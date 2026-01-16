@@ -153,6 +153,8 @@ The plugin follows a "Hub and Spoke" model:
 
 ### The Flow of a Request
 
+<img src="img/intro.png" alt="Orchestration Flow" width="800">
+
 1. **User Prompt**: "Refactor the auth logic and update the docs."
 2. **Orchestrator**: Creates a TODO list.
 3. **Delegation**:
@@ -315,6 +317,8 @@ Fast code search and refactoring:
 ### Quota Tool
 
 For Antigravity users:
+
+<img src="img/quota.png" alt="Antigravity Quota" width="600">
 
 | Tool | Description |
 |------|-------------|
