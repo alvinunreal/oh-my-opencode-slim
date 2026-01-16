@@ -16,6 +16,19 @@
 
 ---
 
+## ⚡ Quick Navigation
+
+- [🚀 Installation](#installation)
+- [🏗️ Architecture & Flow](#architecture--flow)
+- [📟 Tmux Integration](#tmux-integration)
+- [🏛️ Meet the Pantheon](#meet-the-pantheon)
+- [🛠️ Tools & Capabilities](#tools--capabilities)
+- [🔌 MCP Servers](#mcp-servers)
+- [⚙️ Configuration](#configuration)
+- [🗑️ Uninstallation](#uninstallation)
+
+---
+
 ## Installation
 
 ### For Humans
@@ -162,6 +175,95 @@ The plugin follows a "Hub and Spoke" model:
    - Launches a `@librarian` task to check the latest documentation for the auth library used.
 4. **Integration**: Once background results are ready, the Orchestrator performs the refactor.
 5. **Finalization**: Passes the changes to `@document-writer` to update the README.
+
+---
+
+## Tmux Integration
+
+<img src="img/tmux.png" alt="Tmux Integration" width="800">
+
+**Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new tmux panes automatically spawn showing each agent's live progress. No more waiting in the dark.
+
+### Why This Matters
+
+| Without Tmux Integration | With Tmux Integration |
+|--------------------------|----------------------|
+| Fire off a background task, wait anxiously | See the agent thinking, searching, coding |
+| "Is it stuck or just slow?" | Watch tool calls happen in real-time |
+| Results appear out of nowhere | Follow the journey from question to answer |
+| Debug by guessing | Debug by observation |
+
+### What You Get
+
+- **Live Visibility**: Each sub-agent gets its own pane showing real-time output
+- **Auto-Layout**: Tmux automatically arranges panes using your preferred layout
+- **Auto-Cleanup**: Panes close when agents finish, layout rebalances
+- **Zero Overhead**: Works with OpenCode's built-in `task` tool AND our `background_task` tool
+
+### Quick Setup
+
+**1. Enable the OpenCode HTTP server** (one-time setup)
+
+Add to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "server": {
+    "port": 4096
+  }
+}
+```
+
+**2. Enable tmux integration in the plugin**
+
+Add to your `~/.config/opencode/oh-my-opencode-slim.json`:
+
+```json
+{
+  "tmux": {
+    "enabled": true,
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  }
+}
+```
+
+**3. Run OpenCode inside tmux**
+
+```bash
+tmux
+opencode
+```
+
+That's it. When agents spawn, they'll appear in new panes.
+
+### Layout Options
+
+| Layout | Description |
+|--------|-------------|
+| `main-vertical` | Your session on the left (60%), agents stacked on the right |
+| `main-horizontal` | Your session on top (60%), agents stacked below |
+| `tiled` | All panes in equal-sized grid |
+| `even-horizontal` | All panes side by side |
+| `even-vertical` | All panes stacked vertically |
+
+### Configuration Reference
+
+```json
+{
+  "tmux": {
+    "enabled": true,
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  }
+}
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable/disable tmux integration |
+| `layout` | string | `"main-vertical"` | Tmux layout preset |
+| `main_pane_size` | number | `60` | Size of main pane as percentage (20-80) |
 
 ---
 

@@ -8,6 +8,52 @@ let tmuxChecked = false;
 // Store config for reapplying layout on close
 let storedConfig: TmuxConfig | null = null;
 
+// Cache server availability check
+let serverAvailable: boolean | null = null;
+let serverCheckUrl: string | null = null;
+
+/**
+ * Check if the OpenCode HTTP server is actually running.
+ * This is needed because ctx.serverUrl may return a fallback URL even when no server is running.
+ */
+async function isServerRunning(serverUrl: string): Promise<boolean> {
+  // Use cached result if checking the same URL
+  if (serverCheckUrl === serverUrl && serverAvailable !== null) {
+    return serverAvailable;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1000);
+
+    // Try to hit the health endpoint or just the root
+    const response = await fetch(`${serverUrl}/health`, {
+      signal: controller.signal,
+    }).catch(() => null);
+
+    clearTimeout(timeout);
+
+    serverCheckUrl = serverUrl;
+    serverAvailable = response?.ok ?? false;
+
+    log("[tmux] isServerRunning: checked", { serverUrl, available: serverAvailable });
+    return serverAvailable;
+  } catch {
+    serverCheckUrl = serverUrl;
+    serverAvailable = false;
+    log("[tmux] isServerRunning: server not reachable", { serverUrl });
+    return false;
+  }
+}
+
+/**
+ * Reset the server availability cache (useful when server might have started)
+ */
+export function resetServerCheck(): void {
+  serverAvailable = null;
+  serverCheckUrl = null;
+}
+
 /**
  * Find tmux binary path
  */
@@ -138,6 +184,17 @@ export async function spawnTmuxPane(
 
   if (!isInsideTmux()) {
     log("[tmux] spawnTmuxPane: not inside tmux, skipping");
+    return { success: false };
+  }
+
+  // Check if the OpenCode HTTP server is actually running
+  // This is needed because serverUrl may be a fallback even when no server is running
+  const serverRunning = await isServerRunning(serverUrl);
+  if (!serverRunning) {
+    log("[tmux] spawnTmuxPane: OpenCode server not running, skipping", { 
+      serverUrl,
+      hint: "Add { \"server\": { \"port\": 4096 } } to your OpenCode config"
+    });
     return { success: false };
   }
 
