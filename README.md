@@ -16,6 +16,33 @@
 
 ---
 
+## ⚡ Quick Navigation
+
+- [🚀 **Installation**](#installation)
+  - [For Humans](#for-humans)
+  - [For LLM Agents](#for-llm-agents)
+- [🏗️ **Architecture & Flow**](#architecture--flow)
+- [🏛️ **Meet the Pantheon**](#meet-the-pantheon)
+  - [The Orchestrator](#the-orchestrator---architect-of-realms)
+  - [The Explorer](#the-explorer---pathfinder)
+  - [The Oracle](#the-oracle---seer-beyond-the-stack-trace)
+  - [The Librarian](#the-librarian---keeper-of-infinite-scrolls)
+  - [The Designer](#the-designer---artisan-of-interfaces)
+  - [The Scribe](#the-scribe---chronicle-keeper)
+  - [The Visionary](#the-visionary---reader-of-pixels)
+  - [The Minimalist](#the-minimalist---destroyer-of-bloat)
+- [🛠️ **Tools & Capabilities**](#tools--capabilities)
+  - [Tmux Integration](#tmux-integration)
+  - [Quota Tool](#quota-tool)
+  - [Background Tasks](#background-tasks)
+  - [LSP Tools](#lsp-tools)
+  - [Code Search Tools](#code-search-tools)
+- [🔌 **MCP Servers**](#mcp-servers)
+- [⚙️ **Configuration**](#configuration)
+- [🗑️ **Uninstallation**](#uninstallation)
+
+---
+
 ## Installation
 
 ### For Humans
@@ -100,23 +127,16 @@ The installer automatically:
 
 #### Step 4: Authentication
 
-After installation, guide the user:
+After installation, guide the user to log in for each enabled provider:
 
-**For Antigravity:**
 ```bash
 opencode auth login
-# Select: Google → OAuth with Google (Antigravity)
 ```
 
-**For OpenAI:**
-```bash
-export OPENAI_API_KEY="sk-..."
-```
-
-**For Cerebras:**
-```bash
-export CEREBRAS_API_KEY="..."
-```
+The user should select:
+- **For Antigravity**: Google → OAuth with Google (Antigravity)
+- **For OpenAI**: OpenAI → Enter API Key
+- **For Cerebras**: Cerebras → Enter API Key
 
 ---
 
@@ -283,7 +303,109 @@ Identify unnecessary complexity, challenge premature abstractions, estimate LOC 
 
 ## Tools & Capabilities
 
+### Tmux Integration
+
+<img src="img/tmux.png" alt="Tmux Integration" width="800">
+
+**Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new tmux panes automatically spawn showing each agent's live progress. No more waiting in the dark.
+
+#### Why This Matters
+
+| Without Tmux Integration | With Tmux Integration |
+|--------------------------|----------------------|
+| Fire off a background task, wait anxiously | See the agent thinking, searching, coding |
+| "Is it stuck or just slow?" | Watch tool calls happen in real-time |
+| Results appear out of nowhere | Follow the journey from question to answer |
+| Debug by guessing | Debug by observation |
+
+#### What You Get
+
+- **Live Visibility**: Each sub-agent gets its own pane showing real-time output
+- **Auto-Layout**: Tmux automatically arranges panes using your preferred layout
+- **Auto-Cleanup**: Panes close when agents finish, layout rebalances
+- **Zero Overhead**: Works with OpenCode's built-in `task` tool AND our `background_task` tool
+
+#### Quick Setup
+
+**1. Enable the OpenCode HTTP server** (one-time setup)
+
+Add to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "server": {
+    "port": 4096
+  }
+}
+```
+
+**2. Enable tmux integration in the plugin**
+
+Add to your `~/.config/opencode/oh-my-opencode-slim.json`:
+
+```json
+{
+  "tmux": {
+    "enabled": true,
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  }
+}
+```
+
+**3. Run OpenCode inside tmux**
+
+```bash
+tmux
+opencode
+```
+
+That's it. When agents spawn, they'll appear in new panes.
+
+#### Layout Options
+
+| Layout | Description |
+|--------|-------------|
+| `main-vertical` | Your session on the left (60%), agents stacked on the right |
+| `main-horizontal` | Your session on top (60%), agents stacked below |
+| `tiled` | All panes in equal-sized grid |
+| `even-horizontal` | All panes side by side |
+| `even-vertical` | All panes stacked vertically |
+
+#### Configuration Reference
+
+```json
+{
+  "tmux": {
+    "enabled": true,
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  }
+}
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable/disable tmux integration |
+| `layout` | string | `"main-vertical"` | Tmux layout preset |
+| `main_pane_size` | number | `60` | Size of main pane as percentage (20-80) |
+
+---
+
+### Quota Tool
+
+For Antigravity users. You can trigger this at any time by asking the agent to **"check my quota"** or **"show status."**
+
+<img src="img/quota.png" alt="Antigravity Quota" width="600">
+
+| Tool | Description |
+|------|-------------|
+| `antigravity_quota` | Check API quota for all Antigravity accounts (compact view with progress bars) |
+
+---
+
 ### Background Tasks
+
 
 The plugin provides tools to manage asynchronous work:
 
@@ -292,6 +414,8 @@ The plugin provides tools to manage asynchronous work:
 | `background_task` | Launch an agent in a new session (`sync=true` blocks, `sync=false` runs in background) |
 | `background_output` | Fetch the result of a background task by ID |
 | `background_cancel` | Abort running tasks |
+
+---
 
 ### LSP Tools
 
@@ -304,6 +428,8 @@ Language Server Protocol integration for code intelligence:
 | `lsp_diagnostics` | Get errors/warnings from the language server |
 | `lsp_rename` | Rename a symbol across all files |
 
+---
+
 ### Code Search Tools
 
 Fast code search and refactoring:
@@ -313,16 +439,6 @@ Fast code search and refactoring:
 | `grep` | Fast content search using ripgrep |
 | `ast_grep_search` | AST-aware code pattern matching (25 languages) |
 | `ast_grep_replace` | AST-aware code refactoring with dry-run support |
-
-### Quota Tool
-
-For Antigravity users:
-
-<img src="img/quota.png" alt="Antigravity Quota" width="600">
-
-| Tool | Description |
-|------|-------------|
-| `antigravity_quota` | Check API quota for all Antigravity accounts (compact view with progress bars) |
 
 ---
 

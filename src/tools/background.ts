@@ -7,6 +7,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   STABLE_POLLS_THRESHOLD,
 } from "../config";
+import type { TmuxConfig } from "../config/schema";
 
 const z = tool.schema;
 
@@ -19,7 +20,8 @@ type ToolContext = {
 
 export function createBackgroundTools(
   ctx: PluginInput,
-  manager: BackgroundTaskManager
+  manager: BackgroundTaskManager,
+  tmuxConfig?: TmuxConfig
 ): Record<string, ToolDefinition> {
   const agentList = getAgentListDescription();
   const agentNames = getAgentNames().join(", ");
@@ -46,7 +48,7 @@ Sync mode blocks until completion and returns the result directly.`,
       const isSync = args.sync === true;
 
       if (isSync) {
-        return await executeSync(description, prompt, agent, tctx, ctx, args.session_id as string | undefined);
+        return await executeSync(description, prompt, agent, tctx, ctx, tmuxConfig, args.session_id as string | undefined);
       }
 
       const task = await manager.launch({
@@ -138,6 +140,7 @@ async function executeSync(
   agent: string,
   toolContext: ToolContext,
   ctx: PluginInput,
+  tmuxConfig?: TmuxConfig,
   existingSessionId?: string
 ): Promise<string> {
   let sessionID: string;
@@ -164,6 +167,12 @@ async function executeSync(
       return `Error: Failed to create session: ${createResult.error}`;
     }
     sessionID = createResult.data.id;
+
+    // Give TmuxSessionManager time to spawn the pane via event hook
+    // before we send the prompt (so the TUI can receive streaming updates)
+    if (tmuxConfig?.enabled) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
   // Disable recursive delegation tools to prevent infinite loops
@@ -257,6 +266,7 @@ session_id: ${sessionID}
 
   const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
 
+  // Pane closing is handled by TmuxSessionManager via polling
   return `${responseText}
 
 <task_metadata>
