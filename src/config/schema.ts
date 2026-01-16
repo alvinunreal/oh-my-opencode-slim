@@ -9,11 +9,22 @@ export const AgentOverrideConfigSchema = z.object({
   disable: z.boolean().optional(),
 });
 
+// Tmux layout options
+export const TmuxLayoutSchema = z.enum([
+  "main-horizontal", // Main pane on top, agents stacked below
+  "main-vertical",   // Main pane on left, agents stacked on right
+  "tiled",           // All panes equal size grid
+  "even-horizontal", // All panes side by side
+  "even-vertical",   // All panes stacked vertically
+]);
+
+export type TmuxLayout = z.infer<typeof TmuxLayoutSchema>;
+
 // Tmux integration configuration
 export const TmuxConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  split_direction: z.enum(["horizontal", "vertical"]).default("horizontal"),
-  pane_size: z.number().min(1).max(99).default(30),
+  layout: TmuxLayoutSchema.default("main-vertical"),
+  main_pane_size: z.number().min(20).max(80).default(60), // percentage for main pane
 });
 
 export type TmuxConfig = z.infer<typeof TmuxConfigSchema>;

@@ -1,20 +1,12 @@
 import { spawn } from "bun";
 import { log } from "../shared/logger";
-
-export interface TmuxConfig {
-  enabled: boolean;
-  split_direction?: "horizontal" | "vertical";
-  pane_size?: number; // percentage 1-99
-}
-
-export const DEFAULT_TMUX_CONFIG: TmuxConfig = {
-  enabled: false,
-  split_direction: "horizontal",
-  pane_size: 30,
-};
+import type { TmuxConfig, TmuxLayout } from "../config/schema";
 
 let tmuxPath: string | null = null;
 let tmuxChecked = false;
+
+// Store config for reapplying layout on close
+let storedConfig: TmuxConfig | null = null;
 
 /**
  * Find tmux binary path
@@ -82,6 +74,44 @@ export function isInsideTmux(): boolean {
   return !!process.env.TMUX;
 }
 
+/**
+ * Apply a tmux layout to the current window
+ */
+async function applyLayout(tmux: string, layout: TmuxLayout, mainPaneSize: number): Promise<void> {
+  try {
+    // Apply the layout
+    const layoutProc = spawn([tmux, "select-layout", layout], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await layoutProc.exited;
+
+    // For main-* layouts, set the main pane size
+    if (layout === "main-horizontal" || layout === "main-vertical") {
+      const sizeOption = layout === "main-horizontal" 
+        ? "main-pane-height" 
+        : "main-pane-width";
+      
+      const sizeProc = spawn([tmux, "set-window-option", sizeOption, `${mainPaneSize}%`], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await sizeProc.exited;
+
+      // Reapply layout to use the new size
+      const reapplyProc = spawn([tmux, "select-layout", layout], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await reapplyProc.exited;
+    }
+
+    log("[tmux] applyLayout: applied", { layout, mainPaneSize });
+  } catch (err) {
+    log("[tmux] applyLayout: exception", { error: String(err) });
+  }
+}
+
 export interface SpawnPaneResult {
   success: boolean;
   paneId?: string; // e.g., "%42"
@@ -90,6 +120,7 @@ export interface SpawnPaneResult {
 /**
  * Spawn a new tmux pane running `opencode attach <serverUrl> --session <sessionId>`
  * This connects the new TUI to the existing server so it receives streaming updates.
+ * After spawning, applies the configured layout to auto-rebalance all panes.
  * Returns the pane ID so it can be closed later.
  */
 export async function spawnTmuxPane(
@@ -116,20 +147,19 @@ export async function spawnTmuxPane(
     return { success: false };
   }
 
-  try {
-    // Build split-window command
-    const splitFlag = config.split_direction === "vertical" ? "-v" : "-h";
-    const sizeFlag = config.pane_size ? ["-l", `${config.pane_size}%`] : [];
+  // Store config for use in closeTmuxPane
+  storedConfig = config;
 
+  try {
     // Use `opencode attach <url> --session <id>` to connect to the existing server
     // This ensures the TUI receives streaming updates from the same server handling the prompt
     const opencodeCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
 
-    // Use -P -F '#{pane_id}' to print the new pane's ID
+    // Simple split - layout will handle positioning
+    // Use -h for horizontal split (new pane to the right) as default
     const args = [
       "split-window",
-      splitFlag,
-      ...sizeFlag,
+      "-h",
       "-d", // Don't switch focus to new pane
       "-P", // Print pane info
       "-F", "#{pane_id}", // Format: just the pane ID
@@ -148,16 +178,22 @@ export async function spawnTmuxPane(
     const stderr = await new Response(proc.stderr).text();
     const paneId = stdout.trim(); // e.g., "%42"
 
-    log("[tmux] spawnTmuxPane: result", { exitCode, paneId, stderr: stderr.trim() });
+    log("[tmux] spawnTmuxPane: split result", { exitCode, paneId, stderr: stderr.trim() });
 
     if (exitCode === 0 && paneId) {
-      // Optionally rename the pane for visibility (target the new pane specifically)
+      // Rename the pane for visibility
       const renameProc = spawn(
         [tmux, "select-pane", "-t", paneId, "-T", description.slice(0, 30)],
         { stdout: "ignore", stderr: "ignore" }
       );
       await renameProc.exited;
-      log("[tmux] spawnTmuxPane: SUCCESS, pane created", { paneId });
+
+      // Apply layout to auto-rebalance all panes
+      const layout = config.layout ?? "main-vertical";
+      const mainPaneSize = config.main_pane_size ?? 60;
+      await applyLayout(tmux, layout, mainPaneSize);
+
+      log("[tmux] spawnTmuxPane: SUCCESS, pane created and layout applied", { paneId, layout });
       return { success: true, paneId };
     }
 
@@ -169,7 +205,7 @@ export async function spawnTmuxPane(
 }
 
 /**
- * Close a tmux pane by its ID
+ * Close a tmux pane by its ID and reapply layout to rebalance remaining panes
  */
 export async function closeTmuxPane(paneId: string): Promise<boolean> {
   log("[tmux] closeTmuxPane called", { paneId });
@@ -198,6 +234,15 @@ export async function closeTmuxPane(paneId: string): Promise<boolean> {
 
     if (exitCode === 0) {
       log("[tmux] closeTmuxPane: SUCCESS, pane closed", { paneId });
+
+      // Reapply layout to rebalance remaining panes
+      if (storedConfig) {
+        const layout = storedConfig.layout ?? "main-vertical";
+        const mainPaneSize = storedConfig.main_pane_size ?? 60;
+        await applyLayout(tmux, layout, mainPaneSize);
+        log("[tmux] closeTmuxPane: layout reapplied", { layout });
+      }
+
       return true;
     }
 

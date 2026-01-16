@@ -71,6 +71,7 @@ export function loadPluginConfig(directory: string): PluginConfig {
       ...config,
       ...projectConfig,
       agents: deepMerge(config.agents, projectConfig.agents),
+      tmux: deepMerge(config.tmux, projectConfig.tmux),
       disabled_agents: [
         ...new Set([
           ...(config.disabled_agents ?? []),

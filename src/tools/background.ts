@@ -7,7 +7,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   STABLE_POLLS_THRESHOLD,
 } from "../config";
-import { spawnTmuxPane, closeTmuxPane, type TmuxConfig } from "../utils/tmux";
+import type { TmuxConfig } from "../config/schema";
 
 const z = tool.schema;
 
@@ -144,15 +144,6 @@ async function executeSync(
   existingSessionId?: string
 ): Promise<string> {
   let sessionID: string;
-  let paneId: string | undefined;
-
-  // Helper to close pane and return result
-  const closeAndReturn = async (result: string): Promise<string> => {
-    if (paneId) {
-      await closeTmuxPane(paneId);
-    }
-    return result;
-  };
 
   if (existingSessionId) {
     const sessionResult = await ctx.client.session.get({ path: { id: existingSessionId } });
@@ -177,23 +168,10 @@ async function executeSync(
     }
     sessionID = createResult.data.id;
 
-    // Spawn tmux pane for sync task
-    // IMPORTANT: We await here and add delay so TUI can start before we send prompt
+    // Give TmuxSessionManager time to spawn the pane via event hook
+    // before we send the prompt (so the TUI can receive streaming updates)
     if (tmuxConfig?.enabled) {
-      const serverUrl = ctx.serverUrl?.toString() ?? "http://localhost:4096";
-      const paneResult = await spawnTmuxPane(
-        sessionID,
-        `@${agent}: ${description}`,
-        tmuxConfig,
-        serverUrl
-      ).catch(() => ({ success: false, paneId: undefined }));
-      
-      // Store pane ID for auto-close when task completes
-      if (paneResult.success && paneResult.paneId) {
-        paneId = paneResult.paneId;
-        // Give TUI time to initialize and subscribe to session events
-        await new Promise((r) => setTimeout(r, 500));
-      }
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
 
@@ -208,11 +186,11 @@ async function executeSync(
       },
     });
   } catch (error) {
-    return closeAndReturn(`Error: Failed to send prompt: ${error instanceof Error ? error.message : String(error)}
+    return `Error: Failed to send prompt: ${error instanceof Error ? error.message : String(error)}
 
 <task_metadata>
 session_id: ${sessionID}
-</task_metadata>`);
+</task_metadata>`;
   }
 
   const pollStart = Date.now();
@@ -221,11 +199,11 @@ session_id: ${sessionID}
 
   while (Date.now() - pollStart < MAX_POLL_TIME_MS) {
     if (toolContext.abort?.aborted) {
-      return closeAndReturn(`Task aborted.
+      return `Task aborted.
 
 <task_metadata>
 session_id: ${sessionID}
-</task_metadata>`);
+</task_metadata>`;
     }
 
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -254,27 +232,27 @@ session_id: ${sessionID}
   }
 
   if (Date.now() - pollStart >= MAX_POLL_TIME_MS) {
-    return closeAndReturn(`Error: Agent timed out after 5 minutes.
+    return `Error: Agent timed out after 5 minutes.
 
 <task_metadata>
 session_id: ${sessionID}
-</task_metadata>`);
+</task_metadata>`;
   }
 
   const messagesResult = await ctx.client.session.messages({ path: { id: sessionID } });
   if (messagesResult.error) {
-    return closeAndReturn(`Error: Failed to get messages: ${messagesResult.error}`);
+    return `Error: Failed to get messages: ${messagesResult.error}`;
   }
 
   const messages = messagesResult.data as Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>;
   const assistantMessages = messages.filter((m) => m.info?.role === "assistant");
 
   if (assistantMessages.length === 0) {
-    return closeAndReturn(`Error: No response from agent.
+    return `Error: No response from agent.
 
 <task_metadata>
 session_id: ${sessionID}
-</task_metadata>`);
+</task_metadata>`;
   }
 
   const extractedContent: string[] = [];
@@ -288,9 +266,10 @@ session_id: ${sessionID}
 
   const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
 
-  return closeAndReturn(`${responseText}
+  // Pane closing is handled by TmuxSessionManager via polling
+  return `${responseText}
 
 <task_metadata>
 session_id: ${sessionID}
-</task_metadata>`);
+</task_metadata>`;
 }

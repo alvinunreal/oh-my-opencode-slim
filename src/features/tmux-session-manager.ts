@@ -1,5 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin";
-import { spawnTmuxPane, closeTmuxPane, isInsideTmux, type TmuxConfig } from "../utils/tmux";
+import { spawnTmuxPane, closeTmuxPane, isInsideTmux } from "../utils/tmux";
+import type { TmuxConfig } from "../config/schema";
 import { log } from "../shared/logger";
 
 type OpencodeClient = PluginInput["client"];

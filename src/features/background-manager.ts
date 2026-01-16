@@ -1,7 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin";
 import { POLL_INTERVAL_BACKGROUND_MS, POLL_INTERVAL_SLOW_MS } from "../config";
-import { spawnTmuxPane, closeTmuxPane, type TmuxConfig } from "../utils/tmux";
-import { log } from "../shared/logger";
+import type { TmuxConfig } from "../config/schema";
 
 type OpencodeClient = PluginInput["client"];
 
@@ -15,7 +14,6 @@ export interface BackgroundTask {
   error?: string;
   startedAt: Date;
   completedAt?: Date;
-  paneId?: string; // tmux pane ID for auto-close
 }
 
 export interface LaunchOptions {
@@ -35,14 +33,12 @@ export class BackgroundTaskManager {
   private client: OpencodeClient;
   private directory: string;
   private pollInterval?: ReturnType<typeof setInterval>;
-  private tmuxConfig: TmuxConfig;
-  private serverUrl: string;
+  private tmuxEnabled: boolean;
 
   constructor(ctx: PluginInput, tmuxConfig?: TmuxConfig) {
     this.client = ctx.client;
     this.directory = ctx.directory;
-    this.tmuxConfig = tmuxConfig ?? { enabled: false, split_direction: "horizontal", pane_size: 30 };
-    this.serverUrl = ctx.serverUrl?.toString() ?? "http://localhost:4096";
+    this.tmuxEnabled = tmuxConfig?.enabled ?? false;
   }
 
   async launch(opts: LaunchOptions): Promise<BackgroundTask> {
@@ -70,22 +66,10 @@ export class BackgroundTaskManager {
     this.tasks.set(task.id, task);
     this.startPolling();
 
-    // Spawn tmux pane for this background task
-    // IMPORTANT: We await here and add delay so TUI can start before we send prompt
-    if (this.tmuxConfig.enabled) {
-      const paneResult = await spawnTmuxPane(
-        session.data.id,
-        `@${opts.agent}: ${opts.description}`,
-        this.tmuxConfig,
-        this.serverUrl
-      ).catch(() => ({ success: false, paneId: undefined }));
-      
-      // Store pane ID for auto-close when task completes
-      if (paneResult.success && paneResult.paneId) {
-        task.paneId = paneResult.paneId;
-        // Give TUI time to initialize and subscribe to session events
-        await new Promise((r) => setTimeout(r, 500));
-      }
+    // Give TmuxSessionManager time to spawn the pane via event hook
+    // before we send the prompt (so the TUI can receive streaming updates)
+    if (this.tmuxEnabled) {
+      await new Promise((r) => setTimeout(r, 500));
     }
 
     const promptQuery: Record<string, string> = {
@@ -207,23 +191,13 @@ export class BackgroundTaskManager {
         task.result = responseText;
         task.status = "completed";
         task.completedAt = new Date();
-        
-        // Auto-close tmux pane when task completes
-        if (task.paneId) {
-          log("[background-manager] pollTask: task completed, closing pane", { taskId: task.id, paneId: task.paneId });
-          await closeTmuxPane(task.paneId);
-        }
+        // Pane closing is handled by TmuxSessionManager via polling
       }
     } catch (error) {
       task.status = "failed";
       task.error = error instanceof Error ? error.message : String(error);
       task.completedAt = new Date();
-      
-      // Auto-close tmux pane on failure too
-      if (task.paneId) {
-        log("[background-manager] pollTask: task failed, closing pane", { taskId: task.id, paneId: task.paneId });
-        await closeTmuxPane(task.paneId);
-      }
+      // Pane closing is handled by TmuxSessionManager via polling
     }
   }
 }

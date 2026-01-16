@@ -25,8 +25,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // Parse tmux config with defaults
   const tmuxConfig: TmuxConfig = {
     enabled: config.tmux?.enabled ?? false,
-    split_direction: config.tmux?.split_direction ?? "horizontal",
-    pane_size: config.tmux?.pane_size ?? 30,
+    layout: config.tmux?.layout ?? "main-vertical",
+    main_pane_size: config.tmux?.main_pane_size ?? 60,
   };
 
   log("[plugin] initialized with tmux config", { 
@@ -106,5 +106,5 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
 export default OhMyOpenCodeLite;
 
-export type { PluginConfig, AgentOverrideConfig, AgentName, McpName, TmuxConfig } from "./config";
+export type { PluginConfig, AgentOverrideConfig, AgentName, McpName, TmuxConfig, TmuxLayout } from "./config";
 export type { RemoteMcpConfig } from "./mcp";
