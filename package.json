@@ -1,6 +1,6 @@
 {
   "name": "oh-my-opencode-slim",
-  "version": "0.2.2",
+  "version": "0.3.1",
   "description": "Lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

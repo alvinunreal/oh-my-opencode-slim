@@ -58,6 +58,19 @@ export async function isOpenCodeInstalled(): Promise<boolean> {
   }
 }
 
+export async function isTmuxInstalled(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["tmux", "-V"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    await proc.exited
+    return proc.exitCode === 0
+  } catch {
+    return false
+  }
+}
+
 export async function getOpenCodeVersion(): Promise<string | null> {
   try {
     const proc = Bun.spawn(["opencode", "--version"], {
@@ -211,6 +224,36 @@ export function addProviderConfig(installConfig: InstallConfig): ConfigMergeResu
   }
 }
 
+/**
+ * Add server configuration to opencode.json for tmux integration
+ */
+export function addServerConfig(installConfig: InstallConfig): ConfigMergeResult {
+  const configPath = getConfigJson()
+
+  try {
+    ensureConfigDir()
+    let config = parseConfig(configPath) ?? {}
+
+    if (installConfig.hasTmux) {
+      const server = (config.server ?? {}) as Record<string, unknown>
+      // Only set port if not already configured
+      if (server.port === undefined) {
+        server.port = 4096
+      }
+      config.server = server
+    }
+
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+    return { success: true, configPath }
+  } catch (err) {
+    return {
+      success: false,
+      configPath,
+      error: `Failed to add server config: ${err}`,
+    }
+  }
+}
+
 // Model mappings by provider priority
 const MODEL_MAPPINGS = {
   antigravity: {
@@ -255,28 +298,37 @@ export function generateLiteConfig(installConfig: InstallConfig): Record<string,
         ? "cerebras"
         : null;
 
-  if (!baseProvider) {
-    return { agents: {} };
-  }
+  const config: Record<string, unknown> = { agents: {} };
 
-  // Start with base provider models
-  const agents: Record<string, { model: string }> = Object.fromEntries(
-    Object.entries(MODEL_MAPPINGS[baseProvider]).map(([k, v]) => [k, { model: v }])
-  );
+  if (baseProvider) {
+    // Start with base provider models
+    const agents: Record<string, { model: string }> = Object.fromEntries(
+      Object.entries(MODEL_MAPPINGS[baseProvider]).map(([k, v]) => [k, { model: v }])
+    );
 
-  // Apply provider-specific overrides for mixed configurations
-  if (installConfig.hasAntigravity) {
-    if (installConfig.hasOpenAI) {
-      agents["oracle"] = { model: "openai/gpt-5.2-codex" };
-    }
-    if (installConfig.hasCerebras) {
+    // Apply provider-specific overrides for mixed configurations
+    if (installConfig.hasAntigravity) {
+      if (installConfig.hasOpenAI) {
+        agents["oracle"] = { model: "openai/gpt-5.2-codex" };
+      }
+      if (installConfig.hasCerebras) {
+        agents["explore"] = { model: "cerebras/zai-glm-4.6" };
+      }
+    } else if (installConfig.hasOpenAI && installConfig.hasCerebras) {
       agents["explore"] = { model: "cerebras/zai-glm-4.6" };
     }
-  } else if (installConfig.hasOpenAI && installConfig.hasCerebras) {
-    agents["explore"] = { model: "cerebras/zai-glm-4.6" };
+    config.agents = agents;
   }
 
-  return { agents };
+  if (installConfig.hasTmux) {
+    config.tmux = {
+      enabled: true,
+      layout: "main-vertical",
+      main_pane_size: 60,
+    };
+  }
+
+  return config;
 }
 
 export function writeLiteConfig(installConfig: InstallConfig): ConfigMergeResult {
@@ -302,6 +354,7 @@ export function detectCurrentConfig(): DetectedConfig {
     hasAntigravity: false,
     hasOpenAI: false,
     hasCerebras: false,
+    hasTmux: false,
   }
 
   const config = parseConfig(getConfigJson())
@@ -314,9 +367,8 @@ export function detectCurrentConfig(): DetectedConfig {
   // Try to detect from lite config
   const liteConfig = parseConfig(getLiteConfig())
   if (liteConfig && typeof liteConfig === "object") {
-    const agents = (liteConfig as Record<string, unknown>).agents as
-      | Record<string, { model?: string }>
-      | undefined
+    const configObj = liteConfig as Record<string, any>
+    const agents = configObj.agents as Record<string, { model?: string }> | undefined
 
     if (agents) {
       const models = Object.values(agents)
@@ -324,6 +376,10 @@ export function detectCurrentConfig(): DetectedConfig {
         .filter(Boolean)
       result.hasOpenAI = models.some((m) => m?.startsWith("openai/"))
       result.hasCerebras = models.some((m) => m?.startsWith("cerebras/"))
+    }
+
+    if (configObj.tmux && typeof configObj.tmux === "object") {
+      result.hasTmux = configObj.tmux.enabled === true
     }
   }
 
