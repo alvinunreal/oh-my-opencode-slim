@@ -216,7 +216,6 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
   const tmuxInstalled = await isTmuxInstalled()
 
   console.log(`${BOLD}Question 1/${tmuxInstalled ? "4" : "3"}:${RESET}`)
-  printInfo(`${BOLD}${YELLOW}Antigravity subscription is highly recommended for the best experience.${RESET}`)
   printInfo(`The Pantheon is tuned for Antigravity's model routing. Other models work, but results may vary.`)
   const antigravity = await askYesNo(
     "Do you have an Antigravity subscription?",

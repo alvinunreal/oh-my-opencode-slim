@@ -18,6 +18,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.openai = arg.split("=")[1] as BooleanArg
     } else if (arg.startsWith("--cerebras=")) {
       result.cerebras = arg.split("=")[1] as BooleanArg
+    } else if (arg.startsWith("--tmux=")) {
+      result.tmux = arg.split("=")[1] as BooleanArg
     } else if (arg === "-h" || arg === "--help") {
       printHelp()
       process.exit(0)
@@ -37,13 +39,14 @@ Options:
   --antigravity=yes|no   Antigravity subscription (yes/no)
   --openai=yes|no        OpenAI API access (yes/no)
   --cerebras=yes|no      Cerebras API access (yes/no)
+  --tmux=yes|no          Enable tmux integration (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
   --skip-auth            Skip authentication reminder
   -h, --help             Show this help message
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --cerebras=no
+  bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --cerebras=no --tmux=yes
 `)
 }
 
