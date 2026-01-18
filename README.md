@@ -10,9 +10,41 @@
 
 </div>
 
-> Slimmed-down fork of [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) — focused on core agent orchestration without the extra bells and whistles.
+> Slimmed-down fork of [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) - focused on core agent orchestration without the extra bells and whistles.
 
-> **[Antigravity](https://antigravity.ai) subscription recommended.** The pantheon is tuned for Antigravity's model routing. Other providers work, but you'll get the best experience with Antigravity.
+> **[Antigravity](https://antigravity.google) subscription recommended.** The pantheon is tuned for Antigravity's model routing. Other providers work, but you'll get the best experience with Antigravity.
+
+---
+
+## ⚡ Quick Navigation
+
+- [🚀 **Installation**](#installation)
+  - [For Humans](#for-humans)
+  - [For LLM Agents](#for-llm-agents)
+- [🏗️ **Architecture & Flow**](#architecture--flow)
+- [🏛️ **Meet the Pantheon**](#meet-the-pantheon)
+  - [Orchestrator](#orchestrator)
+  - [Explorer](#explorer)
+  - [Oracle](#oracle)
+  - [Librarian](#librarian)
+  - [Frontend Designer](#frontend-designer)
+  - [Document Writer](#document-writer)
+  - [Multimodal Viewer](#multimodal-viewer)
+  - [Code Simplifier](#code-simplifier)
+- [🛠️ **Tools & Capabilities**](#tools--capabilities)
+  - [Tmux Integration](#tmux-integration)
+  - [Quota Tool](#quota-tool)
+  - [Background Tasks](#background-tasks)
+  - [LSP Tools](#lsp-tools)
+  - [Code Search Tools](#code-search-tools)
+- [🧩 **Skills**](#-skills)
+  - [Playwright Integration](#playwright-integration)
+- [🔌 **MCP Servers**](#mcp-servers)
+- [⚙️ **Configuration**](#configuration)
+  - [Files You Edit](#files-you-edit)
+  - [OpenCode Config](#opencode-config-opencodejson)
+  - [Plugin Config](#plugin-config-oh-my-opencode-slimjson)
+- [🗑️ **Uninstallation**](#uninstallation)
 
 ---
 
@@ -143,7 +175,7 @@ Then manually create the config files at:
 
 ---
 
-## Architecture & Flow
+## 🏗️ Architecture & Flow
 
 The plugin follows a "Hub and Spoke" model:
 
@@ -151,7 +183,9 @@ The plugin follows a "Hub and Spoke" model:
 2. **Specialized Agents (Spokes)**: Domain-specific experts (e.g., UI/UX, Documentation, Architecture) that handle narrow tasks with high precision.
 3. **Background Manager**: A robust engine that allows the Orchestrator to "fire and forget" tasks (like deep codebase searches or documentation research) while continuing to work on other parts of the problem.
 
-### The Flow of a Request
+### 🏛️ The Flow of a Request
+
+<img src="img/intro.png" alt="Orchestration Flow" width="800">
 
 <img src="img/intro.png" alt="Orchestration Flow" width="800">
 
@@ -169,119 +203,195 @@ The plugin follows a "Hub and Spoke" model:
 
 <br clear="both">
 
-### The Orchestrator — *Architect of Realms*
+### Orchestrator
 
-<a href="src/agents/orchestrator.ts"><img src="img/orchestrator.png" alt="The Orchestrator" align="right" width="240"></a>
+<a href="src/agents/orchestrator.ts"><img src="img/orchestrator.png" alt="Orchestrator" align="right" width="240"></a>
 
-> **The Orchestrator** was born when the first codebase collapsed under its own complexity. Neither god nor mortal would claim responsibility—so The Orchestrator emerged from the void, forging order from chaos. They don't merely command armies; they fight alongside them. Every line of code passes through their hands before they decide which lesser deity deserves a piece of the puzzle.
+> **The Orchestrator** was born when the first codebase collapsed under its own complexity. Neither god nor mortal would claim responsibility - so The Orchestrator emerged from the void, forging order from chaos. They don't merely command armies; they fight alongside them. Every line of code passes through their hands before they decide which lesser deity deserves a piece of the puzzle.
 
-**Role:** Supreme executor, delegator, and overseer — **Model:** `google/claude-opus-4-5-thinking`
+**Role:** `Supreme executor, delegator, and overseer`  
+**Model:** `google/claude-opus-4-5-thinking`  
+**Prompt:** [src/agents/orchestrator.ts](src/agents/orchestrator.ts)
 
-Write and execute code, orchestrate multi-agent workflows, parse the unspoken from the spoken, summon specialists mid-battle. Shape reality directly—and assign realms to others when the universe grows too vast.
-
-<br clear="both">
-
----
-
-### The Explorer — *Pathfinder*
-
-<a href="src/agents/explore.ts"><img src="img/explorer.png" alt="The Explorer" align="right" width="240"></a>
-
-> **The Explorer** moves through codebases like wind through trees—swift, silent, everywhere at once. When The Orchestrator whispers "find me the auth module," The Explorer has already returned with forty file paths and a map. They were born from the first `grep` command, evolved beyond it, and now see patterns mortals miss.
-
-**Role:** Codebase reconnaissance — **Model:** `cerebras/zai-glm-4.6`
-
-Regex search, AST pattern matching, file discovery, parallel exploration. Read-only: they chart the territory; others conquer it.
+Write and execute code, orchestrate multi-agent workflows, parse the unspoken from the spoken, summon specialists mid-battle. *Shape reality directly - and assign realms to others when the universe grows too vast.*
 
 <br clear="both">
 
 ---
 
-### The Oracle — *Seer Beyond the Stack Trace*
+### Explorer
 
-<a href="src/agents/oracle.ts"><img src="img/oracle.png" alt="The Oracle" align="right" width="240"></a>
+<a href="src/agents/explore.ts"><img src="img/explorer.png" alt="Explorer" align="right" width="240"></a>
 
-> **The Oracle** does not code—they *know*. When bugs defy logic and architectures crumble, The Oracle gazes into the abyss of your codebase and speaks truth. They've seen a thousand systems rise and fall. They'll tell you which path leads to ruin, and which to production.
+> **The Explorer** moves through codebases like wind through trees - swift, silent, everywhere at once. When The Orchestrator whispers "find me the auth module," The Explorer has already returned with forty file paths and a map. They were born from the first `grep` command, evolved beyond it, and now see patterns mortals miss.
 
-**Role:** Strategic advisor and debugger of last resort — **Model:** `openai/gpt-5.2-codex`
+**Role:** `Codebase reconnaissance`  
+**Model:** `cerebras/zai-glm-4.6`  
+**Prompt:** [src/agents/explore.ts](src/agents/explore.ts)
 
-Root cause analysis, architecture review, debugging guidance, tradeoff analysis. Read-only: Oracles advise; they don't intervene.
-
-<br clear="both">
-
----
-
-### The Librarian — *Keeper of Infinite Scrolls*
-
-<a href="src/agents/librarian.ts"><img src="img/librarian.png" alt="The Librarian" align="right" width="240"></a>
-
-> **The Librarian** guards a library with no walls—every GitHub repo, every npm package, every StackOverflow answer ever written. Ask them "how does React handle concurrent rendering?" and they'll return with official docs, real-world examples, and a warning about the footgun you're about to step on.
-
-**Role:** External knowledge retrieval — **Model:** `google/gemini-3-flash`
-
-Documentation lookup, GitHub code search, library research, best practice retrieval. Read-only: they fetch wisdom; implementation is for others.
+Regex search, AST pattern matching, file discovery, parallel exploration. *Read-only: they chart the territory; others conquer it.*
 
 <br clear="both">
 
 ---
 
-### The Designer — *Artisan of Interfaces*
+### Oracle
 
-<a href="src/agents/frontend.ts"><img src="img/designer.png" alt="The Designer" align="right" width="240"></a>
+<a href="src/agents/oracle.ts"><img src="img/oracle.png" alt="Oracle" align="right" width="240"></a>
 
-> **The Designer** believes code should be beautiful—and so should everything it renders. Born from the frustration of a thousand ugly MVPs, they wield CSS like a brush and components like clay. Hand them a feature request; receive a masterpiece. They don't do "good enough."
+> **The Oracle** does not code - they *know*. When bugs defy logic and architectures crumble, The Oracle gazes into the abyss of your codebase and speaks truth. They've seen a thousand systems rise and fall. They'll tell you which path leads to ruin, and which to production.
 
-**Role:** UI/UX implementation and visual excellence — **Model:** `google/gemini-3-flash`
+**Role:** `Strategic advisor and debugger of last resort`  
+**Model:** `openai/gpt-5.2-codex`  
+**Prompt:** [src/agents/oracle.ts](src/agents/oracle.ts)
 
-Modern responsive design, CSS/Tailwind mastery, micro-animations, component architecture. Visual excellence over code perfection—beauty is the priority.
-
-<br clear="both">
-
----
-
-### The Scribe — *Chronicle Keeper*
-
-<a href="src/agents/document-writer.ts"><img src="img/scribe.png" alt="The Scribe" align="right" width="240"></a>
-
-> **The Scribe** was there when the first README was written—and wept, for it was incomplete. They have devoted eternity to the sacred art of documentation: clear, scannable, honest. While others ship features, The Scribe ensures those features are understood. Every code example works. Every explanation enlightens.
-
-**Role:** Technical documentation and knowledge capture — **Model:** `google/gemini-3-flash`
-
-README crafting, API documentation, architecture docs, inline comments that don't insult your intelligence. Match existing style; focus on "why," not just "what."
+Root cause analysis, architecture review, debugging guidance, tradeoff analysis. *Read-only: Oracles advise; they don't intervene.*
 
 <br clear="both">
 
 ---
 
-### The Visionary — *Reader of Pixels*
+### Librarian
 
-<a href="src/agents/multimodal.ts"><img src="img/multimodal.png" alt="The Visionary" align="right" width="240"></a>
+<a href="src/agents/librarian.ts"><img src="img/librarian.png" alt="Librarian" align="right" width="240"></a>
 
-> **The Visionary** sees what others cannot—literally. Screenshots, wireframes, diagrams, PDFs: all are text to them. When a designer throws a Figma mockup at the team and vanishes, The Visionary translates vision into specification. They read the unreadable and describe the indescribable.
+> **The Librarian** guards a library with no walls - every GitHub repo, every npm package, every StackOverflow answer ever written. Ask them "how does React handle concurrent rendering?" and they'll return with official docs, real-world examples, and a warning about the footgun you're about to step on.
 
-**Role:** Image and visual content analysis — **Model:** `google/gemini-3-flash`
+**Role:** `External knowledge retrieval`  
+**Model:** `google/gemini-3-flash`  
+**Prompt:** [src/agents/librarian.ts](src/agents/librarian.ts)
 
-Extract text from images, interpret diagrams, analyze UI screenshots, summarize visual documents. Report what they observe; inference is for others.
+Documentation lookup, GitHub code search, library research, best practice retrieval. *Read-only: they fetch wisdom; implementation is for others.*
 
 <br clear="both">
 
 ---
 
-### The Minimalist — *Destroyer of Bloat*
+### Frontend Designer
 
-<a href="src/agents/simplicity-reviewer.ts"><img src="img/code-simplicity.png" alt="The Minimalist" align="right" width="240"></a>
+<a href="src/agents/frontend.ts"><img src="img/designer.png" alt="Frontend Designer" align="right" width="240"></a>
 
-> **The Minimalist** has one sacred truth: every line of code is a liability. They hunt abstractions that serve no purpose, defensive checks that defend nothing, and "clever" solutions that will haunt you in six months. Where others add, The Minimalist subtracts—ruthlessly, joyfully, necessarily.
+> **The Designer** believes code should be beautiful - and so should everything it renders. Born from the frustration of a thousand ugly MVPs, they wield CSS like a brush and components like clay. Hand them a feature request; receive a masterpiece. They don't do "good enough."
 
-**Role:** Code simplification and YAGNI enforcement — **Model:** `google/claude-opus-4-5-thinking`
+**Role:** `UI/UX implementation and visual excellence`  
+**Model:** `google/gemini-3-flash`  
+**Prompt:** [src/agents/frontend.ts](src/agents/frontend.ts)
 
-Identify unnecessary complexity, challenge premature abstractions, estimate LOC reduction, enforce minimalism. Read-only: they judge; The Orchestrator executes the sentence.
+Modern responsive design, CSS/Tailwind mastery, micro-animations, component architecture. *Visual excellence over code perfection - beauty is the priority.*
+
+<br clear="both">
+
+---
+
+### Document Writer
+
+<a href="src/agents/document-writer.ts"><img src="img/scribe.png" alt="Document Writer" align="right" width="240"></a>
+
+> **The Scribe** was there when the first README was written - and wept, for it was incomplete. They have devoted eternity to the sacred art of documentation: clear, scannable, honest. While others ship features, The Scribe ensures those features are understood. Every code example works. Every explanation enlightens.
+
+**Role:** `Technical documentation and knowledge capture`  
+**Model:** `google/gemini-3-flash`  
+**Prompt:** [src/agents/document-writer.ts](src/agents/document-writer.ts)
+
+README crafting, API documentation, architecture docs, inline comments that don't insult your intelligence. *Match existing style; focus on "why," not just "what."*
+
+<br clear="both">
+
+---
+
+### Multimodal Viewer
+
+<a href="src/agents/multimodal.ts"><img src="img/multimodal.png" alt="Multimodal Viewer" align="right" width="240"></a>
+
+> **The Visionary** sees what others cannot - literally. Screenshots, wireframes, diagrams, PDFs: all are text to them. When a designer throws a Figma mockup at the team and vanishes, The Visionary translates vision into specification. They read the unreadable and describe the indescribable.
+
+**Role:** `Image and visual content analysis`  
+**Model:** `google/gemini-3-flash`  
+**Prompt:** [src/agents/multimodal.ts](src/agents/multimodal.ts)
+
+Extract text from images, interpret diagrams, analyze UI screenshots, summarize visual documents. *Report what they observe; inference is for others.*
+
+<br clear="both">
+
+---
+
+### Code Simplifier
+
+<a href="src/agents/simplicity-reviewer.ts"><img src="img/code-simplicity.png" alt="Code Simplifier" align="right" width="240"></a>
+
+> **The Minimalist** has one sacred truth: every line of code is a liability. They hunt abstractions that serve no purpose, defensive checks that defend nothing, and "clever" solutions that will haunt you in six months. Where others add, The Minimalist subtracts - ruthlessly, joyfully, necessarily.
+
+**Role:** `Code simplification and YAGNI enforcement`  
+**Model:** `google/claude-opus-4-5-thinking`  
+**Prompt:** [src/agents/simplicity-reviewer.ts](src/agents/simplicity-reviewer.ts)
+
+Identify unnecessary complexity, challenge premature abstractions, estimate LOC reduction, enforce minimalism. *Read-only: they judge; The Orchestrator executes the sentence.*
 
 <br clear="both">
 
 ---
 
 ## Tools & Capabilities
+
+### Tmux Integration
+
+<img src="img/tmux.png" alt="Tmux Integration" width="800">
+
+**Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new tmux panes automatically spawn showing each agent's live progress. No more waiting in the dark.
+
+#### Why This Matters
+
+| Without Tmux Integration | With Tmux Integration |
+|--------------------------|----------------------|
+| Fire off a background task, wait anxiously | See the agent thinking, searching, coding |
+| "Is it stuck or just slow?" | Watch tool calls happen in real-time |
+| Results appear out of nowhere | Follow the journey from question to answer |
+| Debug by guessing | Debug by observation |
+
+#### What You Get
+
+- **Live Visibility**: Each sub-agent gets its own pane showing real-time output
+- **Auto-Layout**: Tmux automatically arranges panes using your preferred layout
+- **Auto-Cleanup**: Panes close when agents finish, layout rebalances
+- **Zero Overhead**: Works with OpenCode's built-in `task` tool AND our `background_task` tool
+
+#### Quick Setup
+
+1. **Enable the OpenCode HTTP server** in `opencode.json` (see [OpenCode Config](#opencode-config-opencodejson)).
+2. **Enable tmux integration** in `oh-my-opencode-slim.json` (see [Plugin Config](#plugin-config-oh-my-opencode-slimjson)).
+3. **Run OpenCode inside tmux**:
+   ```bash
+   tmux
+   opencode
+   ```
+
+That's it. When agents spawn, they'll appear in new panes.
+
+#### Layout Options
+
+| Layout | Description |
+|--------|-------------|
+| `main-vertical` | Your session on the left (60%), agents stacked on the right |
+| `main-horizontal` | Your session on top (60%), agents stacked below |
+| `tiled` | All panes in equal-sized grid |
+| `even-horizontal` | All panes side by side |
+| `even-vertical` | All panes stacked vertically |
+
+*See the [Option Reference](#option-reference) for detailed configuration.*
+
+---
+
+### Quota Tool
+
+For Antigravity users. You can trigger this at any time by asking the agent to **"check my quota"** or **"show status."**
+
+<img src="img/quota.png" alt="Antigravity Quota" width="600">
+
+| Tool | Description |
+|------|-------------|
+| `antigravity_quota` | Check API quota for all Antigravity accounts (compact view with progress bars) |
+
+---
 
 ### Background Tasks
 
@@ -292,6 +402,8 @@ The plugin provides tools to manage asynchronous work:
 | `background_task` | Launch an agent in a new session (`sync=true` blocks, `sync=false` runs in background) |
 | `background_output` | Fetch the result of a background task by ID |
 | `background_cancel` | Abort running tasks |
+
+---
 
 ### LSP Tools
 
@@ -304,6 +416,8 @@ Language Server Protocol integration for code intelligence:
 | `lsp_diagnostics` | Get errors/warnings from the language server |
 | `lsp_rename` | Rename a symbol across all files |
 
+---
+
 ### Code Search Tools
 
 Fast code search and refactoring:
@@ -314,15 +428,27 @@ Fast code search and refactoring:
 | `ast_grep_search` | AST-aware code pattern matching (25 languages) |
 | `ast_grep_replace` | AST-aware code refactoring with dry-run support |
 
-### Quota Tool
+---
 
-For Antigravity users:
+## 🧩 Skills
+
+Skills are specialized capabilities that combine MCP servers with specific instructions for the Orchestrator.
+
+### Playwright Integration
+
+**The Orchestrator's eyes and hands in the browser.**
 
 <img src="img/quota.png" alt="Antigravity Quota" width="600">
 
 | Tool | Description |
 |------|-------------|
-| `antigravity_quota` | Check API quota for all Antigravity accounts (compact view with progress bars) |
+| `omo_skill` | Loads a skill (e.g., `playwright`) and provides its instructions and available MCP tools |
+| `omo_skill_mcp` | Invokes a specific tool from an MCP server managed by a skill |
+
+#### Key Features
+- **Browser Automation**: Full Playwright capabilities (browsing, clicking, typing, scraping).
+- **Screenshots**: Capture visual state of any web page.
+- **Sandboxed Output**: Screenshots are safely saved to `/tmp/playwright-mcp-output/`.
 
 ---
 
@@ -338,41 +464,75 @@ Built-in Model Context Protocol servers (enabled by default):
 
 ### Disabling MCPs
 
-You can disable specific MCP servers in your config:
-
-```json
-{
-  "disabled_mcps": ["websearch", "grep_app"]
-}
-```
+You can disable specific MCP servers by adding them to the `disabled_mcps` array in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson).
 
 ---
 
 ## Configuration
 
-You can customize the behavior of the plugin via JSON configuration files.
+### Files You Edit
 
-### Configuration Files
+| File | Purpose |
+|------|---------|
+| `~/.config/opencode/opencode.json` | OpenCode core settings (server port for tmux) |
+| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings (agents, tmux, MCPs) |
+| `.opencode/oh-my-opencode-slim.json` | Project-local plugin overrides (optional) |
 
-The plugin looks for configuration in two places (and merges them):
+> **Platform paths:** On Windows, user config may also be at `%APPDATA%\opencode\`.
 
-1. **User Global**: `~/.config/opencode/oh-my-opencode-slim.json` (or OS equivalent)
-2. **Project Local**: `./.opencode/oh-my-opencode-slim.json`
+---
 
-| Platform | User Config Path |
-| :--- | :--- |
-| **Windows** | `~/.config/opencode/oh-my-opencode-slim.json` or `%APPDATA%\opencode\oh-my-opencode-slim.json` |
-| **macOS/Linux** | `~/.config/opencode/oh-my-opencode-slim.json` |
+### OpenCode Config (`opencode.json`)
 
-### Disabling Agents
-
-You can disable specific agents using the `disabled_agents` array:
+Enable the HTTP server for tmux integration:
 
 ```json
 {
-  "disabled_agents": ["multimodal-looker", "code-simplicity-reviewer"]
+  "server": {
+    "port": 4096
+  }
 }
 ```
+
+---
+
+### Plugin Config (`oh-my-opencode-slim.json`)
+
+All plugin options in one file:
+
+```json
+{
+  "tmux": {
+    "enabled": true,
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  },
+  "disabled_agents": ["multimodal-looker", "code-simplicity-reviewer"],
+  "disabled_mcps": ["websearch", "grep_app"],
+  "agents": {
+    "orchestrator": {
+      "model": "openai/gpt-5.2-codex",
+      "variant": "high"
+    },
+    "explore": {
+      "model": "opencode/glm-4.7",
+      "variant": "low"
+    }
+  }
+}
+```
+
+#### Option Reference
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tmux.enabled` | boolean | `false` | Enable tmux pane spawning for sub-agents |
+| `tmux.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
+| `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20-80) |
+| `disabled_agents` | string[] | `[]` | Agent IDs to disable (e.g., `"multimodal-looker"`) |
+| `disabled_mcps` | string[] | `[]` | MCP server IDs to disable (e.g., `"websearch"`) |
+| `agents.<name>.model` | string | — | Override the LLM for a specific agent |
+| `agents.<name>.variant` | string | — | Reasoning effort: `"low"`, `"medium"`, `"high"` |
 
 ---
 

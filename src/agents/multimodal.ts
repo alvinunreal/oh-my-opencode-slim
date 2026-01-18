@@ -3,11 +3,11 @@ import type { AgentDefinition } from "./orchestrator";
 export function createMultimodalAgent(model: string): AgentDefinition {
   return {
     name: "multimodal-looker",
-    description: "Image and UI analysis",
+    description: "Image and visual content analysis. Use for PDFs, screenshots, diagrams, mockups, and extracting info from visuals.",
     config: {
       model,
       temperature: 0.1,
-      system: MULTIMODAL_PROMPT,
+      prompt: MULTIMODAL_PROMPT,
     },
   };
 }

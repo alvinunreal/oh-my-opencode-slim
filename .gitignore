@@ -8,6 +8,7 @@ dist/
 .env
 .env.local
 .env.*.local
+.ignore
 
 # Editor/IDE
 .vscode/
@@ -35,3 +36,7 @@ coverage/
 # Temporary files
 tmp/
 temp/
+local
+
+.sisyphus/
+.hive/

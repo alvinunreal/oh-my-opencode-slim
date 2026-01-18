@@ -16,36 +16,35 @@ type AgentFactory = (model: string) => AgentDefinition;
 function applyOverrides(agent: AgentDefinition, override: AgentOverrideConfig): void {
   if (override.model) agent.config.model = override.model;
   if (override.temperature !== undefined) agent.config.temperature = override.temperature;
-  if (override.prompt) agent.config.system = override.prompt;
+  if (override.prompt) agent.config.prompt = override.prompt;
   if (override.prompt_append) {
-    agent.config.system = `${agent.config.system}\n\n${override.prompt_append}`;
+    agent.config.prompt = `${agent.config.prompt}\n\n${override.prompt_append}`;
   }
 }
 
-type SubagentName = Exclude<AgentName, "orchestrator">;
-type SubagentInfo = { factory: AgentFactory; shortDesc: string };
+type PermissionValue = "ask" | "allow" | "deny";
 
-/** Short descriptions for each subagent (used in tool descriptions) */
-export const SUBAGENT_INFO = {
-  explore: { factory: createExploreAgent, shortDesc: "codebase grep" },
-  librarian: { factory: createLibrarianAgent, shortDesc: "docs/GitHub" },
-  oracle: { factory: createOracleAgent, shortDesc: "strategy" },
-  "frontend-ui-ux-engineer": { factory: createFrontendAgent, shortDesc: "UI/UX" },
-  "document-writer": { factory: createDocumentWriterAgent, shortDesc: "docs" },
-  "multimodal-looker": { factory: createMultimodalAgent, shortDesc: "image/visual analysis" },
-  "code-simplicity-reviewer": { factory: createSimplicityReviewerAgent, shortDesc: "code review" },
-} as const satisfies Record<SubagentName, SubagentInfo>;
-
-/** Generate agent list string for tool descriptions */
-export function getAgentListDescription(): string {
-  return (Object.entries(SUBAGENT_INFO) as [SubagentName, SubagentInfo][])
-    .map(([name, { shortDesc }]) => `${name} (${shortDesc})`)
-    .join(", ");
+function applyDefaultPermissions(agent: AgentDefinition): void {
+  const existing = (agent.config.permission ?? {}) as Record<string, PermissionValue>;
+  agent.config.permission = { ...existing, question: "allow" } as SDKAgentConfig["permission"];
 }
+
+type SubagentName = Exclude<AgentName, "orchestrator">;
+
+/** Agent factories indexed by name */
+const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
+  explore: createExploreAgent,
+  librarian: createLibrarianAgent,
+  oracle: createOracleAgent,
+  "frontend-ui-ux-engineer": createFrontendAgent,
+  "document-writer": createDocumentWriterAgent,
+  "multimodal-looker": createMultimodalAgent,
+  "code-simplicity-reviewer": createSimplicityReviewerAgent,
+};
 
 /** Get list of agent names */
 export function getAgentNames(): SubagentName[] {
-  return Object.keys(SUBAGENT_INFO) as SubagentName[];
+  return Object.keys(SUBAGENT_FACTORIES) as SubagentName[];
 }
 
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
@@ -53,8 +52,8 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const agentOverrides = config?.agents ?? {};
 
   // 1. Gather all sub-agent proto-definitions
-  const protoSubAgents = (Object.entries(SUBAGENT_INFO) as [SubagentName, SubagentInfo][]).map(
-    ([name, { factory }]) => factory(DEFAULT_MODELS[name])
+  const protoSubAgents = (Object.entries(SUBAGENT_FACTORIES) as [SubagentName, AgentFactory][]).map(
+    ([name, factory]) => factory(DEFAULT_MODELS[name])
   );
 
   // 2. Apply common filtering and overrides
@@ -71,7 +70,8 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   // 3. Create Orchestrator (with its own overrides)
   const orchestratorModel =
     agentOverrides["orchestrator"]?.model ?? DEFAULT_MODELS["orchestrator"];
-  const orchestrator = createOrchestratorAgent(orchestratorModel, allSubAgents);
+  const orchestrator = createOrchestratorAgent(orchestratorModel);
+  applyDefaultPermissions(orchestrator);
   const oOverride = agentOverrides["orchestrator"];
   if (oOverride) {
     applyOverrides(orchestrator, oOverride);
@@ -82,5 +82,5 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
 
 export function getAgentConfigs(config?: PluginConfig): Record<string, SDKAgentConfig> {
   const agents = createAgents(config);
-  return Object.fromEntries(agents.map((a) => [a.name, a.config]));
+  return Object.fromEntries(agents.map((a) => [a.name, { ...a.config, description: a.description }]));
 }

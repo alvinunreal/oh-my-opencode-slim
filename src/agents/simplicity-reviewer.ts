@@ -3,11 +3,11 @@ import type { AgentDefinition } from "./orchestrator";
 export function createSimplicityReviewerAgent(model: string): AgentDefinition {
   return {
     name: "code-simplicity-reviewer",
-    description: "Ruthless code simplification and YAGNI principle enforcement",
+    description: "Code complexity analysis and YAGNI enforcement. Use after major refactors or before finalizing PRs to simplify code.",
     config: {
       model,
       temperature: 0.1,
-      system: SIMPLICITY_REVIEWER_PROMPT,
+      prompt: SIMPLICITY_REVIEWER_PROMPT,
     },
   };
 }

@@ -7,4 +7,5 @@ import type { RemoteMcpConfig } from "./types";
 export const context7: RemoteMcpConfig = {
   type: "remote",
   url: "https://mcp.context7.com/mcp",
+  oauth: false,
 };

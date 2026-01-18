@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { getAgentConfigs } from "./agents";
-import { BackgroundTaskManager } from "./features";
+import { BackgroundTaskManager, TmuxSessionManager } from "./features";
 import {
   createBackgroundTools,
   lsp_goto_definition,
@@ -11,16 +11,51 @@ import {
   ast_grep_search,
   ast_grep_replace,
   antigravity_quota,
+  createSkillTools,
+  SkillMcpManager,
 } from "./tools";
-import { loadPluginConfig } from "./config";
+import { loadPluginConfig, type TmuxConfig } from "./config";
 import { createBuiltinMcps } from "./mcp";
+import { createAutoUpdateCheckerHook } from "./hooks";
+import { startTmuxCheck } from "./utils";
+import { log } from "./shared/logger";
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
   const agents = getAgentConfigs(config);
-  const backgroundManager = new BackgroundTaskManager(ctx);
-  const backgroundTools = createBackgroundTools(ctx, backgroundManager);
+
+  // Parse tmux config with defaults
+  const tmuxConfig: TmuxConfig = {
+    enabled: config.tmux?.enabled ?? false,
+    layout: config.tmux?.layout ?? "main-vertical",
+    main_pane_size: config.tmux?.main_pane_size ?? 60,
+  };
+
+  log("[plugin] initialized with tmux config", { 
+    tmuxConfig, 
+    rawTmuxConfig: config.tmux,
+    directory: ctx.directory 
+  });
+
+  // Start background tmux check if enabled
+  if (tmuxConfig.enabled) {
+    startTmuxCheck();
+  }
+
+  const backgroundManager = new BackgroundTaskManager(ctx, tmuxConfig, config);
+  const backgroundTools = createBackgroundTools(ctx, backgroundManager, tmuxConfig, config);
   const mcps = createBuiltinMcps(config.disabled_mcps);
+  const skillMcpManager = SkillMcpManager.getInstance();
+  const skillTools = createSkillTools(skillMcpManager);
+
+  // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
+  const tmuxSessionManager = new TmuxSessionManager(ctx, tmuxConfig);
+
+  // Initialize auto-update checker hook
+  const autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
+    showStartupToast: true,
+    autoUpdate: true,
+  });
 
   return {
     name: "oh-my-opencode-slim",
@@ -37,6 +72,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ast_grep_search,
       ast_grep_replace,
       antigravity_quota,
+      ...skillTools,
     },
 
     mcp: mcps,
@@ -59,10 +95,21 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         Object.assign(configMcp, mcps);
       }
     },
+
+    event: async (input) => {
+      // Handle auto-update checking
+      await autoUpdateChecker.event(input);
+      
+      // Handle tmux pane spawning for OpenCode's Task tool sessions
+      await tmuxSessionManager.onSessionCreated(input.event as {
+        type: string;
+        properties?: { info?: { id?: string; parentID?: string; title?: string } };
+      });
+    },
   };
 };
 
 export default OhMyOpenCodeLite;
 
-export type { PluginConfig, AgentOverrideConfig, AgentName, McpName } from "./config";
+export type { PluginConfig, AgentOverrideConfig, AgentName, McpName, TmuxConfig, TmuxLayout } from "./config";
 export type { RemoteMcpConfig } from "./mcp";

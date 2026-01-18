@@ -15,3 +15,6 @@ export { ast_grep_search, ast_grep_replace } from "./ast-grep";
 
 // Antigravity quota tool
 export { antigravity_quota } from "./quota";
+
+// Skill tools
+export { createSkillTools, SkillMcpManager } from "./skill";

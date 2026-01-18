@@ -3,11 +3,11 @@ import type { AgentDefinition } from "./orchestrator";
 export function createExploreAgent(model: string): AgentDefinition {
   return {
     name: "explore",
-    description: "Fast codebase search and pattern matching",
+    description: "Fast codebase search and pattern matching. Use for finding files, locating code patterns, and answering 'where is X?' questions.",
     config: {
       model,
       temperature: 0.1,
-      system: EXPLORE_PROMPT,
+      prompt: EXPLORE_PROMPT,
     },
   };
 }
@@ -39,7 +39,7 @@ const EXPLORE_PROMPT = `You are Explorer - a fast codebase navigation specialist
 **Output Format**:
 <results>
 <files>
-- /path/to/file.ts:42 — Brief description of what's there
+- /path/to/file.ts:42 - Brief description of what's there
 </files>
 <answer>
 Concise answer to the question

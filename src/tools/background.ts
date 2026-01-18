@@ -1,12 +1,16 @@
 import { tool, type PluginInput, type ToolDefinition } from "@opencode-ai/plugin";
 import type { BackgroundTaskManager } from "../features";
-import { getAgentListDescription, getAgentNames } from "../agents";
+import { getAgentNames } from "../agents";
 import {
   POLL_INTERVAL_MS,
   MAX_POLL_TIME_MS,
   DEFAULT_TIMEOUT_MS,
   STABLE_POLLS_THRESHOLD,
 } from "../config";
+import type { TmuxConfig } from "../config/schema";
+import type { PluginConfig } from "../config";
+import { applyAgentVariant, resolveAgentVariant } from "../utils";
+import { log } from "../shared/logger";
 
 const z = tool.schema;
 
@@ -19,15 +23,16 @@ type ToolContext = {
 
 export function createBackgroundTools(
   ctx: PluginInput,
-  manager: BackgroundTaskManager
+  manager: BackgroundTaskManager,
+  tmuxConfig?: TmuxConfig,
+  pluginConfig?: PluginConfig
 ): Record<string, ToolDefinition> {
-  const agentList = getAgentListDescription();
   const agentNames = getAgentNames().join(", ");
 
   const background_task = tool({
     description: `Run agent task. Use sync=true to wait for result, sync=false (default) to run in background.
 
-Agents: ${agentList}.
+Agents: ${agentNames}.
 
 Async mode returns task_id immediately - use \`background_output\` to get results.
 Sync mode blocks until completion and returns the result directly.`,
@@ -46,7 +51,7 @@ Sync mode blocks until completion and returns the result directly.`,
       const isSync = args.sync === true;
 
       if (isSync) {
-        return await executeSync(description, prompt, agent, tctx, ctx, args.session_id as string | undefined);
+        return await executeSync(description, prompt, agent, tctx, ctx, tmuxConfig, pluginConfig, args.session_id as string | undefined);
       }
 
       const task = await manager.launch({
@@ -138,6 +143,8 @@ async function executeSync(
   agent: string,
   toolContext: ToolContext,
   ctx: PluginInput,
+  tmuxConfig?: TmuxConfig,
+  pluginConfig?: PluginConfig,
   existingSessionId?: string
 ): Promise<string> {
   let sessionID: string;
@@ -164,17 +171,36 @@ async function executeSync(
       return `Error: Failed to create session: ${createResult.error}`;
     }
     sessionID = createResult.data.id;
+
+    // Give TmuxSessionManager time to spawn the pane via event hook
+    // before we send the prompt (so the TUI can receive streaming updates)
+    if (tmuxConfig?.enabled) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
   // Disable recursive delegation tools to prevent infinite loops
+  log(`[background-sync] launching sync task for agent="${agent}"`, { description });
+  const resolvedVariant = resolveAgentVariant(pluginConfig, agent);
+
+  type PromptBody = {
+    agent: string;
+    tools: { background_task: boolean; task: boolean };
+    parts: Array<{ type: "text"; text: string }>;
+    variant?: string;
+  };
+
+  const baseBody: PromptBody = {
+    agent,
+    tools: { background_task: false, task: false },
+    parts: [{ type: "text" as const, text: prompt }],
+  };
+  const promptBody = applyAgentVariant(resolvedVariant, baseBody);
+
   try {
     await ctx.client.session.prompt({
       path: { id: sessionID },
-      body: {
-        agent,
-        tools: { background_task: false, task: false },
-        parts: [{ type: "text", text: prompt }],
-      },
+      body: promptBody,
     });
   } catch (error) {
     return `Error: Failed to send prompt: ${error instanceof Error ? error.message : String(error)}
@@ -257,6 +283,7 @@ session_id: ${sessionID}
 
   const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
 
+  // Pane closing is handled by TmuxSessionManager via polling
   return `${responseText}
 
 <task_metadata>

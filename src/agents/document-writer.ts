@@ -3,11 +3,11 @@ import type { AgentDefinition } from "./orchestrator";
 export function createDocumentWriterAgent(model: string): AgentDefinition {
   return {
     name: "document-writer",
-    description: "Technical documentation and READMEs",
+    description: "Technical documentation writer. Use for README files, API docs, architecture docs, and user guides.",
     config: {
       model,
       temperature: 0.3,
-      system: DOCUMENT_WRITER_PROMPT,
+      prompt: DOCUMENT_WRITER_PROMPT,
     },
   };
 }

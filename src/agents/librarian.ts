@@ -3,11 +3,11 @@ import type { AgentDefinition } from "./orchestrator";
 export function createLibrarianAgent(model: string): AgentDefinition {
   return {
     name: "librarian",
-    description: "External documentation and library research",
+    description: "External documentation and library research. Use for official docs lookup, GitHub examples, and understanding library internals.",
     config: {
       model,
       temperature: 0.1,
-      system: LIBRARIAN_PROMPT,
+      prompt: LIBRARIAN_PROMPT,
     },
   };
 }
