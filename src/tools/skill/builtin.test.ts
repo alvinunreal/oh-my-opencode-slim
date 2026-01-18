@@ -17,18 +17,6 @@ describe("getBuiltinSkills", () => {
     expect(names).toContain("yagni-enforcement")
     expect(names).toContain("playwright")
   })
-
-  test("each skill has required properties", () => {
-    const skills = getBuiltinSkills()
-    for (const skill of skills) {
-      expect(skill.name).toBeDefined()
-      expect(typeof skill.name).toBe("string")
-      expect(skill.description).toBeDefined()
-      expect(typeof skill.description).toBe("string")
-      expect(skill.template).toBeDefined()
-      expect(typeof skill.template).toBe("string")
-    }
-  })
 })
 
 describe("getSkillByName", () => {

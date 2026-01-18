@@ -51,37 +51,24 @@ describe("loadPluginConfig", () => {
     expect(config.agents?.oracle?.model).toBe("test/model")
   })
 
-  test("validates config against schema", () => {
+  test("ignores invalid config (schema violation or malformed JSON)", () => {
     const projectDir = path.join(tempDir, "project")
     const projectConfigDir = path.join(projectDir, ".opencode")
     fs.mkdirSync(projectConfigDir, { recursive: true })
     
-    // Invalid temperature (out of range) - should be ignored
+    // Test 1: Invalid temperature (out of range)
     fs.writeFileSync(
       path.join(projectConfigDir, "oh-my-opencode-slim.json"),
-      JSON.stringify({
-        agents: {
-          oracle: { temperature: 5 }, // Invalid: max is 2
-        },
-      })
+      JSON.stringify({ agents: { oracle: { temperature: 5 } } })
     )
+    expect(loadPluginConfig(projectDir)).toEqual({})
 
-    const config = loadPluginConfig(projectDir)
-    // Invalid config should be ignored, returning empty
-    expect(config).toEqual({})
-  })
-
-  test("ignores malformed JSON", () => {
-    const projectDir = path.join(tempDir, "project")
-    const projectConfigDir = path.join(projectDir, ".opencode")
-    fs.mkdirSync(projectConfigDir, { recursive: true })
+    // Test 2: Malformed JSON
     fs.writeFileSync(
       path.join(projectConfigDir, "oh-my-opencode-slim.json"),
       "{ invalid json }"
     )
-
-    const config = loadPluginConfig(projectDir)
-    expect(config).toEqual({})
+    expect(loadPluginConfig(projectDir)).toEqual({})
   })
 })
 
