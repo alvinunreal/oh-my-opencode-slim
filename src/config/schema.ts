@@ -37,7 +37,7 @@ export const McpNameSchema = z.enum(["websearch", "context7", "grep_app"]);
 export type McpName = z.infer<typeof McpNameSchema>;
 
 // Skill names
-export const SkillNameSchema = z.enum(["technical-writing", "yagni-enforcement", "playwright"]);
+export const SkillNameSchema = z.enum(["yagni-enforcement", "playwright"]);
 export type SkillName = z.infer<typeof SkillNameSchema>;
 
 // Skill configuration - maps skill name to allowed agents

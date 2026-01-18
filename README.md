@@ -29,7 +29,6 @@
   - [Librarian](#librarian)
   - [Designer](#designer)
 - [🧩 **Skills**](#-skills)
-  - [Technical Writing](#technical-writing)
   - [YAGNI Enforcement](#yagni-enforcement)
   - [Playwright Integration](#playwright-integration)
 - [🛠️ **Tools & Capabilities**](#tools--capabilities)

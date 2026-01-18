@@ -17,13 +17,6 @@ function loadSkillTemplate(filename: string): string {
   }
 }
 
-const technicalWritingSkill: SkillDefinition = {
-  name: "technical-writing",
-  description:
-    "Technical documentation writer. Use for README files, API docs, architecture docs, and user guides.",
-  template: loadSkillTemplate("technical-writing.md"),
-};
-
 const yagniEnforcementSkill: SkillDefinition = {
   name: "yagni-enforcement",
   description:
@@ -45,7 +38,6 @@ const playwrightSkill: SkillDefinition = {
 };
 
 const builtinSkillsMap = new Map<string, SkillDefinition>([
-  [technicalWritingSkill.name, technicalWritingSkill],
   [yagniEnforcementSkill.name, yagniEnforcementSkill],
   [playwrightSkill.name, playwrightSkill],
 ]);
