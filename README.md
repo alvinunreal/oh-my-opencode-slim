@@ -10,7 +10,7 @@
 
 </div>
 
-> Slimmed-down fork of [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) - focused on core agent orchestration without the extra bells and whistles.
+> Slimmed-down fork of [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) - focused on core agent orchestration with low token consumption.
 
 > **[Antigravity](https://antigravity.google) subscription recommended.** The pantheon is tuned for Antigravity's model routing. Other providers work, but you'll get the best experience with Antigravity.
 
@@ -333,6 +333,8 @@ Identify unnecessary complexity, challenge premature abstractions, estimate LOC 
 
 ### Tmux Integration
 
+> ⚠️ **Known Issue:** When the server port is enabled, only one OpenCode instance can be opened at a time. We're tracking this in [issue #15](https://github.com/alvinunreal/oh-my-opencode-slim/issues/15), and there's an upstream PR to OpenCode: [opencode#9099](https://github.com/anomalyco/opencode/issues/9099).
+
 <img src="img/tmux.png" alt="Tmux Integration" width="800">
 
 **Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new tmux panes automatically spawn showing each agent's live progress. No more waiting in the dark.
@@ -362,8 +364,6 @@ Identify unnecessary complexity, challenge premature abstractions, estimate LOC 
    tmux
    opencode
    ```
-
-That's it. When agents spawn, they'll appear in new panes.
 
 #### Layout Options
 
