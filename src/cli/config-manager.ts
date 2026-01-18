@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "no
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ConfigMergeResult, DetectedConfig, InstallConfig } from "./types"
+import { DEFAULT_AGENT_SKILLS } from "../tools/skill/builtin"
 
 const PACKAGE_NAME = "oh-my-opencode-slim"
 
@@ -342,15 +343,6 @@ const MODEL_MAPPINGS = {
   },
 } as const;
 
-// Default skills per agent - mirrors DEFAULT_AGENT_SKILLS from builtin.ts
-const DEFAULT_SKILLS: Record<string, string[]> = {
-  orchestrator: ["*"],
-  designer: ["playwright"],
-  oracle: [],
-  librarian: [],
-  explorer: [],
-};
-
 export function generateLiteConfig(installConfig: InstallConfig): Record<string, unknown> {
   // Determine base provider
   const baseProvider = installConfig.hasAntigravity
@@ -368,20 +360,20 @@ export function generateLiteConfig(installConfig: InstallConfig): Record<string,
     const agents: Record<string, { model: string; skills: string[] }> = Object.fromEntries(
       Object.entries(MODEL_MAPPINGS[baseProvider]).map(([k, v]) => [
         k,
-        { model: v, skills: DEFAULT_SKILLS[k] ?? [] },
+        { model: v, skills: DEFAULT_AGENT_SKILLS[k as keyof typeof DEFAULT_AGENT_SKILLS] ?? [] },
       ])
     );
 
     // Apply provider-specific overrides for mixed configurations
     if (installConfig.hasAntigravity) {
       if (installConfig.hasOpenAI) {
-        agents["oracle"] = { model: "openai/gpt-5.2-codex", skills: DEFAULT_SKILLS["oracle"] ?? [] };
+        agents["oracle"] = { model: "openai/gpt-5.2-codex", skills: DEFAULT_AGENT_SKILLS["oracle"] ?? [] };
       }
       if (installConfig.hasCerebras) {
-        agents["explorer"] = { model: "cerebras/zai-glm-4.7", skills: DEFAULT_SKILLS["explorer"] ?? [] };
+        agents["explorer"] = { model: "cerebras/zai-glm-4.7", skills: DEFAULT_AGENT_SKILLS["explorer"] ?? [] };
       }
     } else if (installConfig.hasOpenAI && installConfig.hasCerebras) {
-      agents["explorer"] = { model: "cerebras/zai-glm-4.7", skills: DEFAULT_SKILLS["explorer"] ?? [] };
+      agents["explorer"] = { model: "cerebras/zai-glm-4.7", skills: DEFAULT_AGENT_SKILLS["explorer"] ?? [] };
     }
     config.agents = agents;
   }

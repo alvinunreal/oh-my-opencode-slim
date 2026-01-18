@@ -1,9 +1,5 @@
 import { z } from "zod";
 
-// Skill names - "*" means all skills
-export const SkillNameSchema = z.enum(["yagni-enforcement", "playwright", "*"]);
-export type SkillName = z.infer<typeof SkillNameSchema>;
-
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const AgentOverrideConfigSchema = z.object({
   model: z.string().optional(),

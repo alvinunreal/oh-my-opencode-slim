@@ -1,6 +1,12 @@
 import type { SkillDefinition } from "./types";
 import type { PluginConfig, AgentName } from "../../config/schema";
 
+/** Map old agent names to new names for backward compatibility */
+const AGENT_ALIASES: Record<string, string> = {
+  "explore": "explorer",
+  "frontend-ui-ux-engineer": "designer",
+};
+
 /** Default skills per agent - "*" means all skills */
 export const DEFAULT_AGENT_SKILLS: Record<AgentName, string[]> = {
   orchestrator: ["*"],
@@ -198,10 +204,12 @@ export function canAgentUseSkill(
 
 /**
  * Get the skill list for an agent (from config or defaults)
+ * Supports backward compatibility with old agent names via AGENT_ALIASES
  */
 function getAgentSkillList(agentName: string, config?: PluginConfig): string[] {
-  // Check if config has override for this agent
-  const agentConfig = config?.agents?.[agentName];
+  // Check if config has override for this agent (new name first, then alias)
+  const agentConfig = config?.agents?.[agentName] ??
+    config?.agents?.[Object.keys(AGENT_ALIASES).find(k => AGENT_ALIASES[k] === agentName) ?? ""];
   if (agentConfig?.skills !== undefined) {
     return agentConfig.skills;
   }
