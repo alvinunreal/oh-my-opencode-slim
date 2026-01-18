@@ -1,6 +1,19 @@
 import type { PluginInput } from "@opencode-ai/plugin";
 import { POLL_INTERVAL_BACKGROUND_MS, POLL_INTERVAL_SLOW_MS } from "../config";
 import type { TmuxConfig } from "../config/schema";
+import type { PluginConfig } from "../config";
+import { applyAgentVariant, resolveAgentVariant } from "../utils";
+import { log } from "../shared/logger";
+type PromptBody = {
+  messageID?: string;
+  model?: { providerID: string; modelID: string };
+  agent?: string;
+  noReply?: boolean;
+  system?: string;
+  tools?: { [key: string]: boolean };
+  parts: Array<{ type: "text"; text: string }>;
+  variant?: string;
+};
 
 type OpencodeClient = PluginInput["client"];
 
@@ -34,11 +47,13 @@ export class BackgroundTaskManager {
   private directory: string;
   private pollInterval?: ReturnType<typeof setInterval>;
   private tmuxEnabled: boolean;
+  private config?: PluginConfig;
 
-  constructor(ctx: PluginInput, tmuxConfig?: TmuxConfig) {
+  constructor(ctx: PluginInput, tmuxConfig?: TmuxConfig, config?: PluginConfig) {
     this.client = ctx.client;
     this.directory = ctx.directory;
     this.tmuxEnabled = tmuxConfig?.enabled ?? false;
+    this.config = config;
   }
 
   async launch(opts: LaunchOptions): Promise<BackgroundTask> {
@@ -79,13 +94,27 @@ export class BackgroundTaskManager {
       promptQuery.model = opts.model;
     }
 
+    log(`[background-manager] launching task for agent="${opts.agent}"`, { description: opts.description });
+    const resolvedVariant = resolveAgentVariant(this.config, opts.agent);
+    const promptBody = applyAgentVariant(resolvedVariant, {
+      agent: opts.agent,
+      tools: { background_task: false, task: false },
+      parts: [{ type: "text" as const, text: opts.prompt }],
+    } as PromptBody) as unknown as {
+      messageID?: string;
+      model?: { providerID: string; modelID: string };
+      agent?: string;
+      noReply?: boolean;
+      system?: string;
+      tools?: { [key: string]: boolean };
+      parts: Array<{ type: "text"; text: string }>;
+      variant?: string;
+    };
+
+
     await this.client.session.prompt({
       path: { id: session.data.id },
-      body: {
-        agent: opts.agent,
-        tools: { background_task: false, task: false },
-        parts: [{ type: "text", text: opts.prompt }],
-      },
+      body: promptBody,
       query: promptQuery,
     });
 

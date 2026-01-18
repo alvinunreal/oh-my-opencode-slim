@@ -42,8 +42,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     startTmuxCheck();
   }
 
-  const backgroundManager = new BackgroundTaskManager(ctx, tmuxConfig);
-  const backgroundTools = createBackgroundTools(ctx, backgroundManager, tmuxConfig);
+  const backgroundManager = new BackgroundTaskManager(ctx, tmuxConfig, config);
+  const backgroundTools = createBackgroundTools(ctx, backgroundManager, tmuxConfig, config);
   const mcps = createBuiltinMcps(config.disabled_mcps);
   const skillMcpManager = SkillMcpManager.getInstance();
   const skillTools = createSkillTools(skillMcpManager);

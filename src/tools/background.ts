@@ -8,6 +8,9 @@ import {
   STABLE_POLLS_THRESHOLD,
 } from "../config";
 import type { TmuxConfig } from "../config/schema";
+import type { PluginConfig } from "../config";
+import { applyAgentVariant, resolveAgentVariant } from "../utils";
+import { log } from "../shared/logger";
 
 const z = tool.schema;
 
@@ -21,7 +24,8 @@ type ToolContext = {
 export function createBackgroundTools(
   ctx: PluginInput,
   manager: BackgroundTaskManager,
-  tmuxConfig?: TmuxConfig
+  tmuxConfig?: TmuxConfig,
+  pluginConfig?: PluginConfig
 ): Record<string, ToolDefinition> {
   const agentNames = getAgentNames().join(", ");
 
@@ -47,7 +51,7 @@ Sync mode blocks until completion and returns the result directly.`,
       const isSync = args.sync === true;
 
       if (isSync) {
-        return await executeSync(description, prompt, agent, tctx, ctx, tmuxConfig, args.session_id as string | undefined);
+        return await executeSync(description, prompt, agent, tctx, ctx, tmuxConfig, pluginConfig, args.session_id as string | undefined);
       }
 
       const task = await manager.launch({
@@ -140,6 +144,7 @@ async function executeSync(
   toolContext: ToolContext,
   ctx: PluginInput,
   tmuxConfig?: TmuxConfig,
+  pluginConfig?: PluginConfig,
   existingSessionId?: string
 ): Promise<string> {
   let sessionID: string;
@@ -175,14 +180,27 @@ async function executeSync(
   }
 
   // Disable recursive delegation tools to prevent infinite loops
+  log(`[background-sync] launching sync task for agent="${agent}"`, { description });
+  const resolvedVariant = resolveAgentVariant(pluginConfig, agent);
+
+  type PromptBody = {
+    agent: string;
+    tools: { background_task: boolean; task: boolean };
+    parts: Array<{ type: "text"; text: string }>;
+    variant?: string;
+  };
+
+  const baseBody: PromptBody = {
+    agent,
+    tools: { background_task: false, task: false },
+    parts: [{ type: "text" as const, text: prompt }],
+  };
+  const promptBody = applyAgentVariant(resolvedVariant, baseBody);
+
   try {
     await ctx.client.session.prompt({
       path: { id: sessionID },
-      body: {
-        agent,
-        tools: { background_task: false, task: false },
-        parts: [{ type: "text", text: prompt }],
-      },
+      body: promptBody,
     });
   } catch (error) {
     return `Error: Failed to send prompt: ${error instanceof Error ? error.message : String(error)}
