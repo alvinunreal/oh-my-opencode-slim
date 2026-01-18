@@ -161,7 +161,6 @@ If the user's approach seems problematic:
 ## Skills
 You have access to specialized skills:
 
-- **technical-writing**: Documentation and knowledge capture (README, API docs, architecture docs)
 - **yagni-enforcement**: Code complexity analysis and simplification
 - **playwright**: Browser automation and visual testing
 
