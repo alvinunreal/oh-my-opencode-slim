@@ -13,6 +13,7 @@ import {
   USER_CONFIG_DIR,
 } from "./constants"
 import { log } from "../../shared/logger"
+import { stripJsonComments } from "../../cli/config-manager"
 
 function isPrereleaseVersion(version: string): boolean {
   return version.includes("-")
@@ -38,11 +39,6 @@ export function extractChannel(version: string | null): string {
   return "latest"
 }
 
-function stripJsonComments(json: string): string {
-  return json
-    .replace(/\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g, (m, g) => (g ? "" : m))
-    .replace(/,(\s*[}\]])/g, "$1")
-}
 
 function getConfigPaths(directory: string): string[] {
   const paths = [

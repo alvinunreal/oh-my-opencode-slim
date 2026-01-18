@@ -15,6 +15,10 @@ function getConfigJson(): string {
   return join(getConfigDir(), "opencode.json")
 }
 
+function getConfigJsonc(): string {
+  return join(getConfigDir(), "opencode.jsonc")
+}
+
 function getLiteConfig(): string {
   return join(getConfigDir(), "oh-my-opencode-slim.json")
 }
@@ -26,23 +30,82 @@ function ensureConfigDir(): void {
   }
 }
 
+/**
+ * Strip JSON comments (single-line // and multi-line) and trailing commas for JSONC support.
+ * Note: When config files are read and written back, any comments will be lost as
+ * JSON.stringify produces standard JSON without comments.
+ */
+export function stripJsonComments(json: string): string {
+  // Regex matches three alternatives (in order):
+  //   1. \\\" - Escaped quotes (preserve these)
+  //   2. \"(?:\\\"|[^\"])*\" - Complete quoted strings (preserve content including // or /*)
+  //   3. (\/\/.*|\/\*[\s\S]*?\*\/) - Single-line or multi-line comments (capture group 1 - strip these)
+  //
+  // The replace callback: if group 1 exists (comment), replace with empty string; otherwise keep match
+  const commentPattern = /\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g
+
+  // Remove trailing commas before closing braces or brackets
+  // Uses same string-aware pattern to avoid corrupting strings containing ,} or ,]
+  const trailingCommaPattern = /\\"|"(?:\\"|[^"])*"|(,)(\s*[}\]])/g
+
+  return json
+    .replace(commentPattern, (match, commentGroup) => (commentGroup ? "" : match))
+    .replace(trailingCommaPattern, (match, comma, closing) =>
+      comma ? closing : match
+    )
+}
+
 interface OpenCodeConfig {
   plugin?: string[]
   provider?: Record<string, unknown>
   [key: string]: unknown
 }
 
-function parseConfig(path: string): OpenCodeConfig | null {
+function parseConfigFile(path: string): OpenCodeConfig | null {
   try {
     if (!existsSync(path)) return null
     const stat = statSync(path)
     if (stat.size === 0) return null
     const content = readFileSync(path, "utf-8")
     if (content.trim().length === 0) return null
-    return JSON.parse(content) as OpenCodeConfig
+    return JSON.parse(stripJsonComments(content)) as OpenCodeConfig
   } catch {
     return null
   }
+}
+
+function parseConfig(path: string): OpenCodeConfig | null {
+  const config = parseConfigFile(path)
+  if (config) return config
+
+  if (path.endsWith(".json")) {
+    const jsoncPath = path.replace(/\.json$/, ".jsonc")
+    return parseConfigFile(jsoncPath)
+  }
+  return null
+}
+
+function getExistingConfigPath(): string {
+  const jsonPath = getConfigJson()
+  if (existsSync(jsonPath)) return jsonPath
+  
+  const jsoncPath = getConfigJsonc()
+  if (existsSync(jsoncPath)) return jsoncPath
+  
+  return jsonPath
+}
+
+/**
+ * Write config to file with proper warning if writing to .jsonc file.
+ * Note: Comments in JSONC files will be lost as JSON.stringify produces standard JSON.
+ */
+function writeConfig(configPath: string, config: OpenCodeConfig): void {
+  if (configPath.endsWith(".jsonc")) {
+    console.warn(
+      "[config-manager] Writing to .jsonc file - comments will not be preserved"
+    )
+  }
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
 }
 
 export async function isOpenCodeInstalled(): Promise<boolean> {
@@ -107,7 +170,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     }
   }
 
-  const configPath = getConfigJson()
+  const configPath = getExistingConfigPath()
 
   try {
     let config = parseConfig(configPath) ?? {}
@@ -122,7 +185,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     filteredPlugins.push(PACKAGE_NAME)
     config.plugin = filteredPlugins
 
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+    writeConfig(configPath, config)
     return { success: true, configPath }
   } catch (err) {
     return {
@@ -134,7 +197,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
 }
 
 export async function addAuthPlugins(installConfig: InstallConfig): Promise<ConfigMergeResult> {
-  const configPath = getConfigJson()
+  const configPath = getExistingConfigPath()
 
   try {
     ensureConfigDir()
@@ -153,7 +216,7 @@ export async function addAuthPlugins(installConfig: InstallConfig): Promise<Conf
     }
 
     config.plugin = plugins
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+    writeConfig(configPath, config)
     return { success: true, configPath }
   } catch (err) {
     return {
@@ -201,7 +264,7 @@ const GOOGLE_PROVIDER_CONFIG = {
 }
 
 export function addProviderConfig(installConfig: InstallConfig): ConfigMergeResult {
-  const configPath = getConfigJson()
+  const configPath = getExistingConfigPath()
 
   try {
     ensureConfigDir()
@@ -213,7 +276,7 @@ export function addProviderConfig(installConfig: InstallConfig): ConfigMergeResu
       config.provider = providers
     }
 
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+    writeConfig(configPath, config)
     return { success: true, configPath }
   } catch (err) {
     return {
@@ -228,7 +291,7 @@ export function addProviderConfig(installConfig: InstallConfig): ConfigMergeResu
  * Add server configuration to opencode.json for tmux integration
  */
 export function addServerConfig(installConfig: InstallConfig): ConfigMergeResult {
-  const configPath = getConfigJson()
+  const configPath = getExistingConfigPath()
 
   try {
     ensureConfigDir()
@@ -243,7 +306,7 @@ export function addServerConfig(installConfig: InstallConfig): ConfigMergeResult
       config.server = server
     }
 
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+    writeConfig(configPath, config)
     return { success: true, configPath }
   } catch (err) {
     return {
@@ -352,7 +415,7 @@ export function writeLiteConfig(installConfig: InstallConfig): ConfigMergeResult
  * Disable OpenCode's default subagents since the plugin provides its own
  */
 export function disableDefaultAgents(): ConfigMergeResult {
-  const configPath = getConfigJson()
+  const configPath = getExistingConfigPath()
 
   try {
     ensureConfigDir()
@@ -363,7 +426,7 @@ export function disableDefaultAgents(): ConfigMergeResult {
     agent.general = { disable: true }
     config.agent = agent
 
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+    writeConfig(configPath, config)
     return { success: true, configPath }
   } catch (err) {
     return {
@@ -383,7 +446,7 @@ export function detectCurrentConfig(): DetectedConfig {
     hasTmux: false,
   }
 
-  const config = parseConfig(getConfigJson())
+  const config = parseConfig(getExistingConfigPath())
   if (!config) return result
 
   const plugins = config.plugin ?? []
