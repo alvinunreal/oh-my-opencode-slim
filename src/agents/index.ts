@@ -22,6 +22,13 @@ function applyOverrides(agent: AgentDefinition, override: AgentOverrideConfig): 
   }
 }
 
+type PermissionValue = "ask" | "allow" | "deny";
+
+function applyDefaultPermissions(agent: AgentDefinition): void {
+  const existing = (agent.config.permission ?? {}) as Record<string, PermissionValue>;
+  agent.config.permission = { ...existing, question: "allow" } as SDKAgentConfig["permission"];
+}
+
 type SubagentName = Exclude<AgentName, "orchestrator">;
 
 /** Agent factories indexed by name */
@@ -64,6 +71,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const orchestratorModel =
     agentOverrides["orchestrator"]?.model ?? DEFAULT_MODELS["orchestrator"];
   const orchestrator = createOrchestratorAgent(orchestratorModel);
+  applyDefaultPermissions(orchestrator);
   const oOverride = agentOverrides["orchestrator"];
   if (oOverride) {
     applyOverrides(orchestrator, oOverride);
