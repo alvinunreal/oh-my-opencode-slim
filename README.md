@@ -41,6 +41,8 @@
   - [Playwright Integration](#playwright-integration)
 - [🔌 **MCP Servers**](#mcp-servers)
 - [⚙️ **Configuration**](#configuration)
+  - [Disabling Agents](#disabling-agents)
+  - [Agent Variants](#agent-variants)
 - [🗑️ **Uninstallation**](#uninstallation)
 
 ---
@@ -534,6 +536,29 @@ You can disable specific agents using the `disabled_agents` array:
   "disabled_agents": ["multimodal-looker", "code-simplicity-reviewer"]
 }
 ```
+
+### Agent Variants
+
+You can configure model reasoning variants per agent. Variants control the model's reasoning effort level when spawning background/subagent sessions.
+
+```json
+{
+  "agents": {
+    "oracle": {
+      "variant": "high"
+    },
+    "explore": {
+      "variant": "low"
+    }
+  }
+}
+```
+
+| Option | Type | Values | Description |
+|--------|------|--------|-------------|
+| `agents.<name>.variant` | string | `"low"`, `"medium"`, `"high"` | Reasoning effort level for this agent |
+
+Variants are applied when the plugin launches background tasks or sync agent calls.
 
 ---
 
