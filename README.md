@@ -28,7 +28,7 @@
   - [Oracle](#oracle)
   - [Librarian](#librarian)
   - [Frontend Designer](#frontend-designer)
-  - [Document Writer](#document-writer)
+  - [Scribe](#scribe)
   - [Multimodal Viewer](#multimodal-viewer)
   - [Code Simplifier](#code-simplifier)
 - [🛠️ **Tools & Capabilities**](#tools--capabilities)
@@ -189,8 +189,8 @@ The plugin follows a "Hub and Spoke" model:
 3. **Delegation**:
    - Launches an `@explore` background task to find all auth-related files.
    - Launches a `@librarian` task to check the latest documentation for the auth library used.
-4. **Integration**: Once background results are ready, the Orchestrator performs the refactor.
-5. **Finalization**: Passes the changes to `@document-writer` to update the README.
+4. **Integration**: Once background results are ready, the Orchestrator delegates to `@scribe` for multi-file refactor.
+5. **Review**: Orchestrator deep-reviews the code, fixes any issues directly, marks complete.
 
 ---
 
@@ -278,17 +278,17 @@ Modern responsive design, CSS/Tailwind mastery, micro-animations, component arch
 
 ---
 
-### Document Writer
+### Scribe
 
-<a href="src/agents/document-writer.ts"><img src="img/scribe.png" alt="Document Writer" align="right" width="240"></a>
+<a href="src/agents/scribe.ts"><img src="img/scribe.png" alt="Scribe" align="right" width="240"></a>
 
-> **The Scribe** was there when the first README was written - and wept, for it was incomplete. They have devoted eternity to the sacred art of documentation: clear, scannable, honest. While others ship features, The Scribe ensures those features are understood. Every code example works. Every explanation enlightens.
+> **The Scribe** writes what The Orchestrator dictates - code, docs, tests, whatever is needed. When the thinking is done and decisions are made, The Scribe implements. Fast, clean, focused. They don't question the architecture; they build it. They don't redesign; they deliver.
 
-**Role:** `Technical documentation and knowledge capture`  
-**Model:** `google/gemini-3-flash`  
-**Prompt:** [src/agents/document-writer.ts](src/agents/document-writer.ts)
+**Role:** `Fast implementation of multi-file tasks`  
+**Model:** `cerebras/zai-glm-4.7`  
+**Prompt:** [src/agents/scribe.ts](src/agents/scribe.ts)
 
-README crafting, API documentation, architecture docs, inline comments that don't insult your intelligence. *Match existing style; focus on "why," not just "what."*
+Multi-file implementations, boilerplate generation, scaffolding, repetitive edits. *The Orchestrator thinks; The Scribe writes.*
 
 <br clear="both">
 

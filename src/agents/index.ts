@@ -5,7 +5,7 @@ import { createOracleAgent } from "./oracle";
 import { createLibrarianAgent } from "./librarian";
 import { createExploreAgent } from "./explore";
 import { createFrontendAgent } from "./frontend";
-import { createDocumentWriterAgent } from "./document-writer";
+import { createScribeAgent } from "./scribe";
 import { createMultimodalAgent } from "./multimodal";
 import { createSimplicityReviewerAgent } from "./simplicity-reviewer";
 
@@ -31,7 +31,7 @@ export const SUBAGENT_INFO = {
   librarian: { factory: createLibrarianAgent, shortDesc: "docs/GitHub" },
   oracle: { factory: createOracleAgent, shortDesc: "strategy" },
   "frontend-ui-ux-engineer": { factory: createFrontendAgent, shortDesc: "UI/UX" },
-  "document-writer": { factory: createDocumentWriterAgent, shortDesc: "docs" },
+  scribe: { factory: createScribeAgent, shortDesc: "writes code/docs/tests" },
   "multimodal-looker": { factory: createMultimodalAgent, shortDesc: "image/visual analysis" },
   "code-simplicity-reviewer": { factory: createSimplicityReviewerAgent, shortDesc: "code review" },
 } as const satisfies Record<SubagentName, SubagentInfo>;
