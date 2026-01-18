@@ -30,6 +30,7 @@
   "homepage": "https://github.com/alvinunreal/oh-my-opencode-slim#readme",
   "files": [
     "dist",
+    "skills",
     "README.md",
     "LICENSE"
   ],

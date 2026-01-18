@@ -36,11 +36,25 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 export const McpNameSchema = z.enum(["websearch", "context7", "grep_app"]);
 export type McpName = z.infer<typeof McpNameSchema>;
 
+// Skill names
+export const SkillNameSchema = z.enum(["technical-writing", "yagni-enforcement", "playwright"]);
+export type SkillName = z.infer<typeof SkillNameSchema>;
+
+// Skill configuration - maps skill name to allowed agents
+export const SkillConfigSchema = z.record(
+  z.string(), // skill name
+  z.object({
+    agents: z.array(z.string()), // list of agent names that can use this skill
+  })
+);
+export type SkillConfig = z.infer<typeof SkillConfigSchema>;
+
 // Main plugin config
 export const PluginConfigSchema = z.object({
   agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
   disabled_agents: z.array(z.string()).optional(),
   disabled_mcps: z.array(z.string()).optional(),
+  skills: SkillConfigSchema.optional(),
   tmux: TmuxConfigSchema.optional(),
 });
 
@@ -52,10 +66,7 @@ export type AgentName =
   | "oracle"
   | "librarian"
   | "explore"
-  | "frontend-ui-ux-engineer"
-  | "document-writer"
-  | "multimodal-looker"
-  | "code-simplicity-reviewer";
+  | "frontend-ui-ux-engineer";
 
 export const DEFAULT_MODELS: Record<AgentName, string> = {
   orchestrator: "google/claude-opus-4-5-thinking",
@@ -63,7 +74,4 @@ export const DEFAULT_MODELS: Record<AgentName, string> = {
   librarian: "google/gemini-3-flash",
   explore: "cerebras/zai-glm-4.6",
   "frontend-ui-ux-engineer": "google/gemini-3-flash",
-  "document-writer": "google/gemini-3-flash",
-  "multimodal-looker": "google/gemini-3-flash",
-  "code-simplicity-reviewer": "google/claude-opus-4-5-thinking",
 };

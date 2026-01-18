@@ -5,9 +5,6 @@ import { createOracleAgent } from "./oracle";
 import { createLibrarianAgent } from "./librarian";
 import { createExploreAgent } from "./explore";
 import { createFrontendAgent } from "./frontend";
-import { createDocumentWriterAgent } from "./document-writer";
-import { createMultimodalAgent } from "./multimodal";
-import { createSimplicityReviewerAgent } from "./simplicity-reviewer";
 
 export type { AgentDefinition } from "./orchestrator";
 
@@ -37,9 +34,6 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   librarian: createLibrarianAgent,
   oracle: createOracleAgent,
   "frontend-ui-ux-engineer": createFrontendAgent,
-  "document-writer": createDocumentWriterAgent,
-  "multimodal-looker": createMultimodalAgent,
-  "code-simplicity-reviewer": createSimplicityReviewerAgent,
 };
 
 /** Get list of agent names */
