@@ -537,17 +537,19 @@ You can disable specific agents using the `disabled_agents` array:
 }
 ```
 
-### Agent Variants
+### Agent Configuration
 
-You can configure model reasoning variants per agent. Variants control the model's reasoning effort level when spawning background/subagent sessions.
+You can fully customize each agent's behavior by overriding its model and reasoning variant. This allows you to balance cost and performance for specific tasks.
 
 ```json
 {
   "agents": {
-    "oracle": {
+    "orchestrator": {
+      "model": "openai/gpt-5.2-codex",
       "variant": "high"
     },
     "explore": {
+      "model": "opencode/glm-4.7",
       "variant": "low"
     }
   }
@@ -556,9 +558,10 @@ You can configure model reasoning variants per agent. Variants control the model
 
 | Option | Type | Values | Description |
 |--------|------|--------|-------------|
-| `agents.<name>.variant` | string | `"low"`, `"medium"`, `"high"` | Reasoning effort level for this agent |
+| `agents.<name>.model` | string | Any valid model ID | Override the underlying LLM for this agent |
+| `agents.<name>.variant` | string | `"low"`, `"medium"`, `"high"` | Reasoning effort level for this agent (when supported) |
 
-Variants are applied when the plugin launches background tasks or sync agent calls.
+These settings are applied when the plugin launches background tasks or sync agent calls.
 
 ---
 
