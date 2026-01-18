@@ -65,6 +65,19 @@ Or use non-interactive mode:
 bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --cerebras=no
 ```
 
+After installation, authenticate with your providers:
+
+```bash
+opencode auth login
+# Select your provider → Complete OAuth flow
+# Repeat for each provider you enabled
+```
+
+Once authenticated, run opencode and `ping all agents` to verify all agents respond.
+
+<img src="img/ping.png" alt="Ping All Agents" width="800">
+
+
 **Alternative: Ask any coding agent**
 
 Paste this into Claude Code, AmpCode, Cursor, or any coding agent:
@@ -139,24 +152,7 @@ After installation, guide the user:
 ```bash
 opencode auth login
 # Select: Google → OAuth with Google (Antigravity)
-```
-
-**For OpenAI:**
-```bash
-export OPENAI_API_KEY="sk-..."
-```
-
-**For Cerebras:**
-```bash
-export CEREBRAS_API_KEY="..."
-```
-
----
-
-#### Step 5: Verify
-
-```bash
-opencode
+# Repeat for all other providers
 ```
 
 ---
