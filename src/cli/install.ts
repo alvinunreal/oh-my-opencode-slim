@@ -14,6 +14,7 @@ import {
   generateLiteConfig,
 } from "./config-manager"
 
+// Colors
 const GREEN = "\x1b[32m"
 const BLUE = "\x1b[34m"
 const YELLOW = "\x1b[33m"
@@ -138,6 +139,9 @@ async function askYesNo(
 
 async function runInteractiveMode(detected: DetectedConfig): Promise<InstallConfig> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  // TODO: tmux has a bug, disabled for now
+  // const tmuxInstalled = await isTmuxInstalled()
+  // const totalQuestions = tmuxInstalled ? 3 : 2
   const totalQuestions = 2
 
   try {
@@ -149,6 +153,16 @@ async function runInteractiveMode(detected: DetectedConfig): Promise<InstallConf
     console.log(`${BOLD}Question 2/${totalQuestions}:${RESET}`)
     const openai = await askYesNo(rl, "Do you have access to OpenAI API?", detected.hasOpenAI ? "yes" : "no")
     console.log()
+
+    // TODO: tmux has a bug, disabled for now
+    // let tmux: BooleanArg = "no"
+    // if (tmuxInstalled) {
+    //   console.log(`${BOLD}Question 3/3:${RESET}`)
+    //   printInfo(`${BOLD}Tmux detected!${RESET} We can enable tmux integration for you.`)
+    //   printInfo("This will spawn new panes for sub-agents, letting you watch them work in real-time.")
+    //   tmux = await askYesNo(rl, "Enable tmux integration?", detected.hasTmux ? "yes" : "no")
+    //   console.log()
+    // }
 
     return {
       hasAntigravity: antigravity === "yes",
@@ -167,6 +181,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printHeader(isUpdate)
 
+  // Calculate total steps dynamically
   let totalSteps = 4 // Base: check opencode, add plugin, disable default agents, write lite config
   if (config.hasAntigravity) totalSteps += 2 // auth plugins + provider config
   // TODO: tmux has a bug, disabled for now
@@ -207,6 +222,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   const liteResult = writeLiteConfig(config)
   if (!handleStepResult(liteResult, "Config written")) return 1
 
+  // Summary
   console.log()
   console.log(formatConfigSummary(config))
   console.log()
@@ -265,6 +281,7 @@ export async function install(args: InstallArgs): Promise<number> {
     return runInstall(argsToConfig(args))
   }
 
+  // Interactive mode
   const detected = detectCurrentConfig()
 
   printHeader(detected.isInstalled)
