@@ -4,7 +4,6 @@ export interface InstallArgs {
   tui: boolean
   antigravity?: BooleanArg
   openai?: BooleanArg
-  zen?: BooleanArg
   tmux?: BooleanArg
   skipAuth?: boolean
 }

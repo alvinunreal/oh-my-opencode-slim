@@ -89,7 +89,7 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push("")
   lines.push(`  ${config.hasAntigravity ? SYMBOLS.check : DIM + "○" + RESET} Antigravity`)
   lines.push(`  ${config.hasOpenAI ? SYMBOLS.check : DIM + "○" + RESET} OpenAI`)
-  lines.push(`  ${config.hasOpencodeZen ? SYMBOLS.check : DIM + "○" + RESET} Opencode Zen (free models)`)
+  lines.push(`  ${SYMBOLS.check} Opencode Zen (free models)`) // Always enabled
   lines.push(`  ${config.hasTmux ? SYMBOLS.check : DIM + "○" + RESET} Tmux Integration`)
   return lines.join("\n")
 }
@@ -117,7 +117,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
   return {
     hasAntigravity: args.antigravity === "yes",
     hasOpenAI: args.openai === "yes",
-    hasOpencodeZen: args.zen === "yes",
+    hasOpencodeZen: true, // Always enabled - free models available to all users
     hasTmux: args.tmux === "yes",
   }
 }
@@ -244,7 +244,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 export async function install(args: InstallArgs): Promise<number> {
   // Non-interactive mode: all args must be provided
   if (!args.tui) {
-    const requiredArgs = ["antigravity", "openai", "zen", "tmux"] as const
+    const requiredArgs = ["antigravity", "openai", "tmux"] as const
     const errors = requiredArgs.filter((key) => {
       const value = args[key]
       return value === undefined || !["yes", "no"].includes(value)
@@ -257,7 +257,7 @@ export async function install(args: InstallArgs): Promise<number> {
         console.log(`  ${SYMBOLS.bullet} --${key}=<yes|no>`)
       }
       console.log()
-      printInfo("Usage: bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no> --zen=<yes|no> --tmux=<yes|no>")
+      printInfo("Usage: bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no> --tmux=<yes|no>")
       console.log()
       return 1
     }

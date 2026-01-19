@@ -16,8 +16,6 @@ function parseArgs(args: string[]): InstallArgs {
       result.antigravity = arg.split("=")[1] as BooleanArg
     } else if (arg.startsWith("--openai=")) {
       result.openai = arg.split("=")[1] as BooleanArg
-    } else if (arg.startsWith("--zen=")) {
-      result.zen = arg.split("=")[1] as BooleanArg
     } else if (arg.startsWith("--tmux=")) {
       result.tmux = arg.split("=")[1] as BooleanArg
     } else if (arg === "-h" || arg === "--help") {
@@ -38,7 +36,6 @@ Usage: bunx oh-my-opencode-slim install [OPTIONS]
 Options:
   --antigravity=yes|no   Antigravity subscription (yes/no)
   --openai=yes|no        OpenAI API access (yes/no)
-  --zen=yes|no           Opencode Zen access (yes/no, default: yes)
   --tmux=yes|no          Enable tmux integration (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
   --skip-auth            Skip authentication reminder
@@ -46,7 +43,7 @@ Options:
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --zen=yes --tmux=no
+  bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --tmux=no
 `)
 }
 
