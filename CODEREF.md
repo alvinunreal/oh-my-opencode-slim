@@ -337,6 +337,7 @@ import { MY_NEW_TIMEOUT_MS } from "../config";
 | `src/index.ts` | Plugin entry, exports |
 | `src/agents/index.ts` | Agent factory, override logic |
 | `src/agents/orchestrator.ts` | Main orchestrator agent |
+| `src/agents/fixer.ts` | Fast implementation specialist |
 | `src/mcp/index.ts` | MCP factory, builtin MCPs |
 | `src/mcp/websearch.ts` | Exa AI web search |
 | `src/mcp/context7.ts` | Context7 docs lookup |

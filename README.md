@@ -28,6 +28,7 @@
   - [Oracle](#oracle)
   - [Librarian](#librarian)
   - [Designer](#designer)
+  - [Fixer](#fixer)
 - [🧩 **Skills**](#-skills)
   - [Available Skills](#available-skills)
   - [Default Skill Assignments](#default-skill-assignments)
@@ -198,7 +199,7 @@ The plugin follows a "Hub and Spoke" model:
 3. **Delegation**:
    - Launches an `@explorer` background task to find all auth-related files.
    - Launches a `@librarian` task to check the latest documentation for the auth library used.
-4. **Integration**: Once background results are ready, the Orchestrator performs the refactor.
+4. **Integration**: Once background results are ready, the Orchestrator delegates to `@fixer` to perform the refactor efficiently.
 
 ---
 
@@ -281,6 +282,22 @@ Documentation lookup, GitHub code search, library research, best practice retrie
 **Prompt:** [src/agents/designer.ts](src/agents/designer.ts)
 
 Modern responsive design, CSS/Tailwind mastery, micro-animations, component architecture. *Visual excellence over code perfection - beauty is the priority.*
+
+<br clear="both">
+
+---
+
+### Fixer
+
+<a href="src/agents/fixer.ts"><img src="img/fixer.png" alt="Fixer" align="right" width="240"></a>
+
+> **The Fixer** is the hands that build what others envision. While The Orchestrator plans and The Oracle advises, The Fixer executes. They receive complete context from research agents and clear task specifications, then implement with surgical precision. Fast, efficient, and focused - they don't think about what to build, they just build it.
+
+**Role:** `Fast implementation specialist`  
+**Model:** `cerebras/zai-glm-4.7`  
+**Prompt:** [src/agents/fixer.ts](src/agents/fixer.ts)
+
+Code implementation, refactoring, testing, verification. *Execute the plan - no research, no delegation, no planning.*
 
 <br clear="both">
 
@@ -405,6 +422,7 @@ Skills are specialized capabilities that agents can use. Each agent has a defaul
 | `oracle` | none |
 | `librarian` | none |
 | `explorer` | none |
+| `fixer` | none |
 
 ### YAGNI Enforcement
 

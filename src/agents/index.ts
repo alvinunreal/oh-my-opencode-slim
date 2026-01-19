@@ -5,6 +5,7 @@ import { createOracleAgent } from "./oracle";
 import { createLibrarianAgent } from "./librarian";
 import { createExplorerAgent } from "./explorer";
 import { createDesignerAgent } from "./designer";
+import { createFixerAgent } from "./fixer";
 
 export type { AgentDefinition } from "./orchestrator";
 
@@ -44,6 +45,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   librarian: createLibrarianAgent,
   oracle: createOracleAgent,
   designer: createDesignerAgent,
+  fixer: createFixerAgent,
 };
 
 /** Get list of agent names */

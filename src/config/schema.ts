@@ -53,7 +53,8 @@ export type AgentName =
   | "oracle"
   | "librarian"
   | "explorer"
-  | "designer";
+  | "designer"
+  | "fixer";
 
 export const DEFAULT_MODELS: Record<AgentName, string> = {
   orchestrator: "google/claude-opus-4-5-thinking",
@@ -61,4 +62,5 @@ export const DEFAULT_MODELS: Record<AgentName, string> = {
   librarian: "google/gemini-3-flash",
   explorer: "cerebras/zai-glm-4.7",
   designer: "google/gemini-3-flash",
+  fixer: "cerebras/zai-glm-4.7",
 };

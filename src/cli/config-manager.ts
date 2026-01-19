@@ -327,6 +327,7 @@ const MODEL_MAPPINGS = {
     librarian: "google/gemini-3-flash",
     explorer: "google/gemini-3-flash",
     designer: "google/gemini-3-flash",
+    fixer: "google/gemini-3-flash",
   },
   openai: {
     orchestrator: "openai/gpt-5.2-codex",
@@ -334,6 +335,7 @@ const MODEL_MAPPINGS = {
     librarian: "openai/gpt-4.1-mini",
     explorer: "openai/gpt-4.1-mini",
     designer: "openai/gpt-4.1-mini",
+    fixer: "openai/gpt-4.1-mini",
   },
   cerebras: {
     orchestrator: "cerebras/zai-glm-4.7",
@@ -341,6 +343,7 @@ const MODEL_MAPPINGS = {
     librarian: "cerebras/zai-glm-4.7",
     explorer: "cerebras/zai-glm-4.7",
     designer: "cerebras/zai-glm-4.7",
+    fixer: "cerebras/zai-glm-4.7",
   },
   opencode: {
     orchestrator: "opencode/glm-4.7-free",

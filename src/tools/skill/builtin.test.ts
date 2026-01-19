@@ -59,6 +59,10 @@ describe("DEFAULT_AGENT_SKILLS", () => {
   test("explorer has no skills by default", () => {
     expect(DEFAULT_AGENT_SKILLS.explorer).toEqual([])
   })
+
+  test("fixer has no skills by default", () => {
+    expect(DEFAULT_AGENT_SKILLS.fixer).toEqual([])
+  })
 })
 
 describe("getSkillsForAgent", () => {
