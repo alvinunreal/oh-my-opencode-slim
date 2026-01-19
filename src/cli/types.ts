@@ -4,7 +4,7 @@ export interface InstallArgs {
   tui: boolean
   antigravity?: BooleanArg
   openai?: BooleanArg
-  cerebras?: BooleanArg
+  zen?: BooleanArg
   tmux?: BooleanArg
   skipAuth?: boolean
 }
@@ -12,7 +12,7 @@ export interface InstallArgs {
 export interface InstallConfig {
   hasAntigravity: boolean
   hasOpenAI: boolean
-  hasCerebras: boolean
+  hasOpencodeZen: boolean
   hasTmux: boolean
 }
 
@@ -26,6 +26,6 @@ export interface DetectedConfig {
   isInstalled: boolean
   hasAntigravity: boolean
   hasOpenAI: boolean
-  hasCerebras: boolean
+  hasOpencodeZen: boolean
   hasTmux: boolean
 }

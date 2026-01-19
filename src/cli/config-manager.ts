@@ -177,6 +177,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     let config = parseConfig(configPath) ?? {}
     const plugins = config.plugin ?? []
 
+
     // Remove existing oh-my-opencode-slim entries
     const filteredPlugins = plugins.filter(
       (p) => p !== PACKAGE_NAME && !p.startsWith(`${PACKAGE_NAME}@`)
@@ -341,17 +342,24 @@ const MODEL_MAPPINGS = {
     explorer: "cerebras/zai-glm-4.7",
     designer: "cerebras/zai-glm-4.7",
   },
+  opencode: {
+    orchestrator: "opencode/glm-4.7-free",
+    oracle: "opencode/glm-4.7-free",
+    librarian: "opencode/glm-4.7-free",
+    explorer: "opencode/glm-4.7-free",
+    designer: "opencode/glm-4.7-free",
+  },
 } as const;
 
 export function generateLiteConfig(installConfig: InstallConfig): Record<string, unknown> {
-  // Determine base provider
+  // Priority: antigravity > openai > opencode (Zen free models)
   const baseProvider = installConfig.hasAntigravity
     ? "antigravity"
     : installConfig.hasOpenAI
       ? "openai"
-      : installConfig.hasCerebras
-        ? "cerebras"
-        : null;
+      : installConfig.hasOpencodeZen
+        ? "opencode"
+        : "opencode"; // Default to Zen free models
 
   const config: Record<string, unknown> = { agents: {} };
 
@@ -369,11 +377,6 @@ export function generateLiteConfig(installConfig: InstallConfig): Record<string,
       if (installConfig.hasOpenAI) {
         agents["oracle"] = { model: "openai/gpt-5.2-codex", skills: DEFAULT_AGENT_SKILLS["oracle"] ?? [] };
       }
-      if (installConfig.hasCerebras) {
-        agents["explorer"] = { model: "cerebras/zai-glm-4.7", skills: DEFAULT_AGENT_SKILLS["explorer"] ?? [] };
-      }
-    } else if (installConfig.hasOpenAI && installConfig.hasCerebras) {
-      agents["explorer"] = { model: "cerebras/zai-glm-4.7", skills: DEFAULT_AGENT_SKILLS["explorer"] ?? [] };
     }
     config.agents = agents;
   }
@@ -437,7 +440,7 @@ export function detectCurrentConfig(): DetectedConfig {
     isInstalled: false,
     hasAntigravity: false,
     hasOpenAI: false,
-    hasCerebras: false,
+    hasOpencodeZen: false,
     hasTmux: false,
   }
 
@@ -459,7 +462,7 @@ export function detectCurrentConfig(): DetectedConfig {
         .map((a) => a?.model)
         .filter(Boolean)
       result.hasOpenAI = models.some((m) => m?.startsWith("openai/"))
-      result.hasCerebras = models.some((m) => m?.startsWith("cerebras/"))
+      result.hasOpencodeZen = models.some((m) => m?.startsWith("opencode/"))
     }
 
     if (configObj.tmux && typeof configObj.tmux === "object") {

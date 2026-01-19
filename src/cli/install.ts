@@ -14,7 +14,6 @@ import {
   generateLiteConfig,
 } from "./config-manager"
 
-// Colors
 const GREEN = "\x1b[32m"
 const BLUE = "\x1b[34m"
 const YELLOW = "\x1b[33m"
@@ -90,7 +89,7 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push("")
   lines.push(`  ${config.hasAntigravity ? SYMBOLS.check : DIM + "○" + RESET} Antigravity`)
   lines.push(`  ${config.hasOpenAI ? SYMBOLS.check : DIM + "○" + RESET} OpenAI`)
-  lines.push(`  ${config.hasCerebras ? SYMBOLS.check : DIM + "○" + RESET} Cerebras`)
+  lines.push(`  ${config.hasOpencodeZen ? SYMBOLS.check : DIM + "○" + RESET} Opencode Zen (free models)`)
   lines.push(`  ${config.hasTmux ? SYMBOLS.check : DIM + "○" + RESET} Tmux Integration`)
   return lines.join("\n")
 }
@@ -118,7 +117,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
   return {
     hasAntigravity: args.antigravity === "yes",
     hasOpenAI: args.openai === "yes",
-    hasCerebras: args.cerebras === "yes",
+    hasOpencodeZen: args.zen === "yes",
     hasTmux: args.tmux === "yes",
   }
 }
@@ -139,10 +138,7 @@ async function askYesNo(
 
 async function runInteractiveMode(detected: DetectedConfig): Promise<InstallConfig> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  // TODO: tmux has a bug, disabled for now
-  // const tmuxInstalled = await isTmuxInstalled()
-  // const totalQuestions = tmuxInstalled ? 4 : 3
-  const totalQuestions = 3
+  const totalQuestions = 2
 
   try {
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`)
@@ -154,24 +150,10 @@ async function runInteractiveMode(detected: DetectedConfig): Promise<InstallConf
     const openai = await askYesNo(rl, "Do you have access to OpenAI API?", detected.hasOpenAI ? "yes" : "no")
     console.log()
 
-    console.log(`${BOLD}Question 3/${totalQuestions}:${RESET}`)
-    const cerebras = await askYesNo(rl, "Do you have access to Cerebras API?", detected.hasCerebras ? "yes" : "no")
-    console.log()
-
-    // TODO: tmux has a bug, disabled for now
-    // let tmux: BooleanArg = "no"
-    // if (tmuxInstalled) {
-    //   console.log(`${BOLD}Question 4/4:${RESET}`)
-    //   printInfo(`${BOLD}Tmux detected!${RESET} We can enable tmux integration for you.`)
-    //   printInfo("This will spawn new panes for sub-agents, letting you watch them work in real-time.")
-    //   tmux = await askYesNo(rl, "Enable tmux integration?", detected.hasTmux ? "yes" : "no")
-    //   console.log()
-    // }
-
     return {
       hasAntigravity: antigravity === "yes",
       hasOpenAI: openai === "yes",
-      hasCerebras: cerebras === "yes",
+      hasOpencodeZen: true,
       hasTmux: false,
     }
   } finally {
@@ -185,7 +167,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printHeader(isUpdate)
 
-  // Calculate total steps dynamically
   let totalSteps = 4 // Base: check opencode, add plugin, disable default agents, write lite config
   if (config.hasAntigravity) totalSteps += 2 // auth plugins + provider config
   // TODO: tmux has a bug, disabled for now
@@ -226,16 +207,14 @@ async function runInstall(config: InstallConfig): Promise<number> {
   const liteResult = writeLiteConfig(config)
   if (!handleStepResult(liteResult, "Config written")) return 1
 
-  // Summary
   console.log()
   console.log(formatConfigSummary(config))
   console.log()
 
   printAgentModels(config)
 
-  if (!config.hasAntigravity && !config.hasOpenAI && !config.hasCerebras) {
-    printWarning("No providers configured. At least one provider is required.")
-    return 1
+  if (!config.hasAntigravity && !config.hasOpenAI) {
+    printWarning("No providers configured. Zen free models will be used as fallback.")
   }
 
   console.log(`${SYMBOLS.star} ${BOLD}${GREEN}${isUpdate ? "Configuration updated!" : "Installation complete!"}${RESET}`)
@@ -265,7 +244,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 export async function install(args: InstallArgs): Promise<number> {
   // Non-interactive mode: all args must be provided
   if (!args.tui) {
-    const requiredArgs = ["antigravity", "openai", "cerebras", "tmux"] as const
+    const requiredArgs = ["antigravity", "openai", "zen", "tmux"] as const
     const errors = requiredArgs.filter((key) => {
       const value = args[key]
       return value === undefined || !["yes", "no"].includes(value)
@@ -278,7 +257,7 @@ export async function install(args: InstallArgs): Promise<number> {
         console.log(`  ${SYMBOLS.bullet} --${key}=<yes|no>`)
       }
       console.log()
-      printInfo("Usage: bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no> --cerebras=<yes|no> --tmux=<yes|no>")
+      printInfo("Usage: bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no> --zen=<yes|no> --tmux=<yes|no>")
       console.log()
       return 1
     }
@@ -286,7 +265,6 @@ export async function install(args: InstallArgs): Promise<number> {
     return runInstall(argsToConfig(args))
   }
 
-  // Interactive mode
   const detected = detectCurrentConfig()
 
   printHeader(detected.isInstalled)
