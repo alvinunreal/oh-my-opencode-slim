@@ -132,13 +132,13 @@ bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|n
 **Examples:**
 ```bash
 # Antigravity + OpenAI
-bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes
+bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --tmux=no
 
 # OpenAI only
-bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=yes
+bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=yes --tmux=no
 
 # No providers (Zen free models only)
-bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=no
+bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=no --tmux=no
 ```
 
 The installer automatically:
