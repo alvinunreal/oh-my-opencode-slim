@@ -45,9 +45,11 @@
     "@modelcontextprotocol/sdk": "^1.25.1",
     "@opencode-ai/plugin": "^1.1.19",
     "@opencode-ai/sdk": "^1.1.19",
-    "zod": "^4.1.8"
+    "js-yaml": "^4.1.1",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "bun-types": "latest",
     "typescript": "^5.7.3"
   },

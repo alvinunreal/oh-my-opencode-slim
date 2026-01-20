@@ -40,3 +40,8 @@ local
 
 .sisyphus/
 .hive/
+conductor-cdd
+
+# Ralph loop state files (local runtime state)
+.orchestrator/ralph-loop.local.md
+
