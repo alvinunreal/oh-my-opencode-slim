@@ -8,16 +8,8 @@
  * 
  * Uses experimental.chat.messages.transform so it doesn't show in UI.
  */
-const PHASE_REMINDER = `<reminder>
-Recal critical workflow phases:
-Phase 1: Understand
-Phase 2: DELEGATE 
-Phase 2.1: PARALELIZATION 
-Phase 3: Planning
-Phase 4: Execute
-Phase 5: Verify
-
-Recall Agent Specs: @oracle @librarian @explorer @designer @fixer
+const PHASE_REMINDER = `<reminder>⚠️ MANDATORY: Understand→DELEGATE(!)→Parallelize(?)→Plan→Execute→Verify
+Available Specialist: @oracle @librarian @explorer @designer @fixer
 </reminder>`;
 
 interface MessageInfo {
