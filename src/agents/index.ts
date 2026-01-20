@@ -1,5 +1,5 @@
 import type { AgentConfig as SDKAgentConfig } from "@opencode-ai/sdk";
-import { DEFAULT_MODELS, type AgentName, type PluginConfig, type AgentOverrideConfig } from "../config";
+import { DEFAULT_MODELS, type PluginConfig, type AgentOverrideConfig } from "../config";
 import { createOrchestratorAgent, type AgentDefinition } from "./orchestrator";
 import { createOracleAgent } from "./oracle";
 import { createLibrarianAgent } from "./librarian";
@@ -37,7 +37,24 @@ function applyDefaultPermissions(agent: AgentDefinition): void {
   agent.config.permission = { ...existing, question: "allow" } as SDKAgentConfig["permission"];
 }
 
-type SubagentName = Exclude<AgentName, "orchestrator">;
+/** Constants for agent classification */
+export const PRIMARY_AGENT_NAMES = ["orchestrator"] as const;
+export type PrimaryAgentName = (typeof PRIMARY_AGENT_NAMES)[number];
+
+export const SUBAGENT_NAMES = ["explorer", "librarian", "oracle", "designer", "fixer"] as const;
+export type SubagentName = (typeof SUBAGENT_NAMES)[number];
+
+export function getPrimaryAgentNames(): PrimaryAgentName[] {
+  return [...PRIMARY_AGENT_NAMES];
+}
+
+export function getSubagentNames(): SubagentName[] {
+  return [...SUBAGENT_NAMES];
+}
+
+export function isSubagent(name: string): name is SubagentName {
+  return (SUBAGENT_NAMES as readonly string[]).includes(name);
+}
 
 /** Agent factories indexed by name */
 const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
@@ -50,7 +67,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
 
 /** Get list of agent names */
 export function getAgentNames(): SubagentName[] {
-  return Object.keys(SUBAGENT_FACTORIES) as SubagentName[];
+  return getSubagentNames();
 }
 
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
@@ -97,5 +114,19 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
 
 export function getAgentConfigs(config?: PluginConfig): Record<string, SDKAgentConfig> {
   const agents = createAgents(config);
-  return Object.fromEntries(agents.map((a) => [a.name, { ...a.config, description: a.description }]));
+  return Object.fromEntries(
+    agents.map((a) => {
+      const sdkConfig: SDKAgentConfig = { ...a.config, description: a.description };
+
+      // Apply classification-based visibility and mode
+      if (isSubagent(a.name)) {
+        sdkConfig.mode = "subagent";
+        sdkConfig.hidden = true;
+      } else if (a.name === "orchestrator") {
+        sdkConfig.mode = "primary";
+      }
+
+      return [a.name, sdkConfig];
+    })
+  );
 }
