@@ -6,7 +6,7 @@
 
 <img src="img/team.png" alt="The Pantheon - Agent Team" width="800">
 
-*Transform your AI assistant into a manager capable of delegating complex tasks to specialized sub-agents, running searches in the background, and managing multi-step workflows with ease.*
+*When the first codebase collapsed under its own complexity, neither god nor mortal would claim responsibility. So the Pantheon emerged from the void—six divine beings forged from necessity, each an immortal master of their craft. Now they await your command to forge order from chaos and build what was once thought impossible.*
 
 </div>
 
