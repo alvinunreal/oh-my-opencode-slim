@@ -18,32 +18,40 @@ let serverCheckUrl: string | null = null;
  */
 async function isServerRunning(serverUrl: string): Promise<boolean> {
   // Use cached result if checking the same URL
-  if (serverCheckUrl === serverUrl && serverAvailable !== null) {
-    return serverAvailable;
+  if (serverCheckUrl === serverUrl && serverAvailable === true) {
+    return true;
   }
 
-  try {
+  const healthUrl = new URL("/health", serverUrl).toString();
+  const timeoutMs = 3000;
+  const maxAttempts = 2;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Try to hit the health endpoint or just the root
-    const response = await fetch(`${serverUrl}/health`, {
-      signal: controller.signal,
-    }).catch(() => null);
+    let response: Response | null = null;
+    try {
+      response = await fetch(healthUrl, { signal: controller.signal }).catch(() => null);
+    } finally {
+      clearTimeout(timeout);
+    }
 
-    clearTimeout(timeout);
+    const available = response?.ok ?? false;
+    if (available) {
+      serverCheckUrl = serverUrl;
+      serverAvailable = true;
+      log("[tmux] isServerRunning: checked", { serverUrl, available, attempt });
+      return true;
+    }
 
-    serverCheckUrl = serverUrl;
-    serverAvailable = response?.ok ?? false;
-
-    log("[tmux] isServerRunning: checked", { serverUrl, available: serverAvailable });
-    return serverAvailable;
-  } catch {
-    serverCheckUrl = serverUrl;
-    serverAvailable = false;
-    log("[tmux] isServerRunning: server not reachable", { serverUrl });
-    return false;
+    if (attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
   }
+
+  log("[tmux] isServerRunning: checked", { serverUrl, available: false });
+  return false;
 }
 
 /**
