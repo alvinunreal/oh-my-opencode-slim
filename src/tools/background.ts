@@ -21,6 +21,37 @@ type ToolContext = {
   abort: AbortSignal;
 };
 
+async function deleteSession(client: any, serverUrl: URL, directory: string, sessionId: string) {
+  try {
+    // Try SDK v1 style first if available
+    if (typeof client.session?.delete === "function") {
+      await client.session.delete({ path: { id: sessionId } });
+      log(`[background-tools] deleted session via SDK`, { sessionId });
+      return;
+    }
+  } catch (err) {
+    log(`[background-tools] SDK delete failed, trying fetch`, { sessionId, error: String(err) });
+  }
+
+  try {
+    // Fallback to raw fetch if SDK method is missing or fails
+    const url = new URL(`/session/${sessionId}`, serverUrl);
+    const response = await fetch(url.toString(), {
+      method: "DELETE",
+      headers: {
+        "x-opencode-directory": directory,
+      },
+    });
+    if (response.ok) {
+      log(`[background-tools] deleted session via fetch`, { sessionId });
+    } else {
+      log(`[background-tools] fetch delete failed`, { sessionId, status: response.status });
+    }
+  } catch (err) {
+    log(`[background-tools] failed to delete session via all methods`, { sessionId, error: String(err) });
+  }
+}
+
 export function createBackgroundTools(
   ctx: PluginInput,
   manager: BackgroundTaskManager,
@@ -134,7 +165,53 @@ Duration: ${duration}
     },
   });
 
-  return { background_task, background_output, background_cancel };
+  const background_cleanup = tool({
+    description: "Cleanup finished (idle) child sessions to keep the history clean.",
+    args: {
+      all: z.boolean().optional().describe("Force delete ALL child sessions, including running ones"),
+    },
+    async execute(args, toolContext) {
+      const tctx = toolContext as ToolContext;
+      try {
+        // Get all children of the current session
+        const childrenResult = await ctx.client.session.children({ path: { id: tctx.sessionID } });
+        const children = (childrenResult.data ?? []) as Array<{ id: string; title?: string }>;
+
+        if (children.length === 0) {
+          return "No child sessions found to cleanup.";
+        }
+
+        // Get status of all sessions
+        const statusResult = await ctx.client.session.status();
+        const allStatuses = (statusResult.data ?? {}) as Record<string, { type: string }>;
+
+        let deletedCount = 0;
+        let skippedCount = 0;
+
+        for (const child of children) {
+          const status = allStatuses[child.id];
+          const isIdle = !status || status.type === "idle";
+
+          if (isIdle || args.all === true) {
+            await deleteSession(ctx.client, ctx.serverUrl, ctx.directory, child.id);
+            deletedCount++;
+          } else {
+            skippedCount++;
+          }
+        }
+
+        let msg = `Successfully deleted ${deletedCount} session(s).`;
+        if (skippedCount > 0) {
+          msg += ` Skipped ${skippedCount} running session(s). Use all=true to force delete.`;
+        }
+        return msg;
+      } catch (error) {
+        return `Error during cleanup: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    },
+  });
+
+  return { background_task, background_output, background_cancel, background_cleanup };
 }
 
 async function executeSync(
@@ -283,8 +360,12 @@ session_id: ${sessionID}
 
   const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
 
-  // Pane closing is handled by TmuxSessionManager via polling
-  return `${responseText}
+  log(`[background-sync] sync task completed`, { sessionId: sessionID });
+
+  // Clean up session after completion
+  await deleteSession(ctx.client, ctx.serverUrl, ctx.directory, sessionID);
+
+  return `${responseText || "(No text response)"}
 
 <task_metadata>
 session_id: ${sessionID}
