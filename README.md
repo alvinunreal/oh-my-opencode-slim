@@ -4,7 +4,7 @@
 
 **A lightweight, powerful agent orchestration plugin for OpenCode**
 
-<img src="img/team.png" alt="The Pantheon - Agent Team" width="600">
+<img src="img/team.png" alt="The Pantheon - Agent Team" width="800">
 
 *Transform your AI assistant into a manager capable of delegating complex tasks to specialized sub-agents, running searches in the background, and managing multi-step workflows with ease.*
 
