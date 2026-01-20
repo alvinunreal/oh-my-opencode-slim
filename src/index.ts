@@ -1,6 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { getAgentConfigs } from "./agents";
 import { BackgroundTaskManager, TmuxSessionManager } from "./features";
+import { createRalphLoopTools } from "./features/builtin-commands";
+import { ralphLoopHook } from "./hooks/ralph-loop";
 import {
   createBackgroundTools,
   lsp_goto_definition,
@@ -47,6 +49,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const mcps = createBuiltinMcps(config.disabled_mcps);
   const skillMcpManager = SkillMcpManager.getInstance();
   const skillTools = createSkillTools(skillMcpManager, config);
+  const ralphLoopTools = createRalphLoopTools(ctx);
 
   // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
   const tmuxSessionManager = new TmuxSessionManager(ctx, tmuxConfig);
@@ -73,6 +76,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ast_grep_replace,
       antigravity_quota,
       ...skillTools,
+      ...ralphLoopTools,
     },
 
     mcp: mcps,
@@ -99,6 +103,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     event: async (input) => {
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
+      
+      // Handle ralph-loop hook
+      await ralphLoopHook(ctx, input);
       
       // Handle tmux pane spawning for OpenCode's Task tool sessions
       await tmuxSessionManager.onSessionCreated(input.event as {
