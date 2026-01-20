@@ -37,12 +37,22 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 export const McpNameSchema = z.enum(["websearch", "context7", "grep_app"]);
 export type McpName = z.infer<typeof McpNameSchema>;
 
+// Ralph Loop configuration
+export const RalphLoopConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  default_max_iterations: z.number().min(1).max(1000).default(100),
+  state_dir: z.string().optional().default(".orchestrator"),
+});
+
+export type RalphLoopConfig = z.infer<typeof RalphLoopConfigSchema>;
+
 // Main plugin config
 export const PluginConfigSchema = z.object({
   agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
   disabled_agents: z.array(z.string()).optional(),
   disabled_mcps: z.array(z.string()).optional(),
   tmux: TmuxConfigSchema.optional(),
+  ralph_loop: RalphLoopConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;

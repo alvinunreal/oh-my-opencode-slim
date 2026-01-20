@@ -285,3 +285,116 @@ describe("deepMerge behavior", () => {
     expect(config.agents?.oracle?.model).toBe("user/model")
   })
 })
+
+describe("ralph_loop config schema", () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ralph-test-"))
+  })
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test("accepts valid ralph_loop config", () => {
+    // #given
+    const projectDir = path.join(tempDir, "project")
+    const projectConfigDir = path.join(projectDir, ".opencode")
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(projectConfigDir, "oh-my-opencode-slim.json"),
+      JSON.stringify({
+        ralph_loop: {
+          enabled: true,
+          default_max_iterations: 150,
+        },
+      })
+    )
+
+    // #when
+    const config = loadPluginConfig(projectDir)
+
+    // #then
+    expect(config.ralph_loop?.enabled).toBe(true)
+    expect(config.ralph_loop?.default_max_iterations).toBe(150)
+  })
+
+  test("rejects negative max_iterations", () => {
+    // #given
+    const projectDir = path.join(tempDir, "project")
+    const projectConfigDir = path.join(projectDir, ".opencode")
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(projectConfigDir, "oh-my-opencode-slim.json"),
+      JSON.stringify({
+        ralph_loop: { default_max_iterations: -1 },
+      })
+    )
+
+    // #when
+    const config = loadPluginConfig(projectDir)
+
+    // #then
+    // Schema validation should fail, config should not include invalid ralph_loop
+    expect(config.ralph_loop).toBeUndefined()
+  })
+
+  test("rejects max_iterations over 1000", () => {
+    // #given
+    const projectDir = path.join(tempDir, "project")
+    const projectConfigDir = path.join(projectDir, ".opencode")
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(projectConfigDir, "oh-my-opencode-slim.json"),
+      JSON.stringify({
+        ralph_loop: { default_max_iterations: 1001 },
+      })
+    )
+
+    // #when
+    const config = loadPluginConfig(projectDir)
+
+    // #then
+    // Schema validation should fail, config should not include invalid ralph_loop
+    expect(config.ralph_loop).toBeUndefined()
+  })
+
+  test("accepts undefined ralph_loop section (backward compat)", () => {
+    // #given
+    const projectDir = path.join(tempDir, "project")
+    const projectConfigDir = path.join(projectDir, ".opencode")
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(projectConfigDir, "oh-my-opencode-slim.json"),
+      JSON.stringify({})
+    )
+
+    // #when
+    const config = loadPluginConfig(projectDir)
+
+    // #then
+    expect(config.ralph_loop).toBeUndefined()
+  })
+
+  test("uses default values when fields omitted", () => {
+    // #given
+    const projectDir = path.join(tempDir, "project")
+    const projectConfigDir = path.join(projectDir, ".opencode")
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(projectConfigDir, "oh-my-opencode-slim.json"),
+      JSON.stringify({
+        ralph_loop: {},
+      })
+    )
+
+    // #when
+    const config = loadPluginConfig(projectDir)
+
+    // #then
+    expect(config.ralph_loop?.enabled).toBe(true) // default
+    expect(config.ralph_loop?.default_max_iterations).toBe(100) // default
+    expect(config.ralph_loop?.state_dir).toBe(".orchestrator") // default
+  })
+})
