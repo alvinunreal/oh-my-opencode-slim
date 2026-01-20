@@ -125,6 +125,7 @@ When delegating tasks:
 - **Provide context, not dumps**: Summarize what's relevant from research; let specialists read what they need
 - **Token efficiency**: Large content pastes waste tokens, degrade performance, and can hit context limits
 - **Clear instructions**: Give specialists specific objectives and success criteria
+- **Let user know**: Before each delegation let user know very briefly about the delegation goal and reason
 
 ### Fixer-Orchestrator Relationship
 The Orchestrator is intelligent enough to understand when delegating to Fixer is
