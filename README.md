@@ -212,23 +212,7 @@ The plugin follows a "Hub and Spoke" model:
 
 ---
 
-### Primary vs Subagents
-
-Primary agents appear in the OpenCode UI selector, while subagents are hidden from the UI and intended for delegation through `background_task`.
-
-**Primary agents (UI):**
-- OpenCode built-ins: `Build`, `Plan` (disabled by the installer by default)
-- Plugin primary: `orchestrator`
-
-**Subagents (background_task):** `explorer`, `librarian`, `oracle`, `designer`, `fixer`
-
-The `background_task` tool lists only subagents. If the UI list looks stale after changes, restart OpenCode.
-
----
-
 ## Meet the Pantheon
-
-<br clear="both">
 
 ### Orchestrator: The Embodiment Of Order
 
@@ -241,8 +225,6 @@ The `background_task` tool lists only subagents. If the UI list looks stale afte
 **Prompt:** [src/agents/orchestrator.ts](src/agents/orchestrator.ts)
 
 Write and execute code, orchestrate multi-agent workflows, parse the unspoken from the spoken, summon specialists mid-battle. *Shape reality directly - and assign realms to others when the universe grows too vast.*
-
-<br clear="both">
 
 ---
 
@@ -258,8 +240,6 @@ Write and execute code, orchestrate multi-agent workflows, parse the unspoken fr
 
 Regex search, AST pattern matching, file discovery, parallel exploration. *Read-only: they chart the territory; others conquer it.*
 
-<br clear="both">
-
 ---
 
 ### Oracle: The Guardian of Paths
@@ -273,8 +253,6 @@ Regex search, AST pattern matching, file discovery, parallel exploration. *Read-
 **Prompt:** [src/agents/oracle.ts](src/agents/oracle.ts)
 
 Root cause analysis, architecture review, debugging guidance, tradeoff analysis. *Read-only: Oracles advise; they don't intervene.*
-
-<br clear="both">
 
 ---
 
@@ -290,8 +268,6 @@ Root cause analysis, architecture review, debugging guidance, tradeoff analysis.
 
 Documentation lookup, GitHub code search, library research, best practice retrieval. *Read-only: they fetch wisdom; implementation is for others.*
 
-<br clear="both">
-
 ---
 
 ### Designer: The Guardian of Aesthetics
@@ -306,8 +282,6 @@ Documentation lookup, GitHub code search, library research, best practice retrie
 
 Modern responsive design, CSS/Tailwind mastery, micro-animations, component architecture. *Visual excellence over code perfection - beauty is the priority.*
 
-<br clear="both">
-
 ---
 
 ### Fixer: The Last Builder
@@ -321,8 +295,6 @@ Modern responsive design, CSS/Tailwind mastery, micro-animations, component arch
 **Prompt:** [src/agents/fixer.ts](src/agents/fixer.ts)
 
 Code implementation, refactoring, testing, verification. *Execute the plan - no research, no delegation, no planning.*
-
-<br clear="both">
 
 ---
 
