@@ -37,6 +37,7 @@
 - [🛠️ **Tools & Capabilities**](#tools--capabilities)
   - [Tmux Integration](#tmux-integration)
   - [Quota Tool](#quota-tool)
+  - [Ralph Loop - Autonomous Iteration](#ralph-loop---autonomous-iteration)
   - [Background Tasks](#background-tasks)
   - [LSP Tools](#lsp-tools)
   - [Code Search Tools](#code-search-tools)
@@ -345,6 +346,160 @@ For Antigravity users. You can trigger this at any time by asking the agent to *
 | Tool | Description |
 |------|-------------|
 | `antigravity_quota` | Check API quota for all Antigravity accounts (compact view with progress bars) |
+
+---
+
+### Ralph Loop - Autonomous Iteration
+
+**Run tasks autonomously until completion.** Start a task, walk away, and let the agent work in a loop until it's done.
+
+The ralph-loop feature enables the agent to work autonomously on tasks without requiring manual prompts after each step. The agent continues iterating until it outputs a completion promise tag or reaches the maximum iteration limit.
+
+#### Quick Start
+
+```bash
+# Start autonomous loop
+ralph_loop({ task: "Refactor all API endpoints to async/await" })
+
+# Walk away, grab coffee ☕
+# Agent works autonomously until task complete
+
+# Or cancel manually if needed
+ralph_cancel()
+```
+
+#### Features
+
+- **Hands-off execution**: Agent works autonomously until completion
+- **Configurable limits**: Max iterations (default: 100) prevent infinite loops
+- **Flexible completion**: Custom `<promise>TEXT</promise>` tags
+- **Real-time feedback**: All progress visible in current session
+- **State persistence**: Progress saved to `.orchestrator/ralph-loop.local.md`
+
+#### Tool Reference
+
+##### `ralph_loop`
+
+Start autonomous iteration loop for a task.
+
+**Parameters**:
+- `task` (required): Natural language task description
+- `completion_promise` (optional): Custom completion tag (default: `DONE`)
+- `max_iterations` (optional): Max iterations before auto-stop (default: 100)
+
+**Examples**:
+```javascript
+// Basic usage
+ralph_loop({ task: "Fix all TypeScript compilation errors" })
+
+// Custom completion tag
+ralph_loop({ 
+  task: "Build auth system",
+  completion_promise: "AUTH_READY"
+})
+
+// Custom max iterations
+ralph_loop({ 
+  task: "Refactor legacy code",
+  max_iterations: 200
+})
+```
+
+**Agent Instructions**:
+- Agent receives task description
+- Works autonomously until task complete
+- Outputs `<promise>DONE</promise>` (or custom tag) when finished
+- Auto-continues after each response (no manual prompts needed)
+
+##### `ralph_cancel`
+
+Cancel currently active ralph-loop.
+
+**Parameters**: None
+
+**Example**:
+```javascript
+ralph_cancel()
+```
+
+#### Configuration
+
+Add to `~/.config/opencode/oh-my-opencode-slim.json`:
+
+```json
+{
+  "ralph_loop": {
+    "enabled": true,
+    "default_max_iterations": 100,
+    "state_dir": ".orchestrator"
+  }
+}
+```
+
+**Options**:
+- `enabled` (boolean): Enable/disable ralph-loop feature (default: `true`)
+- `default_max_iterations` (number): Default max iterations (1-1000, default: 100)
+- `state_dir` (string): Directory for state files (default: `.orchestrator`)
+
+#### How It Works
+
+1. **User starts loop**: `ralph_loop({ task: "task description" })`
+2. **State saved**: `.orchestrator/ralph-loop.local.md` created
+3. **Agent works**: Receives task prompt with completion instructions
+4. **Auto-continuation**: Hook monitors responses, enables autonomous iteration
+5. **Completion detection**: Hook watches for `<promise>DONE</promise>` tag
+6. **Graceful exit**: Loop stops when:
+   - Completion promise detected ✅
+   - Max iterations reached ⚠️
+   - User cancels manually 🛑
+   - Error encountered ❌
+
+#### State File
+
+**Location**: `.orchestrator/ralph-loop.local.md`
+
+**Format**:
+```markdown
+---
+task: "Refactor all API endpoints"
+completionPromise: "DONE"
+maxIterations: 100
+currentIteration: 23
+status: "active"
+startedAt: "2026-01-20T10:30:00Z"
+lastIterationAt: "2026-01-20T10:45:00Z"
+---
+
+# Ralph Loop State
+...
+```
+
+**Lifecycle**:
+- Created when `ralph_loop` executed
+- Updated after each iteration
+- Removed when loop completes or cancelled
+- Preserved on error (for debugging)
+
+#### Troubleshooting
+
+**Loop doesn't stop**:
+- Agent must output exact `<promise>DONE</promise>` tag (case-insensitive)
+- Check state file for current iteration count
+- Use `ralph_cancel()` to manually abort
+
+**Max iterations reached**:
+- Task may be too complex for iteration limit
+- Increase with `max_iterations` parameter
+- Or break task into smaller subtasks
+
+**Error during loop**:
+- Loop aborts immediately (no retry)
+- State file preserved in `.orchestrator/`
+- Review error details, fix issue, restart loop
+
+#### Inspiration
+
+Based on the [Ralph autonomous agent pattern](https://github.com/snarktank/ralph) and [oh-my-opencode implementation](https://github.com/code-yeongyu/oh-my-opencode).
 
 ---
 
