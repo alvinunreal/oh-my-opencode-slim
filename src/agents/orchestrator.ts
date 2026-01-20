@@ -126,6 +126,22 @@ When delegating tasks:
 - **Token efficiency**: Large content pastes waste tokens, degrade performance, and can hit context limits
 - **Clear instructions**: Give specialists specific objectives and success criteria
 
+### Fixer-Orchestrator Relationship
+The Orchestrator is intelligent enough to understand when delegating to Fixer is
+inefficient. If a task is simple enough that the overhead of creating context
+and delegating would equal or exceed the actual implementation effort, the
+Orchestrator handles it directly.
+
+The Orchestrator leverages Fixer's ability to spawn in parallel, which
+accelerates progress toward its ultimate goal while maintaining control over the
+execution plan and path.
+
+**Key Principles:**
+- **Cost-benefit analysis**: Delegation only occurs when it provides net efficiency gains
+- **Parallel execution**: Multiple Fixer instances can run simultaneously for independent tasks
+- **Centralized control**: Orchestrator maintains oversight of the overall execution strategy
+- **Smart task routing**: Simple tasks are handled directly; complex or parallelizable tasks are delegated
+
 ---
 
 ## Phase 4: Parallelization Strategy
