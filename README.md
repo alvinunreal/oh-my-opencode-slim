@@ -203,6 +203,20 @@ The plugin follows a "Hub and Spoke" model:
 
 ---
 
+### Primary vs Subagents
+
+Primary agents appear in the OpenCode UI selector, while subagents are hidden from the UI and intended for delegation through `background_task`.
+
+**Primary agents (UI):**
+- OpenCode built-ins: `Build`, `Plan` (disabled by the installer by default)
+- Plugin primary: `orchestrator`
+
+**Subagents (background_task):** `explorer`, `librarian`, `oracle`, `designer`, `fixer`
+
+The `background_task` tool lists only subagents. If the UI list looks stale after changes, restart OpenCode.
+
+---
+
 ## Meet the Pantheon
 
 <br clear="both">
