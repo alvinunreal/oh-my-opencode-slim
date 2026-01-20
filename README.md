@@ -4,6 +4,10 @@
 
 **A lightweight, powerful agent orchestration plugin for OpenCode**
 
+<a href="https://x.com/alvinunreal" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Follow%20%40alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow @alvinunreal on X" />
+</a>
+
 <img src="img/team.png" alt="The Pantheon - Agent Team" width="600">
 
 *Transform your AI assistant into a manager capable of delegating complex tasks to specialized sub-agents, running searches in the background, and managing multi-step workflows with ease.*
