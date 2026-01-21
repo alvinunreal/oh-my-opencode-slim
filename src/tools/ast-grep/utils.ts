@@ -1,5 +1,10 @@
 import type { SgResult, CliLanguage } from "./types"
 
+/**
+ * Formats an ast-grep search result into a human-readable summary.
+ * @param result - The SgResult containing matches or error.
+ * @returns A formatted string summary.
+ */
 export function formatSearchResult(result: SgResult): string {
   if (result.error) {
     return `Error: ${result.error}`
@@ -39,6 +44,12 @@ export function formatSearchResult(result: SgResult): string {
   return lines.join("\n")
 }
 
+/**
+ * Formats an ast-grep replacement result into a human-readable summary.
+ * @param result - The SgResult containing matches/replacements.
+ * @param isDryRun - Whether this was a dry run.
+ * @returns A formatted string summary.
+ */
 export function formatReplaceResult(result: SgResult, isDryRun: boolean): string {
   if (result.error) {
     return `Error: ${result.error}`
@@ -83,6 +94,12 @@ export function formatReplaceResult(result: SgResult, isDryRun: boolean): string
   return lines.join("\n")
 }
 
+/**
+ * Provides helpful hints for common mistakes when an ast-grep search returns no results.
+ * @param pattern - The pattern that was searched.
+ * @param lang - The language used for the search.
+ * @returns A hint string if a common mistake is detected, otherwise null.
+ */
 export function getEmptyResultHint(pattern: string, lang: CliLanguage): string | null {
   const src = pattern.trim()
 

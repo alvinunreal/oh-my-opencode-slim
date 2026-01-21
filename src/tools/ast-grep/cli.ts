@@ -24,6 +24,10 @@ export interface RunOptions {
 // Use a single init promise to avoid race conditions
 let initPromise: Promise<string | null> | null = null
 
+/**
+ * Resolves the path to the ast-grep binary, downloading it if necessary.
+ * @returns A promise resolving to the binary path, or null if it couldn't be found/downloaded.
+ */
 export async function getAstGrepPath(): Promise<string | null> {
   const currentPath = getSgCliPath()
   if (currentPath !== "sg" && existsSync(currentPath)) {
@@ -53,6 +57,9 @@ export async function getAstGrepPath(): Promise<string | null> {
   return initPromise
 }
 
+/**
+ * Starts background initialization of the ast-grep binary.
+ */
 export function startBackgroundInit(): void {
   if (!initPromise) {
     initPromise = getAstGrepPath()
@@ -60,6 +67,11 @@ export function startBackgroundInit(): void {
   }
 }
 
+/**
+ * Runs an ast-grep search or rewrite with the provided options.
+ * @param options - ast-grep configuration.
+ * @returns A promise resolving to the search/rewrite results.
+ */
 export async function runSg(options: RunOptions): Promise<SgResult> {
   const args = ["run", "-p", options.pattern, "--lang", options.lang, "--json=compact"]
 
@@ -99,12 +111,13 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
     stderr: "pipe",
   })
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
+  const timeoutPromise = new Promise<never>(async (_, reject) => {
     const id = setTimeout(() => {
       proc.kill()
-      reject(new Error(`Search timeout after ${timeout}ms`))
+      reject(new Error(`[ast-grep] run: Search timeout after ${timeout}ms`))
     }, timeout)
-    proc.exited.then(() => clearTimeout(id))
+    await proc.exited
+    clearTimeout(id)
   })
 
   let stdout: string
@@ -123,7 +136,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
         totalMatches: 0,
         truncated: true,
         truncatedReason: "timeout",
-        error: error.message,
+        error: `[ast-grep] run: ${error.message}`,
       }
     }
 
@@ -143,7 +156,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
           totalMatches: 0,
           truncated: false,
           error:
-            `ast-grep CLI binary not found.\n\n` +
+            `[ast-grep] run: ast-grep CLI binary not found.\n\n` +
             `Auto-download failed. Manual install options:\n` +
             `  bun add -D @ast-grep/cli\n` +
             `  cargo install ast-grep --locked\n` +
@@ -156,7 +169,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
       matches: [],
       totalMatches: 0,
       truncated: false,
-      error: `Failed to spawn ast-grep: ${error.message}`,
+      error: `[ast-grep] run: Failed to spawn ast-grep: ${error.message}`,
     }
   }
 
@@ -165,7 +178,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
       return { matches: [], totalMatches: 0, truncated: false }
     }
     if (stderr.trim()) {
-      return { matches: [], totalMatches: 0, truncated: false, error: stderr.trim() }
+      return { matches: [], totalMatches: 0, truncated: false, error: `[ast-grep] run: ${stderr.trim()}` }
     }
     return { matches: [], totalMatches: 0, truncated: false }
   }
@@ -197,7 +210,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
           totalMatches: 0,
           truncated: true,
           truncatedReason: "max_output_bytes",
-          error: "Output too large and could not be parsed",
+          error: "[ast-grep] run: Output too large and could not be parsed",
         }
       }
     } else {
@@ -221,11 +234,19 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
   }
 }
 
+/**
+ * Checks if the ast-grep CLI is available on the system.
+ * @returns True if the CLI is available, false otherwise.
+ */
 export function isCliAvailable(): boolean {
   const path = findSgCliPathSync()
   return path !== null && existsSync(path)
 }
 
+/**
+ * Ensures that the ast-grep CLI is available, downloading it if necessary.
+ * @returns A promise resolving to true if available, false otherwise.
+ */
 export async function ensureCliAvailable(): Promise<boolean> {
   const path = await getAstGrepPath()
   return path !== null && existsSync(path)

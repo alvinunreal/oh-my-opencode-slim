@@ -6,7 +6,8 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync } from "f
 import { lspManager } from "./client"
 import type { LSPClient } from "./client"
 import { findServerForExtension } from "./config"
-import { SYMBOL_KIND_MAP, SEVERITY_MAP } from "./constants"
+import { SEVERITY_MAP } from "./constants"
+import { applyTextEditsToFile } from "./text-editor"
 import type {
   Location,
   LocationLink,
@@ -16,6 +17,11 @@ import type {
   ServerLookupResult,
 } from "./types"
 
+/**
+ * Finds the workspace root for a given file by looking for common markers like .git or package.json.
+ * @param filePath - The path to the file.
+ * @returns The resolved workspace root directory.
+ */
 export function findWorkspaceRoot(filePath: string): string {
   let dir = resolve(filePath)
 
@@ -43,6 +49,11 @@ export function findWorkspaceRoot(filePath: string): string {
   return dirname(resolve(filePath))
 }
 
+/**
+ * Converts a file URI to a local filesystem path.
+ * @param uri - The file URI (e.g., 'file:///path/to/file').
+ * @returns The local filesystem path.
+ */
 export function uriToPath(uri: string): string {
   return fileURLToPath(uri)
 }
@@ -50,7 +61,7 @@ export function uriToPath(uri: string): string {
 export function formatServerLookupError(result: Exclude<ServerLookupResult, { status: "found" }>): string {
   if (result.status === "not_installed") {
     return [
-      `LSP server '${result.server.id}' is NOT INSTALLED.`,
+      `[lsp-utils] findServer: LSP server '${result.server.id}' is NOT INSTALLED.`,
       ``,
       `Command not found: ${result.server.command[0]}`,
       ``,
@@ -58,9 +69,17 @@ export function formatServerLookupError(result: Exclude<ServerLookupResult, { st
     ].join("\n")
   }
 
-  return `No LSP server configured for extension: ${result.extension}`
+  return `[lsp-utils] findServer: No LSP server configured for extension: ${result.extension}`
 }
 
+/**
+ * Executes a callback function with an LSP client for the given file.
+ * Manages client acquisition and release automatically.
+ * @param filePath - The path to the file to get a client for.
+ * @param fn - The callback function to execute with the client.
+ * @returns The result of the callback function.
+ * @throws Error if no suitable LSP server is found or if the client times out.
+ */
 export async function withLspClient<T>(filePath: string, fn: (client: LSPClient) => Promise<T>): Promise<T> {
   const absPath = resolve(filePath)
   const ext = extname(absPath)
@@ -80,7 +99,7 @@ export async function withLspClient<T>(filePath: string, fn: (client: LSPClient)
     if (e instanceof Error && e.message.includes("timeout")) {
       const isInitializing = lspManager.isServerInitializing(root, server.id)
       if (isInitializing) {
-        throw new Error(`LSP server is still initializing. Please retry in a few seconds.`)
+        throw new Error(`[lsp-utils] withLspClient: LSP server is still initializing. Please retry in a few seconds.`)
       }
     }
     throw e
@@ -89,6 +108,11 @@ export async function withLspClient<T>(filePath: string, fn: (client: LSPClient)
   }
 }
 
+/**
+ * Formats an LSP location or location link into a human-readable string (path:line:char).
+ * @param loc - The LSP location or location link.
+ * @returns A formatted string representation.
+ */
 export function formatLocation(loc: Location | LocationLink): string {
   if ("targetUri" in loc) {
     const uri = uriToPath(loc.targetUri)
@@ -103,15 +127,16 @@ export function formatLocation(loc: Location | LocationLink): string {
   return `${uri}:${line}:${char}`
 }
 
-export function formatSymbolKind(kind: number): string {
-  return SYMBOL_KIND_MAP[kind] || `Unknown(${kind})`
-}
-
 export function formatSeverity(severity: number | undefined): string {
   if (!severity) return "unknown"
   return SEVERITY_MAP[severity] || `unknown(${severity})`
 }
 
+/**
+ * Formats an LSP diagnostic into a human-readable string.
+ * @param diag - The LSP diagnostic.
+ * @returns A formatted string representation.
+ */
 export function formatDiagnostic(diag: Diagnostic): string {
   const severity = formatSeverity(diag.severity)
   const line = diag.range.start.line + 1
@@ -142,42 +167,6 @@ export function filterDiagnosticsBySeverity(
 
 // WorkspaceEdit application
 
-function applyTextEditsToFile(filePath: string, edits: TextEdit[]): { success: boolean; editCount: number; error?: string } {
-  try {
-    const content = readFileSync(filePath, "utf-8")
-    const lines = content.split("\n")
-
-    const sortedEdits = [...edits].sort((a, b) => {
-      if (b.range.start.line !== a.range.start.line) {
-        return b.range.start.line - a.range.start.line
-      }
-      return b.range.start.character - a.range.start.character
-    })
-
-    for (const edit of sortedEdits) {
-      const startLine = edit.range.start.line
-      const startChar = edit.range.start.character
-      const endLine = edit.range.end.line
-      const endChar = edit.range.end.character
-
-      if (startLine === endLine) {
-        const line = lines[startLine] || ""
-        lines[startLine] = line.substring(0, startChar) + edit.newText + line.substring(endChar)
-      } else {
-        const firstLine = lines[startLine] || ""
-        const lastLine = lines[endLine] || ""
-        const newContent = firstLine.substring(0, startChar) + edit.newText + lastLine.substring(endChar)
-        lines.splice(startLine, endLine - startLine + 1, ...newContent.split("\n"))
-      }
-    }
-
-    writeFileSync(filePath, lines.join("\n"), "utf-8")
-    return { success: true, editCount: edits.length }
-  } catch (err) {
-    return { success: false, editCount: 0, error: err instanceof Error ? err.message : String(err) }
-  }
-}
-
 export interface ApplyResult {
   success: boolean
   filesModified: string[]
@@ -185,9 +174,15 @@ export interface ApplyResult {
   errors: string[]
 }
 
+/**
+ * Applies an LSP workspace edit to the local filesystem.
+ * Supports both 'changes' (TextEdits) and 'documentChanges' (Create/Rename/Delete/Edit).
+ * @param edit - The workspace edit to apply.
+ * @returns An object containing the success status, modified files, and any errors.
+ */
 export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
   if (!edit) {
-    return { success: false, filesModified: [], totalEdits: 0, errors: ["No edit provided"] }
+    return { success: false, filesModified: [], totalEdits: 0, errors: ["[lsp-utils] applyWorkspaceEdit: No edit provided"] }
   }
 
   const result: ApplyResult = { success: true, filesModified: [], totalEdits: 0, errors: [] }
@@ -202,7 +197,7 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
         result.totalEdits += applyResult.editCount
       } else {
         result.success = false
-        result.errors.push(`${filePath}: ${applyResult.error}`)
+        result.errors.push(`[lsp-utils] applyWorkspaceEdit: ${filePath}: ${applyResult.error?.replace("[lsp-utils] applyTextEdits: ", "")}`)
       }
     }
   }
@@ -217,7 +212,8 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
             result.filesModified.push(filePath)
           } catch (err) {
             result.success = false
-            result.errors.push(`Create ${change.uri}: ${err}`)
+            const message = err instanceof Error ? err.message : String(err)
+            result.errors.push(`[lsp-utils] applyWorkspaceEdit: Create ${change.uri}: ${message}`)
           }
         } else if (change.kind === "rename") {
           try {
@@ -229,7 +225,8 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
             result.filesModified.push(newPath)
           } catch (err) {
             result.success = false
-            result.errors.push(`Rename ${change.oldUri}: ${err}`)
+            const message = err instanceof Error ? err.message : String(err)
+            result.errors.push(`[lsp-utils] applyWorkspaceEdit: Rename ${change.oldUri}: ${message}`)
           }
         } else if (change.kind === "delete") {
           try {
@@ -238,7 +235,8 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
             result.filesModified.push(filePath)
           } catch (err) {
             result.success = false
-            result.errors.push(`Delete ${change.uri}: ${err}`)
+            const message = err instanceof Error ? err.message : String(err)
+            result.errors.push(`[lsp-utils] applyWorkspaceEdit: Delete ${change.uri}: ${message}`)
           }
         }
       } else {
@@ -259,6 +257,11 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
   return result
 }
 
+/**
+ * Formats the result of a workspace edit application into a human-readable summary.
+ * @param result - The apply result from applyWorkspaceEdit.
+ * @returns A formatted summary string.
+ */
 export function formatApplyResult(result: ApplyResult): string {
   const lines: string[] = []
 

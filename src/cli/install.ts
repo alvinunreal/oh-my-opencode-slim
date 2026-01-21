@@ -12,6 +12,7 @@ import {
   isTmuxInstalled,
   generateLiteConfig,
 } from "./config-manager"
+import { log } from "../shared/logger"
 
 // Colors
 const GREEN = "\x1b[32m"
@@ -33,30 +34,30 @@ const SYMBOLS = {
 }
 
 function printHeader(isUpdate: boolean): void {
-  console.log()
-  console.log(`${BOLD}oh-my-opencode-slim ${isUpdate ? "Update" : "Install"}${RESET}`)
-  console.log("=".repeat(30))
-  console.log()
+  log("")
+  log(`${BOLD}oh-my-opencode-slim ${isUpdate ? "Update" : "Install"}${RESET}`)
+  log("=".repeat(30))
+  log("")
 }
 
 function printStep(step: number, total: number, message: string): void {
-  console.log(`${DIM}[${step}/${total}]${RESET} ${message}`)
+  log(`${DIM}[${step}/${total}]${RESET} ${message}`)
 }
 
 function printSuccess(message: string): void {
-  console.log(`${SYMBOLS.check} ${message}`)
+  log(`${SYMBOLS.check} ${message}`)
 }
 
 function printError(message: string): void {
-  console.log(`${SYMBOLS.cross} ${RED}${message}${RESET}`)
+  log(`${SYMBOLS.cross} ${RED}${message}${RESET}`)
 }
 
 function printInfo(message: string): void {
-  console.log(`${SYMBOLS.info} ${message}`)
+  log(`${SYMBOLS.info} ${message}`)
 }
 
 function printWarning(message: string): void {
-  console.log(`${SYMBOLS.warn} ${YELLOW}${message}${RESET}`)
+  log(`${SYMBOLS.warn} ${YELLOW}${message}${RESET}`)
 }
 
 async function checkOpenCodeInstalled(): Promise<{ ok: boolean; version?: string }> {
@@ -64,7 +65,7 @@ async function checkOpenCodeInstalled(): Promise<{ ok: boolean; version?: string
   if (!installed) {
     printError("OpenCode is not installed on this system.")
     printInfo("Install it with:")
-    console.log(`     ${BLUE}curl -fsSL https://opencode.ai/install | bash${RESET}`)
+    log(`     ${BLUE}curl -fsSL https://opencode.ai/install | bash${RESET}`)
     return { ok: false }
   }
   const version = await getOpenCodeVersion()
@@ -100,17 +101,17 @@ function printAgentModels(config: InstallConfig): void {
 
   if (!agents || Object.keys(agents).length === 0) return
 
-  console.log(`${BOLD}Agent Configuration:${RESET}`)
-  console.log()
+  log(`${BOLD}Agent Configuration:${RESET}`)
+  log("")
 
   const maxAgentLen = Math.max(...Object.keys(agents).map((a) => a.length))
 
   for (const [agent, info] of Object.entries(agents)) {
     const padding = " ".repeat(maxAgentLen - agent.length)
     const skillsStr = info.skills.length > 0 ? ` ${DIM}[${info.skills.join(", ")}]${RESET}` : ""
-    console.log(`  ${DIM}${agent}${RESET}${padding} ${SYMBOLS.arrow} ${BLUE}${info.model}${RESET}${skillsStr}`)
+    log(`  ${DIM}${agent}${RESET}${padding} ${SYMBOLS.arrow} ${BLUE}${info.model}${RESET}${skillsStr}`)
   }
-  console.log()
+  log("")
 }
 
 function argsToConfig(args: InstallArgs): InstallConfig {
@@ -138,30 +139,17 @@ async function askYesNo(
 
 async function runInteractiveMode(detected: DetectedConfig): Promise<InstallConfig> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  // TODO: tmux has a bug, disabled for now
-  // const tmuxInstalled = await isTmuxInstalled()
-  // const totalQuestions = tmuxInstalled ? 3 : 2
   const totalQuestions = 2
 
   try {
-    console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`)
+    log(`${BOLD}Question 1/${totalQuestions}:${RESET}`)
     printInfo("The Pantheon is tuned for Antigravity's model routing. Other models work, but results may vary.")
     const antigravity = await askYesNo(rl, "Do you have an Antigravity subscription?", "yes")
-    console.log()
+    log("")
 
-    console.log(`${BOLD}Question 2/${totalQuestions}:${RESET}`)
+    log(`${BOLD}Question 2/${totalQuestions}:${RESET}`)
     const openai = await askYesNo(rl, "Do you have access to OpenAI API?", detected.hasOpenAI ? "yes" : "no")
-    console.log()
-
-    // TODO: tmux has a bug, disabled for now
-    // let tmux: BooleanArg = "no"
-    // if (tmuxInstalled) {
-    //   console.log(`${BOLD}Question 3/3:${RESET}`)
-    //   printInfo(`${BOLD}Tmux detected!${RESET} We can enable tmux integration for you.`)
-    //   printInfo("This will spawn new panes for sub-agents, letting you watch them work in real-time.")
-    //   tmux = await askYesNo(rl, "Enable tmux integration?", detected.hasTmux ? "yes" : "no")
-    //   console.log()
-    // }
+    log("")
 
     return {
       hasAntigravity: antigravity === "yes",
@@ -213,9 +201,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (!handleStepResult(liteResult, "Config written")) return 1
 
   // Summary
-  console.log()
-  console.log(formatConfigSummary(config))
-  console.log()
+  log("")
+  log(formatConfigSummary(config))
+  log("")
 
   printAgentModels(config)
 
@@ -223,26 +211,19 @@ async function runInstall(config: InstallConfig): Promise<number> {
     printWarning("No providers configured. Zen free models will be used as fallback.")
   }
 
-  console.log(`${SYMBOLS.star} ${BOLD}${GREEN}${isUpdate ? "Configuration updated!" : "Installation complete!"}${RESET}`)
-  console.log()
-  console.log(`${BOLD}Next steps:${RESET}`)
-  console.log()
+  log(`${SYMBOLS.star} ${BOLD}${GREEN}${isUpdate ? "Configuration updated!" : "Installation complete!"}${RESET}`)
+  log("")
+  log(`${BOLD}Next steps:${RESET}`)
+  log("")
 
   let nextStep = 1
-  console.log(`  ${nextStep++}. Authenticate with your providers:`)
-  console.log(`     ${BLUE}$ opencode auth login${RESET}`)
-  console.log()
+  log(`  ${nextStep++}. Authenticate with your providers:`)
+  log(`     ${BLUE}$ opencode auth login${RESET}`)
+  log("")
 
-  // TODO: tmux has a bug, disabled for now
-  // if (config.hasTmux) {
-  //   console.log(`  ${nextStep++}. Run OpenCode inside tmux:`)
-  //   console.log(`     ${BLUE}$ tmux${RESET}`)
-  //   console.log(`     ${BLUE}$ opencode${RESET}`)
-  // } else {
-  console.log(`  ${nextStep++}. Start OpenCode:`)
-  console.log(`     ${BLUE}$ opencode${RESET}`)
-  // }
-  console.log()
+  log(`  ${nextStep++}. Start OpenCode:`)
+  log(`     ${BLUE}$ opencode${RESET}`)
+  log("")
 
   return 0
 }
@@ -260,11 +241,11 @@ export async function install(args: InstallArgs): Promise<number> {
       printHeader(false)
       printError("Missing or invalid arguments:")
       for (const key of errors) {
-        console.log(`  ${SYMBOLS.bullet} --${key}=<yes|no>`)
+        log(`  ${SYMBOLS.bullet} --${key}=<yes|no>`)
       }
-      console.log()
+      log("")
       printInfo("Usage: bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no> --tmux=<yes|no>")
-      console.log()
+      log("")
       return 1
     }
 
@@ -279,7 +260,7 @@ export async function install(args: InstallArgs): Promise<number> {
   printStep(1, 1, "Checking OpenCode installation...")
   const { ok } = await checkOpenCodeInstalled()
   if (!ok) return 1
-  console.log()
+  log("")
 
   const config = await runInteractiveMode(detected)
   return runInstall(config)

@@ -176,7 +176,7 @@ export function getCachedVersion(): string | null {
       if (pkg.version) return pkg.version
     }
   } catch (err) {
-    log("[auto-update-checker] Failed to resolve version from current directory:", err)
+    log("[auto-update] check: Failed to resolve version from current directory:", err instanceof Error ? err.message : String(err))
   }
 
   return null
@@ -189,7 +189,7 @@ export function updatePinnedVersion(configPath: string, oldEntry: string, newVer
     
     const pluginMatch = content.match(/"plugin"\s*:\s*\[/)
     if (!pluginMatch || pluginMatch.index === undefined) {
-      log(`[auto-update-checker] No "plugin" array found in ${configPath}`)
+      log(`[auto-update] update: No "plugin" array found in ${configPath}`)
       return false
     }
     
@@ -211,7 +211,7 @@ export function updatePinnedVersion(configPath: string, oldEntry: string, newVer
     const regex = new RegExp(`["']${escapedOldEntry}["']`)
     
     if (!regex.test(pluginArrayContent)) {
-      log(`[auto-update-checker] Entry "${oldEntry}" not found in plugin array of ${configPath}`)
+      log(`[auto-update] update: Entry "${oldEntry}" not found in plugin array of ${configPath}`)
       return false
     }
     
@@ -219,15 +219,15 @@ export function updatePinnedVersion(configPath: string, oldEntry: string, newVer
     const updatedContent = before + updatedPluginArray + after
     
     if (updatedContent === content) {
-      log(`[auto-update-checker] No changes made to ${configPath}`)
+      log(`[auto-update] update: No changes made to ${configPath}`)
       return false
     }
     
     fs.writeFileSync(configPath, updatedContent, "utf-8")
-    log(`[auto-update-checker] Updated ${configPath}: ${oldEntry} → ${newEntry}`)
+    log(`[auto-update] update: Updated ${configPath}: ${oldEntry} → ${newEntry}`)
     return true
   } catch (err) {
-    log(`[auto-update-checker] Failed to update config file ${configPath}:`, err)
+    log(`[auto-update] update: Failed to update config file ${configPath}:`, err instanceof Error ? err.message : String(err))
     return false
   }
 }
@@ -246,7 +246,8 @@ export async function getLatestVersion(channel: string = "latest"): Promise<stri
 
     const data = (await response.json()) as NpmDistTags
     return data[channel] ?? data.latest ?? null
-  } catch {
+  } catch (err) {
+    log(`[auto-update] fetch: failed to fetch latest version: ${err instanceof Error ? err.message : String(err)}`)
     return null
   } finally {
     clearTimeout(timeoutId)

@@ -6,6 +6,11 @@ import { homedir } from "os"
 import { BUILTIN_SERVERS, EXT_TO_LANG, LSP_INSTALL_HINTS } from "./constants"
 import type { ResolvedServer, ServerLookupResult } from "./types"
 
+/**
+ * Finds a suitable LSP server for a given file extension.
+ * @param ext - The file extension (including dot).
+ * @returns A result indicating if a server was found, not installed, or not configured.
+ */
 export function findServerForExtension(ext: string): ServerLookupResult {
   // Find matching server
   for (const [id, config] of Object.entries(BUILTIN_SERVERS)) {
@@ -33,10 +38,21 @@ export function findServerForExtension(ext: string): ServerLookupResult {
   return { status: "not_configured", extension: ext }
 }
 
+/**
+ * Maps a file extension to its corresponding LSP language identifier.
+ * @param ext - The file extension (including dot).
+ * @returns The language identifier (e.g., 'typescript', 'python').
+ */
 export function getLanguageId(ext: string): string {
   return EXT_TO_LANG[ext] || "plaintext"
 }
 
+/**
+ * Checks if an LSP server command is available on the system.
+ * Looks in PATH, local node_modules/.bin, and global opencode bin.
+ * @param command - The command array (e.g., ['typescript-language-server', '--stdio']).
+ * @returns True if the server is installed and executable.
+ */
 export function isServerInstalled(command: string[]): boolean {
   if (command.length === 0) return false
 

@@ -6,6 +6,8 @@ import { extname, resolve } from "path"
 import { pathToFileURL } from "node:url"
 import { getLanguageId } from "./config"
 import type { Diagnostic, ResolvedServer } from "./types"
+import { parseMessages } from "./protocol-parser"
+import { sleep } from "../../utils/polling"
 
 interface ManagedClient {
   client: LSPClient
@@ -119,7 +121,7 @@ class LSPServerManager {
       }
     } catch (err) {
       this.clients.delete(key)
-      throw err
+      throw new Error(`[lsp-client] getClient: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     return client
@@ -182,18 +184,19 @@ export class LSPClient {
     })
 
     if (!this.proc) {
-      throw new Error(`Failed to spawn LSP server: ${this.server.command.join(" ")}`)
+      throw new Error(`[lsp-client] start: Failed to spawn LSP server: ${this.server.command.join(" ")}`)
     }
 
     this.startReading()
     this.startStderrReading()
 
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await sleep(100)
 
     if (this.proc.exitCode !== null) {
       const stderr = this.stderrBuffer.join("\n")
       throw new Error(
-        `LSP server exited immediately with code ${this.proc.exitCode}` + (stderr ? `\nstderr: ${stderr}` : "")
+        `[lsp-client] start: LSP server exited immediately with code ${this.proc.exitCode}` +
+          (stderr ? `\nstderr: ${stderr}` : "")
       )
     }
   }
@@ -208,7 +211,7 @@ export class LSPClient {
           const { done, value } = await reader.read()
           if (done) {
             this.processExited = true
-            this.rejectAllPending("LSP server stdout closed")
+            this.rejectAllPending("[lsp-client] startReading: LSP server stdout closed")
             break
           }
           const newBuf = new Uint8Array(this.buffer.length + value.length)
@@ -219,7 +222,8 @@ export class LSPClient {
         }
       } catch (err) {
         this.processExited = true
-        this.rejectAllPending(`LSP stdout read error: ${err}`)
+        const message = err instanceof Error ? err.message : String(err)
+        this.rejectAllPending(`[lsp-client] startReading: ${message}`)
       }
     }
     read()
@@ -253,50 +257,12 @@ export class LSPClient {
     }
   }
 
-  private findSequence(haystack: Uint8Array, needle: number[]): number {
-    outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
-      for (let j = 0; j < needle.length; j++) {
-        if (haystack[i + j] !== needle[j]) continue outer
-      }
-      return i
-    }
-    return -1
-  }
-
   private processBuffer(): void {
-    const decoder = new TextDecoder()
-    const CONTENT_LENGTH = [67, 111, 110, 116, 101, 110, 116, 45, 76, 101, 110, 103, 116, 104, 58]
-    const CRLF_CRLF = [13, 10, 13, 10]
-    const LF_LF = [10, 10]
+    const { messages, remainingBuffer } = parseMessages(this.buffer)
+    this.buffer = remainingBuffer
 
-    while (true) {
-      const headerStart = this.findSequence(this.buffer, CONTENT_LENGTH)
-      if (headerStart === -1) break
-      if (headerStart > 0) this.buffer = this.buffer.slice(headerStart)
-
-      let headerEnd = this.findSequence(this.buffer, CRLF_CRLF)
-      let sepLen = 4
-      if (headerEnd === -1) {
-        headerEnd = this.findSequence(this.buffer, LF_LF)
-        sepLen = 2
-      }
-      if (headerEnd === -1) break
-
-      const header = decoder.decode(this.buffer.slice(0, headerEnd))
-      const match = header.match(/Content-Length:\s*(\d+)/i)
-      if (!match) break
-
-      const len = parseInt(match[1], 10)
-      const start = headerEnd + sepLen
-      const end = start + len
-      if (this.buffer.length < end) break
-
-      const content = decoder.decode(this.buffer.slice(start, end))
-      this.buffer = this.buffer.slice(end)
-
+    for (const msg of messages) {
       try {
-        const msg = JSON.parse(content)
-
         if ("method" in msg && !("id" in msg)) {
           if (msg.method === "textDocument/publishDiagnostics" && msg.params?.uri) {
             this.diagnosticsStore.set(msg.params.uri, msg.params.diagnostics ?? [])
@@ -307,21 +273,25 @@ export class LSPClient {
           const handler = this.pending.get(msg.id)!
           this.pending.delete(msg.id)
           if ("error" in msg) {
-            handler.reject(new Error(msg.error.message))
+            handler.reject(new Error(`[lsp-client] response: ${msg.error.message}`))
           } else {
             handler.resolve(msg.result)
           }
         }
-      } catch {}
+      } catch (err) {
+        console.error(`[lsp-client] Error handling message: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   }
 
   private send(method: string, params?: unknown): Promise<unknown> {
-    if (!this.proc) throw new Error("LSP client not started")
+    if (!this.proc) throw new Error("[lsp-client] send: LSP client not started")
 
     if (this.processExited || this.proc.exitCode !== null) {
       const stderr = this.stderrBuffer.slice(-10).join("\n")
-      throw new Error(`LSP server already exited (code: ${this.proc.exitCode})` + (stderr ? `\nstderr: ${stderr}` : ""))
+      throw new Error(
+        `[lsp-client] send: LSP server already exited (code: ${this.proc.exitCode})` + (stderr ? `\nstderr: ${stderr}` : "")
+      )
     }
 
     const id = ++this.requestIdCounter
@@ -335,18 +305,28 @@ export class LSPClient {
         if (this.pending.has(id)) {
           this.pending.delete(id)
           const stderr = this.stderrBuffer.slice(-5).join("\n")
-          reject(new Error(`LSP request timeout (method: ${method})` + (stderr ? `\nrecent stderr: ${stderr}` : "")))
+          reject(
+            new Error(
+              `[lsp-client] send: LSP request timeout (method: ${method})` + (stderr ? `\nrecent stderr: ${stderr}` : "")
+            )
+          )
         }
       }, 15000)
     })
   }
 
   private notify(method: string, params?: unknown): void {
-    if (!this.proc) return
-    if (this.processExited || this.proc.exitCode !== null) return
+    if (!this.proc) throw new Error("[lsp-client] notify: LSP client not started")
+    if (this.processExited || this.proc.exitCode !== null) {
+      throw new Error("[lsp-client] notify: LSP server already exited")
+    }
 
     const msg = JSON.stringify({ jsonrpc: "2.0", method, params })
-    this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
+    try {
+      this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
+    } catch (err) {
+      throw new Error(`[lsp-client] notify: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   private respond(id: number | string, result: unknown): void {
@@ -373,37 +353,41 @@ export class LSPClient {
   }
 
   async initialize(): Promise<void> {
-    const rootUri = pathToFileURL(this.root).href
-    await this.send("initialize", {
-      processId: process.pid,
-      rootUri,
-      rootPath: this.root,
-      workspaceFolders: [{ uri: rootUri, name: "workspace" }],
-      capabilities: {
-        textDocument: {
-          hover: { contentFormat: ["markdown", "plaintext"] },
-          definition: { linkSupport: true },
-          references: {},
-          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-          publishDiagnostics: {},
-          rename: {
-            prepareSupport: true,
-            prepareSupportDefaultBehavior: 1,
-            honorsChangeAnnotations: true,
+    try {
+      const rootUri = pathToFileURL(this.root).href
+      await this.send("initialize", {
+        processId: process.pid,
+        rootUri,
+        rootPath: this.root,
+        workspaceFolders: [{ uri: rootUri, name: "workspace" }],
+        capabilities: {
+          textDocument: {
+            hover: { contentFormat: ["markdown", "plaintext"] },
+            definition: { linkSupport: true },
+            references: {},
+            documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+            publishDiagnostics: {},
+            rename: {
+              prepareSupport: true,
+              prepareSupportDefaultBehavior: 1,
+              honorsChangeAnnotations: true,
+            },
+          },
+          workspace: {
+            symbol: {},
+            workspaceFolders: true,
+            configuration: true,
+            applyEdit: true,
+            workspaceEdit: { documentChanges: true },
           },
         },
-        workspace: {
-          symbol: {},
-          workspaceFolders: true,
-          configuration: true,
-          applyEdit: true,
-          workspaceEdit: { documentChanges: true },
-        },
-      },
-      ...this.server.initialization,
-    })
-    this.notify("initialized")
-    await new Promise((r) => setTimeout(r, 300))
+        ...this.server.initialization,
+      })
+      this.notify("initialized")
+      await sleep(300)
+    } catch (err) {
+      throw new Error(`[lsp-client] initialize: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   async openFile(filePath: string): Promise<void> {
@@ -424,7 +408,7 @@ export class LSPClient {
     })
     this.openedFiles.add(absPath)
 
-    await new Promise((r) => setTimeout(r, 1000))
+    await sleep(1000)
   }
 
   async definition(filePath: string, line: number, character: number): Promise<unknown> {
@@ -450,7 +434,7 @@ export class LSPClient {
     const absPath = resolve(filePath)
     const uri = pathToFileURL(absPath).href
     await this.openFile(absPath)
-    await new Promise((r) => setTimeout(r, 500))
+    await sleep(500)
 
     try {
       const result = await this.send("textDocument/diagnostic", {
@@ -480,12 +464,16 @@ export class LSPClient {
 
   async stop(): Promise<void> {
     try {
-      this.notify("shutdown", {})
-      this.notify("exit")
-    } catch {}
-    this.proc?.kill()
-    this.proc = null
-    this.processExited = true
-    this.diagnosticsStore.clear()
+      try {
+        this.notify("shutdown", {})
+        this.notify("exit")
+      } catch {}
+      this.proc?.kill()
+      this.proc = null
+      this.processExited = true
+      this.diagnosticsStore.clear()
+    } catch (err) {
+      throw new Error(`[lsp-client] stop: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }

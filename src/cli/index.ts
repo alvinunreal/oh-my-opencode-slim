@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { install } from "./install"
 import type { InstallArgs, BooleanArg } from "./types"
+import { log } from "../shared/logger"
 
 function parseArgs(args: string[]): InstallArgs {
   const result: InstallArgs = {
@@ -28,7 +29,7 @@ function parseArgs(args: string[]): InstallArgs {
 }
 
 function printHelp(): void {
-  console.log(`
+  log(`
 oh-my-opencode-slim installer
 
 Usage: bunx oh-my-opencode-slim install [OPTIONS]
@@ -58,13 +59,13 @@ async function main(): Promise<void> {
     printHelp()
     process.exit(0)
   } else {
-    console.error(`Unknown command: ${args[0]}`)
-    console.error("Run with --help for usage information")
+    log(`Unknown command: ${args[0]}`)
+    log("Run with --help for usage information")
     process.exit(1)
   }
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err)
+  log("Fatal error:", err)
   process.exit(1)
 })

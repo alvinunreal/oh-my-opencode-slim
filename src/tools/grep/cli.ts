@@ -129,6 +129,12 @@ function parseCountOutput(output: string): CountResult[] {
   return results
 }
 
+/**
+ * Runs a ripgrep (or grep) search with the provided options.
+ * @param options - Grep search configuration.
+ * @returns A promise resolving to the search results.
+ * @throws Error if the search times out.
+ */
 export async function runRg(options: GrepOptions): Promise<GrepResult> {
   const cli = resolveGrepCli()
   const args = buildArgs(options, cli.backend)
@@ -147,12 +153,13 @@ export async function runRg(options: GrepOptions): Promise<GrepResult> {
     stderr: "pipe",
   })
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
+  const timeoutPromise = new Promise<never>(async (_, reject) => {
     const id = setTimeout(() => {
       proc.kill()
-      reject(new Error(`Search timeout after ${timeout}ms`))
+      reject(new Error(`[grep] run: Search timeout after ${timeout}ms`))
     }, timeout)
-    proc.exited.then(() => clearTimeout(id))
+    await proc.exited
+    clearTimeout(id)
   })
 
   try {
@@ -169,7 +176,7 @@ export async function runRg(options: GrepOptions): Promise<GrepResult> {
         totalMatches: 0,
         filesSearched: 0,
         truncated: false,
-        error: stderr.trim(),
+        error: `[grep] run: ${stderr.trim()}`,
       }
     }
 
@@ -188,11 +195,16 @@ export async function runRg(options: GrepOptions): Promise<GrepResult> {
       totalMatches: 0,
       filesSearched: 0,
       truncated: false,
-      error: e instanceof Error ? e.message : String(e),
+      error: `[grep] run: ${e instanceof Error ? e.message : String(e)}`,
     }
   }
 }
-
+/**
+ * Runs a ripgrep (or grep) count search with the provided options.
+ * @param options - Grep search configuration (context ignored).
+ * @returns A promise resolving to an array of per-file match counts.
+ * @throws Error if the search fails or times out.
+ */
 export async function runRgCount(options: Omit<GrepOptions, "context">): Promise<CountResult[]> {
   const cli = resolveGrepCli()
   const args = buildArgs({ ...options, context: 0 }, cli.backend)
@@ -212,18 +224,19 @@ export async function runRgCount(options: Omit<GrepOptions, "context">): Promise
     stderr: "pipe",
   })
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
+  const timeoutPromise = new Promise<never>(async (_, reject) => {
     const id = setTimeout(() => {
       proc.kill()
-      reject(new Error(`Search timeout after ${timeout}ms`))
+      reject(new Error(`[grep] run: Search timeout after ${timeout}ms`))
     }, timeout)
-    proc.exited.then(() => clearTimeout(id))
+    await proc.exited
+    clearTimeout(id)
   })
 
   try {
     const stdout = await Promise.race([new Response(proc.stdout).text(), timeoutPromise])
     return parseCountOutput(stdout)
   } catch (e) {
-    throw new Error(`Count search failed: ${e instanceof Error ? e.message : String(e)}`)
+    throw new Error(`[grep] run: Count search failed: ${e instanceof Error ? e.message : String(e)}`)
   }
 }

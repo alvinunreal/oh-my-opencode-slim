@@ -85,7 +85,7 @@ export class SkillMcpManager {
   ): Promise<Client> {
     if (!("url" in config)) {
       throw new Error(
-        `MCP server "${info.serverName}" missing url for HTTP connection.`
+        `[mcp-manager] init: MCP server "${info.serverName}" missing url for HTTP connection.`
       );
     }
 
@@ -114,7 +114,7 @@ export class SkillMcpManager {
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Failed to connect to MCP server "${info.serverName}". ${errorMessage}`
+        `[mcp-manager] connect: failed to connect to MCP server "${info.serverName}": ${errorMessage}`
       );
     }
 
@@ -137,7 +137,7 @@ export class SkillMcpManager {
   ): Promise<Client> {
     if (!("command" in config)) {
       throw new Error(
-        `MCP server "${info.serverName}" missing command for stdio connection.`
+        `[mcp-manager] init: MCP server "${info.serverName}" missing command for stdio connection.`
       );
     }
 
@@ -163,7 +163,7 @@ export class SkillMcpManager {
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Failed to connect to MCP server "${info.serverName}". ${errorMessage}`
+        `[mcp-manager] connect: failed to connect to MCP server "${info.serverName}": ${errorMessage}`
       );
     }
 

@@ -1,11 +1,22 @@
 import type { PluginConfig } from "../config";
 import { log } from "../shared/logger";
 
+/**
+ * Normalizes an agent name by trimming whitespace and removing leading '@'.
+ * @param agentName - The agent name to normalize.
+ * @returns The normalized agent name.
+ */
 export function normalizeAgentName(agentName: string): string {
   const trimmed = agentName.trim();
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
 }
 
+/**
+ * Resolves the configured variant for a given agent.
+ * @param config - The plugin configuration.
+ * @param agentName - The name of the agent.
+ * @returns The resolved variant name, or undefined if not found/invalid.
+ */
 export function resolveAgentVariant(
   config: PluginConfig | undefined,
   agentName: string
@@ -28,6 +39,12 @@ export function resolveAgentVariant(
   return trimmed;
 }
 
+/**
+ * Applies a variant to a prompt body if one is provided and not already present.
+ * @param variant - The variant to apply.
+ * @param body - The prompt body to modify.
+ * @returns The updated prompt body with the variant applied.
+ */
 export function applyAgentVariant<T extends { variant?: string }>(
   variant: string | undefined,
   body: T

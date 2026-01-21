@@ -10,6 +10,7 @@ import {
 import type { TmuxConfig } from "../config/schema";
 import type { PluginConfig } from "../config";
 import { applyAgentVariant, resolveAgentVariant } from "../utils";
+import { sleep } from "../utils/polling";
 import { log } from "../shared/logger";
 
 const z = tool.schema;
@@ -21,6 +22,14 @@ type ToolContext = {
   abort: AbortSignal;
 };
 
+/**
+ * Creates background task tools (background_task, background_output, background_cancel).
+ * @param ctx - The plugin input context.
+ * @param manager - The background task manager instance.
+ * @param tmuxConfig - Optional tmux configuration for spawning panes.
+ * @param pluginConfig - Optional plugin configuration for agent variants.
+ * @returns A record of tool definitions.
+ */
 export function createBackgroundTools(
   ctx: PluginInput,
   manager: BackgroundTaskManager,
@@ -85,7 +94,7 @@ Use \`background_output\` with task_id="${task.id}" to get results.`;
 
       const task = await manager.getResult(taskId, block, timeout);
       if (!task) {
-        return `Task not found: ${taskId}`;
+        return `Error: [background] task not found: ${taskId}`;
       }
 
       const duration = task.completedAt
@@ -147,37 +156,11 @@ async function executeSync(
   pluginConfig?: PluginConfig,
   existingSessionId?: string
 ): Promise<string> {
-  let sessionID: string;
-
-  if (existingSessionId) {
-    const sessionResult = await ctx.client.session.get({ path: { id: existingSessionId } });
-    if (sessionResult.error) {
-      return `Error: Failed to get session: ${sessionResult.error}`;
-    }
-    sessionID = existingSessionId;
-  } else {
-    const parentSession = await ctx.client.session.get({ path: { id: toolContext.sessionID } }).catch(() => null);
-    const parentDirectory = parentSession?.data?.directory ?? ctx.directory;
-
-    const createResult = await ctx.client.session.create({
-      body: {
-        parentID: toolContext.sessionID,
-        title: `${description} (@${agent})`,
-      },
-      query: { directory: parentDirectory },
-    });
-
-    if (createResult.error) {
-      return `Error: Failed to create session: ${createResult.error}`;
-    }
-    sessionID = createResult.data.id;
-
-    // Give TmuxSessionManager time to spawn the pane via event hook
-    // before we send the prompt (so the TUI can receive streaming updates)
-    if (tmuxConfig?.enabled) {
-      await new Promise((r) => setTimeout(r, 500));
-    }
+  const sessionResult = await getOrCreateSession(description, agent, toolContext, ctx, tmuxConfig, existingSessionId);
+  if ("error" in sessionResult) {
+    return sessionResult.error;
   }
+  const sessionID = sessionResult.sessionID;
 
   // Disable recursive delegation tools to prevent infinite loops
   log(`[background-sync] launching sync task for agent="${agent}"`, { description });
@@ -203,27 +186,116 @@ async function executeSync(
       body: promptBody,
     });
   } catch (error) {
-    return `Error: Failed to send prompt: ${error instanceof Error ? error.message : String(error)}
+    return `Error: [background] executeSync: failed to send prompt: ${error instanceof Error ? error.message : String(error)}
 
 <task_metadata>
 session_id: ${sessionID}
 </task_metadata>`;
   }
 
+  const pollStatus = await pollForCompletion(sessionID, toolContext, ctx);
+  if (pollStatus === "aborted") {
+    return `Task aborted.
+
+<task_metadata>
+session_id: ${sessionID}
+</task_metadata>`;
+  } else if (pollStatus === "timeout") {
+    return `Error: [background] executeSync: agent timed out after 5 minutes.
+
+<task_metadata>
+session_id: ${sessionID}
+</task_metadata>`;
+  }
+
+  const messagesResult = await ctx.client.session.messages({ path: { id: sessionID } });
+  if (messagesResult.error) {
+    return `Error: [background] executeSync: failed to get messages: ${messagesResult.error}`;
+  }
+
+  const responseText = extractAssistantResponse(
+    messagesResult.data as Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>
+  );
+
+  if (responseText === null) {
+    return `Error: [background] executeSync: no response from agent.
+
+<task_metadata>
+session_id: ${sessionID}
+</task_metadata>`;
+  }
+
+  // Pane closing is handled by TmuxSessionManager via polling
+  return `${responseText}
+
+<task_metadata>
+session_id: ${sessionID}
+</task_metadata>`;
+}
+
+/**
+ * Retrieves an existing session or creates a new one for background task execution.
+ */
+async function getOrCreateSession(
+  description: string,
+  agent: string,
+  toolContext: ToolContext,
+  ctx: PluginInput,
+  tmuxConfig?: TmuxConfig,
+  existingSessionId?: string
+): Promise<{ sessionID: string } | { error: string }> {
+  if (existingSessionId) {
+    const sessionResult = await ctx.client.session.get({ path: { id: existingSessionId } });
+    if (sessionResult.error) {
+      return { error: `Error: [background] executeSync: failed to get session: ${sessionResult.error}` };
+    }
+    return { sessionID: existingSessionId };
+  }
+
+  const parentSession = await ctx.client.session.get({ path: { id: toolContext.sessionID } }).catch(() => null);
+  const parentDirectory = parentSession?.data?.directory ?? ctx.directory;
+
+  const createResult = await ctx.client.session.create({
+    body: {
+      parentID: toolContext.sessionID,
+      title: `${description} (@${agent})`,
+    },
+    query: { directory: parentDirectory },
+  });
+
+  if (createResult.error) {
+    return { error: `Error: [background] executeSync: failed to create session: ${createResult.error}` };
+  }
+
+  const sessionID = createResult.data.id;
+
+  // Give TmuxSessionManager time to spawn the pane via event hook
+  // before we send the prompt (so the TUI can receive streaming updates)
+  if (tmuxConfig?.enabled) {
+    await sleep(500);
+  }
+
+  return { sessionID };
+}
+
+/**
+ * Polls for the completion of a session's execution.
+ */
+async function pollForCompletion(
+  sessionID: string,
+  toolContext: ToolContext,
+  ctx: PluginInput
+): Promise<"completed" | "aborted" | "timeout"> {
   const pollStart = Date.now();
   let lastMsgCount = 0;
   let stablePolls = 0;
 
   while (Date.now() - pollStart < MAX_POLL_TIME_MS) {
     if (toolContext.abort?.aborted) {
-      return `Task aborted.
-
-<task_metadata>
-session_id: ${sessionID}
-</task_metadata>`;
+      return "aborted";
     }
 
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await sleep(POLL_INTERVAL_MS);
 
     const statusResult = await ctx.client.session.status();
     const allStatuses = (statusResult.data ?? {}) as Record<string, { type: string }>;
@@ -241,35 +313,26 @@ session_id: ${sessionID}
 
     if (currentMsgCount > 0 && currentMsgCount === lastMsgCount) {
       stablePolls++;
-      if (stablePolls >= STABLE_POLLS_THRESHOLD) break;
+      if (stablePolls >= STABLE_POLLS_THRESHOLD) return "completed";
     } else {
       stablePolls = 0;
       lastMsgCount = currentMsgCount;
     }
   }
 
-  if (Date.now() - pollStart >= MAX_POLL_TIME_MS) {
-    return `Error: Agent timed out after 5 minutes.
+  return "timeout";
+}
 
-<task_metadata>
-session_id: ${sessionID}
-</task_metadata>`;
-  }
-
-  const messagesResult = await ctx.client.session.messages({ path: { id: sessionID } });
-  if (messagesResult.error) {
-    return `Error: Failed to get messages: ${messagesResult.error}`;
-  }
-
-  const messages = messagesResult.data as Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>;
+/**
+ * Extracts the assistant's response text from the session messages.
+ */
+function extractAssistantResponse(
+  messages: Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>
+): string | null {
   const assistantMessages = messages.filter((m) => m.info?.role === "assistant");
 
   if (assistantMessages.length === 0) {
-    return `Error: No response from agent.
-
-<task_metadata>
-session_id: ${sessionID}
-</task_metadata>`;
+    return null;
   }
 
   const extractedContent: string[] = [];
@@ -282,11 +345,5 @@ session_id: ${sessionID}
   }
 
   const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
-
-  // Pane closing is handled by TmuxSessionManager via polling
-  return `${responseText}
-
-<task_metadata>
-session_id: ${sessionID}
-</task_metadata>`;
+  return responseText.length > 0 ? responseText : null;
 }

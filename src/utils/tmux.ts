@@ -1,6 +1,7 @@
 import { spawn } from "bun";
 import { log } from "../shared/logger";
 import type { TmuxConfig, TmuxLayout } from "../config/schema";
+import { sleep } from "./polling";
 
 let tmuxPath: string | null = null;
 let tmuxChecked = false;
@@ -41,21 +42,24 @@ async function isServerRunning(serverUrl: string): Promise<boolean> {
     if (available) {
       serverCheckUrl = serverUrl;
       serverAvailable = true;
-      log("[tmux] isServerRunning: checked", { serverUrl, available, attempt });
+      log("[tmux] health-check: success", { serverUrl, available, attempt });
       return true;
     }
 
     if (attempt < maxAttempts) {
-      await new Promise((r) => setTimeout(r, 250));
+      await sleep(250);
     }
   }
 
-  log("[tmux] isServerRunning: checked", { serverUrl, available: false });
+  log("[tmux] health-check: failed", { serverUrl, available: false });
   return false;
 }
 
 /**
  * Reset the server availability cache (useful when server might have started)
+ */
+/**
+ * Resets the server availability cache.
  */
 export function resetServerCheck(): void {
   serverAvailable = null;
@@ -77,14 +81,14 @@ async function findTmuxPath(): Promise<string | null> {
 
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
-      log("[tmux] findTmuxPath: 'which tmux' failed", { exitCode });
+      log("[tmux] find: 'which tmux' failed", { exitCode });
       return null;
     }
 
     const stdout = await new Response(proc.stdout).text();
     const path = stdout.trim().split("\n")[0];
     if (!path) {
-      log("[tmux] findTmuxPath: no path in output");
+      log("[tmux] find: no path in output");
       return null;
     }
 
@@ -95,14 +99,14 @@ async function findTmuxPath(): Promise<string | null> {
     });
     const verifyExit = await verifyProc.exited;
     if (verifyExit !== 0) {
-      log("[tmux] findTmuxPath: tmux -V failed", { path, verifyExit });
+      log("[tmux] find: tmux -V failed", { path, verifyExit });
       return null;
     }
 
-    log("[tmux] findTmuxPath: found tmux", { path });
+    log("[tmux] find: found tmux", { path });
     return path;
   } catch (err) {
-    log("[tmux] findTmuxPath: exception", { error: String(err) });
+    log("[tmux] find: exception", { error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }
@@ -117,12 +121,16 @@ export async function getTmuxPath(): Promise<string | null> {
 
   tmuxPath = await findTmuxPath();
   tmuxChecked = true;
-  log("[tmux] getTmuxPath: initialized", { tmuxPath });
+  log("[tmux] init: initialized", { tmuxPath });
   return tmuxPath;
 }
 
 /**
  * Check if we're running inside tmux
+ */
+/**
+ * Checks if the current process is running inside a tmux session.
+ * @returns True if running inside tmux, false otherwise.
  */
 export function isInsideTmux(): boolean {
   return !!process.env.TMUX;
@@ -160,9 +168,9 @@ async function applyLayout(tmux: string, layout: TmuxLayout, mainPaneSize: numbe
       await reapplyProc.exited;
     }
 
-    log("[tmux] applyLayout: applied", { layout, mainPaneSize });
+    log("[tmux] apply-layout: applied", { layout, mainPaneSize });
   } catch (err) {
-    log("[tmux] applyLayout: exception", { error: String(err) });
+    log("[tmux] apply-layout: exception", { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -183,15 +191,15 @@ export async function spawnTmuxPane(
   config: TmuxConfig,
   serverUrl: string
 ): Promise<SpawnPaneResult> {
-  log("[tmux] spawnTmuxPane called", { sessionId, description, config, serverUrl });
+  log("[tmux] spawn: start", { sessionId, description, config, serverUrl });
 
   if (!config.enabled) {
-    log("[tmux] spawnTmuxPane: config.enabled is false, skipping");
+    log("[tmux] spawn: disabled in config");
     return { success: false };
   }
 
   if (!isInsideTmux()) {
-    log("[tmux] spawnTmuxPane: not inside tmux, skipping");
+    log("[tmux] spawn: not inside tmux");
     return { success: false };
   }
 
@@ -199,7 +207,7 @@ export async function spawnTmuxPane(
   // This is needed because serverUrl may be a fallback even when no server is running
   const serverRunning = await isServerRunning(serverUrl);
   if (!serverRunning) {
-    log("[tmux] spawnTmuxPane: OpenCode server not running, skipping", {
+    log("[tmux] spawn: server not running", {
       serverUrl,
       hint: "Start opencode with --port 4096"
     });
@@ -208,7 +216,7 @@ export async function spawnTmuxPane(
 
   const tmux = await getTmuxPath();
   if (!tmux) {
-    log("[tmux] spawnTmuxPane: tmux binary not found, skipping");
+    log("[tmux] spawn: binary not found");
     return { success: false };
   }
 
@@ -231,7 +239,7 @@ export async function spawnTmuxPane(
       opencodeCmd,
     ];
 
-    log("[tmux] spawnTmuxPane: executing", { tmux, args, opencodeCmd });
+    log("[tmux] spawn: executing", { tmux, args, opencodeCmd });
 
     const proc = spawn([tmux, ...args], {
       stdout: "pipe",
@@ -243,7 +251,7 @@ export async function spawnTmuxPane(
     const stderr = await new Response(proc.stderr).text();
     const paneId = stdout.trim(); // e.g., "%42"
 
-    log("[tmux] spawnTmuxPane: split result", { exitCode, paneId, stderr: stderr.trim() });
+    log("[tmux] spawn: result", { exitCode, paneId, stderr: stderr.trim() });
 
     if (exitCode === 0 && paneId) {
       // Rename the pane for visibility
@@ -258,13 +266,13 @@ export async function spawnTmuxPane(
       const mainPaneSize = config.main_pane_size ?? 60;
       await applyLayout(tmux, layout, mainPaneSize);
 
-      log("[tmux] spawnTmuxPane: SUCCESS, pane created and layout applied", { paneId, layout });
+      log("[tmux] spawn: success", { paneId, layout });
       return { success: true, paneId };
     }
 
     return { success: false };
   } catch (err) {
-    log("[tmux] spawnTmuxPane: exception", { error: String(err) });
+    log("[tmux] spawn: exception", { error: err instanceof Error ? err.message : String(err) });
     return { success: false };
   }
 }
@@ -273,16 +281,16 @@ export async function spawnTmuxPane(
  * Close a tmux pane by its ID and reapply layout to rebalance remaining panes
  */
 export async function closeTmuxPane(paneId: string): Promise<boolean> {
-  log("[tmux] closeTmuxPane called", { paneId });
+  log("[tmux] close: start", { paneId });
 
   if (!paneId) {
-    log("[tmux] closeTmuxPane: no paneId provided");
+    log("[tmux] close: no paneId provided");
     return false;
   }
 
   const tmux = await getTmuxPath();
   if (!tmux) {
-    log("[tmux] closeTmuxPane: tmux binary not found");
+    log("[tmux] close: binary not found");
     return false;
   }
 
@@ -295,33 +303,36 @@ export async function closeTmuxPane(paneId: string): Promise<boolean> {
     const exitCode = await proc.exited;
     const stderr = await new Response(proc.stderr).text();
 
-    log("[tmux] closeTmuxPane: result", { exitCode, stderr: stderr.trim() });
+    log("[tmux] close: result", { exitCode, stderr: stderr.trim() });
 
     if (exitCode === 0) {
-      log("[tmux] closeTmuxPane: SUCCESS, pane closed", { paneId });
+      log("[tmux] close: success", { paneId });
 
       // Reapply layout to rebalance remaining panes
       if (storedConfig) {
         const layout = storedConfig.layout ?? "main-vertical";
         const mainPaneSize = storedConfig.main_pane_size ?? 60;
         await applyLayout(tmux, layout, mainPaneSize);
-        log("[tmux] closeTmuxPane: layout reapplied", { layout });
+        log("[tmux] close: layout reapplied", { layout });
       }
 
       return true;
     }
 
     // Pane might already be closed (user closed it manually, or process exited)
-    log("[tmux] closeTmuxPane: failed (pane may already be closed)", { paneId });
+    log("[tmux] close: failed (pane may already be closed)", { paneId });
     return false;
   } catch (err) {
-    log("[tmux] closeTmuxPane: exception", { error: String(err) });
+    log("[tmux] close: exception", { error: err instanceof Error ? err.message : String(err) });
     return false;
   }
 }
 
 /**
  * Start background check for tmux availability
+ */
+/**
+ * Starts a background check for tmux availability by looking for the binary path.
  */
 export function startTmuxCheck(): void {
   if (!tmuxChecked) {

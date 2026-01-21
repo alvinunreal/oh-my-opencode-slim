@@ -3,6 +3,8 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ConfigMergeResult, DetectedConfig, InstallConfig } from "./types"
 import { DEFAULT_AGENT_SKILLS } from "../tools/skill/builtin"
+import { MODEL_MAPPINGS } from "./model-mappings"
+import { log } from "../shared/logger"
 
 const PACKAGE_NAME = "oh-my-opencode-slim"
 
@@ -70,7 +72,8 @@ function parseConfigFile(path: string): OpenCodeConfig | null {
     const content = readFileSync(path, "utf-8")
     if (content.trim().length === 0) return null
     return JSON.parse(stripJsonComments(content)) as OpenCodeConfig
-  } catch {
+  } catch (err) {
+    log(`[config-manager] parse: failed to parse ${path}: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }
@@ -102,7 +105,7 @@ function getExistingConfigPath(): string {
  */
 function writeConfig(configPath: string, config: OpenCodeConfig): void {
   if (configPath.endsWith(".jsonc")) {
-    console.warn(
+    log(
       "[config-manager] Writing to .jsonc file - comments will not be preserved"
     )
   }
@@ -117,7 +120,8 @@ export async function isOpenCodeInstalled(): Promise<boolean> {
     })
     await proc.exited
     return proc.exitCode === 0
-  } catch {
+  } catch (err) {
+    log(`[config-manager] check: failed to check opencode installation: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -130,7 +134,8 @@ export async function isTmuxInstalled(): Promise<boolean> {
     })
     await proc.exited
     return proc.exitCode === 0
-  } catch {
+  } catch (err) {
+    log(`[config-manager] check: failed to check tmux installation: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -144,7 +149,8 @@ export async function getOpenCodeVersion(): Promise<string | null> {
     const output = await new Response(proc.stdout).text()
     await proc.exited
     return proc.exitCode === 0 ? output.trim() : null
-  } catch {
+  } catch (err) {
+    log(`[config-manager] version: failed to get opencode version: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }
@@ -155,7 +161,8 @@ export async function fetchLatestVersion(packageName: string): Promise<string | 
     if (!res.ok) return null
     const data = (await res.json()) as { version: string }
     return data.version
-  } catch {
+  } catch (err) {
+    log(`[config-manager] fetch: failed to fetch latest version for ${packageName}: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }
@@ -167,7 +174,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     return {
       success: false,
       configPath: getConfigDir(),
-      error: `Failed to create config directory: ${err}`,
+      error: `[config-manager] install: failed to create config directory: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 
@@ -193,7 +200,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     return {
       success: false,
       configPath,
-      error: `Failed to update opencode config: ${err}`,
+      error: `[config-manager] install: failed to update opencode config: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 }
@@ -224,7 +231,7 @@ export async function addAuthPlugins(installConfig: InstallConfig): Promise<Conf
     return {
       success: false,
       configPath,
-      error: `Failed to add auth plugins: ${err}`,
+      error: `[config-manager] auth: failed to add auth plugins: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 }
@@ -284,38 +291,11 @@ export function addProviderConfig(installConfig: InstallConfig): ConfigMergeResu
     return {
       success: false,
       configPath,
-      error: `Failed to add provider config: ${err}`,
+      error: `[config-manager] provider: failed to add provider config: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 }
 
-
-// Model mappings by provider priority
-const MODEL_MAPPINGS = {
-  antigravity: {
-    orchestrator: "google/claude-opus-4-5-thinking",
-    oracle: "google/claude-opus-4-5-thinking",
-    librarian: "google/gemini-3-flash",
-    explorer: "google/gemini-3-flash",
-    designer: "google/gemini-3-flash",
-    fixer: "google/gemini-3-flash",
-  },
-  openai: {
-    orchestrator: "openai/gpt-5.2-codex",
-    oracle: "openai/gpt-5.2-codex",
-    librarian: "openai/gpt-5.1-codex-mini",
-    explorer: "openai/gpt-5.1-codex-mini",
-    designer: "openai/gpt-5.1-codex-mini",
-    fixer: "openai/gpt-5.1-codex-mini",
-  },
-  opencode: {
-    orchestrator: "opencode/glm-4.7-free",
-    oracle: "opencode/glm-4.7-free",
-    librarian: "opencode/glm-4.7-free",
-    explorer: "opencode/glm-4.7-free",
-    designer: "opencode/glm-4.7-free",
-  },
-} as const;
 
 export function generateLiteConfig(installConfig: InstallConfig): Record<string, unknown> {
   // Priority: antigravity > openai > opencode (Zen free models)
@@ -370,7 +350,7 @@ export function writeLiteConfig(installConfig: InstallConfig): ConfigMergeResult
     return {
       success: false,
       configPath,
-      error: `Failed to write lite config: ${err}`,
+      error: `[config-manager] lite: failed to write lite config: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 }
@@ -396,7 +376,7 @@ export function disableDefaultAgents(): ConfigMergeResult {
     return {
       success: false,
       configPath,
-      error: `Failed to disable default agents: ${err}`,
+      error: `[config-manager] agents: failed to disable default agents: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 }

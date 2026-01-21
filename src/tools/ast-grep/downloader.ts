@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, chmodSync, unlinkSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { homedir } from "node:os"
 import { createRequire } from "node:module"
-import { extractZip } from "../../shared"
+import { getDefaultInstallDir, ensureBinary } from "../shared/downloader-utils"
+export { getDefaultInstallDir as getCacheDir } from "../shared/downloader-utils"
 
 const REPO = "ast-grep/ast-grep"
 
@@ -35,24 +35,12 @@ const PLATFORM_MAP: Record<string, PlatformInfo> = {
   "win32-ia32": { arch: "i686", os: "pc-windows-msvc" },
 }
 
-export function getCacheDir(): string {
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA || process.env.APPDATA
-    const base = localAppData || join(homedir(), "AppData", "Local")
-    return join(base, "oh-my-opencode-slim", "bin")
-  }
-
-  const xdgCache = process.env.XDG_CACHE_HOME
-  const base = xdgCache || join(homedir(), ".cache")
-  return join(base, "oh-my-opencode-slim", "bin")
-}
-
 export function getBinaryName(): string {
   return process.platform === "win32" ? "sg.exe" : "sg"
 }
 
 export function getCachedBinaryPath(): string | null {
-  const binaryPath = join(getCacheDir(), getBinaryName())
+  const binaryPath = join(getDefaultInstallDir(), getBinaryName())
   return existsSync(binaryPath) ? binaryPath : null
 }
 
@@ -61,56 +49,23 @@ export async function downloadAstGrep(version: string = DEFAULT_VERSION): Promis
   const platformInfo = PLATFORM_MAP[platformKey]
 
   if (!platformInfo) {
-    console.error(`[oh-my-opencode-slim] Unsupported platform for ast-grep: ${platformKey}`)
     return null
-  }
-
-  const cacheDir = getCacheDir()
-  const binaryName = getBinaryName()
-  const binaryPath = join(cacheDir, binaryName)
-
-  if (existsSync(binaryPath)) {
-    return binaryPath
   }
 
   const { arch, os } = platformInfo
   const assetName = `app-${arch}-${os}.zip`
-  const downloadUrl = `https://github.com/${REPO}/releases/download/${version}/${assetName}`
-
-  console.log(`[oh-my-opencode-slim] Downloading ast-grep binary...`)
+  const url = `https://github.com/${REPO}/releases/download/${version}/${assetName}`
 
   try {
-    if (!existsSync(cacheDir)) {
-      mkdirSync(cacheDir, { recursive: true })
-    }
-
-    const response = await fetch(downloadUrl, { redirect: "follow" })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-
-    const archivePath = join(cacheDir, assetName)
-    const arrayBuffer = await response.arrayBuffer()
-    await Bun.write(archivePath, arrayBuffer)
-
-    await extractZip(archivePath, cacheDir)
-
-    if (existsSync(archivePath)) {
-      unlinkSync(archivePath)
-    }
-
-    if (process.platform !== "win32" && existsSync(binaryPath)) {
-      chmodSync(binaryPath, 0o755)
-    }
-
-    console.log(`[oh-my-opencode-slim] ast-grep binary ready.`)
-
-    return binaryPath
-  } catch (err) {
-    console.error(
-      `[oh-my-opencode-slim] Failed to download ast-grep: ${err instanceof Error ? err.message : err}`
-    )
+    return await ensureBinary({
+      binaryName: "sg",
+      version,
+      url,
+      installDir: getDefaultInstallDir(),
+      archiveName: assetName,
+      isZip: true,
+    })
+  } catch {
     return null
   }
 }

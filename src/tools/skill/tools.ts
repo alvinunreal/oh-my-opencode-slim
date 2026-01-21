@@ -108,6 +108,12 @@ async function formatMcpCapabilities(
   return sections.join("\n");
 }
 
+/**
+ * Creates skill tools for agent use, including 'omos_skill' and 'omos_skill_mcp'.
+ * @param manager - The SkillMcpManager to use for MCP operations.
+ * @param pluginConfig - Optional plugin configuration for skill permissions.
+ * @returns An object containing the created tool definitions.
+ */
 export function createSkillTools(
   manager: SkillMcpManager,
   pluginConfig?: PluginConfig

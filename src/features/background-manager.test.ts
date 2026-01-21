@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeEach, mock } from "bun:test"
 import { BackgroundTaskManager, type BackgroundTask, type LaunchOptions } from "./background-manager"
+import { sleep } from "../utils/polling"
 
 // Mock the plugin context
 function createMockContext(overrides?: {
@@ -130,7 +131,7 @@ describe("BackgroundTaskManager", () => {
       })
 
       // Wait a bit for polling to complete the task
-      await new Promise(r => setTimeout(r, 100))
+      await sleep(100)
 
       const result = await manager.getResult(task.id, true)
       expect(result).toBeDefined()

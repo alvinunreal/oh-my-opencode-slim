@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import { log } from "../../shared/logger";
 
 // Define base configuration directory based on OS
 const isWindows = os.platform() === "win32";
@@ -44,6 +45,6 @@ try {
     }
   }
 } catch (error) {
-  console.error("Failed to create command file/directory:", error);
+  log("Failed to create command file/directory:", error);
   // Continue execution, as this might not be fatal for the plugin's core function
 }

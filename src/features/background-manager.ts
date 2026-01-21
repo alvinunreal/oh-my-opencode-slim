@@ -3,6 +3,7 @@ import { POLL_INTERVAL_BACKGROUND_MS, POLL_INTERVAL_SLOW_MS } from "../config";
 import type { TmuxConfig } from "../config/schema";
 import type { PluginConfig } from "../config";
 import { applyAgentVariant, resolveAgentVariant } from "../utils";
+import { sleep } from "../utils/polling";
 import { log } from "../shared/logger";
 type PromptBody = {
   messageID?: string;
@@ -84,7 +85,7 @@ export class BackgroundTaskManager {
     // Give TmuxSessionManager time to spawn the pane via event hook
     // before we send the prompt (so the TUI can receive streaming updates)
     if (this.tmuxEnabled) {
-      await new Promise((r) => setTimeout(r, 500));
+      await sleep(500);
     }
 
     const promptQuery: Record<string, string> = {
@@ -136,7 +137,7 @@ export class BackgroundTaskManager {
       if (status === "completed" || status === "failed") {
         return task;
       }
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_SLOW_MS));
+      await sleep(POLL_INTERVAL_SLOW_MS);
     }
 
     return task;

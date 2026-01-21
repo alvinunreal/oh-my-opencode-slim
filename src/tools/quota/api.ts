@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import { sleep } from "../../utils/polling";
 import type {
   Account,
   AccountsConfig,
@@ -177,7 +178,7 @@ export async function fetchAccountQuota(account: Account): Promise<AccountQuotaR
 export async function fetchAllQuotas(accounts: Account[]): Promise<AccountQuotaResult[]> {
   const results: AccountQuotaResult[] = [];
   for (let i = 0; i < accounts.length; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, ACCOUNT_FETCH_DELAY_MS));
+    if (i > 0) await sleep(ACCOUNT_FETCH_DELAY_MS);
     results.push(await fetchAccountQuota(accounts[i]));
   }
   return results;

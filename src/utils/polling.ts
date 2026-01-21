@@ -40,7 +40,7 @@ export async function pollUntilStable<T>(
       return { success: false, aborted: true };
     }
 
-    await new Promise((r) => setTimeout(r, pollInterval));
+    await sleep(pollInterval);
 
     const currentData = await fetchFn();
 
@@ -60,8 +60,10 @@ export async function pollUntilStable<T>(
 }
 
 /**
- * Simple delay utility
+ * Delays execution for a specified number of milliseconds.
+ * @param ms - The number of milliseconds to sleep.
+ * @returns A promise that resolves after the delay.
  */
-export function delay(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }

@@ -1,25 +1,10 @@
-import { existsSync, mkdirSync, chmodSync, unlinkSync, readdirSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { spawn } from "bun"
-import { extractZip } from "../../shared"
-
-export function findFileRecursive(dir: string, filename: string): string | null {
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true, recursive: true })
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name === filename) {
-        return join(entry.parentPath ?? dir, entry.name)
-      }
-    }
-  } catch {
-    return null
-  }
-  return null
-}
+import { getDefaultInstallDir, ensureBinary } from "../shared/downloader-utils"
 
 const RG_VERSION = "14.1.1"
 
-// Platform key format: ${process.platform}-${process.arch} (consistent with ast-grep)
+// Platform key format: ${process.platform}-${process.arch}
 const PLATFORM_CONFIG: Record<string, { platform: string; extension: "tar.gz" | "zip" } | undefined> =
   {
     "darwin-arm64": { platform: "aarch64-apple-darwin", extension: "tar.gz" },
@@ -33,60 +18,9 @@ function getPlatformKey(): string {
   return `${process.platform}-${process.arch}`
 }
 
-function getInstallDir(): string {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || "."
-  return join(homeDir, ".cache", "oh-my-opencode-slim", "bin")
-}
-
 function getRgPath(): string {
   const isWindows = process.platform === "win32"
-  return join(getInstallDir(), isWindows ? "rg.exe" : "rg")
-}
-
-async function downloadFile(url: string, destPath: string): Promise<void> {
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to download: ${response.status} ${response.statusText}`)
-  }
-
-  const buffer = await response.arrayBuffer()
-  await Bun.write(destPath, buffer)
-}
-
-async function extractTarGz(archivePath: string, destDir: string): Promise<void> {
-  const args = ["tar", "-xzf", archivePath, "--strip-components=1"]
-
-  if (process.platform === "darwin") {
-    args.push("--include=*/rg")
-  } else if (process.platform === "linux") {
-    args.push("--wildcards", "*/rg")
-  }
-
-  const proc = spawn(args, {
-    cwd: destDir,
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-
-  const exitCode = await proc.exited
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text()
-    throw new Error(`Failed to extract tar.gz: ${stderr}`)
-  }
-}
-
-async function extractZipArchive(archivePath: string, destDir: string): Promise<void> {
-  await extractZip(archivePath, destDir)
-
-  const binaryName = process.platform === "win32" ? "rg.exe" : "rg"
-  const foundPath = findFileRecursive(destDir, binaryName)
-  if (foundPath) {
-    const destPath = join(destDir, binaryName)
-    if (foundPath !== destPath) {
-      const { renameSync } = await import("node:fs")
-      renameSync(foundPath, destPath)
-    }
-  }
+  return join(getDefaultInstallDir(), isWindows ? "rg.exe" : "rg")
 }
 
 export async function downloadAndInstallRipgrep(): Promise<string> {
@@ -94,51 +28,21 @@ export async function downloadAndInstallRipgrep(): Promise<string> {
   const config = PLATFORM_CONFIG[platformKey]
 
   if (!config) {
-    throw new Error(`Unsupported platform: ${platformKey}`)
+    throw new Error(`[grep] download: Unsupported platform: ${platformKey}`)
   }
-
-  const installDir = getInstallDir()
-  const rgPath = getRgPath()
-
-  if (existsSync(rgPath)) {
-    return rgPath
-  }
-
-  mkdirSync(installDir, { recursive: true })
 
   const filename = `ripgrep-${RG_VERSION}-${config.platform}.${config.extension}`
   const url = `https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/${filename}`
-  const archivePath = join(installDir, filename)
 
-  try {
-    console.log(`[oh-my-opencode-slim] Downloading ripgrep...`)
-    await downloadFile(url, archivePath)
-
-    if (config.extension === "tar.gz") {
-      await extractTarGz(archivePath, installDir)
-    } else {
-      await extractZipArchive(archivePath, installDir)
-    }
-
-    if (process.platform !== "win32") {
-      chmodSync(rgPath, 0o755)
-    }
-
-    if (!existsSync(rgPath)) {
-      throw new Error("ripgrep binary not found after extraction")
-    }
-
-    console.log(`[oh-my-opencode-slim] ripgrep ready.`)
-    return rgPath
-  } finally {
-    if (existsSync(archivePath)) {
-      try {
-        unlinkSync(archivePath)
-      } catch {
-        // Cleanup failures are non-critical
-      }
-    }
-  }
+  return ensureBinary({
+    binaryName: "rg",
+    version: RG_VERSION,
+    url,
+    installDir: getDefaultInstallDir(),
+    archiveName: filename,
+    isZip: config.extension === "zip",
+    tarInclude: "*/rg",
+  })
 }
 
 export function getInstalledRipgrepPath(): string | null {
