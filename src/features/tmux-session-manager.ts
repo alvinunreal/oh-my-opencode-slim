@@ -31,7 +31,7 @@ export class TmuxSessionManager {
   constructor(ctx: PluginInput, tmuxConfig: TmuxConfig) {
     this.client = ctx.client;
     this.tmuxConfig = tmuxConfig;
-    this.serverUrl = ctx.serverUrl?.toString() ?? "http://localhost:4096";
+    this.serverUrl = ctx.serverUrl?.origin ?? "http://localhost:4096";
     this.enabled = tmuxConfig.enabled && isInsideTmux();
 
     log("[tmux-session-manager] initialized", {
@@ -42,63 +42,70 @@ export class TmuxSessionManager {
   }
 
   /**
-   * Handle session.created events.
-   * Spawns a tmux pane for child sessions (those with parentID).
+   * Handle session.created and session.deleted events.
+   * Spawns or closes tmux panes for child sessions.
    */
-  async onSessionCreated(event: {
+  async onSessionEvent(event: {
     type: string;
     properties?: { info?: { id?: string; parentID?: string; title?: string } };
   }): Promise<void> {
     if (!this.enabled) return;
-    if (event.type !== "session.created") return;
 
-    const info = event.properties?.info;
-    if (!info?.id || !info?.parentID) {
-      // Not a child session, skip
-      return;
-    }
+    if (event.type === "session.created") {
+      const info = event.properties?.info;
+      if (!info?.id || !info?.parentID) {
+        // Not a child session, skip
+        return;
+      }
 
-    const sessionId = info.id;
-    const parentId = info.parentID;
-    const title = info.title ?? "Subagent";
+      const sessionId = info.id;
+      const parentId = info.parentID;
+      const title = info.title ?? "Subagent";
 
-    // Skip if we're already tracking this session
-    if (this.sessions.has(sessionId)) {
-      log("[tmux-session-manager] session already tracked", { sessionId });
-      return;
-    }
+      // Skip if we're already tracking this session
+      if (this.sessions.has(sessionId)) {
+        log("[tmux-session-manager] session already tracked", { sessionId });
+        return;
+      }
 
-    log("[tmux-session-manager] child session created, spawning pane", {
-      sessionId,
-      parentId,
-      title,
-    });
-
-    const paneResult = await spawnTmuxPane(
-      sessionId,
-      title,
-      this.tmuxConfig,
-      this.serverUrl
-    ).catch((err) => {
-      log("[tmux-session-manager] failed to spawn pane", { error: String(err) });
-      return { success: false, paneId: undefined };
-    });
-
-    if (paneResult.success && paneResult.paneId) {
-      this.sessions.set(sessionId, {
+      log("[tmux-session-manager] child session created, spawning pane", {
         sessionId,
-        paneId: paneResult.paneId,
         parentId,
         title,
-        createdAt: Date.now(),
       });
 
-      log("[tmux-session-manager] pane spawned", {
+      const paneResult = await spawnTmuxPane(
         sessionId,
-        paneId: paneResult.paneId,
+        title,
+        this.tmuxConfig,
+        this.serverUrl
+      ).catch((err) => {
+        log("[tmux-session-manager] failed to spawn pane", { error: String(err) });
+        return { success: false, paneId: undefined };
       });
 
-      this.startPolling();
+      if (paneResult.success && paneResult.paneId) {
+        this.sessions.set(sessionId, {
+          sessionId,
+          paneId: paneResult.paneId,
+          parentId,
+          title,
+          createdAt: Date.now(),
+        });
+
+        log("[tmux-session-manager] pane spawned", {
+          sessionId,
+          paneId: paneResult.paneId,
+        });
+
+        this.startPolling();
+      }
+    } else if (event.type === "session.deleted") {
+      const sessionId = event.properties?.info?.id;
+      if (sessionId && this.sessions.has(sessionId)) {
+        log("[tmux-session-manager] session deleted event received, closing pane", { sessionId });
+        await this.closeSession(sessionId);
+      }
     }
   }
 
@@ -174,7 +181,7 @@ export class TmuxSessionManager {
    */
   createEventHandler(): (input: { event: { type: string; properties?: unknown } }) => Promise<void> {
     return async (input) => {
-      await this.onSessionCreated(input.event as {
+      await this.onSessionEvent(input.event as {
         type: string;
         properties?: { info?: { id?: string; parentID?: string; title?: string } };
       });

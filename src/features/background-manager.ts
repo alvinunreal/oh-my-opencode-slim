@@ -48,10 +48,12 @@ export class BackgroundTaskManager {
   private pollInterval?: ReturnType<typeof setInterval>;
   private tmuxEnabled: boolean;
   private config?: PluginConfig;
+  private serverUrl: URL;
 
   constructor(ctx: PluginInput, tmuxConfig?: TmuxConfig, config?: PluginConfig) {
     this.client = ctx.client;
     this.directory = ctx.directory;
+    this.serverUrl = ctx.serverUrl;
     this.tmuxEnabled = tmuxConfig?.enabled ?? false;
     this.config = config;
   }
@@ -216,12 +218,14 @@ export class BackgroundTaskManager {
       }
 
       const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
-      if (responseText) {
-        task.result = responseText;
-        task.status = "completed";
-        task.completedAt = new Date();
-        // Pane closing is handled by TmuxSessionManager via polling
-      }
+      
+      // Even if responseText is empty, if it's idle, it's done.
+      // The Global Reaper in index.ts will also catch this, but we handle it here for completeness.
+      task.result = responseText || "(No text response)";
+      task.status = "completed";
+      task.completedAt = new Date();
+      
+      log(`[background-manager] task completed`, { taskId: task.id, sessionId: task.sessionId });
     } catch (error) {
       task.status = "failed";
       task.error = error instanceof Error ? error.message : String(error);
