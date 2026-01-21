@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { getDefaultInstallDir, ensureBinary } from "../shared/downloader-utils"
+import { getDefaultInstallDir, ensureBinary } from "../../shared/binary-downloader"
 
 const RG_VERSION = "14.1.1"
 

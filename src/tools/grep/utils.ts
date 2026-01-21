@@ -1,3 +1,4 @@
+import { groupByFile } from "../../shared"
 import type { GrepResult } from "./types"
 
 export function formatGrepResult(result: GrepResult): string {
@@ -12,12 +13,7 @@ export function formatGrepResult(result: GrepResult): string {
   const lines: string[] = []
 
   // Group matches by file
-  const byFile = new Map<string, { line: number; text: string }[]>()
-  for (const match of result.matches) {
-    const existing = byFile.get(match.file) || []
-    existing.push({ line: match.line, text: match.text })
-    byFile.set(match.file, existing)
-  }
+  const byFile = groupByFile(result.matches)
 
   for (const [file, matches] of byFile) {
     lines.push(`\n${file}:`)

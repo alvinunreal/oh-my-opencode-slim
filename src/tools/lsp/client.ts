@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url"
 import { getLanguageId } from "./config"
 import type { Diagnostic, ResolvedServer } from "./types"
 import { parseMessages } from "./protocol-parser"
-import { sleep } from "../../utils/polling"
+import { sleep } from "../../shared"
 
 interface ManagedClient {
   client: LSPClient

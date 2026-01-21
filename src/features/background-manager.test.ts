@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, mock } from "bun:test"
 import { BackgroundTaskManager, type BackgroundTask, type LaunchOptions } from "./background-manager"
-import { sleep } from "../utils/polling"
+import { sleep } from "../shared"
 
 // Mock the plugin context
 function createMockContext(overrides?: {

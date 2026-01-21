@@ -5,7 +5,6 @@ export interface InstallArgs {
   antigravity?: BooleanArg
   openai?: BooleanArg
   tmux?: BooleanArg
-  skipAuth?: boolean
 }
 
 export interface InstallConfig {

@@ -1,9 +1,9 @@
+import { POST_READ_NUDGE_TEXT, READ_TOOLS } from "../../config/constants";
+
 /**
  * Post-Read nudge - appends a delegation reminder after file reads.
  * Catches the "read files → implement myself" anti-pattern.
  */
-
-const NUDGE = "\n\n---\nConsider: splitting the task to parallelize, delegate to specialist(s). (if so, reference file paths/lines—don't copy file contents)";
 
 interface ToolExecuteAfterInput {
   tool: string;
@@ -24,12 +24,12 @@ export function createPostReadNudgeHook() {
       output: ToolExecuteAfterOutput
     ): Promise<void> => {
       // Only nudge for Read tool
-      if (input.tool !== "Read" && input.tool !== "read") {
+      if (!READ_TOOLS.includes(input.tool)) {
         return;
       }
 
       // Append the nudge
-      output.output = output.output + NUDGE;
+      output.output = output.output + POST_READ_NUDGE_TEXT;
     },
   };
 }

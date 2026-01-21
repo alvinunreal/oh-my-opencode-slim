@@ -1,3 +1,5 @@
+import { AGENT_ORCHESTRATOR, PHASE_REMINDER_TEXT } from "../../config/constants";
+
 /**
  * Phase reminder to inject before each user message.
  * Keeps workflow instructions in the immediate attention window
@@ -8,9 +10,6 @@
  * 
  * Uses experimental.chat.messages.transform so it doesn't show in UI.
  */
-const PHASE_REMINDER = `<reminder>⚠️ MANDATORY: Understand→DELEGATE(!)→Split-and-Parallelize(?)→Plan→Execute→Verify
-Available Specialist: @oracle @librarian @explorer @designer @fixer
-</reminder>`;
 
 interface MessageInfo {
   role: string;
@@ -42,43 +41,22 @@ export function createPhaseReminderHook() {
     ): Promise<void> => {
       const { messages } = output;
       
-      if (messages.length === 0) {
-        return;
-      }
+      const lastUserMessage = [...messages].reverse().find(m => m.info.role === "user");
+      if (!lastUserMessage) return;
 
-      // Find the last user message
-      let lastUserMessageIndex = -1;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].info.role === "user") {
-          lastUserMessageIndex = i;
-          break;
-        }
-      }
-
-      if (lastUserMessageIndex === -1) {
-        return;
-      }
-
-      const lastUserMessage = messages[lastUserMessageIndex];
-      
       // Only inject for orchestrator (or if no agent specified = main session)
       const agent = lastUserMessage.info.agent;
-      if (agent && agent !== "orchestrator") {
+      if (agent && agent !== AGENT_ORCHESTRATOR) {
         return;
       }
 
-      // Find the first text part
-      const textPartIndex = lastUserMessage.parts.findIndex(
+      const textPart = lastUserMessage.parts.find(
         (p) => p.type === "text" && p.text !== undefined
       );
 
-      if (textPartIndex === -1) {
-        return;
+      if (textPart) {
+        textPart.text = `${PHASE_REMINDER_TEXT}\n\n---\n\n${textPart.text}`;
       }
-
-      // Prepend the reminder to the existing text
-      const originalText = lastUserMessage.parts[textPartIndex].text ?? "";
-      lastUserMessage.parts[textPartIndex].text = `${PHASE_REMINDER}\n\n---\n\n${originalText}`;
     },
   };
 }

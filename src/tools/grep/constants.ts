@@ -3,11 +3,11 @@ import { join, dirname } from "node:path"
 import { spawnSync } from "node:child_process"
 import { getInstalledRipgrepPath, downloadAndInstallRipgrep } from "./downloader"
 
-export type GrepBackend = "rg" | "grep"
+export type GrepBackend = "rg"
 
 interface ResolvedCli {
   path: string
-  backend: GrepBackend
+  backend: "rg"
 }
 
 let cachedCli: ResolvedCli | null = null
@@ -82,12 +82,7 @@ export function resolveGrepCli(): ResolvedCli {
     return cachedCli
   }
 
-  const grep = findExecutable("grep")
-  if (grep) {
-    cachedCli = { path: grep, backend: "grep" }
-    return cachedCli
-  }
-
+  // Fallback to "rg" in PATH even if not found by findExecutable (spawn will fail but it's consistent)
   cachedCli = { path: "rg", backend: "rg" }
   return cachedCli
 }
@@ -95,7 +90,9 @@ export function resolveGrepCli(): ResolvedCli {
 export async function resolveGrepCliWithAutoInstall(): Promise<ResolvedCli> {
   const current = resolveGrepCli()
 
-  if (current.backend === "rg") {
+  // In this version, we always want rg. If not found, try to install.
+  // We check if the current path actually exists.
+  if (existsSync(current.path)) {
     return current
   }
 
@@ -129,5 +126,3 @@ export const RG_SAFETY_FLAGS = [
   "--line-number",
   "--with-filename",
 ] as const
-
-export const GREP_SAFETY_FLAGS = ["-n", "-H", "--color=never"] as const

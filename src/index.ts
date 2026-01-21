@@ -17,7 +17,7 @@ import {
 import { loadPluginConfig, type TmuxConfig } from "./config";
 import { createBuiltinMcps } from "./mcp";
 import { createAutoUpdateCheckerHook, createPhaseReminderHook, createPostReadNudgeHook } from "./hooks";
-import { startTmuxCheck } from "./utils";
+import { startTmuxCheck } from "./shared";
 import { log } from "./shared/logger";
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {

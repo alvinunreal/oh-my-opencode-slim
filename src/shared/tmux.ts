@@ -1,5 +1,5 @@
 import { spawn } from "bun";
-import { log } from "../shared/logger";
+import { log } from "./logger";
 import type { TmuxConfig, TmuxLayout } from "../config/schema";
 import { sleep } from "./polling";
 

@@ -1,6 +1,7 @@
 import type { PluginInput } from "@opencode-ai/plugin";
-import { spawnTmuxPane, closeTmuxPane, isInsideTmux } from "../utils/tmux";
+import { spawnTmuxPane, closeTmuxPane, isInsideTmux } from "../shared";
 import type { TmuxConfig } from "../config/schema";
+import { DEFAULT_TMUX_SERVER_URL, DEFAULT_SUBAGENT_TITLE, POLL_INTERVAL_TMUX_MS, TMUX_SESSION_TIMEOUT_MS } from "../config/constants";
 import { log } from "../shared/logger";
 
 type OpencodeClient = PluginInput["client"];
@@ -12,9 +13,6 @@ interface TrackedSession {
   title: string;
   createdAt: number;
 }
-
-const POLL_INTERVAL_MS = 2000;
-const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * TmuxSessionManager tracks child sessions (created by OpenCode's Task tool)
@@ -31,7 +29,7 @@ export class TmuxSessionManager {
   constructor(ctx: PluginInput, tmuxConfig: TmuxConfig) {
     this.client = ctx.client;
     this.tmuxConfig = tmuxConfig;
-    this.serverUrl = ctx.serverUrl?.toString() ?? "http://localhost:4096";
+    this.serverUrl = ctx.serverUrl?.toString() ?? DEFAULT_TMUX_SERVER_URL;
     this.enabled = tmuxConfig.enabled && isInsideTmux();
 
     log("[tmux-session-manager] initialized", {
@@ -60,7 +58,7 @@ export class TmuxSessionManager {
 
     const sessionId = info.id;
     const parentId = info.parentID;
-    const title = info.title ?? "Subagent";
+    const title = info.title ?? DEFAULT_SUBAGENT_TITLE;
 
     // Skip if we're already tracking this session
     if (this.sessions.has(sessionId)) {
@@ -105,7 +103,7 @@ export class TmuxSessionManager {
   private startPolling(): void {
     if (this.pollInterval) return;
 
-    this.pollInterval = setInterval(() => this.pollSessions(), POLL_INTERVAL_MS);
+    this.pollInterval = setInterval(() => this.pollSessions(), POLL_INTERVAL_TMUX_MS);
     log("[tmux-session-manager] polling started");
   }
 
@@ -137,7 +135,7 @@ export class TmuxSessionManager {
         const isIdle = !status || status.type === "idle";
 
         // Check for timeout
-        const isTimedOut = now - tracked.createdAt > SESSION_TIMEOUT_MS;
+        const isTimedOut = now - tracked.createdAt > TMUX_SESSION_TIMEOUT_MS;
 
         if (isIdle || isTimedOut) {
           sessionsToClose.push(sessionId);

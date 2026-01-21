@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { createRequire } from "node:module"
-import { getDefaultInstallDir, ensureBinary } from "../shared/downloader-utils"
-export { getDefaultInstallDir as getCacheDir } from "../shared/downloader-utils"
+import { getDefaultInstallDir, ensureBinary } from "../../shared/binary-downloader"
+
+export function getCacheDir(): string {
+  return getDefaultInstallDir()
+}
 
 const REPO = "ast-grep/ast-grep"
 

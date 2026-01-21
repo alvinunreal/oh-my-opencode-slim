@@ -7,7 +7,6 @@ export const AgentOverrideConfigSchema = z.object({
   prompt: z.string().optional(),
   prompt_append: z.string().optional(),
   variant: z.string().optional().catch(undefined),
-  disable: z.boolean().optional(),
   skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all)
 });
 

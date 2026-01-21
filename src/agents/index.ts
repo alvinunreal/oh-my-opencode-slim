@@ -1,25 +1,21 @@
 import type { AgentConfig as SDKAgentConfig } from "@opencode-ai/sdk";
 import { DEFAULT_MODELS, type PluginConfig, type AgentOverrideConfig } from "../config";
-import { createOrchestratorAgent, type AgentDefinition } from "./orchestrator";
-import { createOracleAgent } from "./oracle";
-import { createLibrarianAgent } from "./librarian";
-import { createExplorerAgent } from "./explorer";
-import { createDesignerAgent } from "./designer";
-import { createFixerAgent } from "./fixer";
-
-export type { AgentDefinition } from "./orchestrator";
-
-type AgentFactory = (model: string) => AgentDefinition;
-
-/** Map old agent names to new names for backward compatibility */
-const AGENT_ALIASES: Record<string, string> = {
-  "explore": "explorer",
-  "frontend-ui-ux-engineer": "designer",
-};
-
-function getOverride(overrides: Record<string, AgentOverrideConfig>, name: string): AgentOverrideConfig | undefined {
-  return overrides[name] ?? overrides[Object.keys(AGENT_ALIASES).find(k => AGENT_ALIASES[k] === name) ?? ""];
-}
+import { createOrchestratorAgent } from "./orchestrator";
+import { 
+  AgentDefinition, 
+  SubagentName, 
+  SUBAGENT_NAMES, 
+  isSubagent,
+  getSubagentNames
+} from "./types";
+export { 
+  AgentDefinition, 
+  SubagentName, 
+  SUBAGENT_NAMES, 
+  isSubagent,
+  getSubagentNames
+} from "./types";
+import * as prompts from "./prompts";
 
 function applyOverrides(agent: AgentDefinition, override: AgentOverrideConfig): void {
   if (override.model) agent.config.model = override.model;
@@ -37,74 +33,50 @@ function applyDefaultPermissions(agent: AgentDefinition): void {
   agent.config.permission = { ...existing, question: "allow" } as SDKAgentConfig["permission"];
 }
 
-/** Constants for agent classification */
-export const PRIMARY_AGENT_NAMES = ["orchestrator"] as const;
-export type PrimaryAgentName = (typeof PRIMARY_AGENT_NAMES)[number];
-
-export const SUBAGENT_NAMES = ["explorer", "librarian", "oracle", "designer", "fixer"] as const;
-export type SubagentName = (typeof SUBAGENT_NAMES)[number];
-
-export function getPrimaryAgentNames(): PrimaryAgentName[] {
-  return [...PRIMARY_AGENT_NAMES];
-}
-
-export function getSubagentNames(): SubagentName[] {
+/** Get list of agent names */
+export function getAgentNames(): SubagentName[] {
   return [...SUBAGENT_NAMES];
 }
 
-export function isSubagent(name: string): name is SubagentName {
-  return (SUBAGENT_NAMES as readonly string[]).includes(name);
-}
-
-/** Agent factories indexed by name */
-const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
-  explorer: createExplorerAgent,
-  librarian: createLibrarianAgent,
-  oracle: createOracleAgent,
-  designer: createDesignerAgent,
-  fixer: createFixerAgent,
-};
-
-/** Get list of agent names */
-export function getAgentNames(): SubagentName[] {
-  return getSubagentNames();
+/** generic factory for subagents */
+function createSubagent(name: SubagentName, model: string): AgentDefinition {
+  const promptKey = `${name.toUpperCase()}_PROMPT` as keyof typeof prompts;
+  const descriptionKey = `${name.toUpperCase()}_DESCRIPTION` as keyof typeof prompts;
+  
+  return {
+    name,
+    description: prompts[descriptionKey] as string,
+    config: {
+      model,
+      temperature: name === "designer" ? 0.7 : 0.1,
+      prompt: prompts[promptKey] as string,
+    },
+  };
 }
 
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const disabledAgents = new Set(config?.disabled_agents ?? []);
   const agentOverrides = config?.agents ?? {};
 
-  // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
-  // existing users who don't have fixer in their config yet
-  const getModelForAgent = (name: SubagentName): string => {
-    if (name === "fixer" && !getOverride(agentOverrides, "fixer")?.model) {
-      return getOverride(agentOverrides, "librarian")?.model ?? DEFAULT_MODELS["librarian"];
-    }
-    return DEFAULT_MODELS[name];
-  };
-
   // 1. Gather all sub-agent proto-definitions
-  const protoSubAgents = (Object.entries(SUBAGENT_FACTORIES) as [SubagentName, AgentFactory][]).map(
-    ([name, factory]) => factory(getModelForAgent(name))
-  );
-
-  // 2. Apply common filtering and overrides
-  const allSubAgents = protoSubAgents
-    .filter((a) => !disabledAgents.has(a.name))
-    .map((agent) => {
-      const override = getOverride(agentOverrides, agent.name);
+  const allSubAgents = SUBAGENT_NAMES
+    .filter(name => !disabledAgents.has(name))
+    .map(name => {
+      const override = agentOverrides[name];
+      const model = override?.model ?? DEFAULT_MODELS[name];
+      const agent = createSubagent(name, model);
       if (override) {
         applyOverrides(agent, override);
       }
       return agent;
     });
 
-  // 3. Create Orchestrator (with its own overrides)
+  // 2. Create Orchestrator (with its own overrides)
   const orchestratorModel =
-    getOverride(agentOverrides, "orchestrator")?.model ?? DEFAULT_MODELS["orchestrator"];
+    agentOverrides["orchestrator"]?.model ?? DEFAULT_MODELS["orchestrator"];
   const orchestrator = createOrchestratorAgent(orchestratorModel);
   applyDefaultPermissions(orchestrator);
-  const oOverride = getOverride(agentOverrides, "orchestrator");
+  const oOverride = agentOverrides["orchestrator"];
   if (oOverride) {
     applyOverrides(orchestrator, oOverride);
   }

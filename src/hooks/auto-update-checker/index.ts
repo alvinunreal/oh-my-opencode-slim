@@ -1,20 +1,25 @@
 import type { PluginInput } from "@opencode-ai/plugin"
-import { getCachedVersion, getLocalDevVersion, findPluginEntry, getLatestVersion, updatePinnedVersion, extractChannel } from "./checker"
-import { invalidatePackage } from "./cache"
-import { PACKAGE_NAME } from "./constants"
+import { 
+  getCachedVersion, 
+  getLocalDevVersion, 
+  findPluginEntry, 
+  getLatestVersion, 
+  updatePinnedVersion, 
+  extractChannel,
+  invalidatePackage,
+  PACKAGE_NAME,
+  type AutoUpdateCheckerOptions
+} from "./checker"
 import { log } from "../../shared/logger"
-import type { AutoUpdateCheckerOptions } from "./types"
 
 export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdateCheckerOptions = {}) {
   const { showStartupToast = true, autoUpdate = true } = options
-
   let hasChecked = false
 
   return {
     event: ({ event }: { event: { type: string; properties?: unknown } }) => {
-      if (event.type !== "session.created") return
-      if (hasChecked) return
-
+      if (event.type !== "session.created" || hasChecked) return
+      
       const props = event.properties as { info?: { parentID?: string } } | undefined
       if (props?.info?.parentID) return
 
@@ -29,7 +34,7 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
           if (showStartupToast) {
             showToast(ctx, `OMO-Slim ${displayVersion} (dev)`, "Running in local development mode.", "info")
           }
-          log("[auto-update-checker] Local development mode")
+          log("[auto-update] Local development mode")
           return
         }
 
@@ -38,7 +43,7 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
         }
 
         runBackgroundUpdateCheck(ctx, autoUpdate).catch(err => {
-          log("[auto-update-checker] Background update check failed:", err)
+          log("[auto-update] Background update check failed:", err)
         })
       }, 0)
     },
@@ -47,83 +52,49 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
 
 async function runBackgroundUpdateCheck(ctx: PluginInput, autoUpdate: boolean): Promise<void> {
   const pluginInfo = findPluginEntry(ctx.directory)
-  if (!pluginInfo) {
-    log("[auto-update-checker] Plugin not found in config")
-    return
-  }
+  if (!pluginInfo) return
 
-  const cachedVersion = getCachedVersion()
-  const currentVersion = cachedVersion ?? pluginInfo.pinnedVersion
-  if (!currentVersion) {
-    log("[auto-update-checker] No version found (cached or pinned)")
-    return
-  }
+  const currentVersion = getCachedVersion() ?? pluginInfo.pinnedVersion
+  if (!currentVersion) return
 
   const channel = extractChannel(pluginInfo.pinnedVersion ?? currentVersion)
   const latestVersion = await getLatestVersion(channel)
-  if (!latestVersion) {
-    log("[auto-update-checker] Failed to fetch latest version for channel:", channel)
-    return
-  }
+  
+  if (!latestVersion || currentVersion === latestVersion) return
 
-  if (currentVersion === latestVersion) {
-    log("[auto-update-checker] Already on latest version for channel:", channel)
-    return
-  }
-
-  log(`[auto-update-checker] Update available (${channel}): ${currentVersion} → ${latestVersion}`)
+  log(`[auto-update] Update available (${channel}): ${currentVersion} → ${latestVersion}`)
 
   if (!autoUpdate) {
     showToast(ctx, `OMO-Slim ${latestVersion}`, `v${latestVersion} available. Restart to apply.`, "info", 8000)
-    log("[auto-update-checker] Auto-update disabled, notification only")
     return
   }
 
   if (pluginInfo.isPinned) {
-    const updated = updatePinnedVersion(pluginInfo.configPath, pluginInfo.entry, latestVersion)
-    if (!updated) {
+    if (!updatePinnedVersion(pluginInfo.configPath, pluginInfo.entry, latestVersion)) {
       showToast(ctx, `OMO-Slim ${latestVersion}`, `v${latestVersion} available. Restart to apply.`, "info", 8000)
-      log("[auto-update-checker] Failed to update pinned version in config")
       return
     }
-    log(`[auto-update-checker] Config updated: ${pluginInfo.entry} → ${PACKAGE_NAME}@${latestVersion}`)
   }
 
   invalidatePackage(PACKAGE_NAME)
 
-  const installSuccess = await runBunInstallSafe(ctx)
-
-  if (installSuccess) {
+  if (await runBunInstallSafe(ctx)) {
     showToast(ctx, "OMO-Slim Updated!", `v${currentVersion} → v${latestVersion}\nRestart OpenCode to apply.`, "success", 8000)
-    log(`[auto-update-checker] Update installed: ${currentVersion} → ${latestVersion}`)
+    log(`[auto-update] Update installed: ${currentVersion} → ${latestVersion}`)
   } else {
     showToast(ctx, `OMO-Slim ${latestVersion}`, `v${latestVersion} available. Restart to apply.`, "info", 8000)
-    log("[auto-update-checker] bun install failed; update not installed")
   }
 }
 
 async function runBunInstallSafe(ctx: PluginInput): Promise<boolean> {
   try {
-    const proc = Bun.spawn(["bun", "install"], {
-      cwd: ctx.directory,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    
-    const timeoutPromise = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), 60_000)
-    )
-    const exitPromise = proc.exited.then(() => "completed" as const)
-    const result = await Promise.race([exitPromise, timeoutPromise])
-    
-    if (result === "timeout") {
-      try { proc.kill() } catch { /* empty */ }
-      return false
-    }
-    
+    const proc = Bun.spawn(["bun", "install"], { cwd: ctx.directory })
+    const timeout = setTimeout(() => proc.kill(), 60_000)
+    await proc.exited
+    clearTimeout(timeout)
     return proc.exitCode === 0
   } catch (err) {
-    log("[auto-update-checker] bun install error:", err)
+    log("[auto-update] bun install error:", err)
     return false
   }
 }
@@ -140,4 +111,4 @@ function showToast(
   }).catch(() => {})
 }
 
-export type { AutoUpdateCheckerOptions } from "./types"
+export type { AutoUpdateCheckerOptions }

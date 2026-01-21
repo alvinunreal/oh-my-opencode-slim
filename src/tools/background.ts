@@ -9,8 +9,7 @@ import {
 } from "../config";
 import type { TmuxConfig } from "../config/schema";
 import type { PluginConfig } from "../config";
-import { applyAgentVariant, resolveAgentVariant } from "../utils";
-import { sleep } from "../utils/polling";
+import { applyAgentVariant, resolveAgentVariant, sleep } from "../shared";
 import { log } from "../shared/logger";
 
 const z = tool.schema;

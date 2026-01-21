@@ -1,5 +1,5 @@
 import type { PluginConfig } from "../config";
-import { log } from "../shared/logger";
+import { log } from "./logger";
 
 /**
  * Normalizes an agent name by trimming whitespace and removing leading '@'.

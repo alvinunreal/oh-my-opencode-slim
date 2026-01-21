@@ -9,11 +9,10 @@ import {
   DEFAULT_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT_BYTES,
   RG_SAFETY_FLAGS,
-  GREP_SAFETY_FLAGS,
 } from "./constants"
 import type { GrepOptions, GrepMatch, GrepResult, CountResult } from "./types"
 
-function buildRgArgs(options: GrepOptions): string[] {
+function buildArgs(options: GrepOptions): string[] {
   const args: string[] = [
     ...RG_SAFETY_FLAGS,
     `--max-depth=${Math.min(options.maxDepth ?? DEFAULT_MAX_DEPTH, DEFAULT_MAX_DEPTH)}`,
@@ -52,38 +51,6 @@ function buildRgArgs(options: GrepOptions): string[] {
   }
 
   return args
-}
-
-function buildGrepArgs(options: GrepOptions): string[] {
-  const args: string[] = [...GREP_SAFETY_FLAGS, "-r"]
-
-  if (options.context !== undefined && options.context > 0) {
-    args.push(`-C${Math.min(options.context, 10)}`)
-  }
-
-  if (!options.caseSensitive) args.push("-i")
-  if (options.wholeWord) args.push("-w")
-  if (options.fixedStrings) args.push("-F")
-
-  if (options.globs?.length) {
-    for (const glob of options.globs) {
-      args.push(`--include=${glob}`)
-    }
-  }
-
-  if (options.excludeGlobs?.length) {
-    for (const glob of options.excludeGlobs) {
-      args.push(`--exclude=${glob}`)
-    }
-  }
-
-  args.push("--exclude-dir=.git", "--exclude-dir=node_modules")
-
-  return args
-}
-
-function buildArgs(options: GrepOptions, backend: GrepBackend): string[] {
-  return backend === "rg" ? buildRgArgs(options) : buildGrepArgs(options)
 }
 
 function parseOutput(output: string): GrepMatch[] {
@@ -137,14 +104,10 @@ function parseCountOutput(output: string): CountResult[] {
  */
 export async function runRg(options: GrepOptions): Promise<GrepResult> {
   const cli = resolveGrepCli()
-  const args = buildArgs(options, cli.backend)
+  const args = buildArgs(options)
   const timeout = Math.min(options.timeout ?? DEFAULT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
 
-  if (cli.backend === "rg") {
-    args.push("--", options.pattern)
-  } else {
-    args.push("-e", options.pattern)
-  }
+  args.push("--", options.pattern)
 
   const paths = options.paths?.length ? options.paths : ["."]
   args.push(...paths)
@@ -207,13 +170,9 @@ export async function runRg(options: GrepOptions): Promise<GrepResult> {
  */
 export async function runRgCount(options: Omit<GrepOptions, "context">): Promise<CountResult[]> {
   const cli = resolveGrepCli()
-  const args = buildArgs({ ...options, context: 0 }, cli.backend)
+  const args = buildArgs({ ...options, context: 0 })
 
-  if (cli.backend === "rg") {
-    args.push("--count", "--", options.pattern)
-  } else {
-    args.push("-c", "-e", options.pattern)
-  }
+  args.push("--count", "--", options.pattern)
 
   const paths = options.paths?.length ? options.paths : ["."]
   args.push(...paths)

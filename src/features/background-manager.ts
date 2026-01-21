@@ -1,9 +1,8 @@
 import type { PluginInput } from "@opencode-ai/plugin";
-import { POLL_INTERVAL_BACKGROUND_MS, POLL_INTERVAL_SLOW_MS } from "../config";
+import { POLL_INTERVAL_BACKGROUND_MS, POLL_INTERVAL_SLOW_MS, BG_TASK_CANCEL_MSG, AGENT_ORCHESTRATOR, BG_TASK_ID_PREFIX, BG_SESSION_TITLE_PREFIX, DEFAULT_TIMEOUT_MS } from "../config/constants";
 import type { TmuxConfig } from "../config/schema";
 import type { PluginConfig } from "../config";
-import { applyAgentVariant, resolveAgentVariant } from "../utils";
-import { sleep } from "../utils/polling";
+import { applyAgentVariant, resolveAgentVariant, sleep } from "../shared";
 import { log } from "../shared/logger";
 type PromptBody = {
   messageID?: string;
@@ -39,11 +38,12 @@ export interface LaunchOptions {
 }
 
 function generateTaskId(): string {
-  return `bg_${Math.random().toString(36).substring(2, 10)}`;
+  return `${BG_TASK_ID_PREFIX}${Math.random().toString(36).substring(2, 10)}`;
 }
 
 export class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTask>();
+  private waiters = new Map<string, Array<() => void>>();
   private client: OpencodeClient;
   private directory: string;
   private pollInterval?: ReturnType<typeof setInterval>;
@@ -61,7 +61,7 @@ export class BackgroundTaskManager {
     const session = await this.client.session.create({
       body: {
         parentID: opts.parentSessionId,
-        title: `Background: ${opts.description}`,
+        title: `${BG_SESSION_TITLE_PREFIX}${opts.description}`,
       },
       query: { directory: this.directory },
     });
@@ -122,25 +122,29 @@ export class BackgroundTaskManager {
     return task;
   }
 
-  async getResult(taskId: string, block = false, timeout = 120000): Promise<BackgroundTask | null> {
+  async getResult(taskId: string, block = false, timeout = DEFAULT_TIMEOUT_MS): Promise<BackgroundTask | null> {
     const task = this.tasks.get(taskId);
     if (!task) return null;
 
-    if (!block || task.status === "completed" || task.status === "failed") {
+    if (!block || task.status !== "running") {
       return task;
     }
 
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-      await this.pollTask(task);
-      const status = task.status as string;
-      if (status === "completed" || status === "failed") {
-        return task;
-      }
-      await sleep(POLL_INTERVAL_SLOW_MS);
-    }
+    // Wait for the background polling loop to complete the task
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        resolve(task);
+      }, timeout);
 
-    return task;
+      const waiter = () => {
+        clearTimeout(timer);
+        resolve(task);
+      };
+
+      const taskWaiters = this.waiters.get(taskId) ?? [];
+      taskWaiters.push(waiter);
+      this.waiters.set(taskId, taskWaiters);
+    });
   }
 
   cancel(taskId?: string): number {
@@ -148,8 +152,9 @@ export class BackgroundTaskManager {
       const task = this.tasks.get(taskId);
       if (task && task.status === "running") {
         task.status = "failed";
-        task.error = "Cancelled by user";
+        task.error = BG_TASK_CANCEL_MSG;
         task.completedAt = new Date();
+        this.notifyWaiters(taskId);
         return 1;
       }
       return 0;
@@ -159,8 +164,9 @@ export class BackgroundTaskManager {
     for (const task of this.tasks.values()) {
       if (task.status === "running") {
         task.status = "failed";
-        task.error = "Cancelled by user";
+        task.error = BG_TASK_CANCEL_MSG;
         task.completedAt = new Date();
+        this.notifyWaiters(task.id);
         count++;
       }
     }
@@ -180,17 +186,20 @@ export class BackgroundTaskManager {
       return;
     }
 
+    const statusResult = await this.client.session.status().catch(() => ({ data: {} }));
+    const allStatuses = (statusResult.data ?? {}) as Record<string, { type: string }>;
+
     for (const task of runningTasks) {
-      await this.pollTask(task);
+      await this.pollTask(task, allStatuses);
     }
   }
 
-  private async pollTask(task: BackgroundTask) {
+  private async pollTask(task: BackgroundTask, allStatuses?: Record<string, { type: string }>) {
     try {
       // Check session status first
-      const statusResult = await this.client.session.status();
-      const allStatuses = (statusResult.data ?? {}) as Record<string, { type: string }>;
-      const sessionStatus = allStatuses[task.sessionId];
+      const sessionStatus = allStatuses 
+        ? allStatuses[task.sessionId]
+        : ((await this.client.session.status()).data ?? {})[task.sessionId];
 
       // If session is still active (not idle), don't try to read messages yet
       if (sessionStatus && sessionStatus.type !== "idle") {
@@ -206,28 +215,31 @@ export class BackgroundTaskManager {
         return; // No response yet
       }
 
-      // Extract text from all assistant messages
-      const extractedContent: string[] = [];
-      for (const message of assistantMessages) {
-        for (const part of message.parts ?? []) {
-          if ((part.type === "text" || part.type === "reasoning") && part.text) {
-            extractedContent.push(part.text);
-          }
-        }
-      }
+      const responseText = assistantMessages
+        .flatMap((m) => m.parts ?? [])
+        .filter((p) => (p.type === "text" || p.type === "reasoning") && p.text)
+        .map((p) => p.text)
+        .join("\n\n");
 
-      const responseText = extractedContent.filter((t) => t.length > 0).join("\n\n");
       if (responseText) {
         task.result = responseText;
         task.status = "completed";
         task.completedAt = new Date();
-        // Pane closing is handled by TmuxSessionManager via polling
+        this.notifyWaiters(task.id);
       }
     } catch (error) {
       task.status = "failed";
       task.error = error instanceof Error ? error.message : String(error);
       task.completedAt = new Date();
-      // Pane closing is handled by TmuxSessionManager via polling
+      this.notifyWaiters(task.id);
+    }
+  }
+
+  private notifyWaiters(taskId: string) {
+    const taskWaiters = this.waiters.get(taskId);
+    if (taskWaiters) {
+      taskWaiters.forEach((w) => w());
+      this.waiters.delete(taskId);
     }
   }
 }

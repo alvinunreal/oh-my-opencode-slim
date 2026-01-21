@@ -11,8 +11,6 @@ function parseArgs(args: string[]): InstallArgs {
   for (const arg of args) {
     if (arg === "--no-tui") {
       result.tui = false
-    } else if (arg === "--skip-auth") {
-      result.skipAuth = true
     } else if (arg.startsWith("--antigravity=")) {
       result.antigravity = arg.split("=")[1] as BooleanArg
     } else if (arg.startsWith("--openai=")) {
@@ -39,7 +37,6 @@ Options:
   --openai=yes|no        OpenAI API access (yes/no)
   --tmux=yes|no          Enable tmux integration (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
-  --skip-auth            Skip authentication reminder
   -h, --help             Show this help message
 
 Examples:

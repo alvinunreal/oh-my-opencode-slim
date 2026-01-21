@@ -1,3 +1,4 @@
+import { groupByFile } from "../../shared"
 import type { SgResult, CliLanguage } from "./types"
 
 /**
@@ -17,12 +18,7 @@ export function formatSearchResult(result: SgResult): string {
   const lines: string[] = []
 
   // Group matches by file
-  const byFile = new Map<string, typeof result.matches>()
-  for (const match of result.matches) {
-    const existing = byFile.get(match.file) || []
-    existing.push(match)
-    byFile.set(match.file, existing)
-  }
+  const byFile = groupByFile(result.matches)
 
   for (const [file, matches] of byFile) {
     lines.push(`\n${file}:`)
