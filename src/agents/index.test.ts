@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createAgents, getAgentConfigs, getSubagentNames, getPrimaryAgentNames, isSubagent } from "./index";
+import { createAgents, getAgentConfigs, getSubagentNames, isSubagent } from "./index";
 import type { PluginConfig } from "../config";
 
 describe("agent alias backward compatibility", () => {
@@ -136,11 +136,6 @@ describe("isSubagent type guard", () => {
 });
 
 describe("agent classification", () => {
-  test("getPrimaryAgentNames returns only orchestrator", () => {
-    const names = getPrimaryAgentNames();
-    expect(names).toEqual(["orchestrator"]);
-  });
-
   test("getSubagentNames excludes orchestrator", () => {
     const names = getSubagentNames();
     expect(names).not.toContain("orchestrator");

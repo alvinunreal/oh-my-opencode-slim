@@ -49,33 +49,13 @@ function applyDefaultPermissions(agent: AgentDefinition): void {
 
 // Agent Classification
 
-const PRIMARY_AGENT_NAMES = ["orchestrator"] as const;
-export type PrimaryAgentName = (typeof PRIMARY_AGENT_NAMES)[number];
-
 export const SUBAGENT_NAMES = ["explorer", "librarian", "oracle", "designer", "fixer"] as const;
 export type SubagentName = (typeof SUBAGENT_NAMES)[number];
 
-/**
- * Get list of primary agent names.
- * @returns Readonly array containing only the orchestrator agent name
- */
-export function getPrimaryAgentNames(): readonly PrimaryAgentName[] {
-  return PRIMARY_AGENT_NAMES;
-}
-
-/**
- * Get list of all subagent names.
- * @returns Readonly array of subagent names (excludes orchestrator)
- */
 export function getSubagentNames(): readonly SubagentName[] {
   return SUBAGENT_NAMES;
 }
 
-/**
- * Type guard to check if a given agent name is a subagent.
- * @param name - Agent name to check
- * @returns True if the name is a valid subagent name
- */
 export function isSubagent(name: string): name is SubagentName {
   return (SUBAGENT_NAMES as readonly string[]).includes(name);
 }
