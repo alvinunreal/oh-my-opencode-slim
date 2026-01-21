@@ -31,15 +31,11 @@ function getOverride(overrides: Record<string, AgentOverrideConfig>, name: strin
 
 /**
  * Apply user-provided overrides to an agent's configuration.
- * Supports overriding model, temperature, prompt, and appending to prompts.
+ * Supports overriding model and temperature.
  */
 function applyOverrides(agent: AgentDefinition, override: AgentOverrideConfig): void {
   if (override.model) agent.config.model = override.model;
   if (override.temperature !== undefined) agent.config.temperature = override.temperature;
-  if (override.prompt) agent.config.prompt = override.prompt;
-  if (override.prompt_append) {
-    agent.config.prompt = `${agent.config.prompt}\n\n${override.prompt_append}`;
-  }
 }
 
 /**

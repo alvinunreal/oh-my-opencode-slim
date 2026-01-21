@@ -4,10 +4,7 @@ import { z } from "zod";
 export const AgentOverrideConfigSchema = z.object({
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
-  prompt: z.string().optional(),
-  prompt_append: z.string().optional(),
   variant: z.string().optional().catch(undefined),
-  disable: z.boolean().optional(),
   skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all)
 });
 

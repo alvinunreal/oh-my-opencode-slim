@@ -190,6 +190,7 @@ If the user's approach seems problematic:
 export function createOrchestratorAgent(model: string): AgentDefinition {
   return {
     name: "orchestrator",
+    description: "AI coding orchestrator that delegates tasks to specialist agents for optimal quality, speed, and cost",
     config: {
       model,
       temperature: 0.1,
