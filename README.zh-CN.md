@@ -17,35 +17,34 @@
 
 ## ⚡ 快速导航
 
-- [🚀 **安装**](#installation)
-  - [给人类的指南](#for-humans)
-  - [给 LLM 代理的指南](#for-llm-agents)
-- [🏗️ **架构与流程**](#architecture--flow)
-- [🏛️ **认识万神殿**](#meet-the-pantheon)
-  - [编排者 (Orchestrator)](#orchestrator)
-  - [探索者 (Explorer)](#explorer)
-  - [神谕者 (Oracle)](#oracle)
-  - [图书管理员 (Librarian)](#librarian)
-  - [设计师 (Designer)](#designer)
-  - [修复者 (Fixer)](#fixer)
-- [🧩 **技能**](#-skills)
-  - [可用技能](#available-skills)
-  - [默认技能分配](#default-skill-assignments)
-  - [YAGNI 约束](#yagni-enforcement)
-  - [Playwright 集成](#playwright-integration)
-  - [自定义代理技能](#customizing-agent-skills)
-- [🛠️ **工具与能力**](#tools--capabilities)
-  - [Tmux 集成](#tmux-integration)
-  - [配额工具](#quota-tool)
-  - [后台任务](#background-tasks)
-  - [LSP 工具](#lsp-tools)
-  - [代码搜索工具](#code-search-tools)
-- [🔌 **MCP 服务器**](#mcp-servers)
-- [⚙️ **配置**](#configuration)
-  - [需要编辑的文件](#files-you-edit)
-  - [OpenCode 配置](#opencode-config-opencodejson)
-  - [插件配置](#plugin-config-oh-my-opencode-slimjson)
-- [🗑️ **卸载**](#uninstallation)
+- [🚀 **安装**](#安装)
+  - [给人类的指南](#给人类的指南)
+  - [给 LLM 代理的指南](#给-llm-代理的指南)
+- [🏗️ **架构与流程**](#-架构与流程)
+- [🏛️ **认识万神殿**](#认识万神殿)
+  - [编排者 (Orchestrator)](#编排者-orchestrator)
+  - [探索者 (Explorer)](#探索者-explorer)
+  - [神谕者 (Oracle)](#神谕者-oracle)
+  - [图书管理员 (Librarian)](#图书管理员-librarian)
+  - [设计师 (Designer)](#设计师-designer)
+  - [修复者 (Fixer)](#修复者-fixer)
+- [🧩 **技能**](#-技能)
+  - [可用技能](#可用技能)
+  - [默认技能分配](#默认技能分配)
+  - [YAGNI 约束](#yagni-约束)
+  - [Playwright 集成](#playwright-集成)
+  - [自定义代理技能](#自定义代理技能)
+- [🛠️ **工具与能力**](#工具与能力)
+  - [Tmux 集成](#tmux-集成)
+  - [配额工具](#配额工具)
+  - [后台任务](#后台任务)
+  - [LSP 工具](#lsp-工具)
+  - [代码搜索工具](#代码搜索工具)
+- [🔌 **MCP 服务器**](#mcp-服务器)
+- [⚙️ **配置**](#配置)
+  - [需要编辑的文件](#需要编辑的文件)
+  - [插件配置](#插件配置-oh-my-opencode-slimjson)
+- [🗑️ **卸载**](#卸载)
 
 ---
 
@@ -77,7 +76,7 @@ opencode auth login
 
 <img src="img/ping.png" alt="Ping All Agents" width="800">
 
-> **💡 小贴士：模型完全可自定义。** 安装器会设定合理的默认值，但你可以将 *任何* 模型分配给 *任何* 代理。编辑 `~/.config/opencode/oh-my-opencode-slim.json` 来覆盖模型、调整推理强度或完全禁用代理。详见[配置](#configuration)。
+> **💡 小贴士：模型完全可自定义。** 安装器会设定合理的默认值，但你可以将 *任何* 模型分配给 *任何* 代理。编辑 `~/.config/opencode/oh-my-opencode-slim.json` 来覆盖模型、调整推理强度或完全禁用代理。详见[配置](#配置)。
 
 **备用方式：询问任意编码代理**
 
@@ -216,7 +215,7 @@ bunx oh-my-opencode-slim install --help
 
 ### 探索者 (Explorer)
 
-<a href="src/agents/explore.ts"><img src="img/explorer.png" alt="Explorer" align="right" width="240"></a>
+<a href="src/agents/explorer.ts"><img src="img/explorer.png" alt="Explorer" align="right" width="240"></a>
 
 > **探索者**穿梭代码库如风穿林 -  - 迅速、静默、无处不在。当编排者轻语“给我找到认证模块”，探索者已经带着四十条文件路径和地图归来。他们源自第一个 `grep` 命令，早已超越它，现在能看见凡人忽略的模式。
 
@@ -322,8 +321,8 @@ bunx oh-my-opencode-slim install --help
 
 #### 快速设置
 
-1. 在 `opencode.json` 中启用 OpenCode HTTP 服务（见 [OpenCode 配置](#opencode-config-opencodejson)）。
-2. 在 `oh-my-opencode-slim.json` 中启用 tmux 集成（见 [插件配置](#plugin-config-oh-my-opencode-slimjson)）。
+1. 在 `opencode.json` 中启用 OpenCode HTTP 服务（见 [OpenCode 配置](#需要编辑的文件)）。
+2. 在 `oh-my-opencode-slim.json` 中启用 tmux 集成（见 [插件配置](#插件配置-oh-my-opencode-slimjson)）。
 3. 在 tmux 中运行 OpenCode：
    ```bash
    tmux
@@ -340,7 +339,7 @@ bunx oh-my-opencode-slim install --help
 | `even-horizontal` | 所有窗格并排 |
 | `even-vertical` | 所有窗格垂直堆叠 |
 
-*查看[选项参考](#option-reference)获取详细配置。*
+*查看[选项参考](#选项参考)获取详细配置。*
 
 ---
 
@@ -431,7 +430,7 @@ bunx oh-my-opencode-slim install --help
 
 ### 自定义代理技能
 
-在你的[插件配置](#plugin-config-oh-my-opencode-slimjson)中覆盖每个代理的技能：
+在你的[插件配置](#插件配置-oh-my-opencode-slimjson)中覆盖每个代理的技能：
 
 ```json
 {
@@ -460,7 +459,7 @@ bunx oh-my-opencode-slim install --help
 
 ### 禁用 MCP
 
-你可以在[插件配置](#plugin-config-oh-my-opencode-slimjson)的 `disabled_mcps` 数组中添加要禁用的 MCP 服务器。
+你可以在[插件配置](#插件配置-oh-my-opencode-slimjson)的 `disabled_mcps` 数组中添加要禁用的 MCP 服务器。
 
 ---
 

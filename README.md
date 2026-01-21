@@ -31,12 +31,12 @@
   - [For Humans](#for-humans)
   - [For LLM Agents](#for-llm-agents)
 - [🏛️ **Meet the Pantheon**](#meet-the-pantheon)
-  - [Orchestrator](#orchestrator)
-  - [Explorer](#explorer)
-  - [Oracle](#oracle)
-  - [Librarian](#librarian)
-  - [Designer](#designer)
-  - [Fixer](#fixer)
+  - [Orchestrator](#orchestrator-the-embodiment-of-order)
+  - [Explorer](#explorer-the-eternal-wanderer)
+  - [Oracle](#oracle-the-guardian-of-paths)
+  - [Librarian](#librarian-the-weaver-of-knowledge)
+  - [Designer](#designer-the-guardian-of-aesthetics)
+  - [Fixer](#fixer-the-last-builder)
 - [🧩 **Skills**](#-skills)
   - [Available Skills](#available-skills)
   - [Default Skill Assignments](#default-skill-assignments)
@@ -52,7 +52,6 @@
 - [🔌 **MCP Servers**](#mcp-servers)
 - [⚙️ **Configuration**](#configuration)
   - [Files You Edit](#files-you-edit)
-  - [OpenCode Config](#opencode-config-opencodejson)
   - [Plugin Config](#plugin-config-oh-my-opencode-slimjson)
 - [🗑️ **Uninstallation**](#uninstallation)
 
@@ -208,7 +207,7 @@ Write and execute code, orchestrate multi-agent workflows, parse the unspoken fr
 
 ### Explorer: The Eternal Wanderer
 
-<a href="src/agents/explore.ts"><img src="img/explorer.png" alt="Explorer" align="right" width="240"></a>
+<a href="src/agents/explorer.ts"><img src="img/explorer.png" alt="Explorer" align="right" width="240"></a>
 
 > **The Explorer** is an immortal wanderer who has traversed the corridors of a million codebases since the dawn of programming. Cursed with the gift of eternal curiosity, they cannot rest until every file is known, every pattern understood, every secret revealed. Legends say they once searched the entire internet in a single heartbeat. They are the wind that carries knowledge, the eyes that see all, the spirit that never sleeps.
 
