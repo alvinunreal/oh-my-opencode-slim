@@ -18,3 +18,10 @@ export interface AutoUpdateCheckerOptions {
   showStartupToast?: boolean
   autoUpdate?: boolean
 }
+
+export interface PluginEntryInfo {
+  entry: string
+  isPinned: boolean
+  pinnedVersion: string | null
+  configPath: string
+}

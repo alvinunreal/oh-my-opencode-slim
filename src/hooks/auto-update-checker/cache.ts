@@ -2,6 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { CACHE_DIR, PACKAGE_NAME } from "./constants"
 import { log } from "../../shared/logger"
+import { stripJsonComments } from "../../cli/config-manager"
 
 interface BunLockfile {
   workspaces?: {
@@ -12,17 +13,27 @@ interface BunLockfile {
   packages?: Record<string, unknown>
 }
 
-function stripTrailingCommas(json: string): string {
-  return json.replace(/,(\s*[}\]])/g, "$1")
-}
-
+/**
+ * Removes a package from the bun.lock file if it's in JSON format.
+ * Note: Newer Bun versions (1.1+) use a custom text format for bun.lock.
+ * This function handles JSON-based lockfiles gracefully.
+ */
 function removeFromBunLock(packageName: string): boolean {
   const lockPath = path.join(CACHE_DIR, "bun.lock")
   if (!fs.existsSync(lockPath)) return false
 
   try {
     const content = fs.readFileSync(lockPath, "utf-8")
-    const lock = JSON.parse(stripTrailingCommas(content)) as BunLockfile
+    let lock: BunLockfile
+
+    try {
+      lock = JSON.parse(stripJsonComments(content)) as BunLockfile
+    } catch {
+      // If it's not valid JSON(C), it might be the new Bun text format or binary format.
+      // For now, we only support JSON-based lockfile manipulation.
+      return false
+    }
+
     let modified = false
 
     if (lock.workspaces?.[""]?.dependencies?.[packageName]) {
@@ -41,11 +52,17 @@ function removeFromBunLock(packageName: string): boolean {
     }
 
     return modified
-  } catch {
+  } catch (err) {
+    log(`[auto-update-checker] Failed to process bun.lock:`, err)
     return false
   }
 }
 
+/**
+ * Invalidates the current package by removing its directory and dependency entries.
+ * This forces a clean state before running a fresh install.
+ * @param packageName The name of the package to invalidate.
+ */
 export function invalidatePackage(packageName: string = PACKAGE_NAME): boolean {
   try {
     const pkgDir = path.join(CACHE_DIR, "node_modules", packageName)
@@ -62,13 +79,17 @@ export function invalidatePackage(packageName: string = PACKAGE_NAME): boolean {
     }
 
     if (fs.existsSync(pkgJsonPath)) {
-      const content = fs.readFileSync(pkgJsonPath, "utf-8")
-      const pkgJson = JSON.parse(content)
-      if (pkgJson.dependencies?.[packageName]) {
-        delete pkgJson.dependencies[packageName]
-        fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2))
-        log(`[auto-update-checker] Dependency removed from package.json: ${packageName}`)
-        dependencyRemoved = true
+      try {
+        const content = fs.readFileSync(pkgJsonPath, "utf-8")
+        const pkgJson = JSON.parse(stripJsonComments(content))
+        if (pkgJson.dependencies?.[packageName]) {
+          delete pkgJson.dependencies[packageName]
+          fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2))
+          log(`[auto-update-checker] Dependency removed from package.json: ${packageName}`)
+          dependencyRemoved = true
+        }
+      } catch (err) {
+        log(`[auto-update-checker] Failed to update package.json for invalidation:`, err)
       }
     }
 

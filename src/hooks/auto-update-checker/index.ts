@@ -5,6 +5,12 @@ import { PACKAGE_NAME } from "./constants"
 import { log } from "../../shared/logger"
 import type { AutoUpdateCheckerOptions } from "./types"
 
+/**
+ * Creates an OpenCode hook that checks for plugin updates when a new session is created.
+ * @param ctx The plugin input context.
+ * @param options Configuration options for the update checker.
+ * @returns A hook object for the session.created event.
+ */
 export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdateCheckerOptions = {}) {
   const { showStartupToast = true, autoUpdate = true } = options
 
@@ -45,6 +51,11 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
   }
 }
 
+/**
+ * Orchestrates the version comparison and update process in the background.
+ * @param ctx The plugin input context.
+ * @param autoUpdate Whether to automatically install updates.
+ */
 async function runBackgroundUpdateCheck(ctx: PluginInput, autoUpdate: boolean): Promise<void> {
   const pluginInfo = findPluginEntry(ctx.directory)
   if (!pluginInfo) {
@@ -102,6 +113,12 @@ async function runBackgroundUpdateCheck(ctx: PluginInput, autoUpdate: boolean): 
   }
 }
 
+/**
+ * Spawns a background process to run 'bun install'.
+ * Includes a 60-second timeout to prevent stalling OpenCode.
+ * @param ctx The plugin input context.
+ * @returns True if the installation succeeded within the timeout.
+ */
 async function runBunInstallSafe(ctx: PluginInput): Promise<boolean> {
   try {
     const proc = Bun.spawn(["bun", "install"], {
@@ -109,18 +126,18 @@ async function runBunInstallSafe(ctx: PluginInput): Promise<boolean> {
       stdout: "pipe",
       stderr: "pipe",
     })
-    
+
     const timeoutPromise = new Promise<"timeout">((resolve) =>
       setTimeout(() => resolve("timeout"), 60_000)
     )
     const exitPromise = proc.exited.then(() => "completed" as const)
     const result = await Promise.race([exitPromise, timeoutPromise])
-    
+
     if (result === "timeout") {
       try { proc.kill() } catch { /* empty */ }
       return false
     }
-    
+
     return proc.exitCode === 0
   } catch (err) {
     log("[auto-update-checker] bun install error:", err)
@@ -128,6 +145,14 @@ async function runBunInstallSafe(ctx: PluginInput): Promise<boolean> {
   }
 }
 
+/**
+ * Helper to display a toast notification in the OpenCode TUI.
+ * @param ctx The plugin input context.
+ * @param title The toast title.
+ * @param message The toast message.
+ * @param variant The visual style of the toast.
+ * @param duration How long to show the toast in milliseconds.
+ */
 function showToast(
   ctx: PluginInput,
   title: string,
@@ -137,7 +162,7 @@ function showToast(
 ): void {
   ctx.client.tui.showToast({
     body: { title, message, variant, duration },
-  }).catch(() => {})
+  }).catch(() => { })
 }
 
 export type { AutoUpdateCheckerOptions } from "./types"

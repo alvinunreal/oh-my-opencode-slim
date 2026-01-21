@@ -7,9 +7,32 @@ import { DEFAULT_AGENT_SKILLS } from "../tools/skill/builtin"
 const PACKAGE_NAME = "oh-my-opencode-slim"
 
 function getConfigDir(): string {
+  if (process.platform === "win32") {
+    const homedirPath = homedir()
+    const crossPlatformDir = join(homedirPath, ".config")
+    const appdataDir = process.env.APPDATA ?? join(homedirPath, "AppData", "Roaming")
+
+    const crossPlatformConfig = join(crossPlatformDir, "opencode", "opencode.json")
+    const crossPlatformConfigJsonc = join(crossPlatformDir, "opencode", "opencode.jsonc")
+
+    if (existsSync(crossPlatformConfig) || existsSync(crossPlatformConfigJsonc)) {
+      return crossPlatformDir
+    }
+
+    return appdataDir
+  }
+
   return process.env.XDG_CONFIG_HOME
     ? join(process.env.XDG_CONFIG_HOME, "opencode")
     : join(homedir(), ".config", "opencode")
+}
+
+export function getOpenCodeConfigPaths(): string[] {
+  const configDir = getConfigDir()
+  return [
+    join(configDir, "opencode", "opencode.json"),
+    join(configDir, "opencode", "opencode.jsonc"),
+  ]
 }
 
 function getConfigJson(): string {
@@ -89,10 +112,10 @@ function parseConfig(path: string): OpenCodeConfig | null {
 function getExistingConfigPath(): string {
   const jsonPath = getConfigJson()
   if (existsSync(jsonPath)) return jsonPath
-  
+
   const jsoncPath = getConfigJsonc()
   if (existsSync(jsoncPath)) return jsoncPath
-  
+
   return jsonPath
 }
 
