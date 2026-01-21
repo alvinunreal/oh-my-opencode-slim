@@ -1,5 +1,5 @@
 import type { AgentConfig as SDKAgentConfig } from "@opencode-ai/sdk";
-import { DEFAULT_MODELS, type PluginConfig, type AgentOverrideConfig } from "../config";
+import { DEFAULT_MODELS, SUBAGENT_NAMES, type PluginConfig, type AgentOverrideConfig } from "../config";
 import { createOrchestratorAgent, type AgentDefinition } from "./orchestrator";
 import { createOracleAgent } from "./oracle";
 import { createLibrarianAgent } from "./librarian";
@@ -49,12 +49,7 @@ function applyDefaultPermissions(agent: AgentDefinition): void {
 
 // Agent Classification
 
-export const SUBAGENT_NAMES = ["explorer", "librarian", "oracle", "designer", "fixer"] as const;
-export type SubagentName = (typeof SUBAGENT_NAMES)[number];
-
-export function getSubagentNames(): readonly SubagentName[] {
-  return SUBAGENT_NAMES;
-}
+export type SubagentName = typeof SUBAGENT_NAMES[number];
 
 export function isSubagent(name: string): name is SubagentName {
   return (SUBAGENT_NAMES as readonly string[]).includes(name);

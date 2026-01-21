@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createAgents, getAgentConfigs, getSubagentNames, isSubagent } from "./index";
+import { createAgents, getAgentConfigs, isSubagent } from "./index";
+import { SUBAGENT_NAMES } from "../config";
 import type { PluginConfig } from "../config";
 
 describe("agent alias backward compatibility", () => {
@@ -136,11 +137,10 @@ describe("isSubagent type guard", () => {
 });
 
 describe("agent classification", () => {
-  test("getSubagentNames excludes orchestrator", () => {
-    const names = getSubagentNames();
-    expect(names).not.toContain("orchestrator");
-    expect(names).toContain("explorer");
-    expect(names).toContain("fixer");
+  test("SUBAGENT_NAMES excludes orchestrator", () => {
+    expect(SUBAGENT_NAMES).not.toContain("orchestrator");
+    expect(SUBAGENT_NAMES).toContain("explorer");
+    expect(SUBAGENT_NAMES).toContain("fixer");
   });
 
   test("getAgentConfigs applies correct classification visibility and mode", () => {
@@ -150,8 +150,7 @@ describe("agent classification", () => {
     expect(configs["orchestrator"].mode).toBe("primary");
 
     // Subagents
-    const subagents = getSubagentNames();
-    for (const name of subagents) {
+    for (const name of SUBAGENT_NAMES) {
       expect(configs[name].mode).toBe("subagent");
     }
   });

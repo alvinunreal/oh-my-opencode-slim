@@ -43,20 +43,5 @@ export const PluginConfigSchema = z.object({
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;
 
-// Agent names
-export type AgentName =
-  | "orchestrator"
-  | "oracle"
-  | "librarian"
-  | "explorer"
-  | "designer"
-  | "fixer";
-
-export const DEFAULT_MODELS: Record<AgentName, string> = {
-  orchestrator: "google/claude-opus-4-5-thinking",
-  oracle: "openai/gpt-5.2-codex",
-  librarian: "google/gemini-3-flash",
-  explorer: "google/gemini-3-flash",
-  designer: "google/gemini-3-flash",
-  fixer: "google/gemini-3-flash",
-};
+// Agent names - re-exported from constants for convenience
+export type { AgentName } from "./constants";
