@@ -457,8 +457,6 @@ You can disable specific MCP servers by adding them to the `disabled_mcps` array
 | `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings (agents, tmux, MCPs) |
 | `.opencode/oh-my-opencode-slim.json` | Project-local plugin overrides (optional) |
 
-> **Platform paths:** On Windows, user config may also be at `%APPDATA%\opencode\`.
-
 ---
 
 ### Plugin Config (`oh-my-opencode-slim.json`)

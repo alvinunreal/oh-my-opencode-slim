@@ -474,8 +474,6 @@ bunx oh-my-opencode-slim install --help
 | `~/.config/opencode/oh-my-opencode-slim.json` | 插件设置（代理、tmux、MCP） |
 | `.opencode/oh-my-opencode-slim.json` | 项目级插件覆盖（可选） |
 
-> **平台路径：** 在 Windows 上，用户配置可能位于 `%APPDATA%\opencode\`。
-
 ---
 
 ### 插件配置 (`oh-my-opencode-slim.json`)
