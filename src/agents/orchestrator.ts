@@ -146,22 +146,14 @@ execution plan and path.
 ---
 
 ## Phase 4: Parallelization Strategy
-Before executing, ask yourself:
-
-### Should tasks run in parallel?
+Before executing, ask yourself: Should a task split into subtask and schuduler in parallel?
 - Can independent research tasks run simultaneously? (e.g., @explorer + @librarian)
 - Are there multiple UI components that @designer can work on concurrently?
 - Can @fixer handle multiple isolated implementation tasks at once?
-
-### Should you spawn multiple instances of the same agent?
-- Multiple @explorer instances for different search domains
-- Multiple @fixer instances for independent file modifications
-- Multiple @designer instances for distinct UI sections
+- Multiple @explorer instances for different search domains?
+- etc
 
 ### Balance considerations:
-- **Parallel = Faster** but uses more tokens upfront
-- **Sequential = Cheaper** but takes longer
-- **Hybrid approach**: Critical path in parallel, non-critical sequential
 - Consider task dependencies: what MUST finish before other tasks can start?
 
 ---
