@@ -89,8 +89,9 @@ function buildArgs(options: GrepOptions, backend: GrepBackend): string[] {
 function parseOutput(output: string): GrepMatch[] {
   if (!output.trim()) return [];
 
-  const matches: GrepMatch[] = [];
-  const lines = output.split('\n');
+  const matches: GrepMatch[] = []
+  // Handle both Unix (\n) and Windows (\r\n) line endings
+  const lines = output.trim().split(/\r?\n/)
 
   for (const line of lines) {
     if (!line.trim()) continue;
