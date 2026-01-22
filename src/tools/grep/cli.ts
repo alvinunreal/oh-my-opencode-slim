@@ -26,12 +26,16 @@ function buildRgArgs(options: GrepOptions): string[] {
     args.push(`-C${Math.min(options.context, 10)}`);
   }
 
-  if (options.caseSensitive) args.push('--case-sensitive');
-  if (options.wholeWord) args.push('-w');
-  if (options.fixedStrings) args.push('-F');
-  if (options.multiline) args.push('-U');
-  if (options.hidden) args.push('--hidden');
-  if (options.noIgnore) args.push('--no-ignore');
+  if (options.caseSensitive) {
+    args.push("--case-sensitive")
+  } else {
+    args.push("-i")
+  }
+  if (options.wholeWord) args.push("-w")
+  if (options.fixedStrings) args.push("-F")
+  if (options.multiline) args.push("-U")
+  if (options.hidden) args.push("--hidden")
+  if (options.noIgnore) args.push("--no-ignore")
 
   if (options.fileType?.length) {
     for (const type of options.fileType) {
