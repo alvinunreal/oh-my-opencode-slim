@@ -2,9 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  downloadAndInstallRipgrep,
-  getInstalledRipgrepPath,
+    downloadAndInstallRipgrep,
+    getInstalledRipgrepPath,
 } from './downloader';
+import { homedir } from "os";
+
 
 export type GrepBackend = 'rg' | 'grep';
 
@@ -31,20 +33,6 @@ function findExecutable(name: string): string | null {
   return null;
 }
 
-function getDataDir(): string {
-  if (process.platform === 'win32') {
-    return (
-      process.env.LOCALAPPDATA ||
-      process.env.APPDATA ||
-      join(process.env.USERPROFILE || '.', 'AppData', 'Local')
-    );
-  }
-  return (
-    process.env.XDG_DATA_HOME ||
-    join(process.env.HOME || '.', '.local', 'share')
-  );
-}
-
 function getOpenCodeBundledRg(): string | null {
   const execPath = process.execPath;
   const execDir = dirname(execPath);
@@ -54,7 +42,7 @@ function getOpenCodeBundledRg(): string | null {
 
   const candidates = [
     // OpenCode XDG data path (highest priority - where OpenCode installs rg)
-    join(getDataDir(), 'opencode', 'bin', rgName),
+    join(homedir(), ".opencode", "bin", rgName),
     // Legacy paths relative to execPath
     join(execDir, rgName),
     join(execDir, 'bin', rgName),
