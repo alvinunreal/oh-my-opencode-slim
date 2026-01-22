@@ -112,8 +112,9 @@ function parseOutput(output: string): GrepMatch[] {
 function parseCountOutput(output: string): CountResult[] {
   if (!output.trim()) return [];
 
-  const results: CountResult[] = [];
-  const lines = output.split('\n');
+  const results: CountResult[] = []
+  // Handle both Unix (\n) and Windows (\r\n) line endings
+  const lines = output.trim().split(/\r?\n/)
 
   for (const line of lines) {
     if (!line.trim()) continue;

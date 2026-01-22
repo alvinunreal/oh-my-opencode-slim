@@ -25,7 +25,8 @@ function findExecutable(name: string): string | null {
   try {
     const result = spawnSync(cmd, [name], { encoding: 'utf-8', timeout: 5000 });
     if (result.status === 0 && result.stdout.trim()) {
-      return result.stdout.trim().split('\n')[0];
+      // Handle both Unix (\n) and Windows (\r\n) line endings
+      return result.stdout.trim().split(/\r?\n/)[0]
     }
   } catch {
     // Command execution failed
