@@ -52,6 +52,7 @@
 - [🔌 **MCP Servers**](#mcp-servers)
 - [⚙️ **Configuration**](#configuration)
   - [Files You Edit](#files-you-edit)
+  - [Prompt Overriding](#prompt-overriding)
   - [Plugin Config](#plugin-config-oh-my-opencode-slimjson)
     - [Presets](#presets)
     - [Option Reference](#option-reference)
@@ -468,6 +469,37 @@ You can disable specific MCP servers by adding them to the `disabled_mcps` array
 | `~/.config/opencode/opencode.json` | OpenCode core settings |
 | `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings (agents, tmux, MCPs) |
 | `.opencode/oh-my-opencode-slim.json` | Project-local plugin overrides (optional) |
+
+---
+
+### Prompt Overriding
+
+You can customize agent prompts by creating markdown files in `~/.config/opencode/oh-my-opencode-slim/`:
+
+| File | Purpose |
+|------|---------|
+| `{agent}.md` | Replaces the default prompt entirely |
+| `{agent}_append.md` | Appends to the default prompt |
+
+**Example:**
+
+```
+~/.config/opencode/oh-my-opencode-slim/
+  ├── orchestrator.md          # Custom orchestrator prompt
+  ├── orchestrator_append.md   # Append to default orchestrator prompt
+  ├── explorer.md
+  ├── explorer_append.md
+  └── ...
+```
+
+**Usage:**
+
+- Create `{agent}.md` to completely replace an agent's default prompt
+- Create `{agent}_append.md` to add custom instructions to the default prompt
+- Both files can exist simultaneously - the replacement takes precedence
+- If neither file exists, the default prompt is used
+
+This allows you to fine-tune agent behavior without modifying the source code.
 
 ---
 
