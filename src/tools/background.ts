@@ -255,7 +255,7 @@ async function executeSync(
 /**
  * Resolves an existing session or creates a new one.
  */
-async function resolveSessionId(
+export async function resolveSessionId(
   ctx: PluginInput,
   toolContext: ToolContext,
   description: string,
@@ -278,7 +278,7 @@ async function resolveSessionId(
 /**
  * Creates a new session with proper configuration.
  */
-async function createSession(
+export async function createSession(
   ctx: PluginInput,
   toolContext: ToolContext,
   description: string,
@@ -314,7 +314,7 @@ async function createSession(
 /**
  * Sends a prompt to the specified session.
  */
-async function sendPrompt(
+export async function sendPrompt(
   ctx: PluginInput,
   sessionID: string,
   prompt: string,
@@ -354,7 +354,7 @@ async function sendPrompt(
 /**
  * Polls the session until it becomes idle and has messages.
  */
-async function pollSession(
+export async function pollSession(
   ctx: PluginInput,
   sessionID: string,
   abortSignal: AbortSignal
@@ -409,7 +409,7 @@ async function pollSession(
 /**
  * Extracts the assistant's response text from session messages.
  */
-function extractResponseText(messages: SessionMessage[]): string {
+export function extractResponseText(messages: SessionMessage[]): string {
   // Filter for assistant messages only
   const assistantMessages = messages.filter((m) => m.info?.role === "assistant");
   const extractedContent: string[] = [];
