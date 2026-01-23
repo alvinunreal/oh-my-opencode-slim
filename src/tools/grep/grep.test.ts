@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runRg, runRgCount } from './cli';
-import { formatGrepResult } from './utils';
 import { grep } from './tools';
+import { formatGrepResult } from './utils';
 
 describe('grep tool', () => {
   const testDir = join(tmpdir(), `grep-test-${Date.now()}`);
@@ -13,8 +13,14 @@ describe('grep tool', () => {
 
   beforeAll(async () => {
     await mkdir(testDir, { recursive: true });
-    await writeFile(testFile1, 'Hello world\nThis is a test file\nAnother line with match');
-    await writeFile(testFile2, 'const x = \'Hello world\';\nconsole.log(\'test\');');
+    await writeFile(
+      testFile1,
+      'Hello world\nThis is a test file\nAnother line with match',
+    );
+    await writeFile(
+      testFile2,
+      "const x = 'Hello world';\nconsole.log('test');",
+    );
   });
 
   afterAll(async () => {
@@ -46,9 +52,9 @@ describe('grep tool', () => {
     test('formats matches correctly', () => {
       const result = {
         matches: [
-          { file: 'file1.ts', line: 10, text: 'const foo = \'bar\'' },
+          { file: 'file1.ts', line: 10, text: "const foo = 'bar'" },
           { file: 'file1.ts', line: 15, text: 'console.log(foo)' },
-          { file: 'file2.ts', line: 5, text: 'import { foo } from \'./file1\'' },
+          { file: 'file2.ts', line: 5, text: "import { foo } from './file1'" },
         ],
         totalMatches: 3,
         filesSearched: 2,
@@ -57,10 +63,10 @@ describe('grep tool', () => {
 
       const output = formatGrepResult(result);
       expect(output).toContain('file1.ts:');
-      expect(output).toContain('  10: const foo = \'bar\'');
+      expect(output).toContain("  10: const foo = 'bar'");
       expect(output).toContain('  15: console.log(foo)');
       expect(output).toContain('file2.ts:');
-      expect(output).toContain('  5: import { foo } from \'./file1\'');
+      expect(output).toContain("  5: import { foo } from './file1'");
       expect(output).toContain('Found 3 matches in 2 files');
     });
 
@@ -83,8 +89,16 @@ describe('grep tool', () => {
       });
 
       expect(result.totalMatches).toBeGreaterThanOrEqual(2);
-      expect(result.matches.some((m) => m.file.includes('test1.txt') && m.text.includes('Hello'))).toBe(true);
-      expect(result.matches.some((m) => m.file.includes('test2.ts') && m.text.includes('Hello'))).toBe(true);
+      expect(
+        result.matches.some(
+          (m) => m.file.includes('test1.txt') && m.text.includes('Hello'),
+        ),
+      ).toBe(true);
+      expect(
+        result.matches.some(
+          (m) => m.file.includes('test2.ts') && m.text.includes('Hello'),
+        ),
+      ).toBe(true);
     });
 
     test('respects file inclusion patterns', async () => {
@@ -94,8 +108,12 @@ describe('grep tool', () => {
         globs: ['*.txt'],
       });
 
-      expect(result.matches.some((m) => m.file.includes('test1.txt'))).toBe(true);
-      expect(result.matches.some((m) => m.file.includes('test2.ts'))).toBe(false);
+      expect(result.matches.some((m) => m.file.includes('test1.txt'))).toBe(
+        true,
+      );
+      expect(result.matches.some((m) => m.file.includes('test2.ts'))).toBe(
+        false,
+      );
     });
 
     test('handles no matches', async () => {
@@ -116,14 +134,14 @@ describe('grep tool', () => {
       const resultInsensitive = await runRg({
         pattern: 'hello',
         paths: [testDir],
-        caseSensitive: false
+        caseSensitive: false,
       });
       expect(resultInsensitive.totalMatches).toBeGreaterThan(0);
 
       const resultSensitive = await runRg({
         pattern: 'hello', // File has "Hello"
         paths: [testDir],
-        caseSensitive: true
+        caseSensitive: true,
       });
       expect(resultSensitive.totalMatches).toBe(0);
     });
@@ -132,14 +150,14 @@ describe('grep tool', () => {
       const resultPartial = await runRg({
         pattern: 'Hell',
         paths: [testDir],
-        wholeWord: false
+        wholeWord: false,
       });
       expect(resultPartial.totalMatches).toBeGreaterThan(0);
 
       const resultWhole = await runRg({
         pattern: 'Hell',
         paths: [testDir],
-        wholeWord: true
+        wholeWord: true,
       });
       expect(resultWhole.totalMatches).toBe(0);
     });
@@ -148,10 +166,12 @@ describe('grep tool', () => {
       const result = await runRg({
         pattern: 'Hello',
         paths: [testDir],
-        maxCount: 1
+        maxCount: 1,
       });
       // maxCount is per file
-      expect(result.matches.filter(m => m.file.includes('test1.txt')).length).toBeLessThanOrEqual(1);
+      expect(
+        result.matches.filter((m) => m.file.includes('test1.txt')).length,
+      ).toBeLessThanOrEqual(1);
     });
   });
 
@@ -159,11 +179,11 @@ describe('grep tool', () => {
     test('counts matches correctly', async () => {
       const results = await runRgCount({
         pattern: 'Hello',
-        paths: [testDir]
+        paths: [testDir],
       });
 
       expect(results.length).toBeGreaterThan(0);
-      const file1Result = results.find(r => r.file.includes('test1.txt'));
+      const file1Result = results.find((r) => r.file.includes('test1.txt'));
       expect(file1Result).toBeDefined();
       expect(file1Result?.count).toBe(1);
     });
@@ -171,7 +191,7 @@ describe('grep tool', () => {
 
   describe('grep tool execute', () => {
     test('executes successfully', async () => {
-      // @ts-ignore
+      // @ts-expect-error
       const result = await grep.execute({
         pattern: 'Hello',
         path: testDir,
@@ -183,7 +203,7 @@ describe('grep tool', () => {
     });
 
     test('handles errors gracefully', async () => {
-      // @ts-ignore
+      // @ts-expect-error
       const result = await grep.execute({
         pattern: 'Hello',
         path: '/non/existent/path/12345',
@@ -195,11 +215,11 @@ describe('grep tool', () => {
     });
 
     test('respects include pattern in execute', async () => {
-      // @ts-ignore
+      // @ts-expect-error
       const result = await grep.execute({
         pattern: 'Hello',
         path: testDir,
-        include: '*.txt'
+        include: '*.txt',
       });
 
       expect(result).toContain('test1.txt');

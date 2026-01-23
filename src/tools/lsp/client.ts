@@ -241,20 +241,25 @@ export class LSPClient {
 
     this.connection.onNotification(
       'textDocument/publishDiagnostics',
-      (params: any) => {
+      (params: { uri?: string; diagnostics?: Diagnostic[] }) => {
         if (params.uri) {
           this.diagnosticsStore.set(params.uri, params.diagnostics ?? []);
         }
       },
     );
 
-    this.connection.onRequest('workspace/configuration', (params: any) => {
-      const items = params.items ?? [];
-      return items.map((item: any) => {
-        if (item.section === 'json') return { validate: { enable: true } };
-        return {};
-      });
-    });
+    this.connection.onRequest(
+      'workspace/configuration',
+      (params: { items?: unknown[] }) => {
+        const items = params.items ?? [];
+        return items.map((item: unknown) => {
+          const configItem = item as { section?: string };
+          if (configItem.section === 'json')
+            return { validate: { enable: true } };
+          return {};
+        });
+      },
+    );
 
     this.connection.onRequest('client/registerCapability', () => null);
     this.connection.onRequest('window/workDoneProgress/create', () => null);

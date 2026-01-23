@@ -122,7 +122,7 @@ function formatConfigSummary(config: InstallConfig): string {
 function printAgentModels(config: InstallConfig): void {
   const liteConfig = generateLiteConfig(config);
   const presetName = (liteConfig.preset as string) || 'unknown';
-  const presets = liteConfig.presets as Record<string, any>;
+  const presets = liteConfig.presets as Record<string, unknown>;
   const agents = presets?.[presetName] as Record<
     string,
     { model: string; skills: string[] }
