@@ -5,7 +5,8 @@ export const AgentOverrideConfigSchema = z.object({
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   variant: z.string().optional().catch(undefined),
-  skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all)
+  skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
+  mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
 });
 
 // Tmux layout options

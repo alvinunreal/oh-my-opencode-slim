@@ -6,6 +6,7 @@ import {
   type PluginConfig,
   SUBAGENT_NAMES,
 } from '../config';
+import { getAgentMcpList } from '../tools/skill/builtin';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
@@ -170,9 +171,10 @@ export function getAgentConfigs(
   const agents = createAgents(config);
   return Object.fromEntries(
     agents.map((a) => {
-      const sdkConfig: SDKAgentConfig = {
+      const sdkConfig: SDKAgentConfig & { mcps?: string[] } = {
         ...a.config,
         description: a.description,
+        mcps: getAgentMcpList(a.name, config),
       };
 
       // Apply classification-based visibility and mode

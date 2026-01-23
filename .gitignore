@@ -43,3 +43,5 @@ local
 .opencode/
 .claude/
 .ignore
+opencode
+oh-my-opencode

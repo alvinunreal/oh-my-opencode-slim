@@ -40,22 +40,28 @@
 - [🧩 **Skills**](#-skills)
   - [Available Skills](#available-skills)
   - [Default Skill Assignments](#default-skill-assignments)
-  - [YAGNI Enforcement](#yagni-enforcement)
+  - [Skill Syntax](#skill-syntax)
+- [Simplify](#simplify)
   - [Playwright Integration](#playwright-integration)
   - [Customizing Agent Skills](#customizing-agent-skills)
+- [🔌 **MCP Servers**](#mcp-servers)
+  - [MCP Permissions](#mcp-permissions)
+  - [MCP Syntax](#mcp-syntax)
+  - [Disabling MCPs](#disabling-mcps)
+  - [Customizing MCP Permissions](#customizing-mcp-permissions)
 - [🛠️ **Tools & Capabilities**](#tools--capabilities)
   - [Tmux Integration](#tmux-integration)
   - [Quota Tool](#quota-tool)
   - [Background Tasks](#background-tasks)
   - [LSP Tools](#lsp-tools)
   - [Code Search Tools](#code-search-tools)
-- [🔌 **MCP Servers**](#mcp-servers)
+  - [Formatters](#formatters)
 - [⚙️ **Configuration**](#configuration)
   - [Files You Edit](#files-you-edit)
   - [Prompt Overriding](#prompt-overriding)
   - [Plugin Config](#plugin-config-oh-my-opencode-slimjson)
     - [Presets](#presets)
-    - [Option Reference](#option-reference)
+      - [Option Reference](#option-reference)
 - [🗑️ **Uninstallation**](#uninstallation)
 
 ---
@@ -278,7 +284,149 @@ Code implementation, refactoring, testing, verification. *Execute the plan - no 
 
 ---
 
-## Tools & Capabilities
+## 🧩 Skills
+
+Skills are specialized capabilities that agents can use. Each agent has a default set of skills, which you can override in the agent config.
+
+### Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| `simplify` | Code complexity analysis and YAGNI enforcement |
+| `playwright` | Browser automation via Playwright MCP |
+
+### Default Skill Assignments
+
+| Agent | Default Skills |
+|-------|----------------|
+| `orchestrator` | `*` (all skills) |
+| `designer` | `playwright` |
+| `oracle` | none |
+| `librarian` | none |
+| `explorer` | none |
+| `fixer` | none |
+
+### Skill Syntax
+
+Skills support wildcard and exclusion syntax for flexible control:
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `"*"` | All skills | `["*"]` |
+| `"!item"` | Exclude specific skill | `["*", "!playwright"]` |
+| Explicit list | Only listed skills | `["simplify", "playwright"]` |
+| `"!*"` | Deny all skills | `["!*"]` |
+
+**Rules:**
+- `*` expands to all available skills
+- `!item` excludes specific skills
+- Conflicts (e.g., `["a", "!a"]`) → deny wins (principle of least privilege)
+- Empty list `[]` → no skills allowed
+
+### Simplify
+
+**The Minimalist's sacred truth: every line of code is a liability.**
+
+Use after major refactors or before finalizing PRs. Identifies unnecessary complexity, challenges premature abstractions, estimates LOC reduction, and enforces minimalism.
+
+### Playwright Integration
+
+**Browser automation for visual verification and testing.**
+
+- **Browser Automation**: Full Playwright capabilities (browsing, clicking, typing, scraping).
+- **Screenshots**: Capture visual state of any web page.
+- **Sandboxed Output**: Screenshots saved to session subdirectory (check tool output for path).
+
+### Customizing Agent Skills
+
+Override skills per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
+
+```json
+{
+  "presets": {
+    "my-preset": {
+  "orchestrator": {
+    "skills": ["*", "!playwright"]
+  },
+  "designer": {
+    "skills": ["playwright", "simplify"]
+  }
+    }
+  }
+}
+```
+
+---
+
+## 🔌 MCP Servers
+
+Built-in Model Context Protocol servers (enabled by default):
+
+| MCP | Purpose | URL |
+|-----|---------|-----|
+| `websearch` | Real-time web search via Exa AI | `https://mcp.exa.ai/mcp` |
+| `context7` | Official library documentation | `https://mcp.context7.com/mcp` |
+| `grep_app` | GitHub code search via grep.app | `https://mcp.grep.app` |
+
+### MCP Permissions
+
+Control which agents can access which MCP servers using per-agent allowlists:
+
+| Agent | Default MCPs |
+|-------|--------------|
+| `orchestrator` | `websearch` |
+| `designer` | none |
+| `oracle` | none |
+| `librarian` | `websearch`, `context7`, `grep_app` |
+| `explorer` | none |
+| `fixer` | none |
+
+### MCP Syntax
+
+MCPs support wildcard and exclusion syntax (same as skills):
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `"*"` | All MCPs | `["*"]` |
+| `"!item"` | Exclude specific MCP | `["*", "!context7"]` |
+| Explicit list | Only listed MCPs | `["websearch", "context7"]` |
+| `"!*"` | Deny all MCPs | `["!*"]` |
+
+**Rules:**
+- `*` expands to all available MCPs
+- `!item` excludes specific MCPs
+- Conflicts (e.g., `["a", "!a"]`) → deny wins
+- Empty list `[]` → no MCPs allowed
+
+### Disabling MCPs
+
+You can disable specific MCP servers globally by adding them to the `disabled_mcps` array in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson).
+
+### Customizing MCP Permissions
+
+Override MCP access per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
+
+```json
+{
+  "presets": {
+    "my-preset": {
+      "orchestrator": {
+        "mcps": ["websearch"]
+      },
+      "librarian": {
+        "mcps": ["websearch", "context7", "grep_app"]
+      },
+      "oracle": {
+        "mcps": ["*", "!websearch"]
+      }
+    }
+  }
+}
+```
+
+---
+
+## 🛠️ Tools & Capabilities
 
 ### Tmux Integration
 
@@ -389,77 +537,6 @@ OpenCode automatically formats files after they're written or edited using langu
 
 ---
 
-## 🧩 Skills
-
-Skills are specialized capabilities that agents can use. Each agent has a default set of skills, which you can override in the agent config.
-
-### Available Skills
-
-| Skill | Description |
-|-------|-------------|
-| `yagni-enforcement` | Code complexity analysis and YAGNI enforcement |
-| `playwright` | Browser automation via Playwright MCP |
-
-### Default Skill Assignments
-
-| Agent | Default Skills |
-|-------|----------------|
-| `orchestrator` | `*` (all skills) |
-| `designer` | `playwright` |
-| `oracle` | none |
-| `librarian` | none |
-| `explorer` | none |
-| `fixer` | none |
-
-### YAGNI Enforcement
-
-**The Minimalist's sacred truth: every line of code is a liability.**
-
-Use after major refactors or before finalizing PRs. Identifies unnecessary complexity, challenges premature abstractions, estimates LOC reduction, and enforces minimalism.
-
-### Playwright Integration
-
-**Browser automation for visual verification and testing.**
-
-- **Browser Automation**: Full Playwright capabilities (browsing, clicking, typing, scraping).
-- **Screenshots**: Capture visual state of any web page.
-- **Sandboxed Output**: Screenshots saved to session subdirectory (check tool output for path).
-
-### Customizing Agent Skills
-
-Override skills per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
-
-```json
-{
-  "agents": {
-    "orchestrator": {
-      "skills": ["*"]
-    },
-    "designer": {
-      "skills": ["playwright"]
-    }
-  }
-}
-```
-
----
-
-## MCP Servers
-
-Built-in Model Context Protocol servers (enabled by default):
-
-| MCP | Purpose | URL |
-|-----|---------|-----|
-| `websearch` | Real-time web search via Exa AI | `https://mcp.exa.ai/mcp` |
-| `context7` | Official library documentation | `https://mcp.context7.com/mcp` |
-| `grep_app` | GitHub code search via grep.app | `https://mcp.grep.app` |
-
-### Disabling MCPs
-
-You can disable specific MCP servers by adding them to the `disabled_mcps` array in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson).
-
----
-
 ## Configuration
 
 ### Files You Edit
@@ -519,36 +596,36 @@ The installer generates presets for different provider combinations. Switch betw
   "preset": "antigravity-openai",
   "presets": {
     "antigravity": {
-      "orchestrator": { "model": "google/claude-opus-4-5-thinking", "skills": ["*"] },
-      "oracle": { "model": "google/claude-opus-4-5-thinking", "variant": "high", "skills": [] },
-      "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] },
-      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] },
-      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"] },
-      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] }
+      "orchestrator": { "model": "google/claude-opus-4-5-thinking", "skills": ["*"], "mcps": ["websearch"] },
+      "oracle": { "model": "google/claude-opus-4-5-thinking", "variant": "high", "skills": [], "mcps": [] },
+      "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] }
     },
     "openai": {
-      "orchestrator": { "model": "openai/gpt-5.2-codex", "skills": ["*"] },
-      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [] },
-      "librarian": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [] },
-      "explorer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [] },
-      "designer": { "model": "openai/gpt-5.1-codex-mini", "variant": "medium", "skills": ["playwright"] },
-      "fixer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [] }
+      "orchestrator": { "model": "openai/gpt-5.2-codex", "skills": ["*"], "mcps": ["websearch"] },
+      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": [] },
+      "librarian": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "openai/gpt-5.1-codex-mini", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": [] }
     },
     "zen-free": {
-      "orchestrator": { "model": "opencode/glm-4.7-free", "skills": ["*"] },
-      "oracle": { "model": "opencode/glm-4.7-free", "variant": "high", "skills": [] },
-      "librarian": { "model": "opencode/grok-code", "variant": "low", "skills": [] },
-      "explorer": { "model": "opencode/grok-code", "variant": "low", "skills": [] },
-      "designer": { "model": "opencode/grok-code", "variant": "medium", "skills": ["playwright"] },
-      "fixer": { "model": "opencode/grok-code", "variant": "low", "skills": [] }
+      "orchestrator": { "model": "opencode/grok-code", "skills": ["*"], "mcps": ["websearch"] },
+      "oracle": { "model": "opencode/grok-code", "variant": "high", "skills": [], "mcps": [] },
+      "librarian": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "opencode/grok-code", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": [] }
     },
     "antigravity-openai": {
-      "orchestrator": { "model": "google/claude-opus-4-5-thinking", "skills": ["*"] },
-      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [] },
-      "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] },
-      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] },
-      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"] },
-      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] }
+      "orchestrator": { "model": "google/claude-opus-4-5-thinking", "skills": ["*"], "mcps": ["websearch"] },
+      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": [] },
+      "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] }
     }
   },
   "tmux": {
@@ -576,12 +653,12 @@ The author's personal configuration using Cerebras for the Orchestrator:
 ```json
 {
   "cerebras": {
-    "orchestrator": { "model": "cerebras/zai-glm-4.7", "skills": ["*"] },
-    "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [] },
-    "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] },
-    "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] },
-    "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"] },
-    "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [] }
+    "orchestrator": { "model": "cerebras/zai-glm-4.7", "skills": ["*"], "mcps": ["websearch"] },
+    "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": [] },
+    "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+    "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] },
+    "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+    "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] }
   }
 }
 ```
@@ -606,11 +683,12 @@ The environment variable takes precedence over the `preset` field in the config 
 | `presets.<name>.<agent>.model` | string | - | Model ID for the agent (e.g., `"google/claude-opus-4-5-thinking"`) |
 | `presets.<name>.<agent>.temperature` | number | - | Temperature setting (0-2) for the agent |
 | `presets.<name>.<agent>.variant` | string | - | Agent variant for reasoning effort (e.g., `"low"`, `"medium"`, `"high"`) |
-| `presets.<name>.<agent>.skills` | string[] | - | Array of skill names the agent can use (`"*"` for all) |
+| `presets.<name>.<agent>.skills` | string[] | - | Array of skill names the agent can use (`"*"` for all, `"!item"` to exclude) |
+| `presets.<name>.<agent>.mcps` | string[] | - | Array of MCP names the agent can use (`"*"` for all, `"!item"` to exclude) |
 | `tmux.enabled` | boolean | `false` | Enable tmux pane spawning for sub-agents |
 | `tmux.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20-80) |
-| `disabled_mcps` | string[] | `[]` | MCP server IDs to disable (e.g., `"websearch"`) |
+| `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally (e.g., `"websearch"`) |
 
 > **Note:** Agent configuration should be defined within `presets`. The root-level `agents` field is deprecated.
 

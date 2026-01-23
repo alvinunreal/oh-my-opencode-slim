@@ -1,4 +1,5 @@
 import type { AgentName, PluginConfig } from '../../config/schema';
+import { McpNameSchema } from '../../config/schema';
 import type { SkillDefinition } from './types';
 
 /** Map old agent names to new names for backward compatibility */
@@ -7,7 +8,7 @@ const AGENT_ALIASES: Record<string, string> = {
   'frontend-ui-ux-engineer': 'designer',
 };
 
-/** Default skills per agent - "*" means all skills */
+/** Default skills per agent - "*" means all skills, "!item" excludes specific skills */
 export const DEFAULT_AGENT_SKILLS: Record<AgentName, string[]> = {
   orchestrator: ['*'],
   designer: ['playwright'],
@@ -17,7 +18,56 @@ export const DEFAULT_AGENT_SKILLS: Record<AgentName, string[]> = {
   fixer: [],
 };
 
-const YAGNI_TEMPLATE = `# YAGNI Enforcement Skill
+/** Default MCPs per agent - "*" means all MCPs, "!item" excludes specific MCPs */
+export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
+  orchestrator: ['websearch'],
+  designer: [],
+  oracle: [],
+  librarian: ['websearch', 'context7', 'grep_app'],
+  explorer: [],
+  fixer: [],
+};
+
+/**
+ * Parse a list with wildcard and exclusion syntax.
+ * Supports:
+ * - "*" to expand to all available items
+ * - "!item" to exclude specific items
+ * - Conflicts: deny wins (principle of least privilege)
+ *
+ * @param items - The list to parse (may contain "*" and "!item")
+ * @param allAvailable - All available items to expand "*" against
+ * @returns The resolved list of allowed items
+ *
+ * @example
+ * parseList(["*", "!playwright"], ["playwright", "yagni"]) // ["yagni"]
+ * parseList(["a", "c"], ["a", "b", "c"]) // ["a", "c"]
+ * parseList(["!*"], ["a", "b"]) // []
+ */
+export function parseList(items: string[], allAvailable: string[]): string[] {
+  if (!items || items.length === 0) {
+    return [];
+  }
+
+  const allow = items.filter((i) => !i.startsWith('!'));
+  const deny = items.filter((i) => i.startsWith('!')).map((i) => i.slice(1));
+
+  // Handle "!*" - deny all
+  if (deny.includes('*')) {
+    return [];
+  }
+
+  // If "*" is in allow, expand to all available minus denials
+  if (allow.includes('*')) {
+    return allAvailable.filter((item) => !deny.includes(item));
+  }
+
+  // Otherwise, return explicit allowlist minus denials
+  // Deny wins in case of conflict
+  return allow.filter((item) => !deny.includes(item));
+}
+
+const YAGNI_TEMPLATE = `# Simplify Skill
 
 You are a code simplicity expert specializing in minimalism and the YAGNI (You Aren't Gonna Need It) principle. Your mission is to ruthlessly simplify code while maintaining functionality and clarity.
 
@@ -133,7 +183,7 @@ This skill provides browser automation capabilities via the Playwright MCP serve
 5. Return results with visual proof`;
 
 const yagniEnforcementSkill: SkillDefinition = {
-  name: 'yagni-enforcement',
+  name: 'simplify',
   description:
     'Code complexity analysis and YAGNI enforcement. Use after major refactors or before finalizing PRs to simplify code.',
   template: YAGNI_TEMPLATE,
@@ -165,6 +215,16 @@ export function getSkillByName(name: string): SkillDefinition | undefined {
   return builtinSkillsMap.get(name);
 }
 
+export function getAvailableMcpNames(config?: PluginConfig): string[] {
+  const builtinMcps = McpNameSchema.options;
+  const skillMcps = getBuiltinSkills().flatMap((skill) =>
+    Object.keys(skill.mcpConfig ?? {}),
+  );
+  const disabled = new Set(config?.disabled_mcps ?? []);
+  const allMcps = Array.from(new Set([...builtinMcps, ...skillMcps]));
+  return allMcps.filter((name) => !disabled.has(name));
+}
+
 /**
  * Get skills available for a specific agent
  * @param agentName - The name of the agent
@@ -175,12 +235,11 @@ export function getSkillsForAgent(
   config?: PluginConfig,
 ): SkillDefinition[] {
   const allSkills = getBuiltinSkills();
-  const agentSkills = getAgentSkillList(agentName, config);
-
-  // "*" means all skills
-  if (agentSkills.includes('*')) {
-    return allSkills;
-  }
+  const allSkillNames = allSkills.map((s) => s.name);
+  const agentSkills = parseList(
+    getAgentSkillList(agentName, config),
+    allSkillNames,
+  );
 
   return allSkills.filter((skill) => agentSkills.includes(skill.name));
 }
@@ -193,14 +252,30 @@ export function canAgentUseSkill(
   skillName: string,
   config?: PluginConfig,
 ): boolean {
-  const agentSkills = getAgentSkillList(agentName, config);
-
-  // "*" means all skills
-  if (agentSkills.includes('*')) {
-    return true;
-  }
+  const allSkills = getBuiltinSkills();
+  const allSkillNames = allSkills.map((s) => s.name);
+  const agentSkills = parseList(
+    getAgentSkillList(agentName, config),
+    allSkillNames,
+  );
 
   return agentSkills.includes(skillName);
+}
+
+/**
+ * Check if an agent can use a specific MCP
+ */
+export function canAgentUseMcp(
+  agentName: string,
+  mcpName: string,
+  config?: PluginConfig,
+): boolean {
+  const agentMcps = parseList(
+    getAgentMcpList(agentName, config),
+    getAvailableMcpNames(config),
+  );
+
+  return agentMcps.includes(mcpName);
 }
 
 /**
@@ -222,4 +297,28 @@ function getAgentSkillList(agentName: string, config?: PluginConfig): string[] {
   // Fall back to defaults
   const defaultSkills = DEFAULT_AGENT_SKILLS[agentName as AgentName];
   return defaultSkills ?? [];
+}
+
+/**
+ * Get the MCP list for an agent (from config or defaults)
+ * Supports backward compatibility with old agent names via AGENT_ALIASES
+ */
+export function getAgentMcpList(
+  agentName: string,
+  config?: PluginConfig,
+): string[] {
+  // Check if config has override for this agent (new name first, then alias)
+  const agentConfig =
+    config?.agents?.[agentName] ??
+    config?.agents?.[
+      Object.keys(AGENT_ALIASES).find((k) => AGENT_ALIASES[k] === agentName) ??
+        ''
+    ];
+  if (agentConfig?.mcps !== undefined) {
+    return agentConfig.mcps;
+  }
+
+  // Fall back to defaults
+  const defaultMcps = DEFAULT_AGENT_MCPS[agentName as AgentName];
+  return defaultMcps ?? [];
 }

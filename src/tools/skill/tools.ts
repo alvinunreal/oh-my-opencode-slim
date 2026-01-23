@@ -6,12 +6,14 @@ import type {
 import { type ToolDefinition, tool } from '@opencode-ai/plugin';
 import type { PluginConfig } from '../../config/schema';
 import {
+  canAgentUseMcp,
   canAgentUseSkill,
   getBuiltinSkills,
   getSkillByName,
   getSkillsForAgent,
 } from './builtin';
 import {
+  SKILL_LIST_TOOL_DESCRIPTION,
   SKILL_MCP_TOOL_DESCRIPTION,
   SKILL_TOOL_DESCRIPTION,
 } from './constants';
@@ -25,28 +27,20 @@ type ToolContext = {
   abort: AbortSignal;
 };
 
-function formatSkillsXml(skills: SkillDefinition[]): string {
-  if (skills.length === 0) return '';
+function formatSkillsList(skills: SkillDefinition[]): string {
+  if (skills.length === 0) return 'No skills available for this agent.';
 
-  const skillsXml = skills
-    .map((skill) => {
-      const lines = [
-        '  <skill>',
-        `    <name>${skill.name}</name>`,
-        `    <description>${skill.description}</description>`,
-        '  </skill>',
-      ];
-      return lines.join('\n');
-    })
+  return skills
+    .map((skill) => `- ${skill.name}: ${skill.description}`)
     .join('\n');
-
-  return `\n\n<available_skills>\n${skillsXml}\n</available_skills>`;
 }
 
 async function formatMcpCapabilities(
   skill: SkillDefinition,
   manager: SkillMcpManager,
   sessionId: string,
+  agentName: string,
+  pluginConfig?: PluginConfig,
 ): Promise<string | null> {
   if (!skill.mcpConfig || Object.keys(skill.mcpConfig).length === 0) {
     return null;
@@ -55,6 +49,11 @@ async function formatMcpCapabilities(
   const sections: string[] = ['', '## Available MCP Servers', ''];
 
   for (const [serverName, config] of Object.entries(skill.mcpConfig)) {
+    // Check if this agent can use this MCP
+    if (!canAgentUseMcp(agentName, serverName, pluginConfig)) {
+      continue; // Skip this MCP - agent doesn't have permission
+    }
+
     const info = {
       serverName,
       skillName: skill.name,
@@ -128,11 +127,13 @@ async function formatMcpCapabilities(
 export function createSkillTools(
   manager: SkillMcpManager,
   pluginConfig?: PluginConfig,
-): { omos_skill: ToolDefinition; omos_skill_mcp: ToolDefinition } {
+): {
+  omos_skill: ToolDefinition;
+  omos_skill_list: ToolDefinition;
+  omos_skill_mcp: ToolDefinition;
+} {
   const allSkills = getBuiltinSkills();
-  const description =
-    SKILL_TOOL_DESCRIPTION +
-    (allSkills.length > 0 ? formatSkillsXml(allSkills) : '');
+  const description = SKILL_TOOL_DESCRIPTION;
 
   const skill: ToolDefinition = tool({
     description,
@@ -175,6 +176,8 @@ export function createSkillTools(
           skillDefinition,
           manager,
           sessionId,
+          agentName,
+          pluginConfig,
         );
         if (mcpInfo) {
           output.push(mcpInfo);
@@ -182,6 +185,17 @@ export function createSkillTools(
       }
 
       return output.join('\n');
+    },
+  });
+
+  const skill_list: ToolDefinition = tool({
+    description: SKILL_LIST_TOOL_DESCRIPTION,
+    args: {},
+    async execute(_, toolContext) {
+      const tctx = toolContext as ToolContext | undefined;
+      const agentName = tctx?.agent ?? 'orchestrator';
+      const skills = getSkillsForAgent(agentName, pluginConfig);
+      return formatSkillsList(skills);
     },
   });
 
@@ -217,6 +231,13 @@ export function createSkillTools(
         );
       }
 
+      // Check if this agent can use this MCP
+      if (!canAgentUseMcp(agentName, args.mcpName, pluginConfig)) {
+        throw new Error(
+          `Agent "${agentName}" cannot use MCP "${args.mcpName}".`,
+        );
+      }
+
       if (
         !skillDefinition.mcpConfig ||
         !skillDefinition.mcpConfig[args.mcpName]
@@ -248,5 +269,9 @@ export function createSkillTools(
     },
   });
 
-  return { omos_skill: skill, omos_skill_mcp: skill_mcp };
+  return {
+    omos_skill: skill,
+    omos_skill_list: skill_list,
+    omos_skill_mcp: skill_mcp,
+  };
 }

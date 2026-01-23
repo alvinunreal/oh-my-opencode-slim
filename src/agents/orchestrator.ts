@@ -158,7 +158,7 @@ Before executing, ask yourself: should the task split into subtasks and schedule
 
 ## Phase 6: Verify
 - Run \`lsp_diagnostics\` to check for errors
-- Suggest user run \`yagni-enforcement\` skill when applicable
+- Suggest user run \`simplify\` skill when applicable
 - Verify all delegated tasks completed successfully
 - Confirm the solution meets original requirements (Phase 1)
 
