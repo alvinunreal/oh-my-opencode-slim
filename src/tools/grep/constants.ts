@@ -2,10 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-    downloadAndInstallRipgrep,
-    getInstalledRipgrepPath,
+  downloadAndInstallRipgrep,
+  getInstalledRipgrepPath,
 } from './downloader';
-import { homedir } from "os";
+import { homedir } from 'os';
 
 
 export type GrepBackend = 'rg' | 'grep';
@@ -26,7 +26,7 @@ function findExecutable(name: string): string | null {
     const result = spawnSync(cmd, [name], { encoding: 'utf-8', timeout: 5000 });
     if (result.status === 0 && result.stdout.trim()) {
       // Handle both Unix (\n) and Windows (\r\n) line endings
-      return result.stdout.trim().split(/\r?\n/)[0]
+      return result.stdout.trim().split(/\r?\n/)[0];
     }
   } catch {
     // Command execution failed
@@ -43,7 +43,7 @@ function getOpenCodeBundledRg(): string | null {
 
   const candidates = [
     // OpenCode XDG data path (highest priority - where OpenCode installs rg)
-    join(homedir(), ".opencode", "bin", rgName),
+    join(homedir(), '.opencode', 'bin', rgName),
     // Legacy paths relative to execPath
     join(execDir, rgName),
     join(execDir, 'bin', rgName),
