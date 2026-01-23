@@ -21,9 +21,9 @@ import {
   lsp_rename,
   SkillMcpManager,
 } from './tools';
+import { parseList } from './tools/skill/builtin';
 import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
-import { parseList } from './tools/skill/builtin';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
@@ -103,7 +103,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       } else {
         Object.assign(opencodeConfig.agent, agents);
       }
-      const configAgent = opencodeConfig.agent as Record<string, any>;
+      const configAgent = opencodeConfig.agent as Record<string, unknown>;
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as
@@ -127,7 +127,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (!configAgent[agentName]) {
           configAgent[agentName] = { ...agentConfig };
         }
-        const agentPermission = (configAgent[agentName].permission ?? {}) as Record<string, unknown>;
+        const agentConfigEntry = configAgent[agentName] as Record<
+          string,
+          unknown
+        >;
+        const agentPermission = (agentConfigEntry.permission ?? {}) as Record<
+          string,
+          unknown
+        >;
 
         // Parse mcps list with wildcard and exclusion support
         const allowedMcps = parseList(agentMcps, allMcpNames);
@@ -146,7 +153,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
 
         // Update agent config with permissions
-        configAgent[agentName].permission = agentPermission;
+        agentConfigEntry.permission = agentPermission;
       }
     },
 

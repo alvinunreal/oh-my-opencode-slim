@@ -96,7 +96,7 @@ export async function extractZip(
   const exitCode = await proc.exited;
 
   if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr as any).text();
+    const stderr = await new Response(proc.stderr as ReadableStream).text();
     throw new Error(`zip extraction failed (exit ${exitCode}): ${stderr}`);
   }
 }

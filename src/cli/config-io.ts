@@ -297,9 +297,9 @@ export function detectCurrentConfig(): DetectedConfig {
   // Try to detect from lite config
   const { config: liteConfig } = parseConfig(getLiteConfig());
   if (liteConfig && typeof liteConfig === 'object') {
-    const configObj = liteConfig as Record<string, any>;
+    const configObj = liteConfig as Record<string, unknown>;
     const presetName = configObj.preset as string;
-    const presets = configObj.presets as Record<string, any>;
+    const presets = configObj.presets as Record<string, unknown>;
     const agents = presets?.[presetName] as
       | Record<string, { model?: string }>
       | undefined;
@@ -313,7 +313,8 @@ export function detectCurrentConfig(): DetectedConfig {
     }
 
     if (configObj.tmux && typeof configObj.tmux === 'object') {
-      result.hasTmux = configObj.tmux.enabled === true;
+      const tmuxConfig = configObj.tmux as { enabled?: boolean };
+      result.hasTmux = tmuxConfig.enabled === true;
     }
   }
 
