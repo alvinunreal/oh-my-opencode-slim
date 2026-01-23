@@ -44,23 +44,24 @@
   - [YAGNI Enforcement](#yagni-enforcement)
   - [Playwright Integration](#playwright-integration)
   - [Customizing Agent Skills](#customizing-agent-skills)
+- [🔌 **MCP Servers**](#mcp-servers)
+  - [MCP Permissions](#mcp-permissions)
+  - [MCP Syntax](#mcp-syntax)
+  - [Disabling MCPs](#disabling-mcps)
+  - [Customizing MCP Permissions](#customizing-mcp-permissions)
 - [🛠️ **Tools & Capabilities**](#tools--capabilities)
   - [Tmux Integration](#tmux-integration)
   - [Quota Tool](#quota-tool)
   - [Background Tasks](#background-tasks)
   - [LSP Tools](#lsp-tools)
   - [Code Search Tools](#code-search-tools)
-- [🔌 **MCP Servers**](#mcp-servers)
-  - [MCP Permissions](#mcp-permissions)
-  - [MCP Syntax](#mcp-syntax)
-  - [Disabling MCPs](#disabling-mcps)
-  - [Customizing MCP Permissions](#customizing-mcp-permissions)
+  - [Formatters](#formatters)
 - [⚙️ **Configuration**](#configuration)
   - [Files You Edit](#files-you-edit)
   - [Prompt Overriding](#prompt-overriding)
   - [Plugin Config](#plugin-config-oh-my-opencode-slimjson)
     - [Presets](#presets)
-    - [Option Reference](#option-reference)
+      - [Option Reference](#option-reference)
 - [🗑️ **Uninstallation**](#uninstallation)
 
 ---
@@ -283,7 +284,181 @@ Code implementation, refactoring, testing, verification. *Execute the plan - no 
 
 ---
 
-## Tools & Capabilities
+## 🧩 Skills
+
+Skills are specialized capabilities that agents can use. Each agent has a default set of skills, which you can override in the agent config.
+
+### Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| `yagni-enforcement` | Code complexity analysis and YAGNI enforcement |
+| `playwright` | Browser automation via Playwright MCP |
+
+### Default Skill Assignments
+
+| Agent | Default Skills |
+|-------|----------------|
+| `orchestrator` | `*` (all skills) |
+| `designer` | `playwright` |
+| `oracle` | none |
+| `librarian` | none |
+| `explorer` | none |
+| `fixer` | none |
+
+### Skill Syntax
+
+Skills support wildcard and exclusion syntax for flexible control:
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `"*"` | All skills | `["*"]` |
+| `"!item"` | Exclude specific skill | `["*", "!playwright"]` |
+| Explicit list | Only listed skills | `["yagni-enforcement", "playwright"]` |
+| `"!*"` | Deny all skills | `["!*"]` |
+
+**Rules:**
+- `*` expands to all available skills
+- `!item` excludes specific skills
+- Conflicts (e.g., `["a", "!a"]`) → deny wins (principle of least privilege)
+- Empty list `[]` → no skills allowed
+
+### YAGNI Enforcement
+
+**The Minimalist's sacred truth: every line of code is a liability.**
+
+Use after major refactors or before finalizing PRs. Identifies unnecessary complexity, challenges premature abstractions, estimates LOC reduction, and enforces minimalism.
+
+### Playwright Integration
+
+**Browser automation for visual verification and testing.**
+
+- **Browser Automation**: Full Playwright capabilities (browsing, clicking, typing, scraping).
+- **Screenshots**: Capture visual state of any web page.
+- **Sandboxed Output**: Screenshots saved to session subdirectory (check tool output for path).
+
+### Customizing Agent Skills
+
+Override skills per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
+
+```json
+{
+  "presets": {
+    "my-preset": {
+      "orchestrator": {
+        "skills": ["*", "!playwright"]
+      },
+      "designer": {
+        "skills": ["playwright", "yagni-enforcement"]
+      }
+    }
+  }
+}
+```
+
+**Examples:**
+
+```json
+// Orchestrator gets all skills except playwright
+"orchestrator": { "skills": ["*", "!playwright"] }
+
+// Designer gets only specific skills
+"designer": { "skills": ["playwright", "yagni-enforcement"] }
+
+// Oracle gets no skills
+"oracle": { "skills": [] }
+
+// Librarian gets all skills
+"librarian": { "skills": ["*"] }
+```
+
+---
+
+## 🔌 MCP Servers
+
+Built-in Model Context Protocol servers (enabled by default):
+
+| MCP | Purpose | URL |
+|-----|---------|-----|
+| `websearch` | Real-time web search via Exa AI | `https://mcp.exa.ai/mcp` |
+| `context7` | Official library documentation | `https://mcp.context7.com/mcp` |
+| `grep_app` | GitHub code search via grep.app | `https://mcp.grep.app` |
+
+### MCP Permissions
+
+Control which agents can access which MCP servers using per-agent allowlists:
+
+| Agent | Default MCPs |
+|-------|--------------|
+| `orchestrator` | `websearch` |
+| `designer` | none |
+| `oracle` | none |
+| `librarian` | `websearch`, `context7`, `grep_app` |
+| `explorer` | none |
+| `fixer` | none |
+
+### MCP Syntax
+
+MCPs support wildcard and exclusion syntax (same as skills):
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `"*"` | All MCPs | `["*"]` |
+| `"!item"` | Exclude specific MCP | `["*", "!context7"]` |
+| Explicit list | Only listed MCPs | `["websearch", "context7"]` |
+| `"!*"` | Deny all MCPs | `["!*"]` |
+
+**Rules:**
+- `*` expands to all available MCPs
+- `!item` excludes specific MCPs
+- Conflicts (e.g., `["a", "!a"]`) → deny wins
+- Empty list `[]` → no MCPs allowed
+
+### Disabling MCPs
+
+You can disable specific MCP servers globally by adding them to the `disabled_mcps` array in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson).
+
+### Customizing MCP Permissions
+
+Override MCP access per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
+
+```json
+{
+  "presets": {
+    "my-preset": {
+      "orchestrator": {
+        "mcps": ["websearch"]
+      },
+      "librarian": {
+        "mcps": ["websearch", "context7", "grep_app"]
+      },
+      "oracle": {
+        "mcps": ["*", "!websearch"]
+      }
+    }
+  }
+}
+```
+
+**Examples:**
+
+```json
+// Orchestrator gets only websearch
+"orchestrator": { "mcps": ["websearch"] }
+
+// Librarian gets all three MCPs
+"librarian": { "mcps": ["websearch", "context7", "grep_app"] }
+
+// Oracle gets all MCPs except websearch
+"oracle": { "mcps": ["*", "!websearch"] }
+
+// Designer gets no MCPs
+"designer": { "mcps": [] }
+```
+
+---
+
+## 🛠️ Tools & Capabilities
 
 ### Tmux Integration
 
@@ -394,180 +569,6 @@ OpenCode automatically formats files after they're written or edited using langu
 
 ---
 
-## 🧩 Skills
-
-Skills are specialized capabilities that agents can use. Each agent has a default set of skills, which you can override in the agent config.
-
-### Available Skills
-
-| Skill | Description |
-|-------|-------------|
-| `yagni-enforcement` | Code complexity analysis and YAGNI enforcement |
-| `playwright` | Browser automation via Playwright MCP |
-
-### Default Skill Assignments
-
-| Agent | Default Skills |
-|-------|----------------|
-| `orchestrator` | `*` (all skills) |
-| `designer` | `playwright` |
-| `oracle` | none |
-| `librarian` | none |
-| `explorer` | none |
-| `fixer` | none |
-
-### Skill Syntax
-
-Skills support wildcard and exclusion syntax for flexible control:
-
-| Syntax | Description | Example |
-|--------|-------------|---------|
-| `"*"` | All skills | `["*"]` |
-| `"!item"` | Exclude specific skill | `["*", "!playwright"]` |
-| Explicit list | Only listed skills | `["yagni-enforcement", "playwright"]` |
-| `"!*"` | Deny all skills | `["!*"]` |
-
-**Rules:**
-- `*` expands to all available skills
-- `!item` excludes specific skills
-- Conflicts (e.g., `["a", "!a"]`) → deny wins (principle of least privilege)
-- Empty list `[]` → no skills allowed
-
-### YAGNI Enforcement
-
-**The Minimalist's sacred truth: every line of code is a liability.**
-
-Use after major refactors or before finalizing PRs. Identifies unnecessary complexity, challenges premature abstractions, estimates LOC reduction, and enforces minimalism.
-
-### Playwright Integration
-
-**Browser automation for visual verification and testing.**
-
-- **Browser Automation**: Full Playwright capabilities (browsing, clicking, typing, scraping).
-- **Screenshots**: Capture visual state of any web page.
-- **Sandboxed Output**: Screenshots saved to session subdirectory (check tool output for path).
-
-### Customizing Agent Skills
-
-Override skills per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
-
-```json
-{
-  "presets": {
-    "my-preset": {
-      "orchestrator": {
-        "skills": ["*", "!playwright"]
-      },
-      "designer": {
-        "skills": ["playwright", "yagni-enforcement"]
-      }
-    }
-  }
-}
-```
-
-**Examples:**
-
-```json
-// Orchestrator gets all skills except playwright
-"orchestrator": { "skills": ["*", "!playwright"] }
-
-// Designer gets only specific skills
-"designer": { "skills": ["playwright", "yagni-enforcement"] }
-
-// Oracle gets no skills
-"oracle": { "skills": [] }
-
-// Librarian gets all skills
-"librarian": { "skills": ["*"] }
-```
-
----
-
-## MCP Servers
-
-Built-in Model Context Protocol servers (enabled by default):
-
-| MCP | Purpose | URL |
-|-----|---------|-----|
-| `websearch` | Real-time web search via Exa AI | `https://mcp.exa.ai/mcp` |
-| `context7` | Official library documentation | `https://mcp.context7.com/mcp` |
-| `grep_app` | GitHub code search via grep.app | `https://mcp.grep.app` |
-
-### MCP Permissions
-
-Control which agents can access which MCP servers using per-agent allowlists:
-
-| Agent | Default MCPs |
-|-------|--------------|
-| `orchestrator` | `websearch` |
-| `designer` | `websearch` |
-| `oracle` | `websearch`, `context7`, `grep_app` |
-| `librarian` | `websearch`, `context7`, `grep_app` |
-| `explorer` | `websearch` |
-| `fixer` | `websearch` |
-
-### MCP Syntax
-
-MCPs support wildcard and exclusion syntax (same as skills):
-
-| Syntax | Description | Example |
-|--------|-------------|---------|
-| `"*"` | All MCPs | `["*"]` |
-| `"!item"` | Exclude specific MCP | `["*", "!context7"]` |
-| Explicit list | Only listed MCPs | `["websearch", "context7"]` |
-| `"!*"` | Deny all MCPs | `["!*"]` |
-
-**Rules:**
-- `*` expands to all available MCPs
-- `!item` excludes specific MCPs
-- Conflicts (e.g., `["a", "!a"]`) → deny wins
-- Empty list `[]` → no MCPs allowed
-
-### Disabling MCPs
-
-You can disable specific MCP servers globally by adding them to the `disabled_mcps` array in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson).
-
-### Customizing MCP Permissions
-
-Override MCP access per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-slimjson):
-
-```json
-{
-  "presets": {
-    "my-preset": {
-      "orchestrator": {
-        "mcps": ["websearch"]
-      },
-      "librarian": {
-        "mcps": ["websearch", "context7", "grep_app"]
-      },
-      "oracle": {
-        "mcps": ["*", "!websearch"]
-      }
-    }
-  }
-}
-```
-
-**Examples:**
-
-```json
-// Orchestrator gets only websearch
-"orchestrator": { "mcps": ["websearch"] }
-
-// Librarian gets all three MCPs
-"librarian": { "mcps": ["websearch", "context7", "grep_app"] }
-
-// Oracle gets all MCPs except websearch
-"oracle": { "mcps": ["*", "!websearch"] }
-
-// Designer gets no MCPs
-"designer": { "mcps": [] }
-```
-
----
-
 ## Configuration
 
 ### Files You Edit
@@ -628,35 +629,35 @@ The installer generates presets for different provider combinations. Switch betw
   "presets": {
     "antigravity": {
       "orchestrator": { "model": "google/claude-opus-4-5-thinking", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "google/claude-opus-4-5-thinking", "variant": "high", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "oracle": { "model": "google/claude-opus-4-5-thinking", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch"] },
-      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": ["websearch"] },
-      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch"] }
+      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] }
     },
     "openai": {
       "orchestrator": { "model": "openai/gpt-5.2-codex", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": ["websearch"] },
-      "designer": { "model": "openai/gpt-5.1-codex-mini", "variant": "medium", "skills": ["playwright"], "mcps": ["websearch"] },
-      "fixer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": ["websearch"] }
+      "explorer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "openai/gpt-5.1-codex-mini", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": [] }
     },
     "zen-free": {
       "orchestrator": { "model": "opencode/glm-4.7-free", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "opencode/glm-4.7-free", "variant": "high", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "oracle": { "model": "opencode/glm-4.7-free", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": ["websearch"] },
-      "designer": { "model": "opencode/grok-code", "variant": "medium", "skills": ["playwright"], "mcps": ["websearch"] },
-      "fixer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": ["websearch"] }
+      "explorer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "opencode/grok-code", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": [] }
     },
     "antigravity-openai": {
       "orchestrator": { "model": "google/claude-opus-4-5-thinking", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch"] },
-      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": ["websearch"] },
-      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch"] }
+      "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+      "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] }
     }
   },
   "tmux": {
@@ -685,11 +686,11 @@ The author's personal configuration using Cerebras for the Orchestrator:
 {
   "cerebras": {
     "orchestrator": { "model": "cerebras/zai-glm-4.7", "skills": ["*"], "mcps": ["websearch"] },
-    "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+    "oracle": { "model": "openai/gpt-5.2-codex", "variant": "high", "skills": [], "mcps": [] },
     "librarian": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-    "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch"] },
-    "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": ["websearch"] },
-    "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": ["websearch"] }
+    "explorer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] },
+    "designer": { "model": "google/gemini-3-flash", "variant": "medium", "skills": ["playwright"], "mcps": [] },
+    "fixer": { "model": "google/gemini-3-flash", "variant": "low", "skills": [], "mcps": [] }
   }
 }
 ```

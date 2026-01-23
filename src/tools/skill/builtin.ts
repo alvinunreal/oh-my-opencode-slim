@@ -20,11 +20,11 @@ export const DEFAULT_AGENT_SKILLS: Record<AgentName, string[]> = {
 /** Default MCPs per agent - "*" means all MCPs, "!item" excludes specific MCPs */
 export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
   orchestrator: ['websearch'],
-  designer: ['websearch'],
-  oracle: ['websearch', 'context7', 'grep_app'],
+  designer: [],
+  oracle: [],
   librarian: ['websearch', 'context7', 'grep_app'],
-  explorer: ['websearch'],
-  fixer: ['websearch'],
+  explorer: [],
+  fixer: [],
 };
 
 /**
