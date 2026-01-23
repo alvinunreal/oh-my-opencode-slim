@@ -7,7 +7,7 @@ const AGENT_ALIASES: Record<string, string> = {
   'frontend-ui-ux-engineer': 'designer',
 };
 
-/** Default skills per agent - "*" means all skills */
+/** Default skills per agent - "*" means all skills, "!item" excludes specific skills */
 export const DEFAULT_AGENT_SKILLS: Record<AgentName, string[]> = {
   orchestrator: ['*'],
   designer: ['playwright'],
@@ -17,7 +17,7 @@ export const DEFAULT_AGENT_SKILLS: Record<AgentName, string[]> = {
   fixer: [],
 };
 
-/** Default MCPs per agent - "*" means all MCPs */
+/** Default MCPs per agent - "*" means all MCPs, "!item" excludes specific MCPs */
 export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
   orchestrator: ['websearch'],
   designer: ['websearch'],
@@ -26,6 +26,48 @@ export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
   explorer: ['websearch'],
   fixer: ['websearch'],
 };
+
+/**
+ * Parse a list with wildcard and exclusion syntax.
+ * Supports:
+ * - "*" to expand to all available items
+ * - "!item" to exclude specific items
+ * - Conflicts: deny wins (principle of least privilege)
+ *
+ * @param items - The list to parse (may contain "*" and "!item")
+ * @param allAvailable - All available items to expand "*" against
+ * @returns The resolved list of allowed items
+ *
+ * @example
+ * parseList(["*", "!playwright"], ["playwright", "yagni"]) // ["yagni"]
+ * parseList(["a", "c"], ["a", "b", "c"]) // ["a", "c"]
+ * parseList(["!*"], ["a", "b"]) // []
+ */
+export function parseList(
+  items: string[],
+  allAvailable: string[],
+): string[] {
+  if (!items || items.length === 0) {
+    return [];
+  }
+
+  const allow = items.filter((i) => !i.startsWith('!'));
+  const deny = items.filter((i) => i.startsWith('!')).map((i) => i.slice(1));
+
+  // Handle "!*" - deny all
+  if (deny.includes('*')) {
+    return [];
+  }
+
+  // If "*" is in allow, expand to all available minus denials
+  if (allow.includes('*')) {
+    return allAvailable.filter((item) => !deny.includes(item));
+  }
+
+  // Otherwise, return explicit allowlist minus denials
+  // Deny wins in case of conflict
+  return allow.filter((item) => !deny.includes(item));
+}
 
 const YAGNI_TEMPLATE = `# YAGNI Enforcement Skill
 
@@ -185,12 +227,11 @@ export function getSkillsForAgent(
   config?: PluginConfig,
 ): SkillDefinition[] {
   const allSkills = getBuiltinSkills();
-  const agentSkills = getAgentSkillList(agentName, config);
-
-  // "*" means all skills
-  if (agentSkills.includes('*')) {
-    return allSkills;
-  }
+  const allSkillNames = allSkills.map((s) => s.name);
+  const agentSkills = parseList(
+    getAgentSkillList(agentName, config),
+    allSkillNames,
+  );
 
   return allSkills.filter((skill) => agentSkills.includes(skill.name));
 }
@@ -203,12 +244,12 @@ export function canAgentUseSkill(
   skillName: string,
   config?: PluginConfig,
 ): boolean {
-  const agentSkills = getAgentSkillList(agentName, config);
-
-  // "*" means all skills
-  if (agentSkills.includes('*')) {
-    return true;
-  }
+  const allSkills = getBuiltinSkills();
+  const allSkillNames = allSkills.map((s) => s.name);
+  const agentSkills = parseList(
+    getAgentSkillList(agentName, config),
+    allSkillNames,
+  );
 
   return agentSkills.includes(skillName);
 }
@@ -221,12 +262,10 @@ export function canAgentUseMcp(
   mcpName: string,
   config?: PluginConfig,
 ): boolean {
-  const agentMcps = getAgentMcpList(agentName, config);
-
-  // "*" means all MCPs
-  if (agentMcps.includes('*')) {
-    return true;
-  }
+  const agentMcps = parseList(
+    getAgentMcpList(agentName, config),
+    Object.keys(DEFAULT_AGENT_MCPS.orchestrator), // All available MCPs
+  );
 
   return agentMcps.includes(mcpName);
 }

@@ -23,7 +23,7 @@ import {
 } from './tools';
 import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
-import { canAgentUseMcp } from './tools/skill/builtin';
+import { canAgentUseMcp, parseList } from './tools/skill/builtin';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
@@ -135,10 +135,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
         const agentPermission = (configAgent[agentName].permission ?? {}) as Record<string, unknown>;
 
-        // Determine which MCPs this agent can use
-        const allowedMcps = agentMcps.includes('*')
-          ? allMcpNames
-          : agentMcps.filter((m) => allMcpNames.includes(m));
+        // Parse mcps list with wildcard and exclusion support
+        const allowedMcps = parseList(agentMcps, allMcpNames);
 
         // Create permission rules for each MCP
         // MCP tools are named as <server>_<tool>, so we use <server>_*
