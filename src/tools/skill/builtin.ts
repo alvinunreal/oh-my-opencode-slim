@@ -1,4 +1,5 @@
 import type { AgentName, PluginConfig } from '../../config/schema';
+import { McpNameSchema } from '../../config/schema';
 import type { SkillDefinition } from './types';
 
 /** Map old agent names to new names for backward compatibility */
@@ -214,6 +215,16 @@ export function getSkillByName(name: string): SkillDefinition | undefined {
   return builtinSkillsMap.get(name);
 }
 
+export function getAvailableMcpNames(config?: PluginConfig): string[] {
+  const builtinMcps = McpNameSchema.options;
+  const skillMcps = getBuiltinSkills().flatMap((skill) =>
+    Object.keys(skill.mcpConfig ?? {}),
+  );
+  const disabled = new Set(config?.disabled_mcps ?? []);
+  const allMcps = Array.from(new Set([...builtinMcps, ...skillMcps]));
+  return allMcps.filter((name) => !disabled.has(name));
+}
+
 /**
  * Get skills available for a specific agent
  * @param agentName - The name of the agent
@@ -261,7 +272,7 @@ export function canAgentUseMcp(
 ): boolean {
   const agentMcps = parseList(
     getAgentMcpList(agentName, config),
-    Object.keys(DEFAULT_AGENT_MCPS.orchestrator), // All available MCPs
+    getAvailableMcpNames(config),
   );
 
   return agentMcps.includes(mcpName);

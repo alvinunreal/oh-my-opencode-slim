@@ -356,22 +356,6 @@ Override skills per-agent in your [Plugin Config](#plugin-config-oh-my-opencode-
 }
 ```
 
-**Examples:**
-
-```json
-// Orchestrator gets all skills except playwright
-"orchestrator": { "skills": ["*", "!playwright"] }
-
-// Designer gets only specific skills
-"designer": { "skills": ["playwright", "simplify"] }
-
-// Oracle gets no skills
-"oracle": { "skills": [] }
-
-// Librarian gets all skills
-"librarian": { "skills": ["*"] }
-```
-
 ---
 
 ## 🔌 MCP Servers
@@ -438,22 +422,6 @@ Override MCP access per-agent in your [Plugin Config](#plugin-config-oh-my-openc
     }
   }
 }
-```
-
-**Examples:**
-
-```json
-// Orchestrator gets only websearch
-"orchestrator": { "mcps": ["websearch"] }
-
-// Librarian gets all three MCPs
-"librarian": { "mcps": ["websearch", "context7", "grep_app"] }
-
-// Oracle gets all MCPs except websearch
-"oracle": { "mcps": ["*", "!websearch"] }
-
-// Designer gets no MCPs
-"designer": { "mcps": [] }
 ```
 
 ---
@@ -644,8 +612,8 @@ The installer generates presets for different provider combinations. Switch betw
       "fixer": { "model": "openai/gpt-5.1-codex-mini", "variant": "low", "skills": [], "mcps": [] }
     },
     "zen-free": {
-      "orchestrator": { "model": "opencode/glm-4.7-free", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "opencode/glm-4.7-free", "variant": "high", "skills": [], "mcps": [] },
+      "orchestrator": { "model": "opencode/grok-code", "skills": ["*"], "mcps": ["websearch"] },
+      "oracle": { "model": "opencode/grok-code", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
       "explorer": { "model": "opencode/grok-code", "variant": "low", "skills": [], "mcps": [] },
       "designer": { "model": "opencode/grok-code", "variant": "medium", "skills": ["playwright"], "mcps": [] },

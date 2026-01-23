@@ -6,7 +6,7 @@ import {
   type PluginConfig,
   SUBAGENT_NAMES,
 } from '../config';
-import { canAgentUseMcp, DEFAULT_AGENT_MCPS, getAgentMcpList } from '../tools/skill/builtin';
+import { getAgentMcpList } from '../tools/skill/builtin';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';

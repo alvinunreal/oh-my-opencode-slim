@@ -23,7 +23,7 @@ import {
 } from './tools';
 import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
-import { canAgentUseMcp, parseList } from './tools/skill/builtin';
+import { parseList } from './tools/skill/builtin';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
@@ -114,12 +114,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       } else {
         Object.assign(configMcp, mcps);
       }
-
-      // Compile MCP permissions into PermissionNext rules
-      // This maps our simple mcps config to opencode's permission system
-      const permissionConfig = opencodeConfig.permission as
-        | Record<string, unknown>
-        | undefined;
 
       // Get all MCP names from our config
       const allMcpNames = Object.keys(mcps);
