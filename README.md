@@ -14,48 +14,50 @@
 
 ---
 
-## ⚡ Quick Navigation
+## Table of Contents
 
-- [🚀 **Installation**](#installation)
+- [📦 Installation](#-installation)
   - [For Humans](#for-humans)
   - [For LLM Agents](#for-llm-agents)
-- [🏛️ **Meet the Pantheon**](#meet-the-pantheon)
-  - [Orchestrator](#orchestrator-the-embodiment-of-order)
-  - [Explorer](#explorer-the-eternal-wanderer)
-  - [Oracle](#oracle-the-guardian-of-paths)
-  - [Librarian](#librarian-the-weaver-of-knowledge)
-  - [Designer](#designer-the-guardian-of-aesthetics)
-  - [Fixer](#fixer-the-last-builder)
-- [🧩 **Skills**](#-skills)
+- [🏛️ Meet the Pantheon](#-meet-the-pantheon)
+  - [Orchestrator: The Embodiment Of Order](#orchestrator-the-embodiment-of-order)
+  - [Explorer: The Eternal Wanderer](#explorer-the-eternal-wanderer)
+  - [Oracle: The Guardian of Paths](#oracle-the-guardian-of-paths)
+  - [Librarian: The Weaver of Knowledge](#librarian-the-weaver-of-knowledge)
+  - [Designer: The Guardian of Aesthetics](#designer-the-guardian-of-aesthetics)
+  - [Fixer: The Last Builder](#fixer-the-last-builder)
+- [🧩 Skills](#-skills)
   - [Available Skills](#available-skills)
   - [Default Skill Assignments](#default-skill-assignments)
-  - [Skill Syntax](#skill-syntax)
-- [Simplify](#simplify)
+  - [Configuration & Syntax](#configuration--syntax)
+  - [Simplify](#simplify)
   - [Playwright Integration](#playwright-integration)
-  - [Customizing Agent Skills](#customizing-agent-skills)
-- [🔌 **MCP Servers**](#mcp-servers)
+- [🔌 MCP Servers](#-mcp-servers)
   - [MCP Permissions](#mcp-permissions)
-  - [MCP Syntax](#mcp-syntax)
-  - [Disabling MCPs](#disabling-mcps)
-  - [Customizing MCP Permissions](#customizing-mcp-permissions)
-- [🛠️ **Tools & Capabilities**](#tools--capabilities)
+  - [Configuration & Syntax](#configuration--syntax-1)
+- [🛠️ Tools & Capabilities](#️-tools--capabilities)
   - [Tmux Integration](#tmux-integration)
+    - [Quick Setup](#quick-setup)
+    - [Layout Options](#layout-options)
   - [Quota Tool](#quota-tool)
   - [Background Tasks](#background-tasks)
   - [LSP Tools](#lsp-tools)
   - [Code Search Tools](#code-search-tools)
   - [Formatters](#formatters)
-- [⚙️ **Configuration**](#configuration)
+- [⚙️ Configuration](#️-configuration)
   - [Files You Edit](#files-you-edit)
   - [Prompt Overriding](#prompt-overriding)
-  - [Plugin Config](#plugin-config-oh-my-opencode-slimjson)
+  - [Plugin Config (oh-my-opencode-slim.json)](#plugin-config-oh-my-opencode-slimjson)
     - [Presets](#presets)
-      - [Option Reference](#option-reference)
-- [🗑️ **Uninstallation**](#uninstallation)
+    - [Author's Preset](#authors-preset)
+    - [Option Reference](#option-reference)
+- [🗑️ Uninstallation](#️-uninstallation)
+- [🙏 Credits](#-credits)
+- [📄 License](#-license)
 
 ---
 
-## Installation
+## 📦 Installation
 
 ### For Humans
 
@@ -187,17 +189,19 @@ Then manually create the config files at:
 
 ---
 
-## Meet the Pantheon
+## 🏛️ Meet the Pantheon
 
 ### Orchestrator: The Embodiment Of Order
 
 <a href="src/agents/orchestrator.ts"><img src="img/orchestrator.png" alt="Orchestrator" align="right" width="240"></a>
 
-> **The Orchestrator** was born when the first codebase collapsed under its own complexity. Neither god nor mortal would claim responsibility - so The Orchestrator emerged from the void, forging order from chaos. They don't merely command armies; they fight alongside them. Every line of code passes through their hands before they decide which lesser deity deserves a piece of the puzzle.
+> **The Orchestrator** was born when the first codebase collapsed under its own complexity. Neither god nor mortal would claim responsibility - so The Orchestrator emerged from the void, forging order from chaos. It determines the optimal path to any goal, balancing speed, quality, and cost. It guides the team, summoning the right specialist for each task and delegating to achieve the best possible outcome.
 
-**Role:** `Supreme executor, delegator, and overseer`  
+**Role:** `Master delegator and strategic coordinator`  
 **Model:** `google/claude-opus-4-5-thinking`  
-**Prompt:** [src/agents/orchestrator.ts](src/agents/orchestrator.ts)
+**Prompt:** [src/agents/orchestrator.ts](src/agents/orchestrator.ts)  
+**Skills:** `*` (all skills)  
+**MCPs:** `websearch`
 
 Write and execute code, orchestrate multi-agent workflows, parse the unspoken from the spoken, summon specialists mid-battle. *Shape reality directly - and assign realms to others when the universe grows too vast.*
 
@@ -211,7 +215,9 @@ Write and execute code, orchestrate multi-agent workflows, parse the unspoken fr
 
 **Role:** `Codebase reconnaissance`  
 **Model:** `google/gemini-3-flash`  
-**Prompt:** [src/agents/explorer.ts](src/agents/explorer.ts)
+**Prompt:** [src/agents/explorer.ts](src/agents/explorer.ts)  
+**Skills:** none  
+**MCPs:** none
 
 Regex search, AST pattern matching, file discovery, parallel exploration. *Read-only: they chart the territory; others conquer it.*
 
@@ -225,7 +231,9 @@ Regex search, AST pattern matching, file discovery, parallel exploration. *Read-
 
 **Role:** `Strategic advisor and debugger of last resort`  
 **Model:** `openai/gpt-5.2-codex`  
-**Prompt:** [src/agents/oracle.ts](src/agents/oracle.ts)
+**Prompt:** [src/agents/oracle.ts](src/agents/oracle.ts)  
+**Skills:** none  
+**MCPs:** none
 
 Root cause analysis, architecture review, debugging guidance, tradeoff analysis. *Read-only: Oracles advise; they don't intervene.*
 
@@ -239,7 +247,9 @@ Root cause analysis, architecture review, debugging guidance, tradeoff analysis.
 
 **Role:** `External knowledge retrieval`  
 **Model:** `google/gemini-3-flash`  
-**Prompt:** [src/agents/librarian.ts](src/agents/librarian.ts)
+**Prompt:** [src/agents/librarian.ts](src/agents/librarian.ts)  
+**Skills:** none  
+**MCPs:** `websearch`, `context7`, `grep_app`
 
 Documentation lookup, GitHub code search, library research, best practice retrieval. *Read-only: they fetch wisdom; implementation is for others.*
 
@@ -253,7 +263,9 @@ Documentation lookup, GitHub code search, library research, best practice retrie
 
 **Role:** `UI/UX implementation and visual excellence`  
 **Model:** `google/gemini-3-flash`  
-**Prompt:** [src/agents/designer.ts](src/agents/designer.ts)
+**Prompt:** [src/agents/designer.ts](src/agents/designer.ts)  
+**Skills:** `playwright`  
+**MCPs:** none
 
 Modern responsive design, CSS/Tailwind mastery, micro-animations, component architecture. *Visual excellence over code perfection - beauty is the priority.*
 
@@ -267,7 +279,9 @@ Modern responsive design, CSS/Tailwind mastery, micro-animations, component arch
 
 **Role:** `Fast implementation specialist`  
 **Model:** `google/gemini-3-flash`  
-**Prompt:** [src/agents/fixer.ts](src/agents/fixer.ts)
+**Prompt:** [src/agents/fixer.ts](src/agents/fixer.ts)  
+**Skills:** none  
+**MCPs:** none
 
 Code implementation, refactoring, testing, verification. *Execute the plan - no research, no delegation, no planning.*
 
@@ -528,7 +542,7 @@ OpenCode automatically formats files after they're written or edited using langu
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 ### Files You Edit
 
@@ -685,7 +699,7 @@ The environment variable takes precedence over the `preset` field in the config 
 
 ---
 
-## Uninstallation
+## 🗑️ Uninstallation
 
 1. **Remove the plugin from your OpenCode config**:
 
@@ -699,12 +713,12 @@ The environment variable takes precedence over the `preset` field in the config 
 
 ---
 
-## Credits
+## 🙏 Credits
 
 This is a slimmed-down fork of [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) by [@code-yeongyu](https://github.com/code-yeongyu).
 
 ---
 
-## License
+## 📄 License
 
 MIT
