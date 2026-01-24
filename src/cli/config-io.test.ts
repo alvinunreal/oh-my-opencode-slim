@@ -11,7 +11,6 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  addAuthPlugins,
   addPluginToOpenCodeConfig,
   addProviderConfig,
   detectCurrentConfig,
@@ -121,28 +120,9 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
-  test('addAuthPlugins adds antigravity auth plugin', async () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    paths.ensureConfigDir();
-    writeFileSync(configPath, JSON.stringify({}));
+  // Removed: addAuthPlugins test - auth plugin no longer used with cliproxy
 
-    mock.module('./system', () => ({
-      fetchLatestVersion: async () => '1.2.3',
-    }));
-
-    const result = await addAuthPlugins({
-      hasAntigravity: true,
-      hasOpenAI: false,
-      hasOpencodeZen: false,
-      hasTmux: false,
-    });
-    expect(result.success).toBe(true);
-
-    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(saved.plugin).toContain('opencode-antigravity-auth@1.2.3');
-  });
-
-  test('addProviderConfig adds google provider config', () => {
+  test('addProviderConfig adds cliproxy provider config', () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
     writeFileSync(configPath, JSON.stringify({}));
@@ -156,7 +136,7 @@ describe('config-io', () => {
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(saved.provider.google).toBeDefined();
+    expect(saved.provider.cliproxy).toBeDefined();
   });
 
   test('writeLiteConfig writes lite config', () => {
@@ -172,8 +152,8 @@ describe('config-io', () => {
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
-    expect(saved.preset).toBe('antigravity');
-    expect(saved.presets.antigravity).toBeDefined();
+    expect(saved.preset).toBe('cliproxy');
+    expect(saved.presets.cliproxy).toBeDefined();
     expect(saved.tmux.enabled).toBe(true);
   });
 
@@ -198,7 +178,12 @@ describe('config-io', () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        plugin: ['oh-my-opencode-slim', 'opencode-antigravity-auth'],
+        plugin: ['oh-my-opencode-slim'],
+        provider: {
+          cliproxy: {
+            npm: '@ai-sdk/openai-compatible',
+          },
+        },
       }),
     );
     writeFileSync(

@@ -26,7 +26,7 @@
   - [Librarian: The Weaver of Knowledge](#librarian-the-weaver-of-knowledge)
   - [Designer: The Guardian of Aesthetics](#designer-the-guardian-of-aesthetics)
   - [Fixer: The Last Builder](#fixer-the-last-builder)
-- [🎯 Presets](#-presets)
+- [🎚️ Presets](#-presets)
   - [Switching Presets](#switching-presets)
   - [OpenAI Preset](#openai-preset)
   - [Antigravity via CLIProxy Preset](#antigravity-via-cliproxy-preset)
@@ -42,17 +42,17 @@
 - [🔌 MCP Servers](#-mcp-servers)
   - [MCP Permissions](#mcp-permissions)
   - [Configuration & Syntax](#configuration--syntax-1)
-- [🛠️ Tools & Capabilities](#️-tools--capabilities)
+- [🛠️ Tools & Capabilities](#-tools--capabilities)
   - [Tmux Integration](#tmux-integration)
   - [Background Tasks](#background-tasks)
   - [LSP Tools](#lsp-tools)
   - [Code Search Tools](#code-search-tools)
   - [Formatters](#formatters)
-- [⚙️ Configuration](#️-configuration)
+- [⚙️ Configuration](#-configuration)
   - [Files You Edit](#files-you-edit)
   - [Prompt Overriding](#prompt-overriding)
   - [Plugin Config (oh-my-opencode-slim.json)](#plugin-config-oh-my-opencode-slimjson)
-- [🗑️ Uninstallation](#️-uninstallation)
+- [🗑️ Uninstallation](#-uninstallation)
 - [🙏 Credits](#-credits)
 - [📄 License](#-license)
 
@@ -304,7 +304,7 @@ Code implementation, refactoring, testing, verification. *Execute the plan - no 
 
 ---
 
-## 🎯 Presets
+## 🎚️ Presets
 
 Presets are pre-configured agent model mappings for different provider combinations. The installer generates these automatically based on your available providers, and you can switch between them instantly.
 

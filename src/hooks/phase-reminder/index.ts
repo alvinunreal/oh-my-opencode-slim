@@ -8,7 +8,7 @@
  *
  * Uses experimental.chat.messages.transform so it doesn't show in UI.
  */
-const PHASE_REMINDER = `<reminder>⚠️ MANDATORY: Understand→DELEGATE(!)→Split-and-Parallelize(?)→Plan→Execute→Verify
+const PHASE_REMINDER = `<reminder>⚠️ MANDATORY: Understand→DELEGATE(! based on each agent rules)→Split-and-Parallelize(?)→Plan→Execute→Verify
 Available Specialist: @oracle @librarian @explorer @designer @fixer
 </reminder>`;
 

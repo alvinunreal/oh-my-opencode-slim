@@ -12,15 +12,15 @@ describe('providers', () => {
       hasTmux: false,
     });
 
-    expect(config.preset).toBe('antigravity');
-    const agents = (config.presets as any).antigravity;
+    expect(config.preset).toBe('cliproxy');
+    const agents = (config.presets as any).cliproxy;
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe(
-      MODEL_MAPPINGS.antigravity.orchestrator.model,
+      'cliproxy/gemini-claude-opus-4-5-thinking',
     );
     expect(agents.orchestrator.variant).toBeUndefined();
-    expect(agents.fixer.model).toBe(MODEL_MAPPINGS.antigravity.fixer.model);
-    expect(agents.fixer.variant).toBe(MODEL_MAPPINGS.antigravity.fixer.variant);
+    expect(agents.fixer.model).toBe('cliproxy/gemini-3-flash-preview');
+    expect(agents.fixer.variant).toBe('low');
     // Should NOT include other presets
     expect((config.presets as any).openai).toBeUndefined();
     expect((config.presets as any)['zen-free']).toBeUndefined();
@@ -34,18 +34,18 @@ describe('providers', () => {
       hasTmux: false,
     });
 
-    expect(config.preset).toBe('antigravity-openai');
-    const agents = (config.presets as any)['antigravity-openai'];
+    expect(config.preset).toBe('cliproxy');
+    const agents = (config.presets as any).cliproxy;
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe(
-      MODEL_MAPPINGS.antigravity.orchestrator.model,
+      'cliproxy/gemini-claude-opus-4-5-thinking',
     );
     expect(agents.orchestrator.variant).toBeUndefined();
     expect(agents.oracle.model).toBe('openai/gpt-5.2-codex');
     expect(agents.oracle.variant).toBe('high');
     // Should NOT include other presets
-    expect((config.presets as any).antigravity).toBeUndefined();
     expect((config.presets as any).openai).toBeUndefined();
+    expect((config.presets as any)['zen-free']).toBeUndefined();
   });
 
   test('generateLiteConfig generates openai preset when only openai selected', () => {
@@ -64,7 +64,7 @@ describe('providers', () => {
     );
     expect(agents.orchestrator.variant).toBeUndefined();
     // Should NOT include other presets
-    expect((config.presets as any).antigravity).toBeUndefined();
+    expect((config.presets as any).cliproxy).toBeUndefined();
     expect((config.presets as any)['zen-free']).toBeUndefined();
   });
 
@@ -82,7 +82,7 @@ describe('providers', () => {
     expect(agents.orchestrator.model).toBe('opencode/grok-code');
     expect(agents.orchestrator.variant).toBeUndefined();
     // Should NOT include other presets
-    expect((config.presets as any).antigravity).toBeUndefined();
+    expect((config.presets as any).cliproxy).toBeUndefined();
     expect((config.presets as any).openai).toBeUndefined();
   });
 
@@ -123,7 +123,7 @@ describe('providers', () => {
       hasTmux: false,
     });
 
-    const agents = (config.presets as any).antigravity;
+    const agents = (config.presets as any).cliproxy;
     expect(agents.orchestrator.skills).toContain('*');
     expect(agents.fixer.skills).toBeDefined();
   });
@@ -136,7 +136,7 @@ describe('providers', () => {
       hasTmux: false,
     });
 
-    const agents = (config.presets as any).antigravity;
+    const agents = (config.presets as any).cliproxy;
     expect(agents.orchestrator.mcps).toBeDefined();
     expect(Array.isArray(agents.orchestrator.mcps)).toBe(true);
     expect(agents.librarian.mcps).toBeDefined();
