@@ -65,13 +65,13 @@
 Run the interactive installer:
 
 ```bash
-bunx oh-my-opencode-slim install
+bunx oh-my-opencode-slim@latest install
 ```
 
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --antigravity=yes --openai=yes --tmux=no
 ```
 
 After installation, authenticate with your providers:
@@ -135,19 +135,19 @@ Help the user understand the tradeoffs:
 Based on answers, run:
 
 ```bash
-bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no>
+bunx oh-my-opencode-slim@latest install --no-tui --antigravity=<yes|no> --openai=<yes|no>
 ```
 
 **Examples:**
 ```bash
 # Antigravity + OpenAI
-bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --antigravity=yes --openai=yes --tmux=no
 
 # OpenAI only
-bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --antigravity=no --openai=yes --tmux=no
 
 # No providers (Zen free models only)
-bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=no --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --antigravity=no --openai=no --tmux=no
 ```
 
 The installer automatically:
@@ -196,7 +196,7 @@ opencode auth login
 
 If the installer fails, check the expected config format:
 ```bash
-bunx oh-my-opencode-slim install --help
+bunx oh-my-opencode-slim@latest install --help
 ```
 
 Then manually create the config files at:
