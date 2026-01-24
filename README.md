@@ -19,14 +19,14 @@
 - [📦 Installation](#-installation)
   - [For Humans](#for-humans)
   - [For LLM Agents](#for-llm-agents)
-- [🏛️ Meet the Pantheon](#-meet-the-pantheon)
+- [🏛️ Meet the Pantheon](#️-meet-the-pantheon)
   - [Orchestrator: The Embodiment Of Order](#orchestrator-the-embodiment-of-order)
   - [Explorer: The Eternal Wanderer](#explorer-the-eternal-wanderer)
   - [Oracle: The Guardian of Paths](#oracle-the-guardian-of-paths)
   - [Librarian: The Weaver of Knowledge](#librarian-the-weaver-of-knowledge)
   - [Designer: The Guardian of Aesthetics](#designer-the-guardian-of-aesthetics)
   - [Fixer: The Last Builder](#fixer-the-last-builder)
-- [🎚️ Presets](#-presets)
+- [🎚️ Presets](#️-presets)
   - [Switching Presets](#switching-presets)
   - [OpenAI Preset](#openai-preset)
   - [Antigravity via CLIProxy Preset](#antigravity-via-cliproxy-preset)
@@ -42,17 +42,17 @@
 - [🔌 MCP Servers](#-mcp-servers)
   - [MCP Permissions](#mcp-permissions)
   - [Configuration & Syntax](#configuration--syntax-1)
-- [🛠️ Tools & Capabilities](#-tools--capabilities)
+- [🛠️ Tools & Capabilities](#️-tools--capabilities)
   - [Tmux Integration](#tmux-integration)
   - [Background Tasks](#background-tasks)
   - [LSP Tools](#lsp-tools)
   - [Code Search Tools](#code-search-tools)
   - [Formatters](#formatters)
-- [⚙️ Configuration](#-configuration)
+- [⚙️ Configuration](#️-configuration)
   - [Files You Edit](#files-you-edit)
   - [Prompt Overriding](#prompt-overriding)
   - [Plugin Config (oh-my-opencode-slim.json)](#plugin-config-oh-my-opencode-slimjson)
-- [🗑️ Uninstallation](#-uninstallation)
+- [🗑️ Uninstallation](#️-uninstallation)
 - [🙏 Credits](#-credits)
 - [📄 License](#-license)
 
@@ -759,7 +759,7 @@ This allows you to fine-tune agent behavior without modifying the source code.
 
 ### Plugin Config (`oh-my-opencode-slim.json`)
 
-The installer generates this file based on your providers. You can manually customize it to mix and match models. See the [Presets](#-presets) section for detailed configuration options.
+The installer generates this file based on your providers. You can manually customize it to mix and match models. See the [Presets](#️-presets) section for detailed configuration options.
 
 #### Option Reference
 
