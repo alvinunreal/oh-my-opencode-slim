@@ -183,6 +183,8 @@ curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/re
 ```
 
 **For OpenAI (if enabled):**
+Ask user to run the following command.
+Don't run it yourself, it requires user interaction.
 ```bash
 opencode auth login
 # Select your provider and complete OAuth flow
