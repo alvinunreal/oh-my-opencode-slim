@@ -6,7 +6,7 @@
 
 <img src="img/team.png" alt="The Pantheon - Agent Team" width="800">
 
-*Six divine beings forged from necessity, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.*
+*Six divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.*
 
 </div>
 
