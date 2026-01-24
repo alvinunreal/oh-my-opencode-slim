@@ -1,6 +1,5 @@
 import * as readline from 'node:readline/promises';
 import {
-  addAuthPlugins,
   addPluginToOpenCodeConfig,
   addProviderConfig,
   detectCurrentConfig,
@@ -189,12 +188,9 @@ async function runInteractiveMode(
 
   try {
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`);
-    printInfo(
-      "The Pantheon is tuned for Antigravity's model routing. Other models work, but results may vary.",
-    );
     const antigravity = await askYesNo(
       rl,
-      'Do you have an Antigravity subscription?',
+      'Do you have an Antigravity subscription (via cliproxy)?',
       'yes',
     );
     console.log();
@@ -236,7 +232,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   // Calculate total steps dynamically
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
-  if (config.hasAntigravity) totalSteps += 2; // auth plugins + provider config
+  if (config.hasAntigravity) totalSteps += 1; // provider config only (no auth plugin needed)
 
   let step = 1;
 
@@ -253,13 +249,10 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
 
   if (config.hasAntigravity) {
-    printStep(step++, totalSteps, 'Adding auth plugins...');
-    const authResult = await addAuthPlugins(config);
-    if (!handleStepResult(authResult, 'Auth plugins configured')) return 1;
-
-    printStep(step++, totalSteps, 'Adding provider configurations...');
+    printStep(step++, totalSteps, 'Adding cliproxy provider configuration...');
     const providerResult = addProviderConfig(config);
-    if (!handleStepResult(providerResult, 'Providers configured')) return 1;
+    if (!handleStepResult(providerResult, 'Cliproxy provider configured'))
+      return 1;
   }
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
@@ -287,9 +280,30 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log();
 
   let nextStep = 1;
-  console.log(`  ${nextStep++}. Authenticate with your providers:`);
-  console.log(`     ${BLUE}$ opencode auth login${RESET}`);
-  console.log();
+
+  if (config.hasAntigravity) {
+    console.log(`  ${nextStep++}. Install cliproxy:`);
+    console.log(`     ${DIM}macOS:${RESET}`);
+    console.log(`       ${BLUE}$ brew install cliproxyapi${RESET}`);
+    console.log(`       ${BLUE}$ brew services start cliproxyapi${RESET}`);
+    console.log(`     ${DIM}Linux:${RESET}`);
+    console.log(
+      `       ${BLUE}$ curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash${RESET}`,
+    );
+    console.log();
+    console.log(`  ${nextStep++}. Authenticate with Antigravity via OAuth:`);
+    console.log(`     ${BLUE}$ ./cli-proxy-api --antigravity-login${RESET}`);
+    console.log(
+      `     ${DIM}(Add --no-browser to print login URL instead of opening browser)${RESET}`,
+    );
+    console.log();
+  }
+
+  if (config.hasOpenAI || !config.hasAntigravity) {
+    console.log(`  ${nextStep++}. Authenticate with your providers:`);
+    console.log(`     ${BLUE}$ opencode auth login${RESET}`);
+    console.log();
+  }
 
   // TODO: tmux has a bug, disabled for now
   // if (config.hasTmux) {

@@ -27,9 +27,10 @@
   - [Designer: The Guardian of Aesthetics](#designer-the-guardian-of-aesthetics)
   - [Fixer: The Last Builder](#fixer-the-last-builder)
 - [🎯 Presets](#-presets)
-  - [Available Presets](#available-presets)
   - [Switching Presets](#switching-presets)
-  - [Preset Configurations](#preset-configurations)
+  - [OpenAI Preset](#openai-preset)
+  - [Antigravity via CLIProxy Preset](#antigravity-via-cliproxy-preset)
+  - [Author's Preset](#authors-preset)
   - [Creating Custom Presets](#creating-custom-presets)
   - [Option Reference](#option-reference)
 - [🧩 Skills](#-skills)
@@ -119,11 +120,11 @@ If not installed, direct the user to https://opencode.ai/docs first.
 
 Ask these questions **one at a time**, waiting for responses:
 
-1. "Do you have an **Antigravity** subscription?" *(Provides Claude + Gemini via `google/` prefix)*
+1. "Do you have an **Antigravity** subscription (via cliproxy)?" *(Provides Claude + Gemini via `cliproxy/` prefix)*
 2. "Do you have access to **OpenAI** API?" *(Enables `openai/` models)*
 
 Help the user understand the tradeoffs:
-- Antigravity is the recommended path for Claude + Gemini routing.
+- Antigravity via cliproxy provides Claude + Gemini routing.
 - OpenAI is optional; it enables `openai/` models.
 - If the user has **no providers**, the plugin still works using **OpenCode Zen** free models. They can switch to paid providers later by editing `~/.config/opencode/oh-my-opencode-slim.json`.
 
@@ -151,8 +152,7 @@ bunx oh-my-opencode-slim install --no-tui --antigravity=no --openai=no --tmux=no
 
 The installer automatically:
 - Adds the plugin to `~/.config/opencode/opencode.json`
-- Adds `opencode-antigravity-auth` plugin (if Antigravity enabled)
-- Configures Google provider with model definitions
+- Configures cliproxy provider for Antigravity models
 - Generates agent model mappings in `~/.config/opencode/oh-my-opencode-slim.json`
 
 **Crucial Advice for the User:**
@@ -162,15 +162,32 @@ The installer automatically:
 
 ---
 
-#### Step 4: Authentication
+#### Step 4: Install and Configure Cliproxy (if using Antigravity)
 
-After installation, guide the user:
+If the user selected Antigravity, guide them to install cliproxy:
 
-**For Antigravity/OpenAI:**
+**macOS:**
+```bash
+brew install cliproxyapi
+brew services start cliproxyapi
+```
+
+**Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash
+```
+
+**Authenticate with Antigravity:**
+```bash
+./cli-proxy-api --antigravity-login
+# Add --no-browser to print login URL instead of opening browser
+# The local OAuth callback uses port 51121
+```
+
+**For OpenAI (if enabled):**
 ```bash
 opencode auth login
-# Select: Google → OAuth with Google (Antigravity)
-# Repeat for all other providers
+# Select your provider and complete OAuth flow
 ```
 
 ---
@@ -291,14 +308,6 @@ Code implementation, refactoring, testing, verification. *Execute the plan - no 
 
 Presets are pre-configured agent model mappings for different provider combinations. The installer generates these automatically based on your available providers, and you can switch between them instantly.
 
-### Available Presets
-
-| Preset | Description | Best For |
-|--------|-------------|----------|
-| `openai` | OpenAI models only | Users with OpenAI API access |
-| `cliproxy` | Antigravity via CLIProxy | Users with Antigravity subscription |
-| `alvin` | Author's mixed setup | Advanced users with multiple providers |
-
 ### Switching Presets
 
 **Method 1: Edit Config File**
@@ -322,9 +331,8 @@ opencode
 
 The environment variable takes precedence over the config file.
 
-### Preset Configurations
 
-#### OpenAI Preset
+### OpenAI Preset
 
 Uses OpenAI models exclusively:
 
@@ -344,7 +352,7 @@ Uses OpenAI models exclusively:
 }
 ```
 
-#### Antigravity via CLIProxy Preset
+### Antigravity via CLIProxy Preset
 
 Routes through Antigravity's CLIProxy for Claude + Gemini models:
 
@@ -408,7 +416,7 @@ Requires provider configuration:
 }
 ```
 
-#### Author's Preset
+### Author's Preset
 
 Mixed setup combining multiple providers:
 

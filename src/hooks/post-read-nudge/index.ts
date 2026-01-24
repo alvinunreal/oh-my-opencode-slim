@@ -4,7 +4,7 @@
  */
 
 const NUDGE =
-  "\n\n---\nConsider: splitting the task to parallelize, delegate to specialist(s). (if so, reference file paths/lines—don't copy file contents)";
+  "\n\n---\nReminder to follow the workflow instructions, consider delegation to specialist(s)";
 
 interface ToolExecuteAfterInput {
   tool: string;

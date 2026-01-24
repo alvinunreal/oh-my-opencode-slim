@@ -12,8 +12,7 @@ import {
   getExistingConfigPath,
   getLiteConfig,
 } from './paths';
-import { GOOGLE_PROVIDER_CONFIG, generateLiteConfig } from './providers';
-import { fetchLatestVersion } from './system';
+import { CLIPROXY_PROVIDER_CONFIG, generateLiteConfig } from './providers';
 import type {
   ConfigMergeResult,
   DetectedConfig,
@@ -138,46 +137,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
   }
 }
 
-export async function addAuthPlugins(
-  installConfig: InstallConfig,
-): Promise<ConfigMergeResult> {
-  const configPath = getExistingConfigPath();
-
-  try {
-    ensureConfigDir();
-    const { config: parsedConfig, error } = parseConfig(configPath);
-    if (error) {
-      return {
-        success: false,
-        configPath,
-        error: `Failed to parse config: ${error}`,
-      };
-    }
-    const config = parsedConfig ?? {};
-    const plugins = config.plugin ?? [];
-
-    if (installConfig.hasAntigravity) {
-      const version = await fetchLatestVersion('opencode-antigravity-auth');
-      const pluginEntry = version
-        ? `opencode-antigravity-auth@${version}`
-        : 'opencode-antigravity-auth@latest';
-
-      if (!plugins.some((p) => p.startsWith('opencode-antigravity-auth'))) {
-        plugins.push(pluginEntry);
-      }
-    }
-
-    config.plugin = plugins;
-    writeConfig(configPath, config);
-    return { success: true, configPath };
-  } catch (err) {
-    return {
-      success: false,
-      configPath,
-      error: `Failed to add auth plugins: ${err}`,
-    };
-  }
-}
+// Removed: addAuthPlugins - no longer needed with cliproxy
 
 export function addProviderConfig(
   installConfig: InstallConfig,
@@ -198,7 +158,7 @@ export function addProviderConfig(
 
     if (installConfig.hasAntigravity) {
       const providers = (config.provider ?? {}) as Record<string, unknown>;
-      providers.google = GOOGLE_PROVIDER_CONFIG.google;
+      providers.cliproxy = CLIPROXY_PROVIDER_CONFIG.cliproxy;
       config.provider = providers;
     }
 
@@ -290,9 +250,10 @@ export function detectCurrentConfig(): DetectedConfig {
 
   const plugins = config.plugin ?? [];
   result.isInstalled = plugins.some((p) => p.startsWith(PACKAGE_NAME));
-  result.hasAntigravity = plugins.some((p) =>
-    p.startsWith('opencode-antigravity-auth'),
-  );
+
+  // Check for cliproxy provider instead of auth plugin
+  const providers = config.provider as Record<string, unknown> | undefined;
+  result.hasAntigravity = !!providers?.cliproxy;
 
   // Try to detect from lite config
   const { config: liteConfig } = parseConfig(getLiteConfig());
