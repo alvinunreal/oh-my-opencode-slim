@@ -23,7 +23,6 @@ export interface InstallConfig {
   installSkills: boolean;
 }
 
-
 export interface ConfigMergeResult {
   success: boolean;
   configPath: string;

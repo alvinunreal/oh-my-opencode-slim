@@ -218,14 +218,12 @@ async function runInteractiveMode(
     // Skills prompt
     console.log(`${BOLD}Recommended Skills:${RESET}`);
     for (const skill of RECOMMENDED_SKILLS) {
-      console.log(`  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`);
+      console.log(
+        `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+      );
     }
     console.log();
-    const skills = await askYesNo(
-      rl,
-      'Install recommended skills?',
-      'yes',
-    );
+    const skills = await askYesNo(rl, 'Install recommended skills?', 'yes');
     console.log();
 
     return {
@@ -289,7 +287,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
         printWarning(`Failed to install: ${skill.name}`);
       }
     }
-    printSuccess(`${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`);
+    printSuccess(
+      `${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`,
+    );
   }
 
   // Summary

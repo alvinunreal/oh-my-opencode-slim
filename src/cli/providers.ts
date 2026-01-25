@@ -2,7 +2,6 @@ import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
 
-
 /**
  * Provider configurations for Cliproxy (Antigravity via cliproxy)
  */
@@ -87,17 +86,20 @@ export function generateLiteConfig(
 
   config.preset = activePreset;
 
-  const createAgentConfig = (agentName: string, modelInfo: { model: string; variant?: string }) => {
+  const createAgentConfig = (
+    agentName: string,
+    modelInfo: { model: string; variant?: string },
+  ) => {
     const isOrchestrator = agentName === 'orchestrator';
 
     // Skills: orchestrator gets "*", others get recommended skills for their role
     const skills = isOrchestrator
       ? ['*']
       : RECOMMENDED_SKILLS.filter(
-        (s) =>
-          s.allowedAgents.includes('*') ||
-          s.allowedAgents.includes(agentName),
-      ).map((s) => s.skillName);
+          (s) =>
+            s.allowedAgents.includes('*') ||
+            s.allowedAgents.includes(agentName),
+        ).map((s) => s.skillName);
 
     // Special case for designer and agent-browser skill
     if (agentName === 'designer' && !skills.includes('agent-browser')) {
@@ -108,7 +110,8 @@ export function generateLiteConfig(
       model: modelInfo.model,
       variant: modelInfo.variant,
       skills,
-      mcps: DEFAULT_AGENT_MCPS[agentName as keyof typeof DEFAULT_AGENT_MCPS] ?? [],
+      mcps:
+        DEFAULT_AGENT_MCPS[agentName as keyof typeof DEFAULT_AGENT_MCPS] ?? [],
     };
   };
 

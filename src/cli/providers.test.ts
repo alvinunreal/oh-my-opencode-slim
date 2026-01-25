@@ -141,7 +141,6 @@ describe('providers', () => {
     expect(agents.fixer.skills).toEqual([]);
   });
 
-
   test('generateLiteConfig includes mcps field', () => {
     const config = generateLiteConfig({
       hasAntigravity: true,
