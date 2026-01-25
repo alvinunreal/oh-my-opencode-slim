@@ -32,6 +32,10 @@
   - [Antigravity via CLIProxy Preset](#antigravity-via-cliproxy-preset)
   - [Author's Preset](#authors-preset)
 - [🧩 Skills](#-skills)
+  - [Simplify](#simplify)
+  - [Agent Browser](#agent-browser)
+  - [Cartography](#cartography)
+  - [Skills Assignment](#skills-assignment)
 - [🔌 MCP Servers](#-mcp-servers)
   - [MCP Permissions](#mcp-permissions)
   - [Configuration & Syntax](#configuration--syntax-1)
@@ -622,67 +626,20 @@ Mixed setup combining multiple providers:
 
 ## 🧩 Skills
 
-Skills are specialized capabilities provided by external agents and tools. Unlike MCPs which are servers, skills are prompt-based tool configurations installed via `npx skills add`.
+Skills are specialized capabilities provided by external agents and tools. Unlike MCPs which are servers, skills are prompt-based tool configurations installed via `npx skills add` during installation.
 
-### Installation
-
-The interactive installer will ask to install recommended skills automatically. Behind the scenes, it runs:
-
-```bash
-# Example: Adding the simplify skill
-npx skills add https://github.com/brianlovin/claude-config --skill simplify -a opencode -y --global
-```
-
-### Available Skills
-
-#### Recommended Skills (via npx)
+### Recommended Skills (via npx)
 
 | Skill | Description | Assigned To |
 |-------|-------------|-------------|
-| `simplify` | YAGNI code simplification expert | `orchestrator` |
-| `agent-browser` | High-performance browser automation | `designer` |
+| [`simplify`](#simplify) | YAGNI code simplification expert | `orchestrator` |
+| [`agent-browser`](#agent-browser) | High-performance browser automation | `designer` |
 
-#### Custom Skills (bundled in repo)
+### Custom Skills (bundled in repo)
 
 | Skill | Description | Assigned To |
 |-------|-------------|-------------|
-| `cartography` | Repository understanding and hierarchical codemap generation | `orchestrator` |
-
-### Configuration & Syntax
-
-You can customize which skills each agent is allowed to use in `~/.config/opencode/oh-my-opencode-slim.json`.
-
-**Syntax:**
-
-| Syntax | Description | Example |
-|--------|-------------|---------|
-| `"*"` | All installed skills | `["*"]` |
-| `"!item"` | Exclude specific skill | `["*", "!agent-browser"]` |
-| Explicit list | Only listed skills | `["simplify"]` |
-| `"!*"` | Deny all skills | `["!*"]` |
-
-**Rules:**
-- `*` expands to all available skills
-- `!item` excludes specific skills
-- Conflicts (e.g., `["a", "!a"]`) → deny wins (principle of least privilege)
-- Empty list `[]` → no skills allowed
-
-**Example Configuration:**
-
-```json
-{
-  "presets": {
-    "my-preset": {
-      "orchestrator": {
-        "skills": ["*", "!agent-browser"]
-      },
-      "designer": {
-        "skills": ["agent-browser", "simplify"]
-      }
-    }
-  }
-}
-```
+| [`cartography`](#cartography) | Repository understanding and hierarchical codemap generation | `orchestrator` |
 
 ### Simplify
 
@@ -742,6 +699,42 @@ python ~/.config/opencode/skills/cartography/scripts/cartographer.py changes --r
 python ~/.config/opencode/skills/cartography/scripts/cartographer.py update --root .
 ```
 </details>
+
+### Skills Assignment
+
+You can customize which skills each agent is allowed to use in `~/.config/opencode/oh-my-opencode-slim.json`.
+
+**Syntax:**
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `"*"` | All installed skills | `["*"]` |
+| `"!item"` | Exclude specific skill | `["*", "!agent-browser"]` |
+| Explicit list | Only listed skills | `["simplify"]` |
+| `"!*"` | Deny all skills | `["!*"]` |
+
+**Rules:**
+- `*` expands to all available skills
+- `!item` excludes specific skills
+- Conflicts (e.g., `["a", "!a"]`) → deny wins (principle of least privilege)
+- Empty list `[]` → no skills allowed
+
+**Example Configuration:**
+
+```json
+{
+  "presets": {
+    "my-preset": {
+      "orchestrator": {
+        "skills": ["*", "!agent-browser"]
+      },
+      "designer": {
+        "skills": ["agent-browser", "simplify"]
+      }
+    }
+  }
+}
+```
 
 ---
 
