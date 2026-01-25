@@ -37,7 +37,7 @@ If it **doesn't exist**: Continue to Step 2 (Initialize).
 
 ```bash
 python3 ~/.config/opencode/skills/cartography/scripts/cartographer.py init \
-  --root /path/to/repo \
+  --root ./ \
   --include "src/**/*.ts" \
   --exclude "**/*.test.ts" --exclude "dist/**" --exclude "node_modules/**"
 ```
@@ -54,7 +54,7 @@ This creates:
 
 ```bash
 python3 ~/.config/opencode/skills/cartography/scripts/cartographer.py changes \
-  --root /path/to/repo
+  --root ./
 ```
 
 2. **Review the output** - It shows:
@@ -68,8 +68,17 @@ python3 ~/.config/opencode/skills/cartography/scripts/cartographer.py changes \
 
 ```bash
 python3 ~/.config/opencode/skills/cartography/scripts/cartographer.py update \
-  --root /path/to/repo
+  --root ./
 ```
+
+### Step 4: Finalize Repository Atlas (Root Codemap)
+
+Once all specific directories are mapped, the Orchestrator must create or update the root `codemap.md`. This file serves as the **Master Entry Point** for any agent or human entering the repository.
+
+1.  **Map Root Assets**: Document the root-level files (e.g., `package.json`, `index.ts`, `plugin.json`) and the project's overall purpose.
+2.  **Aggregate Sub-Maps**: Create a "Repository Directory Map" section. For every folder that has a `codemap.md`, extract its **Responsibility** summary and include it in a table or list in the root map.
+3.  **Cross-Reference**: Ensure that the root map contains the absolute or relative paths to the sub-maps so agents can jump directly to the relevant details.
+
 
 ## Codemap Content
 
@@ -104,4 +113,25 @@ Each agent is a prompt + permission set. Config system uses:
 ## Integration
 - Consumed by: Main plugin (src/index.ts)
 - Depends on: Config loader, skills registry
+```
+
+Example **Root Codemap (Atlas)**:
+
+```markdown
+# Repository Atlas: oh-my-opencode-slim
+
+## Project Responsibility
+A high-performance, low-latency agent orchestration plugin for OpenCode, focusing on specialized sub-agent delegation and background task management.
+
+## System Entry Points
+- `src/index.ts`: Plugin initialization and OpenCode integration.
+- `package.json`: Dependency manifest and build scripts.
+- `oh-my-opencode-slim.json`: User configuration schema.
+
+## Directory Map (Aggregated)
+| Directory | Responsibility Summary | Detailed Map |
+|-----------|------------------------|--------------|
+| `src/agents/` | Defines agent personalities (Orchestrator, Explorer) and manages model routing. | [View Map](src/agents/codemap.md) |
+| `src/features/` | Core logic for tmux integration, background task spawning, and session state. | [View Map](src/features/codemap.md) |
+| `src/config/` | Implements the configuration loading pipeline and environment variable injection. | [View Map](src/config/codemap.md) |
 ```
