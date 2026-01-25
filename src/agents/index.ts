@@ -6,7 +6,9 @@ import {
   type PluginConfig,
   SUBAGENT_NAMES,
 } from '../config';
-import { getAgentMcpList } from '../tools/skill/builtin';
+import { getAgentMcpList } from '../config/agent-mcps';
+import { getSkillPermissionsForAgent } from '../cli/skills';
+
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
@@ -41,7 +43,7 @@ function getOverride(
   return (
     overrides[name] ??
     overrides[
-      Object.keys(AGENT_ALIASES).find((k) => AGENT_ALIASES[k] === name) ?? ''
+    Object.keys(AGENT_ALIASES).find((k) => AGENT_ALIASES[k] === name) ?? ''
     ]
   );
 }
@@ -63,18 +65,40 @@ function applyOverrides(
 
 /**
  * Apply default permissions to an agent.
- * Currently sets 'question' permission to 'allow' for all agents.
+ * Sets 'question' permission to 'allow' and includes skill permission presets.
  */
-function applyDefaultPermissions(agent: AgentDefinition): void {
+/**
+ * Apply default permissions to an agent.
+ * Sets 'question' permission to 'allow' and includes skill permission presets.
+ * If configuredSkills is provided, it honors that list instead of defaults.
+ */
+function applyDefaultPermissions(
+  agent: AgentDefinition,
+  configuredSkills?: string[],
+): void {
   const existing = (agent.config.permission ?? {}) as Record<
     string,
-    'ask' | 'allow' | 'deny'
+    'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
   >;
+
+  // Get skill-specific permissions for this agent
+  const skillPermissions = getSkillPermissionsForAgent(
+    agent.name,
+    configuredSkills,
+  );
+
   agent.config.permission = {
     ...existing,
     question: 'allow',
+    // Apply skill permissions as nested object under 'skill' key
+    skill: {
+      ...(typeof existing.skill === 'object' ? existing.skill : {}),
+      ...skillPermissions,
+    },
   } as SDKAgentConfig['permission'];
 }
+
+
 
 // Agent Classification
 
@@ -130,12 +154,13 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     );
   });
 
-  // 2. Apply overrides to each agent
+  // 2. Apply overrides and default permissions to each agent
   const allSubAgents = protoSubAgents.map((agent) => {
     const override = getOverride(agentOverrides, agent.name);
     if (override) {
       applyOverrides(agent, override);
     }
+    applyDefaultPermissions(agent, override?.skills);
     return agent;
   });
 
@@ -149,8 +174,8 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     orchestratorPrompts.prompt,
     orchestratorPrompts.appendPrompt,
   );
-  applyDefaultPermissions(orchestrator);
   const oOverride = getOverride(agentOverrides, 'orchestrator');
+  applyDefaultPermissions(orchestrator, oOverride?.skills);
   if (oOverride) {
     applyOverrides(orchestrator, oOverride);
   }

@@ -10,6 +10,7 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: false,
     });
 
     expect(config.preset).toBe('cliproxy');
@@ -32,6 +33,7 @@ describe('providers', () => {
       hasOpenAI: true,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: false,
     });
 
     expect(config.preset).toBe('cliproxy');
@@ -54,6 +56,7 @@ describe('providers', () => {
       hasOpenAI: true,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: false,
     });
 
     expect(config.preset).toBe('openai');
@@ -74,6 +77,7 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: false,
     });
 
     expect(config.preset).toBe('zen-free');
@@ -92,6 +96,7 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: true,
       hasTmux: false,
+      installSkills: false,
     });
 
     expect(config.preset).toBe('zen-free');
@@ -109,6 +114,7 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: true,
+      installSkills: false,
     });
 
     expect(config.tmux).toBeDefined();
@@ -121,12 +127,20 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: true,
     });
 
     const agents = (config.presets as any).cliproxy;
-    expect(agents.orchestrator.skills).toContain('*');
-    expect(agents.fixer.skills).toBeDefined();
+    // Orchestrator should always have '*'
+    expect(agents.orchestrator.skills).toEqual(['*']);
+
+    // Designer should have 'agent-browser'
+    expect(agents.designer.skills).toContain('agent-browser');
+
+    // Fixer should have no skills by default (empty recommended list)
+    expect(agents.fixer.skills).toEqual([]);
   });
+
 
   test('generateLiteConfig includes mcps field', () => {
     const config = generateLiteConfig({
@@ -134,6 +148,7 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: false,
     });
 
     const agents = (config.presets as any).cliproxy;
@@ -149,6 +164,7 @@ describe('providers', () => {
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
+      installSkills: false,
     });
 
     const agents = (config.presets as any)['zen-free'];

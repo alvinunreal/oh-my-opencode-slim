@@ -9,6 +9,7 @@ import {
   isOpenCodeInstalled,
   writeLiteConfig,
 } from './config-manager';
+import { RECOMMENDED_SKILLS, installSkill } from './skills';
 import type {
   BooleanArg,
   ConfigMergeResult,
@@ -155,6 +156,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     hasOpenAI: args.openai === 'yes',
     hasOpencodeZen: true, // Always enabled - free models available to all users
     hasTmux: args.tmux === 'yes',
+    installSkills: args.skills === 'yes',
   };
 }
 
@@ -213,11 +215,25 @@ async function runInteractiveMode(
     //   console.log()
     // }
 
+    // Skills prompt
+    console.log(`${BOLD}Recommended Skills:${RESET}`);
+    for (const skill of RECOMMENDED_SKILLS) {
+      console.log(`  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`);
+    }
+    console.log();
+    const skills = await askYesNo(
+      rl,
+      'Install recommended skills?',
+      'yes',
+    );
+    console.log();
+
     return {
       hasAntigravity: antigravity === 'yes',
       hasOpenAI: openai === 'yes',
       hasOpencodeZen: true,
       hasTmux: false,
+      installSkills: skills === 'yes',
     };
   } finally {
     rl.close();
@@ -233,6 +249,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   // Calculate total steps dynamically
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
   if (config.hasAntigravity) totalSteps += 1; // provider config only (no auth plugin needed)
+  if (config.installSkills) totalSteps += 1; // skills installation
 
   let step = 1;
 
@@ -258,6 +275,22 @@ async function runInstall(config: InstallConfig): Promise<number> {
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
   const liteResult = writeLiteConfig(config);
   if (!handleStepResult(liteResult, 'Config written')) return 1;
+
+  // Install skills if requested
+  if (config.installSkills) {
+    printStep(step++, totalSteps, 'Installing recommended skills...');
+    let skillsInstalled = 0;
+    for (const skill of RECOMMENDED_SKILLS) {
+      printInfo(`Installing ${skill.name}...`);
+      if (installSkill(skill)) {
+        printSuccess(`Installed: ${skill.name}`);
+        skillsInstalled++;
+      } else {
+        printWarning(`Failed to install: ${skill.name}`);
+      }
+    }
+    printSuccess(`${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`);
+  }
 
   // Summary
   console.log();

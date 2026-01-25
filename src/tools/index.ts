@@ -14,6 +14,3 @@ export {
 
 // Antigravity quota tool
 export { antigravity_quota } from './quota';
-
-// Skill tools
-export { createSkillTools, SkillMcpManager } from './skill';

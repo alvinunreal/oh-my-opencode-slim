@@ -2,6 +2,7 @@ import type { Plugin } from '@opencode-ai/plugin';
 import { getAgentConfigs } from './agents';
 import { BackgroundTaskManager, TmuxSessionManager } from './background';
 import { loadPluginConfig, type TmuxConfig } from './config';
+import { parseList } from './config/agent-mcps';
 import {
   createAutoUpdateCheckerHook,
   createPhaseReminderHook,
@@ -13,15 +14,12 @@ import {
   ast_grep_replace,
   ast_grep_search,
   createBackgroundTools,
-  createSkillTools,
   grep,
   lsp_diagnostics,
   lsp_find_references,
   lsp_goto_definition,
   lsp_rename,
-  SkillMcpManager,
 } from './tools';
-import { parseList } from './tools/skill/builtin';
 import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
 
@@ -55,8 +53,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config,
   );
   const mcps = createBuiltinMcps(config.disabled_mcps);
-  const skillMcpManager = SkillMcpManager.getInstance();
-  const skillTools = createSkillTools(skillMcpManager, config);
 
   // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
   const tmuxSessionManager = new TmuxSessionManager(ctx, tmuxConfig);
@@ -88,7 +84,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ast_grep_search,
       ast_grep_replace,
       antigravity_quota,
-      ...skillTools,
     },
 
     mcp: mcps,

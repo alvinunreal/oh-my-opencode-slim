@@ -1,8 +1,7 @@
-import {
-  DEFAULT_AGENT_MCPS,
-  DEFAULT_AGENT_SKILLS,
-} from '../tools/skill/builtin';
+import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
+import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
+
 
 /**
  * Provider configurations for Cliproxy (Antigravity via cliproxy)
@@ -111,7 +110,7 @@ export function generateLiteConfig(
       designer: {
         model: 'cliproxy/gemini-3-flash-preview',
         variant: 'medium',
-        skills: ['playwright'],
+        skills: ['agent-browser'],
         mcps: [],
       },
       fixer: {
@@ -151,7 +150,7 @@ export function generateLiteConfig(
       designer: {
         model: 'cliproxy/gemini-3-flash-preview',
         variant: 'medium',
-        skills: ['playwright'],
+        skills: ['agent-browser'],
         mcps: [],
       },
       fixer: {
@@ -171,19 +170,30 @@ export function generateLiteConfig(
       { model: string; variant?: string; skills: string[]; mcps: string[] }
     > =>
       Object.fromEntries(
-        Object.entries(models).map(([k, v]) => [
-          k,
-          {
-            model: v.model,
-            variant: v.variant,
-            skills:
-              DEFAULT_AGENT_SKILLS[k as keyof typeof DEFAULT_AGENT_SKILLS] ??
-              [],
-            mcps:
-              DEFAULT_AGENT_MCPS[k as keyof typeof DEFAULT_AGENT_MCPS] ?? [],
-          },
-        ]),
+        Object.entries(models).map(([agentName, v]) => {
+          const skills =
+            agentName === 'orchestrator'
+              ? ['*']
+              : RECOMMENDED_SKILLS.filter(
+                (s) =>
+                  s.allowedAgents.includes('*') ||
+                  s.allowedAgents.includes(agentName),
+              ).map((s) => s.skillName);
+
+          return [
+            agentName,
+            {
+              model: v.model,
+              variant: v.variant,
+              skills,
+              mcps:
+                DEFAULT_AGENT_MCPS[agentName as keyof typeof DEFAULT_AGENT_MCPS] ??
+                [],
+            },
+          ];
+        }),
       );
+
     (config.presets as Record<string, unknown>).openai = createAgents(
       MODEL_MAPPINGS.openai,
     );
@@ -197,18 +207,29 @@ export function generateLiteConfig(
       { model: string; variant?: string; skills: string[]; mcps: string[] }
     > =>
       Object.fromEntries(
-        Object.entries(models).map(([k, v]) => [
-          k,
-          {
-            model: v.model,
-            variant: v.variant,
-            skills:
-              DEFAULT_AGENT_SKILLS[k as keyof typeof DEFAULT_AGENT_SKILLS] ??
-              [],
-            mcps:
-              DEFAULT_AGENT_MCPS[k as keyof typeof DEFAULT_AGENT_MCPS] ?? [],
-          },
-        ]),
+        Object.entries(models).map(([agentName, v]) => {
+          const skills =
+            agentName === 'orchestrator'
+              ? ['*']
+              : RECOMMENDED_SKILLS.filter(
+                (s) =>
+                  s.allowedAgents.includes('*') ||
+                  s.allowedAgents.includes(agentName),
+              ).map((s) => s.skillName);
+
+
+          return [
+            agentName,
+            {
+              model: v.model,
+              variant: v.variant,
+              skills,
+              mcps:
+                DEFAULT_AGENT_MCPS[agentName as keyof typeof DEFAULT_AGENT_MCPS] ??
+                [],
+            },
+          ];
+        }),
       );
     (config.presets as Record<string, unknown>)['zen-free'] = createAgents(
       MODEL_MAPPINGS['zen-free'],
