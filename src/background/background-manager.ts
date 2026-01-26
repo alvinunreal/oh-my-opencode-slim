@@ -172,14 +172,15 @@ export class BackgroundTaskManager {
    * Start a task in the background (Phase B).
    */
   private async startTask(task: BackgroundTask): Promise<void> {
-    // Check if cancelled before starting
-    if (task.status === 'cancelled') {
+    task.status = 'starting';
+    this.activeStarts++;
+
+    // Check if cancelled after incrementing activeStarts (to catch race)
+    // Use type assertion since cancel() can change status during race condition
+    if ((task as BackgroundTask & { status: string }).status === 'cancelled') {
       this.completeTask(task, 'cancelled', 'Task cancelled before start');
       return;
     }
-
-    task.status = 'starting';
-    this.activeStarts++;
 
     try {
       // Create session
@@ -313,11 +314,8 @@ export class BackgroundTaskManager {
     status: 'completed' | 'failed' | 'cancelled',
     resultOrError: string,
   ): void {
-    if (
-      task.status === 'completed' ||
-      task.status === 'failed' ||
-      task.status === 'cancelled'
-    ) {
+    // Don't check for 'cancelled' here - cancel() may set status before calling
+    if (task.status === 'completed' || task.status === 'failed') {
       return; // Already completed
     }
 
@@ -428,8 +426,18 @@ export class BackgroundTaskManager {
           task.status === 'starting' ||
           task.status === 'running')
       ) {
+        // Clean up any waiting resolver
+        this.completionResolvers.delete(taskId);
+
+        // Check if in start queue (must check before marking cancelled)
+        const inStartQueue = task.status === 'pending';
+
+        // Mark as cancelled FIRST to prevent race with startTask
+        // Use type assertion since we're deliberately changing status before completeTask
+        (task as BackgroundTask & { status: string }).status = 'cancelled';
+
         // Remove from start queue if pending
-        if (task.status === 'pending') {
+        if (inStartQueue) {
           const idx = this.startQueue.findIndex((t) => t.id === taskId);
           if (idx >= 0) {
             this.startQueue.splice(idx, 1);
@@ -449,8 +457,18 @@ export class BackgroundTaskManager {
         task.status === 'starting' ||
         task.status === 'running'
       ) {
+        // Clean up any waiting resolver
+        this.completionResolvers.delete(task.id);
+
+        // Check if in start queue (must check before marking cancelled)
+        const inStartQueue = task.status === 'pending';
+
+        // Mark as cancelled FIRST to prevent race with startTask
+        // Use type assertion since we're deliberately changing status before completeTask
+        (task as BackgroundTask & { status: string }).status = 'cancelled';
+
         // Remove from start queue if pending
-        if (task.status === 'pending') {
+        if (inStartQueue) {
           const idx = this.startQueue.findIndex((t) => t.id === task.id);
           if (idx >= 0) {
             this.startQueue.splice(idx, 1);
