@@ -112,7 +112,8 @@ Use \`background_output\` with task_id="${task.id}" to get results.`;
         task &&
         timeout > 0 &&
         task.status !== 'completed' &&
-        task.status !== 'failed'
+        task.status !== 'failed' &&
+        task.status !== 'cancelled'
       ) {
         task = await manager.waitForCompletion(taskId, timeout);
       }

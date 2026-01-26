@@ -313,7 +313,11 @@ export class BackgroundTaskManager {
     status: 'completed' | 'failed' | 'cancelled',
     resultOrError: string,
   ): void {
-    if (task.status === 'completed' || task.status === 'failed') {
+    if (
+      task.status === 'completed' ||
+      task.status === 'failed' ||
+      task.status === 'cancelled'
+    ) {
       return; // Already completed
     }
 
