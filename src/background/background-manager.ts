@@ -328,6 +328,11 @@ export class BackgroundTaskManager {
       task.error = resultOrError;
     }
 
+    // Clean up tasksBySessionId map to prevent memory leak
+    if (task.sessionId) {
+      this.tasksBySessionId.delete(task.sessionId);
+    }
+
     // Send notification if configured
     if (task.config.notifyOnComplete && task.parentSessionId) {
       this.sendCompletionNotification(task).catch((err) => {
