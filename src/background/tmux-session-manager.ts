@@ -116,6 +116,9 @@ export class TmuxSessionManager {
         sessionId,
         paneId: paneResult.paneId,
       });
+
+      // Start polling for fallback reliability
+      this.startPolling();
     }
   }
 
@@ -224,28 +227,6 @@ export class TmuxSessionManager {
     if (this.sessions.size === 0) {
       this.stopPolling();
     }
-  }
-
-  /**
-   * Create the event handler for session.created events.
-   */
-  createSessionCreatedHandler(): (input: {
-    event: SessionEvent;
-  }) => Promise<void> {
-    return async (input) => {
-      await this.onSessionCreated(input.event);
-    };
-  }
-
-  /**
-   * Create the event handler for session.status events.
-   */
-  createSessionStatusHandler(): (input: {
-    event: SessionEvent;
-  }) => Promise<void> {
-    return async (input) => {
-      await this.onSessionStatus(input.event);
-    };
   }
 
   /**

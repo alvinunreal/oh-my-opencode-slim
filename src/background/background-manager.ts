@@ -15,7 +15,6 @@
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
-import { POLL_INTERVAL_BACKGROUND_MS } from '../config';
 import type { TmuxConfig } from '../config/schema';
 import { applyAgentVariant, resolveAgentVariant } from '../utils';
 import { log } from '../utils/logger';
@@ -66,7 +65,6 @@ export interface LaunchOptions {
   prompt: string; // Initial prompt to send to the agent
   description: string; // Human-readable task description
   parentSessionId: string; // Parent session ID for task hierarchy
-  model?: string; // Optional model override
   notifyOnComplete?: boolean; // Whether to notify parent session on completion
 }
 
@@ -225,10 +223,9 @@ export class BackgroundTaskManager {
         sessionId: session.data.id,
       });
     } catch (error) {
-      task.status = 'failed';
-      task.error = error instanceof Error ? error.message : String(error);
-      task.completedAt = new Date();
-      this.completeTask(task, 'failed', task.error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.completeTask(task, 'failed', errorMessage);
     } finally {
       this.activeStarts--;
       this.processQueue();
@@ -435,9 +432,6 @@ export class BackgroundTaskManager {
           }
         }
 
-        task.status = 'cancelled';
-        task.error = 'Cancelled by user';
-        task.completedAt = new Date();
         this.completeTask(task, 'cancelled', 'Cancelled by user');
         return 1;
       }
@@ -459,9 +453,6 @@ export class BackgroundTaskManager {
           }
         }
 
-        task.status = 'cancelled';
-        task.error = 'Cancelled by user';
-        task.completedAt = new Date();
         this.completeTask(task, 'cancelled', 'Cancelled by user');
         count++;
       }
