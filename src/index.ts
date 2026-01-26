@@ -165,6 +165,22 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           };
         },
       );
+
+      // Handle session.status events for:
+      // 1. BackgroundTaskManager: completion detection
+      // 2. TmuxSessionManager: pane cleanup
+      await backgroundManager.handleSessionStatus(
+        input.event as {
+          type: string;
+          properties?: { sessionID?: string; status?: { type: string } };
+        },
+      );
+      await tmuxSessionManager.onSessionStatus(
+        input.event as {
+          type: string;
+          properties?: { sessionID?: string; status?: { type: string } };
+        },
+      );
     },
 
     // Inject phase reminder before sending to API (doesn't show in UI)

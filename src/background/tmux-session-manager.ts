@@ -17,19 +17,24 @@ interface TrackedSession {
 }
 
 /**
- * Event shape for session creation hooks
+ * Event shape for session events
  */
-interface SessionCreatedEvent {
+interface SessionEvent {
   type: string;
-  properties?: { info?: { id?: string; parentID?: string; title?: string } };
+  properties?: {
+    info?: { id?: string; parentID?: string; title?: string };
+    sessionID?: string;
+    status?: { type: string };
+  };
 }
 
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
 
 /**
- * TmuxSessionManager tracks child sessions (created by OpenCode's Task tool)
- * and spawns/closes tmux panes for them.
+ * TmuxSessionManager tracks child sessions and spawns/closes tmux panes for them.
+ *
+ * Uses session.status events for completion detection instead of polling.
  */
 export class TmuxSessionManager {
   private client: OpencodeClient;
@@ -58,10 +63,7 @@ export class TmuxSessionManager {
    * Handle session.created events.
    * Spawns a tmux pane for child sessions (those with parentID).
    */
-  async onSessionCreated(event: {
-    type: string;
-    properties?: { info?: { id?: string; parentID?: string; title?: string } };
-  }): Promise<void> {
+  async onSessionCreated(event: SessionEvent): Promise<void> {
     if (!this.enabled) return;
     if (event.type !== 'session.created') return;
 
@@ -114,8 +116,25 @@ export class TmuxSessionManager {
         sessionId,
         paneId: paneResult.paneId,
       });
+    }
+  }
 
-      this.startPolling();
+  /**
+   * Handle session.status events for completion detection.
+   * Uses session.status instead of deprecated session.idle.
+   *
+   * When a session becomes idle (completed), close its pane.
+   */
+  async onSessionStatus(event: SessionEvent): Promise<void> {
+    if (!this.enabled) return;
+    if (event.type !== 'session.status') return;
+
+    const sessionId = event.properties?.sessionID;
+    if (!sessionId) return;
+
+    // Check if session is idle (completed)
+    if (event.properties?.status?.type === 'idle') {
+      await this.closeSession(sessionId);
     }
   }
 
@@ -137,6 +156,10 @@ export class TmuxSessionManager {
     }
   }
 
+  /**
+   * Poll sessions for status updates (fallback for reliability).
+   * Also handles timeout and missing session detection.
+   */
   private async pollSessions(): Promise<void> {
     if (this.sessions.size === 0) {
       this.stopPolling();
@@ -204,13 +227,24 @@ export class TmuxSessionManager {
   }
 
   /**
-   * Create the event handler for the plugin's event hook.
+   * Create the event handler for session.created events.
    */
-  createEventHandler(): (input: {
-    event: { type: string; properties?: unknown };
+  createSessionCreatedHandler(): (input: {
+    event: SessionEvent;
   }) => Promise<void> {
     return async (input) => {
-      await this.onSessionCreated(input.event as SessionCreatedEvent);
+      await this.onSessionCreated(input.event);
+    };
+  }
+
+  /**
+   * Create the event handler for session.status events.
+   */
+  createSessionStatusHandler(): (input: {
+    event: SessionEvent;
+  }) => Promise<void> {
+    return async (input) => {
+      await this.onSessionStatus(input.event);
     };
   }
 

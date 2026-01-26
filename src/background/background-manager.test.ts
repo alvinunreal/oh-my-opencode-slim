@@ -12,15 +12,18 @@ function createMockContext(overrides?: {
     }>;
   };
 }) {
+  let callCount = 0;
   return {
     client: {
       session: {
-        create: mock(
-          async () =>
+        create: mock(async () => {
+          callCount++;
+          return (
             overrides?.sessionCreateResult ?? {
-              data: { id: 'test-session-id' },
-            },
-        ),
+              data: { id: `test-session-${callCount}` },
+            }
+          );
+        }),
         status: mock(
           async () => overrides?.sessionStatusResult ?? { data: {} },
         ),
@@ -36,10 +39,9 @@ function createMockContext(overrides?: {
 
 describe('BackgroundTaskManager', () => {
   describe('constructor', () => {
-    test('creates manager with tmux disabled by default', () => {
+    test('creates manager with defaults', () => {
       const ctx = createMockContext();
       const manager = new BackgroundTaskManager(ctx);
-      // Manager should be created without errors
       expect(manager).toBeDefined();
     });
 
@@ -52,14 +54,25 @@ describe('BackgroundTaskManager', () => {
       });
       expect(manager).toBeDefined();
     });
+
+    test('creates manager with background config', () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        background: {
+          notifyOnComplete: true,
+          maxConcurrentStarts: 5,
+        },
+      });
+      expect(manager).toBeDefined();
+    });
   });
 
-  describe('launch', () => {
-    test('creates new session and task', async () => {
+  describe('launch (fire-and-forget)', () => {
+    test('returns task immediately with pending or starting status', async () => {
       const ctx = createMockContext();
       const manager = new BackgroundTaskManager(ctx);
 
-      const task = await manager.launch({
+      const task = manager.launch({
         agent: 'explorer',
         prompt: 'Find all test files',
         description: 'Test file search',
@@ -67,71 +80,90 @@ describe('BackgroundTaskManager', () => {
       });
 
       expect(task.id).toMatch(/^bg_/);
-      expect(task.sessionId).toBe('test-session-id');
+      // Task may be pending (in queue) or starting (already started)
+      expect(['pending', 'starting']).toContain(task.status);
+      expect(task.sessionId).toBeUndefined();
       expect(task.agent).toBe('explorer');
       expect(task.description).toBe('Test file search');
-      expect(task.status).toBe('running');
       expect(task.startedAt).toBeDefined();
     });
 
-    test('throws when session creation fails', async () => {
+    test('sessionId is set asynchronously when task starts', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Immediately after launch, no sessionId
+      expect(task.sessionId).toBeUndefined();
+
+      // Wait for microtask queue to process
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // After background start, sessionId should be set
+      expect(task.sessionId).toBeDefined();
+      expect(task.status).toBe('running');
+    });
+
+    test('task fails when session creation fails', async () => {
       const ctx = createMockContext({ sessionCreateResult: { data: {} } });
       const manager = new BackgroundTaskManager(ctx);
 
-      await expect(
-        manager.launch({
-          agent: 'explorer',
-          prompt: 'test',
-          description: 'test',
-          parentSessionId: 'parent-123',
-        }),
-      ).rejects.toThrow('Failed to create background session');
-    });
-
-    test('passes model to prompt when provided', async () => {
-      const ctx = createMockContext();
-      const manager = new BackgroundTaskManager(ctx);
-
-      await manager.launch({
+      const task = manager.launch({
         agent: 'explorer',
         prompt: 'test',
         description: 'test',
         parentSessionId: 'parent-123',
-        model: 'custom/model',
       });
 
-      expect(ctx.client.session.prompt).toHaveBeenCalled();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(task.status).toBe('failed');
+      expect(task.error).toBe('Failed to create background session');
+    });
+
+    test('multiple launches return immediately', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task1 = manager.launch({
+        agent: 'explorer',
+        prompt: 'test1',
+        description: 'test1',
+        parentSessionId: 'parent-123',
+      });
+
+      const task2 = manager.launch({
+        agent: 'oracle',
+        prompt: 'test2',
+        description: 'test2',
+        parentSessionId: 'parent-123',
+      });
+
+      const task3 = manager.launch({
+        agent: 'fixer',
+        prompt: 'test3',
+        description: 'test3',
+        parentSessionId: 'parent-123',
+      });
+
+      // All return immediately with pending or starting status
+      expect(['pending', 'starting']).toContain(task1.status);
+      expect(['pending', 'starting']).toContain(task2.status);
+      expect(['pending', 'starting']).toContain(task3.status);
     });
   });
 
-  describe('getResult', () => {
-    test('returns null for unknown task', async () => {
-      const ctx = createMockContext();
-      const manager = new BackgroundTaskManager(ctx);
-
-      const result = await manager.getResult('unknown-task-id');
-      expect(result).toBeNull();
-    });
-
-    test('returns task immediately when not blocking', async () => {
-      const ctx = createMockContext();
-      const manager = new BackgroundTaskManager(ctx);
-
-      const task = await manager.launch({
-        agent: 'explorer',
-        prompt: 'test',
-        description: 'test',
-        parentSessionId: 'parent-123',
-      });
-
-      const result = await manager.getResult(task.id, false);
-      expect(result).toBeDefined();
-      expect(result?.id).toBe(task.id);
-    });
-
-    test('returns completed task immediately even when blocking', async () => {
+  describe('handleSessionStatus', () => {
+    test('completes task when session becomes idle', async () => {
       const ctx = createMockContext({
-        sessionStatusResult: { data: { 'test-session-id': { type: 'idle' } } },
         sessionMessagesResult: {
           data: [
             {
@@ -143,25 +175,202 @@ describe('BackgroundTaskManager', () => {
       });
       const manager = new BackgroundTaskManager(ctx);
 
-      const task = await manager.launch({
+      const task = manager.launch({
         agent: 'explorer',
         prompt: 'test',
         description: 'test',
         parentSessionId: 'parent-123',
       });
 
-      const result = await manager.getResult(task.id, true);
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Simulate session.idle event
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      expect(task.status).toBe('completed');
+      expect(task.result).toBe('Result text');
+    });
+
+    test('ignores non-idle status', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Simulate session.busy event
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'busy' },
+        },
+      });
+
+      expect(task.status).toBe('running');
+    });
+
+    test('ignores non-matching session ID', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Simulate event for different session
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'other-session-id',
+          status: { type: 'idle' },
+        },
+      });
+
+      expect(task.status).toBe('running');
+    });
+  });
+
+  describe('getResult', () => {
+    test('returns null for unknown task', () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const result = manager.getResult('unknown-task-id');
+      expect(result).toBeNull();
+    });
+
+    test('returns task immediately (no blocking)', () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      const result = manager.getResult(task.id);
+      expect(result).toBeDefined();
+      expect(result?.id).toBe(task.id);
+    });
+  });
+
+  describe('waitForCompletion', () => {
+    test('waits for task to complete', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Done' }],
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Trigger completion via session.status event
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      // Now waitForCompletion should return immediately
+      const result = await manager.waitForCompletion(task.id, 5000);
       expect(result?.status).toBe('completed');
-      expect(result?.result).toBe('Result text');
+      expect(result?.result).toBe('Done');
+    });
+
+    test('returns immediately if already completed', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Done' }],
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Trigger completion
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      // Now wait should return immediately
+      const result = await manager.waitForCompletion(task.id, 5000);
+      expect(result?.status).toBe('completed');
+    });
+
+    test('returns null for unknown task', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const result = await manager.waitForCompletion('unknown-task-id', 5000);
+      expect(result).toBeNull();
     });
   });
 
   describe('cancel', () => {
-    test('cancels specific running task', async () => {
+    test('cancels pending task before it starts', () => {
       const ctx = createMockContext();
       const manager = new BackgroundTaskManager(ctx);
 
-      const task = await manager.launch({
+      const task = manager.launch({
         agent: 'explorer',
         prompt: 'test',
         description: 'test',
@@ -171,9 +380,30 @@ describe('BackgroundTaskManager', () => {
       const count = manager.cancel(task.id);
       expect(count).toBe(1);
 
-      const result = await manager.getResult(task.id);
-      expect(result?.status).toBe('failed');
-      expect(result?.error).toBe('Cancelled by user');
+      const result = manager.getResult(task.id);
+      expect(result?.status).toBe('cancelled');
+    });
+
+    test('cancels running task', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const count = manager.cancel(task.id);
+      expect(count).toBe(1);
+
+      const result = manager.getResult(task.id);
+      expect(result?.status).toBe('cancelled');
     });
 
     test('returns 0 when cancelling unknown task', () => {
@@ -184,24 +414,18 @@ describe('BackgroundTaskManager', () => {
       expect(count).toBe(0);
     });
 
-    test('cancels all running tasks when no ID provided', async () => {
+    test('cancels all pending/running tasks when no ID provided', () => {
       const ctx = createMockContext();
-      // Make each call return a different session ID
-      let callCount = 0;
-      ctx.client.session.create = mock(async () => {
-        callCount++;
-        return { data: { id: `session-${callCount}` } };
-      });
       const manager = new BackgroundTaskManager(ctx);
 
-      await manager.launch({
+      manager.launch({
         agent: 'explorer',
         prompt: 'test1',
         description: 'test1',
         parentSessionId: 'parent-123',
       });
 
-      await manager.launch({
+      manager.launch({
         agent: 'oracle',
         prompt: 'test2',
         description: 'test2',
@@ -214,7 +438,6 @@ describe('BackgroundTaskManager', () => {
 
     test('does not cancel already completed tasks', async () => {
       const ctx = createMockContext({
-        sessionStatusResult: { data: { 'test-session-id': { type: 'idle' } } },
         sessionMessagesResult: {
           data: [
             {
@@ -226,100 +449,169 @@ describe('BackgroundTaskManager', () => {
       });
       const manager = new BackgroundTaskManager(ctx);
 
-      const task = await manager.launch({
+      const task = manager.launch({
         agent: 'explorer',
         prompt: 'test',
         description: 'test',
         parentSessionId: 'parent-123',
       });
 
-      // Use getResult with block=true to wait for completion
-      // This triggers polling immediately rather than relying on interval
-      const result = await manager.getResult(task.id, true, 5000);
-      expect(result?.status).toBe('completed');
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Trigger completion
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
 
       // Now try to cancel - should fail since already completed
       const count = manager.cancel(task.id);
-      expect(count).toBe(0); // Already completed, so not cancelled
+      expect(count).toBe(0);
     });
   });
-});
 
-describe('BackgroundTask logic', () => {
-  test('extracts content from multiple types and messages', async () => {
-    const ctx = createMockContext({
-      sessionStatusResult: { data: { 'test-session-id': { type: 'idle' } } },
-      sessionMessagesResult: {
-        data: [
-          {
-            info: { role: 'assistant' },
-            parts: [
-              { type: 'reasoning', text: 'I am thinking...' },
-              { type: 'text', text: 'First part.' },
-            ],
-          },
-          {
-            info: { role: 'assistant' },
-            parts: [
-              { type: 'text', text: 'Second part.' },
-              { type: 'text', text: '' }, // Should be ignored
-            ],
-          },
-        ],
-      },
-    });
-    const manager = new BackgroundTaskManager(ctx);
-    const task = await manager.launch({
-      agent: 'test',
-      prompt: 'test',
-      description: 'test',
-      parentSessionId: 'p1',
+  describe('BackgroundTask logic', () => {
+    test('extracts content from multiple types and messages', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [
+                { type: 'reasoning', text: 'I am thinking...' },
+                { type: 'text', text: 'First part.' },
+              ],
+            },
+            {
+              info: { role: 'assistant' },
+              parts: [
+                { type: 'text', text: 'Second part.' },
+                { type: 'text', text: '' }, // Should be ignored
+              ],
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx);
+
+      const task = manager.launch({
+        agent: 'test',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'p1',
+      });
+
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Trigger completion
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      expect(task.status).toBe('completed');
+      expect(task.result).toContain('I am thinking...');
+      expect(task.result).toContain('First part.');
+      expect(task.result).toContain('Second part.');
+      // Check for double newline join
+      expect(task.result).toBe(
+        'I am thinking...\n\nFirst part.\n\nSecond part.',
+      );
     });
 
-    const result = await manager.getResult(task.id, true);
-    expect(result?.status).toBe('completed');
-    expect(result?.result).toContain('I am thinking...');
-    expect(result?.result).toContain('First part.');
-    expect(result?.result).toContain('Second part.');
-    // Check for double newline join
-    expect(result?.result).toBe(
-      'I am thinking...\n\nFirst part.\n\nSecond part.',
-    );
-  });
+    test('task has completedAt timestamp on completion or cancellation', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'done' }],
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx);
 
-  test('task has completedAt timestamp on success or failure', async () => {
-    const ctx = createMockContext({
-      sessionStatusResult: { data: { 'test-session-id': { type: 'idle' } } },
-      sessionMessagesResult: {
-        data: [
-          {
-            info: { role: 'assistant' },
-            parts: [{ type: 'text', text: 'done' }],
-          },
-        ],
-      },
-    });
-    const manager = new BackgroundTaskManager(ctx);
+      // Test completion timestamp
+      const task1 = manager.launch({
+        agent: 'test',
+        prompt: 't1',
+        description: 'd1',
+        parentSessionId: 'p1',
+      });
 
-    // Test success timestamp
-    const task1 = await manager.launch({
-      agent: 'test',
-      prompt: 't1',
-      description: 'd1',
-      parentSessionId: 'p1',
-    });
-    await manager.getResult(task1.id, true);
-    expect(task1.completedAt).toBeInstanceOf(Date);
+      await Promise.resolve();
+      await Promise.resolve();
 
-    // Test cancellation timestamp
-    const task2 = await manager.launch({
-      agent: 'test',
-      prompt: 't2',
-      description: 'd2',
-      parentSessionId: 'p2',
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task1.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      expect(task1.completedAt).toBeInstanceOf(Date);
+      expect(task1.status).toBe('completed');
+
+      // Test cancellation timestamp
+      const task2 = manager.launch({
+        agent: 'test',
+        prompt: 't2',
+        description: 'd2',
+        parentSessionId: 'p2',
+      });
+
+      manager.cancel(task2.id);
+      expect(task2.completedAt).toBeInstanceOf(Date);
+      expect(task2.status).toBe('cancelled');
     });
-    manager.cancel(task2.id);
-    expect(task2.completedAt).toBeInstanceOf(Date);
-    expect(task2.status).toBe('failed');
+
+    test('notifyOnComplete sends notification to parent session', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'done' }],
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        background: { notifyOnComplete: true, maxConcurrentStarts: 10 },
+      });
+
+      const task = manager.launch({
+        agent: 'test',
+        prompt: 't',
+        description: 'd',
+        parentSessionId: 'parent-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      // Should have called prompt.append for notification
+      expect(ctx.client.session.prompt).toHaveBeenCalled();
+    });
   });
 });
