@@ -21,12 +21,12 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 
 // Default models for each agent
 export const DEFAULT_MODELS: Record<AgentName, string> = {
-  orchestrator: 'google/claude-opus-4-5-thinking',
+  orchestrator: 'kimi-for-coding/k2p5',
   oracle: 'openai/gpt-5.2-codex',
-  librarian: 'google/gemini-3-flash',
-  explorer: 'google/gemini-3-flash',
-  designer: 'google/gemini-3-flash',
-  fixer: 'google/gemini-3-flash',
+  librarian: 'openai/gpt-5.1-codex-mini',
+  explorer: 'openai/gpt-5.1-codex-mini',
+  designer: 'kimi-for-coding/k2p5',
+  fixer: 'openai/gpt-5.1-codex-mini',
 };
 
 // Polling configuration

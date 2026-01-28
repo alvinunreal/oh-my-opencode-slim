@@ -11,6 +11,3 @@ export {
   lsp_rename,
   lspManager,
 } from './lsp';
-
-// Antigravity quota tool
-export { antigravity_quota } from './quota';

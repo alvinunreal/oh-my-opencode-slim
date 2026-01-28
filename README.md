@@ -63,7 +63,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cliproxy/gemini-claude-opus-4-5-thinking</code> <code>openai/gpt-5.2-codex</code>
+      <b>Recommended Models:</b> <code>kimi-for-coding/k2p5</code> <code>openai/gpt-5.2-codex</code>
     </td>
   </tr>
 </table>
@@ -125,7 +125,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.2-codex</code> <code>cliproxy/gemini-3-pro-high</code>
+      <b>Recommended Models:</b> <code>openai/gpt-5.2-codex</code> <code>kimi-for-coding/k2p5</code>
     </td>
   </tr>
 </table>
@@ -229,12 +229,6 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 
 - **[Quick Reference](docs/quick-reference.md)** - Presets, Skills, MCPs, Tools, Configuration
 - **[Installation Guide](docs/installation.md)** - Detailed installation and troubleshooting
-
----
-
-## 🙏 Credits
-
-This is a slimmed-down fork of [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) by [@code-yeongyu](https://github.com/code-yeongyu).
 
 ---
 

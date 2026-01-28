@@ -2,56 +2,15 @@ import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
 
-/**
- * Provider configurations for Cliproxy (Antigravity via cliproxy)
- */
-export const CLIPROXY_PROVIDER_CONFIG = {
-  cliproxy: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'CliProxy',
-    options: {
-      baseURL: 'http://127.0.0.1:8317/v1',
-      apiKey: 'your-api-key-1',
-    },
-    models: {
-      'gemini-3-pro-high': {
-        name: 'Gemini 3 Pro High',
-        thinking: true,
-        attachment: true,
-        limit: { context: 1048576, output: 65535 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-      },
-      'gemini-3-flash-preview': {
-        name: 'Gemini 3 Flash',
-        attachment: true,
-        limit: { context: 1048576, output: 65536 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-      },
-      'gemini-claude-opus-4-5-thinking': {
-        name: 'Claude Opus 4.5 Thinking',
-        attachment: true,
-        limit: { context: 200000, output: 32000 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-      },
-      'gemini-claude-sonnet-4-5-thinking': {
-        name: 'Claude Sonnet 4.5 Thinking',
-        attachment: true,
-        limit: { context: 200000, output: 32000 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-      },
-    },
-  },
-};
-
 // Model mappings by provider priority
 export const MODEL_MAPPINGS = {
-  antigravity: {
-    orchestrator: { model: 'cliproxy/gemini-claude-opus-4-5-thinking' },
-    oracle: { model: 'cliproxy/gemini-3-pro-preview', variant: 'high' },
-    librarian: { model: 'cliproxy/gemini-3-flash-preview', variant: 'low' },
-    explorer: { model: 'cliproxy/gemini-3-flash-preview', variant: 'low' },
-    designer: { model: 'cliproxy/gemini-3-flash-preview', variant: 'medium' },
-    fixer: { model: 'cliproxy/gemini-3-flash-preview', variant: 'low' },
+  kimi: {
+    orchestrator: { model: 'kimi-for-coding/k2p5' },
+    oracle: { model: 'kimi-for-coding/k2p5', variant: 'high' },
+    librarian: { model: 'kimi-for-coding/k2p5', variant: 'low' },
+    explorer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
+    designer: { model: 'kimi-for-coding/k2p5', variant: 'medium' },
+    fixer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
   },
   openai: {
     orchestrator: { model: 'openai/gpt-5.2-codex' },
@@ -80,8 +39,8 @@ export function generateLiteConfig(
   };
 
   // Determine active preset name
-  let activePreset: 'cliproxy' | 'openai' | 'zen-free' = 'zen-free';
-  if (installConfig.hasAntigravity) activePreset = 'cliproxy';
+  let activePreset: 'kimi' | 'openai' | 'zen-free' = 'zen-free';
+  if (installConfig.hasKimi) activePreset = 'kimi';
   else if (installConfig.hasOpenAI) activePreset = 'openai';
 
   config.preset = activePreset;
@@ -121,9 +80,9 @@ export function generateLiteConfig(
       Object.entries(mapping).map(([agentName, modelInfo]) => {
         let activeModelInfo = { ...modelInfo };
 
-        // Hybrid case: Antigravity + OpenAI (use OpenAI for Oracle)
+        // Hybrid case: Kimi + OpenAI (use OpenAI for Oracle, Kimi for orchestrator/designer)
         if (
-          activePreset === 'cliproxy' &&
+          activePreset === 'kimi' &&
           installConfig.hasOpenAI &&
           agentName === 'oracle'
         ) {
@@ -135,9 +94,8 @@ export function generateLiteConfig(
     );
   };
 
-  (config.presets as Record<string, unknown>)[activePreset] = buildPreset(
-    activePreset === 'cliproxy' ? 'antigravity' : activePreset,
-  );
+  (config.presets as Record<string, unknown>)[activePreset] =
+    buildPreset(activePreset);
 
   if (installConfig.hasTmux) {
     config.tmux = {

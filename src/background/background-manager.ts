@@ -159,7 +159,8 @@ export class BackgroundTaskManager {
       this.activeStarts < this.maxConcurrentStarts &&
       this.startQueue.length > 0
     ) {
-      const task = this.startQueue.shift()!;
+      const task = this.startQueue.shift();
+      if (!task) break;
       this.startTask(task);
     }
   }

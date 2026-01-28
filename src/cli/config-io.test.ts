@@ -12,7 +12,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   addPluginToOpenCodeConfig,
-  addProviderConfig,
   detectCurrentConfig,
   disableDefaultAgents,
   parseConfig,
@@ -120,40 +119,23 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
-  // Removed: addAuthPlugins test - auth plugin no longer used with cliproxy
-
-  test('addProviderConfig adds cliproxy provider config', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    paths.ensureConfigDir();
-    writeFileSync(configPath, JSON.stringify({}));
-
-    const result = addProviderConfig({
-      hasAntigravity: true,
-      hasOpenAI: false,
-      hasOpencodeZen: false,
-      hasTmux: false,
-    });
-    expect(result.success).toBe(true);
-
-    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(saved.provider.cliproxy).toBeDefined();
-  });
-
   test('writeLiteConfig writes lite config', () => {
     const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
     paths.ensureConfigDir();
 
     const result = writeLiteConfig({
-      hasAntigravity: true,
+      hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: true,
+      installSkills: false,
+      installCustomSkills: false,
     });
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
-    expect(saved.preset).toBe('cliproxy');
-    expect(saved.presets.cliproxy).toBeDefined();
+    expect(saved.preset).toBe('kimi');
+    expect(saved.presets.kimi).toBeDefined();
     expect(saved.tmux.enabled).toBe(true);
   });
 
@@ -180,7 +162,7 @@ describe('config-io', () => {
       JSON.stringify({
         plugin: ['oh-my-opencode-slim'],
         provider: {
-          cliproxy: {
+          kimi: {
             npm: '@ai-sdk/openai-compatible',
           },
         },
@@ -201,7 +183,7 @@ describe('config-io', () => {
 
     const detected = detectCurrentConfig();
     expect(detected.isInstalled).toBe(true);
-    expect(detected.hasAntigravity).toBe(true);
+    expect(detected.hasKimi).toBe(true);
     expect(detected.hasOpenAI).toBe(true);
     expect(detected.hasTmux).toBe(true);
   });

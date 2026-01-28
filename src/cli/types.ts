@@ -2,7 +2,7 @@ export type BooleanArg = 'yes' | 'no';
 
 export interface InstallArgs {
   tui: boolean;
-  antigravity?: BooleanArg;
+  kimi?: BooleanArg;
   openai?: BooleanArg;
   tmux?: BooleanArg;
   skills?: BooleanArg;
@@ -16,7 +16,7 @@ export interface OpenCodeConfig {
 }
 
 export interface InstallConfig {
-  hasAntigravity: boolean;
+  hasKimi: boolean;
   hasOpenAI: boolean;
   hasOpencodeZen: boolean;
   hasTmux: boolean;
@@ -32,7 +32,7 @@ export interface ConfigMergeResult {
 
 export interface DetectedConfig {
   isInstalled: boolean;
-  hasAntigravity: boolean;
+  hasKimi: boolean;
   hasOpenAI: boolean;
   hasOpencodeZen: boolean;
   hasTmux: boolean;

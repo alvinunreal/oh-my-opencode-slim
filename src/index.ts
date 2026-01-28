@@ -10,7 +10,6 @@ import {
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
 import {
-  antigravity_quota,
   ast_grep_replace,
   ast_grep_search,
   createBackgroundTools,
@@ -83,7 +82,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       grep,
       ast_grep_search,
       ast_grep_replace,
-      antigravity_quota,
     },
 
     mcp: mcps,

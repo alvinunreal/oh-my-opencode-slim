@@ -1,7 +1,6 @@
 import * as readline from 'node:readline/promises';
 import {
   addPluginToOpenCodeConfig,
-  addProviderConfig,
   detectCurrentConfig,
   disableDefaultAgents,
   generateLiteConfig,
@@ -107,9 +106,7 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push(`${BOLD}Configuration Summary${RESET}`);
   lines.push('');
   lines.push(`  ${BOLD}Preset:${RESET} ${BLUE}${preset}${RESET}`);
-  lines.push(
-    `  ${config.hasAntigravity ? SYMBOLS.check : `${DIM}○${RESET}`} Antigravity`,
-  );
+  lines.push(`  ${config.hasKimi ? SYMBOLS.check : `${DIM}○${RESET}`} Kimi`);
   lines.push(
     `  ${config.hasOpenAI ? SYMBOLS.check : `${DIM}○${RESET}`} OpenAI`,
   );
@@ -153,7 +150,7 @@ function printAgentModels(config: InstallConfig): void {
 
 function argsToConfig(args: InstallArgs): InstallConfig {
   return {
-    hasAntigravity: args.antigravity === 'yes',
+    hasKimi: args.kimi === 'yes',
     hasOpenAI: args.openai === 'yes',
     hasOpencodeZen: true, // Always enabled - free models available to all users
     hasTmux: args.tmux === 'yes',
@@ -192,10 +189,10 @@ async function runInteractiveMode(
 
   try {
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`);
-    const antigravity = await askYesNo(
+    const kimi = await askYesNo(
       rl,
-      'Do you have an Antigravity subscription (via cliproxy)?',
-      'yes',
+      'Do you want to use Kimi For Coding?',
+      detected.hasKimi ? 'yes' : 'no',
     );
     console.log();
 
@@ -240,7 +237,7 @@ async function runInteractiveMode(
     console.log();
 
     return {
-      hasAntigravity: antigravity === 'yes',
+      hasKimi: kimi === 'yes',
       hasOpenAI: openai === 'yes',
       hasOpencodeZen: true,
       hasTmux: false,
@@ -260,7 +257,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   // Calculate total steps dynamically
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
-  if (config.hasAntigravity) totalSteps += 1; // provider config only (no auth plugin needed)
   if (config.installSkills) totalSteps += 1; // skills installation
   if (config.installCustomSkills) totalSteps += 1; // custom skills installation
 
@@ -277,13 +273,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
   printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
   const agentResult = disableDefaultAgents();
   if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
-
-  if (config.hasAntigravity) {
-    printStep(step++, totalSteps, 'Adding cliproxy provider configuration...');
-    const providerResult = addProviderConfig(config);
-    if (!handleStepResult(providerResult, 'Cliproxy provider configured'))
-      return 1;
-  }
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
   const liteResult = writeLiteConfig(config);
@@ -332,7 +321,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printAgentModels(config);
 
-  if (!config.hasAntigravity && !config.hasOpenAI) {
+  if (!config.hasKimi && !config.hasOpenAI) {
     printWarning(
       'No providers configured. Zen Big Pickle models will be used as fallback.',
     );
@@ -347,27 +336,13 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   let nextStep = 1;
 
-  if (config.hasAntigravity) {
-    console.log(`  ${nextStep++}. Install cliproxy:`);
-    console.log(`     ${DIM}macOS:${RESET}`);
-    console.log(`       ${BLUE}$ brew install cliproxyapi${RESET}`);
-    console.log(`       ${BLUE}$ brew services start cliproxyapi${RESET}`);
-    console.log(`     ${DIM}Linux:${RESET}`);
-    console.log(
-      `       ${BLUE}$ curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash${RESET}`,
-    );
-    console.log();
-    console.log(`  ${nextStep++}. Authenticate with Antigravity via OAuth:`);
-    console.log(`     ${BLUE}$ ./cli-proxy-api --antigravity-login${RESET}`);
-    console.log(
-      `     ${DIM}(Add --no-browser to print login URL instead of opening browser)${RESET}`,
-    );
-    console.log();
-  }
-
-  if (config.hasOpenAI || !config.hasAntigravity) {
+  if (config.hasKimi || config.hasOpenAI) {
     console.log(`  ${nextStep++}. Authenticate with your providers:`);
     console.log(`     ${BLUE}$ opencode auth login${RESET}`);
+    if (config.hasKimi) {
+      console.log();
+      console.log(`     Then select ${BOLD}Kimi For Coding${RESET} provider.`);
+    }
     console.log();
   }
 
@@ -388,7 +363,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 export async function install(args: InstallArgs): Promise<number> {
   // Non-interactive mode: all args must be provided
   if (!args.tui) {
-    const requiredArgs = ['antigravity', 'openai', 'tmux'] as const;
+    const requiredArgs = ['kimi', 'openai', 'tmux'] as const;
     const errors = requiredArgs.filter((key) => {
       const value = args[key];
       return value === undefined || !['yes', 'no'].includes(value);
@@ -402,7 +377,7 @@ export async function install(args: InstallArgs): Promise<number> {
       }
       console.log();
       printInfo(
-        'Usage: bunx oh-my-opencode-slim install --no-tui --antigravity=<yes|no> --openai=<yes|no> --tmux=<yes|no>',
+        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --tmux=<yes|no>',
       );
       console.log();
       return 1;

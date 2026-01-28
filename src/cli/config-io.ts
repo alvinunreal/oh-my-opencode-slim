@@ -12,7 +12,7 @@ import {
   getExistingConfigPath,
   getLiteConfig,
 } from './paths';
-import { CLIPROXY_PROVIDER_CONFIG, generateLiteConfig } from './providers';
+import { generateLiteConfig } from './providers';
 import type {
   ConfigMergeResult,
   DetectedConfig,
@@ -138,40 +138,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
 }
 
 // Removed: addAuthPlugins - no longer needed with cliproxy
-
-export function addProviderConfig(
-  installConfig: InstallConfig,
-): ConfigMergeResult {
-  const configPath = getExistingConfigPath();
-
-  try {
-    ensureConfigDir();
-    const { config: parsedConfig, error } = parseConfig(configPath);
-    if (error) {
-      return {
-        success: false,
-        configPath,
-        error: `Failed to parse config: ${error}`,
-      };
-    }
-    const config = parsedConfig ?? {};
-
-    if (installConfig.hasAntigravity) {
-      const providers = (config.provider ?? {}) as Record<string, unknown>;
-      providers.cliproxy = CLIPROXY_PROVIDER_CONFIG.cliproxy;
-      config.provider = providers;
-    }
-
-    writeConfig(configPath, config);
-    return { success: true, configPath };
-  } catch (err) {
-    return {
-      success: false,
-      configPath,
-      error: `Failed to add provider config: ${err}`,
-    };
-  }
-}
+// Removed: addProviderConfig - default opencode now has kimi provider config
 
 export function writeLiteConfig(
   installConfig: InstallConfig,
@@ -239,7 +206,7 @@ export function disableDefaultAgents(): ConfigMergeResult {
 export function detectCurrentConfig(): DetectedConfig {
   const result: DetectedConfig = {
     isInstalled: false,
-    hasAntigravity: false,
+    hasKimi: false,
     hasOpenAI: false,
     hasOpencodeZen: false,
     hasTmux: false,
@@ -251,9 +218,9 @@ export function detectCurrentConfig(): DetectedConfig {
   const plugins = config.plugin ?? [];
   result.isInstalled = plugins.some((p) => p.startsWith(PACKAGE_NAME));
 
-  // Check for cliproxy provider instead of auth plugin
+  // Check for kimi provider
   const providers = config.provider as Record<string, unknown> | undefined;
-  result.hasAntigravity = !!providers?.cliproxy;
+  result.hasKimi = !!providers?.kimi;
 
   // Try to detect from lite config
   const { config: liteConfig } = parseConfig(getLiteConfig());

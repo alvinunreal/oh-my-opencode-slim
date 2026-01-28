@@ -4,45 +4,44 @@ import { describe, expect, test } from 'bun:test';
 import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
 
 describe('providers', () => {
-  test('generateLiteConfig generates antigravity config when only antigravity selected', () => {
+  test('generateLiteConfig generates kimi config when only kimi selected', () => {
     const config = generateLiteConfig({
-      hasAntigravity: true,
+      hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
-    expect(config.preset).toBe('cliproxy');
-    const agents = (config.presets as any).cliproxy;
+    expect(config.preset).toBe('kimi');
+    const agents = (config.presets as any).kimi;
     expect(agents).toBeDefined();
-    expect(agents.orchestrator.model).toBe(
-      'cliproxy/gemini-claude-opus-4-5-thinking',
-    );
+    expect(agents.orchestrator.model).toBe('kimi-for-coding/k2p5');
     expect(agents.orchestrator.variant).toBeUndefined();
-    expect(agents.fixer.model).toBe('cliproxy/gemini-3-flash-preview');
+    expect(agents.fixer.model).toBe('kimi-for-coding/k2p5');
     expect(agents.fixer.variant).toBe('low');
     // Should NOT include other presets
     expect((config.presets as any).openai).toBeUndefined();
     expect((config.presets as any)['zen-free']).toBeUndefined();
   });
 
-  test('generateLiteConfig generates antigravity-openai preset when both selected', () => {
+  test('generateLiteConfig generates kimi-openai preset when both selected', () => {
     const config = generateLiteConfig({
-      hasAntigravity: true,
+      hasKimi: true,
       hasOpenAI: true,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
-    expect(config.preset).toBe('cliproxy');
-    const agents = (config.presets as any).cliproxy;
+    expect(config.preset).toBe('kimi');
+    const agents = (config.presets as any).kimi;
     expect(agents).toBeDefined();
-    expect(agents.orchestrator.model).toBe(
-      'cliproxy/gemini-claude-opus-4-5-thinking',
-    );
+    expect(agents.orchestrator.model).toBe('kimi-for-coding/k2p5');
     expect(agents.orchestrator.variant).toBeUndefined();
+    // Oracle uses OpenAI when both kimi and openai are enabled
     expect(agents.oracle.model).toBe('openai/gpt-5.2-codex');
     expect(agents.oracle.variant).toBe('high');
     // Should NOT include other presets
@@ -52,11 +51,12 @@ describe('providers', () => {
 
   test('generateLiteConfig generates openai preset when only openai selected', () => {
     const config = generateLiteConfig({
-      hasAntigravity: false,
+      hasKimi: false,
       hasOpenAI: true,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
     expect(config.preset).toBe('openai');
@@ -67,17 +67,18 @@ describe('providers', () => {
     );
     expect(agents.orchestrator.variant).toBeUndefined();
     // Should NOT include other presets
-    expect((config.presets as any).cliproxy).toBeUndefined();
+    expect((config.presets as any).kimi).toBeUndefined();
     expect((config.presets as any)['zen-free']).toBeUndefined();
   });
 
   test('generateLiteConfig generates zen-free preset when no providers selected', () => {
     const config = generateLiteConfig({
-      hasAntigravity: false,
+      hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
     expect(config.preset).toBe('zen-free');
@@ -86,17 +87,18 @@ describe('providers', () => {
     expect(agents.orchestrator.model).toBe('opencode/big-pickle');
     expect(agents.orchestrator.variant).toBeUndefined();
     // Should NOT include other presets
-    expect((config.presets as any).cliproxy).toBeUndefined();
+    expect((config.presets as any).kimi).toBeUndefined();
     expect((config.presets as any).openai).toBeUndefined();
   });
 
   test('generateLiteConfig uses zen-free big-pickle models', () => {
     const config = generateLiteConfig({
-      hasAntigravity: false,
+      hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: true,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
     expect(config.preset).toBe('zen-free');
@@ -110,11 +112,12 @@ describe('providers', () => {
 
   test('generateLiteConfig enables tmux when requested', () => {
     const config = generateLiteConfig({
-      hasAntigravity: false,
+      hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: true,
       installSkills: false,
+      installCustomSkills: false,
     });
 
     expect(config.tmux).toBeDefined();
@@ -123,14 +126,15 @@ describe('providers', () => {
 
   test('generateLiteConfig includes default skills', () => {
     const config = generateLiteConfig({
-      hasAntigravity: true,
+      hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: true,
+      installCustomSkills: false,
     });
 
-    const agents = (config.presets as any).cliproxy;
+    const agents = (config.presets as any).kimi;
     // Orchestrator should always have '*'
     expect(agents.orchestrator.skills).toEqual(['*']);
 
@@ -143,14 +147,15 @@ describe('providers', () => {
 
   test('generateLiteConfig includes mcps field', () => {
     const config = generateLiteConfig({
-      hasAntigravity: true,
+      hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
-    const agents = (config.presets as any).cliproxy;
+    const agents = (config.presets as any).kimi;
     expect(agents.orchestrator.mcps).toBeDefined();
     expect(Array.isArray(agents.orchestrator.mcps)).toBe(true);
     expect(agents.librarian.mcps).toBeDefined();
@@ -159,11 +164,12 @@ describe('providers', () => {
 
   test('generateLiteConfig zen-free includes correct mcps', () => {
     const config = generateLiteConfig({
-      hasAntigravity: false,
+      hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: false,
       hasTmux: false,
       installSkills: false,
+      installCustomSkills: false,
     });
 
     const agents = (config.presets as any)['zen-free'];

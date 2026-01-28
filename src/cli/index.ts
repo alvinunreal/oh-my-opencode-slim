@@ -10,8 +10,8 @@ function parseArgs(args: string[]): InstallArgs {
   for (const arg of args) {
     if (arg === '--no-tui') {
       result.tui = false;
-    } else if (arg.startsWith('--antigravity=')) {
-      result.antigravity = arg.split('=')[1] as BooleanArg;
+    } else if (arg.startsWith('--kimi=')) {
+      result.kimi = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--openai=')) {
       result.openai = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--tmux=')) {
@@ -32,7 +32,7 @@ oh-my-opencode-slim installer
 Usage: bunx oh-my-opencode-slim install [OPTIONS]
 
 Options:
-  --antigravity=yes|no   Antigravity subscription (yes/no)
+  --kimi=yes|no          Kimi API access (yes/no)
   --openai=yes|no        OpenAI API access (yes/no)
   --tmux=yes|no          Enable tmux integration (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
@@ -40,7 +40,7 @@ Options:
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --antigravity=yes --openai=yes --tmux=no
+  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --tmux=no
 `);
 }
 
