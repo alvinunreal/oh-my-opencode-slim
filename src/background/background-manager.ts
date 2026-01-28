@@ -65,7 +65,6 @@ export interface LaunchOptions {
   prompt: string; // Initial prompt to send to the agent
   description: string; // Human-readable task description
   parentSessionId: string; // Parent session ID for task hierarchy
-  notifyOnComplete?: boolean; // Whether to notify parent session on completion
 }
 
 function generateTaskId(): string {
@@ -102,7 +101,6 @@ export class BackgroundTaskManager {
     this.tmuxEnabled = tmuxConfig?.enabled ?? false;
     this.config = config;
     this.backgroundConfig = config?.background ?? {
-      notifyOnComplete: false,
       maxConcurrentStarts: 10,
     };
     this.maxConcurrentStarts = this.backgroundConfig.maxConcurrentStarts;
@@ -126,8 +124,6 @@ export class BackgroundTaskManager {
       status: 'pending',
       startedAt: new Date(),
       config: {
-        notifyOnComplete:
-          opts.notifyOnComplete ?? this.backgroundConfig.notifyOnComplete,
         maxConcurrentStarts: this.maxConcurrentStarts,
       },
       parentSessionId: opts.parentSessionId,
@@ -333,8 +329,8 @@ export class BackgroundTaskManager {
       this.tasksBySessionId.delete(task.sessionId);
     }
 
-    // Send notification if configured
-    if (task.config.notifyOnComplete && task.parentSessionId) {
+    // Send notification to parent session
+    if (task.parentSessionId) {
       this.sendCompletionNotification(task).catch((err) => {
         log(`[background-manager] notification failed: ${err}`);
       });

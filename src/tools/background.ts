@@ -7,43 +7,35 @@ import type { BackgroundTaskManager } from '../background';
 import type { PluginConfig } from '../config';
 import { SUBAGENT_NAMES } from '../config';
 import type { TmuxConfig } from '../config/schema';
-import { applyAgentVariant, resolveAgentVariant } from '../utils';
-import { log } from '../utils/logger';
 
 const z = tool.schema;
 
-interface SessionMessage {
-  info?: { role: string };
-  parts?: Array<{ type: string; text?: string }>;
-}
-
 /**
  * Creates background task management tools for the plugin.
- * @param ctx - Plugin input context
+ * @param _ctx - Plugin input context
  * @param manager - Background task manager for launching and tracking tasks
- * @param tmuxConfig - Optional tmux configuration for session management
- * @param pluginConfig - Optional plugin configuration for agent variants
+ * @param _tmuxConfig - Optional tmux configuration for session management
+ * @param _pluginConfig - Optional plugin configuration for agent variants
  * @returns Object containing background_task, background_output, and background_cancel tools
  */
 export function createBackgroundTools(
-  ctx: PluginInput,
+  _ctx: PluginInput,
   manager: BackgroundTaskManager,
-  tmuxConfig?: TmuxConfig,
-  pluginConfig?: PluginConfig,
+  _tmuxConfig?: TmuxConfig,
+  _pluginConfig?: PluginConfig,
 ): Record<string, ToolDefinition> {
   const agentNames = SUBAGENT_NAMES.join(', ');
 
   // Tool for launching agent tasks (fire-and-forget)
   const background_task = tool({
-    description: `Run agent task in background. Returns task_id immediately - use \`background_output\` to get results.
+    description: `Launch background agent task. Returns task_id immediately.
 
-Agents: ${agentNames}.
+Flow: launch → wait for automatic notification when complete.
 
 Key behaviors:
-- Fire-and-forget: Returns task_id in ~1ms without waiting for session creation
-- Multiple tasks launch in parallel (up to 10 concurrent)
-- Completion detection via session.status events (no polling)
-- Optional: Set notifyOnComplete=true to get notification when task completes`,
+- Fire-and-forget: returns task_id in ~1ms
+- Parallel: up to 10 concurrent tasks
+- Auto-notify: parent session receives result when task completes`,
 
     args: {
       description: z
@@ -51,10 +43,6 @@ Key behaviors:
         .describe('Short description of the task (5-10 words)'),
       prompt: z.string().describe('The task prompt for the agent'),
       agent: z.string().describe(`Agent to use: ${agentNames}`),
-      notifyOnComplete: z
-        .boolean()
-        .optional()
-        .describe('Notify parent session when task completes (default: false)'),
     },
     async execute(args, toolContext) {
       if (
@@ -68,7 +56,6 @@ Key behaviors:
       const agent = String(args.agent);
       const prompt = String(args.prompt);
       const description = String(args.description);
-      const notifyOnComplete = args.notifyOnComplete === true;
 
       // Fire-and-forget launch
       const task = manager.launch({
@@ -76,7 +63,6 @@ Key behaviors:
         prompt,
         description,
         parentSessionId: (toolContext as { sessionID: string }).sessionID,
-        notifyOnComplete,
       });
 
       return `Background task launched.
@@ -91,8 +77,13 @@ Use \`background_output\` with task_id="${task.id}" to get results.`;
 
   // Tool for retrieving output from background tasks
   const background_output = tool({
-    description:
-      'Get output from background task. Returns current state immediately (no blocking).',
+    description: `Get background task results after completion notification received.
+
+timeout=0: returns status immediately (no wait)
+timeout=N: waits up to N ms for completion
+
+Returns: results if completed, error if failed, status if running.`,
+
     args: {
       task_id: z.string().describe('Task ID from background_task'),
       timeout: z
@@ -153,8 +144,12 @@ Use \`background_output\` with task_id="${task.id}" to get results.`;
 
   // Tool for canceling running background tasks
   const background_cancel = tool({
-    description:
-      'Cancel running background task(s). Use all=true to cancel all.',
+    description: `Cancel background task(s).
+
+task_id: cancel specific task
+all=true: cancel all running tasks
+
+Only cancels pending/starting/running tasks.`,
     args: {
       task_id: z.string().optional().describe('Specific task to cancel'),
       all: z.boolean().optional().describe('Cancel all running tasks'),

@@ -1,4 +1,5 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk';
+import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
   type AgentOverrideConfig,
   DEFAULT_MODELS,
@@ -8,7 +9,6 @@ import {
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
-import { getSkillPermissionsForAgent } from '../cli/skills';
 
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';

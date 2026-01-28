@@ -59,7 +59,6 @@ describe('BackgroundTaskManager', () => {
       const ctx = createMockContext();
       const manager = new BackgroundTaskManager(ctx, undefined, {
         background: {
-          notifyOnComplete: true,
           maxConcurrentStarts: 5,
         },
       });
@@ -577,7 +576,7 @@ describe('BackgroundTaskManager', () => {
       expect(task2.status).toBe('cancelled');
     });
 
-    test('notifyOnComplete sends notification to parent session', async () => {
+    test('always sends notification to parent session on completion', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {
           data: [
@@ -589,7 +588,7 @@ describe('BackgroundTaskManager', () => {
         },
       });
       const manager = new BackgroundTaskManager(ctx, undefined, {
-        background: { notifyOnComplete: true, maxConcurrentStarts: 10 },
+        background: { maxConcurrentStarts: 10 },
       });
 
       const task = manager.launch({

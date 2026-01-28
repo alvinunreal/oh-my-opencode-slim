@@ -8,8 +8,8 @@ import {
   DEFAULT_TIMEOUT_MS,
   GREP_SAFETY_FLAGS,
   type GrepBackend,
-  resolveGrepCli,
   RG_SAFETY_FLAGS,
+  resolveGrepCli,
 } from './constants';
 import type { CountResult, GrepMatch, GrepOptions, GrepResult } from './types';
 
