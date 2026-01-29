@@ -20,10 +20,20 @@ import {
   lsp_rename,
 } from './tools';
 import { startTmuxCheck } from './utils';
-import { log } from './utils/logger';
+import { LogLevel, log, setLogLevel } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
+
+  // Set log level from config
+  const logLevelMap: Record<string, LogLevel> = {
+    error: LogLevel.ERROR,
+    warn: LogLevel.WARN,
+    info: LogLevel.INFO,
+    debug: LogLevel.DEBUG,
+  };
+  setLogLevel(logLevelMap[config.logLevel ?? 'info']);
+
   const agents = getAgentConfigs(config);
 
   // Parse tmux config with defaults

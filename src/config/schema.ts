@@ -54,6 +54,7 @@ export const PluginConfigSchema = z.object({
   disabled_mcps: z.array(z.string()).optional(),
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
+  logLevel: z.enum(['error', 'warn', 'info', 'debug']).optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;

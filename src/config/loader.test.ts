@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadAgentPrompt, loadPluginConfig } from './loader';
+import { clearPromptCache, loadAgentPrompt, loadPluginConfig } from './loader';
 
 // Test deepMerge indirectly through loadPluginConfig behavior
 // since deepMerge is not exported
@@ -570,6 +570,7 @@ describe('loadAgentPrompt', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-test-'));
     originalEnv = { ...process.env };
     process.env.XDG_CONFIG_HOME = tempDir;
+    clearPromptCache(); // Clear cache before each test
   });
 
   afterEach(() => {

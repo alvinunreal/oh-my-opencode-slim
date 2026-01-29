@@ -18,6 +18,10 @@ import type {
   PluginEntryInfo,
 } from './types';
 
+// Pre-compiled regular expressions for better performance
+const DIST_TAG_REGEX = /^\d/;
+const CHANNEL_REGEX = /^(alpha|beta|rc|canary|next)/;
+
 /**
  * Checks if a version string indicates a prerelease (contains a hyphen).
  */
@@ -29,7 +33,7 @@ function isPrereleaseVersion(version: string): boolean {
  * Checks if a version string is an NPM dist-tag (does not start with a digit).
  */
 function isDistTag(version: string): boolean {
-  return !/^\d/.test(version);
+  return !DIST_TAG_REGEX.test(version);
 }
 
 /**
@@ -45,7 +49,7 @@ export function extractChannel(version: string | null): string {
   if (isPrereleaseVersion(version)) {
     const prereleasePart = version.split('-')[1];
     if (prereleasePart) {
-      const channelMatch = prereleasePart.match(/^(alpha|beta|rc|canary|next)/);
+      const channelMatch = prereleasePart.match(CHANNEL_REGEX);
       if (channelMatch) return channelMatch[1];
     }
   }

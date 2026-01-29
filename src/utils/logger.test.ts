@@ -97,7 +97,7 @@ describe('logger', () => {
 
     const content = fs.readFileSync(testLogFile, 'utf-8');
     expect(content).toMatch(
-      /\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]\s+\n/,
+      /\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] \[INFO\]\s+\n/,
     );
   });
 

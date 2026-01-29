@@ -27,6 +27,7 @@ class LSPServerManager {
   private clients = new Map<string, ManagedClient>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly IDLE_TIMEOUT = 5 * 60 * 1000;
+  private readonly MAX_CLIENTS = 10;
 
   private constructor() {
     this.startCleanupTimer();
@@ -89,6 +90,23 @@ class LSPServerManager {
     }
   }
 
+  private async evictOldestIdleClient(): Promise<void> {
+    let oldest: [string, ManagedClient] | null = null;
+
+    for (const [key, managed] of this.clients) {
+      if (managed.refCount === 0) {
+        if (!oldest || managed.lastUsedAt < oldest[1].lastUsedAt) {
+          oldest = [key, managed];
+        }
+      }
+    }
+
+    if (oldest) {
+      await oldest[1].client.stop();
+      this.clients.delete(oldest[0]);
+    }
+  }
+
   async getClient(root: string, server: ResolvedServer): Promise<LSPClient> {
     const key = this.getKey(root, server.id);
 
@@ -104,6 +122,11 @@ class LSPServerManager {
       }
       await managed.client.stop();
       this.clients.delete(key);
+    }
+
+    // Check pool size before creating new client
+    if (this.clients.size >= this.MAX_CLIENTS) {
+      await this.evictOldestIdleClient();
     }
 
     const client = new LSPClient(root, server);

@@ -6,6 +6,19 @@ import { type PluginConfig, PluginConfigSchema } from './schema';
 const CONFIG_FILENAME = 'oh-my-opencode-slim.json';
 const PROMPTS_DIR_NAME = 'oh-my-opencode-slim';
 
+// Cache for agent prompts to avoid repeated disk I/O
+const promptCache = new Map<
+  string,
+  { prompt?: string; appendPrompt?: string }
+>();
+
+/**
+ * Clear the agent prompt cache. Useful for testing.
+ */
+export function clearPromptCache(): void {
+  promptCache.clear();
+}
+
 /**
  * Get the user's configuration directory following XDG Base Directory specification.
  * Falls back to ~/.config if XDG_CONFIG_HOME is not set.
@@ -165,6 +178,12 @@ export function loadAgentPrompt(agentName: string): {
   prompt?: string;
   appendPrompt?: string;
 } {
+  // Check cache first
+  const cached = promptCache.get(agentName);
+  if (cached) {
+    return cached;
+  }
+
   const promptsDir = path.join(
     getUserConfigDir(),
     'opencode',
@@ -197,6 +216,9 @@ export function loadAgentPrompt(agentName: string): {
       );
     }
   }
+
+  // Cache the result
+  promptCache.set(agentName, result);
 
   return result;
 }

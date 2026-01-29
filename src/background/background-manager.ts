@@ -269,25 +269,23 @@ export class BackgroundTaskManager {
         info?: { role: string };
         parts?: Array<{ type: string; text?: string }>;
       }>;
-      const assistantMessages = messages.filter(
-        (m) => m.info?.role === 'assistant',
-      );
 
-      const extractedContent: string[] = [];
-      for (const message of assistantMessages) {
+      // Single pass extraction - more efficient than filter+map+filter+join
+      let responseText = '';
+      for (const message of messages) {
+        if (message.info?.role !== 'assistant') continue;
+
         for (const part of message.parts ?? []) {
           if (
             (part.type === 'text' || part.type === 'reasoning') &&
-            part.text
+            part.text &&
+            part.text.length > 0
           ) {
-            extractedContent.push(part.text);
+            if (responseText) responseText += '\n\n';
+            responseText += part.text;
           }
         }
       }
-
-      const responseText = extractedContent
-        .filter((t) => t.length > 0)
-        .join('\n\n');
 
       if (responseText) {
         this.completeTask(task, 'completed', responseText);
@@ -347,6 +345,11 @@ export class BackgroundTaskManager {
     log(`[background-manager] task ${status}: ${task.id}`, {
       description: task.description,
     });
+
+    // Auto-cleanup completed tasks after 1 hour to prevent memory leak
+    setTimeout(() => {
+      this.tasks.delete(task.id);
+    }, 3600000);
   }
 
   /**
