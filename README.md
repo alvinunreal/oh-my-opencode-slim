@@ -233,6 +233,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 
 - **[Quick Reference](docs/quick-reference.md)** - Presets, Skills, MCPs, Tools, Configuration
 - **[Installation Guide](docs/installation.md)** - Detailed installation and troubleshooting
+- **[Cartography Skill](docs/cartography.md)** - Custom skill for repository mapping + codemap generation
 - **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
 

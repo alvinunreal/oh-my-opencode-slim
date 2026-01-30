@@ -6,6 +6,7 @@ Complete reference for oh-my-opencode-slim configuration and capabilities.
 
 - [Presets](#presets)
 - [Skills](#skills)
+  - [Cartography](#cartography)
 - [MCP Servers](#mcp-servers)
 - [Tools & Capabilities](#tools--capabilities)
 - [Configuration](#configuration)
@@ -182,6 +183,8 @@ Skills are specialized capabilities provided by external agents and tools. Unlik
 ### Cartography
 
 **Automated repository mapping through hierarchical codemaps.**
+
+A dedicated guide (with screenshots) lives at: **[docs/cartography.md](cartography.md)**.
 
 `cartography` empowers the Orchestrator to build and maintain a deep architectural understanding of any codebase. Instead of reading thousands of lines of code every time, agents refer to hierarchical `codemap.md` files that describe the *why* and *how* of each directory.
 
