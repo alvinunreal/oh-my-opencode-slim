@@ -21,7 +21,7 @@ Presets are pre-configured agent model mappings for different provider combinati
 
 **Method 1: Edit Config File**
 
-Edit `~/.config/opencode/oh-my-opencode-slim.json` and change the `preset` field:
+Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and change the `preset` field:
 
 ```json
 {
@@ -229,7 +229,7 @@ python3 ~/.config/opencode/skills/cartography/scripts/cartographer.py update --r
 
 ### Skills Assignment
 
-You can customize which skills each agent is allowed to use in `~/.config/opencode/oh-my-opencode-slim.json`.
+You can customize which skills each agent is allowed to use in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
 
 **Syntax:**
 
@@ -290,7 +290,7 @@ Control which agents can access which MCP servers using per-agent allowlists:
 
 ### Configuration & Syntax
 
-You can configure MCP access in your plugin configuration file: `~/.config/opencode/oh-my-opencode-slim.json`.
+You can configure MCP access in your plugin configuration file: `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
 
 **Per-Agent Permissions**
 
@@ -345,7 +345,7 @@ You can disable specific MCP servers globally by adding them to the `disabled_mc
 
 #### Quick Setup
 
-1. **Enable tmux integration** in `oh-my-opencode-slim.json`:
+1. **Enable tmux integration** in `oh-my-opencode-slim.json` (or `.jsonc`):
 
    ```json
    {
@@ -423,8 +423,10 @@ OpenCode automatically formats files after they're written or edited using langu
 | File | Purpose |
 |------|---------|
 | `~/.config/opencode/opencode.json` | OpenCode core settings |
-| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings (agents, tmux, MCPs) |
-| `.opencode/oh-my-opencode-slim.json` | Project-local plugin overrides (optional) |
+| `~/.config/opencode/oh-my-opencode-slim.json` or `.jsonc` | Plugin settings (agents, tmux, MCPs) |
+| `.opencode/oh-my-opencode-slim.json` or `.jsonc` | Project-local plugin overrides (optional) |
+
+> **💡 JSONC Support:** Configuration files support JSONC format (JSON with Comments). Use `.jsonc` extension to enable comments and trailing commas. If both `.jsonc` and `.json` exist, `.jsonc` takes precedence.
 
 ### Prompt Overriding
 
@@ -455,7 +457,42 @@ You can customize agent prompts by creating markdown files in `~/.config/opencod
 
 This allows you to fine-tune agent behavior without modifying the source code.
 
-### Plugin Config (`oh-my-opencode-slim.json`)
+### JSONC Format (JSON with Comments)
+
+The plugin supports **JSONC** format for configuration files, allowing you to:
+
+- Add single-line comments (`//`)
+- Add multi-line comments (`/* */`)
+- Use trailing commas in arrays and objects
+
+**File Priority:**
+1. `oh-my-opencode-slim.jsonc` (preferred if exists)
+2. `oh-my-opencode-slim.json` (fallback)
+
+**Example JSONC Configuration:**
+
+```jsonc
+{
+  // Use preset for development
+  "preset": "dev",
+
+  /* Presets definition - customize agent models here */
+  "presets": {
+    "dev": {
+      // Fast models for quick iteration
+      "oracle": { "model": "google/gemini-3-flash" },
+      "explorer": { "model": "google/gemini-3-flash" },
+    },
+  },
+
+  "tmux": {
+    "enabled": true,  // Enable for monitoring
+    "layout": "main-vertical",
+  },
+}
+```
+
+### Plugin Config (`oh-my-opencode-slim.json` or `oh-my-opencode-slim.jsonc`)
 
 The installer generates this file based on your providers. You can manually customize it to mix and match models. See the [Presets](#presets) section for detailed configuration options.
 

@@ -34,7 +34,7 @@ Complete guide for using tmux integration with oh-my-opencode-slim to watch agen
 
 ### Step 1: Enable Tmux Integration
 
-Edit `~/.config/opencode/oh-my-opencode-slim.json`:
+Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 
 ```json
 {
@@ -64,7 +64,7 @@ That's it! Your agents will now spawn panes automatically.
 
 ### Tmux Settings
 
-Configure tmux behavior in `~/.config/opencode/oh-my-opencode-slim.json`:
+Configure tmux behavior in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 
 ```json
 {
@@ -196,7 +196,7 @@ tmux switch -t project2
 **Solutions:**
 1. **Verify tmux integration is enabled:**
    ```bash
-   cat ~/.config/opencode/oh-my-opencode-slim.json | grep tmux
+    cat ~/.config/opencode/oh-my-opencode-slim.json | grep tmux # (or .jsonc)
    ```
 
 2. **Check port configuration:**

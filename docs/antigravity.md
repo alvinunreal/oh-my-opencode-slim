@@ -114,7 +114,7 @@ Edit `~/.config/opencode/opencode.json` and add the "google" provider configurat
 
 ### Step 2: Configure Agent Models
 
-Edit `~/.config/opencode/oh-my-opencode-slim.json` and add the Antigravity preset:
+Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and add the Antigravity preset:
 
 ```json
 {
@@ -368,7 +368,7 @@ To test different configurations:
 export OH_MY_OPENCODE_SLIM_PRESET=openai
 opencode
 
-# Or edit ~/.config/opencode/oh-my-opencode-slim.json
+# Or edit ~/.config/opencode/oh-my-opencode-slim.json (or .jsonc)
 # Change the "preset" field and restart OpenCode
 ```
 
