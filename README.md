@@ -1,7 +1,7 @@
 <div align="center">
   <img src="img/team.png" alt="Pantheon agents" width="420">
   <p><i>Six divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.</i></p>
-  <p><b>Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
+  <p><b>Multi Agent Suite</b> · Mix any models · Auto delegate tasks · Now with native Antigravity support</p>
 </div>
 
 ---
@@ -22,7 +22,7 @@ opencode auth login
 
 Run `ping all agents` to verify everything works.
 
-> **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` to assign any model to any agent.
+> **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` to assign any model to any agent. Supports Kimi, OpenAI, and Antigravity (Google) providers.
 
 ### For LLM Agents
 

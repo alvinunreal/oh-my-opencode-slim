@@ -1,5 +1,7 @@
 import * as readline from 'node:readline/promises';
 import {
+  addAntigravityPlugin,
+  addGoogleProvider,
   addPluginToOpenCodeConfig,
   detectCurrentConfig,
   disableDefaultAgents,
@@ -110,6 +112,9 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push(
     `  ${config.hasOpenAI ? SYMBOLS.check : `${DIM}○${RESET}`} OpenAI`,
   );
+  lines.push(
+    `  ${config.hasAntigravity ? SYMBOLS.check : `${DIM}○${RESET}`} Antigravity (Google)`,
+  );
   lines.push(`  ${SYMBOLS.check} Opencode Zen (Big Pickle)`); // Always enabled
   lines.push(
     `  ${config.hasTmux ? SYMBOLS.check : `${DIM}○${RESET}`} Tmux Integration`,
@@ -152,6 +157,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
   return {
     hasKimi: args.kimi === 'yes',
     hasOpenAI: args.openai === 'yes',
+    hasAntigravity: args.antigravity === 'yes',
     hasOpencodeZen: true, // Always enabled - free models available to all users
     hasTmux: args.tmux === 'yes',
     installSkills: args.skills === 'yes',
@@ -185,7 +191,7 @@ async function runInteractiveMode(
   // TODO: tmux has a bug, disabled for now
   // const tmuxInstalled = await isTmuxInstalled()
   // const totalQuestions = tmuxInstalled ? 3 : 2
-  const totalQuestions = 2;
+  const totalQuestions = 3;
 
   try {
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`);
@@ -201,6 +207,14 @@ async function runInteractiveMode(
       rl,
       'Do you have access to OpenAI API?',
       detected.hasOpenAI ? 'yes' : 'no',
+    );
+    console.log();
+
+    console.log(`${BOLD}Question 3/${totalQuestions}:${RESET}`);
+    const antigravity = await askYesNo(
+      rl,
+      'Enable Antigravity authentication for Google models?',
+      detected.hasAntigravity ? 'yes' : 'no',
     );
     console.log();
 
@@ -239,6 +253,7 @@ async function runInteractiveMode(
     return {
       hasKimi: kimi === 'yes',
       hasOpenAI: openai === 'yes',
+      hasAntigravity: antigravity === 'yes',
       hasOpencodeZen: true,
       hasTmux: false,
       installSkills: skills === 'yes',
@@ -257,6 +272,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   // Calculate total steps dynamically
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
+  if (config.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
   if (config.installSkills) totalSteps += 1; // skills installation
   if (config.installCustomSkills) totalSteps += 1; // custom skills installation
 
@@ -269,6 +285,19 @@ async function runInstall(config: InstallConfig): Promise<number> {
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
   const pluginResult = await addPluginToOpenCodeConfig();
   if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
+
+  // Add Antigravity support if requested
+  if (config.hasAntigravity) {
+    printStep(step++, totalSteps, 'Adding Antigravity plugin...');
+    const antigravityPluginResult = addAntigravityPlugin();
+    if (!handleStepResult(antigravityPluginResult, 'Antigravity plugin added'))
+      return 1;
+
+    printStep(step++, totalSteps, 'Configuring Google Provider...');
+    const googleProviderResult = addGoogleProvider();
+    if (!handleStepResult(googleProviderResult, 'Google Provider configured'))
+      return 1;
+  }
 
   printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
   const agentResult = disableDefaultAgents();
@@ -321,7 +350,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printAgentModels(config);
 
-  if (!config.hasKimi && !config.hasOpenAI) {
+  if (!config.hasKimi && !config.hasOpenAI && !config.hasAntigravity) {
     printWarning(
       'No providers configured. Zen Big Pickle models will be used as fallback.',
     );
@@ -336,12 +365,16 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   let nextStep = 1;
 
-  if (config.hasKimi || config.hasOpenAI) {
+  if (config.hasKimi || config.hasOpenAI || config.hasAntigravity) {
     console.log(`  ${nextStep++}. Authenticate with your providers:`);
     console.log(`     ${BLUE}$ opencode auth login${RESET}`);
     if (config.hasKimi) {
       console.log();
       console.log(`     Then select ${BOLD}Kimi For Coding${RESET} provider.`);
+    }
+    if (config.hasAntigravity) {
+      console.log();
+      console.log(`     Then select ${BOLD}google${RESET} provider.`);
     }
     console.log();
   }

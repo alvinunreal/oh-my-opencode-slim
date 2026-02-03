@@ -24,7 +24,19 @@ bunx oh-my-opencode-slim@latest install
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --tmux=no
+```
+
+### Provider Options
+
+The installer supports multiple providers:
+- **Kimi For Coding**: High-performance coding models
+- **OpenAI**: GPT-4 and GPT-3.5 models
+- **Antigravity (Google)**: Claude 4.5 and Gemini 3 models via Google's infrastructure
+
+Enable during installation:
+```bash
+bunx oh-my-opencode-slim install --kimi=yes --openai=yes --antigravity=yes
 ```
 
 ### After Installation
@@ -70,10 +82,12 @@ Ask these questions **one at a time**, waiting for responses:
 
 1. "Do you have access to **Kimi For Coding**?" *(Provides Kimi k1.5 models)*
 2. "Do you have access to **OpenAI** API?" *(Enables `openai/` models)*
+3. "Do you have access to **Antigravity (Google)**?" *(Enables `google/` models via Antigravity)*
 
 Help the user understand the tradeoffs:
 - Kimi For Coding provides powerful k1.5 models for coding tasks.
-- OpenAI is optional; it enables `openai/` models.
+- OpenAI enables `openai/` models.
+- Antigravity (Google) provides Claude 4.5 and Gemini 3 models.
 - If the user has **no providers**, the plugin still works using **OpenCode Zen** free models (`opencode/big-pickle`). They can switch to paid providers later by editing `~/.config/opencode/oh-my-opencode-slim.json`.
 
 ### Step 3: Run the Installer
@@ -81,19 +95,19 @@ Help the user understand the tradeoffs:
 Based on answers, run:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no>
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no>
 ```
 
 **Examples:**
 ```bash
-# Kimi + OpenAI
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --tmux=no
+# Kimi + OpenAI + Antigravity
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --tmux=no
 
 # OpenAI only
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --tmux=no
 
 # No providers (Zen free models only)
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --antigravity=no --tmux=no
 ```
 
 The installer automatically:
@@ -121,6 +135,14 @@ Don't run it yourself, it requires user interaction.
 ```bash
 opencode auth login
 # Select your provider and complete OAuth flow
+```
+
+**For Antigravity (if enabled):**
+Ask user to run the following command.
+Don't run it yourself, it requires user interaction.
+```bash
+opencode auth login
+# Select "Antigravity (Google)" provider and complete OAuth flow
 ```
 
 ---

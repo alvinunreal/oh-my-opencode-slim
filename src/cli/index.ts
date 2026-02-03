@@ -14,8 +14,12 @@ function parseArgs(args: string[]): InstallArgs {
       result.kimi = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--openai=')) {
       result.openai = arg.split('=')[1] as BooleanArg;
+    } else if (arg.startsWith('--antigravity=')) {
+      result.antigravity = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--tmux=')) {
       result.tmux = arg.split('=')[1] as BooleanArg;
+    } else if (arg.startsWith('--skills=')) {
+      result.skills = arg.split('=')[1] as BooleanArg;
     } else if (arg === '-h' || arg === '--help') {
       printHelp();
       process.exit(0);
@@ -34,13 +38,15 @@ Usage: bunx oh-my-opencode-slim install [OPTIONS]
 Options:
   --kimi=yes|no          Kimi API access (yes/no)
   --openai=yes|no        OpenAI API access (yes/no)
+  --antigravity=yes|no   Antigravity/Google models (yes/no)
   --tmux=yes|no          Enable tmux integration (yes/no)
+  --skills=yes|no        Install recommended skills (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
   -h, --help             Show this help message
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --tmux=no
+  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --antigravity=yes --tmux=no --skills=yes
 `);
 }
 
