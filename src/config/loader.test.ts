@@ -562,6 +562,192 @@ describe('environment variable preset override', () => {
   });
 });
 
+describe('JSONC config support', () => {
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonc-test-'));
+    originalEnv = { ...process.env };
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  test('loads .jsonc file with single-line comments', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // This is a comment
+        "agents": {
+          "oracle": { "model": "test/model" } // inline comment
+        }
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('test/model');
+  });
+
+  test('loads .jsonc file with multi-line comments', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        /* Multi-line
+           comment block */
+        "agents": {
+          "explorer": { "model": "explorer-model" }
+        }
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.explorer?.model).toBe('explorer-model');
+  });
+
+  test('loads .jsonc file with trailing commas', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        "agents": {
+          "oracle": { "model": "test-model", },
+        },
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('test-model');
+  });
+
+  test('prefers .jsonc over .json when both exist', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+
+    // Create both files
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ agents: { oracle: { model: 'json-model' } } }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // JSONC version
+        "agents": { "oracle": { "model": "jsonc-model" } }
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('jsonc-model');
+  });
+
+  test('falls back to .json when .jsonc does not exist', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+
+    // Only create .json file
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ agents: { oracle: { model: 'json-model' } } }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('json-model');
+  });
+
+  test('loads user config from .jsonc', () => {
+    const userOpencodeDir = path.join(tempDir, 'user-config', 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // User config with comments
+        "agents": { "librarian": { "model": "user-librarian" } }
+      }`,
+    );
+
+    const projectDir = path.join(tempDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.librarian?.model).toBe('user-librarian');
+  });
+
+  test('merges user .jsonc with project .jsonc', () => {
+    const userOpencodeDir = path.join(tempDir, 'user-config', 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // User config
+        "agents": {
+          "oracle": { "model": "user-oracle", "temperature": 0.5 }
+        }
+      }`,
+    );
+
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // Project config
+        "agents": { "oracle": { "temperature": 0.8 } }
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('user-oracle');
+    expect(config.agents?.oracle?.temperature).toBe(0.8);
+  });
+
+  test('handles complex JSONC with mixed comments and trailing commas', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // Main configuration
+        "preset": "dev",
+        /* Presets definition */
+        "presets": {
+          "dev": {
+            // Development agents
+            "oracle": { "model": "dev-oracle", },
+            "explorer": { "model": "dev-explorer", },
+          },
+        },
+        "tmux": {
+          "enabled": true, // Enable tmux
+          "layout": "main-vertical",
+        },
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.preset).toBe('dev');
+    expect(config.agents?.oracle?.model).toBe('dev-oracle');
+    expect(config.agents?.explorer?.model).toBe('dev-explorer');
+    expect(config.tmux?.enabled).toBe(true);
+    expect(config.tmux?.layout).toBe('main-vertical');
+  });
+});
+
 describe('loadAgentPrompt', () => {
   let tempDir: string;
   let originalEnv: typeof process.env;

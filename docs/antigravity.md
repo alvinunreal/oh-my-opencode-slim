@@ -107,6 +107,7 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 ## Manual Configuration
 
 If you prefer to configure manually, edit `~/.config/opencode/oh-my-opencode-slim.json`:
+Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and add the Antigravity preset:
 
 ```json
 {
@@ -191,6 +192,8 @@ lsof -i :8317
 
 # Restart the service
 # (Follow your Antigravity/LLM-Mux restart procedure)
+# Or edit ~/.config/opencode/oh-my-opencode-slim.json (or .jsonc)
+# Change the "preset" field and restart OpenCode
 ```
 
 ## Notes

@@ -23,6 +23,7 @@ opencode auth login
 Run `ping all agents` to verify everything works.
 
 > **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` to assign any model to any agent. Supports Kimi, OpenAI, and Antigravity (Google) providers.
+> **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to assign any model to any agent.
 
 ### For LLM Agents
 

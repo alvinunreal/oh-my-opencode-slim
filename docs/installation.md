@@ -51,7 +51,7 @@ opencode auth login
 
 Once authenticated, run opencode and `ping all agents` to verify all agents respond.
 
-> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` to override models, adjust reasoning effort, or disable agents entirely. See [Configuration](quick-reference.md#configuration) for details.
+> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely. See [Configuration](quick-reference.md#configuration) for details.
 
 ### Alternative: Ask Any Coding Agent
 
@@ -89,6 +89,8 @@ Help the user understand the tradeoffs:
 - OpenAI enables `openai/` models.
 - Antigravity (Google) provides Claude 4.5 and Gemini 3 models.
 - If the user has **no providers**, the plugin still works using **OpenCode Zen** free models (`opencode/big-pickle`). They can switch to paid providers later by editing `~/.config/opencode/oh-my-opencode-slim.json`.
+- OpenAI is optional; it enables `openai/` models.
+- If the user has **no providers**, the plugin still works using **OpenCode Zen** free models (`opencode/big-pickle`). They can switch to paid providers later by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
 
 ### Step 3: Run the Installer
 
@@ -112,12 +114,12 @@ bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --antigra
 
 The installer automatically:
 - Adds the plugin to `~/.config/opencode/opencode.json`
-- Generates agent model mappings in `~/.config/opencode/oh-my-opencode-slim.json`
+- Generates agent model mappings in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
 
 **Crucial Advice for the User:**
-- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json`.
+- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
 - If they add a new provider later, they just need to update this file.
-- Read generated `~/.config/opencode/oh-my-opencode-slim.json` file and report the model configuration.
+- Read generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file and report the model configuration.
 
 ### Step 4: Authenticate with Providers
 
@@ -157,7 +159,7 @@ bunx oh-my-opencode-slim@latest install --help
 ```
 
 Then manually create the config files at:
-- `~/.config/opencode/oh-my-opencode-slim.json`
+- `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
 
 ### Agents Not Responding
 

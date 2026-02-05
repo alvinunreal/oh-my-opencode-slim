@@ -1,9 +1,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { stripJsonComments } from '../cli/config-io';
 import { type PluginConfig, PluginConfigSchema } from './schema';
 
-const CONFIG_FILENAME = 'oh-my-opencode-slim.json';
 const PROMPTS_DIR_NAME = 'oh-my-opencode-slim';
 
 /**
@@ -18,6 +18,7 @@ function getUserConfigDir(): string {
 
 /**
  * Load and validate plugin configuration from a specific file path.
+ * Supports both .json and .jsonc formats (JSON with comments).
  * Returns null if the file doesn't exist, is invalid, or cannot be read.
  * Logs warnings for validation errors and unexpected read errors.
  *
@@ -27,7 +28,8 @@ function getUserConfigDir(): string {
 function loadConfigFromPath(configPath: string): PluginConfig | null {
   try {
     const content = fs.readFileSync(configPath, 'utf-8');
-    const rawConfig = JSON.parse(content);
+    // Use stripJsonComments to support JSONC format (comments and trailing commas)
+    const rawConfig = JSON.parse(stripJsonComments(content));
     const result = PluginConfigSchema.safeParse(rawConfig);
 
     if (!result.success) {
@@ -51,6 +53,27 @@ function loadConfigFromPath(configPath: string): PluginConfig | null {
     }
     return null;
   }
+}
+
+/**
+ * Find existing config file path, preferring .jsonc over .json.
+ * Checks for .jsonc first, then falls back to .json.
+ *
+ * @param basePath - Base path without extension (e.g., /path/to/oh-my-opencode-slim)
+ * @returns Path to existing config file, or null if neither exists
+ */
+function findConfigPath(basePath: string): string | null {
+  const jsoncPath = `${basePath}.jsonc`;
+  const jsonPath = `${basePath}.json`;
+
+  // Prefer .jsonc over .json
+  if (fs.existsSync(jsoncPath)) {
+    return jsoncPath;
+  }
+  if (fs.existsSync(jsonPath)) {
+    return jsonPath;
+  }
+  return null;
 }
 
 /**
@@ -96,9 +119,10 @@ function deepMerge<T extends Record<string, unknown>>(
  * Load plugin configuration from user and project config files, merging them appropriately.
  *
  * Configuration is loaded from two locations:
- * 1. User config: ~/.config/opencode/oh-my-opencode-slim.json (or $XDG_CONFIG_HOME)
- * 2. Project config: <directory>/.opencode/oh-my-opencode-slim.json
+ * 1. User config: ~/.config/opencode/oh-my-opencode-slim.jsonc or .json (or $XDG_CONFIG_HOME)
+ * 2. Project config: <directory>/.opencode/oh-my-opencode-slim.jsonc or .json
  *
+ * JSONC format is preferred over JSON (allows comments and trailing commas).
  * Project config takes precedence over user config. Nested objects (agents, tmux) are
  * deep-merged, while top-level arrays are replaced entirely by project config.
  *
@@ -106,17 +130,29 @@ function deepMerge<T extends Record<string, unknown>>(
  * @returns Merged plugin configuration (empty object if no configs found)
  */
 export function loadPluginConfig(directory: string): PluginConfig {
-  const userConfigPath = path.join(
+  const userConfigBasePath = path.join(
     getUserConfigDir(),
     'opencode',
-    CONFIG_FILENAME,
+    'oh-my-opencode-slim',
   );
 
-  const projectConfigPath = path.join(directory, '.opencode', CONFIG_FILENAME);
+  const projectConfigBasePath = path.join(
+    directory,
+    '.opencode',
+    'oh-my-opencode-slim',
+  );
 
-  let config: PluginConfig = loadConfigFromPath(userConfigPath) ?? {};
+  // Find existing config files (preferring .jsonc over .json)
+  const userConfigPath = findConfigPath(userConfigBasePath);
+  const projectConfigPath = findConfigPath(projectConfigBasePath);
 
-  const projectConfig = loadConfigFromPath(projectConfigPath);
+  let config: PluginConfig = userConfigPath
+    ? (loadConfigFromPath(userConfigPath) ?? {})
+    : {};
+
+  const projectConfig = projectConfigPath
+    ? loadConfigFromPath(projectConfigPath)
+    : null;
   if (projectConfig) {
     config = {
       ...config,
