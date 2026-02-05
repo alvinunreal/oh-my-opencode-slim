@@ -1,11 +1,16 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test';
-import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
+import {
+  generateAntigravityMixedPreset,
+  generateLiteConfig,
+  MODEL_MAPPINGS,
+} from './providers';
 
 describe('providers', () => {
   test('generateLiteConfig generates kimi config when only kimi selected', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
@@ -28,6 +33,7 @@ describe('providers', () => {
 
   test('generateLiteConfig generates kimi-openai preset when both selected', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: true,
       hasOpenAI: true,
       hasOpencodeZen: false,
@@ -51,6 +57,7 @@ describe('providers', () => {
 
   test('generateLiteConfig generates openai preset when only openai selected', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: false,
       hasOpenAI: true,
       hasOpencodeZen: false,
@@ -73,6 +80,7 @@ describe('providers', () => {
 
   test('generateLiteConfig generates zen-free preset when no providers selected', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: false,
@@ -93,6 +101,7 @@ describe('providers', () => {
 
   test('generateLiteConfig uses zen-free big-pickle models', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: true,
@@ -112,6 +121,7 @@ describe('providers', () => {
 
   test('generateLiteConfig enables tmux when requested', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: false,
@@ -126,6 +136,7 @@ describe('providers', () => {
 
   test('generateLiteConfig includes default skills', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
@@ -147,6 +158,7 @@ describe('providers', () => {
 
   test('generateLiteConfig includes mcps field', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: true,
       hasOpenAI: false,
       hasOpencodeZen: false,
@@ -164,6 +176,7 @@ describe('providers', () => {
 
   test('generateLiteConfig zen-free includes correct mcps', () => {
     const config = generateLiteConfig({
+      hasAntigravity: false,
       hasKimi: false,
       hasOpenAI: false,
       hasOpencodeZen: false,
@@ -178,5 +191,180 @@ describe('providers', () => {
     expect(agents.librarian.mcps).toContain('context7');
     expect(agents.librarian.mcps).toContain('grep_app');
     expect(agents.designer.mcps).toEqual([]);
+  });
+
+  // Antigravity tests
+  describe('Antigravity presets', () => {
+    test('generateLiteConfig generates antigravity-mixed-both preset when all providers selected', () => {
+      const config = generateLiteConfig({
+        hasKimi: true,
+        hasOpenAI: true,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect(config.preset).toBe('antigravity-mixed-both');
+      const agents = (config.presets as any)['antigravity-mixed-both'];
+      expect(agents).toBeDefined();
+
+      // Orchestrator should use Kimi
+      expect(agents.orchestrator.model).toBe('kimi-for-coding/k2p5');
+
+      // Oracle should use OpenAI
+      expect(agents.oracle.model).toBe('openai/gpt-5.2-codex');
+      expect(agents.oracle.variant).toBe('high');
+
+      // Others should use Antigravity Flash
+      expect(agents.explorer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.explorer.variant).toBe('low');
+      expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.librarian.variant).toBe('low');
+      expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.designer.variant).toBe('medium');
+      expect(agents.fixer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.fixer.variant).toBe('low');
+    });
+
+    test('generateLiteConfig generates antigravity-mixed-kimi preset when Kimi + Antigravity', () => {
+      const config = generateLiteConfig({
+        hasKimi: true,
+        hasOpenAI: false,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect(config.preset).toBe('antigravity-mixed-kimi');
+      const agents = (config.presets as any)['antigravity-mixed-kimi'];
+      expect(agents).toBeDefined();
+
+      // Orchestrator should use Kimi
+      expect(agents.orchestrator.model).toBe('kimi-for-coding/k2p5');
+
+      // Oracle should use Antigravity (no OpenAI)
+      expect(agents.oracle.model).toBe('google/antigravity-gemini-3-pro');
+
+      // Others should use Antigravity Flash
+      expect(agents.explorer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.fixer.model).toBe('google/antigravity-gemini-3-flash');
+    });
+
+    test('generateLiteConfig generates antigravity-mixed-openai preset when OpenAI + Antigravity', () => {
+      const config = generateLiteConfig({
+        hasKimi: false,
+        hasOpenAI: true,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect(config.preset).toBe('antigravity-mixed-openai');
+      const agents = (config.presets as any)['antigravity-mixed-openai'];
+      expect(agents).toBeDefined();
+
+      // Orchestrator should use Antigravity (no Kimi)
+      expect(agents.orchestrator.model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+
+      // Oracle should use OpenAI
+      expect(agents.oracle.model).toBe('openai/gpt-5.2-codex');
+      expect(agents.oracle.variant).toBe('high');
+
+      // Others should use Antigravity Flash
+      expect(agents.explorer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.fixer.model).toBe('google/antigravity-gemini-3-flash');
+    });
+
+    test('generateLiteConfig generates pure antigravity preset when only Antigravity', () => {
+      const config = generateLiteConfig({
+        hasKimi: false,
+        hasOpenAI: false,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect(config.preset).toBe('antigravity');
+      const agents = (config.presets as any).antigravity;
+      expect(agents).toBeDefined();
+
+      // All agents should use Antigravity
+      expect(agents.orchestrator.model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+      expect(agents.oracle.model).toBe('google/antigravity-gemini-3-pro');
+      expect(agents.explorer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents.fixer.model).toBe('google/antigravity-gemini-3-flash');
+    });
+
+    test('generateAntigravityMixedPreset respects Kimi for orchestrator', () => {
+      const preset = generateAntigravityMixedPreset({
+        hasKimi: true,
+        hasOpenAI: false,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect((preset.orchestrator as any).model).toBe('kimi-for-coding/k2p5');
+    });
+
+    test('generateAntigravityMixedPreset respects OpenAI for oracle', () => {
+      const preset = generateAntigravityMixedPreset({
+        hasKimi: false,
+        hasOpenAI: true,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect((preset.oracle as any).model).toBe('openai/gpt-5.2-codex');
+      expect((preset.oracle as any).variant).toBe('high');
+    });
+
+    test('generateAntigravityMixedPreset always uses Antigravity for explorer/librarian/designer/fixer', () => {
+      const preset = generateAntigravityMixedPreset({
+        hasKimi: true,
+        hasOpenAI: true,
+        hasAntigravity: true,
+        hasOpencodeZen: false,
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+      });
+
+      expect((preset.explorer as any).model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+      expect((preset.librarian as any).model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+      expect((preset.designer as any).model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+      expect((preset.fixer as any).model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+    });
   });
 });

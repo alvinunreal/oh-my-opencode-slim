@@ -60,72 +60,36 @@ Uses OpenAI models exclusively:
 }
 ```
 
-### Antigravity via CLIProxy Preset
+### Google Provider (Antigravity)
 
-Routes through Antigravity's CLIProxy for Claude + Gemini models:
+Access Claude 4.5 and Gemini 3 models through Google's Antigravity infrastructure.
 
-```json
-{
-  "preset": "cliproxy",
-  "presets": {
-    "cliproxy": {
-      "orchestrator": { "model": "cliproxy/gemini-claude-opus-4-5-thinking", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "cliproxy/gemini-3-pro-preview", "variant": "high", "skills": [], "mcps": [] },
-      "librarian": { "model": "cliproxy/gemini-3-flash-preview", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "cliproxy/gemini-3-flash-preview", "variant": "low", "skills": [], "mcps": [] },
-      "designer": { "model": "cliproxy/gemini-3-flash-preview", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
-      "fixer": { "model": "cliproxy/gemini-3-flash-preview", "variant": "low", "skills": [], "mcps": [] }
-    }
-  }
-}
+**Installation:**
+```bash
+bunx oh-my-opencode-slim install --antigravity=yes
 ```
 
-<details>
-<summary>Verify provider configuration in ~/.config/opencode/opencode.json</summary>
+**Agent Mapping:**
+- Orchestrator: Kimi (if available)
+- Oracle: GPT (if available)
+- Explorer/Librarian/Designer/Fixer: Gemini 3 Flash via Antigravity
 
-```json
-{
-  "provider": {
-    "cliproxy": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "CliProxy",
-      "options": {
-        "baseURL": "http://127.0.0.1:8317/v1",
-        "apiKey": "your-api-key-1"
-      },
-      "models": {
-        "gemini-3-pro-high": {
-          "name": "Gemini 3 Pro High",
-          "thinking": true,
-          "attachment": true,
-          "limit": { "context": 1048576, "output": 65535 },
-          "modalities": { "input": [ "text", "image", "pdf" ], "output": [ "text" ] }
-        },
-        "gemini-3-flash-preview": {
-          "name": "Gemini 3 Flash",
-          "attachment": true,
-          "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": [ "text", "image", "pdf" ], "output": [ "text" ] }
-        },
-        "gemini-claude-opus-4-5-thinking": {
-          "name": "Claude Opus 4.5 Thinking",
-          "attachment": true,
-          "limit": { "context": 200000, "output": 32000 },
-          "modalities": { "input": [ "text", "image", "pdf" ], "output": [ "text" ] }
-        },
-        "gemini-claude-sonnet-4-5-thinking": {
-          "name": "Claude Sonnet 4.5 Thinking",
-          "attachment": true,
-          "limit": { "context": 200000, "output": 32000 },
-          "modalities": { "input": [ "text", "image", "pdf" ], "output": [ "text" ] }
-        }
-      }
-    }
-  }
-}
+**Authentication:**
+```bash
+opencode auth login
+# Select "google" provider
 ```
 
-</details>
+**Available Models:**
+- `google/antigravity-gemini-3-flash`
+- `google/antigravity-gemini-3-pro`
+- `google/antigravity-claude-sonnet-4-5`
+- `google/antigravity-claude-sonnet-4-5-thinking`
+- `google/antigravity-claude-opus-4-5-thinking`
+- `google/gemini-2.5-flash` (Gemini CLI)
+- `google/gemini-2.5-pro` (Gemini CLI)
+- `google/gemini-3-flash-preview` (Gemini CLI)
+- `google/gemini-3-pro-preview` (Gemini CLI)
 
 ### Author's Preset
 
@@ -500,7 +464,7 @@ The installer generates this file based on your providers. You can manually cust
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `preset` | string | - | Name of the preset to use (e.g., `"openai"`, `"cliproxy"`) |
+| `preset` | string | - | Name of the preset to use (e.g., `"openai"`, `"antigravity"`) |
 | `presets` | object | - | Named preset configurations containing agent mappings |
 | `presets.<name>.<agent>.model` | string | - | Model ID for the agent (e.g., `"google/claude-opus-4-5-thinking"`) |
 | `presets.<name>.<agent>.temperature` | number | - | Temperature setting (0-2) for the agent |

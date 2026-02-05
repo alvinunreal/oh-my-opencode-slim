@@ -20,6 +20,23 @@ export const MODEL_MAPPINGS = {
     designer: { model: 'openai/gpt-5.1-codex-mini', variant: 'medium' },
     fixer: { model: 'openai/gpt-5.1-codex-mini', variant: 'low' },
   },
+  antigravity: {
+    orchestrator: { model: 'google/antigravity-gemini-3-flash' },
+    oracle: { model: 'google/antigravity-gemini-3-pro' },
+    librarian: {
+      model: 'google/antigravity-gemini-3-flash',
+      variant: 'low',
+    },
+    explorer: {
+      model: 'google/antigravity-gemini-3-flash',
+      variant: 'low',
+    },
+    designer: {
+      model: 'google/antigravity-gemini-3-flash',
+      variant: 'medium',
+    },
+    fixer: { model: 'google/antigravity-gemini-3-flash', variant: 'low' },
+  },
   'zen-free': {
     orchestrator: { model: 'opencode/big-pickle' },
     oracle: { model: 'opencode/big-pickle', variant: 'high' },
@@ -30,6 +47,91 @@ export const MODEL_MAPPINGS = {
   },
 } as const;
 
+export function generateAntigravityMixedPreset(
+  config: InstallConfig,
+  existingPreset?: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = existingPreset
+    ? { ...existingPreset }
+    : {};
+
+  const createAgentConfig = (
+    agentName: string,
+    modelInfo: { model: string; variant?: string },
+  ) => {
+    const isOrchestrator = agentName === 'orchestrator';
+
+    // Skills: orchestrator gets "*", others get recommended skills for their role
+    const skills = isOrchestrator
+      ? ['*']
+      : RECOMMENDED_SKILLS.filter(
+          (s) =>
+            s.allowedAgents.includes('*') ||
+            s.allowedAgents.includes(agentName),
+        ).map((s) => s.skillName);
+
+    // Special case for designer and agent-browser skill
+    if (agentName === 'designer' && !skills.includes('agent-browser')) {
+      skills.push('agent-browser');
+    }
+
+    return {
+      model: modelInfo.model,
+      variant: modelInfo.variant,
+      skills,
+      mcps:
+        DEFAULT_AGENT_MCPS[agentName as keyof typeof DEFAULT_AGENT_MCPS] ?? [],
+    };
+  };
+
+  const antigravityFlash = {
+    model: 'google/antigravity-gemini-3-flash',
+  };
+
+  // Orchestrator: Kimi if hasKimi, else keep existing if exists, else antigravity
+  if (config.hasKimi) {
+    result.orchestrator = createAgentConfig(
+      'orchestrator',
+      MODEL_MAPPINGS.kimi.orchestrator,
+    );
+  } else if (!result.orchestrator) {
+    result.orchestrator = createAgentConfig(
+      'orchestrator',
+      MODEL_MAPPINGS.antigravity.orchestrator,
+    );
+  }
+
+  // Oracle: GPT if hasOpenAI, else keep existing if exists, else antigravity
+  if (config.hasOpenAI) {
+    result.oracle = createAgentConfig('oracle', MODEL_MAPPINGS.openai.oracle);
+  } else if (!result.oracle) {
+    result.oracle = createAgentConfig(
+      'oracle',
+      MODEL_MAPPINGS.antigravity.oracle,
+    );
+  }
+
+  // Explorer, Librarian, Designer, Fixer: Always use Antigravity Flash
+  result.explorer = createAgentConfig('explorer', {
+    ...antigravityFlash,
+    variant: 'low',
+  });
+  result.librarian = createAgentConfig('librarian', {
+    ...antigravityFlash,
+    variant: 'low',
+  });
+  result.designer = createAgentConfig('designer', {
+    ...antigravityFlash,
+    variant: 'medium',
+  });
+  result.fixer = createAgentConfig('fixer', {
+    ...antigravityFlash,
+    variant: 'low',
+  });
+
+  return result;
+}
+
 export function generateLiteConfig(
   installConfig: InstallConfig,
 ): Record<string, unknown> {
@@ -39,9 +141,33 @@ export function generateLiteConfig(
   };
 
   // Determine active preset name
-  let activePreset: 'kimi' | 'openai' | 'zen-free' = 'zen-free';
-  if (installConfig.hasKimi) activePreset = 'kimi';
-  else if (installConfig.hasOpenAI) activePreset = 'openai';
+  let activePreset:
+    | 'kimi'
+    | 'openai'
+    | 'antigravity'
+    | 'antigravity-mixed-both'
+    | 'antigravity-mixed-kimi'
+    | 'antigravity-mixed-openai'
+    | 'zen-free' = 'zen-free';
+
+  // Antigravity mixed presets have priority
+  if (
+    installConfig.hasAntigravity &&
+    installConfig.hasKimi &&
+    installConfig.hasOpenAI
+  ) {
+    activePreset = 'antigravity-mixed-both';
+  } else if (installConfig.hasAntigravity && installConfig.hasKimi) {
+    activePreset = 'antigravity-mixed-kimi';
+  } else if (installConfig.hasAntigravity && installConfig.hasOpenAI) {
+    activePreset = 'antigravity-mixed-openai';
+  } else if (installConfig.hasAntigravity) {
+    activePreset = 'antigravity';
+  } else if (installConfig.hasKimi) {
+    activePreset = 'kimi';
+  } else if (installConfig.hasOpenAI) {
+    activePreset = 'openai';
+  }
 
   config.preset = activePreset;
 
@@ -94,8 +220,20 @@ export function generateLiteConfig(
     );
   };
 
-  (config.presets as Record<string, unknown>)[activePreset] =
-    buildPreset(activePreset);
+  // Build preset based on type
+  if (
+    activePreset === 'antigravity-mixed-both' ||
+    activePreset === 'antigravity-mixed-kimi' ||
+    activePreset === 'antigravity-mixed-openai'
+  ) {
+    // Use dedicated mixed preset generator
+    (config.presets as Record<string, unknown>)[activePreset] =
+      generateAntigravityMixedPreset(installConfig);
+  } else {
+    // Use standard buildPreset for pure presets
+    (config.presets as Record<string, unknown>)[activePreset] =
+      buildPreset(activePreset);
+  }
 
   if (installConfig.hasTmux) {
     config.tmux = {

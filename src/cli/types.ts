@@ -4,6 +4,7 @@ export interface InstallArgs {
   tui: boolean;
   kimi?: BooleanArg;
   openai?: BooleanArg;
+  antigravity?: BooleanArg;
   tmux?: BooleanArg;
   skills?: BooleanArg;
 }
@@ -18,6 +19,7 @@ export interface OpenCodeConfig {
 export interface InstallConfig {
   hasKimi: boolean;
   hasOpenAI: boolean;
+  hasAntigravity: boolean;
   hasOpencodeZen: boolean;
   hasTmux: boolean;
   installSkills: boolean;
@@ -34,6 +36,7 @@ export interface DetectedConfig {
   isInstalled: boolean;
   hasKimi: boolean;
   hasOpenAI: boolean;
+  hasAntigravity: boolean;
   hasOpencodeZen: boolean;
   hasTmux: boolean;
 }
