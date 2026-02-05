@@ -4,7 +4,7 @@
 
 1. Install with Antigravity support:
    ```bash
-   bunx oh-my-opencode-slim install --antigravity=yes --opencode-free=yes --opencode-free-model=auto
+   bunx oh-my-opencode-slim install --antigravity=yes
    ```
 
 2. Authenticate:
@@ -23,9 +23,7 @@
 The installer automatically:
 - Adds `opencode-antigravity-auth@latest` plugin
 - Configures Google provider with all Antigravity and Gemini CLI models
-- Sets up agent mapping (Kimi/GPT for Orchestrator/Oracle, Antigravity for others)
-- Optionally refreshes OpenCode free models via `opencode models --refresh --verbose`
-- In hybrid mode, OpenCode free support models can be applied to explorer/librarian/fixer while `designer` stays on external mapping
+- Sets up Antigravity-focused agent mapping presets
 
 ## Models Available
 
@@ -88,7 +86,7 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 
 ### antigravity-mixed-both (Kimi + OpenAI + Antigravity)
 - **Orchestrator**: Kimi k2p5
-- **Oracle**: GPT-5.2-codex
+- **Oracle**: OpenAI model
 - **Explorer/Librarian/Designer/Fixer**: Gemini 3 Flash (Antigravity)
 
 ### antigravity-mixed-kimi (Kimi + Antigravity)
@@ -98,7 +96,7 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 
 ### antigravity-mixed-openai (OpenAI + Antigravity)
 - **Orchestrator**: Gemini 3 Flash (Antigravity)
-- **Oracle**: GPT-5.2-codex
+- **Oracle**: OpenAI model
 - **Explorer/Librarian/Designer/Fixer**: Gemini 3 Flash (Antigravity)
 
 ### antigravity (Pure Antigravity)
@@ -108,22 +106,20 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 
 ## Manual Configuration
 
-If you prefer to configure manually, edit `~/.config/opencode/oh-my-opencode-slim.json`:
-Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and add the Antigravity preset:
+If you prefer to configure manually, edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and add a pure Antigravity preset:
 
 ```json
 {
-  "preset": "antigravity-mixed-both",
+  "preset": "antigravity",
   "presets": {
-    "antigravity-mixed-both": {
+    "antigravity": {
       "orchestrator": {
-        "model": "kimi-for-coding/k2p5",
+        "model": "google/antigravity-gemini-3-flash",
         "skills": ["*"],
         "mcps": ["websearch"]
       },
       "oracle": {
-        "model": "openai/gpt-5.2-codex",
-        "variant": "high",
+        "model": "google/antigravity-gemini-3-pro",
         "skills": [],
         "mcps": []
       },
@@ -174,7 +170,7 @@ opencode auth login
 cat ~/.config/opencode/opencode.json | grep antigravity
 
 # Reinstall plugin
-bunx oh-my-opencode-slim install --antigravity=yes --no-tui --kimi=no --openai=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=no
+bunx oh-my-opencode-slim install --antigravity=yes --no-tui --kimi=no --openai=no --tmux=no --skills=no
 ```
 
 ### Wrong Model Selected
