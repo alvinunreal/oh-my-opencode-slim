@@ -174,6 +174,53 @@ describe('providers', () => {
     expect(Array.isArray(agents.librarian.mcps)).toBe(true);
   });
 
+  test('generateLiteConfig applies OpenCode free model overrides in hybrid mode', () => {
+    const config = generateLiteConfig({
+      hasAntigravity: false,
+      hasKimi: false,
+      hasOpenAI: true,
+      hasOpencodeZen: true,
+      useOpenCodeFreeModels: true,
+      selectedOpenCodePrimaryModel: 'opencode/glm-4.7-free',
+      selectedOpenCodeSecondaryModel: 'opencode/gpt-5-nano',
+      hasTmux: false,
+      installSkills: false,
+      installCustomSkills: false,
+    });
+
+    const agents = (config.presets as any).openai;
+    expect(agents.orchestrator.model).toBe(
+      MODEL_MAPPINGS.openai.orchestrator.model,
+    );
+    expect(agents.oracle.model).toBe(MODEL_MAPPINGS.openai.oracle.model);
+    expect(agents.explorer.model).toBe('opencode/gpt-5-nano');
+    expect(agents.librarian.model).toBe('opencode/gpt-5-nano');
+    expect(agents.fixer.model).toBe('opencode/gpt-5-nano');
+  });
+
+  test('generateLiteConfig applies OpenCode free model overrides in OpenCode-only mode', () => {
+    const config = generateLiteConfig({
+      hasAntigravity: false,
+      hasKimi: false,
+      hasOpenAI: false,
+      hasOpencodeZen: true,
+      useOpenCodeFreeModels: true,
+      selectedOpenCodePrimaryModel: 'opencode/glm-4.7-free',
+      selectedOpenCodeSecondaryModel: 'opencode/gpt-5-nano',
+      hasTmux: false,
+      installSkills: false,
+      installCustomSkills: false,
+    });
+
+    const agents = (config.presets as any)['zen-free'];
+    expect(agents.orchestrator.model).toBe('opencode/glm-4.7-free');
+    expect(agents.oracle.model).toBe('opencode/glm-4.7-free');
+    expect(agents.designer.model).toBe('opencode/glm-4.7-free');
+    expect(agents.explorer.model).toBe('opencode/gpt-5-nano');
+    expect(agents.librarian.model).toBe('opencode/gpt-5-nano');
+    expect(agents.fixer.model).toBe('opencode/gpt-5-nano');
+  });
+
   test('generateLiteConfig zen-free includes correct mcps', () => {
     const config = generateLiteConfig({
       hasAntigravity: false,

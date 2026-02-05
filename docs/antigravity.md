@@ -4,7 +4,7 @@
 
 1. Install with Antigravity support:
    ```bash
-   bunx oh-my-opencode-slim install --antigravity=yes
+   bunx oh-my-opencode-slim install --antigravity=yes --opencode-free=yes --opencode-free-model=auto
    ```
 
 2. Authenticate:
@@ -24,6 +24,8 @@ The installer automatically:
 - Adds `opencode-antigravity-auth@latest` plugin
 - Configures Google provider with all Antigravity and Gemini CLI models
 - Sets up agent mapping (Kimi/GPT for Orchestrator/Oracle, Antigravity for others)
+- Optionally refreshes OpenCode free models via `opencode models --refresh --verbose`
+- In hybrid mode, OpenCode free support models can be applied to explorer/librarian/fixer while `designer` stays on external mapping
 
 ## Models Available
 
@@ -172,7 +174,7 @@ opencode auth login
 cat ~/.config/opencode/opencode.json | grep antigravity
 
 # Reinstall plugin
-bunx oh-my-opencode-slim install --antigravity=yes --no-tui --kimi=no --openai=no --tmux=no --skills=no
+bunx oh-my-opencode-slim install --antigravity=yes --no-tui --kimi=no --openai=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=no
 ```
 
 ### Wrong Model Selected

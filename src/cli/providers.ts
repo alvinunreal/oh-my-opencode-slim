@@ -200,6 +200,33 @@ export function generateLiteConfig(
     };
   };
 
+  const applyOpenCodeFreeAssignments = (
+    presetAgents: Record<string, unknown>,
+    hasExternalProviders: boolean,
+  ) => {
+    if (!installConfig.useOpenCodeFreeModels) return;
+
+    const primaryModel = installConfig.selectedOpenCodePrimaryModel;
+    const secondaryModel =
+      installConfig.selectedOpenCodeSecondaryModel ?? primaryModel;
+
+    if (!primaryModel || !secondaryModel) return;
+
+    const setAgent = (agentName: string, model: string) => {
+      presetAgents[agentName] = createAgentConfig(agentName, { model });
+    };
+
+    if (!hasExternalProviders) {
+      setAgent('orchestrator', primaryModel);
+      setAgent('oracle', primaryModel);
+      setAgent('designer', primaryModel);
+    }
+
+    setAgent('librarian', secondaryModel);
+    setAgent('explorer', secondaryModel);
+    setAgent('fixer', secondaryModel);
+  };
+
   const buildPreset = (mappingName: keyof typeof MODEL_MAPPINGS) => {
     const mapping = MODEL_MAPPINGS[mappingName];
     return Object.fromEntries(
@@ -229,10 +256,24 @@ export function generateLiteConfig(
     // Use dedicated mixed preset generator
     (config.presets as Record<string, unknown>)[activePreset] =
       generateAntigravityMixedPreset(installConfig);
+
+    applyOpenCodeFreeAssignments(
+      (config.presets as Record<string, Record<string, unknown>>)[activePreset],
+      installConfig.hasKimi ||
+        installConfig.hasOpenAI ||
+        installConfig.hasAntigravity,
+    );
   } else {
     // Use standard buildPreset for pure presets
     (config.presets as Record<string, unknown>)[activePreset] =
       buildPreset(activePreset);
+
+    applyOpenCodeFreeAssignments(
+      (config.presets as Record<string, Record<string, unknown>>)[activePreset],
+      installConfig.hasKimi ||
+        installConfig.hasOpenAI ||
+        installConfig.hasAntigravity,
+    );
   }
 
   if (installConfig.hasTmux) {

@@ -7,6 +7,19 @@ export interface InstallArgs {
   antigravity?: BooleanArg;
   tmux?: BooleanArg;
   skills?: BooleanArg;
+  opencodeFree?: BooleanArg;
+  opencodeFreeModel?: string;
+}
+
+export interface OpenCodeFreeModel {
+  model: string;
+  name: string;
+  status: 'alpha' | 'beta' | 'deprecated' | 'active';
+  contextLimit: number;
+  outputLimit: number;
+  reasoning: boolean;
+  toolcall: boolean;
+  attachment: boolean;
 }
 
 export interface OpenCodeConfig {
@@ -21,6 +34,11 @@ export interface InstallConfig {
   hasOpenAI: boolean;
   hasAntigravity: boolean;
   hasOpencodeZen: boolean;
+  useOpenCodeFreeModels?: boolean;
+  preferredOpenCodeModel?: string;
+  selectedOpenCodePrimaryModel?: string;
+  selectedOpenCodeSecondaryModel?: string;
+  availableOpenCodeFreeModels?: OpenCodeFreeModel[];
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;

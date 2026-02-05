@@ -14,6 +14,12 @@
 bunx oh-my-opencode-slim@latest install
 ```
 
+The installer can refresh and use OpenCode free models directly:
+
+```bash
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+```
+
 Then authenticate:
 
 ```bash
@@ -22,7 +28,11 @@ opencode auth login
 
 Run `ping all agents` to verify everything works.
 
-> **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` to assign any model to any agent. Supports Kimi, OpenAI, and Antigravity (Google) providers.
+OpenCode free-model mode uses `opencode models --refresh --verbose`, filters to free `opencode/*` models, and applies coding-first selection:
+- OpenCode-only mode can use multiple OpenCode free models across agents.
+- Hybrid mode can combine OpenCode free models with OpenAI, Kimi, and/or Antigravity.
+- In hybrid mode, `designer` stays on the external provider mapping.
+
 > **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to assign any model to any agent.
 
 ### For LLM Agents

@@ -5,9 +5,12 @@ import {
   addPluginToOpenCodeConfig,
   detectCurrentConfig,
   disableDefaultAgents,
+  discoverOpenCodeFreeModels,
   generateLiteConfig,
   getOpenCodeVersion,
   isOpenCodeInstalled,
+  pickBestCodingOpenCodeModel,
+  pickSupportOpenCodeModel,
   writeLiteConfig,
 } from './config-manager';
 import { CUSTOM_SKILLS, installCustomSkill } from './custom-skills';
@@ -18,6 +21,7 @@ import type {
   DetectedConfig,
   InstallArgs,
   InstallConfig,
+  OpenCodeFreeModel,
 } from './types';
 
 // Colors
@@ -115,7 +119,17 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push(
     `  ${config.hasAntigravity ? SYMBOLS.check : `${DIM}○${RESET}`} Antigravity (Google)`,
   );
-  lines.push(`  ${SYMBOLS.check} Opencode Zen (Big Pickle)`); // Always enabled
+  lines.push(`  ${SYMBOLS.check} Opencode Zen`);
+  if (config.useOpenCodeFreeModels && config.selectedOpenCodePrimaryModel) {
+    lines.push(
+      `  ${SYMBOLS.check} OpenCode Free Primary: ${BLUE}${config.selectedOpenCodePrimaryModel}${RESET}`,
+    );
+  }
+  if (config.useOpenCodeFreeModels && config.selectedOpenCodeSecondaryModel) {
+    lines.push(
+      `  ${SYMBOLS.check} OpenCode Free Support: ${BLUE}${config.selectedOpenCodeSecondaryModel}${RESET}`,
+    );
+  }
   lines.push(
     `  ${config.hasTmux ? SYMBOLS.check : `${DIM}○${RESET}`} Tmux Integration`,
   );
@@ -159,10 +173,54 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     hasOpenAI: args.openai === 'yes',
     hasAntigravity: args.antigravity === 'yes',
     hasOpencodeZen: true, // Always enabled - free models available to all users
+    useOpenCodeFreeModels: args.opencodeFree === 'yes',
+    preferredOpenCodeModel:
+      args.opencodeFreeModel && args.opencodeFreeModel !== 'auto'
+        ? args.opencodeFreeModel
+        : undefined,
     hasTmux: args.tmux === 'yes',
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes', // Install custom skills when skills=yes
   };
+}
+
+async function askModelSelection(
+  rl: readline.Interface,
+  models: OpenCodeFreeModel[],
+  defaultModel: string,
+  prompt: string,
+): Promise<string> {
+  const defaultIndex = Math.max(
+    0,
+    models.findIndex((model) => model.model === defaultModel),
+  );
+
+  for (const [index, model] of models.entries()) {
+    const marker =
+      model.model === defaultModel ? `${BOLD}(recommended)${RESET}` : '';
+    console.log(
+      `  ${DIM}${index + 1}.${RESET} ${BLUE}${model.model}${RESET} ${DIM}${model.name}${RESET} ${marker}`,
+    );
+  }
+
+  const answer = (
+    await rl.question(
+      `${BLUE}${prompt}${RESET} ${DIM}[default: ${defaultIndex + 1}]${RESET}: `,
+    )
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!answer) return defaultModel;
+
+  const asNumber = Number.parseInt(answer, 10);
+  if (Number.isFinite(asNumber)) {
+    const chosen = models[asNumber - 1];
+    if (chosen) return chosen.model;
+  }
+
+  const byId = models.find((model) => model.model.toLowerCase() === answer);
+  return byId?.model ?? defaultModel;
 }
 
 async function askYesNo(
@@ -191,10 +249,66 @@ async function runInteractiveMode(
   // TODO: tmux has a bug, disabled for now
   // const tmuxInstalled = await isTmuxInstalled()
   // const totalQuestions = tmuxInstalled ? 3 : 2
-  const totalQuestions = 3;
+  const totalQuestions = 4;
 
   try {
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`);
+    const useOpenCodeFree = await askYesNo(
+      rl,
+      'Use only OpenCode free models (opencode/*) with live refresh?',
+      'yes',
+    );
+    console.log();
+
+    let availableOpenCodeFreeModels: OpenCodeFreeModel[] | undefined;
+    let selectedOpenCodePrimaryModel: string | undefined;
+    let selectedOpenCodeSecondaryModel: string | undefined;
+
+    if (useOpenCodeFree === 'yes') {
+      printInfo('Refreshing models with: opencode models --refresh --verbose');
+      const discovery = await discoverOpenCodeFreeModels();
+
+      if (discovery.models.length === 0) {
+        printWarning(
+          discovery.error ??
+            'No OpenCode free models found. Continuing without OpenCode free-model assignment.',
+        );
+      } else {
+        availableOpenCodeFreeModels = discovery.models;
+
+        const recommendedPrimary =
+          pickBestCodingOpenCodeModel(discovery.models)?.model ??
+          discovery.models[0]?.model;
+
+        if (recommendedPrimary) {
+          console.log(`${BOLD}OpenCode Free Models:${RESET}`);
+          selectedOpenCodePrimaryModel = await askModelSelection(
+            rl,
+            discovery.models,
+            recommendedPrimary,
+            'Choose primary model for orchestrator/oracle',
+          );
+        }
+
+        if (selectedOpenCodePrimaryModel) {
+          const recommendedSecondary =
+            pickSupportOpenCodeModel(
+              discovery.models,
+              selectedOpenCodePrimaryModel,
+            )?.model ?? selectedOpenCodePrimaryModel;
+          selectedOpenCodeSecondaryModel = await askModelSelection(
+            rl,
+            discovery.models,
+            recommendedSecondary,
+            'Choose support model for explorer/librarian/fixer',
+          );
+        }
+
+        console.log();
+      }
+    }
+
+    console.log(`${BOLD}Question 2/${totalQuestions}:${RESET}`);
     const kimi = await askYesNo(
       rl,
       'Do you want to use Kimi For Coding?',
@@ -202,7 +316,7 @@ async function runInteractiveMode(
     );
     console.log();
 
-    console.log(`${BOLD}Question 2/${totalQuestions}:${RESET}`);
+    console.log(`${BOLD}Question 3/${totalQuestions}:${RESET}`);
     const openai = await askYesNo(
       rl,
       'Do you have access to OpenAI API?',
@@ -210,7 +324,7 @@ async function runInteractiveMode(
     );
     console.log();
 
-    console.log(`${BOLD}Question 3/${totalQuestions}:${RESET}`);
+    console.log(`${BOLD}Question 4/${totalQuestions}:${RESET}`);
     const antigravity = await askYesNo(
       rl,
       'Enable Antigravity authentication for Google models?',
@@ -255,6 +369,11 @@ async function runInteractiveMode(
       hasOpenAI: openai === 'yes',
       hasAntigravity: antigravity === 'yes',
       hasOpencodeZen: true,
+      useOpenCodeFreeModels:
+        useOpenCodeFree === 'yes' && selectedOpenCodePrimaryModel !== undefined,
+      selectedOpenCodePrimaryModel,
+      selectedOpenCodeSecondaryModel,
+      availableOpenCodeFreeModels,
       hasTmux: false,
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
@@ -265,6 +384,10 @@ async function runInteractiveMode(
 }
 
 async function runInstall(config: InstallConfig): Promise<number> {
+  const resolvedConfig: InstallConfig = {
+    ...config,
+  };
+
   const detected = detectCurrentConfig();
   const isUpdate = detected.isInstalled;
 
@@ -272,9 +395,10 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   // Calculate total steps dynamically
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
-  if (config.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
-  if (config.installSkills) totalSteps += 1; // skills installation
-  if (config.installCustomSkills) totalSteps += 1; // custom skills installation
+  if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
+  if (resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
+  if (resolvedConfig.installSkills) totalSteps += 1; // skills installation
+  if (resolvedConfig.installCustomSkills) totalSteps += 1; // custom skills installation
 
   let step = 1;
 
@@ -282,12 +406,80 @@ async function runInstall(config: InstallConfig): Promise<number> {
   const { ok } = await checkOpenCodeInstalled();
   if (!ok) return 1;
 
+  if (
+    resolvedConfig.useOpenCodeFreeModels &&
+    (resolvedConfig.availableOpenCodeFreeModels?.length ?? 0) === 0
+  ) {
+    printStep(
+      step++,
+      totalSteps,
+      'Refreshing OpenCode free models (opencode/*)...',
+    );
+    const discovery = await discoverOpenCodeFreeModels();
+    if (discovery.models.length === 0) {
+      printWarning(
+        discovery.error ??
+          'No OpenCode free models found. Continuing without dynamic OpenCode assignment.',
+      );
+      resolvedConfig.useOpenCodeFreeModels = false;
+    } else {
+      resolvedConfig.availableOpenCodeFreeModels = discovery.models;
+
+      const selectedPrimary =
+        resolvedConfig.preferredOpenCodeModel &&
+        discovery.models.some(
+          (model) => model.model === resolvedConfig.preferredOpenCodeModel,
+        )
+          ? resolvedConfig.preferredOpenCodeModel
+          : (resolvedConfig.selectedOpenCodePrimaryModel ??
+            pickBestCodingOpenCodeModel(discovery.models)?.model);
+
+      resolvedConfig.selectedOpenCodePrimaryModel =
+        selectedPrimary ?? discovery.models[0]?.model;
+      resolvedConfig.selectedOpenCodeSecondaryModel =
+        resolvedConfig.selectedOpenCodeSecondaryModel ??
+        pickSupportOpenCodeModel(
+          discovery.models,
+          resolvedConfig.selectedOpenCodePrimaryModel,
+        )?.model ??
+        resolvedConfig.selectedOpenCodePrimaryModel;
+
+      printSuccess(
+        `OpenCode free models ready (${discovery.models.length} models found)`,
+      );
+    }
+  } else if (
+    resolvedConfig.useOpenCodeFreeModels &&
+    (resolvedConfig.availableOpenCodeFreeModels?.length ?? 0) > 0
+  ) {
+    const availableModels = resolvedConfig.availableOpenCodeFreeModels ?? [];
+    resolvedConfig.selectedOpenCodePrimaryModel =
+      resolvedConfig.selectedOpenCodePrimaryModel ??
+      pickBestCodingOpenCodeModel(availableModels)?.model;
+    resolvedConfig.selectedOpenCodeSecondaryModel =
+      resolvedConfig.selectedOpenCodeSecondaryModel ??
+      pickSupportOpenCodeModel(
+        availableModels,
+        resolvedConfig.selectedOpenCodePrimaryModel,
+      )?.model ??
+      resolvedConfig.selectedOpenCodePrimaryModel;
+
+    printStep(
+      step++,
+      totalSteps,
+      'Using previously refreshed OpenCode free model list...',
+    );
+    printSuccess(
+      `OpenCode free models ready (${availableModels.length} models found)`,
+    );
+  }
+
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
   const pluginResult = await addPluginToOpenCodeConfig();
   if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
 
   // Add Antigravity support if requested
-  if (config.hasAntigravity) {
+  if (resolvedConfig.hasAntigravity) {
     printStep(step++, totalSteps, 'Adding Antigravity plugin...');
     const antigravityPluginResult = addAntigravityPlugin();
     if (!handleStepResult(antigravityPluginResult, 'Antigravity plugin added'))
@@ -304,11 +496,11 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
-  const liteResult = writeLiteConfig(config);
+  const liteResult = writeLiteConfig(resolvedConfig);
   if (!handleStepResult(liteResult, 'Config written')) return 1;
 
   // Install skills if requested
-  if (config.installSkills) {
+  if (resolvedConfig.installSkills) {
     printStep(step++, totalSteps, 'Installing recommended skills...');
     let skillsInstalled = 0;
     for (const skill of RECOMMENDED_SKILLS) {
@@ -326,7 +518,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   // Install custom skills if requested
-  if (config.installCustomSkills) {
+  if (resolvedConfig.installCustomSkills) {
     printStep(step++, totalSteps, 'Installing custom skills...');
     let customSkillsInstalled = 0;
     for (const skill of CUSTOM_SKILLS) {
@@ -345,12 +537,16 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   // Summary
   console.log();
-  console.log(formatConfigSummary(config));
+  console.log(formatConfigSummary(resolvedConfig));
   console.log();
 
-  printAgentModels(config);
+  printAgentModels(resolvedConfig);
 
-  if (!config.hasKimi && !config.hasOpenAI && !config.hasAntigravity) {
+  if (
+    !resolvedConfig.hasKimi &&
+    !resolvedConfig.hasOpenAI &&
+    !resolvedConfig.hasAntigravity
+  ) {
     printWarning(
       'No providers configured. Zen Big Pickle models will be used as fallback.',
     );
@@ -365,14 +561,18 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   let nextStep = 1;
 
-  if (config.hasKimi || config.hasOpenAI || config.hasAntigravity) {
+  if (
+    resolvedConfig.hasKimi ||
+    resolvedConfig.hasOpenAI ||
+    resolvedConfig.hasAntigravity
+  ) {
     console.log(`  ${nextStep++}. Authenticate with your providers:`);
     console.log(`     ${BLUE}$ opencode auth login${RESET}`);
-    if (config.hasKimi) {
+    if (resolvedConfig.hasKimi) {
       console.log();
       console.log(`     Then select ${BOLD}Kimi For Coding${RESET} provider.`);
     }
-    if (config.hasAntigravity) {
+    if (resolvedConfig.hasAntigravity) {
       console.log();
       console.log(`     Then select ${BOLD}google${RESET} provider.`);
     }
