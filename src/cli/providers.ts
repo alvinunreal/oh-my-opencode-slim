@@ -2,6 +2,17 @@ import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
 
+const AGENT_NAMES = [
+  'orchestrator',
+  'oracle',
+  'designer',
+  'explorer',
+  'librarian',
+  'fixer',
+] as const;
+
+type AgentName = (typeof AGENT_NAMES)[number];
+
 // Model mappings by provider priority
 export const MODEL_MAPPINGS = {
   kimi: {
@@ -241,6 +252,13 @@ export function generateLiteConfig(
   const applyChutesAssignments = (presetAgents: Record<string, unknown>) => {
     if (!installConfig.hasChutes) return;
 
+    const hasExternalProviders =
+      installConfig.hasKimi ||
+      installConfig.hasOpenAI ||
+      installConfig.hasAntigravity;
+
+    if (hasExternalProviders && activePreset !== 'chutes') return;
+
     const primaryModel = installConfig.selectedChutesPrimaryModel;
     const secondaryModel =
       installConfig.selectedChutesSecondaryModel ?? primaryModel;
@@ -257,6 +275,89 @@ export function generateLiteConfig(
     setAgent('librarian', secondaryModel);
     setAgent('explorer', secondaryModel);
     setAgent('fixer', secondaryModel);
+  };
+
+  const dedupeModels = (models: Array<string | undefined>) => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (const model of models) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      result.push(model);
+    }
+
+    return result;
+  };
+
+  const getOpenCodeFallbackForAgent = (agentName: AgentName) => {
+    if (!installConfig.useOpenCodeFreeModels) return undefined;
+    const isSupport =
+      agentName === 'explorer' ||
+      agentName === 'librarian' ||
+      agentName === 'fixer';
+    if (isSupport) {
+      return (
+        installConfig.selectedOpenCodeSecondaryModel ??
+        installConfig.selectedOpenCodePrimaryModel
+      );
+    }
+    return installConfig.selectedOpenCodePrimaryModel;
+  };
+
+  const getChutesFallbackForAgent = (agentName: AgentName) => {
+    if (!installConfig.hasChutes) return undefined;
+    const isSupport =
+      agentName === 'explorer' ||
+      agentName === 'librarian' ||
+      agentName === 'fixer';
+    if (isSupport) {
+      return (
+        installConfig.selectedChutesSecondaryModel ??
+        installConfig.selectedChutesPrimaryModel ??
+        MODEL_MAPPINGS.chutes[agentName].model
+      );
+    }
+    return (
+      installConfig.selectedChutesPrimaryModel ??
+      MODEL_MAPPINGS.chutes[agentName].model
+    );
+  };
+
+  const attachFallbackConfig = (presetAgents: Record<string, unknown>) => {
+    const chains: Partial<Record<AgentName, string[]>> = {};
+
+    for (const agentName of AGENT_NAMES) {
+      const currentModel = (
+        presetAgents[agentName] as { model?: string } | undefined
+      )?.model;
+
+      const chain = dedupeModels([
+        currentModel,
+        installConfig.hasOpenAI
+          ? MODEL_MAPPINGS.openai[agentName].model
+          : undefined,
+        installConfig.hasKimi
+          ? MODEL_MAPPINGS.kimi[agentName].model
+          : undefined,
+        installConfig.hasAntigravity
+          ? MODEL_MAPPINGS.antigravity[agentName].model
+          : undefined,
+        getChutesFallbackForAgent(agentName),
+        getOpenCodeFallbackForAgent(agentName),
+        MODEL_MAPPINGS['zen-free'][agentName].model,
+      ]);
+
+      if (chain.length > 0) {
+        chains[agentName] = chain;
+      }
+    }
+
+    config.fallback = {
+      enabled: true,
+      timeoutMs: 15000,
+      chains,
+    };
   };
 
   const buildPreset = (mappingName: keyof typeof MODEL_MAPPINGS) => {
@@ -299,6 +400,9 @@ export function generateLiteConfig(
     applyChutesAssignments(
       (config.presets as Record<string, Record<string, unknown>>)[activePreset],
     );
+    attachFallbackConfig(
+      (config.presets as Record<string, Record<string, unknown>>)[activePreset],
+    );
   } else {
     // Use standard buildPreset for pure presets
     (config.presets as Record<string, unknown>)[activePreset] =
@@ -312,6 +416,9 @@ export function generateLiteConfig(
         installConfig.hasChutes === true,
     );
     applyChutesAssignments(
+      (config.presets as Record<string, Record<string, unknown>>)[activePreset],
+    );
+    attachFallbackConfig(
       (config.presets as Record<string, Record<string, unknown>>)[activePreset],
     );
   }

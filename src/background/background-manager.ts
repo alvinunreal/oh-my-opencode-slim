@@ -15,6 +15,7 @@
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
+import { FALLBACK_FAILOVER_TIMEOUT_MS } from '../config';
 import type { TmuxConfig } from '../config/schema';
 import { applyAgentVariant, resolveAgentVariant } from '../utils';
 import { log } from '../utils/logger';
@@ -31,6 +32,21 @@ type PromptBody = {
 };
 
 type OpencodeClient = PluginInput['client'];
+
+function parseModelReference(model: string): {
+  providerID: string;
+  modelID: string;
+} | null {
+  const slashIndex = model.indexOf('/');
+  if (slashIndex <= 0 || slashIndex >= model.length - 1) {
+    return null;
+  }
+
+  return {
+    providerID: model.slice(0, slashIndex),
+    modelID: model.slice(slashIndex + 1),
+  };
+}
 
 /**
  * Represents a background task running in an isolated session.
@@ -165,6 +181,40 @@ export class BackgroundTaskManager {
     }
   }
 
+  private resolveFallbackChain(agentName: string): string[] {
+    const fallback = this.config?.fallback;
+    const chains = fallback?.chains as
+      | Record<string, string[] | undefined>
+      | undefined;
+    const configuredChain = chains?.[agentName] ?? [];
+    const primary = this.config?.agents?.[agentName]?.model;
+
+    const chain: string[] = [];
+    const seen = new Set<string>();
+
+    for (const model of [primary, ...configuredChain]) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      chain.push(model);
+    }
+
+    return chain;
+  }
+
+  private async promptWithTimeout(
+    args: Parameters<OpencodeClient['session']['prompt']>[0],
+    timeoutMs: number,
+  ): Promise<void> {
+    await Promise.race([
+      this.client.session.prompt(args),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Prompt timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  }
+
   /**
    * Start a task in the background (Phase B).
    */
@@ -205,17 +255,62 @@ export class BackgroundTaskManager {
       // Send prompt
       const promptQuery: Record<string, string> = { directory: this.directory };
       const resolvedVariant = resolveAgentVariant(this.config, task.agent);
-      const promptBody = applyAgentVariant(resolvedVariant, {
+      const basePromptBody = applyAgentVariant(resolvedVariant, {
         agent: task.agent,
         tools: { background_task: false, task: false },
         parts: [{ type: 'text' as const, text: task.prompt }],
       } as PromptBody) as unknown as PromptBody;
 
-      await this.client.session.prompt({
-        path: { id: session.data.id },
-        body: promptBody,
-        query: promptQuery,
-      });
+      const timeoutMs =
+        this.config?.fallback?.timeoutMs ?? FALLBACK_FAILOVER_TIMEOUT_MS;
+      const fallbackEnabled = this.config?.fallback?.enabled ?? true;
+      const chain = fallbackEnabled
+        ? this.resolveFallbackChain(task.agent)
+        : [];
+      const attemptModels = chain.length > 0 ? chain : [undefined];
+
+      const errors: string[] = [];
+      let succeeded = false;
+
+      for (const model of attemptModels) {
+        try {
+          const body: PromptBody = {
+            ...basePromptBody,
+            model: undefined,
+          };
+
+          if (model) {
+            const ref = parseModelReference(model);
+            if (!ref) {
+              throw new Error(`Invalid fallback model format: ${model}`);
+            }
+            body.model = ref;
+          }
+
+          await this.promptWithTimeout(
+            {
+              path: { id: session.data.id },
+              body,
+              query: promptQuery,
+            },
+            timeoutMs,
+          );
+
+          succeeded = true;
+          break;
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (model) {
+            errors.push(`${model}: ${msg}`);
+          } else {
+            errors.push(`default-model: ${msg}`);
+          }
+        }
+      }
+
+      if (!succeeded) {
+        throw new Error(`All fallback models failed. ${errors.join(' | ')}`);
+      }
 
       log(`[background-manager] task started: ${task.id}`, {
         sessionId: session.data.id,

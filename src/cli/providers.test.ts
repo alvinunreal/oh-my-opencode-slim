@@ -103,6 +103,65 @@ describe('providers', () => {
     expect(agents.fixer.model).toBe('chutes/minimax-m2.1');
   });
 
+  test('generateLiteConfig keeps mixed openai/antigravity primary models when chutes is also enabled', () => {
+    const config = generateLiteConfig({
+      hasAntigravity: true,
+      hasKimi: false,
+      hasOpenAI: true,
+      hasChutes: true,
+      hasOpencodeZen: true,
+      useOpenCodeFreeModels: true,
+      selectedOpenCodePrimaryModel: 'opencode/glm-4.7-free',
+      selectedOpenCodeSecondaryModel: 'opencode/gpt-5-nano',
+      selectedChutesPrimaryModel: 'chutes/kimi-k2.5',
+      selectedChutesSecondaryModel: 'chutes/minimax-m2.1',
+      hasTmux: false,
+      installSkills: false,
+      installCustomSkills: false,
+    });
+
+    expect(config.preset).toBe('antigravity-mixed-openai');
+    const agents = (config.presets as any)['antigravity-mixed-openai'];
+    expect(agents.orchestrator.model).toBe('google/antigravity-gemini-3-flash');
+    expect(agents.oracle.model).toBe('openai/gpt-5.2-codex');
+    expect(agents.explorer.model).toBe('opencode/gpt-5-nano');
+  });
+
+  test('generateLiteConfig emits fallback chains for six agents', () => {
+    const config = generateLiteConfig({
+      hasAntigravity: true,
+      hasKimi: true,
+      hasOpenAI: true,
+      hasChutes: true,
+      hasOpencodeZen: true,
+      useOpenCodeFreeModels: true,
+      selectedOpenCodePrimaryModel: 'opencode/glm-4.7-free',
+      selectedOpenCodeSecondaryModel: 'opencode/gpt-5-nano',
+      selectedChutesPrimaryModel: 'chutes/kimi-k2.5',
+      selectedChutesSecondaryModel: 'chutes/minimax-m2.1',
+      hasTmux: false,
+      installSkills: false,
+      installCustomSkills: false,
+    });
+
+    expect((config.fallback as any).enabled).toBe(true);
+    expect((config.fallback as any).timeoutMs).toBe(15000);
+    const chains = (config.fallback as any).chains;
+    expect(Object.keys(chains).sort()).toEqual([
+      'designer',
+      'explorer',
+      'fixer',
+      'librarian',
+      'oracle',
+      'orchestrator',
+    ]);
+    expect(chains.orchestrator).toContain('openai/gpt-5.2-codex');
+    expect(chains.orchestrator).toContain('kimi-for-coding/k2p5');
+    expect(chains.orchestrator).toContain('google/antigravity-gemini-3-flash');
+    expect(chains.orchestrator).toContain('chutes/kimi-k2.5');
+    expect(chains.orchestrator).toContain('opencode/glm-4.7-free');
+  });
+
   test('generateLiteConfig generates zen-free preset when no providers selected', () => {
     const config = generateLiteConfig({
       hasAntigravity: false,
