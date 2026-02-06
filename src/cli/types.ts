@@ -5,6 +5,7 @@ export interface InstallArgs {
   kimi?: BooleanArg;
   openai?: BooleanArg;
   antigravity?: BooleanArg;
+  chutes?: BooleanArg;
   tmux?: BooleanArg;
   skills?: BooleanArg;
   opencodeFree?: BooleanArg;
@@ -12,6 +13,7 @@ export interface InstallArgs {
 }
 
 export interface OpenCodeFreeModel {
+  providerID: string;
   model: string;
   name: string;
   status: 'alpha' | 'beta' | 'deprecated' | 'active';
@@ -20,6 +22,7 @@ export interface OpenCodeFreeModel {
   reasoning: boolean;
   toolcall: boolean;
   attachment: boolean;
+  dailyRequestLimit?: number;
 }
 
 export interface OpenCodeConfig {
@@ -33,12 +36,16 @@ export interface InstallConfig {
   hasKimi: boolean;
   hasOpenAI: boolean;
   hasAntigravity: boolean;
+  hasChutes?: boolean;
   hasOpencodeZen: boolean;
   useOpenCodeFreeModels?: boolean;
   preferredOpenCodeModel?: string;
   selectedOpenCodePrimaryModel?: string;
   selectedOpenCodeSecondaryModel?: string;
   availableOpenCodeFreeModels?: OpenCodeFreeModel[];
+  selectedChutesPrimaryModel?: string;
+  selectedChutesSecondaryModel?: string;
+  availableChutesFreeModels?: OpenCodeFreeModel[];
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;
@@ -55,6 +62,7 @@ export interface DetectedConfig {
   hasKimi: boolean;
   hasOpenAI: boolean;
   hasAntigravity: boolean;
+  hasChutes?: boolean;
   hasOpencodeZen: boolean;
   hasTmux: boolean;
 }

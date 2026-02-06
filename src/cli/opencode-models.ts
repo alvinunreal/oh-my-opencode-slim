@@ -22,6 +22,13 @@ interface OpenCodeModelVerboseRecord {
     toolcall?: boolean;
     attachment?: boolean;
   };
+  quota?: {
+    requestsPerDay?: number;
+  };
+  meta?: {
+    requestsPerDay?: number;
+    dailyLimit?: number;
+  };
 }
 
 function isFreeModel(record: OpenCodeModelVerboseRecord): boolean {
@@ -38,16 +45,38 @@ function isFreeModel(record: OpenCodeModelVerboseRecord): boolean {
   );
 }
 
+function parseDailyRequestLimit(
+  record: OpenCodeModelVerboseRecord,
+): number | undefined {
+  const explicitLimit =
+    record.quota?.requestsPerDay ??
+    record.meta?.requestsPerDay ??
+    record.meta?.dailyLimit;
+
+  if (typeof explicitLimit === 'number' && Number.isFinite(explicitLimit)) {
+    return explicitLimit;
+  }
+
+  const source = `${record.id} ${record.name ?? ''}`.toLowerCase();
+  const match = source.match(
+    /\b(300|2000|5000)\b(?:\s*(?:req|requests|rpd|\/day))?/,
+  );
+  if (!match) return undefined;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function normalizeModel(
   record: OpenCodeModelVerboseRecord,
+  providerFilter?: string,
 ): OpenCodeFreeModel | null {
-  if (record.providerID !== 'opencode') return null;
+  if (providerFilter && record.providerID !== providerFilter) return null;
 
   const fullModel = `${record.providerID}/${record.id}`;
-  if (!fullModel.startsWith('opencode/')) return null;
   if (!isFreeModel(record)) return null;
 
   return {
+    providerID: record.providerID,
     model: fullModel,
     name: record.name ?? record.id,
     status: record.status ?? 'active',
@@ -56,11 +85,13 @@ function normalizeModel(
     reasoning: record.capabilities?.reasoning === true,
     toolcall: record.capabilities?.toolcall === true,
     attachment: record.capabilities?.attachment === true,
+    dailyRequestLimit: parseDailyRequestLimit(record),
   };
 }
 
 export function parseOpenCodeModelsVerboseOutput(
   output: string,
+  providerFilter?: string,
 ): OpenCodeFreeModel[] {
   const lines = output.split(/\r?\n/);
   const models: OpenCodeFreeModel[] = [];
@@ -111,7 +142,7 @@ export function parseOpenCodeModelsVerboseOutput(
       const parsed = JSON.parse(
         jsonLines.join('\n'),
       ) as OpenCodeModelVerboseRecord;
-      const normalized = normalizeModel(parsed);
+      const normalized = normalizeModel(parsed, providerFilter);
       if (normalized) models.push(normalized);
     } catch {
       // Ignore malformed blocks and continue parsing the next model.
@@ -123,7 +154,7 @@ export function parseOpenCodeModelsVerboseOutput(
   return models;
 }
 
-export async function discoverOpenCodeFreeModels(): Promise<{
+async function discoverFreeModelsByProvider(providerID?: string): Promise<{
   models: OpenCodeFreeModel[];
   error?: string;
 }> {
@@ -144,11 +175,27 @@ export async function discoverOpenCodeFreeModels(): Promise<{
       };
     }
 
-    return { models: parseOpenCodeModelsVerboseOutput(stdout) };
+    return {
+      models: parseOpenCodeModelsVerboseOutput(stdout, providerID),
+    };
   } catch {
     return {
       models: [],
       error: 'Unable to run `opencode models --refresh --verbose`.',
     };
   }
+}
+
+export async function discoverOpenCodeFreeModels(): Promise<{
+  models: OpenCodeFreeModel[];
+  error?: string;
+}> {
+  return discoverFreeModelsByProvider('opencode');
+}
+
+export async function discoverProviderFreeModels(providerID: string): Promise<{
+  models: OpenCodeFreeModel[];
+  error?: string;
+}> {
+  return discoverFreeModelsByProvider(providerID);
 }

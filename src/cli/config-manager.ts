@@ -1,3 +1,4 @@
+export * from './chutes-selection';
 export * from './config-io';
 export * from './model-selection';
 export * from './opencode-models';

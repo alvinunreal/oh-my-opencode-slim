@@ -37,6 +37,14 @@ export const MODEL_MAPPINGS = {
     },
     fixer: { model: 'google/antigravity-gemini-3-flash', variant: 'low' },
   },
+  chutes: {
+    orchestrator: { model: 'chutes/kimi-k2.5' },
+    oracle: { model: 'chutes/kimi-k2.5', variant: 'high' },
+    librarian: { model: 'chutes/minimax-m2.1', variant: 'low' },
+    explorer: { model: 'chutes/minimax-m2.1', variant: 'low' },
+    designer: { model: 'chutes/kimi-k2.5', variant: 'medium' },
+    fixer: { model: 'chutes/minimax-m2.1', variant: 'low' },
+  },
   'zen-free': {
     orchestrator: { model: 'opencode/big-pickle' },
     oracle: { model: 'opencode/big-pickle', variant: 'high' },
@@ -145,6 +153,7 @@ export function generateLiteConfig(
     | 'kimi'
     | 'openai'
     | 'antigravity'
+    | 'chutes'
     | 'antigravity-mixed-both'
     | 'antigravity-mixed-kimi'
     | 'antigravity-mixed-openai'
@@ -167,6 +176,8 @@ export function generateLiteConfig(
     activePreset = 'kimi';
   } else if (installConfig.hasOpenAI) {
     activePreset = 'openai';
+  } else if (installConfig.hasChutes) {
+    activePreset = 'chutes';
   }
 
   config.preset = activePreset;
@@ -227,6 +238,27 @@ export function generateLiteConfig(
     setAgent('fixer', secondaryModel);
   };
 
+  const applyChutesAssignments = (presetAgents: Record<string, unknown>) => {
+    if (!installConfig.hasChutes) return;
+
+    const primaryModel = installConfig.selectedChutesPrimaryModel;
+    const secondaryModel =
+      installConfig.selectedChutesSecondaryModel ?? primaryModel;
+
+    if (!primaryModel || !secondaryModel) return;
+
+    const setAgent = (agentName: string, model: string) => {
+      presetAgents[agentName] = createAgentConfig(agentName, { model });
+    };
+
+    setAgent('orchestrator', primaryModel);
+    setAgent('oracle', primaryModel);
+    setAgent('designer', primaryModel);
+    setAgent('librarian', secondaryModel);
+    setAgent('explorer', secondaryModel);
+    setAgent('fixer', secondaryModel);
+  };
+
   const buildPreset = (mappingName: keyof typeof MODEL_MAPPINGS) => {
     const mapping = MODEL_MAPPINGS[mappingName];
     return Object.fromEntries(
@@ -261,7 +293,11 @@ export function generateLiteConfig(
       (config.presets as Record<string, Record<string, unknown>>)[activePreset],
       installConfig.hasKimi ||
         installConfig.hasOpenAI ||
-        installConfig.hasAntigravity,
+        installConfig.hasAntigravity ||
+        installConfig.hasChutes === true,
+    );
+    applyChutesAssignments(
+      (config.presets as Record<string, Record<string, unknown>>)[activePreset],
     );
   } else {
     // Use standard buildPreset for pure presets
@@ -272,7 +308,11 @@ export function generateLiteConfig(
       (config.presets as Record<string, Record<string, unknown>>)[activePreset],
       installConfig.hasKimi ||
         installConfig.hasOpenAI ||
-        installConfig.hasAntigravity,
+        installConfig.hasAntigravity ||
+        installConfig.hasChutes === true,
+    );
+    applyChutesAssignments(
+      (config.presets as Record<string, Record<string, unknown>>)[activePreset],
     );
   }
 

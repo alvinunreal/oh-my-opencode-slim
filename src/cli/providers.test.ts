@@ -78,6 +78,31 @@ describe('providers', () => {
     expect((config.presets as any)['zen-free']).toBeUndefined();
   });
 
+  test('generateLiteConfig generates chutes preset when only chutes selected', () => {
+    const config = generateLiteConfig({
+      hasAntigravity: false,
+      hasKimi: false,
+      hasOpenAI: false,
+      hasChutes: true,
+      hasOpencodeZen: false,
+      hasTmux: false,
+      installSkills: false,
+      installCustomSkills: false,
+      selectedChutesPrimaryModel: 'chutes/kimi-k2.5',
+      selectedChutesSecondaryModel: 'chutes/minimax-m2.1',
+    });
+
+    expect(config.preset).toBe('chutes');
+    const agents = (config.presets as any).chutes;
+    expect(agents).toBeDefined();
+    expect(agents.orchestrator.model).toBe('chutes/kimi-k2.5');
+    expect(agents.oracle.model).toBe('chutes/kimi-k2.5');
+    expect(agents.designer.model).toBe('chutes/kimi-k2.5');
+    expect(agents.explorer.model).toBe('chutes/minimax-m2.1');
+    expect(agents.librarian.model).toBe('chutes/minimax-m2.1');
+    expect(agents.fixer.model).toBe('chutes/minimax-m2.1');
+  });
+
   test('generateLiteConfig generates zen-free preset when no providers selected', () => {
     const config = generateLiteConfig({
       hasAntigravity: false,

@@ -16,6 +16,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.openai = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--antigravity=')) {
       result.antigravity = arg.split('=')[1] as BooleanArg;
+    } else if (arg.startsWith('--chutes=')) {
+      result.chutes = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--tmux=')) {
       result.tmux = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--skills=')) {
@@ -43,6 +45,7 @@ Options:
   --kimi=yes|no          Kimi API access (yes/no)
   --openai=yes|no        OpenAI API access (yes/no)
   --antigravity=yes|no   Antigravity/Google models (yes/no)
+  --chutes=yes|no        Chutes models (yes/no)
   --opencode-free=yes|no Use OpenCode free models (opencode/*)
   --opencode-free-model  Preferred OpenCode model id or "auto"
   --tmux=yes|no          Enable tmux integration (yes/no)
@@ -52,7 +55,7 @@ Options:
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --antigravity=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
 `);
 }
 

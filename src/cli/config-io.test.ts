@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  addChutesProvider,
   addPluginToOpenCodeConfig,
   detectCurrentConfig,
   disableDefaultAgents,
@@ -126,6 +127,7 @@ describe('config-io', () => {
     const result = writeLiteConfig({
       hasKimi: true,
       hasOpenAI: false,
+      hasAntigravity: false,
       hasOpencodeZen: false,
       hasTmux: true,
       installSkills: false,
@@ -186,5 +188,39 @@ describe('config-io', () => {
     expect(detected.hasKimi).toBe(true);
     expect(detected.hasOpenAI).toBe(true);
     expect(detected.hasTmux).toBe(true);
+  });
+
+  test('addChutesProvider configures chutes provider and detection', () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+
+    writeFileSync(
+      configPath,
+      JSON.stringify({ plugin: ['oh-my-opencode-slim'] }),
+    );
+    writeFileSync(
+      litePath,
+      JSON.stringify({
+        preset: 'chutes',
+        presets: {
+          chutes: {
+            orchestrator: { model: 'chutes/kimi-k2.5' },
+          },
+        },
+      }),
+    );
+
+    const result = addChutesProvider();
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.provider.chutes).toBeDefined();
+    expect(saved.provider.chutes.options.baseURL).toBe(
+      'https://llm.chutes.ai/v1',
+    );
+
+    const detected = detectCurrentConfig();
+    expect(detected.hasChutes).toBe(true);
   });
 });

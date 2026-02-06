@@ -1,15 +1,19 @@
 import * as readline from 'node:readline/promises';
 import {
   addAntigravityPlugin,
+  addChutesProvider,
   addGoogleProvider,
   addPluginToOpenCodeConfig,
   detectCurrentConfig,
   disableDefaultAgents,
   discoverOpenCodeFreeModels,
+  discoverProviderFreeModels,
   generateLiteConfig,
   getOpenCodeVersion,
   isOpenCodeInstalled,
+  pickBestCodingChutesModel,
   pickBestCodingOpenCodeModel,
+  pickSupportChutesModel,
   pickSupportOpenCodeModel,
   writeLiteConfig,
 } from './config-manager';
@@ -119,6 +123,9 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push(
     `  ${config.hasAntigravity ? SYMBOLS.check : `${DIM}○${RESET}`} Antigravity (Google)`,
   );
+  lines.push(
+    `  ${config.hasChutes ? SYMBOLS.check : `${DIM}○${RESET}`} Chutes`,
+  );
   lines.push(`  ${SYMBOLS.check} Opencode Zen`);
   if (config.useOpenCodeFreeModels && config.selectedOpenCodePrimaryModel) {
     lines.push(
@@ -128,6 +135,16 @@ function formatConfigSummary(config: InstallConfig): string {
   if (config.useOpenCodeFreeModels && config.selectedOpenCodeSecondaryModel) {
     lines.push(
       `  ${SYMBOLS.check} OpenCode Free Support: ${BLUE}${config.selectedOpenCodeSecondaryModel}${RESET}`,
+    );
+  }
+  if (config.hasChutes && config.selectedChutesPrimaryModel) {
+    lines.push(
+      `  ${SYMBOLS.check} Chutes Primary: ${BLUE}${config.selectedChutesPrimaryModel}${RESET}`,
+    );
+  }
+  if (config.hasChutes && config.selectedChutesSecondaryModel) {
+    lines.push(
+      `  ${SYMBOLS.check} Chutes Support: ${BLUE}${config.selectedChutesSecondaryModel}${RESET}`,
     );
   }
   lines.push(
@@ -172,6 +189,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     hasKimi: args.kimi === 'yes',
     hasOpenAI: args.openai === 'yes',
     hasAntigravity: args.antigravity === 'yes',
+    hasChutes: args.chutes === 'yes',
     hasOpencodeZen: true, // Always enabled - free models available to all users
     useOpenCodeFreeModels: args.opencodeFree === 'yes',
     preferredOpenCodeModel:
@@ -249,7 +267,7 @@ async function runInteractiveMode(
   // TODO: tmux has a bug, disabled for now
   // const tmuxInstalled = await isTmuxInstalled()
   // const totalQuestions = tmuxInstalled ? 3 : 2
-  const totalQuestions = 4;
+  const totalQuestions = 5;
 
   try {
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`);
@@ -263,6 +281,9 @@ async function runInteractiveMode(
     let availableOpenCodeFreeModels: OpenCodeFreeModel[] | undefined;
     let selectedOpenCodePrimaryModel: string | undefined;
     let selectedOpenCodeSecondaryModel: string | undefined;
+    let availableChutesFreeModels: OpenCodeFreeModel[] | undefined;
+    let selectedChutesPrimaryModel: string | undefined;
+    let selectedChutesSecondaryModel: string | undefined;
 
     if (useOpenCodeFree === 'yes') {
       printInfo('Refreshing models with: opencode models --refresh --verbose');
@@ -332,6 +353,58 @@ async function runInteractiveMode(
     );
     console.log();
 
+    console.log(`${BOLD}Question 5/${totalQuestions}:${RESET}`);
+    const chutes = await askYesNo(
+      rl,
+      'Enable Chutes provider with free daily capped models?',
+      detected.hasChutes ? 'yes' : 'no',
+    );
+    console.log();
+
+    if (chutes === 'yes') {
+      printInfo(
+        'Refreshing Chutes model list with: opencode models --refresh --verbose',
+      );
+      const discovery = await discoverProviderFreeModels('chutes');
+
+      if (discovery.models.length === 0) {
+        printWarning(
+          discovery.error ??
+            'No free Chutes models found. Continuing without Chutes dynamic assignment.',
+        );
+      } else {
+        availableChutesFreeModels = discovery.models;
+
+        const recommendedPrimary =
+          pickBestCodingChutesModel(discovery.models)?.model ??
+          discovery.models[0]?.model;
+
+        if (recommendedPrimary) {
+          console.log(`${BOLD}Chutes Free Models:${RESET}`);
+          selectedChutesPrimaryModel = await askModelSelection(
+            rl,
+            discovery.models,
+            recommendedPrimary,
+            'Choose Chutes primary model for orchestrator/oracle/designer',
+          );
+        }
+
+        if (selectedChutesPrimaryModel) {
+          const recommendedSecondary =
+            pickSupportChutesModel(discovery.models, selectedChutesPrimaryModel)
+              ?.model ?? selectedChutesPrimaryModel;
+          selectedChutesSecondaryModel = await askModelSelection(
+            rl,
+            discovery.models,
+            recommendedSecondary,
+            'Choose Chutes support model for explorer/librarian/fixer',
+          );
+        }
+
+        console.log();
+      }
+    }
+
     // TODO: tmux has a bug, disabled for now
     // let tmux: BooleanArg = "no"
     // if (tmuxInstalled) {
@@ -368,12 +441,16 @@ async function runInteractiveMode(
       hasKimi: kimi === 'yes',
       hasOpenAI: openai === 'yes',
       hasAntigravity: antigravity === 'yes',
+      hasChutes: chutes === 'yes',
       hasOpencodeZen: true,
       useOpenCodeFreeModels:
         useOpenCodeFree === 'yes' && selectedOpenCodePrimaryModel !== undefined,
       selectedOpenCodePrimaryModel,
       selectedOpenCodeSecondaryModel,
       availableOpenCodeFreeModels,
+      selectedChutesPrimaryModel,
+      selectedChutesSecondaryModel,
+      availableChutesFreeModels,
       hasTmux: false,
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
@@ -397,6 +474,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
   if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
   if (resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
+  if (resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
   if (resolvedConfig.installSkills) totalSteps += 1; // skills installation
   if (resolvedConfig.installCustomSkills) totalSteps += 1; // custom skills installation
 
@@ -474,6 +552,65 @@ async function runInstall(config: InstallConfig): Promise<number> {
     );
   }
 
+  if (
+    resolvedConfig.hasChutes &&
+    (resolvedConfig.availableChutesFreeModels?.length ?? 0) === 0
+  ) {
+    printStep(
+      step++,
+      totalSteps,
+      'Refreshing Chutes free models (chutes/*)...',
+    );
+    const discovery = await discoverProviderFreeModels('chutes');
+    if (discovery.models.length === 0) {
+      printWarning(
+        discovery.error ??
+          'No free Chutes models found. Continuing with fallback Chutes mapping.',
+      );
+    } else {
+      resolvedConfig.availableChutesFreeModels = discovery.models;
+      resolvedConfig.selectedChutesPrimaryModel =
+        resolvedConfig.selectedChutesPrimaryModel ??
+        pickBestCodingChutesModel(discovery.models)?.model ??
+        discovery.models[0]?.model;
+      resolvedConfig.selectedChutesSecondaryModel =
+        resolvedConfig.selectedChutesSecondaryModel ??
+        pickSupportChutesModel(
+          discovery.models,
+          resolvedConfig.selectedChutesPrimaryModel,
+        )?.model ??
+        resolvedConfig.selectedChutesPrimaryModel;
+
+      printSuccess(
+        `Chutes models ready (${discovery.models.length} models found)`,
+      );
+    }
+  } else if (
+    resolvedConfig.hasChutes &&
+    (resolvedConfig.availableChutesFreeModels?.length ?? 0) > 0
+  ) {
+    const availableChutes = resolvedConfig.availableChutesFreeModels ?? [];
+    resolvedConfig.selectedChutesPrimaryModel =
+      resolvedConfig.selectedChutesPrimaryModel ??
+      pickBestCodingChutesModel(availableChutes)?.model;
+    resolvedConfig.selectedChutesSecondaryModel =
+      resolvedConfig.selectedChutesSecondaryModel ??
+      pickSupportChutesModel(
+        availableChutes,
+        resolvedConfig.selectedChutesPrimaryModel,
+      )?.model ??
+      resolvedConfig.selectedChutesPrimaryModel;
+
+    printStep(
+      step++,
+      totalSteps,
+      'Using previously refreshed Chutes free model list...',
+    );
+    printSuccess(
+      `Chutes models ready (${availableChutes.length} models found)`,
+    );
+  }
+
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
   const pluginResult = await addPluginToOpenCodeConfig();
   if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
@@ -488,6 +625,13 @@ async function runInstall(config: InstallConfig): Promise<number> {
     printStep(step++, totalSteps, 'Configuring Google Provider...');
     const googleProviderResult = addGoogleProvider();
     if (!handleStepResult(googleProviderResult, 'Google Provider configured'))
+      return 1;
+  }
+
+  if (resolvedConfig.hasChutes) {
+    printStep(step++, totalSteps, 'Configuring Chutes Provider...');
+    const chutesProviderResult = addChutesProvider();
+    if (!handleStepResult(chutesProviderResult, 'Chutes Provider configured'))
       return 1;
   }
 
@@ -545,7 +689,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (
     !resolvedConfig.hasKimi &&
     !resolvedConfig.hasOpenAI &&
-    !resolvedConfig.hasAntigravity
+    !resolvedConfig.hasAntigravity &&
+    !resolvedConfig.hasChutes
   ) {
     printWarning(
       'No providers configured. Zen Big Pickle models will be used as fallback.',
@@ -564,7 +709,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (
     resolvedConfig.hasKimi ||
     resolvedConfig.hasOpenAI ||
-    resolvedConfig.hasAntigravity
+    resolvedConfig.hasAntigravity ||
+    resolvedConfig.hasChutes
   ) {
     console.log(`  ${nextStep++}. Authenticate with your providers:`);
     console.log(`     ${BLUE}$ opencode auth login${RESET}`);
@@ -575,6 +721,10 @@ async function runInstall(config: InstallConfig): Promise<number> {
     if (resolvedConfig.hasAntigravity) {
       console.log();
       console.log(`     Then select ${BOLD}google${RESET} provider.`);
+    }
+    if (resolvedConfig.hasChutes) {
+      console.log();
+      console.log(`     Then set ${BOLD}CHUTES_API_KEY${RESET} in your shell.`);
     }
     console.log();
   }
@@ -610,7 +760,7 @@ export async function install(args: InstallArgs): Promise<number> {
       }
       console.log();
       printInfo(
-        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --tmux=<yes|no>',
+        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --tmux=<yes|no>',
       );
       console.log();
       return 1;
