@@ -1,4 +1,4 @@
-import type { OpenCodeFreeModel } from './types';
+import type { DiscoveredModel, OpenCodeFreeModel } from './types';
 
 interface OpenCodeModelVerboseRecord {
   id: string;
@@ -66,14 +66,13 @@ function parseDailyRequestLimit(
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeModel(
+function normalizeDiscoveredModel(
   record: OpenCodeModelVerboseRecord,
   providerFilter?: string,
-): OpenCodeFreeModel | null {
+): DiscoveredModel | null {
   if (providerFilter && record.providerID !== providerFilter) return null;
 
   const fullModel = `${record.providerID}/${record.id}`;
-  if (!isFreeModel(record)) return null;
 
   return {
     providerID: record.providerID,
@@ -86,15 +85,18 @@ function normalizeModel(
     toolcall: record.capabilities?.toolcall === true,
     attachment: record.capabilities?.attachment === true,
     dailyRequestLimit: parseDailyRequestLimit(record),
+    costInput: record.cost?.input,
+    costOutput: record.cost?.output,
   };
 }
 
 export function parseOpenCodeModelsVerboseOutput(
   output: string,
   providerFilter?: string,
-): OpenCodeFreeModel[] {
+  freeOnly = true,
+): DiscoveredModel[] {
   const lines = output.split(/\r?\n/);
-  const models: OpenCodeFreeModel[] = [];
+  const models: DiscoveredModel[] = [];
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]?.trim();
@@ -142,7 +144,9 @@ export function parseOpenCodeModelsVerboseOutput(
       const parsed = JSON.parse(
         jsonLines.join('\n'),
       ) as OpenCodeModelVerboseRecord;
-      const normalized = normalizeModel(parsed, providerFilter);
+      const normalized = normalizeDiscoveredModel(parsed, providerFilter);
+      if (!normalized) continue;
+      if (freeOnly && !isFreeModel(parsed)) continue;
       if (normalized) models.push(normalized);
     } catch {
       // Ignore malformed blocks and continue parsing the next model.
@@ -176,7 +180,43 @@ async function discoverFreeModelsByProvider(providerID?: string): Promise<{
     }
 
     return {
-      models: parseOpenCodeModelsVerboseOutput(stdout, providerID),
+      models: parseOpenCodeModelsVerboseOutput(
+        stdout,
+        providerID,
+        true,
+      ) as OpenCodeFreeModel[],
+    };
+  } catch {
+    return {
+      models: [],
+      error: 'Unable to run `opencode models --refresh --verbose`.',
+    };
+  }
+}
+
+export async function discoverModelCatalog(): Promise<{
+  models: DiscoveredModel[];
+  error?: string;
+}> {
+  try {
+    const proc = Bun.spawn(['opencode', 'models', '--refresh', '--verbose'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+
+    if (proc.exitCode !== 0) {
+      return {
+        models: [],
+        error: stderr.trim() || 'Failed to fetch OpenCode models.',
+      };
+    }
+
+    return {
+      models: parseOpenCodeModelsVerboseOutput(stdout, undefined, false),
     };
   } catch {
     return {

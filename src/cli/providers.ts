@@ -292,6 +292,38 @@ export function generateLiteConfig(
     };
   };
 
+  if (installConfig.dynamicModelPlan) {
+    const dynamicPreset = Object.fromEntries(
+      Object.entries(installConfig.dynamicModelPlan.agents).map(
+        ([agentName, assignment]) => [
+          agentName,
+          createAgentConfig(
+            agentName,
+            assignment as { model: string; variant?: string },
+          ),
+        ],
+      ),
+    );
+
+    config.preset = 'dynamic';
+    (config.presets as Record<string, unknown>).dynamic = dynamicPreset;
+    config.fallback = {
+      enabled: true,
+      timeoutMs: 15000,
+      chains: installConfig.dynamicModelPlan.chains,
+    };
+
+    if (installConfig.hasTmux) {
+      config.tmux = {
+        enabled: true,
+        layout: 'main-vertical',
+        main_pane_size: 60,
+      };
+    }
+
+    return config;
+  }
+
   const applyOpenCodeFreeAssignments = (
     presetAgents: Record<string, unknown>,
     hasExternalProviders: boolean,

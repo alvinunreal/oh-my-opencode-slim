@@ -28,6 +28,31 @@ export interface OpenCodeFreeModel {
   dailyRequestLimit?: number;
 }
 
+export interface DiscoveredModel {
+  providerID: string;
+  model: string;
+  name: string;
+  status: 'alpha' | 'beta' | 'deprecated' | 'active';
+  contextLimit: number;
+  outputLimit: number;
+  reasoning: boolean;
+  toolcall: boolean;
+  attachment: boolean;
+  dailyRequestLimit?: number;
+  costInput?: number;
+  costOutput?: number;
+}
+
+export interface DynamicAgentAssignment {
+  model: string;
+  variant?: string;
+}
+
+export interface DynamicModelPlan {
+  agents: Record<string, DynamicAgentAssignment>;
+  chains: Record<string, string[]>;
+}
+
 export interface OpenCodeConfig {
   plugin?: string[];
   provider?: Record<string, unknown>;
@@ -52,6 +77,7 @@ export interface InstallConfig {
   selectedChutesPrimaryModel?: string;
   selectedChutesSecondaryModel?: string;
   availableChutesFreeModels?: OpenCodeFreeModel[];
+  dynamicModelPlan?: DynamicModelPlan;
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;

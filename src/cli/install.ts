@@ -4,8 +4,10 @@ import {
   addChutesProvider,
   addGoogleProvider,
   addPluginToOpenCodeConfig,
+  buildDynamicModelPlan,
   detectCurrentConfig,
   disableDefaultAgents,
+  discoverModelCatalog,
   discoverOpenCodeFreeModels,
   discoverProviderFreeModels,
   generateLiteConfig,
@@ -509,11 +511,22 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printHeader(isUpdate);
 
+  const hasAnyEnabledProvider =
+    resolvedConfig.hasKimi ||
+    resolvedConfig.hasOpenAI ||
+    resolvedConfig.hasAnthropic ||
+    resolvedConfig.hasCopilot ||
+    resolvedConfig.hasZaiPlan ||
+    resolvedConfig.hasAntigravity ||
+    resolvedConfig.hasChutes ||
+    resolvedConfig.useOpenCodeFreeModels;
+
   // Calculate total steps dynamically
   let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
   if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
   if (resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
   if (resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
+  if (hasAnyEnabledProvider) totalSteps += 1; // dynamic model resolution
   if (resolvedConfig.installSkills) totalSteps += 1; // skills installation
   if (resolvedConfig.installCustomSkills) totalSteps += 1; // custom skills installation
 
@@ -672,6 +685,32 @@ async function runInstall(config: InstallConfig): Promise<number> {
     const chutesProviderResult = addChutesProvider();
     if (!handleStepResult(chutesProviderResult, 'Chutes Provider configured'))
       return 1;
+  }
+
+  if (hasAnyEnabledProvider) {
+    printStep(step++, totalSteps, 'Resolving dynamic model assignments...');
+    const catalogDiscovery = await discoverModelCatalog();
+    if (catalogDiscovery.models.length === 0) {
+      printWarning(
+        catalogDiscovery.error ??
+          'Unable to discover model catalog. Falling back to static mappings.',
+      );
+    } else {
+      const dynamicPlan = buildDynamicModelPlan(
+        catalogDiscovery.models,
+        resolvedConfig,
+      );
+      if (!dynamicPlan) {
+        printWarning(
+          'Dynamic planner found no suitable models. Using static mappings.',
+        );
+      } else {
+        resolvedConfig.dynamicModelPlan = dynamicPlan;
+        printSuccess(
+          `Dynamic assignments ready (${Object.keys(dynamicPlan.agents).length} agents)`,
+        );
+      }
+    }
   }
 
   printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
