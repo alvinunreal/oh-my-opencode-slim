@@ -59,7 +59,144 @@ function statusScore(status: DiscoveredModel['status']): number {
   return -40;
 }
 
-function baseScore(model: DiscoveredModel): number {
+type VersionFamilyInfo = {
+  family: string;
+  version: [number, number, number];
+  confidence: number;
+  prereleasePenalty: number;
+};
+
+function toVersionTuple(
+  major: string,
+  minor?: string,
+  patch?: string,
+): [number, number, number] {
+  return [
+    Number.parseInt(major, 10) || 0,
+    Number.parseInt(minor ?? '0', 10) || 0,
+    Number.parseInt(patch ?? '0', 10) || 0,
+  ];
+}
+
+function compareVersionTuple(
+  a: [number, number, number],
+  b: [number, number, number],
+): number {
+  if (a[0] !== b[0]) return a[0] - b[0];
+  if (a[1] !== b[1]) return a[1] - b[1];
+  return a[2] - b[2];
+}
+
+function extractVersionFamily(
+  model: DiscoveredModel,
+): VersionFamilyInfo | null {
+  const text = `${model.model} ${model.name}`.toLowerCase();
+
+  const gpt = text.match(/\bgpt[-_ ]?(\d+)(?:[.-](\d+))?(?:[.-](\d+))?\b/);
+  if (gpt) {
+    return {
+      family: 'gpt',
+      version: toVersionTuple(gpt[1] ?? '0', gpt[2], gpt[3]),
+      confidence: 1,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  const gemini = text.match(
+    /\bgemini[-_ ]?(\d+)(?:[.-](\d+))?(?:[.-](\d+))?\b/,
+  );
+  if (gemini) {
+    return {
+      family: 'gemini',
+      version: toVersionTuple(gemini[1] ?? '0', gemini[2], gemini[3]),
+      confidence: 1,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  const kimi = text.match(/\bkimi[-_ ]?k(\d+)(?:[.-]?(\d+))?(?:[.-](\d+))?\b/);
+  if (kimi) {
+    return {
+      family: 'kimi-k',
+      version: toVersionTuple(kimi[1] ?? '0', kimi[2], kimi[3]),
+      confidence: 1,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  const generic = text.match(
+    /\b([a-z][a-z0-9-]{1,20})[-_ ](\d+)(?:[.-](\d+))?(?:[.-](\d+))?\b/,
+  );
+  if (generic) {
+    return {
+      family: generic[1] ?? 'generic',
+      version: toVersionTuple(generic[2] ?? '0', generic[3], generic[4]),
+      confidence: 0.7,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  return null;
+}
+
+function getVersionRecencyMap(
+  models: DiscoveredModel[],
+): Record<string, number> {
+  const familyVersions = new Map<string, Array<[number, number, number]>>();
+  const modelInfo = new Map<string, VersionFamilyInfo>();
+
+  for (const model of models) {
+    const info = extractVersionFamily(model);
+    if (!info) continue;
+
+    modelInfo.set(model.model, info);
+    const current = familyVersions.get(info.family) ?? [];
+    current.push(info.version);
+    familyVersions.set(info.family, current);
+  }
+
+  const recencyMap: Record<string, number> = {};
+
+  for (const model of models) {
+    const info = modelInfo.get(model.model);
+    if (!info) {
+      recencyMap[model.model] = 0;
+      continue;
+    }
+
+    const versions = familyVersions.get(info.family) ?? [];
+    const unique = versions
+      .map((tuple) => `${tuple[0]}.${tuple[1]}.${tuple[2]}`)
+      .filter((value, index, arr) => arr.indexOf(value) === index)
+      .map((value) => {
+        const [major, minor, patch] = value
+          .split('.')
+          .map((v) => Number.parseInt(v, 10) || 0);
+        return [major, minor, patch] as [number, number, number];
+      })
+      .sort(compareVersionTuple);
+
+    if (unique.length === 0) {
+      recencyMap[model.model] = 0;
+      continue;
+    }
+
+    const index = unique.findIndex(
+      (tuple) => compareVersionTuple(tuple, info.version) === 0,
+    );
+    const percentile = unique.length === 1 ? 0.5 : index / (unique.length - 1);
+    const raw = -3 + percentile * (12 - -3);
+    const final = Math.max(
+      -3,
+      Math.min(12, raw * info.confidence + info.prereleasePenalty),
+    );
+    recencyMap[model.model] = final;
+  }
+
+  return recencyMap;
+}
+
+function baseScore(model: DiscoveredModel, versionRecencyBoost = 0): number {
   const lowered = `${model.model} ${model.name}`.toLowerCase();
   const context = Math.min(model.contextLimit, 1_000_000) / 50_000;
   const output = Math.min(model.outputLimit, 300_000) / 30_000;
@@ -74,11 +211,6 @@ function baseScore(model: DiscoveredModel): number {
     4,
   );
   const code = tokenScore(lowered, /(codex|coder|code|dev|program)/i, 12);
-  const versionBoost =
-    tokenScore(lowered, /gpt-5\.3/i, 12) +
-    tokenScore(lowered, /gpt-5\.2/i, 8) +
-    tokenScore(lowered, /k2\.5/i, 6);
-
   return (
     statusScore(model.status) +
     context +
@@ -86,7 +218,7 @@ function baseScore(model: DiscoveredModel): number {
     deep +
     fast +
     code +
-    versionBoost +
+    versionRecencyBoost +
     (model.toolcall ? 25 : 0)
   );
 }
@@ -149,7 +281,11 @@ function modelLookupKeys(model: DiscoveredModel): string[] {
   return [...keys];
 }
 
-function roleScore(agent: AgentName, model: DiscoveredModel): number {
+function roleScore(
+  agent: AgentName,
+  model: DiscoveredModel,
+  versionRecencyBoost = 0,
+): number {
   const lowered = `${model.model} ${model.name}`.toLowerCase();
   const reasoning = model.reasoning ? 1 : 0;
   const toolcall = model.toolcall ? 1 : 0;
@@ -182,7 +318,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
     return -5_000;
   }
 
-  const score = baseScore(model);
+  const score = baseScore(model, versionRecencyBoost);
   const flash = hasFlashToken(model);
   const isZai47 = isZai47Model(model);
   const zai47Flash = isZai47 && flash;
@@ -367,11 +503,15 @@ function rankModels(
   agent: AgentName,
   externalSignals?: ExternalSignalMap,
 ): DiscoveredModel[] {
+  const versionRecencyMap = getVersionRecencyMap(models);
+
   return [...models].sort((a, b) => {
     const scoreA =
-      roleScore(agent, a) + getExternalSignalBoost(agent, a, externalSignals);
+      roleScore(agent, a, versionRecencyMap[a.model] ?? 0) +
+      getExternalSignalBoost(agent, a, externalSignals);
     const scoreB =
-      roleScore(agent, b) + getExternalSignalBoost(agent, b, externalSignals);
+      roleScore(agent, b, versionRecencyMap[b.model] ?? 0) +
+      getExternalSignalBoost(agent, b, externalSignals);
     const scoreDelta = scoreB - scoreA;
     if (scoreDelta !== 0) return scoreDelta;
 
@@ -386,9 +526,10 @@ function combinedScore(
   agent: AgentName,
   model: DiscoveredModel,
   externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
 ): number {
   return (
-    roleScore(agent, model) +
+    roleScore(agent, model, versionRecencyMap?.[model.model] ?? 0) +
     getExternalSignalBoost(agent, model, externalSignals)
   );
 }
@@ -397,6 +538,7 @@ function chooseProviderRepresentative(
   providerModels: DiscoveredModel[],
   agent: AgentName,
   externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
 ): DiscoveredModel | null {
   if (providerModels.length === 0) return null;
 
@@ -406,8 +548,18 @@ function chooseProviderRepresentative(
   if (!nonFlashBest) return providerModels[0] ?? null;
   if (!flashBest) return nonFlashBest;
 
-  const flashScore = combinedScore(agent, flashBest, externalSignals);
-  const nonFlashScore = combinedScore(agent, nonFlashBest, externalSignals);
+  const flashScore = combinedScore(
+    agent,
+    flashBest,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const nonFlashScore = combinedScore(
+    agent,
+    nonFlashBest,
+    externalSignals,
+    versionRecencyMap,
+  );
   const threshold = agent === 'explorer' ? -6 : 12;
   return flashScore >= nonFlashScore + threshold ? flashBest : nonFlashBest;
 }
@@ -418,6 +570,7 @@ function selectPrimaryWithDiversity(
   providerUsage: Map<string, number>,
   maxShare: number,
   externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
 ): DiscoveredModel | null {
   if (candidates.length === 0) return null;
 
@@ -427,7 +580,12 @@ function selectPrimaryWithDiversity(
       usage === 0 ? 0 : usage === 1 ? 12 : usage === 2 ? 26 : 42;
     const unusedBonus = usage === 0 ? 8 : 0;
     const overCapPenalty = usage >= maxShare ? 25 : 0;
-    const rawScore = combinedScore(agent, model, externalSignals);
+    const rawScore = combinedScore(
+      agent,
+      model,
+      externalSignals,
+      versionRecencyMap,
+    );
     const adjustedScore =
       rawScore - diversityPenalty + unusedBonus - overCapPenalty;
 
@@ -526,6 +684,7 @@ export function buildDynamicModelPlan(
   const providerCandidates = catalogWithSelectedModels.filter((m) =>
     enabledProviders.has(m.providerID),
   );
+  const versionRecencyMap = getVersionRecencyMap(providerCandidates);
 
   if (providerCandidates.length === 0) {
     return null;
@@ -568,6 +727,7 @@ export function buildDynamicModelPlan(
         providerUsage,
         maxShare,
         externalSignals,
+        versionRecencyMap,
       ) ?? ranked[0];
     if (!primary) continue;
 
@@ -586,6 +746,7 @@ export function buildDynamicModelPlan(
           providerModels,
           agent,
           externalSignals,
+          versionRecencyMap,
         )?.model;
       })
       .filter((m): m is string => Boolean(m));
@@ -653,8 +814,18 @@ export function buildDynamicModelPlan(
         const current = ranked.find((model) => model.model === currentModel);
         if (!candidate || !current) continue;
 
-        const currentScore = combinedScore(agent, current, externalSignals);
-        const candidateScore = combinedScore(agent, candidate, externalSignals);
+        const currentScore = combinedScore(
+          agent,
+          current,
+          externalSignals,
+          versionRecencyMap,
+        );
+        const candidateScore = combinedScore(
+          agent,
+          candidate,
+          externalSignals,
+          versionRecencyMap,
+        );
         const loss = currentScore - candidateScore;
 
         if (!bestSwap || loss < bestSwap.loss) {
