@@ -256,6 +256,64 @@ describe('deepMerge behavior', () => {
     const config = loadPluginConfig(projectDir);
     expect(config.agents?.oracle?.model).toBe('user/model');
   });
+
+  test('merges fallback timeout and chains from user and project', () => {
+    const userOpencodeDir = path.join(userConfigDir, 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: {
+          timeoutMs: 15000,
+          chains: {
+            oracle: ['openai/gpt-5.2-codex', 'opencode/glm-4.7-free'],
+          },
+        },
+      }),
+    );
+
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: {
+          chains: {
+            explorer: ['google/antigravity-gemini-3-flash'],
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.fallback?.timeoutMs).toBe(15000);
+    expect(config.fallback?.chains.oracle).toEqual([
+      'openai/gpt-5.2-codex',
+      'opencode/glm-4.7-free',
+    ]);
+    expect(config.fallback?.chains.explorer).toEqual([
+      'google/antigravity-gemini-3-flash',
+    ]);
+  });
+
+  test('rejects fallback chains with unsupported agent keys', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: {
+          chains: {
+            writing: ['openai/gpt-5.2-codex'],
+          },
+        },
+      }),
+    );
+
+    expect(loadPluginConfig(projectDir)).toEqual({});
+  });
 });
 
 describe('preset resolution', () => {

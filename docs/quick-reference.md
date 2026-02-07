@@ -17,6 +17,28 @@ Complete reference for oh-my-opencode-slim configuration and capabilities.
 
 Presets are pre-configured agent model mappings for different provider combinations. The installer generates these automatically based on your available providers, and you can switch between them instantly.
 
+### OpenCode Free Discovery
+
+The installer can discover the latest OpenCode free models by running:
+
+```bash
+opencode models --refresh --verbose
+```
+
+Selection rules:
+- Only free `opencode/*` models are considered.
+- A coding-first primary model is selected for orchestration/strategy workloads.
+- A support model is selected for research/implementation workloads.
+- OpenCode-only mode can assign multiple OpenCode models across agents.
+- Hybrid mode can combine OpenCode free models with OpenAI/Kimi/Antigravity; `designer` remains on the external provider mapping.
+
+Useful flags:
+
+```bash
+--opencode-free=yes|no
+--opencode-free-model=<id|auto>
+```
+
 ### Switching Presets
 
 **Method 1: Edit Config File**
@@ -66,13 +88,14 @@ Access Claude 4.5 and Gemini 3 models through Google's Antigravity infrastructur
 
 **Installation:**
 ```bash
-bunx oh-my-opencode-slim install --antigravity=yes
+bunx oh-my-opencode-slim install --antigravity=yes --opencode-free=yes --opencode-free-model=auto
 ```
 
 **Agent Mapping:**
 - Orchestrator: Kimi (if available)
 - Oracle: GPT (if available)
 - Explorer/Librarian/Designer/Fixer: Gemini 3 Flash via Antigravity
+- If OpenCode free mode is enabled, Explorer/Librarian/Fixer may use selected free `opencode/*` support model while `designer` stays on external mapping
 
 **Authentication:**
 ```bash

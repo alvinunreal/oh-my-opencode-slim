@@ -340,6 +340,41 @@ export function addGoogleProvider(): ConfigMergeResult {
   }
 }
 
+export function addChutesProvider(): ConfigMergeResult {
+  const configPath = getExistingConfigPath();
+  try {
+    const { config: parsedConfig, error } = parseConfig(configPath);
+    if (error) {
+      return {
+        success: false,
+        configPath,
+        error: `Failed to parse config: ${error}`,
+      };
+    }
+    const config = parsedConfig ?? {};
+    const providers = (config.provider ?? {}) as Record<string, unknown>;
+
+    providers.chutes = {
+      npm: '@ai-sdk/openai-compatible',
+      name: 'Chutes',
+      options: {
+        baseURL: 'https://llm.chutes.ai/v1',
+        apiKey: '{env:CHUTES_API_KEY}',
+      },
+    };
+    config.provider = providers;
+
+    writeConfig(configPath, config);
+    return { success: true, configPath };
+  } catch (err) {
+    return {
+      success: false,
+      configPath,
+      error: `Failed to add chutes provider: ${err}`,
+    };
+  }
+}
+
 export function detectAntigravityConfig(): boolean {
   const { config } = parseConfig(getExistingConfigPath());
   if (!config) return false;
@@ -356,7 +391,11 @@ export function detectCurrentConfig(): DetectedConfig {
     isInstalled: false,
     hasKimi: false,
     hasOpenAI: false,
+    hasAnthropic: false,
+    hasCopilot: false,
+    hasZaiPlan: false,
     hasAntigravity: false,
+    hasChutes: false,
     hasOpencodeZen: false,
     hasTmux: false,
   };
@@ -373,6 +412,10 @@ export function detectCurrentConfig(): DetectedConfig {
   // Check for providers
   const providers = config.provider as Record<string, unknown> | undefined;
   result.hasKimi = !!providers?.kimi;
+  result.hasAnthropic = !!providers?.anthropic;
+  result.hasCopilot = !!providers?.['github-copilot'];
+  result.hasZaiPlan = !!providers?.['zai-coding-plan'];
+  result.hasChutes = !!providers?.chutes;
   if (providers?.google) result.hasAntigravity = true;
 
   // Try to detect from lite config
@@ -390,9 +433,15 @@ export function detectCurrentConfig(): DetectedConfig {
         .map((a) => a?.model)
         .filter(Boolean);
       result.hasOpenAI = models.some((m) => m?.startsWith('openai/'));
+      result.hasAnthropic = models.some((m) => m?.startsWith('anthropic/'));
+      result.hasCopilot = models.some((m) => m?.startsWith('github-copilot/'));
+      result.hasZaiPlan = models.some((m) => m?.startsWith('zai-coding-plan/'));
       result.hasOpencodeZen = models.some((m) => m?.startsWith('opencode/'));
       if (models.some((m) => m?.startsWith('google/'))) {
         result.hasAntigravity = true;
+      }
+      if (models.some((m) => m?.startsWith('chutes/'))) {
+        result.hasChutes = true;
       }
     }
 

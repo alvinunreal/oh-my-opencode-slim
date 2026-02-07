@@ -11,6 +11,7 @@ function createMockContext(overrides?: {
       parts?: Array<{ type: string; text?: string }>;
     }>;
   };
+  promptImpl?: (args: any) => Promise<unknown>;
 }) {
   let callCount = 0;
   return {
@@ -30,7 +31,12 @@ function createMockContext(overrides?: {
         messages: mock(
           async () => overrides?.sessionMessagesResult ?? { data: [] },
         ),
-        prompt: mock(async () => ({})),
+        prompt: mock(async (args: any) => {
+          if (overrides?.promptImpl) {
+            return await overrides.promptImpl(args);
+          }
+          return {};
+        }),
       },
     },
     directory: '/test/directory',
@@ -475,6 +481,90 @@ describe('BackgroundTaskManager', () => {
   });
 
   describe('BackgroundTask logic', () => {
+    test('falls back to next model when first model prompt fails', async () => {
+      let promptCalls = 0;
+      const ctx = createMockContext({
+        promptImpl: async (args) => {
+          const isTaskPrompt =
+            typeof args.path?.id === 'string' &&
+            args.path.id.startsWith('test-session-');
+          const isParentNotification = !isTaskPrompt;
+          if (isParentNotification) return {};
+
+          promptCalls += 1;
+          const modelRef = args.body?.model;
+          if (
+            modelRef?.providerID === 'openai' &&
+            modelRef?.modelID === 'gpt-5.2-codex'
+          ) {
+            throw new Error('primary failed');
+          }
+          return {};
+        },
+      });
+
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        fallback: {
+          enabled: true,
+          timeoutMs: 15000,
+          chains: {
+            explorer: ['openai/gpt-5.2-codex', 'opencode/gpt-5-nano'],
+          },
+        },
+      });
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(task.status).toBe('running');
+      expect(promptCalls).toBe(2);
+    });
+
+    test('fails task when all fallback models fail', async () => {
+      const ctx = createMockContext({
+        promptImpl: async (args) => {
+          const isTaskPrompt =
+            typeof args.path?.id === 'string' &&
+            args.path.id.startsWith('test-session-');
+          const isParentNotification = !isTaskPrompt;
+          if (isParentNotification) return {};
+          throw new Error('all models failing');
+        },
+      });
+
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        fallback: {
+          enabled: true,
+          timeoutMs: 15000,
+          chains: {
+            explorer: ['openai/gpt-5.2-codex', 'opencode/gpt-5-nano'],
+          },
+        },
+      });
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(task.status).toBe('failed');
+      expect(task.error).toContain('All fallback models failed');
+    });
+
     test('extracts content from multiple types and messages', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {

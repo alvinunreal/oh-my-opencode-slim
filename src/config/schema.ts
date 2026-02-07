@@ -1,5 +1,29 @@
 import { z } from 'zod';
 
+const FALLBACK_AGENT_NAMES = [
+  'orchestrator',
+  'oracle',
+  'designer',
+  'explorer',
+  'librarian',
+  'fixer',
+] as const;
+
+const AgentModelChainSchema = z.array(z.string()).min(1);
+
+const FallbackChainsSchema = z
+  .object({
+    orchestrator: AgentModelChainSchema.optional(),
+    oracle: AgentModelChainSchema.optional(),
+    designer: AgentModelChainSchema.optional(),
+    explorer: AgentModelChainSchema.optional(),
+    librarian: AgentModelChainSchema.optional(),
+    fixer: AgentModelChainSchema.optional(),
+  })
+  .strict();
+
+export type FallbackAgentName = (typeof FALLBACK_AGENT_NAMES)[number];
+
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const AgentOverrideConfigSchema = z.object({
   model: z.string().optional(),
@@ -46,6 +70,14 @@ export const BackgroundTaskConfigSchema = z.object({
 
 export type BackgroundTaskConfig = z.infer<typeof BackgroundTaskConfigSchema>;
 
+export const FailoverConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  timeoutMs: z.number().min(1000).max(120000).default(15000),
+  chains: FallbackChainsSchema.default({}),
+});
+
+export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
+
 // Main plugin config
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
@@ -54,6 +86,7 @@ export const PluginConfigSchema = z.object({
   disabled_mcps: z.array(z.string()).optional(),
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
+  fallback: FailoverConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;

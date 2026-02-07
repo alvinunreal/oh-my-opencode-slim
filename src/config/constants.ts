@@ -37,6 +37,7 @@ export const POLL_INTERVAL_BACKGROUND_MS = 2000;
 // Timeouts
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 export const MAX_POLL_TIME_MS = 5 * 60 * 1000; // 5 minutes
+export const FALLBACK_FAILOVER_TIMEOUT_MS = 15_000;
 
 // Polling stability
 export const STABLE_POLLS_THRESHOLD = 3;

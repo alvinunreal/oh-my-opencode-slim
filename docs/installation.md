@@ -24,19 +24,29 @@ bunx oh-my-opencode-slim@latest install
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
 ```
 
 ### Provider Options
 
 The installer supports multiple providers:
+- **OpenCode Free Models**: Live-refreshed free `opencode/*` models
 - **Kimi For Coding**: High-performance coding models
 - **OpenAI**: GPT-4 and GPT-3.5 models
 - **Antigravity (Google)**: Claude 4.5 and Gemini 3 models via Google's infrastructure
+- **Chutes**: Free daily-capped models (`chutes/*`) with dynamic role-aware selection
+
+When OpenCode free mode is enabled, the installer runs:
+
+```bash
+opencode models --refresh --verbose
+```
+
+It then filters to free `opencode/*` models only, picks a coding-first primary model, and picks a support model for search/implementation agents.
 
 Enable during installation:
 ```bash
-bunx oh-my-opencode-slim install --kimi=yes --openai=yes --antigravity=yes
+bunx oh-my-opencode-slim install --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto
 ```
 
 ### After Installation
@@ -83,33 +93,41 @@ Ask these questions **one at a time**, waiting for responses:
 1. "Do you have access to **Kimi For Coding**?" *(Provides Kimi k1.5 models)*
 2. "Do you have access to **OpenAI** API?" *(Enables `openai/` models)*
 3. "Do you have access to **Antigravity (Google)**?" *(Enables `google/` models via Antigravity)*
+4. "Do you want to use **Chutes**?" *(Enables `chutes/` models with daily-cap aware selection)*
+5. "Do you want to use **OpenCode free models**?" *(Refreshes and selects from free `opencode/*` models)*
 
 Help the user understand the tradeoffs:
-- Kimi For Coding provides powerful k1.5 models for coding tasks.
+- OpenCode free mode discovers the latest free `opencode/*` models using `opencode models --refresh --verbose`.
+- OpenCode-only mode can assign more than one OpenCode model across agents.
+- Hybrid mode can combine OpenCode free models with OpenAI, Kimi, and/or Antigravity.
+- In hybrid mode, `designer` remains on the external provider mapping.
+- Chutes selection prioritizes stronger models for orchestrator/oracle and higher-cap models for support agents.
+- Kimi For Coding provides powerful coding models.
 - OpenAI enables `openai/` models.
-- Antigravity (Google) provides Claude 4.5 and Gemini 3 models.
-- If the user has **no providers**, the plugin still works using **OpenCode Zen** free models (`opencode/big-pickle`). They can switch to paid providers later by editing `~/.config/opencode/oh-my-opencode-slim.json`.
-- OpenAI is optional; it enables `openai/` models.
-- If the user has **no providers**, the plugin still works using **OpenCode Zen** free models (`opencode/big-pickle`). They can switch to paid providers later by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
+- Antigravity (Google) provides Claude and Gemini models via Google infrastructure.
+- Chutes provides free daily-capped models and requires `CHUTES_API_KEY`.
 
 ### Step 3: Run the Installer
 
 Based on answers, run:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no>
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --opencode-free=<yes|no> --opencode-free-model=<id|auto> --tmux=<yes|no> --skills=<yes|no>
 ```
 
 **Examples:**
 ```bash
 # Kimi + OpenAI + Antigravity
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
 
 # OpenAI only
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --tmux=no
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=no --tmux=no --skills=yes
 
-# No providers (Zen free models only)
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --antigravity=no --tmux=no
+# OpenCode free models only (auto-select)
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+
+# OpenCode free models + OpenAI (manual primary model)
+bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=opencode/gpt-5-nano --tmux=no --skills=yes
 ```
 
 The installer automatically:
