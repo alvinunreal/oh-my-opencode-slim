@@ -13,6 +13,7 @@ import {
   fetchExternalModelSignals,
   generateLiteConfig,
   getOpenCodeVersion,
+  installOmosCommandEntry,
   isOpenCodeInstalled,
   pickBestCodingChutesModel,
   pickBestCodingOpenCodeModel,
@@ -568,7 +569,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
     resolvedConfig.useOpenCodeFreeModels;
 
   // Calculate total steps dynamically
-  let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
+  let totalSteps = 5; // Base: check opencode, add plugin, install /omos command, disable default agents, write lite config
   if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
   if (resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
   if (resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
@@ -712,6 +713,10 @@ async function runInstall(config: InstallConfig): Promise<number> {
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
   const pluginResult = await addPluginToOpenCodeConfig();
   if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
+
+  printStep(step++, totalSteps, 'Installing /omos command entry...');
+  const omosCommandResult = installOmosCommandEntry();
+  if (!handleStepResult(omosCommandResult, '/omos command installed')) return 1;
 
   // Add Antigravity support if requested
   if (resolvedConfig.hasAntigravity) {

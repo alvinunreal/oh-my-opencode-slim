@@ -1,10 +1,16 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { PluginConfig } from '../config';
 import {
   compileManualPlanToConfig,
   deriveManualPlanFromConfig,
+  diffManualPlans,
+  precedenceWarning,
+  resolveTargetPath,
 } from './omos-preferences';
 
 describe('omos-preferences helpers', () => {
@@ -85,5 +91,84 @@ describe('omos-preferences helpers', () => {
       'opencode/gpt-5-nano',
       'opencode/big-pickle',
     ]);
+  });
+
+  test('builds per-agent diff summary for confirm-before-apply', () => {
+    const before = {
+      orchestrator: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      oracle: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      designer: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      explorer: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      librarian: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      fixer: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+    };
+
+    const after = {
+      ...before,
+      oracle: {
+        primary: 'anthropic/claude-opus-4-6',
+        fallback1: 'openai/gpt-5.3-codex',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+    };
+
+    const diff = diffManualPlans(before, after);
+    expect(diff.changedAgents).toEqual(['oracle']);
+    expect(diff.unchangedAgents).toContain('fixer');
+    expect(diff.details.oracle?.before[0]).toBe('openai/gpt-5.3-codex');
+    expect(diff.details.oracle?.after[0]).toBe('anthropic/claude-opus-4-6');
+  });
+
+  test('warns when writing global while project config exists', () => {
+    const temp = mkdtempSync(join(tmpdir(), 'omos-precedence-test-'));
+    const originalEnv = { ...process.env };
+
+    try {
+      process.env.XDG_CONFIG_HOME = join(temp, 'xdg');
+      const projectDir = join(temp, 'project');
+      mkdirSync(join(projectDir, '.opencode'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        '{"preset":"manual"}\n',
+      );
+
+      const globalTarget = resolveTargetPath(projectDir, 'global');
+      const warning = precedenceWarning(globalTarget, projectDir);
+      expect(warning).toContain('.opencode/oh-my-opencode-slim.json');
+    } finally {
+      process.env = originalEnv;
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 });

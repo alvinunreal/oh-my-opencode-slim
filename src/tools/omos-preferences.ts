@@ -1,13 +1,16 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   type PluginInput,
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
 import { parseConfig, writeConfig } from '../cli/config-io';
-import { getExistingLiteConfigPath } from '../cli/paths';
+import { getConfigDir } from '../cli/paths';
 import { resolveAgentWithPrecedence } from '../cli/precedence-resolver';
 import {
   type AgentOverrideConfig,
+  loadPluginConfig,
   ManualPlanSchema,
   type PluginConfig,
   type Preset,
@@ -23,6 +26,7 @@ const AGENT_NAMES = [
 ] as const;
 
 type AgentName = (typeof AGENT_NAMES)[number];
+type WriteTarget = 'auto' | 'global' | 'project';
 
 type ManualAgentPlan = {
   primary: string;
@@ -33,12 +37,22 @@ type ManualAgentPlan = {
 
 type ManualPlan = Record<AgentName, ManualAgentPlan>;
 
+type DiffSummary = {
+  changedAgents: string[];
+  unchangedAgents: string[];
+  details: Record<string, { before: string[]; after: string[] }>;
+};
+
 const DEFAULT_CHAIN_FILL = [
   'opencode/gpt-5-nano',
   'opencode/glm-4.7-free',
   'opencode/big-pickle',
   'opencode/sonic',
 ];
+
+function stringify(data: unknown): string {
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
 
 function dedupe(models: Array<string | undefined>): string[] {
   const seen = new Set<string>();
@@ -51,13 +65,46 @@ function dedupe(models: Array<string | undefined>): string[] {
   return result;
 }
 
-function readLiteConfig(): { path: string; config: PluginConfig } {
-  const path = getExistingLiteConfigPath();
+function hashString(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash << 5) - hash + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(16);
+}
+
+function getGlobalConfigPath(): string {
+  const configDir = getConfigDir();
+  const jsonPath = join(configDir, 'oh-my-opencode-slim.json');
+  const jsoncPath = join(configDir, 'oh-my-opencode-slim.jsonc');
+  return existsSync(jsoncPath) ? jsoncPath : jsonPath;
+}
+
+function getProjectConfigPath(directory: string): string {
+  const jsonPath = join(directory, '.opencode', 'oh-my-opencode-slim.json');
+  const jsoncPath = join(directory, '.opencode', 'oh-my-opencode-slim.jsonc');
+  return existsSync(jsoncPath) ? jsoncPath : jsonPath;
+}
+
+export function resolveTargetPath(
+  directory: string,
+  target: WriteTarget,
+): string {
+  if (target === 'global') return getGlobalConfigPath();
+  if (target === 'project') return getProjectConfigPath(directory);
+
+  const projectPath = getProjectConfigPath(directory);
+  if (existsSync(projectPath)) return projectPath;
+  return getGlobalConfigPath();
+}
+
+function readConfigAtPath(path: string): PluginConfig {
   const parsed = parseConfig(path);
   if (parsed.error) {
-    throw new Error(`Failed to parse lite config: ${parsed.error}`);
+    throw new Error(`Failed to parse config at ${path}: ${parsed.error}`);
   }
-  return { path, config: (parsed.config ?? {}) as PluginConfig };
+  return (parsed.config ?? {}) as PluginConfig;
 }
 
 function getActivePresetAgents(config: PluginConfig): Record<string, unknown> {
@@ -89,9 +136,7 @@ function deriveAgentChain(
   const primary = getAgentPrimary(config, agentName);
   const fromFallback = config.fallback?.chains?.[agentName] ?? [];
   const resolved = dedupe([primary, ...fromFallback]);
-
-  const fill = dedupe([...resolved, ...DEFAULT_CHAIN_FILL]);
-  return fill.slice(0, 4);
+  return dedupe([...resolved, ...DEFAULT_CHAIN_FILL]).slice(0, 4);
 }
 
 export function deriveManualPlanFromConfig(config: PluginConfig): ManualPlan {
@@ -186,11 +231,53 @@ export function compileManualPlanToConfig(
   };
 }
 
-function stringify(data: unknown): string {
-  return `${JSON.stringify(data, null, 2)}\n`;
+export function diffManualPlans(
+  before: ManualPlan,
+  after: ManualPlan,
+): DiffSummary {
+  const changedAgents: string[] = [];
+  const unchangedAgents: string[] = [];
+  const details: Record<string, { before: string[]; after: string[] }> = {};
+
+  for (const agentName of AGENT_NAMES) {
+    const beforeChain = [
+      before[agentName].primary,
+      before[agentName].fallback1,
+      before[agentName].fallback2,
+      before[agentName].fallback3,
+    ];
+    const afterChain = [
+      after[agentName].primary,
+      after[agentName].fallback1,
+      after[agentName].fallback2,
+      after[agentName].fallback3,
+    ];
+
+    const changed = beforeChain.join(' -> ') !== afterChain.join(' -> ');
+    if (changed) {
+      changedAgents.push(agentName);
+      details[agentName] = { before: beforeChain, after: afterChain };
+    } else {
+      unchangedAgents.push(agentName);
+    }
+  }
+
+  return { changedAgents, unchangedAgents, details };
 }
 
-export function createOmosPreferencesTools(_ctx: PluginInput): {
+export function precedenceWarning(
+  targetPath: string,
+  directory: string,
+): string | undefined {
+  const projectPath = getProjectConfigPath(directory);
+  const globalPath = getGlobalConfigPath();
+  if (targetPath === globalPath && existsSync(projectPath)) {
+    return `Project config exists at ${projectPath} and may override global values from ${globalPath}.`;
+  }
+  return undefined;
+}
+
+export function createOmosPreferencesTools(ctx: PluginInput): {
   omos_preferences: ToolDefinition;
 } {
   const z = tool.schema;
@@ -199,65 +286,103 @@ export function createOmosPreferencesTools(_ctx: PluginInput): {
     description: `Manage OMOS model preferences.
 
 Operations:
-- show: show current per-agent primary + 3 fallbacks
-- plan: validate and preview manual plan compile (no write)
-- apply: validate and write manual plan atomically
-- reset-agent: reset one agent manual chain from policy defaults`,
+- show: show current effective and target plan
+- plan: validate and preview diff (no write)
+- apply: validate and write with confirm=true
+- reset-agent: reset one agent chain on selected target
+
+Targets:
+- auto (default): project if present, otherwise global
+- project: .opencode config in current directory
+- global: ~/.config/opencode config`,
     args: {
       operation: z.enum(['show', 'plan', 'apply', 'reset-agent']),
       plan: z.unknown().optional(),
       agent: z.string().optional(),
       confirm: z.boolean().optional(),
+      target: z.enum(['auto', 'global', 'project']).optional(),
+      expectedDiffHash: z.string().optional(),
     },
     async execute(args) {
       const operation = args.operation;
+      const target = (args.target ?? 'auto') as WriteTarget;
+      const targetPath = resolveTargetPath(ctx.directory, target);
+      const targetConfig = readConfigAtPath(targetPath);
+      const effectiveConfig = loadPluginConfig(ctx.directory);
+      const effectivePlan = deriveManualPlanFromConfig(effectiveConfig);
 
       if (operation === 'show') {
-        const { path, config } = readLiteConfig();
-        const manualPlan = deriveManualPlanFromConfig(config);
-        return `Loaded: ${path}\n\n${stringify({ manualPlan })}`;
+        return stringify({
+          target,
+          targetPath,
+          effectivePlan,
+          targetPlan: deriveManualPlanFromConfig(targetConfig),
+          warning: precedenceWarning(targetPath, ctx.directory),
+        });
       }
 
       if (operation === 'plan') {
-        const { config } = readLiteConfig();
         const parsed = ManualPlanSchema.safeParse(args.plan);
         if (!parsed.success) {
           return `Invalid plan:\n${stringify(parsed.error.format())}`;
         }
 
-        const preview = compileManualPlanToConfig(config, parsed.data);
-        const compiled = {
-          agents: AGENT_NAMES.reduce(
-            (acc, agentName) => {
-              acc[agentName] = {
-                model: (
-                  preview.agents?.[agentName] as { model?: string } | undefined
-                )?.model,
-              };
-              return acc;
-            },
-            {} as Record<string, { model?: string }>,
-          ),
-          fallback: preview.fallback,
-        };
+        const nextPlan = parsed.data;
+        const diff = diffManualPlans(effectivePlan, nextPlan);
+        const diffHash = hashString(stringify(diff));
+        const compiled = compileManualPlanToConfig(targetConfig, nextPlan);
 
-        return `Plan preview (no write):\n\n${stringify(compiled)}`;
+        return stringify({
+          target,
+          targetPath,
+          diffHash,
+          diff,
+          warning: precedenceWarning(targetPath, ctx.directory),
+          compiled: {
+            agents: AGENT_NAMES.reduce(
+              (acc, agentName) => {
+                acc[agentName] = {
+                  model: (compiled.agents?.[agentName] as { model?: string })
+                    ?.model,
+                };
+                return acc;
+              },
+              {} as Record<string, { model?: string }>,
+            ),
+            fallback: compiled.fallback,
+          },
+        });
       }
 
       if (operation === 'apply') {
         if (args.confirm !== true) {
-          return 'Refusing apply without confirm=true.';
+          return 'Refusing apply without confirm=true. Run plan first and review the diff.';
         }
 
-        const { path, config } = readLiteConfig();
         const parsed = ManualPlanSchema.safeParse(args.plan);
         if (!parsed.success) {
           return `Invalid plan:\n${stringify(parsed.error.format())}`;
         }
 
-        const nextConfig = compileManualPlanToConfig(config, parsed.data);
-        writeConfig(path, nextConfig as Record<string, unknown>);
-        return `Applied manual plan to ${path}. Backup written as ${path}.bak. Restart OpenCode for new sessions.`;
+        const nextPlan = parsed.data;
+        const diff = diffManualPlans(effectivePlan, nextPlan);
+        const actualDiffHash = hashString(stringify(diff));
+        if (args.expectedDiffHash && args.expectedDiffHash !== actualDiffHash) {
+          return `Diff hash mismatch. expected=${args.expectedDiffHash} actual=${actualDiffHash}. Run plan again before apply.`;
+        }
+
+        const nextConfig = compileManualPlanToConfig(targetConfig, nextPlan);
+        writeConfig(targetPath, nextConfig as Record<string, unknown>);
+
+        return stringify({
+          applied: true,
+          target,
+          targetPath,
+          diffHash: actualDiffHash,
+          changedAgents: diff.changedAgents,
+          warning: precedenceWarning(targetPath, ctx.directory),
+          restartHint: 'Start a new session for updated models.',
+        });
       }
 
       const agent = args.agent as AgentName | undefined;
@@ -265,23 +390,29 @@ Operations:
         return `Invalid agent. Expected one of: ${AGENT_NAMES.join(', ')}`;
       }
 
-      if (operation === 'reset-agent') {
-        const { path, config } = readLiteConfig();
-        const currentPlan = deriveManualPlanFromConfig(config);
-        const chain = deriveAgentChain(config, agent);
-        currentPlan[agent] = {
-          primary: chain[0] ?? 'opencode/big-pickle',
-          fallback1: chain[1] ?? 'opencode/gpt-5-nano',
-          fallback2: chain[2] ?? 'opencode/glm-4.7-free',
-          fallback3: chain[3] ?? 'opencode/sonic',
-        };
+      const currentTargetPlan = deriveManualPlanFromConfig(targetConfig);
+      const defaultChain = dedupe([...DEFAULT_CHAIN_FILL]).slice(0, 4);
+      currentTargetPlan[agent] = {
+        primary: defaultChain[0] ?? 'opencode/big-pickle',
+        fallback1: defaultChain[1] ?? 'opencode/gpt-5-nano',
+        fallback2: defaultChain[2] ?? 'opencode/glm-4.7-free',
+        fallback3: defaultChain[3] ?? 'opencode/sonic',
+      };
 
-        const nextConfig = compileManualPlanToConfig(config, currentPlan);
-        writeConfig(path, nextConfig as Record<string, unknown>);
-        return `Reset agent ${agent} and wrote updated plan to ${path}.`;
-      }
+      const nextConfig = compileManualPlanToConfig(
+        targetConfig,
+        currentTargetPlan,
+      );
+      writeConfig(targetPath, nextConfig as Record<string, unknown>);
 
-      return 'Unsupported operation';
+      return stringify({
+        reset: true,
+        agent,
+        target,
+        targetPath,
+        warning: precedenceWarning(targetPath, ctx.directory),
+        restartHint: 'Start a new session for updated models.',
+      });
     },
   });
 
