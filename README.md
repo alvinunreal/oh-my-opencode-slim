@@ -79,7 +79,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>kimi-for-coding/k2p5</code> <code>openai/gpt-5.2-codex</code>
+      <b>Recommended Models:</b> <code>Kimi K2.5</code> <code>GPT-5.3-Codex</code>
     </td>
   </tr>
 </table>
@@ -110,7 +110,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3-flash</code> <code>openai/gpt-5.1-codex-mini</code>
+      <b>Recommended Models:</b> <code>ZAI GLM-4.7</code> <code>Gemini 3 Flash</code> <code>GPT-5.1-Codex-Mini</code>
     </td>
   </tr>
 </table>
@@ -141,7 +141,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.2-codex</code> <code>kimi-for-coding/k2p5</code>
+      <b>Recommended Models:</b> <code>GPT-5.3-Codex</code> <code>Kimi K2.5</code>
     </td>
   </tr>
 </table>
@@ -172,7 +172,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3-flash</code> <code>openai/gpt-5.1-codex-mini</code>
+      <b>Recommended Models:</b> <code>Gemini 3 Flash</code> <code>GPT-5.1-Codex-Mini</code>
     </td>
   </tr>
 </table>
@@ -203,7 +203,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3-flash</code>
+      <b>Recommended Models:</b> <code>Gemini 3 Flash</code>
     </td>
   </tr>
 </table>
@@ -234,10 +234,19 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3-flash</code> <code>openai/gpt-5.1-codex-mini</code>
+      <b>Recommended Models:</b> <code>ZAI GLM-4.7</code> <code>Gemini 3 Flash</code> <code>GPT-5.1-Codex-Mini</code>
     </td>
   </tr>
 </table>
+
+#### Granular Fixer Variants (Experimental)
+
+When `experimental.granularFixers` is enabled, the orchestrator routes tasks to specialized fixer variants:
+
+| Variant | Purpose | Use Case | Recommended Models |
+|---------|---------|----------|-------------------|
+| `quick-fixer` | Ultra-fast single-file edits | Independent parallel tasks, simple bugfixes | `Qwen 3 Coder-Next`, `Gemini 3 Flash Preview`, `GPT-5.1-Codex-Mini` |
+| `long-fixer` | Sustained multi-file context | Complex refactors, interdependent changes | `Claude Opus 4.6`, `GPT-5.3-Codex`, `Kimi K2.5` |
 
 ---
 

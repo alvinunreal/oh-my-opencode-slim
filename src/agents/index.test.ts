@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { PluginConfig } from '../config';
 import { SUBAGENT_NAMES } from '../config';
 import { createAgents, getAgentConfigs, isSubagent } from './index';
@@ -127,6 +130,8 @@ describe('isSubagent type guard', () => {
     expect(isSubagent('oracle')).toBe(true);
     expect(isSubagent('designer')).toBe(true);
     expect(isSubagent('fixer')).toBe(true);
+    expect(isSubagent('long-fixer')).toBe(true);
+    expect(isSubagent('quick-fixer')).toBe(true);
   });
 
   test('returns false for orchestrator', () => {
@@ -153,7 +158,28 @@ describe('agent classification', () => {
     // Primary agent
     expect(configs.orchestrator.mode).toBe('primary');
 
-    // Subagents
+    // Subagents (only standard ones by default, not granular fixers)
+    for (const name of [
+      'explorer',
+      'librarian',
+      'oracle',
+      'designer',
+      'fixer',
+    ] as const) {
+      expect(configs[name].mode).toBe('subagent');
+    }
+  });
+
+  test('getAgentConfigs includes granular fixers when experimental flag is enabled', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const configs = getAgentConfigs(config);
+
+    // Primary agent
+    expect(configs.orchestrator.mode).toBe('primary');
+
+    // All subagents including granular fixers
     for (const name of SUBAGENT_NAMES) {
       expect(configs[name].mode).toBe('subagent');
     }
@@ -161,7 +187,7 @@ describe('agent classification', () => {
 });
 
 describe('createAgents', () => {
-  test('creates all agents without config', () => {
+  test('creates all standard agents without config', () => {
     const agents = createAgents();
     const names = agents.map((a) => a.name);
     expect(names).toContain('orchestrator');
@@ -172,9 +198,96 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 6 agents (1 primary + 5 subagents)', () => {
+  test('creates exactly 6 agents (1 primary + 5 subagents) by default', () => {
     const agents = createAgents();
     expect(agents.length).toBe(6);
+  });
+
+  test('creates 8 agents when granularFixers experimental flag is enabled', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    expect(agents.length).toBe(8);
+    const names = agents.map((a) => a.name);
+    expect(names).toContain('long-fixer');
+    expect(names).toContain('quick-fixer');
+  });
+
+  test('does not create long-fixer and quick-fixer when granularFixers is disabled', () => {
+    const agents = createAgents();
+    const names = agents.map((a) => a.name);
+    expect(names).not.toContain('long-fixer');
+    expect(names).not.toContain('quick-fixer');
+  });
+
+  test('quick-fixer and long-fixer inherit fixer custom model', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+      agents: {
+        fixer: { model: 'test/fixer-custom-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(quickFixer?.config.model).toBe('test/fixer-custom-model');
+    expect(longFixer?.config.model).toBe('test/fixer-custom-model');
+  });
+
+  test('quick-fixer and long-fixer use their own defaults when fixer has no config', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+      agents: {
+        librarian: { model: 'test/librarian-custom-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    // Should use DEFAULT_MODELS['quick-fixer'] and DEFAULT_MODELS['long-fixer'],
+    // not inherit from librarian
+    expect(quickFixer?.config.model).toBe('openai/gpt-5-nano');
+    expect(longFixer?.config.model).toBe('openai/gpt-5.1-codex-mini');
+  });
+
+  test('zero-config granular fixers receive their own default models', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    // With no agents configured at all, granular fixers should get
+    // their own DEFAULT_MODELS entries, not the librarian model
+    expect(longFixer?.config.model).toBe('openai/gpt-5.1-codex-mini');
+    expect(quickFixer?.config.model).toBe('openai/gpt-5-nano');
+    expect(quickFixer?.config.model).not.toBe(longFixer?.config.model);
+  });
+
+  test('quick-fixer and long-fixer use explicit config over fixer inheritance', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+      agents: {
+        fixer: { model: 'test/fixer-model' },
+        'quick-fixer': { model: 'test/quick-fixer-model' },
+        'long-fixer': { model: 'test/long-fixer-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(quickFixer?.config.model).toBe('test/quick-fixer-model');
+    expect(longFixer?.config.model).toBe('test/long-fixer-model');
+  });
+
+  test('granular fixers have subagent mode in getAgentConfigs', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const configs = getAgentConfigs(config);
+    expect(configs['quick-fixer'].mode).toBe('subagent');
+    expect(configs['long-fixer'].mode).toBe('subagent');
   });
 });
 
@@ -190,5 +303,112 @@ describe('getAgentConfigs', () => {
     const configs = getAgentConfigs();
     expect(configs.orchestrator.description).toBeDefined();
     expect(configs.explorer.description).toBeDefined();
+  });
+});
+
+describe('granular fixer custom prompts', () => {
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-prompt-test-'));
+    originalEnv = { ...process.env };
+    process.env.XDG_CONFIG_HOME = tempDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  test('long-fixer uses custom prompt file when present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'long-fixer.md'),
+      'Custom long-fixer prompt',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(longFixer?.config.prompt).toBe('Custom long-fixer prompt');
+  });
+
+  test('quick-fixer uses custom prompt file when present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'quick-fixer.md'),
+      'Custom quick-fixer prompt',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    expect(quickFixer?.config.prompt).toBe('Custom quick-fixer prompt');
+  });
+
+  test('long-fixer appends custom prompt when append file present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'long-fixer_append.md'),
+      'Additional instructions for long-fixer',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(longFixer?.config.prompt).toContain(
+      'Additional instructions for long-fixer',
+    );
+    // Verify it still has the base prompt
+    expect(longFixer?.config.prompt).toContain('Long-Fixer');
+  });
+
+  test('quick-fixer appends custom prompt when append file present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'quick-fixer_append.md'),
+      'Additional instructions for quick-fixer',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    expect(quickFixer?.config.prompt).toContain(
+      'Additional instructions for quick-fixer',
+    );
+    // Verify it still has the base prompt
+    expect(quickFixer?.config.prompt).toContain('Quick-Fixer');
+  });
+
+  test('granular fixers use default prompts when no custom files exist', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+
+    // Verify default prompts are used
+    expect(longFixer?.config.prompt).toContain('Long-Fixer');
+    expect(longFixer?.config.prompt).toContain(
+      'thorough implementation specialist',
+    );
+    expect(quickFixer?.config.prompt).toContain('Quick-Fixer');
+    expect(quickFixer?.config.prompt).toContain(
+      'ultra-fast implementation specialist',
+    );
   });
 });

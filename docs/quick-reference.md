@@ -500,3 +500,31 @@ The installer generates this file based on your providers. You can manually cust
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally (e.g., `"websearch"`) |
 
 > **Note:** Agent configuration should be defined within `presets`. The root-level `agents` field is deprecated.
+
+---
+
+## Experimental Features
+
+### Granular Fixer Agents
+
+Enable specialized fixer variants for optimized task routing:
+
+```jsonc
+{
+  "experimental": {
+    "granularFixers": true
+  }
+}
+```
+
+When enabled, the orchestrator analyzes tasks and routes them to the appropriate fixer variant:
+
+| Variant | Best For | Model Strategy |
+|---------|----------|----------------|
+| `quick-fixer` | Single-file edits, independent tasks, simple bugfixes | Fast, cost-effective models (`qwen/qwen3-coder-next`, `google/gemini-3-flash-preview`, `openai/gpt-5.1-codex-mini`) |
+| `long-fixer` | Multi-file refactors, interdependent changes, complex architecture | Strong reasoning models (`anthropic/claude-opus-4.6`, `openai/gpt-5.3-codex`, `moonshotai/kimi-k2.5`) |
+
+**Routing Logic:**
+- 3+ independent tasks → Spawn multiple `quick-fixer` agents in parallel
+- Complex interdependent refactor → Route to `long-fixer` for sustained context
+- Single-file changes → `quick-fixer` for minimal overhead

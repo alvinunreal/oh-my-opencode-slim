@@ -1415,11 +1415,134 @@ describe('BackgroundTaskManager', () => {
       expect(manager.getAllowedSubagents(explorerSessionId)).toEqual([]);
     });
 
+    test('getAllowedSubagents excludes long-fixer and quick-fixer when granularFixers is disabled', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        experimental: { granularFixers: false },
+      });
+
+      // Launch orchestrator
+      const orchestratorTask = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const orchestratorSessionId = orchestratorTask.sessionId;
+      if (!orchestratorSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      const allowed = manager.getAllowedSubagents(orchestratorSessionId);
+      expect(allowed).not.toContain('long-fixer');
+      expect(allowed).not.toContain('quick-fixer');
+      // Base subagents should still be present
+      expect(allowed).toContain('explorer');
+      expect(allowed).toContain('librarian');
+      expect(allowed).toContain('oracle');
+      expect(allowed).toContain('designer');
+      expect(allowed).toContain('fixer');
+    });
+
+    test('getAllowedSubagents includes long-fixer and quick-fixer when granularFixers is enabled', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        experimental: { granularFixers: true },
+      });
+
+      // Launch orchestrator
+      const orchestratorTask = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const orchestratorSessionId = orchestratorTask.sessionId;
+      if (!orchestratorSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      const allowed = manager.getAllowedSubagents(orchestratorSessionId);
+      expect(allowed).toContain('long-fixer');
+      expect(allowed).toContain('quick-fixer');
+    });
+
+    test('isAgentAllowed returns false for long-fixer/quick-fixer when granularFixers is disabled', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        experimental: { granularFixers: false },
+      });
+
+      // Launch orchestrator
+      const orchestratorTask = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const orchestratorSessionId = orchestratorTask.sessionId;
+      if (!orchestratorSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      expect(manager.isAgentAllowed(orchestratorSessionId, 'long-fixer')).toBe(
+        false,
+      );
+      expect(manager.isAgentAllowed(orchestratorSessionId, 'quick-fixer')).toBe(
+        false,
+      );
+      // Base agents remain allowed
+      expect(manager.isAgentAllowed(orchestratorSessionId, 'fixer')).toBe(true);
+      expect(manager.isAgentAllowed(orchestratorSessionId, 'explorer')).toBe(
+        true,
+      );
+    });
+
+    test('isAgentAllowed returns true for long-fixer/quick-fixer when granularFixers is enabled', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        experimental: { granularFixers: true },
+      });
+
+      // Launch orchestrator
+      const orchestratorTask = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const orchestratorSessionId = orchestratorTask.sessionId;
+      if (!orchestratorSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      expect(manager.isAgentAllowed(orchestratorSessionId, 'long-fixer')).toBe(
+        true,
+      );
+      expect(manager.isAgentAllowed(orchestratorSessionId, 'quick-fixer')).toBe(
+        true,
+      );
+    });
+
     test('getAllowedSubagents returns correct lists', async () => {
       const ctx = createMockContext();
-      const manager = new BackgroundTaskManager(ctx);
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        experimental: { granularFixers: true },
+      });
 
-      // Orchestrator -> all 5 subagent names
+      // Orchestrator -> all 7 subagent names (granularFixers enabled)
       const orchestratorTask = manager.launch({
         agent: 'orchestrator',
         prompt: 'test',
@@ -1440,6 +1563,8 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'long-fixer',
+        'quick-fixer',
       ]);
 
       // Fixer -> only explorer
@@ -1477,6 +1602,44 @@ describe('BackgroundTaskManager', () => {
         'explorer',
       ]);
 
+      // Long-fixer -> only explorer (inherits from fixer)
+      const longFixerTask = manager.launch({
+        agent: 'long-fixer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const longFixerSessionId = longFixerTask.sessionId;
+      if (!longFixerSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      expect(manager.getAllowedSubagents(longFixerSessionId)).toEqual([
+        'explorer',
+      ]);
+
+      // Quick-fixer -> only explorer (inherits from fixer)
+      const quickFixerTask = manager.launch({
+        agent: 'quick-fixer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const quickFixerSessionId = quickFixerTask.sessionId;
+      if (!quickFixerSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      expect(manager.getAllowedSubagents(quickFixerSessionId)).toEqual([
+        'explorer',
+      ]);
+
       // Explorer -> empty (leaf)
       const explorerTask = manager.launch({
         agent: 'explorer',
@@ -1501,6 +1664,8 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'long-fixer',
+        'quick-fixer',
       ]);
     });
   });

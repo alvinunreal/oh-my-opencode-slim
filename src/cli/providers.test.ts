@@ -149,7 +149,7 @@ describe('providers', () => {
     expect(agents.explorer.model).toBe('opencode/gpt-5-nano');
   });
 
-  test('generateLiteConfig emits fallback chains for six agents', () => {
+  test('generateLiteConfig emits fallback chains for eight agents', () => {
     const config = generateLiteConfig({
       hasAntigravity: true,
       hasKimi: true,
@@ -174,8 +174,10 @@ describe('providers', () => {
       'explorer',
       'fixer',
       'librarian',
+      'long-fixer',
       'oracle',
       'orchestrator',
+      'quick-fixer',
     ]);
     expect(chains.orchestrator).toContain('openai/gpt-5.3-codex');
     expect(chains.orchestrator).toContain('kimi-for-coding/k2p5');
@@ -325,6 +327,8 @@ describe('providers', () => {
     expect(agents.explorer.model).toBe('opencode/gpt-5-nano');
     expect(agents.librarian.model).toBe('opencode/gpt-5-nano');
     expect(agents.fixer.model).toBe('opencode/gpt-5-nano');
+    expect(agents['long-fixer'].model).toBe('opencode/gpt-5-nano');
+    expect(agents['quick-fixer'].model).toBe('opencode/gpt-5-nano');
   });
 
   test('generateLiteConfig zen-free includes correct mcps', () => {
@@ -379,6 +383,10 @@ describe('providers', () => {
       expect(agents.designer.variant).toBe('medium');
       expect(agents.fixer.model).toBe('openai/gpt-5.3-codex');
       expect(agents.fixer.variant).toBe('low');
+      expect(agents['long-fixer'].model).toBe('kimi-for-coding/k2p5');
+      expect(agents['long-fixer'].variant).toBe('high');
+      expect(agents['quick-fixer'].model).toBe('openai/gpt-5.1-codex-mini');
+      expect(agents['quick-fixer'].variant).toBe('low');
     });
 
     test('generateLiteConfig generates antigravity-mixed-kimi preset when Kimi + Antigravity', () => {
@@ -407,6 +415,12 @@ describe('providers', () => {
       expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.fixer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents['long-fixer'].model).toBe('kimi-for-coding/k2p5');
+      expect(agents['long-fixer'].variant).toBe('high');
+      expect(agents['quick-fixer'].model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+      expect(agents['quick-fixer'].variant).toBe('low');
     });
 
     test('generateLiteConfig generates antigravity-mixed-openai preset when OpenAI + Antigravity', () => {
@@ -438,6 +452,10 @@ describe('providers', () => {
       expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.fixer.model).toBe('openai/gpt-5.3-codex');
+      expect(agents['long-fixer'].model).toBe('openai/gpt-5.3-codex');
+      expect(agents['long-fixer'].variant).toBe('high');
+      expect(agents['quick-fixer'].model).toBe('openai/gpt-5.1-codex-mini');
+      expect(agents['quick-fixer'].variant).toBe('low');
     });
 
     test('generateLiteConfig generates pure antigravity preset when only Antigravity', () => {
@@ -464,6 +482,14 @@ describe('providers', () => {
       expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.fixer.model).toBe('google/antigravity-gemini-3-flash');
+      expect(agents['long-fixer'].model).toBe(
+        'google/antigravity-gemini-3-pro',
+      );
+      expect(agents['long-fixer'].variant).toBeUndefined();
+      expect(agents['quick-fixer'].model).toBe(
+        'google/antigravity-gemini-3-flash',
+      );
+      expect(agents['quick-fixer'].variant).toBe('low');
     });
 
     test('generateAntigravityMixedPreset respects Kimi for orchestrator', () => {
@@ -516,6 +542,12 @@ describe('providers', () => {
         'google/antigravity-gemini-3-flash',
       );
       expect((preset.fixer as any).model).toBe('openai/gpt-5.3-codex');
+      expect((preset['long-fixer'] as any).model).toBe('kimi-for-coding/k2p5');
+      expect((preset['long-fixer'] as any).variant).toBe('high');
+      expect((preset['quick-fixer'] as any).model).toBe(
+        'openai/gpt-5.1-codex-mini',
+      );
+      expect((preset['quick-fixer'] as any).variant).toBe('low');
     });
   });
 });

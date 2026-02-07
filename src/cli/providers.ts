@@ -9,6 +9,8 @@ const AGENT_NAMES = [
   'explorer',
   'librarian',
   'fixer',
+  'long-fixer',
+  'quick-fixer',
 ] as const;
 
 type AgentName = (typeof AGENT_NAMES)[number];
@@ -22,6 +24,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
     designer: { model: 'kimi-for-coding/k2p5', variant: 'medium' },
     fixer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
+    'long-fixer': { model: 'kimi-for-coding/k2p5', variant: 'high' },
+    'quick-fixer': { model: 'kimi-for-coding/k2p5', variant: 'low' },
   },
   openai: {
     orchestrator: { model: 'openai/gpt-5.3-codex' },
@@ -30,6 +34,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'openai/gpt-5.1-codex-mini', variant: 'low' },
     designer: { model: 'openai/gpt-5.1-codex-mini', variant: 'medium' },
     fixer: { model: 'openai/gpt-5.1-codex-mini', variant: 'low' },
+    'long-fixer': { model: 'openai/gpt-5.3-codex', variant: 'high' },
+    'quick-fixer': { model: 'openai/gpt-5.1-codex-mini', variant: 'low' },
   },
   anthropic: {
     orchestrator: { model: 'anthropic/claude-opus-4-6' },
@@ -38,6 +44,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'anthropic/claude-haiku-4-5', variant: 'low' },
     designer: { model: 'anthropic/claude-sonnet-4-5', variant: 'medium' },
     fixer: { model: 'anthropic/claude-sonnet-4-5', variant: 'low' },
+    'long-fixer': { model: 'anthropic/claude-opus-4-6', variant: 'high' },
+    'quick-fixer': { model: 'anthropic/claude-haiku-4-5', variant: 'low' },
   },
   copilot: {
     orchestrator: { model: 'github-copilot/grok-code-fast-1' },
@@ -46,6 +54,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
     designer: { model: 'github-copilot/grok-code-fast-1', variant: 'medium' },
     fixer: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
+    'long-fixer': { model: 'github-copilot/grok-code-fast-1', variant: 'high' },
+    'quick-fixer': { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
   },
   'zai-plan': {
     orchestrator: { model: 'zai-coding-plan/glm-4.7' },
@@ -54,6 +64,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'zai-coding-plan/glm-4.7', variant: 'low' },
     designer: { model: 'zai-coding-plan/glm-4.7', variant: 'medium' },
     fixer: { model: 'zai-coding-plan/glm-4.7', variant: 'low' },
+    'long-fixer': { model: 'zai-coding-plan/glm-4.7', variant: 'high' },
+    'quick-fixer': { model: 'zai-coding-plan/glm-4.7', variant: 'low' },
   },
   antigravity: {
     orchestrator: { model: 'google/antigravity-gemini-3-flash' },
@@ -71,6 +83,11 @@ export const MODEL_MAPPINGS = {
       variant: 'medium',
     },
     fixer: { model: 'google/antigravity-gemini-3-flash', variant: 'low' },
+    'long-fixer': { model: 'google/antigravity-gemini-3-pro' },
+    'quick-fixer': {
+      model: 'google/antigravity-gemini-3-flash',
+      variant: 'low',
+    },
   },
   chutes: {
     orchestrator: { model: 'chutes/kimi-k2.5' },
@@ -79,6 +96,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'chutes/minimax-m2.1', variant: 'low' },
     designer: { model: 'chutes/kimi-k2.5', variant: 'medium' },
     fixer: { model: 'chutes/minimax-m2.1', variant: 'low' },
+    'long-fixer': { model: 'chutes/kimi-k2.5', variant: 'high' },
+    'quick-fixer': { model: 'chutes/minimax-m2.1', variant: 'low' },
   },
   'zen-free': {
     orchestrator: { model: 'opencode/big-pickle' },
@@ -87,6 +106,8 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'opencode/big-pickle', variant: 'low' },
     designer: { model: 'opencode/big-pickle', variant: 'medium' },
     fixer: { model: 'opencode/big-pickle', variant: 'low' },
+    'long-fixer': { model: 'opencode/big-pickle', variant: 'high' },
+    'quick-fixer': { model: 'opencode/big-pickle', variant: 'low' },
   },
 } as const;
 
@@ -204,6 +225,46 @@ export function generateAntigravityMixedPreset(
     });
   } else {
     result.fixer = createAgentConfig('fixer', {
+      ...antigravityFlash,
+      variant: 'low',
+    });
+  }
+
+  // Long-fixer uses high-capability models (preferring Kimi/OpenAI when available).
+  if (config.hasKimi) {
+    result['long-fixer'] = createAgentConfig(
+      'long-fixer',
+      MODEL_MAPPINGS.kimi['long-fixer'],
+    );
+  } else if (config.hasOpenAI) {
+    result['long-fixer'] = createAgentConfig(
+      'long-fixer',
+      MODEL_MAPPINGS.openai['long-fixer'],
+    );
+  } else if (config.hasChutes) {
+    result['long-fixer'] = createAgentConfig('long-fixer', {
+      model: chutesPrimary,
+      variant: 'high',
+    });
+  } else {
+    result['long-fixer'] = createAgentConfig('long-fixer', {
+      model: 'google/antigravity-gemini-3-pro',
+    });
+  }
+
+  // Quick-fixer uses fast/cheap models (same as regular fixer but explicitly quick).
+  if (config.hasOpenAI) {
+    result['quick-fixer'] = createAgentConfig(
+      'quick-fixer',
+      MODEL_MAPPINGS.openai['quick-fixer'],
+    );
+  } else if (config.hasChutes) {
+    result['quick-fixer'] = createAgentConfig('quick-fixer', {
+      model: chutesSupport,
+      variant: 'low',
+    });
+  } else {
+    result['quick-fixer'] = createAgentConfig('quick-fixer', {
       ...antigravityFlash,
       variant: 'low',
     });
@@ -349,6 +410,8 @@ export function generateLiteConfig(
     setAgent('librarian', secondaryModel);
     setAgent('explorer', secondaryModel);
     setAgent('fixer', secondaryModel);
+    setAgent('long-fixer', secondaryModel);
+    setAgent('quick-fixer', secondaryModel);
   };
 
   const applyChutesAssignments = (presetAgents: Record<string, unknown>) => {
@@ -377,6 +440,8 @@ export function generateLiteConfig(
     setAgent('librarian', secondaryModel);
     setAgent('explorer', secondaryModel);
     setAgent('fixer', secondaryModel);
+    setAgent('long-fixer', secondaryModel);
+    setAgent('quick-fixer', secondaryModel);
   };
 
   const dedupeModels = (models: Array<string | undefined>) => {
@@ -397,7 +462,9 @@ export function generateLiteConfig(
     const isSupport =
       agentName === 'explorer' ||
       agentName === 'librarian' ||
-      agentName === 'fixer';
+      agentName === 'fixer' ||
+      agentName === 'long-fixer' ||
+      agentName === 'quick-fixer';
     if (isSupport) {
       return (
         installConfig.selectedOpenCodeSecondaryModel ??
@@ -412,7 +479,9 @@ export function generateLiteConfig(
     const isSupport =
       agentName === 'explorer' ||
       agentName === 'librarian' ||
-      agentName === 'fixer';
+      agentName === 'fixer' ||
+      agentName === 'long-fixer' ||
+      agentName === 'quick-fixer';
     if (isSupport) {
       return (
         installConfig.selectedChutesSecondaryModel ??
