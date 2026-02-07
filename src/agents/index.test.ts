@@ -127,6 +127,8 @@ describe('isSubagent type guard', () => {
     expect(isSubagent('oracle')).toBe(true);
     expect(isSubagent('designer')).toBe(true);
     expect(isSubagent('fixer')).toBe(true);
+    expect(isSubagent('long-fixer')).toBe(true);
+    expect(isSubagent('quick-fixer')).toBe(true);
   });
 
   test('returns false for orchestrator', () => {
@@ -153,7 +155,28 @@ describe('agent classification', () => {
     // Primary agent
     expect(configs.orchestrator.mode).toBe('primary');
 
-    // Subagents
+    // Subagents (only standard ones by default, not granular fixers)
+    for (const name of [
+      'explorer',
+      'librarian',
+      'oracle',
+      'designer',
+      'fixer',
+    ] as const) {
+      expect(configs[name].mode).toBe('subagent');
+    }
+  });
+
+  test('getAgentConfigs includes granular fixers when experimental flag is enabled', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const configs = getAgentConfigs(config);
+
+    // Primary agent
+    expect(configs.orchestrator.mode).toBe('primary');
+
+    // All subagents including granular fixers
     for (const name of SUBAGENT_NAMES) {
       expect(configs[name].mode).toBe('subagent');
     }
@@ -161,7 +184,7 @@ describe('agent classification', () => {
 });
 
 describe('createAgents', () => {
-  test('creates all agents without config', () => {
+  test('creates all standard agents without config', () => {
     const agents = createAgents();
     const names = agents.map((a) => a.name);
     expect(names).toContain('orchestrator');
@@ -172,9 +195,27 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 6 agents (1 primary + 5 subagents)', () => {
+  test('creates exactly 6 agents (1 primary + 5 subagents) by default', () => {
     const agents = createAgents();
     expect(agents.length).toBe(6);
+  });
+
+  test('creates 8 agents when granularFixers experimental flag is enabled', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    expect(agents.length).toBe(8);
+    const names = agents.map((a) => a.name);
+    expect(names).toContain('long-fixer');
+    expect(names).toContain('quick-fixer');
+  });
+
+  test('does not create long-fixer and quick-fixer when granularFixers is disabled', () => {
+    const agents = createAgents();
+    const names = agents.map((a) => a.name);
+    expect(names).not.toContain('long-fixer');
+    expect(names).not.toContain('quick-fixer');
   });
 });
 

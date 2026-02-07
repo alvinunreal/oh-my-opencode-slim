@@ -10,6 +10,8 @@ export const SUBAGENT_NAMES = [
   'oracle',
   'designer',
   'fixer',
+  'long-fixer',
+  'quick-fixer',
 ] as const;
 
 export const ORCHESTRATOR_NAME = 'orchestrator' as const;
@@ -28,6 +30,8 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   orchestrator: SUBAGENT_NAMES,
   fixer: ['explorer'],
+  'long-fixer': ['explorer'],
+  'quick-fixer': ['explorer'],
   designer: ['explorer'],
   explorer: [],
   librarian: [],
@@ -42,6 +46,8 @@ export const DEFAULT_MODELS: Record<AgentName, string> = {
   explorer: 'openai/gpt-5.1-codex-mini',
   designer: 'kimi-for-coding/k2p5',
   fixer: 'openai/gpt-5.1-codex-mini',
+  'long-fixer': 'openai/gpt-5.1-codex-mini',
+  'quick-fixer': 'openai/gpt-5-nano',
 };
 
 // Polling configuration
