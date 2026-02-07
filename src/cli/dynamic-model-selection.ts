@@ -106,6 +106,33 @@ function isKimiK25Model(model: DiscoveredModel): boolean {
   return /kimi-k2\.?5|k2\.?5/i.test(`${model.model} ${model.name}`);
 }
 
+function geminiPreferenceAdjustment(
+  agent: AgentName,
+  model: DiscoveredModel,
+): number {
+  const lowered = `${model.model} ${model.name}`.toLowerCase();
+  const isGemini3Pro = /gemini-3-pro|gemini-3\.0-pro|gemini-3-pro-preview/.test(
+    lowered,
+  );
+  const isGemini25Pro = /gemini-2\.5-pro/.test(lowered);
+  const antigravityNamingBonus =
+    model.providerID === 'google' && lowered.includes('antigravity-') ? 4 : 0;
+
+  const deepRoleBoost =
+    agent === 'oracle' ||
+    agent === 'orchestrator' ||
+    agent === 'fixer' ||
+    agent === 'librarian' ||
+    agent === 'designer'
+      ? 24
+      : 8;
+
+  const gemini3Boost = isGemini3Pro ? deepRoleBoost : 0;
+  const gemini25Penalty = isGemini25Pro && !isGemini3Pro ? -14 : 0;
+
+  return gemini3Boost + gemini25Penalty + antigravityNamingBonus;
+}
+
 function modelLookupKeys(model: DiscoveredModel): string[] {
   const fullKey = model.model.toLowerCase();
   const idKey = model.model.split('/')[1]?.toLowerCase();
@@ -178,6 +205,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
                   : model.providerID === 'opencode'
                     ? -2
                     : 0;
+  const geminiAdjustment = geminiPreferenceAdjustment(agent, model);
 
   if (agent === 'orchestrator') {
     const flashAdjustment = flash ? -22 : 0;
@@ -193,6 +221,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
       flashAdjustment +
       zaiAdjustment +
       nonReasoningFlashPenalty +
+      geminiAdjustment +
       providerBias
     );
   }
@@ -209,6 +238,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
       flashAdjustment +
       zaiAdjustment +
       nonReasoningFlashPenalty +
+      geminiAdjustment +
       providerBias
     );
   }
@@ -224,6 +254,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
       output +
       flashAdjustment +
       zaiAdjustment +
+      geminiAdjustment +
       providerBias
     );
   }
@@ -240,6 +271,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
       flashAdjustment +
       zaiAdjustment +
       deepPenalty +
+      geminiAdjustment +
       providerBias
     );
   }
@@ -254,6 +286,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
       output * 10 +
       flashAdjustment +
       zaiAdjustment +
+      geminiAdjustment +
       providerBias
     );
   }
@@ -271,6 +304,7 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
     flashAdjustment +
     zaiAdjustment +
     nonReasoningFlashPenalty +
+    geminiAdjustment +
     providerBias
   );
 }
