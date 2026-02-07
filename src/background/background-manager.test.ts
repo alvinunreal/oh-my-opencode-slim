@@ -1176,6 +1176,8 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'long-fixer',
+        'quick-fixer',
       ]);
 
       // Fixer -> only explorer
@@ -1237,6 +1239,8 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'long-fixer',
+        'quick-fixer',
       ]);
     });
   });

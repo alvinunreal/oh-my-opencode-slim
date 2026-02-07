@@ -1,0 +1,514 @@
+{
+  "tmux": {
+    "enabled": true,
+    "layout": "main-vertical",
+    "main_pane_size": 30
+  },
+  "preset": "kimi_runs_opus",
+  "presets": {
+    "kimi_runs_codex": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.3-codex",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "google/antigravity-gemini-3-pro-low",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "openai/gpt-5.3-codex",
+        "variant": "medium",
+        "skills": ["agent-browser", "using-tmux-for-interactive-commands"],
+        "mcps": []
+      }
+    },
+    "kimi_runs_glm": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "max",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "google/antigravity-claude-opus-4-6-thinking",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "max",
+        "skills": [
+          "agent-browser", "using-tmux-for-interactive-commands"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [
+          "*"
+        ],
+        "mcps": []
+      }
+    },
+    "kimi_runs_opus": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "google/antigravity-claude-opus-4-6-thinking",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "high",
+        "skills": [
+          "agent-browser", "using-tmux-for-interactive-commands"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "google/antigravity-claude-opus-4-6-thinking",
+        "skills": [
+          "*"
+        ],
+        "mcps": []
+      }
+
+    },
+    "kimi_kimi_kimi": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch",
+          "using-tmux-for-interactive-commands"
+        ]
+      },
+      "oracle": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "high",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "high",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      }
+
+    },
+    "opus_runs_kimi": {
+      "orchestrator": {
+        "model": "google/antigravity-claude-opus-4-6-thinking",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "github-copilot/gpt-5.2",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "kimi-for-coding/k2p5",
+        "variant": "high",
+        "skills": [
+          "*"
+        ],
+        "mcps": []
+      }
+
+    },
+    "cliproxy": {
+      "orchestrator": {
+        "model": "cliproxy/gemini-claude-opus-4-6-thinking",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "cliproxy/gemini-3-pro-preview",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "cliproxy/gemini-3-flash-preview",
+        "variant": "low",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "cliproxy/gemini-3-flash-preview",
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "cliproxy/gemini-3-flash-preview",
+        "variant": "medium",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "cliproxy/gemini-3-flash-preview",
+        "variant": "low",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "anthropic": {
+      "orchestrator": {
+        "model": "google/antigravity-claude-opus-4-6-thinking",
+        "variant": "low",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "github-copilot/gpt-5.2",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "github-copilot/grok-code-fast-1",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "github-copilot/gpt-5.2-codex",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      }
+    },
+    "zai-coding-plan": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.2",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "github-copilot/grok-code-fast-1",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "google/antigravity-gemini-3-pro-high",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "zai-coding-plan/glm-4.7",
+        "variant": "high",
+        "skills": ["agent-browser"],
+        "mcps": []
+      }
+    },
+    "codex":
+    {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "openai/gpt-5.2",
+        "variant": "high",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "github-copilot/grok-code-fast-1",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "cliproxy/gemini-3-flash-preview",
+        "variant": "medium",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "openai/gpt-5.2-codex",
+        "variant": "high",
+        "skills": ["agent-browser"],
+        "mcps": []
+      }
+    },
+    "antigravity": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "google/antigravity-claude-opus-4-6-thinking",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "github-copilot/grok-code-fast-1",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "google/antigravity-gemini-3-flash",
+        "skills": ["agent-browser"],
+        "mcps": []
+      }
+    },
+    "megamind": {
+      "orchestrator": {
+        "model": "kimi-for-coding/k2p5",
+        "skills": [
+          "*"
+        ],
+        "mcps": [
+          "websearch"
+        ]
+      },
+      "oracle": {
+        "model": "google/antigravity-claude-opus-4-6",
+        "skills": [],
+        "mcps": []
+      },
+      "librarian": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [],
+        "mcps": [
+          "websearch",
+          "context7",
+          "grep_app"
+        ]
+      },
+      "explorer": {
+        "model": "zai-coding-plan/glm-4.7",
+        "skills": [],
+        "mcps": []
+      },
+      "designer": {
+        "model": "anthropic/claude-opus-4-6",
+        "variant": "high",
+        "skills": [
+          "agent-browser"
+        ],
+        "mcps": []
+      },
+      "fixer": {
+        "model": "anthropic/claude-opus-4-6",
+        "variant": "high",
+        "skills": ["agent-browser"],
+        "mcps": []
+      }
+    }
+  }
+}
