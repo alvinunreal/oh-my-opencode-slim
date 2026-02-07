@@ -179,6 +179,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     orchestratorModel,
     orchestratorPrompts.prompt,
     orchestratorPrompts.appendPrompt,
+    granularFixersEnabled,
   );
   const oOverride = getAgentOverride(config, 'orchestrator');
   applyDefaultPermissions(orchestrator, oOverride?.skills);
