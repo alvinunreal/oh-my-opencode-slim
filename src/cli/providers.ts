@@ -357,6 +357,9 @@ export function generateLiteConfig(
     const hasExternalProviders =
       installConfig.hasKimi ||
       installConfig.hasOpenAI ||
+      installConfig.hasAnthropic ||
+      installConfig.hasCopilot ||
+      installConfig.hasZaiPlan ||
       installConfig.hasAntigravity;
 
     if (hasExternalProviders && activePreset !== 'chutes') return;

@@ -729,6 +729,20 @@ function dedupe(models: Array<string | undefined>): string[] {
   return result;
 }
 
+function finalizeChainWithTail(
+  prefix: string[],
+  preferredTail: string | undefined,
+): string[] {
+  if (!preferredTail) {
+    return dedupe([...prefix, 'opencode/big-pickle']).slice(0, 10);
+  }
+
+  const withoutTail = prefix
+    .filter((model) => model !== preferredTail)
+    .slice(0, 9);
+  return [...withoutTail, preferredTail];
+}
+
 function ensureSyntheticModel(
   models: DiscoveredModel[],
   fullModelID: string | undefined,
@@ -862,14 +876,20 @@ export function buildDynamicModelPlan(
       selectedChutes,
       selectedOpencode,
       ...freePerProviderBest,
-      'opencode/big-pickle',
-    ]).slice(0, 10);
+    ]);
+
+    const deterministicFreeTail =
+      selectedOpencode ??
+      freePerProviderBest[0] ??
+      ranked.find((model) => model.model.startsWith('opencode/'))?.model;
+
+    const finalizedChain = finalizeChainWithTail(chain, deterministicFreeTail);
 
     agents[agent] = {
-      model: chain[0] ?? primary.model,
+      model: finalizedChain[0] ?? primary.model,
       variant: ROLE_VARIANT[agent],
     };
-    chains[agent] = chain;
+    chains[agent] = finalizedChain;
   }
 
   if (hasPaidProviderEnabled) {

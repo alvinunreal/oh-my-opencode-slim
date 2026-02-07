@@ -49,6 +49,11 @@ function baseAliases(key: string): string[] {
   return [...aliases];
 }
 
+function providerScopedAlias(alias: string, providerPrefix?: string): string {
+  if (!providerPrefix || alias.includes('/')) return alias;
+  return `${providerPrefix}/${alias}`;
+}
+
 function mergeSignal(
   existing: ExternalModelSignal | undefined,
   incoming: ExternalModelSignal,
@@ -87,18 +92,37 @@ function parseOpenRouterPrice(value: string | undefined): number | undefined {
   return parsed * 1_000_000;
 }
 
+async function fetchJsonWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 import { getEnv } from '../utils';
 
 async function fetchArtificialAnalysisSignals(
   apiKey: string,
 ): Promise<ExternalSignalMap> {
-  const response = await fetch(
+  const response = await fetchJsonWithTimeout(
     'https://artificialanalysis.ai/api/v2/data/llms/models',
     {
       headers: {
         'x-api-key': apiKey,
       },
     },
+    8000,
   );
 
   if (!response.ok) {
@@ -134,17 +158,12 @@ async function fetchArtificialAnalysisSignals(
     for (const key of [id, slug, name]) {
       if (!key) continue;
       for (const alias of baseAliases(key)) {
-        map[alias] = mergeSignal(map[alias], baseSignal);
-
-        if (providerPrefix) {
-          const providerAlias = `${providerPrefix}/${alias}`;
-          map[providerAlias] = mergeSignal(map[providerAlias], baseSignal);
-
-          if (providerPrefix !== 'chutes') {
-            const chutesAlias = `chutes/${alias}`;
-            map[chutesAlias] = mergeSignal(map[chutesAlias], baseSignal);
-          }
+        if (!providerPrefix || alias.includes('/')) {
+          map[alias] = mergeSignal(map[alias], baseSignal);
         }
+
+        const scopedAlias = providerScopedAlias(alias, providerPrefix);
+        map[scopedAlias] = mergeSignal(map[scopedAlias], baseSignal);
       }
     }
   }
@@ -155,11 +174,15 @@ async function fetchArtificialAnalysisSignals(
 async function fetchOpenRouterSignals(
   apiKey: string,
 ): Promise<ExternalSignalMap> {
-  const response = await fetch('https://openrouter.ai/api/v1/models', {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
+  const response = await fetchJsonWithTimeout(
+    'https://openrouter.ai/api/v1/models',
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
     },
-  });
+    8000,
+  );
 
   if (!response.ok) {
     throw new Error(
@@ -173,6 +196,7 @@ async function fetchOpenRouterSignals(
   for (const model of parsed.data ?? []) {
     if (!model.id) continue;
     const key = normalizeKey(model.id);
+    const providerPrefix = key.split('/')[0];
     const signal: ExternalModelSignal = {
       inputPricePer1M: parseOpenRouterPrice(model.pricing?.prompt),
       outputPricePer1M: parseOpenRouterPrice(model.pricing?.completion),
@@ -180,13 +204,12 @@ async function fetchOpenRouterSignals(
     };
 
     for (const alias of baseAliases(key)) {
-      map[alias] = mergeSignal(map[alias], signal);
-
-      // Only add Chutes alias if it doesn't already exist
-      const chutesAlias = `chutes/${alias}`;
-      if (!map[chutesAlias]) {
-        map[chutesAlias] = mergeSignal(map[chutesAlias], signal);
+      if (alias.includes('/')) {
+        map[alias] = mergeSignal(map[alias], signal);
       }
+
+      const scopedAlias = providerScopedAlias(alias, providerPrefix);
+      map[scopedAlias] = mergeSignal(map[scopedAlias], signal);
     }
   }
 
@@ -207,30 +230,33 @@ export async function fetchExternalModelSignals(options?: {
     options?.artificialAnalysisApiKey ?? getEnv('ARTIFICIAL_ANALYSIS_API_KEY');
   const orKey = options?.openRouterApiKey ?? getEnv('OPENROUTER_API_KEY');
 
-  if (aaKey) {
-    try {
-      const aaSignals = await fetchArtificialAnalysisSignals(aaKey);
-      for (const [key, signal] of Object.entries(aaSignals)) {
-        aggregate[key] = mergeSignal(aggregate[key], signal);
-      }
-    } catch (error) {
-      warnings.push(
-        `Artificial Analysis unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
+  const aaPromise: Promise<ExternalSignalMap> = aaKey
+    ? fetchArtificialAnalysisSignals(aaKey)
+    : Promise.resolve({});
+  const orPromise: Promise<ExternalSignalMap> = orKey
+    ? fetchOpenRouterSignals(orKey)
+    : Promise.resolve({});
+
+  const [aaResult, orResult] = await Promise.allSettled([aaPromise, orPromise]);
+
+  if (aaResult.status === 'fulfilled') {
+    for (const [key, signal] of Object.entries(aaResult.value)) {
+      aggregate[key] = mergeSignal(aggregate[key], signal);
     }
+  } else if (aaKey) {
+    warnings.push(
+      `Artificial Analysis unavailable: ${aaResult.reason instanceof Error ? aaResult.reason.message : String(aaResult.reason)}`,
+    );
   }
 
-  if (orKey) {
-    try {
-      const orSignals = await fetchOpenRouterSignals(orKey);
-      for (const [key, signal] of Object.entries(orSignals)) {
-        aggregate[key] = mergeSignal(aggregate[key], signal);
-      }
-    } catch (error) {
-      warnings.push(
-        `OpenRouter unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
+  if (orResult.status === 'fulfilled') {
+    for (const [key, signal] of Object.entries(orResult.value)) {
+      aggregate[key] = mergeSignal(aggregate[key], signal);
     }
+  } else if (orKey) {
+    warnings.push(
+      `OpenRouter unavailable: ${orResult.reason instanceof Error ? orResult.reason.message : String(orResult.reason)}`,
+    );
   }
 
   return { signals: aggregate, warnings };

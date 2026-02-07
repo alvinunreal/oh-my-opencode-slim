@@ -276,16 +276,17 @@ async function askYesNo(
   return defaultValue;
 }
 
-async function askOptionalText(
+async function askOptionalApiKey(
   rl: readline.Interface,
   prompt: string,
-  defaultValue?: string,
+  fromEnv?: string,
 ): Promise<string | undefined> {
-  const hint = defaultValue ? `[default: ${defaultValue}]` : '[optional]';
+  const hint = fromEnv ? '[optional, Enter keeps env value]' : '[optional]';
   const answer = (
     await rl.question(`${BLUE}${prompt}${RESET} ${DIM}${hint}${RESET}: `)
   ).trim();
-  if (!answer) return defaultValue;
+
+  if (!answer) return fromEnv;
   return answer;
 }
 
@@ -302,20 +303,29 @@ async function runInteractiveMode(
   const totalQuestions = 10;
 
   try {
+    const existingAaKey = getEnv('ARTIFICIAL_ANALYSIS_API_KEY');
+    const existingOpenRouterKey = getEnv('OPENROUTER_API_KEY');
+
     console.log(`${BOLD}Question 1/${totalQuestions}:${RESET}`);
-    const artificialAnalysisApiKey = await askOptionalText(
+    const artificialAnalysisApiKey = await askOptionalApiKey(
       rl,
       'Artificial Analysis API key for better ranking signals',
-      getEnv('ARTIFICIAL_ANALYSIS_API_KEY'),
+      existingAaKey,
     );
+    if (existingAaKey && !artificialAnalysisApiKey) {
+      printInfo('Using existing ARTIFICIAL_ANALYSIS_API_KEY from environment.');
+    }
     console.log();
 
     console.log(`${BOLD}Question 2/${totalQuestions}:${RESET}`);
-    const openRouterApiKey = await askOptionalText(
+    const openRouterApiKey = await askOptionalApiKey(
       rl,
       'OpenRouter API key for pricing/metadata signals',
-      getEnv('OPENROUTER_API_KEY'),
+      existingOpenRouterKey,
     );
+    if (existingOpenRouterKey && !openRouterApiKey) {
+      printInfo('Using existing OPENROUTER_API_KEY from environment.');
+    }
     console.log();
 
     console.log(`${BOLD}Question 3/${totalQuestions}:${RESET}`);

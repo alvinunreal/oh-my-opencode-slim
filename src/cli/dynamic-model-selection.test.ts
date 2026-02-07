@@ -90,6 +90,6 @@ describe('dynamic-model-selection', () => {
     );
     expect(chains.orchestrator).toContain('chutes/kimi-k2.5');
     expect(chains.explorer).toContain('opencode/gpt-5-nano');
-    expect(chains.fixer[chains.fixer.length - 1]).toBe('opencode/big-pickle');
+    expect(chains.fixer[chains.fixer.length - 1]).toBe('opencode/gpt-5-nano');
   });
 });

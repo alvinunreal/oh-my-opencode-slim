@@ -297,7 +297,7 @@ describe('deepMerge behavior', () => {
     ]);
   });
 
-  test('rejects fallback chains with unsupported agent keys', () => {
+  test('preserves fallback chains with additional agent keys', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
     fs.mkdirSync(projectConfigDir, { recursive: true });
@@ -312,7 +312,8 @@ describe('deepMerge behavior', () => {
       }),
     );
 
-    expect(loadPluginConfig(projectDir)).toEqual({});
+    const config = loadPluginConfig(projectDir);
+    expect(config.fallback?.chains.writing).toEqual(['openai/gpt-5.2-codex']);
   });
 });
 

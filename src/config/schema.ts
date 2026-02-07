@@ -20,7 +20,7 @@ const FallbackChainsSchema = z
     librarian: AgentModelChainSchema.optional(),
     fixer: AgentModelChainSchema.optional(),
   })
-  .strict();
+  .catchall(AgentModelChainSchema);
 
 export type FallbackAgentName = (typeof FALLBACK_AGENT_NAMES)[number];
 
