@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { PluginConfig } from '../config';
 import { SUBAGENT_NAMES } from '../config';
 import { createAgents, getAgentConfigs, isSubagent } from './index';
@@ -284,5 +287,112 @@ describe('getAgentConfigs', () => {
     const configs = getAgentConfigs();
     expect(configs.orchestrator.description).toBeDefined();
     expect(configs.explorer.description).toBeDefined();
+  });
+});
+
+describe('granular fixer custom prompts', () => {
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-prompt-test-'));
+    originalEnv = { ...process.env };
+    process.env.XDG_CONFIG_HOME = tempDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  test('long-fixer uses custom prompt file when present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'long-fixer.md'),
+      'Custom long-fixer prompt',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(longFixer?.config.prompt).toBe('Custom long-fixer prompt');
+  });
+
+  test('quick-fixer uses custom prompt file when present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'quick-fixer.md'),
+      'Custom quick-fixer prompt',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    expect(quickFixer?.config.prompt).toBe('Custom quick-fixer prompt');
+  });
+
+  test('long-fixer appends custom prompt when append file present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'long-fixer_append.md'),
+      'Additional instructions for long-fixer',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(longFixer?.config.prompt).toContain(
+      'Additional instructions for long-fixer',
+    );
+    // Verify it still has the base prompt
+    expect(longFixer?.config.prompt).toContain('Long-Fixer');
+  });
+
+  test('quick-fixer appends custom prompt when append file present', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'quick-fixer_append.md'),
+      'Additional instructions for quick-fixer',
+    );
+
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    expect(quickFixer?.config.prompt).toContain(
+      'Additional instructions for quick-fixer',
+    );
+    // Verify it still has the base prompt
+    expect(quickFixer?.config.prompt).toContain('Quick-Fixer');
+  });
+
+  test('granular fixers use default prompts when no custom files exist', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const agents = createAgents(config);
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+
+    // Verify default prompts are used
+    expect(longFixer?.config.prompt).toContain('Long-Fixer');
+    expect(longFixer?.config.prompt).toContain(
+      'thorough implementation specialist',
+    );
+    expect(quickFixer?.config.prompt).toContain('Quick-Fixer');
+    expect(quickFixer?.config.prompt).toContain(
+      'ultra-fast implementation specialist',
+    );
   });
 });
