@@ -703,4 +703,272 @@ describe('BackgroundTaskManager', () => {
       expect(ctx.client.session.prompt).toHaveBeenCalled();
     });
   });
+
+  describe('subagent delegation restrictions', () => {
+    test('orchestrator can delegate to all subagents (tools enabled)', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // First, simulate orchestrator starting (parent session with no parent)
+      const orchestratorTask = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Verify orchestrator's session is tracked
+      const orchestratorSessionId = orchestratorTask.sessionId;
+      if (!orchestratorSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      // Now launch a subagent from orchestrator - should have tools enabled
+      manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: orchestratorSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Check that the prompt was called with tools enabled
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: true,
+        task: true,
+      });
+    });
+
+    test('explorer cannot delegate to any subagents (tools disabled)', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // First, launch an explorer task
+      const explorerTask = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Now try to launch from explorer - should have tools disabled
+      const explorerSessionId = explorerTask.sessionId;
+      if (!explorerSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      manager.launch({
+        agent: 'fixer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: explorerSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Check that the prompt was called with tools disabled
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: false,
+        task: false,
+      });
+    });
+
+    test('fixer can delegate to explorer only', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // Launch a fixer task
+      const fixerTask = manager.launch({
+        agent: 'fixer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Launch subagent from fixer - should have tools enabled
+      const fixerSessionId = fixerTask.sessionId;
+      if (!fixerSessionId) throw new Error('Expected sessionId to be defined');
+
+      manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: fixerSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: true,
+        task: true,
+      });
+    });
+
+    test('designer can delegate to explorer', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // Launch a designer task
+      const designerTask = manager.launch({
+        agent: 'designer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Launch subagent from designer - should have tools enabled
+      const designerSessionId = designerTask.sessionId;
+      if (!designerSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: designerSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: true,
+        task: true,
+      });
+    });
+
+    test('librarian cannot delegate to any subagents', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // Launch a librarian task
+      const librarianTask = manager.launch({
+        agent: 'librarian',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Launch subagent from librarian - should have tools disabled
+      const librarianSessionId = librarianTask.sessionId;
+      if (!librarianSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: librarianSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: false,
+        task: false,
+      });
+    });
+
+    test('oracle cannot delegate to any subagents', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // Launch an oracle task
+      const oracleTask = manager.launch({
+        agent: 'oracle',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Launch subagent from oracle - should have tools disabled
+      const oracleSessionId = oracleTask.sessionId;
+      if (!oracleSessionId) throw new Error('Expected sessionId to be defined');
+
+      manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: oracleSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: false,
+        task: false,
+      });
+    });
+
+    test('unknown parent session defaults to no delegation', async () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx);
+
+      // Launch task from unknown parent session
+      manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'unknown-session-id',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body: { tools?: Record<string, boolean> } }]
+      >;
+      const lastCall = promptCalls[promptCalls.length - 1];
+      expect(lastCall[0].body.tools).toEqual({
+        background_task: false,
+        task: false,
+      });
+    });
+  });
 });

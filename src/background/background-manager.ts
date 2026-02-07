@@ -15,7 +15,10 @@
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
-import { FALLBACK_FAILOVER_TIMEOUT_MS } from '../config';
+import {
+  FALLBACK_FAILOVER_TIMEOUT_MS,
+  SUBAGENT_DELEGATION_RULES,
+} from '../config';
 import type { TmuxConfig } from '../config/schema';
 import { applyAgentVariant, resolveAgentVariant } from '../utils';
 import { log } from '../utils/logger';
@@ -90,6 +93,8 @@ function generateTaskId(): string {
 export class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTask>();
   private tasksBySessionId = new Map<string, string>();
+  // Track which agent type owns each session for delegation permission checks
+  private agentBySessionId = new Map<string, string>();
   private client: OpencodeClient;
   private directory: string;
   private tmuxEnabled: boolean;
@@ -216,6 +221,45 @@ export class BackgroundTaskManager {
   }
 
   /**
+   * Calculate tool permissions for a subagent based on the parent agent's delegation rules.
+   * Uses SUBAGENT_DELEGATION_RULES to determine which subagents the parent can spawn.
+   *
+   * @param parentSessionId - The session ID of the parent agent spawning the subagent
+   * @returns Tool permissions object with background_task and task enabled/disabled per subagent type
+   */
+  private calculateToolPermissions(parentSessionId: string): {
+    background_task: boolean;
+    task: boolean;
+  } {
+    // Look up the parent agent type from our session tracking
+    const parentAgentName = this.agentBySessionId.get(parentSessionId);
+
+    // If we can't determine the parent agent type, default to no delegation (safe fallback)
+    if (!parentAgentName) {
+      log(
+        `[background-manager] unknown parent session ${parentSessionId}, disabling delegation`,
+      );
+      return { background_task: false, task: false };
+    }
+
+    // Check if the parent agent is allowed to delegate to any subagents
+    const allowedSubagents =
+      SUBAGENT_DELEGATION_RULES[
+        parentAgentName as keyof typeof SUBAGENT_DELEGATION_RULES
+      ];
+
+    // If the parent agent has no allowed subagents, disable delegation tools
+    if (!allowedSubagents || allowedSubagents.length === 0) {
+      return { background_task: false, task: false };
+    }
+
+    // Parent agent can delegate to some subagents - enable the delegation tools
+    // The actual restriction of WHICH subagents is handled at the tool level
+    // by checking the 'agent' parameter against allowedSubagents
+    return { background_task: true, task: true };
+  }
+
+  /**
    * Start a task in the background (Phase B).
    */
   private async startTask(task: BackgroundTask): Promise<void> {
@@ -245,6 +289,8 @@ export class BackgroundTaskManager {
 
       task.sessionId = session.data.id;
       this.tasksBySessionId.set(session.data.id, task.id);
+      // Track the agent type for this session for delegation checks
+      this.agentBySessionId.set(session.data.id, task.agent);
       task.status = 'running';
 
       // Give TmuxSessionManager time to spawn the pane
@@ -252,12 +298,17 @@ export class BackgroundTaskManager {
         await new Promise((r) => setTimeout(r, 500));
       }
 
+      // Calculate tool permissions based on parent agent's delegation rules
+      const toolPermissions = this.calculateToolPermissions(
+        task.parentSessionId,
+      );
+
       // Send prompt
       const promptQuery: Record<string, string> = { directory: this.directory };
       const resolvedVariant = resolveAgentVariant(this.config, task.agent);
       const basePromptBody = applyAgentVariant(resolvedVariant, {
         agent: task.agent,
-        tools: { background_task: false, task: false },
+        tools: toolPermissions,
         parts: [{ type: 'text' as const, text: task.prompt }],
       } as PromptBody) as unknown as PromptBody;
 
@@ -420,9 +471,10 @@ export class BackgroundTaskManager {
       task.error = resultOrError;
     }
 
-    // Clean up tasksBySessionId map to prevent memory leak
+    // Clean up session tracking maps to prevent memory leak
     if (task.sessionId) {
       this.tasksBySessionId.delete(task.sessionId);
+      this.agentBySessionId.delete(task.sessionId);
     }
 
     // Send notification to parent session
@@ -587,5 +639,6 @@ export class BackgroundTaskManager {
     this.completionResolvers.clear();
     this.tasks.clear();
     this.tasksBySessionId.clear();
+    this.agentBySessionId.clear();
   }
 }
