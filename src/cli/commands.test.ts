@@ -30,6 +30,7 @@ describe('commands installer', () => {
 
     const content = readFileSync(commandPath, 'utf-8');
     expect(content).toContain('omos_preferences');
+    expect(content).toContain('operation=score-plan');
     expect(content).toContain('confirm=true');
   });
 });

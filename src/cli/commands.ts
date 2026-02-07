@@ -19,9 +19,10 @@ Use the \`omos_preferences\` tool to manage manual model plans.
 Workflow:
 1) Run \`operation=show\` to inspect current effective plan.
 2) Build a full 6-agent manual plan (primary + fallback1 + fallback2 + fallback3 per agent).
-3) Run \`operation=plan\` with the plan payload and review the diff preview.
-4) Run \`operation=apply\` with the same payload and \`confirm=true\` to persist.
-5) Use \`operation=reset-agent\` with \`agent=<name>\` to reset one agent.
+3) Run \`operation=score-plan\` with \`engine=v1|v2-shadow|v2\` to see per-agent model scores.
+4) Run \`operation=plan\` with the plan payload and review the diff preview + \`diffHash\`.
+5) Run \`operation=apply\` with the same payload and \`confirm=true\` (optionally \`expectedDiffHash\`).
+6) Use \`operation=reset-agent\` with \`agent=<name>\` to reset one agent.
 
 Notes:
 - \`target\` can be \`auto\`, \`global\`, or \`project\`.

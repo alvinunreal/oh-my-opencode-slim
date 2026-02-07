@@ -50,6 +50,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 **Additional guides:**
 - **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration  
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
+- **[/omos + Scoring Rollout](docs/omos-rollout-plan.md)** - `/omos` manual editing flow, score visibility (`score-plan`), and rollout gates
 
 ---
 
@@ -248,6 +249,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 - **[Cartography Skill](docs/cartography.md)** - Custom skill for repository mapping + codemap generation
 - **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
+- **[/omos + Scoring Rollout](docs/omos-rollout-plan.md)** - `/omos` operations (`show`, `score-plan`, `plan`, `apply`, `reset-agent`) and safety flow
 
 ---
 

@@ -114,12 +114,32 @@ Deliverables:
 - `/omos` command entry (command file) + plugin tool backend (`omos_preferences`).
 - Operations:
   - `show`
+  - `score-plan`
   - `plan`
   - `apply`
   - `reset-agent`
 - Atomic write + backup + schema validation.
 - Explicit confirm-before-apply.
 - Post-apply hint: restart/new session required.
+
+### `/omos` score visibility (manual editing)
+
+Use `score-plan` before applying a manual plan to inspect score output per agent/model.
+
+Recommended flow:
+
+1. `show` - inspect effective + target plan.
+2. `score-plan` - evaluate your manual candidates with `engine=v1|v2-shadow|v2`.
+3. `plan` - generate diff preview and `diffHash` for the target config.
+4. `apply` - run with `confirm=true` (and optional `expectedDiffHash` to guard stale plans).
+
+`score-plan` output includes:
+
+- `totalScore` per candidate model.
+- Breakdown fields:
+  - V1: `baseScore`, `externalSignalBoost`
+  - V2: weighted feature breakdown
+  - V2 shadow: V1 score plus `shadowV2Score`
 
 Acceptance criteria:
 - End-to-end `/omos` editing works without CLI roundtrip.
