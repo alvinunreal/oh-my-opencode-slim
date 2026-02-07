@@ -133,6 +133,20 @@ Recommended flow:
 3. `plan` - generate diff preview and `diffHash` for the target config.
 4. `apply` - run with `confirm=true` (and optional `expectedDiffHash` to guard stale plans).
 
+Copy/paste example suite:
+```bash
+/omos_preferences '{"operation":"show","target":"auto"}'
+
+# Use a full 6-agent plan object with primary + fallback1 + fallback2 + fallback3.
+/omos_preferences '{"operation":"score-plan","target":"auto","engine":"v2","plan":<PLAN_JSON>}'
+
+# Save diffHash from this output.
+/omos_preferences '{"operation":"plan","target":"auto","plan":<PLAN_JSON>}'
+
+# Apply the exact same plan (with confirm=true and optional expectedDiffHash guard).
+/omos_preferences '{"operation":"apply","target":"auto","plan":<PLAN_JSON>,"expectedDiffHash":"<DIFF_HASH>","confirm":true}'
+```
+
 `score-plan` output includes:
 
 - `totalScore` per candidate model.
