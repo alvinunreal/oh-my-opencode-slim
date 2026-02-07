@@ -292,17 +292,21 @@ describe('getAgentConfigs', () => {
 
 describe('granular fixer custom prompts', () => {
   let tempDir: string;
-  let originalEnv: typeof process.env;
+  let originalXdgConfigHome: string | undefined;
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-prompt-test-'));
-    originalEnv = { ...process.env };
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = tempDir;
   });
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
-    process.env = originalEnv;
+    if (originalXdgConfigHome === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    }
   });
 
   test('long-fixer uses custom prompt file when present', () => {
