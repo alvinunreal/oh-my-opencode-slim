@@ -102,7 +102,9 @@ async function fetchArtificialAnalysisSignals(
   );
 
   if (!response.ok) {
-    throw new Error(`Artificial Analysis request failed (${response.status} ${response.statusText})`);
+    throw new Error(
+      `Artificial Analysis request failed (${response.status} ${response.statusText})`,
+    );
   }
 
   const parsed = (await response.json()) as ArtificialAnalysisResponse;
@@ -160,7 +162,9 @@ async function fetchOpenRouterSignals(
   });
 
   if (!response.ok) {
-    throw new Error(`OpenRouter request failed (${response.status} ${response.statusText})`);
+    throw new Error(
+      `OpenRouter request failed (${response.status} ${response.statusText})`,
+    );
   }
 
   const parsed = (await response.json()) as OpenRouterModelsResponse;
@@ -177,7 +181,7 @@ async function fetchOpenRouterSignals(
 
     for (const alias of baseAliases(key)) {
       map[alias] = mergeSignal(map[alias], signal);
-      
+
       // Only add Chutes alias if it doesn't already exist
       const chutesAlias = `chutes/${alias}`;
       map[chutesAlias] = mergeSignal(map[chutesAlias], signal);
