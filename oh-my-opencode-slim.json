@@ -10,12 +10,8 @@
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
         "variant": "max",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "openai/gpt-5.3-codex",
@@ -26,11 +22,7 @@
       "librarian": {
         "model": "google/antigravity-gemini-3-flash",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "google/antigravity-gemini-3-flash",
@@ -39,9 +31,7 @@
       },
       "designer": {
         "model": "google/antigravity-gemini-3-pro-low",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
@@ -55,12 +45,8 @@
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
         "variant": "max",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "google/antigravity-claude-opus-4-6-thinking",
@@ -70,11 +56,7 @@
       "librarian": {
         "model": "google/antigravity-gemini-3-flash",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "google/antigravity-gemini-3-flash",
@@ -84,28 +66,20 @@
       "designer": {
         "model": "kimi-for-coding/k2p5",
         "variant": "max",
-        "skills": [
-          "agent-browser", "using-tmux-for-interactive-commands"
-        ],
+        "skills": ["agent-browser", "using-tmux-for-interactive-commands"],
         "mcps": []
       },
       "fixer": {
         "model": "zai-coding-plan/glm-4.7",
-        "skills": [
-          "*"
-        ],
+        "skills": ["*"],
         "mcps": []
       }
     },
     "kimi_runs_opus": {
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "google/antigravity-claude-opus-4-6-thinking",
@@ -115,11 +89,7 @@
       "librarian": {
         "model": "google/antigravity-gemini-3-flash",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "google/antigravity-gemini-3-flash",
@@ -130,30 +100,20 @@
       "designer": {
         "model": "kimi-for-coding/k2p5",
         "variant": "high",
-        "skills": [
-          "agent-browser", "using-tmux-for-interactive-commands"
-        ],
+        "skills": ["agent-browser", "using-tmux-for-interactive-commands"],
         "mcps": []
       },
       "fixer": {
         "model": "google/antigravity-claude-opus-4-6-thinking",
-        "skills": [
-          "*"
-        ],
+        "skills": ["*"],
         "mcps": []
       }
-
     },
     "kimi_kimi_kimi": {
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch",
-          "using-tmux-for-interactive-commands"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch", "using-tmux-for-interactive-commands"]
       },
       "oracle": {
         "model": "kimi-for-coding/k2p5",
@@ -164,11 +124,7 @@
       "librarian": {
         "model": "google/antigravity-gemini-3-flash",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "google/antigravity-gemini-3-flash",
@@ -179,30 +135,21 @@
       "designer": {
         "model": "kimi-for-coding/k2p5",
         "variant": "high",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
         "model": "kimi-for-coding/k2p5",
         "variant": "high",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       }
-
     },
     "opus_runs_kimi": {
       "orchestrator": {
         "model": "google/antigravity-claude-opus-4-6-thinking",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "github-copilot/gpt-5.2",
@@ -213,11 +160,7 @@
       "librarian": {
         "model": "google/antigravity-gemini-3-flash",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "google/antigravity-gemini-3-flash",
@@ -227,30 +170,21 @@
       "designer": {
         "model": "kimi-for-coding/k2p5",
         "variant": "high",
-        "skills": [
-          "*"
-        ],
+        "skills": ["*"],
         "mcps": []
       },
       "fixer": {
         "model": "kimi-for-coding/k2p5",
         "variant": "high",
-        "skills": [
-          "*"
-        ],
+        "skills": ["*"],
         "mcps": []
       }
-
     },
     "cliproxy": {
       "orchestrator": {
         "model": "cliproxy/gemini-claude-opus-4-6-thinking",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "cliproxy/gemini-3-pro-preview",
@@ -262,11 +196,7 @@
         "model": "cliproxy/gemini-3-flash-preview",
         "variant": "low",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "cliproxy/gemini-3-flash-preview",
@@ -277,9 +207,7 @@
       "designer": {
         "model": "cliproxy/gemini-3-flash-preview",
         "variant": "medium",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
@@ -293,12 +221,8 @@
       "orchestrator": {
         "model": "google/antigravity-claude-opus-4-6-thinking",
         "variant": "low",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "github-copilot/gpt-5.2",
@@ -309,11 +233,7 @@
       "librarian": {
         "model": "zai-coding-plan/glm-4.7",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "github-copilot/grok-code-fast-1",
@@ -322,9 +242,7 @@
       },
       "designer": {
         "model": "google/antigravity-gemini-3-flash",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
@@ -337,12 +255,8 @@
     "zai-coding-plan": {
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "openai/gpt-5.2",
@@ -353,11 +267,7 @@
       "librarian": {
         "model": "zai-coding-plan/glm-4.7",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "github-copilot/grok-code-fast-1",
@@ -366,9 +276,7 @@
       },
       "designer": {
         "model": "google/antigravity-gemini-3-pro-high",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
@@ -378,16 +286,11 @@
         "mcps": []
       }
     },
-    "codex":
-    {
+    "codex": {
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "openai/gpt-5.2",
@@ -398,11 +301,7 @@
       "librarian": {
         "model": "zai-coding-plan/glm-4.7",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "github-copilot/grok-code-fast-1",
@@ -412,9 +311,7 @@
       "designer": {
         "model": "cliproxy/gemini-3-flash-preview",
         "variant": "medium",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
@@ -427,12 +324,8 @@
     "antigravity": {
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "google/antigravity-claude-opus-4-6-thinking",
@@ -442,11 +335,7 @@
       "librarian": {
         "model": "zai-coding-plan/glm-4.7",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "github-copilot/grok-code-fast-1",
@@ -455,9 +344,7 @@
       },
       "designer": {
         "model": "google/antigravity-gemini-3-flash",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
@@ -469,12 +356,8 @@
     "megamind": {
       "orchestrator": {
         "model": "kimi-for-coding/k2p5",
-        "skills": [
-          "*"
-        ],
-        "mcps": [
-          "websearch"
-        ]
+        "skills": ["*"],
+        "mcps": ["websearch"]
       },
       "oracle": {
         "model": "google/antigravity-claude-opus-4-6",
@@ -484,11 +367,7 @@
       "librarian": {
         "model": "zai-coding-plan/glm-4.7",
         "skills": [],
-        "mcps": [
-          "websearch",
-          "context7",
-          "grep_app"
-        ]
+        "mcps": ["websearch", "context7", "grep_app"]
       },
       "explorer": {
         "model": "zai-coding-plan/glm-4.7",
@@ -498,9 +377,7 @@
       "designer": {
         "model": "anthropic/claude-opus-4-6",
         "variant": "high",
-        "skills": [
-          "agent-browser"
-        ],
+        "skills": ["agent-browser"],
         "mcps": []
       },
       "fixer": {
