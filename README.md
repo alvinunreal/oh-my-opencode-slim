@@ -239,6 +239,15 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
 </table>
 
+#### Granular Fixer Variants (Experimental)
+
+When `experimental.granularFixers` is enabled, the orchestrator routes tasks to specialized fixer variants:
+
+| Variant | Purpose | Use Case | Recommended Models |
+|---------|---------|----------|-------------------|
+| `quick-fixer` | Ultra-fast single-file edits | Independent parallel tasks, simple bugfixes | `qwen/qwen-3-coder-next`, `google/gemini-3-flash`, `openai/gpt-5.1-codex-mini` |
+| `long-fixer` | Sustained multi-file context | Complex refactors, interdependent changes | `anthropic/claude-opus-4.6`, `openai/gpt-5.3-codex`, `kimi-for-coding/k2.5` |
+
 ---
 
 ## 📚 Documentation
