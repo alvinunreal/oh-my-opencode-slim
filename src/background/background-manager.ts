@@ -128,6 +128,42 @@ export class BackgroundTaskManager {
   }
 
   /**
+   * Check if a parent session is allowed to delegate to a specific agent type.
+   * @param parentSessionId - The session ID of the parent
+   * @param requestedAgent - The agent type being requested
+   * @returns true if allowed, false if not
+   */
+  isAgentAllowed(parentSessionId: string, requestedAgent: string): boolean {
+    const parentAgentName = this.agentBySessionId.get(parentSessionId);
+    if (!parentAgentName) return false;
+
+    const allowedSubagents =
+      SUBAGENT_DELEGATION_RULES[
+        parentAgentName as keyof typeof SUBAGENT_DELEGATION_RULES
+      ];
+
+    if (!allowedSubagents || allowedSubagents.length === 0) return false;
+
+    return allowedSubagents.includes(requestedAgent);
+  }
+
+  /**
+   * Get the list of allowed subagents for a parent session.
+   * @param parentSessionId - The session ID of the parent
+   * @returns Array of allowed agent names, empty if none
+   */
+  getAllowedSubagents(parentSessionId: string): readonly string[] {
+    const parentAgentName = this.agentBySessionId.get(parentSessionId);
+    if (!parentAgentName) return [];
+
+    return (
+      SUBAGENT_DELEGATION_RULES[
+        parentAgentName as keyof typeof SUBAGENT_DELEGATION_RULES
+      ] ?? []
+    );
+  }
+
+  /**
    * Launch a new background task (fire-and-forget).
    *
    * Phase A (sync): Creates task record and returns immediately.
@@ -254,8 +290,8 @@ export class BackgroundTaskManager {
     }
 
     // Parent agent can delegate to some subagents - enable the delegation tools
-    // The actual restriction of WHICH subagents is handled at the tool level
-    // by checking the 'agent' parameter against allowedSubagents
+    // The restriction of WHICH specific subagents are allowed is enforced
+    // by the background_task tool via isAgentAllowed()
     return { background_task: true, task: true };
   }
 
