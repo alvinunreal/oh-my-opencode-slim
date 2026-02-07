@@ -217,6 +217,59 @@ describe('createAgents', () => {
     expect(names).not.toContain('long-fixer');
     expect(names).not.toContain('quick-fixer');
   });
+
+  test('quick-fixer and long-fixer inherit fixer custom model', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+      agents: {
+        fixer: { model: 'test/fixer-custom-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(quickFixer?.config.model).toBe('test/fixer-custom-model');
+    expect(longFixer?.config.model).toBe('test/fixer-custom-model');
+  });
+
+  test('quick-fixer and long-fixer inherit librarian model when fixer has no config', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+      agents: {
+        librarian: { model: 'test/librarian-custom-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(quickFixer?.config.model).toBe('test/librarian-custom-model');
+    expect(longFixer?.config.model).toBe('test/librarian-custom-model');
+  });
+
+  test('quick-fixer and long-fixer use explicit config over fixer inheritance', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+      agents: {
+        fixer: { model: 'test/fixer-model' },
+        'quick-fixer': { model: 'test/quick-fixer-model' },
+        'long-fixer': { model: 'test/long-fixer-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const quickFixer = agents.find((a) => a.name === 'quick-fixer');
+    const longFixer = agents.find((a) => a.name === 'long-fixer');
+    expect(quickFixer?.config.model).toBe('test/quick-fixer-model');
+    expect(longFixer?.config.model).toBe('test/long-fixer-model');
+  });
+
+  test('granular fixers have subagent mode in getAgentConfigs', () => {
+    const config: PluginConfig = {
+      experimental: { granularFixers: true },
+    };
+    const configs = getAgentConfigs(config);
+    expect(configs['quick-fixer'].mode).toBe('subagent');
+    expect(configs['long-fixer'].mode).toBe('subagent');
+  });
 });
 
 describe('getAgentConfigs', () => {

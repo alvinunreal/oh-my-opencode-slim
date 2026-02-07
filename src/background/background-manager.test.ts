@@ -1215,6 +1215,44 @@ describe('BackgroundTaskManager', () => {
         'explorer',
       ]);
 
+      // Long-fixer -> only explorer (inherits from fixer)
+      const longFixerTask = manager.launch({
+        agent: 'long-fixer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const longFixerSessionId = longFixerTask.sessionId;
+      if (!longFixerSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      expect(manager.getAllowedSubagents(longFixerSessionId)).toEqual([
+        'explorer',
+      ]);
+
+      // Quick-fixer -> only explorer (inherits from fixer)
+      const quickFixerTask = manager.launch({
+        agent: 'quick-fixer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const quickFixerSessionId = quickFixerTask.sessionId;
+      if (!quickFixerSessionId)
+        throw new Error('Expected sessionId to be defined');
+
+      expect(manager.getAllowedSubagents(quickFixerSessionId)).toEqual([
+        'explorer',
+      ]);
+
       // Explorer -> empty (leaf)
       const explorerTask = manager.launch({
         agent: 'explorer',

@@ -9,6 +9,8 @@ const AGENT_NAMES = [
   'explorer',
   'librarian',
   'fixer',
+  'long-fixer',
+  'quick-fixer',
 ] as const;
 
 type AgentName = (typeof AGENT_NAMES)[number];
@@ -408,6 +410,8 @@ export function generateLiteConfig(
     setAgent('librarian', secondaryModel);
     setAgent('explorer', secondaryModel);
     setAgent('fixer', secondaryModel);
+    setAgent('long-fixer', secondaryModel);
+    setAgent('quick-fixer', secondaryModel);
   };
 
   const applyChutesAssignments = (presetAgents: Record<string, unknown>) => {
@@ -436,6 +440,8 @@ export function generateLiteConfig(
     setAgent('librarian', secondaryModel);
     setAgent('explorer', secondaryModel);
     setAgent('fixer', secondaryModel);
+    setAgent('long-fixer', secondaryModel);
+    setAgent('quick-fixer', secondaryModel);
   };
 
   const dedupeModels = (models: Array<string | undefined>) => {
@@ -456,7 +462,9 @@ export function generateLiteConfig(
     const isSupport =
       agentName === 'explorer' ||
       agentName === 'librarian' ||
-      agentName === 'fixer';
+      agentName === 'fixer' ||
+      agentName === 'long-fixer' ||
+      agentName === 'quick-fixer';
     if (isSupport) {
       return (
         installConfig.selectedOpenCodeSecondaryModel ??
@@ -471,7 +479,9 @@ export function generateLiteConfig(
     const isSupport =
       agentName === 'explorer' ||
       agentName === 'librarian' ||
-      agentName === 'fixer';
+      agentName === 'fixer' ||
+      agentName === 'long-fixer' ||
+      agentName === 'quick-fixer';
     if (isSupport) {
       return (
         installConfig.selectedChutesSecondaryModel ??
