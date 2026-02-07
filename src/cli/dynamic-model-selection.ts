@@ -1,4 +1,9 @@
-import type { DiscoveredModel, DynamicModelPlan, InstallConfig } from './types';
+import type {
+  DiscoveredModel,
+  DynamicModelPlan,
+  ExternalSignalMap,
+  InstallConfig,
+} from './types';
 
 const AGENTS = [
   'orchestrator',
@@ -10,6 +15,8 @@ const AGENTS = [
 ] as const;
 
 type AgentName = (typeof AGENTS)[number];
+
+const FREE_BIASED_PROVIDERS = new Set(['opencode']);
 
 const ROLE_VARIANT: Record<AgentName, string | undefined> = {
   orchestrator: undefined,
@@ -110,14 +117,45 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
   }
 
   const score = baseScore(model);
+  const providerBias =
+    model.providerID === 'openai'
+      ? 3
+      : model.providerID === 'anthropic'
+        ? 3
+        : model.providerID === 'kimi-for-coding'
+          ? 2
+          : model.providerID === 'google'
+            ? 2
+            : model.providerID === 'github-copilot'
+              ? 1
+              : model.providerID === 'zai-coding-plan'
+                ? 1
+                : model.providerID === 'chutes'
+                  ? -1
+                  : model.providerID === 'opencode'
+                    ? -2
+                    : 0;
 
   if (agent === 'orchestrator') {
     return (
-      score + reasoning * 40 + toolcall * 25 + deep * 10 + code * 8 + context
+      score +
+      reasoning * 40 +
+      toolcall * 25 +
+      deep * 10 +
+      code * 8 +
+      context +
+      providerBias
     );
   }
   if (agent === 'oracle') {
-    return score + reasoning * 55 + deep * 18 + context * 1.2 + toolcall * 10;
+    return (
+      score +
+      reasoning * 55 +
+      deep * 18 +
+      context * 1.2 +
+      toolcall * 10 +
+      providerBias
+    );
   }
   if (agent === 'designer') {
     return (
@@ -126,26 +164,86 @@ function roleScore(agent: AgentName, model: DiscoveredModel): number {
       reasoning * 18 +
       toolcall * 15 +
       context * 0.8 +
-      output
+      output +
+      providerBias
     );
   }
   if (agent === 'explorer') {
-    return score + fast * 35 + toolcall * 28 + reasoning * 8 + context * 0.7;
+    return (
+      score +
+      fast * 35 +
+      toolcall * 28 +
+      reasoning * 8 +
+      context * 0.7 +
+      providerBias
+    );
   }
   if (agent === 'librarian') {
-    return score + context * 30 + toolcall * 22 + reasoning * 15 + output * 10;
+    return (
+      score +
+      context * 30 +
+      toolcall * 22 +
+      reasoning * 15 +
+      output * 10 +
+      providerBias
+    );
   }
 
   return (
-    score + code * 28 + toolcall * 24 + fast * 18 + reasoning * 14 + output * 8
+    score +
+    code * 28 +
+    toolcall * 24 +
+    fast * 18 +
+    reasoning * 14 +
+    output * 8 +
+    providerBias
   );
+}
+
+function getExternalSignalBoost(
+  model: DiscoveredModel,
+  externalSignals: ExternalSignalMap | undefined,
+): number {
+  if (!externalSignals) return 0;
+
+  const fullKey = model.model.toLowerCase();
+  const idKey = model.model.split('/')[1]?.toLowerCase();
+  const signal =
+    externalSignals[fullKey] ?? (idKey ? externalSignals[idKey] : undefined);
+  if (!signal) return 0;
+
+  const qualityBoost = (signal.qualityScore ?? 0) * 0.12;
+  const codingBoost = (signal.codingScore ?? 0) * 0.18;
+  const latencyPenalty = Math.min(signal.latencySeconds ?? 0, 25) * 0.7;
+
+  const blendedPrice =
+    signal.inputPricePer1M !== undefined &&
+    signal.outputPricePer1M !== undefined
+      ? signal.inputPricePer1M * 0.75 + signal.outputPricePer1M * 0.25
+      : (signal.inputPricePer1M ?? signal.outputPricePer1M ?? 0);
+  const pricePenalty = Math.min(blendedPrice, 30) * 0.08;
+
+  return qualityBoost + codingBoost - latencyPenalty - pricePenalty;
 }
 
 function rankModels(
   models: DiscoveredModel[],
   agent: AgentName,
+  externalSignals?: ExternalSignalMap,
 ): DiscoveredModel[] {
-  return [...models].sort((a, b) => roleScore(agent, b) - roleScore(agent, a));
+  return [...models].sort((a, b) => {
+    const scoreA =
+      roleScore(agent, a) + getExternalSignalBoost(a, externalSignals);
+    const scoreB =
+      roleScore(agent, b) + getExternalSignalBoost(b, externalSignals);
+    const scoreDelta = scoreB - scoreA;
+    if (scoreDelta !== 0) return scoreDelta;
+
+    const providerTieBreak = a.providerID.localeCompare(b.providerID);
+    if (providerTieBreak !== 0) return providerTieBreak;
+
+    return a.model.localeCompare(b.model);
+  });
 }
 
 function dedupe(models: Array<string | undefined>): string[] {
@@ -162,6 +260,7 @@ function dedupe(models: Array<string | undefined>): string[] {
 export function buildDynamicModelPlan(
   catalog: DiscoveredModel[],
   config: InstallConfig,
+  externalSignals?: ExternalSignalMap,
 ): DynamicModelPlan | null {
   const enabledProviders = new Set(getEnabledProviders(config));
   const providerCandidates = catalog.filter((m) =>
@@ -172,12 +271,23 @@ export function buildDynamicModelPlan(
     return null;
   }
 
+  const hasPaidProviderEnabled =
+    config.hasOpenAI ||
+    config.hasAnthropic ||
+    config.hasCopilot ||
+    config.hasZaiPlan ||
+    config.hasKimi ||
+    config.hasAntigravity;
+
   const agents: Record<string, { model: string; variant?: string }> = {};
   const chains: Record<string, string[]> = {};
 
   for (const agent of AGENTS) {
-    const ranked = rankModels(providerCandidates, agent);
-    const primary = ranked[0];
+    const ranked = rankModels(providerCandidates, agent, externalSignals);
+    const primaryPool = hasPaidProviderEnabled
+      ? ranked.filter((model) => !FREE_BIASED_PROVIDERS.has(model.providerID))
+      : ranked;
+    const primary = primaryPool[0] ?? ranked[0];
     if (!primary) continue;
 
     const providerOrder = dedupe(ranked.map((m) => m.providerID));
@@ -186,6 +296,12 @@ export function buildDynamicModelPlan(
         (providerID) => ranked.find((m) => m.providerID === providerID)?.model,
       )
       .filter((m): m is string => Boolean(m));
+    const nonFreePerProviderBest = perProviderBest.filter(
+      (model) => !model.startsWith('opencode/'),
+    );
+    const freePerProviderBest = perProviderBest.filter((model) =>
+      model.startsWith('opencode/'),
+    );
 
     const selectedOpencode =
       agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
@@ -201,9 +317,10 @@ export function buildDynamicModelPlan(
 
     const chain = dedupe([
       primary.model,
-      ...perProviderBest,
+      ...nonFreePerProviderBest,
       selectedChutes,
       selectedOpencode,
+      ...freePerProviderBest,
       'opencode/big-pickle',
     ]).slice(0, 7);
 

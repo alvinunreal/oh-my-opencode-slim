@@ -1,6 +1,7 @@
 export * from './chutes-selection';
 export * from './config-io';
 export * from './dynamic-model-selection';
+export * from './external-rankings';
 export * from './model-selection';
 export * from './opencode-models';
 export * from './opencode-selection';

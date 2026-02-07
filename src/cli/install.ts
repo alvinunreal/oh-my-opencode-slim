@@ -10,6 +10,7 @@ import {
   discoverModelCatalog,
   discoverOpenCodeFreeModels,
   discoverProviderFreeModels,
+  fetchExternalModelSignals,
   generateLiteConfig,
   getOpenCodeVersion,
   isOpenCodeInstalled,
@@ -696,9 +697,15 @@ async function runInstall(config: InstallConfig): Promise<number> {
           'Unable to discover model catalog. Falling back to static mappings.',
       );
     } else {
+      const { signals, warnings } = await fetchExternalModelSignals();
+      for (const warning of warnings) {
+        printInfo(warning);
+      }
+
       const dynamicPlan = buildDynamicModelPlan(
         catalogDiscovery.models,
         resolvedConfig,
+        signals,
       );
       if (!dynamicPlan) {
         printWarning(

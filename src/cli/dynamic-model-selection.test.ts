@@ -83,7 +83,11 @@ describe('dynamic-model-selection', () => {
       'oracle',
       'orchestrator',
     ]);
-    expect(chains.oracle).toContain('openai/gpt-5.3-codex');
+    expect(agents.oracle?.model.startsWith('opencode/')).toBe(false);
+    expect(agents.orchestrator?.model.startsWith('opencode/')).toBe(false);
+    expect(chains.oracle.some((m: string) => m.startsWith('openai/'))).toBe(
+      true,
+    );
     expect(chains.orchestrator).toContain('chutes/kimi-k2.5');
     expect(chains.explorer).toContain('opencode/gpt-5-nano');
     expect(chains.fixer[chains.fixer.length - 1]).toBe('opencode/big-pickle');

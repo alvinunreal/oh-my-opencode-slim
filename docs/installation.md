@@ -106,6 +106,10 @@ Help the user understand the tradeoffs:
 - OpenAI enables `openai/` models.
 - Antigravity (Google) provides Claude and Gemini models via Google infrastructure.
 - Chutes provides free daily-capped models and requires `CHUTES_API_KEY`.
+- Optional external ranking signals:
+  - `ARTIFICIAL_ANALYSIS_API_KEY` (quality/coding/latency/price)
+  - `OPENROUTER_API_KEY` (model pricing metadata)
+  If set, installer dynamic planning uses these signals to improve model ranking.
 
 ### Step 3: Run the Installer
 
