@@ -16,6 +16,16 @@ const AGENTS = [
 
 type AgentName = (typeof AGENTS)[number];
 
+const FREE_BIASED_PROVIDERS = new Set(['opencode']);
+const PRIMARY_ASSIGNMENT_ORDER: AgentName[] = [
+  'oracle',
+  'orchestrator',
+  'fixer',
+  'designer',
+  'librarian',
+  'explorer',
+];
+
 const ROLE_VARIANT: Record<AgentName, string | undefined> = {
   orchestrator: undefined,
   oracle: 'high',
@@ -38,80 +48,221 @@ function getEnabledProviders(config: InstallConfig): string[] {
   return providers;
 }
 
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
+function tokenScore(name: string, re: RegExp, points: number): number {
+  return re.test(name) ? points : 0;
 }
 
-function normalize(value: number, max: number): number {
-  if (!Number.isFinite(value) || max <= 0) return 0;
-  return clamp01(value / max);
+function statusScore(status: DiscoveredModel['status']): number {
+  if (status === 'active') return 20;
+  if (status === 'beta') return 8;
+  if (status === 'alpha') return -5;
+  return -40;
 }
 
-function statusMultiplier(status: DiscoveredModel['status']): number {
-  if (status === 'active') return 1;
-  if (status === 'beta') return 0.7;
-  if (status === 'alpha') return 0.4;
-  return 0;
+type VersionFamilyInfo = {
+  family: string;
+  version: [number, number, number];
+  confidence: number;
+  prereleasePenalty: number;
+};
+
+function toVersionTuple(
+  major: string,
+  minor?: string,
+  patch?: string,
+): [number, number, number] {
+  return [
+    Number.parseInt(major, 10) || 0,
+    Number.parseInt(minor ?? '0', 10) || 0,
+    Number.parseInt(patch ?? '0', 10) || 0,
+  ];
 }
 
-function capabilityScore(agent: AgentName, model: DiscoveredModel): number {
-  if (model.status === 'deprecated') return -10_000;
+function compareVersionTuple(
+  a: [number, number, number],
+  b: [number, number, number],
+): number {
+  if (a[0] !== b[0]) return a[0] - b[0];
+  if (a[1] !== b[1]) return a[1] - b[1];
+  return a[2] - b[2];
+}
 
-  if (
-    (agent === 'orchestrator' ||
-      agent === 'explorer' ||
-      agent === 'librarian' ||
-      agent === 'fixer') &&
-    !model.toolcall
-  ) {
-    return -10_000;
+function extractVersionFamily(
+  model: DiscoveredModel,
+): VersionFamilyInfo | null {
+  const text = `${model.model} ${model.name}`.toLowerCase();
+
+  const gpt = text.match(/\bgpt[-_ ]?(\d+)(?:[.-](\d+))?(?:[.-](\d+))?\b/);
+  if (gpt) {
+    return {
+      family: 'gpt',
+      version: toVersionTuple(gpt[1] ?? '0', gpt[2], gpt[3]),
+      confidence: 1,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
   }
 
-  const context = normalize(Math.min(model.contextLimit, 1_000_000), 1_000_000);
-  const output = normalize(Math.min(model.outputLimit, 300_000), 300_000);
-  const reasoning = model.reasoning ? 1 : 0;
-  const toolcall = model.toolcall ? 1 : 0;
-  const attachment = model.attachment ? 1 : 0;
-  const status = statusMultiplier(model.status);
-
-  if (agent === 'oracle') {
-    return (
-      status * 20 + context * 28 + reasoning * 26 + toolcall * 10 + output * 8
-    );
-  }
-
-  if (agent === 'orchestrator') {
-    return (
-      status * 20 + reasoning * 22 + toolcall * 24 + context * 20 + output * 8
-    );
-  }
-
-  if (agent === 'designer') {
-    return (
-      status * 20 +
-      attachment * 24 +
-      output * 20 +
-      reasoning * 14 +
-      toolcall * 10 +
-      context * 8
-    );
-  }
-
-  if (agent === 'explorer') {
-    return (
-      status * 20 + toolcall * 20 + output * 14 + context * 10 + reasoning * 8
-    );
-  }
-
-  if (agent === 'librarian') {
-    return (
-      status * 20 + context * 30 + output * 20 + toolcall * 16 + reasoning * 8
-    );
-  }
-
-  return (
-    status * 20 + toolcall * 24 + reasoning * 18 + output * 16 + context * 12
+  const gemini = text.match(
+    /\bgemini[-_ ]?(\d+)(?:[.-](\d+))?(?:[.-](\d+))?\b/,
   );
+  if (gemini) {
+    return {
+      family: 'gemini',
+      version: toVersionTuple(gemini[1] ?? '0', gemini[2], gemini[3]),
+      confidence: 1,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  const kimi = text.match(/\bkimi[-_ ]?k(\d+)(?:[.-]?(\d+))?(?:[.-](\d+))?\b/);
+  if (kimi) {
+    return {
+      family: 'kimi-k',
+      version: toVersionTuple(kimi[1] ?? '0', kimi[2], kimi[3]),
+      confidence: 1,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  const generic = text.match(
+    /\b([a-z][a-z0-9-]{1,20})[-_ ](\d+)(?:[.-](\d+))?(?:[.-](\d+))?\b/,
+  );
+  if (generic) {
+    return {
+      family: generic[1] ?? 'generic',
+      version: toVersionTuple(generic[2] ?? '0', generic[3], generic[4]),
+      confidence: 0.7,
+      prereleasePenalty: /preview|experimental|exp|\brc\b/.test(text) ? -2 : 0,
+    };
+  }
+
+  return null;
+}
+
+function getVersionRecencyMap(
+  models: DiscoveredModel[],
+): Record<string, number> {
+  const familyVersions = new Map<string, Array<[number, number, number]>>();
+  const modelInfo = new Map<string, VersionFamilyInfo>();
+
+  for (const model of models) {
+    const info = extractVersionFamily(model);
+    if (!info) continue;
+
+    modelInfo.set(model.model, info);
+    const current = familyVersions.get(info.family) ?? [];
+    current.push(info.version);
+    familyVersions.set(info.family, current);
+  }
+
+  const recencyMap: Record<string, number> = {};
+
+  for (const model of models) {
+    const info = modelInfo.get(model.model);
+    if (!info) {
+      recencyMap[model.model] = 0;
+      continue;
+    }
+
+    const versions = familyVersions.get(info.family) ?? [];
+    const unique = versions
+      .map((tuple) => `${tuple[0]}.${tuple[1]}.${tuple[2]}`)
+      .filter((value, index, arr) => arr.indexOf(value) === index)
+      .map((value) => {
+        const [major, minor, patch] = value
+          .split('.')
+          .map((v) => Number.parseInt(v, 10) || 0);
+        return [major, minor, patch] as [number, number, number];
+      })
+      .sort(compareVersionTuple);
+
+    if (unique.length === 0) {
+      recencyMap[model.model] = 0;
+      continue;
+    }
+
+    const index = unique.findIndex(
+      (tuple) => compareVersionTuple(tuple, info.version) === 0,
+    );
+    const percentile = unique.length === 1 ? 0.5 : index / (unique.length - 1);
+    const raw = -3 + percentile * (12 - -3);
+    const final = Math.max(
+      -3,
+      Math.min(12, raw * info.confidence + info.prereleasePenalty),
+    );
+    recencyMap[model.model] = final;
+  }
+
+  return recencyMap;
+}
+
+function baseScore(model: DiscoveredModel, versionRecencyBoost = 0): number {
+  const lowered = `${model.model} ${model.name}`.toLowerCase();
+  const context = Math.min(model.contextLimit, 1_000_000) / 50_000;
+  const output = Math.min(model.outputLimit, 300_000) / 30_000;
+  const deep = tokenScore(
+    lowered,
+    /(opus|pro|thinking|reason|r1|gpt-5|k2\.5)/i,
+    12,
+  );
+  const fast = tokenScore(
+    lowered,
+    /(nano|flash|mini|lite|fast|turbo|haiku|small)/i,
+    4,
+  );
+  const code = tokenScore(lowered, /(codex|coder|code|dev|program)/i, 12);
+  return (
+    statusScore(model.status) +
+    context +
+    output +
+    deep +
+    fast +
+    code +
+    versionRecencyBoost +
+    (model.toolcall ? 25 : 0)
+  );
+}
+
+function hasFlashToken(model: DiscoveredModel): boolean {
+  return /flash/i.test(`${model.model} ${model.name}`);
+}
+
+function isZai47Model(model: DiscoveredModel): boolean {
+  return (
+    model.providerID === 'zai-coding-plan' &&
+    /glm-4\.7/i.test(`${model.model} ${model.name}`)
+  );
+}
+
+function isKimiK25Model(model: DiscoveredModel): boolean {
+  return /kimi-k2\.?5|k2\.?5/i.test(`${model.model} ${model.name}`);
+}
+
+function geminiPreferenceAdjustment(
+  agent: AgentName,
+  model: DiscoveredModel,
+): number {
+  const lowered = `${model.model} ${model.name}`.toLowerCase();
+  const isGemini3Pro = /gemini-3-pro|gemini-3\.0-pro|gemini-3-pro-preview/.test(
+    lowered,
+  );
+  const isGemini25Pro = /gemini-2\.5-pro/.test(lowered);
+  const antigravityNamingBonus =
+    model.providerID === 'google' && lowered.includes('antigravity-') ? 4 : 0;
+
+  const deepRoleBoost =
+    agent === 'oracle' ||
+    agent === 'orchestrator' ||
+    agent === 'fixer' ||
+    agent === 'librarian' ||
+    agent === 'designer'
+      ? 24
+      : 8;
+
+  const gemini3Boost = isGemini3Pro ? deepRoleBoost : 0;
+  const gemini25Penalty = isGemini25Pro && !isGemini3Pro ? -14 : 0;
+
+  return gemini3Boost + gemini25Penalty + antigravityNamingBonus;
 }
 
 function modelLookupKeys(model: DiscoveredModel): string[] {
@@ -130,6 +281,170 @@ function modelLookupKeys(model: DiscoveredModel): string[] {
   return [...keys];
 }
 
+function roleScore(
+  agent: AgentName,
+  model: DiscoveredModel,
+  versionRecencyBoost = 0,
+): number {
+  const lowered = `${model.model} ${model.name}`.toLowerCase();
+  const reasoning = model.reasoning ? 1 : 0;
+  const toolcall = model.toolcall ? 1 : 0;
+  const attachment = model.attachment ? 1 : 0;
+  const context = Math.min(model.contextLimit, 1_000_000) / 60_000;
+  const output = Math.min(model.outputLimit, 300_000) / 40_000;
+  const deep = tokenScore(
+    lowered,
+    /(opus|pro|thinking|reason|r1|gpt-5|k2\.5)/i,
+    1,
+  );
+  const fast = tokenScore(
+    lowered,
+    /(nano|flash|mini|lite|fast|turbo|haiku|small)/i,
+    1,
+  );
+  const code = tokenScore(lowered, /(codex|coder|code|dev|program)/i, 1);
+
+  if (
+    (agent === 'orchestrator' ||
+      agent === 'explorer' ||
+      agent === 'librarian' ||
+      agent === 'fixer') &&
+    !model.toolcall
+  ) {
+    return -10_000;
+  }
+
+  if (model.status === 'deprecated') {
+    return -5_000;
+  }
+
+  const score = baseScore(model, versionRecencyBoost);
+  const flash = hasFlashToken(model);
+  const isZai47 = isZai47Model(model);
+  const zai47Flash = isZai47 && flash;
+  const zai47NonFlash = isZai47 && !flash;
+  const providerBias =
+    model.providerID === 'openai'
+      ? 3
+      : model.providerID === 'anthropic'
+        ? 3
+        : model.providerID === 'kimi-for-coding'
+          ? 2
+          : model.providerID === 'google'
+            ? 2
+            : model.providerID === 'github-copilot'
+              ? 1
+              : model.providerID === 'zai-coding-plan'
+                ? 0
+                : model.providerID === 'chutes'
+                  ? 2
+                  : model.providerID === 'opencode'
+                    ? -2
+                    : 0;
+  const geminiAdjustment = geminiPreferenceAdjustment(agent, model);
+
+  if (agent === 'orchestrator') {
+    const flashAdjustment = flash ? -22 : 0;
+    const zaiAdjustment = zai47NonFlash ? 16 : zai47Flash ? -18 : 0;
+    const nonReasoningFlashPenalty = flash && !model.reasoning ? -16 : 0;
+    return (
+      score +
+      reasoning * 40 +
+      toolcall * 25 +
+      deep * 10 +
+      code * 8 +
+      context +
+      flashAdjustment +
+      zaiAdjustment +
+      nonReasoningFlashPenalty +
+      geminiAdjustment +
+      providerBias
+    );
+  }
+  if (agent === 'oracle') {
+    const flashAdjustment = flash ? -34 : 0;
+    const zaiAdjustment = zai47NonFlash ? 16 : zai47Flash ? -18 : 0;
+    const nonReasoningFlashPenalty = flash && !model.reasoning ? -16 : 0;
+    return (
+      score +
+      reasoning * 55 +
+      deep * 18 +
+      context * 1.2 +
+      toolcall * 10 +
+      flashAdjustment +
+      zaiAdjustment +
+      nonReasoningFlashPenalty +
+      geminiAdjustment +
+      providerBias
+    );
+  }
+  if (agent === 'designer') {
+    const flashAdjustment = flash ? -8 : 0;
+    const zaiAdjustment = zai47NonFlash ? 10 : zai47Flash ? -8 : 0;
+    return (
+      score +
+      attachment * 25 +
+      reasoning * 18 +
+      toolcall * 15 +
+      context * 0.8 +
+      output +
+      flashAdjustment +
+      zaiAdjustment +
+      geminiAdjustment +
+      providerBias
+    );
+  }
+  if (agent === 'explorer') {
+    const flashAdjustment = flash ? 26 : -10;
+    const zaiAdjustment = zai47NonFlash ? 2 : zai47Flash ? 6 : 0;
+    const deepPenalty = deep * -18;
+    return (
+      score +
+      fast * 68 +
+      toolcall * 28 +
+      reasoning * 2 +
+      context * 0.2 +
+      flashAdjustment +
+      zaiAdjustment +
+      deepPenalty +
+      geminiAdjustment +
+      providerBias
+    );
+  }
+  if (agent === 'librarian') {
+    const flashAdjustment = flash ? -12 : 0;
+    const zaiAdjustment = zai47NonFlash ? 16 : zai47Flash ? -18 : 0;
+    return (
+      score +
+      context * 30 +
+      toolcall * 22 +
+      reasoning * 15 +
+      output * 10 +
+      flashAdjustment +
+      zaiAdjustment +
+      geminiAdjustment +
+      providerBias
+    );
+  }
+
+  const flashAdjustment = flash ? -18 : 0;
+  const zaiAdjustment = zai47NonFlash ? 16 : zai47Flash ? -18 : 0;
+  const nonReasoningFlashPenalty = flash && !model.reasoning ? -16 : 0;
+  return (
+    score +
+    code * 28 +
+    toolcall * 24 +
+    fast * 18 +
+    reasoning * 14 +
+    output * 8 +
+    flashAdjustment +
+    zaiAdjustment +
+    nonReasoningFlashPenalty +
+    geminiAdjustment +
+    providerBias
+  );
+}
+
 function getExternalSignalBoost(
   agent: AgentName,
   model: DiscoveredModel,
@@ -143,45 +458,44 @@ function getExternalSignalBoost(
 
   if (!signal) return 0;
 
-  const quality = clamp01((signal.qualityScore ?? 0) / 100);
-  const coding = clamp01((signal.codingScore ?? 0) / 100);
-  const latency = clamp01((signal.latencySeconds ?? 0) / 20);
+  const qualityScore = signal.qualityScore ?? 0;
+  const codingScore = signal.codingScore ?? 0;
+  const latencySeconds = signal.latencySeconds;
 
   const blendedPrice =
     signal.inputPricePer1M !== undefined &&
     signal.outputPricePer1M !== undefined
       ? signal.inputPricePer1M * 0.75 + signal.outputPricePer1M * 0.25
       : (signal.inputPricePer1M ?? signal.outputPricePer1M ?? 0);
-  const price = clamp01(blendedPrice / 30);
-
   if (agent === 'explorer') {
-    return quality * 10 + coding * 8 - latency * 18 - price * 12;
+    const qualityBoost = qualityScore * 0.05;
+    const codingBoost = codingScore * 0.08;
+    const latencyPenalty =
+      typeof latencySeconds === 'number' && Number.isFinite(latencySeconds)
+        ? Math.min(latencySeconds, 12) * 3.2 +
+          (latencySeconds > 7 ? 16 : latencySeconds > 4 ? 10 : 0)
+        : 0;
+    const pricePenalty = Math.min(blendedPrice, 30) * 0.03;
+    const qualityFloorPenalty =
+      qualityScore > 0 && qualityScore < 35 ? (35 - qualityScore) * 0.8 : 0;
+    const boost =
+      qualityBoost +
+      codingBoost -
+      latencyPenalty -
+      pricePenalty -
+      qualityFloorPenalty;
+    return Math.max(-90, Math.min(25, boost));
   }
 
-  if (agent === 'designer') {
-    return quality * 10 + coding * 6 - latency * 8 - price * 8;
-  }
-
-  if (agent === 'librarian') {
-    return quality * 12 + coding * 8 - latency * 6 - price * 8;
-  }
-
-  if (agent === 'fixer') {
-    return quality * 10 + coding * 14 - latency * 8 - price * 8;
-  }
-
-  return quality * 14 + coding * 12 - latency * 8 - price * 10;
-}
-
-function combinedScore(
-  agent: AgentName,
-  model: DiscoveredModel,
-  externalSignals?: ExternalSignalMap,
-): number {
-  return (
-    capabilityScore(agent, model) +
-    getExternalSignalBoost(agent, model, externalSignals)
-  );
+  const qualityBoost = qualityScore * 0.16;
+  const codingBoost = codingScore * 0.24;
+  const latencyPenalty =
+    typeof latencySeconds === 'number' && Number.isFinite(latencySeconds)
+      ? Math.min(latencySeconds, 25) * 0.22
+      : 0;
+  const pricePenalty = Math.min(blendedPrice, 30) * 0.08;
+  const boost = qualityBoost + codingBoost - latencyPenalty - pricePenalty;
+  return Math.max(-30, Math.min(45, boost));
 }
 
 function rankModels(
@@ -189,11 +503,17 @@ function rankModels(
   agent: AgentName,
   externalSignals?: ExternalSignalMap,
 ): DiscoveredModel[] {
+  const versionRecencyMap = getVersionRecencyMap(models);
+
   return [...models].sort((a, b) => {
-    const delta =
-      combinedScore(agent, b, externalSignals) -
-      combinedScore(agent, a, externalSignals);
-    if (delta !== 0) return delta;
+    const scoreA =
+      roleScore(agent, a, versionRecencyMap[a.model] ?? 0) +
+      getExternalSignalBoost(agent, a, externalSignals);
+    const scoreB =
+      roleScore(agent, b, versionRecencyMap[b.model] ?? 0) +
+      getExternalSignalBoost(agent, b, externalSignals);
+    const scoreDelta = scoreB - scoreA;
+    if (scoreDelta !== 0) return scoreDelta;
 
     const providerTieBreak = a.providerID.localeCompare(b.providerID);
     if (providerTieBreak !== 0) return providerTieBreak;
@@ -202,16 +522,210 @@ function rankModels(
   });
 }
 
+function combinedScore(
+  agent: AgentName,
+  model: DiscoveredModel,
+  externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
+): number {
+  return (
+    roleScore(agent, model, versionRecencyMap?.[model.model] ?? 0) +
+    getExternalSignalBoost(agent, model, externalSignals)
+  );
+}
+
+function chooseProviderRepresentative(
+  providerModels: DiscoveredModel[],
+  agent: AgentName,
+  externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
+): DiscoveredModel | null {
+  if (providerModels.length === 0) return null;
+
+  const flashBest = providerModels.find((model) => hasFlashToken(model));
+  const nonFlashBest = providerModels.find((model) => !hasFlashToken(model));
+
+  if (!nonFlashBest) return providerModels[0] ?? null;
+  if (!flashBest) return nonFlashBest;
+
+  const flashScore = combinedScore(
+    agent,
+    flashBest,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const nonFlashScore = combinedScore(
+    agent,
+    nonFlashBest,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const threshold = agent === 'explorer' ? -6 : 12;
+  return flashScore >= nonFlashScore + threshold ? flashBest : nonFlashBest;
+}
+
+function getQualityWindow(agent: AgentName): number {
+  if (agent === 'oracle' || agent === 'orchestrator') return 12;
+  if (agent === 'fixer') return 15;
+  if (agent === 'designer') return 16;
+  if (agent === 'librarian') return 18;
+  return 22;
+}
+
+function getProviderBundle(
+  providerModels: DiscoveredModel[],
+  agent: AgentName,
+  externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
+): string[] {
+  if (providerModels.length === 0) return [];
+
+  const representative = chooseProviderRepresentative(
+    providerModels,
+    agent,
+    externalSignals,
+    versionRecencyMap,
+  );
+  if (!representative) return [];
+
+  const second = providerModels.find((m) => m.model !== representative.model);
+  if (!second) return [representative.model];
+
+  const score1 = combinedScore(
+    agent,
+    representative,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const score2 = combinedScore(
+    agent,
+    second,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const gap = Math.abs(score1 - score2);
+  const includeSecond =
+    representative.providerID === 'chutes' ||
+    gap <=
+      (agent === 'oracle' || agent === 'orchestrator'
+        ? 8
+        : agent === 'designer' || agent === 'librarian'
+          ? 12
+          : agent === 'fixer'
+            ? 15
+            : 18);
+
+  return includeSecond
+    ? [representative.model, second.model]
+    : [representative.model];
+}
+
+function selectPrimaryWithDiversity(
+  candidates: DiscoveredModel[],
+  agent: AgentName,
+  providerUsage: Map<string, number>,
+  targetByProvider: Record<string, number>,
+  remainingSlots: number,
+  externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
+): DiscoveredModel | null {
+  if (candidates.length === 0) return null;
+
+  const candidateScores = candidates.map((model) => {
+    const usage = providerUsage.get(model.providerID) ?? 0;
+    const target = targetByProvider[model.providerID] ?? 1;
+    const softCap = target;
+    const hardCap = Math.min(target + 1, 4);
+    const deficit = Math.max(0, target - usage);
+    const softOverflow = Math.max(0, usage + 1 - softCap);
+    const hardOverflow = Math.max(0, usage + 1 - hardCap);
+    const rawScore = combinedScore(
+      agent,
+      model,
+      externalSignals,
+      versionRecencyMap,
+    );
+    const adjustedScore =
+      rawScore + deficit * 14 - softOverflow * 18 - hardOverflow * 100;
+
+    return {
+      model,
+      usage,
+      target,
+      rawScore,
+      adjustedScore: Math.round(adjustedScore * 1000) / 1000,
+    };
+  });
+
+  const bestRaw = Math.max(...candidateScores.map((item) => item.rawScore));
+  const window = getQualityWindow(agent);
+  let eligible = candidateScores.filter(
+    (item) => item.rawScore >= bestRaw - window,
+  );
+
+  const mustFillProviders = Object.entries(targetByProvider)
+    .filter(([providerID, target]) => {
+      const usage = providerUsage.get(providerID) ?? 0;
+      return Math.max(0, target - usage) >= remainingSlots;
+    })
+    .map(([providerID]) => providerID);
+
+  if (mustFillProviders.length > 0) {
+    const forced = eligible.filter((item) =>
+      mustFillProviders.includes(item.model.providerID),
+    );
+    if (forced.length > 0) eligible = forced;
+  }
+
+  eligible.sort((a, b) => {
+    const delta = b.adjustedScore - a.adjustedScore;
+    if (delta !== 0) return delta;
+
+    const ratioA = a.target > 0 ? a.usage / a.target : a.usage;
+    const ratioB = b.target > 0 ? b.usage / b.target : b.usage;
+    if (ratioA !== ratioB) return ratioA - ratioB;
+
+    if (a.rawScore !== b.rawScore) return b.rawScore - a.rawScore;
+
+    const providerTie = a.model.providerID.localeCompare(b.model.providerID);
+    if (providerTie !== 0) return providerTie;
+    return a.model.model.localeCompare(b.model.model);
+  });
+
+  let chosen = eligible[0] ?? candidateScores[0];
+  if (!chosen) return null;
+
+  if (chosen.usage >= 2) {
+    const bestUnused = candidateScores.find((item) => item.usage === 0);
+    if (bestUnused && bestUnused.adjustedScore >= chosen.adjustedScore - 9) {
+      chosen = bestUnused;
+    }
+  }
+
+  if (
+    agent !== 'explorer' &&
+    isZai47Model(chosen.model) &&
+    hasFlashToken(chosen.model)
+  ) {
+    const kimiCandidate = candidateScores.find((item) =>
+      isKimiK25Model(item.model),
+    );
+    if (kimiCandidate && kimiCandidate.rawScore >= chosen.rawScore - 2) {
+      chosen = kimiCandidate;
+    }
+  }
+
+  return chosen.model;
+}
+
 function dedupe(models: Array<string | undefined>): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
-
   for (const model of models) {
     if (!model || seen.has(model)) continue;
     seen.add(model);
     result.push(model);
   }
-
   return result;
 }
 
@@ -254,21 +768,81 @@ export function buildDynamicModelPlan(
   ].reduce((acc, modelID) => ensureSyntheticModel(acc, modelID), catalog);
 
   const enabledProviders = new Set(getEnabledProviders(config));
-  const providerCandidates = catalogWithSelectedModels.filter((model) =>
-    enabledProviders.has(model.providerID),
+  const providerCandidates = catalogWithSelectedModels.filter((m) =>
+    enabledProviders.has(m.providerID),
   );
+  const versionRecencyMap = getVersionRecencyMap(providerCandidates);
 
   if (providerCandidates.length === 0) {
     return null;
   }
 
+  const hasPaidProviderEnabled =
+    config.hasOpenAI ||
+    config.hasAnthropic ||
+    config.hasCopilot ||
+    config.hasZaiPlan ||
+    config.hasKimi ||
+    config.hasAntigravity;
+
+  const paidProviders = dedupe(
+    providerCandidates
+      .map((model) => model.providerID)
+      .filter((providerID) => providerID !== 'opencode'),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const targetByProvider: Record<string, number> = {};
+  if (paidProviders.length > 0) {
+    const baseTarget = Math.floor(AGENTS.length / paidProviders.length);
+    const extra = AGENTS.length % paidProviders.length;
+    for (const [index, providerID] of paidProviders.entries()) {
+      targetByProvider[providerID] = baseTarget + (index < extra ? 1 : 0);
+    }
+  }
+  const providerUsage = new Map<string, number>();
+
   const agents: Record<string, { model: string; variant?: string }> = {};
   const chains: Record<string, string[]> = {};
 
-  for (const agent of AGENTS) {
+  for (const [agentIndex, agent] of PRIMARY_ASSIGNMENT_ORDER.entries()) {
     const ranked = rankModels(providerCandidates, agent, externalSignals);
-    const primary = ranked[0];
+    const primaryPool = hasPaidProviderEnabled
+      ? ranked.filter((model) => !FREE_BIASED_PROVIDERS.has(model.providerID))
+      : ranked;
+    const remainingSlots = PRIMARY_ASSIGNMENT_ORDER.length - agentIndex;
+    const primary =
+      selectPrimaryWithDiversity(
+        primaryPool.length > 0 ? primaryPool : ranked,
+        agent,
+        providerUsage,
+        targetByProvider,
+        remainingSlots,
+        externalSignals,
+        versionRecencyMap,
+      ) ?? ranked[0];
     if (!primary) continue;
+
+    providerUsage.set(
+      primary.providerID,
+      (providerUsage.get(primary.providerID) ?? 0) + 1,
+    );
+
+    const providerOrder = dedupe(ranked.map((m) => m.providerID));
+    const perProviderBest = providerOrder.flatMap((providerID) => {
+      const providerModels = ranked.filter((m) => m.providerID === providerID);
+      return getProviderBundle(
+        providerModels,
+        agent,
+        externalSignals,
+        versionRecencyMap,
+      );
+    });
+    const nonFreePerProviderBest = perProviderBest.filter(
+      (model) => !model.startsWith('opencode/'),
+    );
+    const freePerProviderBest = perProviderBest.filter((model) =>
+      model.startsWith('opencode/'),
+    );
 
     const selectedOpencode =
       agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
@@ -284,9 +858,10 @@ export function buildDynamicModelPlan(
 
     const chain = dedupe([
       primary.model,
-      ...ranked.slice(0, 7).map((model) => model.model),
+      ...nonFreePerProviderBest,
       selectedChutes,
       selectedOpencode,
+      ...freePerProviderBest,
       'opencode/big-pickle',
     ]).slice(0, 10);
 
@@ -295,6 +870,70 @@ export function buildDynamicModelPlan(
       variant: ROLE_VARIANT[agent],
     };
     chains[agent] = chain;
+  }
+
+  if (hasPaidProviderEnabled) {
+    for (const providerID of paidProviders) {
+      if ((providerUsage.get(providerID) ?? 0) > 0) continue;
+
+      let bestSwap:
+        | {
+            agent: AgentName;
+            candidateModel: string;
+            loss: number;
+          }
+        | undefined;
+
+      for (const agent of PRIMARY_ASSIGNMENT_ORDER) {
+        const currentModel = agents[agent]?.model;
+        if (!currentModel) continue;
+
+        const ranked = rankModels(providerCandidates, agent, externalSignals);
+        const candidate = ranked.find(
+          (model) => model.providerID === providerID,
+        );
+        const current = ranked.find((model) => model.model === currentModel);
+        if (!candidate || !current) continue;
+
+        const currentScore = combinedScore(
+          agent,
+          current,
+          externalSignals,
+          versionRecencyMap,
+        );
+        const candidateScore = combinedScore(
+          agent,
+          candidate,
+          externalSignals,
+          versionRecencyMap,
+        );
+        const loss = currentScore - candidateScore;
+
+        if (!bestSwap || loss < bestSwap.loss) {
+          bestSwap = {
+            agent,
+            candidateModel: candidate.model,
+            loss,
+          };
+        }
+      }
+
+      if (!bestSwap) continue;
+
+      const existingProvider =
+        agents[bestSwap.agent]?.model.split('/')[0] ?? providerID;
+      agents[bestSwap.agent].model = bestSwap.candidateModel;
+      chains[bestSwap.agent] = dedupe([
+        bestSwap.candidateModel,
+        ...(chains[bestSwap.agent] ?? []),
+      ]).slice(0, 10);
+
+      providerUsage.set(providerID, (providerUsage.get(providerID) ?? 0) + 1);
+      providerUsage.set(
+        existingProvider,
+        Math.max(0, (providerUsage.get(existingProvider) ?? 1) - 1),
+      );
+    }
   }
 
   if (Object.keys(agents).length === 0) {
