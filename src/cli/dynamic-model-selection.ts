@@ -564,11 +564,68 @@ function chooseProviderRepresentative(
   return flashScore >= nonFlashScore + threshold ? flashBest : nonFlashBest;
 }
 
+function getQualityWindow(agent: AgentName): number {
+  if (agent === 'oracle' || agent === 'orchestrator') return 12;
+  if (agent === 'fixer') return 15;
+  if (agent === 'designer') return 16;
+  if (agent === 'librarian') return 18;
+  return 22;
+}
+
+function getProviderBundle(
+  providerModels: DiscoveredModel[],
+  agent: AgentName,
+  externalSignals?: ExternalSignalMap,
+  versionRecencyMap?: Record<string, number>,
+): string[] {
+  if (providerModels.length === 0) return [];
+
+  const representative = chooseProviderRepresentative(
+    providerModels,
+    agent,
+    externalSignals,
+    versionRecencyMap,
+  );
+  if (!representative) return [];
+
+  const second = providerModels.find((m) => m.model !== representative.model);
+  if (!second) return [representative.model];
+
+  const score1 = combinedScore(
+    agent,
+    representative,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const score2 = combinedScore(
+    agent,
+    second,
+    externalSignals,
+    versionRecencyMap,
+  );
+  const gap = Math.abs(score1 - score2);
+  const includeSecond =
+    representative.providerID === 'chutes' ||
+    gap <=
+      (agent === 'oracle' || agent === 'orchestrator'
+        ? 8
+        : agent === 'designer' || agent === 'librarian'
+          ? 12
+          : agent === 'fixer'
+            ? 15
+            : 18);
+
+  return includeSecond
+    ? [representative.model, second.model]
+    : [representative.model];
+}
+
 function selectPrimaryWithDiversity(
   candidates: DiscoveredModel[],
   agent: AgentName,
   providerUsage: Map<string, number>,
-  maxShare: number,
+  targetByProvider: Record<string, number>,
+  remainingSlots: number,
   externalSignals?: ExternalSignalMap,
   versionRecencyMap?: Record<string, number>,
 ): DiscoveredModel | null {
@@ -576,10 +633,12 @@ function selectPrimaryWithDiversity(
 
   const candidateScores = candidates.map((model) => {
     const usage = providerUsage.get(model.providerID) ?? 0;
-    const diversityPenalty =
-      usage === 0 ? 0 : usage === 1 ? 12 : usage === 2 ? 26 : 42;
-    const unusedBonus = usage === 0 ? 8 : 0;
-    const overCapPenalty = usage >= maxShare ? 25 : 0;
+    const target = targetByProvider[model.providerID] ?? 1;
+    const softCap = target;
+    const hardCap = Math.min(target + 1, 4);
+    const deficit = Math.max(0, target - usage);
+    const softOverflow = Math.max(0, usage + 1 - softCap);
+    const hardOverflow = Math.max(0, usage + 1 - hardCap);
     const rawScore = combinedScore(
       agent,
       model,
@@ -587,25 +646,53 @@ function selectPrimaryWithDiversity(
       versionRecencyMap,
     );
     const adjustedScore =
-      rawScore - diversityPenalty + unusedBonus - overCapPenalty;
+      rawScore + deficit * 14 - softOverflow * 18 - hardOverflow * 100;
 
     return {
       model,
       usage,
+      target,
       rawScore,
       adjustedScore: Math.round(adjustedScore * 1000) / 1000,
     };
   });
 
-  candidateScores.sort((a, b) => {
+  const bestRaw = Math.max(...candidateScores.map((item) => item.rawScore));
+  const window = getQualityWindow(agent);
+  let eligible = candidateScores.filter(
+    (item) => item.rawScore >= bestRaw - window,
+  );
+
+  const mustFillProviders = Object.entries(targetByProvider)
+    .filter(([providerID, target]) => {
+      const usage = providerUsage.get(providerID) ?? 0;
+      return Math.max(0, target - usage) >= remainingSlots;
+    })
+    .map(([providerID]) => providerID);
+
+  if (mustFillProviders.length > 0) {
+    const forced = eligible.filter((item) =>
+      mustFillProviders.includes(item.model.providerID),
+    );
+    if (forced.length > 0) eligible = forced;
+  }
+
+  eligible.sort((a, b) => {
     const delta = b.adjustedScore - a.adjustedScore;
     if (delta !== 0) return delta;
+
+    const ratioA = a.target > 0 ? a.usage / a.target : a.usage;
+    const ratioB = b.target > 0 ? b.usage / b.target : b.usage;
+    if (ratioA !== ratioB) return ratioA - ratioB;
+
+    if (a.rawScore !== b.rawScore) return b.rawScore - a.rawScore;
+
     const providerTie = a.model.providerID.localeCompare(b.model.providerID);
     if (providerTie !== 0) return providerTie;
     return a.model.model.localeCompare(b.model.model);
   });
 
-  let chosen = candidateScores[0];
+  let chosen = eligible[0] ?? candidateScores[0];
   if (!chosen) return null;
 
   if (chosen.usage >= 2) {
@@ -698,34 +785,38 @@ export function buildDynamicModelPlan(
     config.hasKimi ||
     config.hasAntigravity;
 
-  const enabledPaidProviderCount = [
-    config.hasOpenAI,
-    config.hasAnthropic,
-    config.hasCopilot,
-    config.hasZaiPlan,
-    config.hasKimi,
-    config.hasAntigravity,
-  ].filter(Boolean).length;
-  const maxShare =
-    enabledPaidProviderCount > 0
-      ? Math.ceil(AGENTS.length / enabledPaidProviderCount) + 1
-      : AGENTS.length;
+  const paidProviders = dedupe(
+    providerCandidates
+      .map((model) => model.providerID)
+      .filter((providerID) => providerID !== 'opencode'),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const targetByProvider: Record<string, number> = {};
+  if (paidProviders.length > 0) {
+    const baseTarget = Math.floor(AGENTS.length / paidProviders.length);
+    const extra = AGENTS.length % paidProviders.length;
+    for (const [index, providerID] of paidProviders.entries()) {
+      targetByProvider[providerID] = baseTarget + (index < extra ? 1 : 0);
+    }
+  }
   const providerUsage = new Map<string, number>();
 
   const agents: Record<string, { model: string; variant?: string }> = {};
   const chains: Record<string, string[]> = {};
 
-  for (const agent of PRIMARY_ASSIGNMENT_ORDER) {
+  for (const [agentIndex, agent] of PRIMARY_ASSIGNMENT_ORDER.entries()) {
     const ranked = rankModels(providerCandidates, agent, externalSignals);
     const primaryPool = hasPaidProviderEnabled
       ? ranked.filter((model) => !FREE_BIASED_PROVIDERS.has(model.providerID))
       : ranked;
+    const remainingSlots = PRIMARY_ASSIGNMENT_ORDER.length - agentIndex;
     const primary =
       selectPrimaryWithDiversity(
         primaryPool.length > 0 ? primaryPool : ranked,
         agent,
         providerUsage,
-        maxShare,
+        targetByProvider,
+        remainingSlots,
         externalSignals,
         versionRecencyMap,
       ) ?? ranked[0];
@@ -737,19 +828,15 @@ export function buildDynamicModelPlan(
     );
 
     const providerOrder = dedupe(ranked.map((m) => m.providerID));
-    const perProviderBest = providerOrder
-      .map((providerID) => {
-        const providerModels = ranked.filter(
-          (m) => m.providerID === providerID,
-        );
-        return chooseProviderRepresentative(
-          providerModels,
-          agent,
-          externalSignals,
-          versionRecencyMap,
-        )?.model;
-      })
-      .filter((m): m is string => Boolean(m));
+    const perProviderBest = providerOrder.flatMap((providerID) => {
+      const providerModels = ranked.filter((m) => m.providerID === providerID);
+      return getProviderBundle(
+        providerModels,
+        agent,
+        externalSignals,
+        versionRecencyMap,
+      );
+    });
     const nonFreePerProviderBest = perProviderBest.filter(
       (model) => !model.startsWith('opencode/'),
     );
@@ -776,7 +863,7 @@ export function buildDynamicModelPlan(
       selectedOpencode,
       ...freePerProviderBest,
       'opencode/big-pickle',
-    ]).slice(0, 7);
+    ]).slice(0, 10);
 
     agents[agent] = {
       model: chain[0] ?? primary.model,
@@ -786,12 +873,6 @@ export function buildDynamicModelPlan(
   }
 
   if (hasPaidProviderEnabled) {
-    const paidProviders = dedupe(
-      providerCandidates
-        .map((model) => model.providerID)
-        .filter((providerID) => providerID !== 'opencode'),
-    );
-
     for (const providerID of paidProviders) {
       if ((providerUsage.get(providerID) ?? 0) > 0) continue;
 
@@ -845,7 +926,7 @@ export function buildDynamicModelPlan(
       chains[bestSwap.agent] = dedupe([
         bestSwap.candidateModel,
         ...(chains[bestSwap.agent] ?? []),
-      ]).slice(0, 7);
+      ]).slice(0, 10);
 
       providerUsage.set(providerID, (providerUsage.get(providerID) ?? 0) + 1);
       providerUsage.set(
