@@ -87,18 +87,7 @@ function parseOpenRouterPrice(value: string | undefined): number | undefined {
   return parsed * 1_000_000;
 }
 
-function getEnv(name: string): string | undefined {
-  const bunValue = (globalThis as { Bun?: { env?: Record<string, string> } })
-    .Bun?.env?.[name];
-  if (typeof bunValue === 'string' && bunValue.length > 0) return bunValue;
-
-  const processValue = (
-    globalThis as { process?: { env?: Record<string, string | undefined> } }
-  ).process?.env?.[name];
-  return typeof processValue === 'string' && processValue.length > 0
-    ? processValue
-    : undefined;
-}
+import { getEnv } from '../utils';
 
 async function fetchArtificialAnalysisSignals(
   apiKey: string,
@@ -113,7 +102,7 @@ async function fetchArtificialAnalysisSignals(
   );
 
   if (!response.ok) {
-    throw new Error(`Artificial Analysis request failed (${response.status})`);
+    throw new Error(`Artificial Analysis request failed (${response.status} ${response.statusText})`);
   }
 
   const parsed = (await response.json()) as ArtificialAnalysisResponse;
@@ -171,7 +160,7 @@ async function fetchOpenRouterSignals(
   });
 
   if (!response.ok) {
-    throw new Error(`OpenRouter request failed (${response.status})`);
+    throw new Error(`OpenRouter request failed (${response.status} ${response.statusText})`);
   }
 
   const parsed = (await response.json()) as OpenRouterModelsResponse;
@@ -188,6 +177,8 @@ async function fetchOpenRouterSignals(
 
     for (const alias of baseAliases(key)) {
       map[alias] = mergeSignal(map[alias], signal);
+      
+      // Only add Chutes alias if it doesn't already exist
       const chutesAlias = `chutes/${alias}`;
       map[chutesAlias] = mergeSignal(map[chutesAlias], signal);
     }
@@ -221,10 +212,6 @@ export async function fetchExternalModelSignals(options?: {
         `Artificial Analysis unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-  } else {
-    warnings.push(
-      'ARTIFICIAL_ANALYSIS_API_KEY not set; skipping Artificial Analysis.',
-    );
   }
 
   if (orKey) {
@@ -238,10 +225,6 @@ export async function fetchExternalModelSignals(options?: {
         `OpenRouter unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-  } else {
-    warnings.push(
-      'OPENROUTER_API_KEY not set; skipping OpenRouter model pricing.',
-    );
   }
 
   return { signals: aggregate, warnings };
