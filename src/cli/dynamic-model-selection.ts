@@ -19,6 +19,13 @@ const AGENTS = [
 
 type AgentName = (typeof AGENTS)[number];
 
+export type V1RankedScore = {
+  model: string;
+  totalScore: number;
+  baseScore: number;
+  externalSignalBoost: number;
+};
+
 const FREE_BIASED_PROVIDERS = new Set(['opencode']);
 const PRIMARY_ASSIGNMENT_ORDER: AgentName[] = [
   'oracle',
@@ -525,6 +532,29 @@ function rankModels(
   });
 }
 
+export function rankModelsV1WithBreakdown(
+  models: DiscoveredModel[],
+  agent: AgentName,
+  externalSignals?: ExternalSignalMap,
+): V1RankedScore[] {
+  const versionRecencyMap = getVersionRecencyMap(models);
+  return [...models]
+    .map((model) => {
+      const base = roleScore(agent, model, versionRecencyMap[model.model] ?? 0);
+      const boost = getExternalSignalBoost(agent, model, externalSignals);
+      return {
+        model: model.model,
+        baseScore: Math.round(base * 1000) / 1000,
+        externalSignalBoost: Math.round(boost * 1000) / 1000,
+        totalScore: Math.round((base + boost) * 1000) / 1000,
+      };
+    })
+    .sort((a, b) => {
+      if (a.totalScore !== b.totalScore) return b.totalScore - a.totalScore;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 function combinedScore(
   agent: AgentName,
   model: DiscoveredModel,
@@ -1001,6 +1031,10 @@ export function buildDynamicModelPlan(
         bestSwap.candidateModel,
         ...(chains[bestSwap.agent] ?? []),
       ]).slice(0, 10);
+      provenance[bestSwap.agent] = {
+        winnerLayer: 'provider-fallback-policy',
+        winnerModel: bestSwap.candidateModel,
+      };
 
       providerUsage.set(providerID, (providerUsage.get(providerID) ?? 0) + 1);
       providerUsage.set(

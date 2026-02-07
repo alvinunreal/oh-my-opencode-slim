@@ -11,6 +11,7 @@ import {
   diffManualPlans,
   precedenceWarning,
   resolveTargetPath,
+  scoreManualPlan,
 } from './omos-preferences';
 
 describe('omos-preferences helpers', () => {
@@ -170,5 +171,53 @@ describe('omos-preferences helpers', () => {
       process.env = originalEnv;
       rmSync(temp, { recursive: true, force: true });
     }
+  });
+
+  test('scores manual plan candidates for v2', () => {
+    const plan = {
+      orchestrator: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      oracle: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      designer: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      explorer: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      librarian: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+      fixer: {
+        primary: 'openai/gpt-5.3-codex',
+        fallback1: 'anthropic/claude-opus-4-6',
+        fallback2: 'chutes/kimi-k2.5',
+        fallback3: 'opencode/gpt-5-nano',
+      },
+    };
+
+    const scores = scoreManualPlan(plan, 'v2');
+    expect(scores.oracle.length).toBe(4);
+    expect(scores.oracle[0]?.totalScore).toBeGreaterThanOrEqual(
+      scores.oracle[1]?.totalScore ?? 0,
+    );
+    expect(scores.oracle[0]?.breakdown).toBeDefined();
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type PluginInput,
@@ -6,8 +6,11 @@ import {
   tool,
 } from '@opencode-ai/plugin';
 import { parseConfig, writeConfig } from '../cli/config-io';
+import { rankModelsV1WithBreakdown } from '../cli/dynamic-model-selection';
 import { getConfigDir } from '../cli/paths';
 import { resolveAgentWithPrecedence } from '../cli/precedence-resolver';
+import { rankModelsV2 } from '../cli/scoring-v2';
+import type { DiscoveredModel, ScoringEngineVersion } from '../cli/types';
 import {
   type AgentOverrideConfig,
   loadPluginConfig,
@@ -42,6 +45,14 @@ type DiffSummary = {
   unchangedAgents: string[];
   details: Record<string, { before: string[]; after: string[] }>;
 };
+
+type ScoreRow = {
+  model: string;
+  totalScore: number;
+  breakdown?: Record<string, number>;
+};
+
+type ScoreSummary = Record<AgentName, ScoreRow[]>;
 
 const DEFAULT_CHAIN_FILL = [
   'opencode/gpt-5-nano',
@@ -107,6 +118,15 @@ function readConfigAtPath(path: string): PluginConfig {
   return (parsed.config ?? {}) as PluginConfig;
 }
 
+function ensureParentDir(path: string): void {
+  const parts = path.split('/');
+  if (parts.length <= 1) return;
+  const parent = parts.slice(0, -1).join('/');
+  if (parent && !existsSync(parent)) {
+    mkdirSync(parent, { recursive: true });
+  }
+}
+
 function getActivePresetAgents(config: PluginConfig): Record<string, unknown> {
   const presetName = config.preset;
   if (presetName && config.presets?.[presetName]) {
@@ -154,6 +174,85 @@ export function deriveManualPlanFromConfig(config: PluginConfig): ManualPlan {
   });
 
   return Object.fromEntries(entries) as ManualPlan;
+}
+
+function toSyntheticModel(model: string): DiscoveredModel | null {
+  const [providerID, modelID] = model.split('/');
+  if (!providerID || !modelID) return null;
+
+  return {
+    providerID,
+    model,
+    name: modelID,
+    status: 'active',
+    contextLimit: 200000,
+    outputLimit: 32000,
+    reasoning: true,
+    toolcall: true,
+    attachment: false,
+  };
+}
+
+function extractCandidateModels(plan: ManualPlan, agent: AgentName): string[] {
+  const p = plan[agent];
+  return [p.primary, p.fallback1, p.fallback2, p.fallback3];
+}
+
+export function scoreManualPlan(
+  plan: ManualPlan,
+  engine: ScoringEngineVersion,
+): ScoreSummary {
+  const summary = {} as ScoreSummary;
+
+  for (const agent of AGENT_NAMES) {
+    const syntheticCatalog = dedupe(extractCandidateModels(plan, agent))
+      .map(toSyntheticModel)
+      .filter((m): m is DiscoveredModel => m !== null);
+
+    if (engine === 'v2') {
+      summary[agent] = rankModelsV2(syntheticCatalog, agent).map((entry) => ({
+        model: entry.model.model,
+        totalScore: entry.totalScore,
+        breakdown: {
+          ...entry.scoreBreakdown.weighted,
+        },
+      }));
+      continue;
+    }
+
+    const v1Rows = rankModelsV1WithBreakdown(syntheticCatalog, agent).map(
+      (entry) => ({
+        model: entry.model,
+        totalScore: entry.totalScore,
+        breakdown: {
+          baseScore: entry.baseScore,
+          externalSignalBoost: entry.externalSignalBoost,
+        },
+      }),
+    );
+
+    if (engine === 'v2-shadow') {
+      const v2Rows = rankModelsV2(syntheticCatalog, agent).map((entry) => ({
+        model: entry.model.model,
+        totalScore: entry.totalScore,
+      }));
+      summary[agent] = v1Rows.map((row) => {
+        const v2 = v2Rows.find((candidate) => candidate.model === row.model);
+        return {
+          ...row,
+          breakdown: {
+            ...(row.breakdown ?? {}),
+            shadowV2Score: v2?.totalScore ?? 0,
+          },
+        };
+      });
+      continue;
+    }
+
+    summary[agent] = v1Rows;
+  }
+
+  return summary;
 }
 
 function buildAgentConfig(
@@ -290,18 +389,20 @@ Operations:
 - plan: validate and preview diff (no write)
 - apply: validate and write with confirm=true
 - reset-agent: reset one agent chain on selected target
+- score-plan: score manual candidates per agent for v1/v2/v2-shadow
 
 Targets:
 - auto (default): project if present, otherwise global
 - project: .opencode config in current directory
 - global: ~/.config/opencode config`,
     args: {
-      operation: z.enum(['show', 'plan', 'apply', 'reset-agent']),
+      operation: z.enum(['show', 'plan', 'apply', 'reset-agent', 'score-plan']),
       plan: z.unknown().optional(),
       agent: z.string().optional(),
       confirm: z.boolean().optional(),
       target: z.enum(['auto', 'global', 'project']).optional(),
       expectedDiffHash: z.string().optional(),
+      engine: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
     },
     async execute(args) {
       const operation = args.operation;
@@ -321,6 +422,22 @@ Targets:
         });
       }
 
+      if (operation === 'score-plan') {
+        const parsed = ManualPlanSchema.safeParse(args.plan);
+        if (!parsed.success) {
+          return `Invalid plan:\n${stringify(parsed.error.format())}`;
+        }
+
+        const engine =
+          (args.engine as ScoringEngineVersion | undefined) ??
+          targetConfig.scoringEngineVersion ??
+          'v1';
+        return stringify({
+          engine,
+          scores: scoreManualPlan(parsed.data, engine),
+        });
+      }
+
       if (operation === 'plan') {
         const parsed = ManualPlanSchema.safeParse(args.plan);
         if (!parsed.success) {
@@ -328,7 +445,8 @@ Targets:
         }
 
         const nextPlan = parsed.data;
-        const diff = diffManualPlans(effectivePlan, nextPlan);
+        const targetPlan = deriveManualPlanFromConfig(targetConfig);
+        const diff = diffManualPlans(targetPlan, nextPlan);
         const diffHash = hashString(stringify(diff));
         const compiled = compileManualPlanToConfig(targetConfig, nextPlan);
 
@@ -365,13 +483,15 @@ Targets:
         }
 
         const nextPlan = parsed.data;
-        const diff = diffManualPlans(effectivePlan, nextPlan);
+        const targetPlan = deriveManualPlanFromConfig(targetConfig);
+        const diff = diffManualPlans(targetPlan, nextPlan);
         const actualDiffHash = hashString(stringify(diff));
         if (args.expectedDiffHash && args.expectedDiffHash !== actualDiffHash) {
           return `Diff hash mismatch. expected=${args.expectedDiffHash} actual=${actualDiffHash}. Run plan again before apply.`;
         }
 
         const nextConfig = compileManualPlanToConfig(targetConfig, nextPlan);
+        ensureParentDir(targetPath);
         writeConfig(targetPath, nextConfig as Record<string, unknown>);
 
         return stringify({
@@ -391,18 +511,25 @@ Targets:
       }
 
       const currentTargetPlan = deriveManualPlanFromConfig(targetConfig);
-      const defaultChain = dedupe([...DEFAULT_CHAIN_FILL]).slice(0, 4);
+      const baselinePlan = deriveManualPlanFromConfig(effectiveConfig);
+      const baselineChain = dedupe([
+        baselinePlan[agent]?.primary,
+        baselinePlan[agent]?.fallback1,
+        baselinePlan[agent]?.fallback2,
+        baselinePlan[agent]?.fallback3,
+      ]).slice(0, 4);
       currentTargetPlan[agent] = {
-        primary: defaultChain[0] ?? 'opencode/big-pickle',
-        fallback1: defaultChain[1] ?? 'opencode/gpt-5-nano',
-        fallback2: defaultChain[2] ?? 'opencode/glm-4.7-free',
-        fallback3: defaultChain[3] ?? 'opencode/sonic',
+        primary: baselineChain[0] ?? 'opencode/big-pickle',
+        fallback1: baselineChain[1] ?? 'opencode/gpt-5-nano',
+        fallback2: baselineChain[2] ?? 'opencode/glm-4.7-free',
+        fallback3: baselineChain[3] ?? 'opencode/sonic',
       };
 
       const nextConfig = compileManualPlanToConfig(
         targetConfig,
         currentTargetPlan,
       );
+      ensureParentDir(targetPath);
       writeConfig(targetPath, nextConfig as Record<string, unknown>);
 
       return stringify({
