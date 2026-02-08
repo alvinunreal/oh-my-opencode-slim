@@ -250,30 +250,13 @@ function isKimiK25Model(model: DiscoveredModel): boolean {
 }
 
 function geminiPreferenceAdjustment(
-  agent: AgentName,
+  _agent: AgentName,
   model: DiscoveredModel,
 ): number {
   const lowered = `${model.model} ${model.name}`.toLowerCase();
-  const isGemini3Pro = /gemini-3-pro|gemini-3\.0-pro|gemini-3-pro-preview/.test(
-    lowered,
-  );
   const isGemini25Pro = /gemini-2\.5-pro/.test(lowered);
-  const antigravityNamingBonus =
-    model.providerID === 'google' && lowered.includes('antigravity-') ? 4 : 0;
 
-  const deepRoleBoost =
-    agent === 'oracle' ||
-    agent === 'orchestrator' ||
-    agent === 'fixer' ||
-    agent === 'librarian' ||
-    agent === 'designer'
-      ? 24
-      : 8;
-
-  const gemini3Boost = isGemini3Pro ? deepRoleBoost : 0;
-  const gemini25Penalty = isGemini25Pro && !isGemini3Pro ? -14 : 0;
-
-  return gemini3Boost + gemini25Penalty + antigravityNamingBonus;
+  return isGemini25Pro ? -14 : 0;
 }
 
 function chutesPreferenceAdjustment(

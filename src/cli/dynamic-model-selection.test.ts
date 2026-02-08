@@ -213,4 +213,25 @@ describe('dynamic-model-selection', () => {
     expect(fixer[0]?.model).not.toContain('Qwen3-Coder-480B');
     expect(explorer[0]?.model).toContain('minimax-m2.1');
   });
+
+  test('does not apply a positive Gemini bonus in v1 scoring', () => {
+    const catalog = [
+      m({
+        model: 'google/antigravity-gemini-3-pro',
+        reasoning: true,
+        toolcall: true,
+      }),
+      m({ model: 'openai/gpt-5.3-codex', reasoning: true, toolcall: true }),
+    ];
+
+    const oracle = rankModelsV1WithBreakdown(catalog, 'oracle');
+    const orchestrator = rankModelsV1WithBreakdown(catalog, 'orchestrator');
+    const designer = rankModelsV1WithBreakdown(catalog, 'designer');
+    const librarian = rankModelsV1WithBreakdown(catalog, 'librarian');
+
+    expect(oracle[0]?.model).toBe('openai/gpt-5.3-codex');
+    expect(orchestrator[0]?.model).toBe('openai/gpt-5.3-codex');
+    expect(designer[0]?.model).toBe('openai/gpt-5.3-codex');
+    expect(librarian[0]?.model).toBe('openai/gpt-5.3-codex');
+  });
 });
