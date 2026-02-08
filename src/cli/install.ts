@@ -141,6 +141,9 @@ function formatConfigSummary(config: InstallConfig): string {
     `  ${config.hasChutes ? SYMBOLS.check : `${DIM}○${RESET}`} Chutes`,
   );
   lines.push(`  ${SYMBOLS.check} Opencode Zen`);
+  lines.push(
+    `  ${config.balanceProviderUsage ? SYMBOLS.check : `${DIM}○${RESET}`} Balanced provider spend`,
+  );
   if (config.useOpenCodeFreeModels && config.selectedOpenCodePrimaryModel) {
     lines.push(
       `  ${SYMBOLS.check} OpenCode Free Primary: ${BLUE}${config.selectedOpenCodePrimaryModel}${RESET}`,
@@ -215,6 +218,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
         : undefined,
     artificialAnalysisApiKey: args.aaKey,
     openRouterApiKey: args.openrouterKey,
+    balanceProviderUsage: args.balancedSpend === 'yes',
     hasTmux: args.tmux === 'yes',
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes', // Install custom skills when skills=yes
@@ -302,7 +306,7 @@ async function runInteractiveMode(
   // TODO: tmux has a bug, disabled for now
   // const tmuxInstalled = await isTmuxInstalled()
   // const totalQuestions = tmuxInstalled ? 3 : 2
-  const totalQuestions = 10;
+  const totalQuestions = 11;
 
   try {
     const existingAaKey = getEnv('ARTIFICIAL_ANALYSIS_API_KEY');
@@ -489,6 +493,14 @@ async function runInteractiveMode(
       }
     }
 
+    console.log(`${BOLD}Question 11/${totalQuestions}:${RESET}`);
+    const balancedSpend = await askYesNo(
+      rl,
+      'Do you have subscriptions or pay per API? If yes, we will distribute assignments evenly across selected providers so your subscriptions last longer.',
+      'no',
+    );
+    console.log();
+
     // TODO: tmux has a bug, disabled for now
     // let tmux: BooleanArg = "no"
     // if (tmuxInstalled) {
@@ -540,6 +552,7 @@ async function runInteractiveMode(
       availableChutesModels,
       artificialAnalysisApiKey,
       openRouterApiKey,
+      balanceProviderUsage: balancedSpend === 'yes',
       hasTmux: false,
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
@@ -923,7 +936,7 @@ export async function install(args: InstallArgs): Promise<number> {
       }
       console.log();
       printInfo(
-        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --anthropic=<yes|no> --copilot=<yes|no> --zai-plan=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --tmux=<yes|no>',
+        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --anthropic=<yes|no> --copilot=<yes|no> --zai-plan=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --balanced-spend=<yes|no> --tmux=<yes|no>',
       );
       console.log();
       return 1;

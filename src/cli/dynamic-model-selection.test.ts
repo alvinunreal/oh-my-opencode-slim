@@ -118,6 +118,60 @@ describe('dynamic-model-selection', () => {
     expect(plan?.scoring?.diffs?.oracle).toBeDefined();
   });
 
+  test('balances provider usage when subscription mode is enabled', () => {
+    const plan = buildDynamicModelPlan(
+      [
+        m({ model: 'openai/gpt-5.3-codex', reasoning: true, toolcall: true }),
+        m({
+          model: 'openai/gpt-5.1-codex-mini',
+          reasoning: true,
+          toolcall: true,
+        }),
+        m({
+          model: 'zai-coding-plan/glm-4.7',
+          reasoning: true,
+          toolcall: true,
+        }),
+        m({
+          model: 'zai-coding-plan/glm-4.7-flash',
+          reasoning: true,
+          toolcall: true,
+        }),
+        m({
+          model: 'chutes/moonshotai/Kimi-K2.5-TEE',
+          reasoning: true,
+          toolcall: true,
+        }),
+        m({
+          model: 'chutes/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE',
+          reasoning: true,
+          toolcall: true,
+        }),
+      ],
+      {
+        ...baseInstallConfig(),
+        hasCopilot: false,
+        balanceProviderUsage: true,
+      },
+      undefined,
+      { scoringEngineVersion: 'v2' },
+    );
+
+    expect(plan).not.toBeNull();
+    const usage = Object.values(plan?.agents ?? {}).reduce(
+      (acc, assignment) => {
+        const provider = assignment.model.split('/')[0] ?? 'unknown';
+        acc[provider] = (acc[provider] ?? 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+
+    expect(usage.openai).toBe(2);
+    expect(usage['zai-coding-plan']).toBe(2);
+    expect(usage.chutes).toBe(2);
+  });
+
   test('matches external signals for multi-segment chutes ids in v1', () => {
     const ranked = rankModelsV1WithBreakdown(
       [m({ model: 'chutes/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE' })],

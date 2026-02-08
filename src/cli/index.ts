@@ -30,6 +30,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.skills = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--opencode-free=')) {
       result.opencodeFree = arg.split('=')[1] as BooleanArg;
+    } else if (arg.startsWith('--balanced-spend=')) {
+      result.balancedSpend = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--opencode-free-model=')) {
       result.opencodeFreeModel = arg.split('=')[1];
     } else if (arg.startsWith('--aa-key=')) {
@@ -60,6 +62,7 @@ Options:
   --antigravity=yes|no   Antigravity/Google models (yes/no)
   --chutes=yes|no        Chutes models (yes/no)
   --opencode-free=yes|no Use OpenCode free models (opencode/*)
+  --balanced-spend=yes|no Evenly spread usage across selected providers when score gaps are within tolerance
   --opencode-free-model  Preferred OpenCode model id or "auto"
   --aa-key               Artificial Analysis API key (optional)
   --openrouter-key       OpenRouter API key (optional)
@@ -70,7 +73,7 @@ Options:
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --anthropic=yes --copilot=no --zai-plan=no --antigravity=yes --chutes=no --opencode-free=yes --opencode-free-model=auto --aa-key=YOUR_AA_KEY --openrouter-key=YOUR_OR_KEY --tmux=no --skills=yes
+  bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --anthropic=yes --copilot=no --zai-plan=no --antigravity=yes --chutes=no --opencode-free=yes --balanced-spend=yes --opencode-free-model=auto --aa-key=YOUR_AA_KEY --openrouter-key=YOUR_OR_KEY --tmux=no --skills=yes
 `);
 }
 

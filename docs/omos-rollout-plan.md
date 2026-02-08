@@ -140,6 +140,7 @@ Recommended flow:
 2. `score-plan` - evaluate your manual candidates with `engine=v1|v2-shadow|v2`.
 3. `plan` - generate diff preview and `diffHash` for the target config.
 4. `apply` - run with `confirm=true` (and optional `expectedDiffHash` to guard stale plans).
+5. Optional: set `balanceProviderUsage=true` in `plan`/`apply` payloads to keep distribution more even across enabled providers when score gaps are within tolerance.
 
 Copy/paste example suite:
 ```bash

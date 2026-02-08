@@ -42,7 +42,7 @@ describe('omos-preferences helpers', () => {
   });
 
   test('compiles manual plan into runtime agents and fallback chains', () => {
-    const input: PluginConfig = {};
+    const input: PluginConfig = { balanceProviderUsage: true };
     const manualPlan = {
       orchestrator: {
         primary: 'openai/gpt-5.3-codex',
@@ -92,6 +92,7 @@ describe('omos-preferences helpers', () => {
       'opencode/gpt-5-nano',
       'opencode/big-pickle',
     ]);
+    expect(next.balanceProviderUsage).toBe(true);
   });
 
   test('builds per-agent diff summary for confirm-before-apply', () => {

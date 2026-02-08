@@ -218,6 +218,7 @@ export function generateLiteConfig(
   const config: Record<string, unknown> = {
     preset: 'zen-free',
     presets: {},
+    balanceProviderUsage: installConfig.balanceProviderUsage ?? false,
   };
 
   // Determine active preset name

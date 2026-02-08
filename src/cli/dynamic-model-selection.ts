@@ -1,6 +1,6 @@
 import { buildModelKeyAliases } from './model-key-normalization';
 import { resolveAgentWithPrecedence } from './precedence-resolver';
-import { rankModelsV2 } from './scoring-v2';
+import { rankModelsV2, scoreCandidateV2 } from './scoring-v2';
 import type {
   DiscoveredModel,
   DynamicModelPlan,
@@ -556,6 +556,132 @@ function combinedScore(
   );
 }
 
+function effectiveEngine(engineVersion: ScoringEngineVersion): 'v1' | 'v2' {
+  return engineVersion === 'v2' ? 'v2' : 'v1';
+}
+
+function scoreForEngine(
+  engineVersion: ScoringEngineVersion,
+  agent: AgentName,
+  model: DiscoveredModel,
+  externalSignals: ExternalSignalMap | undefined,
+  versionRecencyMap: Record<string, number>,
+): number {
+  if (effectiveEngine(engineVersion) === 'v2') {
+    return scoreCandidateV2(model, agent, externalSignals).totalScore;
+  }
+
+  return combinedScore(agent, model, externalSignals, versionRecencyMap);
+}
+
+function countProviderUsage(
+  agents: Record<string, { model: string; variant?: string }>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const assignment of Object.values(agents)) {
+    const provider = assignment.model.split('/')[0];
+    if (!provider) continue;
+    counts.set(provider, (counts.get(provider) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function rebalanceForSubscriptionMode(
+  agents: Record<string, { model: string; variant?: string }>,
+  chains: Record<string, string[]>,
+  provenance: Record<string, { winnerLayer: string; winnerModel: string }>,
+  paidProviders: string[],
+  getRankedModels: (agent: AgentName) => DiscoveredModel[],
+  targetByProvider: Record<string, number>,
+  externalSignals: ExternalSignalMap | undefined,
+  versionRecencyMap: Record<string, number>,
+  engineVersion: ScoringEngineVersion,
+): void {
+  if (paidProviders.length <= 1) return;
+
+  const MAX_ALLOWED_SCORE_LOSS = 20;
+
+  while (true) {
+    const providerUsage = countProviderUsage(agents);
+    const underProviders = paidProviders.filter(
+      (providerID) =>
+        (providerUsage.get(providerID) ?? 0) <
+        (targetByProvider[providerID] ?? 0),
+    );
+    const overProviders = paidProviders.filter(
+      (providerID) =>
+        (providerUsage.get(providerID) ?? 0) >
+        (targetByProvider[providerID] ?? 0),
+    );
+
+    if (underProviders.length === 0 || overProviders.length === 0) break;
+
+    let bestSwap:
+      | {
+          agent: AgentName;
+          candidate: DiscoveredModel;
+          loss: number;
+        }
+      | undefined;
+
+    for (const agent of PRIMARY_ASSIGNMENT_ORDER) {
+      const currentModelID = agents[agent]?.model;
+      if (!currentModelID) continue;
+
+      const currentProvider = currentModelID.split('/')[0];
+      if (!currentProvider || !overProviders.includes(currentProvider))
+        continue;
+
+      const ranked = getRankedModels(agent);
+      const currentModel =
+        ranked.find((model) => model.model === currentModelID) ??
+        ranked.find((model) => model.providerID === currentProvider);
+      if (!currentModel) continue;
+
+      const currentScore = scoreForEngine(
+        engineVersion,
+        agent,
+        currentModel,
+        externalSignals,
+        versionRecencyMap,
+      );
+
+      for (const underProvider of underProviders) {
+        const candidate = ranked.find(
+          (model) => model.providerID === underProvider,
+        );
+        if (!candidate) continue;
+
+        const candidateScore = scoreForEngine(
+          engineVersion,
+          agent,
+          candidate,
+          externalSignals,
+          versionRecencyMap,
+        );
+        const loss = currentScore - candidateScore;
+
+        if (loss > MAX_ALLOWED_SCORE_LOSS) continue;
+        if (!bestSwap || loss < bestSwap.loss) {
+          bestSwap = { agent, candidate, loss };
+        }
+      }
+    }
+
+    if (!bestSwap) break;
+
+    agents[bestSwap.agent].model = bestSwap.candidate.model;
+    chains[bestSwap.agent] = dedupe([
+      bestSwap.candidate.model,
+      ...(chains[bestSwap.agent] ?? []),
+    ]).slice(0, 10);
+    provenance[bestSwap.agent] = {
+      winnerLayer: 'provider-fallback-policy',
+      winnerModel: bestSwap.candidate.model,
+    };
+  }
+}
+
 function chooseProviderRepresentative(
   providerModels: DiscoveredModel[],
   agent: AgentName,
@@ -1031,6 +1157,20 @@ export function buildDynamicModelPlan(
         Math.max(0, (providerUsage.get(existingProvider) ?? 1) - 1),
       );
     }
+  }
+
+  if (config.balanceProviderUsage && hasPaidProviderEnabled) {
+    rebalanceForSubscriptionMode(
+      agents,
+      chains,
+      provenance,
+      paidProviders,
+      getRankedModels,
+      targetByProvider,
+      externalSignals,
+      versionRecencyMap,
+      engineVersion,
+    );
   }
 
   if (Object.keys(agents).length === 0) {

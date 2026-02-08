@@ -26,6 +26,7 @@ Workflow:
 
 Notes:
 - \`target\` can be \`auto\`, \`global\`, or \`project\`.
+- Optional \`balanceProviderUsage\` can be set during \`plan\`/\`apply\` to enforce more even provider distribution.
 - Project config has higher precedence than global config.
 - After apply, start a new session for changes to take effect.
 `;

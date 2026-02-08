@@ -405,6 +405,7 @@ Operations:
 - apply: validate and write with confirm=true
 - reset-agent: reset one agent chain on selected target
 - score-plan: score manual candidates per agent for v1/v2/v2-shadow
+- optional: set balanceProviderUsage during plan/apply for even provider spread
 
 Targets:
 - auto (default): project if present, otherwise global
@@ -418,6 +419,7 @@ Targets:
       target: z.enum(['auto', 'global', 'project']).optional(),
       expectedDiffHash: z.string().optional(),
       engine: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
+      balanceProviderUsage: z.boolean().optional(),
     },
     async execute(args) {
       const operation = args.operation;
@@ -431,6 +433,7 @@ Targets:
         return stringify({
           target,
           targetPath,
+          balanceProviderUsage: targetConfig.balanceProviderUsage ?? false,
           effectivePlan,
           targetPlan: deriveManualPlanFromConfig(targetConfig),
           warning: precedenceWarning(targetPath, ctx.directory),
@@ -467,6 +470,9 @@ Targets:
         const diff = diffManualPlans(targetPlan, nextPlan);
         const diffHash = hashString(stringify(diff));
         const compiled = compileManualPlanToConfig(targetConfig, nextPlan);
+        if (typeof args.balanceProviderUsage === 'boolean') {
+          compiled.balanceProviderUsage = args.balanceProviderUsage;
+        }
 
         return stringify({
           target,
@@ -509,6 +515,9 @@ Targets:
         }
 
         const nextConfig = compileManualPlanToConfig(targetConfig, nextPlan);
+        if (typeof args.balanceProviderUsage === 'boolean') {
+          nextConfig.balanceProviderUsage = args.balanceProviderUsage;
+        }
         ensureParentDir(targetPath);
         writeConfig(targetPath, nextConfig as Record<string, unknown>);
 

@@ -12,6 +12,7 @@ export interface InstallArgs {
   tmux?: BooleanArg;
   skills?: BooleanArg;
   opencodeFree?: BooleanArg;
+  balancedSpend?: BooleanArg;
   opencodeFreeModel?: string;
   aaKey?: string;
   openrouterKey?: string;
@@ -117,6 +118,7 @@ export interface InstallConfig {
   scoringEngineVersion?: ScoringEngineVersion;
   artificialAnalysisApiKey?: string;
   openRouterApiKey?: string;
+  balanceProviderUsage?: boolean;
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;
