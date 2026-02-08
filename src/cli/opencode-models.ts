@@ -97,13 +97,13 @@ export function parseOpenCodeModelsVerboseOutput(
 ): DiscoveredModel[] {
   const lines = output.split(/\r?\n/);
   const models: DiscoveredModel[] = [];
+  const modelHeaderPattern = /^[a-z0-9-]+\/.+$/i;
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]?.trim();
     if (!line || !line.includes('/')) continue;
 
-    const isModelHeader = /^[a-z0-9-]+\/[a-z0-9._-]+$/i.test(line);
-    if (!isModelHeader) continue;
+    if (!modelHeaderPattern.test(line)) continue;
 
     let jsonStart = -1;
     for (let search = index + 1; search < lines.length; search++) {
@@ -112,7 +112,7 @@ export function parseOpenCodeModelsVerboseOutput(
         break;
       }
 
-      if (/^[a-z0-9-]+\/[a-z0-9._-]+$/i.test(lines[search]?.trim() ?? '')) {
+      if (modelHeaderPattern.test(lines[search]?.trim() ?? '')) {
         break;
       }
     }
