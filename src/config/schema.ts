@@ -20,7 +20,10 @@ const MANUAL_AGENT_NAMES = [
 
 const ProviderModelIdSchema = z
   .string()
-  .regex(/^[^/\s]+\/[^/\s]+$/, 'Expected provider/model format');
+  .regex(
+    /^[^/\s]+\/[^\s]+$/,
+    'Expected provider/model format (provider/.../model)',
+  );
 
 export const ManualAgentPlanSchema = z
   .object({

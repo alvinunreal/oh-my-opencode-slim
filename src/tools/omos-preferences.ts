@@ -177,7 +177,8 @@ export function deriveManualPlanFromConfig(config: PluginConfig): ManualPlan {
 }
 
 function toSyntheticModel(model: string): DiscoveredModel | null {
-  const [providerID, modelID] = model.split('/');
+  const providerID = model.split('/')[0];
+  const modelID = model.slice(providerID.length + 1);
   if (!providerID || !modelID) return null;
 
   return {

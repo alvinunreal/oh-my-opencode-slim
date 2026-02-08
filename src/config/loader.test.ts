@@ -81,7 +81,7 @@ describe('loadPluginConfig', () => {
           oracle: {
             primary: 'openai/gpt-5.3-codex',
             fallback1: 'anthropic/claude-opus-4-6',
-            fallback2: 'chutes/kimi-k2.5',
+            fallback2: 'chutes/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE',
             fallback3: 'opencode/gpt-5-nano',
           },
           designer: {
@@ -113,7 +113,9 @@ describe('loadPluginConfig', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.manualPlan?.oracle?.fallback3).toBe('opencode/gpt-5-nano');
+    expect(config.manualPlan?.oracle?.fallback2).toBe(
+      'chutes/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE',
+    );
   });
 
   test('ignores invalid config (schema violation or malformed JSON)', () => {
