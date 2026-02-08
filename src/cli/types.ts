@@ -16,6 +16,7 @@ export interface InstallArgs {
   opencodeFreeModel?: string;
   aaKey?: string;
   openrouterKey?: string;
+  dryRun?: boolean;
 }
 
 export interface OpenCodeFreeModel {
@@ -90,6 +91,13 @@ export interface ExternalModelSignal {
 
 export type ExternalSignalMap = Record<string, ExternalModelSignal>;
 
+export type ManualAgentConfig = {
+  primary: string;
+  fallback1: string;
+  fallback2: string;
+  fallback3: string;
+};
+
 export interface OpenCodeConfig {
   plugin?: string[];
   provider?: Record<string, unknown>;
@@ -122,6 +130,9 @@ export interface InstallConfig {
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;
+  setupMode: 'quick' | 'manual';
+  manualAgentConfigs?: Record<string, ManualAgentConfig>;
+  dryRun?: boolean;
 }
 
 export interface ConfigMergeResult {

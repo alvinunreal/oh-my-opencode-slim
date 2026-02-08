@@ -10,4 +10,3 @@ export {
   lsp_rename,
   lspManager,
 } from './lsp';
-export { createOmosPreferencesTools } from './omos-preferences';

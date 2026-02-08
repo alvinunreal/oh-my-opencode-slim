@@ -13,7 +13,6 @@ import {
   fetchExternalModelSignals,
   generateLiteConfig,
   getOpenCodeVersion,
-  installOmosCommandEntry,
   isOpenCodeInstalled,
   pickBestCodingChutesModel,
   pickBestCodingOpenCodeModel,
@@ -30,6 +29,7 @@ import type {
   DiscoveredModel,
   InstallArgs,
   InstallConfig,
+  ManualAgentConfig,
   OpenCodeFreeModel,
 } from './types';
 
@@ -222,6 +222,8 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     hasTmux: args.tmux === 'yes',
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes', // Install custom skills when skills=yes
+    setupMode: 'quick', // Non-interactive mode defaults to quick setup
+    dryRun: args.dryRun,
   };
 }
 
@@ -296,6 +298,440 @@ async function askOptionalApiKey(
   return answer;
 }
 
+async function askSetupMode(
+  rl: readline.Interface,
+): Promise<'quick' | 'manual'> {
+  console.log(`${BOLD}Choose setup mode:${RESET}`);
+  console.log(
+    `  ${DIM}1.${RESET} Quick setup - automatic model selection based on your providers`,
+  );
+  console.log(
+    `  ${DIM}2.${RESET} Manual setup - choose specific models for each agent`,
+  );
+  console.log();
+
+  const answer = (
+    await rl.question(`${BLUE}Selection${RESET} ${DIM}[default: 1]${RESET}: `)
+  )
+    .trim()
+    .toLowerCase();
+
+  if (answer === '2' || answer === 'manual') return 'manual';
+  return 'quick';
+}
+
+async function askModelByNumber(
+  rl: readline.Interface,
+  models: Array<{ model: string; name?: string }>,
+  prompt: string,
+  allowEmpty = false,
+): Promise<string | undefined> {
+  console.log(`${BOLD}${prompt}${RESET}`);
+  console.log(`${DIM}Available models:${RESET}`);
+
+  // Show max 5 models
+  const modelsToShow = models.slice(0, 5);
+  const remainingCount = models.length - 5;
+
+  for (const [index, model] of modelsToShow.entries()) {
+    const name = model.name ? ` ${DIM}(${model.name})${RESET}` : '';
+    console.log(
+      `  ${DIM}${index + 1}.${RESET} ${BLUE}${model.model}${RESET}${name}`,
+    );
+  }
+
+  if (remainingCount > 0) {
+    console.log(
+      `${DIM}  ... and ${remainingCount} more (type model ID directly)${RESET}`,
+    );
+  }
+  console.log(`${DIM}  (or type any model ID directly)${RESET}`);
+  console.log();
+
+  const answer = (await rl.question(`${BLUE}Selection${RESET}: `))
+    .trim()
+    .toLowerCase();
+
+  if (!answer) {
+    if (allowEmpty) return undefined;
+    return models[0]?.model;
+  }
+
+  const asNumber = Number.parseInt(answer, 10);
+  if (
+    Number.isFinite(asNumber) &&
+    asNumber >= 1 &&
+    asNumber <= modelsToShow.length
+  ) {
+    return modelsToShow[asNumber - 1]?.model;
+  }
+
+  // Check if it's a valid model ID in the full list
+  const byId = models.find((m) => m.model.toLowerCase() === answer);
+  if (byId) return byId.model;
+
+  // If not found but user typed something with '/', assume it's a custom model ID
+  if (answer.includes('/')) return answer;
+
+  printWarning(`Invalid selection: "${answer}". Using first available model.`);
+  return models[0]?.model;
+}
+
+async function configureAgentManually(
+  rl: readline.Interface,
+  agentName: string,
+  allModels: Array<{ model: string; name?: string }>,
+): Promise<ManualAgentConfig> {
+  console.log();
+  console.log(`${BOLD}Configure ${agentName}:${RESET}`);
+  console.log();
+
+  // Keep track of selected models to exclude them from subsequent choices
+  const selectedModels = new Set<string>();
+
+  // Primary model selection - show all models
+  const primary =
+    (await askModelByNumber(rl, allModels, 'Primary model')) ??
+    allModels[0]?.model ??
+    'opencode/big-pickle';
+  selectedModels.add(primary);
+
+  // Filter out selected models for subsequent choices
+  const availableForFallback1 = allModels.filter(
+    (m) => !selectedModels.has(m.model),
+  );
+
+  const fallback1 =
+    availableForFallback1.length > 0
+      ? ((await askModelByNumber(
+          rl,
+          availableForFallback1,
+          'Fallback 1 (optional, press Enter to skip)',
+          true,
+        )) ?? primary)
+      : primary;
+  if (fallback1 !== primary) selectedModels.add(fallback1);
+
+  // Filter again for fallback 2
+  const availableForFallback2 = allModels.filter(
+    (m) => !selectedModels.has(m.model),
+  );
+
+  const fallback2 =
+    availableForFallback2.length > 0
+      ? ((await askModelByNumber(
+          rl,
+          availableForFallback2,
+          'Fallback 2 (optional, press Enter to skip)',
+          true,
+        )) ?? fallback1)
+      : fallback1;
+  if (fallback2 !== fallback1) selectedModels.add(fallback2);
+
+  // Filter again for fallback 3
+  const availableForFallback3 = allModels.filter(
+    (m) => !selectedModels.has(m.model),
+  );
+
+  const fallback3 =
+    availableForFallback3.length > 0
+      ? ((await askModelByNumber(
+          rl,
+          availableForFallback3,
+          'Fallback 3 (optional, press Enter to skip)',
+          true,
+        )) ?? fallback2)
+      : fallback2;
+
+  return {
+    primary,
+    fallback1,
+    fallback2,
+    fallback3,
+  };
+}
+
+async function runManualSetupMode(
+  rl: readline.Interface,
+  detected: DetectedConfig,
+): Promise<InstallConfig> {
+  console.log();
+  console.log(`${BOLD}Manual Setup Mode${RESET}`);
+  console.log('='.repeat(20));
+  console.log();
+
+  // Step 1: Ask for providers (same as quick mode)
+  const existingAaKey = getEnv('ARTIFICIAL_ANALYSIS_API_KEY');
+  const existingOpenRouterKey = getEnv('OPENROUTER_API_KEY');
+
+  const artificialAnalysisApiKey = await askOptionalApiKey(
+    rl,
+    'Artificial Analysis API key for better ranking signals',
+    existingAaKey,
+  );
+  if (existingAaKey && !artificialAnalysisApiKey) {
+    printInfo('Using existing ARTIFICIAL_ANALYSIS_API_KEY from environment.');
+  }
+  console.log();
+
+  const openRouterApiKey = await askOptionalApiKey(
+    rl,
+    'OpenRouter API key for pricing/metadata signals',
+    existingOpenRouterKey,
+  );
+  if (existingOpenRouterKey && !openRouterApiKey) {
+    printInfo('Using existing OPENROUTER_API_KEY from environment.');
+  }
+  console.log();
+
+  const useOpenCodeFree = await askYesNo(
+    rl,
+    'Use only OpenCode free models (opencode/*) with live refresh?',
+    'yes',
+  );
+  console.log();
+
+  let availableOpenCodeFreeModels: OpenCodeFreeModel[] | undefined;
+  let availableChutesModels: DiscoveredModel[] | undefined;
+
+  if (useOpenCodeFree === 'yes') {
+    printInfo('Refreshing models with: opencode models --refresh --verbose');
+    const discovery = await discoverOpenCodeFreeModels();
+
+    if (discovery.models.length === 0) {
+      printWarning(
+        discovery.error ??
+          'No OpenCode free models found. Continuing without OpenCode free-model assignment.',
+      );
+    } else {
+      availableOpenCodeFreeModels = discovery.models;
+      printSuccess(`Found ${discovery.models.length} OpenCode free models`);
+    }
+    console.log();
+  }
+
+  // Ask for providers
+  const kimi = await askYesNo(
+    rl,
+    'Do you want to use Kimi For Coding?',
+    detected.hasKimi ? 'yes' : 'no',
+  );
+  console.log();
+
+  const openai = await askYesNo(
+    rl,
+    'Do you have access to OpenAI API?',
+    detected.hasOpenAI ? 'yes' : 'no',
+  );
+  console.log();
+
+  const anthropic = await askYesNo(
+    rl,
+    'Do you have access to Anthropic models?',
+    detected.hasAnthropic ? 'yes' : 'no',
+  );
+  console.log();
+
+  const copilot = await askYesNo(
+    rl,
+    'Do you have access to GitHub Copilot models?',
+    detected.hasCopilot ? 'yes' : 'no',
+  );
+  console.log();
+
+  const zaiPlan = await askYesNo(
+    rl,
+    'Do you have access to ZAI Coding Plan models?',
+    detected.hasZaiPlan ? 'yes' : 'no',
+  );
+  console.log();
+
+  const antigravity = await askYesNo(
+    rl,
+    'Enable Antigravity authentication for Google models?',
+    detected.hasAntigravity ? 'yes' : 'no',
+  );
+  console.log();
+
+  const chutes = await askYesNo(
+    rl,
+    'Enable Chutes provider via OpenCode auth flow?',
+    detected.hasChutes ? 'yes' : 'no',
+  );
+  console.log();
+
+  if (chutes === 'yes') {
+    printInfo(
+      'Refreshing Chutes model list with: opencode models --refresh --verbose',
+    );
+    const discovery = await discoverProviderModels('chutes');
+
+    if (discovery.models.length === 0) {
+      printWarning(
+        discovery.error ??
+          'No Chutes models found. Continuing without Chutes dynamic assignment.',
+      );
+    } else {
+      availableChutesModels = discovery.models;
+      printSuccess(`Found ${discovery.models.length} Chutes models`);
+    }
+    console.log();
+  }
+
+  // Build list of available models from all enabled providers
+  const availableModels: Array<{ model: string; name?: string }> = [];
+
+  if (useOpenCodeFree === 'yes' && availableOpenCodeFreeModels) {
+    for (const model of availableOpenCodeFreeModels) {
+      availableModels.push({ model: model.model, name: model.name });
+    }
+  }
+
+  if (kimi === 'yes') {
+    availableModels.push({ model: 'kimi-for-coding/k2p5', name: 'Kimi K2.5' });
+  }
+
+  if (openai === 'yes') {
+    availableModels.push({
+      model: 'openai/gpt-5.3-codex',
+      name: 'GPT-5.3 Codex',
+    });
+    availableModels.push({
+      model: 'openai/gpt-5.1-codex-mini',
+      name: 'GPT-5.1 Codex Mini',
+    });
+  }
+
+  if (anthropic === 'yes') {
+    availableModels.push({
+      model: 'anthropic/claude-opus-4-6',
+      name: 'Claude Opus 4.6',
+    });
+    availableModels.push({
+      model: 'anthropic/claude-sonnet-4-5',
+      name: 'Claude Sonnet 4.5',
+    });
+    availableModels.push({
+      model: 'anthropic/claude-haiku-4-5',
+      name: 'Claude Haiku 4.5',
+    });
+  }
+
+  if (copilot === 'yes') {
+    availableModels.push({
+      model: 'github-copilot/grok-code-fast-1',
+      name: 'Grok Code Fast',
+    });
+  }
+
+  if (zaiPlan === 'yes') {
+    availableModels.push({ model: 'zai-coding-plan/glm-4.7', name: 'GLM 4.7' });
+  }
+
+  if (antigravity === 'yes') {
+    availableModels.push({
+      model: 'google/antigravity-gemini-3-pro',
+      name: 'Gemini 3 Pro',
+    });
+    availableModels.push({
+      model: 'google/antigravity-gemini-3-flash',
+      name: 'Gemini 3 Flash',
+    });
+  }
+
+  if (chutes === 'yes' && availableChutesModels) {
+    for (const model of availableChutesModels) {
+      availableModels.push({ model: model.model, name: model.name });
+    }
+  }
+
+  // Always include zen fallback
+  availableModels.push({
+    model: 'opencode/big-pickle',
+    name: 'OpenCode Big Pickle',
+  });
+
+  if (availableModels.length === 0) {
+    printWarning('No models available. Please enable at least one provider.');
+    availableModels.push({
+      model: 'opencode/big-pickle',
+      name: 'OpenCode Big Pickle',
+    });
+  }
+
+  // Configure each agent manually
+  const manualAgentConfigs: Record<string, ManualAgentConfig> = {};
+  const agentNames = [
+    'orchestrator',
+    'oracle',
+    'designer',
+    'explorer',
+    'librarian',
+    'fixer',
+  ];
+
+  for (const agentName of agentNames) {
+    manualAgentConfigs[agentName] = await configureAgentManually(
+      rl,
+      agentName,
+      availableModels,
+    );
+  }
+
+  // Ask for remaining options
+  const balancedSpend = await askYesNo(
+    rl,
+    'Do you have subscriptions or pay per API? If yes, we will distribute assignments evenly across selected providers so your subscriptions last longer.',
+    'no',
+  );
+  console.log();
+
+  // Skills prompt
+  console.log(`${BOLD}Recommended Skills:${RESET}`);
+  for (const skill of RECOMMENDED_SKILLS) {
+    console.log(
+      `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+    );
+  }
+  console.log();
+  const skills = await askYesNo(rl, 'Install recommended skills?', 'yes');
+  console.log();
+
+  // Custom skills prompt
+  console.log(`${BOLD}Custom Skills:${RESET}`);
+  for (const skill of CUSTOM_SKILLS) {
+    console.log(
+      `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+    );
+  }
+  console.log();
+  const customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
+  console.log();
+
+  return {
+    hasKimi: kimi === 'yes',
+    hasOpenAI: openai === 'yes',
+    hasAnthropic: anthropic === 'yes',
+    hasCopilot: copilot === 'yes',
+    hasZaiPlan: zaiPlan === 'yes',
+    hasAntigravity: antigravity === 'yes',
+    hasChutes: chutes === 'yes',
+    hasOpencodeZen: true,
+    useOpenCodeFreeModels:
+      useOpenCodeFree === 'yes' && availableOpenCodeFreeModels !== undefined,
+    availableOpenCodeFreeModels,
+    availableChutesModels,
+    artificialAnalysisApiKey,
+    openRouterApiKey,
+    balanceProviderUsage: balancedSpend === 'yes',
+    hasTmux: false,
+    installSkills: skills === 'yes',
+    installCustomSkills: customSkills === 'yes',
+    setupMode: 'manual',
+    manualAgentConfigs,
+  };
+}
+
 async function runInteractiveMode(
   detected: DetectedConfig,
 ): Promise<InstallConfig> {
@@ -303,12 +739,28 @@ async function runInteractiveMode(
     input: process.stdin,
     output: process.stdout,
   });
-  // TODO: tmux has a bug, disabled for now
-  // const tmuxInstalled = await isTmuxInstalled()
-  // const totalQuestions = tmuxInstalled ? 3 : 2
-  const totalQuestions = 11;
 
   try {
+    // Ask for setup mode first
+    console.log();
+    console.log(`${BOLD}oh-my-opencode-slim Setup${RESET}`);
+    console.log('='.repeat(25));
+    console.log();
+
+    const setupMode = await askSetupMode(rl);
+
+    if (setupMode === 'manual') {
+      const config = await runManualSetupMode(rl, detected);
+      rl.close();
+      return config;
+    }
+
+    // Continue with quick setup mode
+    // TODO: tmux has a bug, disabled for now
+    // const tmuxInstalled = await isTmuxInstalled()
+    // const totalQuestions = tmuxInstalled ? 3 : 2
+    const totalQuestions = 11;
+
     const existingAaKey = getEnv('ARTIFICIAL_ANALYSIS_API_KEY');
     const existingOpenRouterKey = getEnv('OPENROUTER_API_KEY');
 
@@ -556,6 +1008,7 @@ async function runInteractiveMode(
       hasTmux: false,
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
+      setupMode: 'quick',
     };
   } finally {
     rl.close();
@@ -583,7 +1036,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
     resolvedConfig.useOpenCodeFreeModels;
 
   // Calculate total steps dynamically
-  let totalSteps = 5; // Base: check opencode, add plugin, install /omos command, disable default agents, write lite config
+  let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
   if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
   if (resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
   if (resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
@@ -594,8 +1047,12 @@ async function runInstall(config: InstallConfig): Promise<number> {
   let step = 1;
 
   printStep(step++, totalSteps, 'Checking OpenCode installation...');
-  const { ok } = await checkOpenCodeInstalled();
-  if (!ok) return 1;
+  if (resolvedConfig.dryRun) {
+    printInfo('Dry run mode - skipping OpenCode check');
+  } else {
+    const { ok } = await checkOpenCodeInstalled();
+    if (!ok) return 1;
+  }
 
   if (
     resolvedConfig.useOpenCodeFreeModels &&
@@ -721,31 +1178,45 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
-  const pluginResult = await addPluginToOpenCodeConfig();
-  if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
-
-  printStep(step++, totalSteps, 'Installing /omos command entry...');
-  const omosCommandResult = installOmosCommandEntry();
-  if (!handleStepResult(omosCommandResult, '/omos command installed')) return 1;
+  if (resolvedConfig.dryRun) {
+    printInfo('Dry run mode - skipping plugin installation');
+  } else {
+    const pluginResult = await addPluginToOpenCodeConfig();
+    if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
+  }
 
   // Add Antigravity support if requested
   if (resolvedConfig.hasAntigravity) {
     printStep(step++, totalSteps, 'Adding Antigravity plugin...');
-    const antigravityPluginResult = addAntigravityPlugin();
-    if (!handleStepResult(antigravityPluginResult, 'Antigravity plugin added'))
-      return 1;
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - skipping Antigravity plugin');
+    } else {
+      const antigravityPluginResult = addAntigravityPlugin();
+      if (
+        !handleStepResult(antigravityPluginResult, 'Antigravity plugin added')
+      )
+        return 1;
+    }
 
     printStep(step++, totalSteps, 'Configuring Google Provider...');
-    const googleProviderResult = addGoogleProvider();
-    if (!handleStepResult(googleProviderResult, 'Google Provider configured'))
-      return 1;
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - skipping Google Provider setup');
+    } else {
+      const googleProviderResult = addGoogleProvider();
+      if (!handleStepResult(googleProviderResult, 'Google Provider configured'))
+        return 1;
+    }
   }
 
   if (resolvedConfig.hasChutes) {
     printStep(step++, totalSteps, 'Enabling Chutes auth flow...');
-    const chutesProviderResult = addChutesProvider();
-    if (!handleStepResult(chutesProviderResult, 'Chutes auth flow ready'))
-      return 1;
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - skipping Chutes auth flow');
+    } else {
+      const chutesProviderResult = addChutesProvider();
+      if (!handleStepResult(chutesProviderResult, 'Chutes auth flow ready'))
+        return 1;
+    }
   }
 
   if (hasAnyEnabledProvider) {
@@ -784,47 +1255,71 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
-  const agentResult = disableDefaultAgents();
-  if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
+  if (resolvedConfig.dryRun) {
+    printInfo('Dry run mode - skipping agent disabling');
+  } else {
+    const agentResult = disableDefaultAgents();
+    if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
+  }
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
-  const liteResult = writeLiteConfig(resolvedConfig);
-  if (!handleStepResult(liteResult, 'Config written')) return 1;
+  if (resolvedConfig.dryRun) {
+    const liteConfig = generateLiteConfig(resolvedConfig);
+    printInfo('Dry run mode - configuration that would be written:');
+    console.log('\n' + JSON.stringify(liteConfig, null, 2) + '\n');
+  } else {
+    const liteResult = writeLiteConfig(resolvedConfig);
+    if (!handleStepResult(liteResult, 'Config written')) return 1;
+  }
 
   // Install skills if requested
   if (resolvedConfig.installSkills) {
     printStep(step++, totalSteps, 'Installing recommended skills...');
-    let skillsInstalled = 0;
-    for (const skill of RECOMMENDED_SKILLS) {
-      printInfo(`Installing ${skill.name}...`);
-      if (installSkill(skill)) {
-        printSuccess(`Installed: ${skill.name}`);
-        skillsInstalled++;
-      } else {
-        printWarning(`Failed to install: ${skill.name}`);
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - would install skills:');
+      for (const skill of RECOMMENDED_SKILLS) {
+        printInfo(`  - ${skill.name}`);
       }
+    } else {
+      let skillsInstalled = 0;
+      for (const skill of RECOMMENDED_SKILLS) {
+        printInfo(`Installing ${skill.name}...`);
+        if (installSkill(skill)) {
+          printSuccess(`Installed: ${skill.name}`);
+          skillsInstalled++;
+        } else {
+          printWarning(`Failed to install: ${skill.name}`);
+        }
+      }
+      printSuccess(
+        `${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`,
+      );
     }
-    printSuccess(
-      `${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`,
-    );
   }
 
   // Install custom skills if requested
   if (resolvedConfig.installCustomSkills) {
     printStep(step++, totalSteps, 'Installing custom skills...');
-    let customSkillsInstalled = 0;
-    for (const skill of CUSTOM_SKILLS) {
-      printInfo(`Installing ${skill.name}...`);
-      if (installCustomSkill(skill)) {
-        printSuccess(`Installed: ${skill.name}`);
-        customSkillsInstalled++;
-      } else {
-        printWarning(`Failed to install: ${skill.name}`);
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - would install custom skills:');
+      for (const skill of CUSTOM_SKILLS) {
+        printInfo(`  - ${skill.name}`);
       }
+    } else {
+      let customSkillsInstalled = 0;
+      for (const skill of CUSTOM_SKILLS) {
+        printInfo(`Installing ${skill.name}...`);
+        if (installCustomSkill(skill)) {
+          printSuccess(`Installed: ${skill.name}`);
+          customSkillsInstalled++;
+        } else {
+          printWarning(`Failed to install: ${skill.name}`);
+        }
+      }
+      printSuccess(
+        `${customSkillsInstalled}/${CUSTOM_SKILLS.length} custom skills installed`,
+      );
     }
-    printSuccess(
-      `${customSkillsInstalled}/${CUSTOM_SKILLS.length} custom skills installed`,
-    );
   }
 
   // Summary
@@ -942,7 +1437,8 @@ export async function install(args: InstallArgs): Promise<number> {
       return 1;
     }
 
-    return runInstall(argsToConfig(args));
+    const nonInteractiveConfig = argsToConfig(args);
+    return runInstall(nonInteractiveConfig);
   }
 
   // Interactive mode
@@ -951,10 +1447,16 @@ export async function install(args: InstallArgs): Promise<number> {
   printHeader(detected.isInstalled);
 
   printStep(1, 1, 'Checking OpenCode installation...');
-  const { ok } = await checkOpenCodeInstalled();
-  if (!ok) return 1;
+  if (args.dryRun) {
+    printInfo('Dry run mode - skipping OpenCode check');
+  } else {
+    const { ok } = await checkOpenCodeInstalled();
+    if (!ok) return 1;
+  }
   console.log();
 
   const config = await runInteractiveMode(detected);
+  // Pass dryRun through to the config
+  config.dryRun = args.dryRun;
   return runInstall(config);
 }

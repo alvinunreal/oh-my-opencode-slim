@@ -38,6 +38,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.aaKey = arg.slice('--aa-key='.length);
     } else if (arg.startsWith('--openrouter-key=')) {
       result.openrouterKey = arg.slice('--openrouter-key='.length);
+    } else if (arg === '--dry-run') {
+      result.dryRun = true;
     } else if (arg === '-h' || arg === '--help') {
       printHelp();
       process.exit(0);
@@ -69,6 +71,7 @@ Options:
   --tmux=yes|no          Enable tmux integration (yes/no)
   --skills=yes|no        Install recommended skills (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
+  --dry-run              Simulate install without writing files or requiring OpenCode
   -h, --help             Show this help message
 
 Examples:

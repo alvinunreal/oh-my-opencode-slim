@@ -13,7 +13,6 @@ import {
   ast_grep_replace,
   ast_grep_search,
   createBackgroundTools,
-  createOmosPreferencesTools,
   grep,
   lsp_diagnostics,
   lsp_find_references,
@@ -52,7 +51,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tmuxConfig,
     config,
   );
-  const omosPreferencesTools = createOmosPreferencesTools(ctx);
   const mcps = createBuiltinMcps(config.disabled_mcps);
 
   // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
@@ -77,7 +75,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     tool: {
       ...backgroundTools,
-      ...omosPreferencesTools,
       lsp_goto_definition,
       lsp_find_references,
       lsp_diagnostics,
