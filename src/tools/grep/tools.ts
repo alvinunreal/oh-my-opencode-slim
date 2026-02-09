@@ -7,7 +7,7 @@ export const grep: ToolDefinition = tool({
     'Fast content search tool with safety limits (60s timeout, 10MB output). ' +
     'Searches file contents using regular expressions. ' +
     'Supports full regex syntax (eg. "log.*Error", "function\\s+\\w+", etc.). ' +
-    'Filter files by pattern with the include parameter (eg. "*.js", "*.{ts,tsx}"). ' +
+    'Filter files by pattern with the include parameter (e.g. "*.js", "*.{ts,tsx}"). ' +
     'Returns file paths with matches sorted by modification time.',
   args: {
     pattern: tool.schema
@@ -25,6 +25,21 @@ export const grep: ToolDefinition = tool({
       .describe(
         'The directory to search in. Defaults to the current working directory.',
       ),
+    caseSensitive: tool.schema
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Perform case-sensitive search (default: false)'),
+    wholeWord: tool.schema
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Match whole words only (default: false)'),
+    fixedStrings: tool.schema
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Treat pattern as literal string (default: false)'),
   },
   execute: async (args) => {
     try {
@@ -36,6 +51,9 @@ export const grep: ToolDefinition = tool({
         paths,
         globs,
         context: 0,
+        caseSensitive: args.caseSensitive ?? false,
+        wholeWord: args.wholeWord ?? false,
+        fixedStrings: args.fixedStrings ?? false,
       });
 
       return formatGrepResult(result);
