@@ -1,3 +1,5 @@
+import { statSync } from 'node:fs';
+
 let cachedOpenCodePath: string | null = null;
 
 function getOpenCodePaths(): string[] {
@@ -54,15 +56,13 @@ export function resolveOpenCodePath(): string {
   const paths = getOpenCodePaths();
 
   for (const opencodePath of paths) {
+    if (opencodePath === 'opencode') continue;
     try {
-      // Check if we can execute it
-      const proc = Bun.spawn([opencodePath, '--version'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      // Don't wait for exit here, just check if spawn worked
-      cachedOpenCodePath = opencodePath;
-      return opencodePath;
+      const stat = statSync(opencodePath);
+      if (stat.isFile()) {
+        cachedOpenCodePath = opencodePath;
+        return opencodePath;
+      }
     } catch {
       // Try next path
     }

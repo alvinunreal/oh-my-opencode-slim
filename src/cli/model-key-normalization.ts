@@ -6,7 +6,7 @@ function cleanupAlias(input: string, preserveSlash: boolean): string {
   if (preserveSlash) {
     value = value.replace(/[_\s]+/g, '-');
     value = value.replace(/-+/g, '-');
-    value = value.replace(/\/+?/g, '/');
+    value = value.replace(/\/+/g, '/');
     value = value.replace(/\/-+/g, '/');
     value = value.replace(/-+\//g, '/');
     value = value.replace(/^\/+|\/+$/g, '');
