@@ -313,10 +313,10 @@ async function askSetupMode(
 ): Promise<'quick' | 'manual'> {
   console.log(`${BOLD}Choose setup mode:${RESET}`);
   console.log(
-    `  ${DIM}1.${RESET} Quick setup - automatic model selection based on your providers`,
+    `  ${DIM}1.${RESET} Quick setup - you choose providers, we auto-pick models`,
   );
   console.log(
-    `  ${DIM}2.${RESET} Manual setup - choose specific models for each agent`,
+    `  ${DIM}2.${RESET} Manual setup - you choose providers and models per agent`,
   );
   console.log();
 
@@ -533,49 +533,49 @@ async function runManualSetupMode(
   // Ask for providers
   const kimi = await askYesNo(
     rl,
-    'Do you want to use Kimi For Coding?',
+    'Enable Kimi provider?',
     detected.hasKimi ? 'yes' : 'no',
   );
   console.log();
 
   const openai = await askYesNo(
     rl,
-    'Do you have access to OpenAI API?',
+    'Enable OpenAI provider?',
     detected.hasOpenAI ? 'yes' : 'no',
   );
   console.log();
 
   const anthropic = await askYesNo(
     rl,
-    'Do you have access to Anthropic models?',
+    'Enable Anthropic provider?',
     detected.hasAnthropic ? 'yes' : 'no',
   );
   console.log();
 
   const copilot = await askYesNo(
     rl,
-    'Do you have access to GitHub Copilot models?',
+    'Enable GitHub Copilot provider?',
     detected.hasCopilot ? 'yes' : 'no',
   );
   console.log();
 
   const zaiPlan = await askYesNo(
     rl,
-    'Do you have access to ZAI Coding Plan models?',
+    'Enable ZAI Coding Plan provider?',
     detected.hasZaiPlan ? 'yes' : 'no',
   );
   console.log();
 
   const antigravity = await askYesNo(
     rl,
-    'Enable Antigravity authentication for Google models?',
+    'Enable Antigravity (Google) provider?',
     detected.hasAntigravity ? 'yes' : 'no',
   );
   console.log();
 
   const chutes = await askYesNo(
     rl,
-    'Enable Chutes provider via OpenCode auth flow?',
+    'Enable Chutes provider?',
     detected.hasChutes ? 'yes' : 'no',
   );
   console.log();
@@ -731,7 +731,9 @@ async function runManualSetupMode(
     customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
     console.log();
   } else {
-    printInfo('Models-only mode: skipping skills prompts.');
+    printInfo(
+      'Models-only mode: skipping plugin/auth setup and skills prompts.',
+    );
     console.log();
   }
 
@@ -889,7 +891,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 4/${totalQuestions}:${RESET}`);
     const kimi = await askYesNo(
       rl,
-      'Do you want to use Kimi For Coding?',
+      'Enable Kimi provider?',
       detected.hasKimi ? 'yes' : 'no',
     );
     console.log();
@@ -897,7 +899,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 5/${totalQuestions}:${RESET}`);
     const openai = await askYesNo(
       rl,
-      'Do you have access to OpenAI API?',
+      'Enable OpenAI provider?',
       detected.hasOpenAI ? 'yes' : 'no',
     );
     console.log();
@@ -905,7 +907,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 6/${totalQuestions}:${RESET}`);
     const anthropic = await askYesNo(
       rl,
-      'Do you have access to Anthropic models?',
+      'Enable Anthropic provider?',
       detected.hasAnthropic ? 'yes' : 'no',
     );
     console.log();
@@ -913,7 +915,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 7/${totalQuestions}:${RESET}`);
     const copilot = await askYesNo(
       rl,
-      'Do you have access to GitHub Copilot models?',
+      'Enable GitHub Copilot provider?',
       detected.hasCopilot ? 'yes' : 'no',
     );
     console.log();
@@ -921,7 +923,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 8/${totalQuestions}:${RESET}`);
     const zaiPlan = await askYesNo(
       rl,
-      'Do you have access to ZAI Coding Plan models?',
+      'Enable ZAI Coding Plan provider?',
       detected.hasZaiPlan ? 'yes' : 'no',
     );
     console.log();
@@ -929,7 +931,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 9/${totalQuestions}:${RESET}`);
     const antigravity = await askYesNo(
       rl,
-      'Enable Antigravity authentication for Google models?',
+      'Enable Antigravity (Google) provider?',
       detected.hasAntigravity ? 'yes' : 'no',
     );
     console.log();
@@ -937,7 +939,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 10/${totalQuestions}:${RESET}`);
     const chutes = await askYesNo(
       rl,
-      'Enable Chutes provider via OpenCode auth flow?',
+      'Enable Chutes provider?',
       detected.hasChutes ? 'yes' : 'no',
     );
     console.log();
@@ -1038,7 +1040,9 @@ async function runInteractiveMode(
       customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
       console.log();
     } else {
-      printInfo('Models-only mode: skipping skills prompts.');
+      printInfo(
+        'Models-only mode: skipping plugin/auth setup and skills prompts.',
+      );
       console.log();
     }
 
