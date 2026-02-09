@@ -40,6 +40,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.openrouterKey = arg.slice('--openrouter-key='.length);
     } else if (arg === '--dry-run') {
       result.dryRun = true;
+    } else if (arg === '--models-only') {
+      result.modelsOnly = true;
     } else if (arg === '-h' || arg === '--help') {
       printHelp();
       process.exit(0);
@@ -54,6 +56,7 @@ function printHelp(): void {
 oh-my-opencode-slim installer
 
 Usage: bunx oh-my-opencode-slim install [OPTIONS]
+       bunx oh-my-opencode-slim models [OPTIONS]
 
 Options:
   --kimi=yes|no          Kimi API access (yes/no)
@@ -72,10 +75,12 @@ Options:
   --skills=yes|no        Install recommended skills (yes/no)
   --no-tui               Non-interactive mode (requires all flags)
   --dry-run              Simulate install without writing files or requiring OpenCode
+  --models-only          Update model assignments only (skip plugin/auth/skills)
   -h, --help             Show this help message
 
 Examples:
   bunx oh-my-opencode-slim install
+  bunx oh-my-opencode-slim models
   bunx oh-my-opencode-slim install --no-tui --kimi=yes --openai=yes --anthropic=yes --copilot=no --zai-plan=no --antigravity=yes --chutes=no --opencode-free=yes --balanced-spend=yes --opencode-free-model=auto --aa-key=YOUR_AA_KEY --openrouter-key=YOUR_OR_KEY --tmux=no --skills=yes
 `);
 }
@@ -83,8 +88,12 @@ Examples:
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args[0] === 'install') {
-    const installArgs = parseArgs(args.slice(args[0] === 'install' ? 1 : 0));
+  if (args.length === 0 || args[0] === 'install' || args[0] === 'models') {
+    const hasSubcommand = args[0] === 'install' || args[0] === 'models';
+    const installArgs = parseArgs(args.slice(hasSubcommand ? 1 : 0));
+    if (args[0] === 'models') {
+      installArgs.modelsOnly = true;
+    }
     const exitCode = await install(installArgs);
     process.exit(exitCode);
   } else if (args[0] === '-h' || args[0] === '--help') {

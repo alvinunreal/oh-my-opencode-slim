@@ -60,6 +60,7 @@ function baseConfig(): InstallConfig {
     hasTmux: false,
     installSkills: false,
     installCustomSkills: false,
+    setupMode: 'quick',
   };
 }
 
@@ -79,7 +80,7 @@ describe('dynamic-model-selection matrix', () => {
         fixer: 'chutes/minimax-m2.1',
         designer: 'chutes/kimi-k2.5',
         librarian: 'anthropic/claude-opus-4-6',
-        explorer: 'anthropic/claude-haiku-4-5',
+        explorer: 'chutes/minimax-m2.1',
       },
       expectedV2: {
         oracle: 'openai/gpt-5.3-codex',
@@ -87,7 +88,7 @@ describe('dynamic-model-selection matrix', () => {
         fixer: 'chutes/minimax-m2.1',
         designer: 'chutes/kimi-k2.5',
         librarian: 'anthropic/claude-opus-4-6',
-        explorer: 'anthropic/claude-haiku-4-5',
+        explorer: 'chutes/minimax-m2.1',
       },
     },
     {
@@ -150,7 +151,7 @@ describe('dynamic-model-selection matrix', () => {
         fixer: 'github-copilot/grok-code-fast-1',
         designer: 'anthropic/claude-opus-4-6',
         librarian: 'github-copilot/grok-code-fast-1',
-        explorer: 'anthropic/claude-haiku-4-5',
+        explorer: 'github-copilot/grok-code-fast-1',
       },
       expectedV2: {
         oracle: 'anthropic/claude-opus-4-6',
@@ -158,7 +159,7 @@ describe('dynamic-model-selection matrix', () => {
         fixer: 'github-copilot/grok-code-fast-1',
         designer: 'anthropic/claude-opus-4-6',
         librarian: 'github-copilot/grok-code-fast-1',
-        explorer: 'anthropic/claude-haiku-4-5',
+        explorer: 'github-copilot/grok-code-fast-1',
       },
     },
     {
@@ -200,7 +201,7 @@ describe('dynamic-model-selection matrix', () => {
         orchestrator: 'chutes/kimi-k2.5',
         fixer: 'google/antigravity-gemini-3-pro',
         designer: 'anthropic/claude-opus-4-6',
-        librarian: 'chutes/kimi-k2.5',
+        librarian: 'chutes/minimax-m2.1',
         explorer: 'google/antigravity-gemini-3-flash',
       },
       expectedV2: {
@@ -208,7 +209,7 @@ describe('dynamic-model-selection matrix', () => {
         orchestrator: 'chutes/kimi-k2.5',
         fixer: 'google/antigravity-gemini-3-pro',
         designer: 'anthropic/claude-opus-4-6',
-        librarian: 'chutes/kimi-k2.5',
+        librarian: 'chutes/minimax-m2.1',
         explorer: 'google/antigravity-gemini-3-flash',
       },
     },

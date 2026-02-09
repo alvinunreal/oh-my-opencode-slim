@@ -233,6 +233,7 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     installCustomSkills: args.skills === 'yes', // Install custom skills when skills=yes
     setupMode: 'quick', // Non-interactive mode defaults to quick setup
     dryRun: args.dryRun,
+    modelsOnly: args.modelsOnly,
   };
 }
 
@@ -335,55 +336,64 @@ async function askModelByNumber(
   prompt: string,
   allowEmpty = false,
 ): Promise<string | undefined> {
-  console.log(`${BOLD}${prompt}${RESET}`);
-  console.log(`${DIM}Available models:${RESET}`);
+  let showAll = false;
 
-  // Show max 5 models
-  const modelsToShow = models.slice(0, 5);
-  const remainingCount = models.length - 5;
+  while (true) {
+    console.log(`${BOLD}${prompt}${RESET}`);
+    console.log(`${DIM}Available models:${RESET}`);
 
-  for (const [index, model] of modelsToShow.entries()) {
-    const name = model.name ? ` ${DIM}(${model.name})${RESET}` : '';
-    console.log(
-      `  ${DIM}${index + 1}.${RESET} ${BLUE}${model.model}${RESET}${name}`,
+    const modelsToShow = showAll ? models : models.slice(0, 5);
+    const remainingCount = models.length - modelsToShow.length;
+
+    for (const [index, model] of modelsToShow.entries()) {
+      const displayIndex = showAll ? index + 1 : index + 1;
+      const name = model.name ? ` ${DIM}(${model.name})${RESET}` : '';
+      console.log(
+        `  ${DIM}${displayIndex}.${RESET} ${BLUE}${model.model}${RESET}${name}`,
+      );
+    }
+
+    if (!showAll && remainingCount > 0) {
+      console.log(`${DIM}  ... and ${remainingCount} more${RESET}`);
+      console.log(`${DIM}  (type "all" to show the full list)${RESET}`);
+    }
+    console.log(`${DIM}  (or type any model ID directly)${RESET}`);
+    console.log();
+
+    const answer = (await rl.question(`${BLUE}Selection${RESET}: `))
+      .trim()
+      .toLowerCase();
+
+    if (!answer) {
+      if (allowEmpty) return undefined;
+      return models[0]?.model;
+    }
+
+    if (answer === 'all') {
+      showAll = true;
+      console.log();
+      continue;
+    }
+
+    const asNumber = Number.parseInt(answer, 10);
+    if (
+      Number.isFinite(asNumber) &&
+      asNumber >= 1 &&
+      asNumber <= models.length
+    ) {
+      return models[asNumber - 1]?.model;
+    }
+
+    const byId = models.find((m) => m.model.toLowerCase() === answer);
+    if (byId) return byId.model;
+
+    if (answer.includes('/')) return answer;
+
+    printWarning(
+      `Invalid selection: "${answer}". Using first available model.`,
     );
-  }
-
-  if (remainingCount > 0) {
-    console.log(
-      `${DIM}  ... and ${remainingCount} more (type model ID directly)${RESET}`,
-    );
-  }
-  console.log(`${DIM}  (or type any model ID directly)${RESET}`);
-  console.log();
-
-  const answer = (await rl.question(`${BLUE}Selection${RESET}: `))
-    .trim()
-    .toLowerCase();
-
-  if (!answer) {
-    if (allowEmpty) return undefined;
     return models[0]?.model;
   }
-
-  const asNumber = Number.parseInt(answer, 10);
-  if (
-    Number.isFinite(asNumber) &&
-    asNumber >= 1 &&
-    asNumber <= modelsToShow.length
-  ) {
-    return modelsToShow[asNumber - 1]?.model;
-  }
-
-  // Check if it's a valid model ID in the full list
-  const byId = models.find((m) => m.model.toLowerCase() === answer);
-  if (byId) return byId.model;
-
-  // If not found but user typed something with '/', assume it's a custom model ID
-  if (answer.includes('/')) return answer;
-
-  printWarning(`Invalid selection: "${answer}". Using first available model.`);
-  return models[0]?.model;
 }
 
 async function configureAgentManually(
@@ -463,6 +473,7 @@ async function configureAgentManually(
 async function runManualSetupMode(
   rl: readline.Interface,
   detected: DetectedConfig,
+  modelsOnly = false,
 ): Promise<InstallConfig> {
   console.log();
   console.log(`${BOLD}Manual Setup Mode${RESET}`);
@@ -495,7 +506,7 @@ async function runManualSetupMode(
 
   const useOpenCodeFree = await askYesNo(
     rl,
-    'Use only OpenCode free models (opencode/*) with live refresh?',
+    'Use Opencode Free models (opencode/*)?',
     'yes',
   );
   console.log();
@@ -695,27 +706,34 @@ async function runManualSetupMode(
   );
   console.log();
 
-  // Skills prompt
-  console.log(`${BOLD}Recommended Skills:${RESET}`);
-  for (const skill of RECOMMENDED_SKILLS) {
-    console.log(
-      `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
-    );
-  }
-  console.log();
-  const skills = await askYesNo(rl, 'Install recommended skills?', 'yes');
-  console.log();
+  let skills: BooleanArg = 'no';
+  let customSkills: BooleanArg = 'no';
+  if (!modelsOnly) {
+    // Skills prompt
+    console.log(`${BOLD}Recommended Skills:${RESET}`);
+    for (const skill of RECOMMENDED_SKILLS) {
+      console.log(
+        `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+      );
+    }
+    console.log();
+    skills = await askYesNo(rl, 'Install recommended skills?', 'yes');
+    console.log();
 
-  // Custom skills prompt
-  console.log(`${BOLD}Custom Skills:${RESET}`);
-  for (const skill of CUSTOM_SKILLS) {
-    console.log(
-      `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
-    );
+    // Custom skills prompt
+    console.log(`${BOLD}Custom Skills:${RESET}`);
+    for (const skill of CUSTOM_SKILLS) {
+      console.log(
+        `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+      );
+    }
+    console.log();
+    customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
+    console.log();
+  } else {
+    printInfo('Models-only mode: skipping skills prompts.');
+    console.log();
   }
-  console.log();
-  const customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
-  console.log();
 
   return {
     hasKimi: kimi === 'yes',
@@ -738,11 +756,13 @@ async function runManualSetupMode(
     installCustomSkills: customSkills === 'yes',
     setupMode: 'manual',
     manualAgentConfigs,
+    modelsOnly,
   };
 }
 
 async function runInteractiveMode(
   detected: DetectedConfig,
+  modelsOnly = false,
 ): Promise<InstallConfig> {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -759,7 +779,7 @@ async function runInteractiveMode(
     const setupMode = await askSetupMode(rl);
 
     if (setupMode === 'manual') {
-      const config = await runManualSetupMode(rl, detected);
+      const config = await runManualSetupMode(rl, detected, modelsOnly);
       rl.close();
       return config;
     }
@@ -798,7 +818,7 @@ async function runInteractiveMode(
     console.log(`${BOLD}Question 3/${totalQuestions}:${RESET}`);
     const useOpenCodeFree = await askYesNo(
       rl,
-      'Use only OpenCode free models (opencode/*) with live refresh?',
+      'Use Opencode Free models (opencode/*)?',
       'yes',
     );
     console.log();
@@ -827,6 +847,9 @@ async function runInteractiveMode(
           discovery.models[0]?.model;
 
         if (recommendedPrimary) {
+          printInfo(
+            'This step configures only OpenCode Free primary/support models.',
+          );
           console.log(`${BOLD}OpenCode Free Models:${RESET}`);
           selectedOpenCodePrimaryModel = await askModelSelection(
             rl,
@@ -842,10 +865,19 @@ async function runInteractiveMode(
               discovery.models,
               selectedOpenCodePrimaryModel,
             )?.model ?? selectedOpenCodePrimaryModel;
+
+          const openCodeSupportList = discovery.models.filter(
+            (model) => model.model !== selectedOpenCodePrimaryModel,
+          );
+          const openCodeSupportDefault =
+            recommendedSecondary === selectedOpenCodePrimaryModel
+              ? (openCodeSupportList[0]?.model ?? recommendedSecondary)
+              : recommendedSecondary;
+
           selectedOpenCodeSecondaryModel = await askModelSelection(
             rl,
-            discovery.models,
-            recommendedSecondary,
+            openCodeSupportList,
+            openCodeSupportDefault,
             'Choose support model for explorer/librarian/fixer',
           );
         }
@@ -942,10 +974,19 @@ async function runInteractiveMode(
           const recommendedSecondary =
             pickSupportChutesModel(discovery.models, selectedChutesPrimaryModel)
               ?.model ?? selectedChutesPrimaryModel;
+
+          const chutesSupportList = discovery.models.filter(
+            (model) => model.model !== selectedChutesPrimaryModel,
+          );
+          const chutesSupportDefault =
+            recommendedSecondary === selectedChutesPrimaryModel
+              ? (chutesSupportList[0]?.model ?? recommendedSecondary)
+              : recommendedSecondary;
+
           selectedChutesSecondaryModel = await askModelSelection(
             rl,
-            discovery.models,
-            recommendedSecondary,
+            chutesSupportList,
+            chutesSupportDefault,
             'Choose Chutes support model for explorer/librarian/fixer',
           );
         }
@@ -972,27 +1013,34 @@ async function runInteractiveMode(
     //   console.log()
     // }
 
-    // Skills prompt
-    console.log(`${BOLD}Recommended Skills:${RESET}`);
-    for (const skill of RECOMMENDED_SKILLS) {
-      console.log(
-        `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
-      );
-    }
-    console.log();
-    const skills = await askYesNo(rl, 'Install recommended skills?', 'yes');
-    console.log();
+    let skills: BooleanArg = 'no';
+    let customSkills: BooleanArg = 'no';
+    if (!modelsOnly) {
+      // Skills prompt
+      console.log(`${BOLD}Recommended Skills:${RESET}`);
+      for (const skill of RECOMMENDED_SKILLS) {
+        console.log(
+          `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+        );
+      }
+      console.log();
+      skills = await askYesNo(rl, 'Install recommended skills?', 'yes');
+      console.log();
 
-    // Custom skills prompt
-    console.log(`${BOLD}Custom Skills:${RESET}`);
-    for (const skill of CUSTOM_SKILLS) {
-      console.log(
-        `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
-      );
+      // Custom skills prompt
+      console.log(`${BOLD}Custom Skills:${RESET}`);
+      for (const skill of CUSTOM_SKILLS) {
+        console.log(
+          `  ${SYMBOLS.bullet} ${BOLD}${skill.name}${RESET}: ${skill.description}`,
+        );
+      }
+      console.log();
+      customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
+      console.log();
+    } else {
+      printInfo('Models-only mode: skipping skills prompts.');
+      console.log();
     }
-    console.log();
-    const customSkills = await askYesNo(rl, 'Install custom skills?', 'yes');
-    console.log();
 
     return {
       hasKimi: kimi === 'yes',
@@ -1018,6 +1066,7 @@ async function runInteractiveMode(
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
       setupMode: 'quick',
+      modelsOnly,
     };
   } finally {
     rl.close();
@@ -1044,16 +1093,24 @@ async function runInstall(config: InstallConfig): Promise<number> {
     resolvedConfig.hasChutes ||
     resolvedConfig.useOpenCodeFreeModels;
 
+  const modelsOnly = resolvedConfig.modelsOnly === true;
+
   // Calculate total steps dynamically
-  let totalSteps = 4; // Base: check opencode, add plugin, disable default agents, write lite config
+  let totalSteps = modelsOnly ? 2 : 4; // Models-only: check + write
   if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
-  if (resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
-  if (resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
+  if (!modelsOnly && resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
+  if (!modelsOnly && resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
   if (hasAnyEnabledProvider) totalSteps += 1; // dynamic model resolution
-  if (resolvedConfig.installSkills) totalSteps += 1; // skills installation
-  if (resolvedConfig.installCustomSkills) totalSteps += 1; // custom skills installation
+  if (!modelsOnly && resolvedConfig.installSkills) totalSteps += 1; // skills installation
+  if (!modelsOnly && resolvedConfig.installCustomSkills) totalSteps += 1; // custom skills installation
 
   let step = 1;
+
+  if (modelsOnly) {
+    printInfo(
+      'Models-only mode: updating model assignments without reinstalling plugins/skills.',
+    );
+  }
 
   printStep(step++, totalSteps, 'Checking OpenCode installation...');
   if (resolvedConfig.dryRun) {
@@ -1186,16 +1243,18 @@ async function runInstall(config: InstallConfig): Promise<number> {
     );
   }
 
-  printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
-  if (resolvedConfig.dryRun) {
-    printInfo('Dry run mode - skipping plugin installation');
-  } else {
-    const pluginResult = await addPluginToOpenCodeConfig();
-    if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
+  if (!modelsOnly) {
+    printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - skipping plugin installation');
+    } else {
+      const pluginResult = await addPluginToOpenCodeConfig();
+      if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
+    }
   }
 
   // Add Antigravity support if requested
-  if (resolvedConfig.hasAntigravity) {
+  if (!modelsOnly && resolvedConfig.hasAntigravity) {
     printStep(step++, totalSteps, 'Adding Antigravity plugin...');
     if (resolvedConfig.dryRun) {
       printInfo('Dry run mode - skipping Antigravity plugin');
@@ -1217,7 +1276,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
     }
   }
 
-  if (resolvedConfig.hasChutes) {
+  if (!modelsOnly && resolvedConfig.hasChutes) {
     printStep(step++, totalSteps, 'Enabling Chutes auth flow...');
     if (resolvedConfig.dryRun) {
       printInfo('Dry run mode - skipping Chutes auth flow');
@@ -1263,12 +1322,14 @@ async function runInstall(config: InstallConfig): Promise<number> {
     }
   }
 
-  printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
-  if (resolvedConfig.dryRun) {
-    printInfo('Dry run mode - skipping agent disabling');
-  } else {
-    const agentResult = disableDefaultAgents();
-    if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
+  if (!modelsOnly) {
+    printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
+    if (resolvedConfig.dryRun) {
+      printInfo('Dry run mode - skipping agent disabling');
+    } else {
+      const agentResult = disableDefaultAgents();
+      if (!handleStepResult(agentResult, 'Default agents disabled')) return 1;
+    }
   }
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
@@ -1282,7 +1343,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   // Install skills if requested
-  if (resolvedConfig.installSkills) {
+  if (!modelsOnly && resolvedConfig.installSkills) {
     printStep(step++, totalSteps, 'Installing recommended skills...');
     if (resolvedConfig.dryRun) {
       printInfo('Dry run mode - would install skills:');
@@ -1307,7 +1368,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   // Install custom skills if requested
-  if (resolvedConfig.installCustomSkills) {
+  if (!modelsOnly && resolvedConfig.installCustomSkills) {
     printStep(step++, totalSteps, 'Installing custom skills...');
     if (resolvedConfig.dryRun) {
       printInfo('Dry run mode - would install custom skills:');
@@ -1464,8 +1525,9 @@ export async function install(args: InstallArgs): Promise<number> {
   }
   console.log();
 
-  const config = await runInteractiveMode(detected);
+  const config = await runInteractiveMode(detected, args.modelsOnly === true);
   // Pass dryRun through to the config
   config.dryRun = args.dryRun;
+  config.modelsOnly = args.modelsOnly;
   return runInstall(config);
 }

@@ -17,6 +17,7 @@ export interface InstallArgs {
   aaKey?: string;
   openrouterKey?: string;
   dryRun?: boolean;
+  modelsOnly?: boolean;
 }
 
 export interface OpenCodeFreeModel {
@@ -133,6 +134,7 @@ export interface InstallConfig {
   setupMode: 'quick' | 'manual';
   manualAgentConfigs?: Record<string, ManualAgentConfig>;
   dryRun?: boolean;
+  modelsOnly?: boolean;
 }
 
 export interface ConfigMergeResult {

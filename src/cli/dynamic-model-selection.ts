@@ -607,6 +607,61 @@ function scoreForEngine(
   return combinedScore(agent, model, externalSignals, versionRecencyMap);
 }
 
+function selectTopModelsPerProvider(
+  models: DiscoveredModel[],
+  engineVersion: ScoringEngineVersion,
+  externalSignals: ExternalSignalMap | undefined,
+  versionRecencyMap: Record<string, number>,
+): DiscoveredModel[] {
+  const byProvider = new Map<string, DiscoveredModel[]>();
+
+  for (const model of models) {
+    const current = byProvider.get(model.providerID) ?? [];
+    current.push(model);
+    byProvider.set(model.providerID, current);
+  }
+
+  const selected: DiscoveredModel[] = [];
+
+  for (const providerModels of byProvider.values()) {
+    if (providerModels.length <= 2) {
+      selected.push(...providerModels);
+      continue;
+    }
+
+    const ranked = [...providerModels]
+      .map((model) => {
+        const total = AGENTS.reduce((sum, agent) => {
+          return (
+            sum +
+            scoreForEngine(
+              engineVersion,
+              agent,
+              model,
+              externalSignals,
+              versionRecencyMap,
+            )
+          );
+        }, 0);
+
+        return {
+          model,
+          score: total / AGENTS.length,
+        };
+      })
+      .sort((a, b) => {
+        if (a.score !== b.score) return b.score - a.score;
+        return a.model.model.localeCompare(b.model.model);
+      })
+      .slice(0, 2)
+      .map((entry) => entry.model);
+
+    selected.push(...ranked);
+  }
+
+  return selected;
+}
+
 function countProviderUsage(
   agents: Record<string, { model: string; variant?: string }>,
 ): Map<string, number> {
@@ -625,6 +680,10 @@ function rebalanceForSubscriptionMode(
   provenance: Record<string, { winnerLayer: string; winnerModel: string }>,
   paidProviders: string[],
   getRankedModels: (agent: AgentName) => DiscoveredModel[],
+  getPinnedModelForProvider: (
+    agent: AgentName,
+    providerID: string,
+  ) => string | undefined,
   targetByProvider: Record<string, number>,
   externalSignals: ExternalSignalMap | undefined,
   versionRecencyMap: Record<string, number>,
@@ -680,9 +739,10 @@ function rebalanceForSubscriptionMode(
       );
 
       for (const underProvider of underProviders) {
-        const candidate = ranked.find(
-          (model) => model.providerID === underProvider,
-        );
+        const pinned = getPinnedModelForProvider(agent, underProvider);
+        const candidate =
+          ranked.find((model) => model.model === pinned) ??
+          ranked.find((model) => model.providerID === underProvider);
         if (!candidate) continue;
 
         const candidateScore = scoreForEngine(
@@ -966,7 +1026,7 @@ export function buildDynamicModelPlan(
   ].reduce((acc, modelID) => ensureSyntheticModel(acc, modelID), catalog);
 
   const enabledProviders = new Set(getEnabledProviders(config));
-  const providerCandidates = catalogWithSelectedModels.filter((m) => {
+  const providerUniverse = catalogWithSelectedModels.filter((m) => {
     if (!enabledProviders.has(m.providerID)) return false;
 
     if (m.providerID === 'chutes' && /qwen/i.test(m.model)) {
@@ -975,7 +1035,16 @@ export function buildDynamicModelPlan(
 
     return true;
   });
-  const versionRecencyMap = getVersionRecencyMap(providerCandidates);
+  const engineVersion =
+    options?.scoringEngineVersion ?? config.scoringEngineVersion ?? 'v1';
+  const versionRecencyMap = getVersionRecencyMap(providerUniverse);
+
+  const providerCandidates = selectTopModelsPerProvider(
+    providerUniverse,
+    engineVersion,
+    externalSignals,
+    versionRecencyMap,
+  );
 
   if (providerCandidates.length === 0) {
     return null;
@@ -1004,8 +1073,6 @@ export function buildDynamicModelPlan(
     }
   }
   const providerUsage = new Map<string, number>();
-  const engineVersion =
-    options?.scoringEngineVersion ?? config.scoringEngineVersion ?? 'v1';
   const rankCache = new Map<AgentName, DiscoveredModel[]>();
   const shadowDiffs: Record<
     string,
@@ -1015,18 +1082,33 @@ export function buildDynamicModelPlan(
   const agents: Record<string, { model: string; variant?: string }> = {};
   const chains: Record<string, string[]> = {};
   const provenance: DynamicModelPlan['provenance'] = {};
-  const lockedAgents = new Set<AgentName>();
-  const hasForcedSelections =
-    (config.hasChutes &&
-      Boolean(
-        config.selectedChutesPrimaryModel ||
-          config.selectedChutesSecondaryModel,
-      )) ||
-    (config.useOpenCodeFreeModels &&
-      Boolean(
-        config.selectedOpenCodePrimaryModel ||
-          config.selectedOpenCodeSecondaryModel,
-      ));
+
+  const getSelectedChutesForAgent = (agent: AgentName): string | undefined => {
+    if (!config.hasChutes) return undefined;
+    return agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
+      ? (config.selectedChutesSecondaryModel ??
+          config.selectedChutesPrimaryModel)
+      : config.selectedChutesPrimaryModel;
+  };
+
+  const getSelectedOpenCodeForAgent = (
+    agent: AgentName,
+  ): string | undefined => {
+    if (!config.useOpenCodeFreeModels) return undefined;
+    return agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
+      ? (config.selectedOpenCodeSecondaryModel ??
+          config.selectedOpenCodePrimaryModel)
+      : config.selectedOpenCodePrimaryModel;
+  };
+
+  const getPinnedModelForProvider = (
+    agent: AgentName,
+    providerID: string,
+  ): string | undefined => {
+    if (providerID === 'chutes') return getSelectedChutesForAgent(agent);
+    if (providerID === 'opencode') return getSelectedOpenCodeForAgent(agent);
+    return undefined;
+  };
 
   const getRankedModels = (agent: AgentName): DiscoveredModel[] => {
     const cached = rankCache.get(agent);
@@ -1084,6 +1166,10 @@ export function buildDynamicModelPlan(
     const providerOrder = dedupe(ranked.map((m) => m.providerID));
     const perProviderBest = providerOrder.flatMap((providerID) => {
       const providerModels = ranked.filter((m) => m.providerID === providerID);
+      const pinned = getPinnedModelForProvider(agent, providerID);
+      if (pinned && providerModels.some((m) => m.model === pinned)) {
+        return [pinned];
+      }
       return getProviderBundle(
         providerModels,
         agent,
@@ -1098,17 +1184,8 @@ export function buildDynamicModelPlan(
       model.startsWith('opencode/'),
     );
 
-    const selectedOpencode =
-      agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
-        ? (config.selectedOpenCodeSecondaryModel ??
-          config.selectedOpenCodePrimaryModel)
-        : config.selectedOpenCodePrimaryModel;
-
-    const selectedChutes =
-      agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
-        ? (config.selectedChutesSecondaryModel ??
-          config.selectedChutesPrimaryModel)
-        : config.selectedChutesPrimaryModel;
+    const selectedOpencode = getSelectedOpenCodeForAgent(agent);
+    const selectedChutes = getSelectedChutesForAgent(agent);
 
     const chain = dedupe([
       primary.model,
@@ -1137,42 +1214,25 @@ export function buildDynamicModelPlan(
     let finalModel = resolved.model;
     let finalChain = resolved.chain;
 
-    const selectedChutesForAgent =
-      agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
-        ? (config.selectedChutesSecondaryModel ??
-          config.selectedChutesPrimaryModel)
-        : config.selectedChutesPrimaryModel;
+    const selectedChutesForAgent = getSelectedChutesForAgent(agent);
+    const selectedOpenCodeForAgent = getSelectedOpenCodeForAgent(agent);
 
-    const selectedOpenCodeForAgent =
-      agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
-        ? (config.selectedOpenCodeSecondaryModel ??
-          config.selectedOpenCodePrimaryModel)
-        : config.selectedOpenCodePrimaryModel;
+    const forceChutes =
+      finalModel.startsWith('chutes/') && Boolean(selectedChutesForAgent);
+    const forceOpenCode =
+      finalModel.startsWith('opencode/') && Boolean(selectedOpenCodeForAgent);
 
-    const hasChutesSelection =
-      config.hasChutes && Boolean(selectedChutesForAgent);
-    const hasOpenCodeSelection =
-      config.useOpenCodeFreeModels && Boolean(selectedOpenCodeForAgent);
-
-    if (hasOpenCodeSelection && selectedOpenCodeForAgent) {
+    if (forceOpenCode && selectedOpenCodeForAgent) {
       finalModel = selectedOpenCodeForAgent;
       finalChain = dedupe([selectedOpenCodeForAgent, ...finalChain]);
     }
 
-    if (hasChutesSelection && selectedChutesForAgent) {
+    if (forceChutes && selectedChutesForAgent) {
       finalModel = selectedChutesForAgent;
       finalChain = dedupe([selectedChutesForAgent, ...finalChain]);
     }
 
-    const wasForced =
-      (hasChutesSelection && selectedChutesForAgent === finalModel) ||
-      (hasOpenCodeSelection &&
-        selectedOpenCodeForAgent === finalModel &&
-        !hasChutesSelection);
-
-    if (wasForced) {
-      lockedAgents.add(agent);
-    }
+    const wasForced = forceChutes || forceOpenCode;
 
     agents[agent] = {
       model: finalModel,
@@ -1187,7 +1247,7 @@ export function buildDynamicModelPlan(
     };
   }
 
-  if (hasPaidProviderEnabled && !hasForcedSelections) {
+  if (hasPaidProviderEnabled) {
     for (const providerID of paidProviders) {
       if ((providerUsage.get(providerID) ?? 0) > 0) continue;
 
@@ -1201,12 +1261,13 @@ export function buildDynamicModelPlan(
 
       for (const agent of PRIMARY_ASSIGNMENT_ORDER) {
         const currentModel = agents[agent]?.model;
-        if (!currentModel || lockedAgents.has(agent)) continue;
+        if (!currentModel) continue;
 
         const ranked = getRankedModels(agent);
-        const candidate = ranked.find(
-          (model) => model.providerID === providerID,
-        );
+        const pinned = getPinnedModelForProvider(agent, providerID);
+        const candidate =
+          ranked.find((model) => model.model === pinned) ??
+          ranked.find((model) => model.providerID === providerID);
         const current = ranked.find((model) => model.model === currentModel);
         if (!candidate || !current) continue;
 
@@ -1255,17 +1316,14 @@ export function buildDynamicModelPlan(
     }
   }
 
-  if (
-    config.balanceProviderUsage &&
-    hasPaidProviderEnabled &&
-    !hasForcedSelections
-  ) {
+  if (config.balanceProviderUsage && hasPaidProviderEnabled) {
     rebalanceForSubscriptionMode(
       agents,
       chains,
       provenance,
       paidProviders,
       getRankedModels,
+      getPinnedModelForProvider,
       targetByProvider,
       externalSignals,
       versionRecencyMap,
