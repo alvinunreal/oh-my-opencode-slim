@@ -430,6 +430,54 @@ export class BackgroundTaskManager {
   }
 
   /**
+   * Handle session.deleted events for cleanup.
+   * When a session is deleted, cancel associated tasks and clean up.
+   */
+  async handleSessionDeleted(event: {
+    type: string;
+    properties?: { info?: { id?: string }; sessionID?: string };
+  }): Promise<void> {
+    if (event.type !== 'session.deleted') return;
+
+    const sessionId = event.properties?.info?.id ?? event.properties?.sessionID;
+    if (!sessionId) return;
+
+    const taskId = this.tasksBySessionId.get(sessionId);
+    if (!taskId) return;
+
+    const task = this.tasks.get(taskId);
+    if (!task) return;
+
+    // Only handle if task is still active
+    if (task.status === 'running' || task.status === 'pending') {
+      log(`[background-manager] Session deleted, cancelling task: ${task.id}`);
+
+      // Clear completion resolver if waiting
+      this.completionResolvers.delete(taskId);
+
+      // Mark as cancelled
+      (task as BackgroundTask & { status: string }).status = 'cancelled';
+      task.completedAt = new Date();
+      task.error = 'Session deleted';
+
+      // Clean up session tracking
+      this.tasksBySessionId.delete(sessionId);
+      this.agentBySessionId.delete(sessionId);
+
+      // Resolve any waiting callers
+      const resolver = this.completionResolvers.get(taskId);
+      if (resolver) {
+        resolver(task);
+        this.completionResolvers.delete(taskId);
+      }
+
+      log(
+        `[background-manager] Task cancelled due to session deletion: ${task.id}`,
+      );
+    }
+  }
+
+  /**
    * Extract task result and mark complete.
    */
   private async extractAndCompleteTask(task: BackgroundTask): Promise<void> {
@@ -499,10 +547,13 @@ export class BackgroundTaskManager {
       task.error = resultOrError;
     }
 
-    // Clean up session tracking maps to prevent memory leak
+    // Abort session to trigger pane cleanup and free resources
     if (task.sessionId) {
-      this.tasksBySessionId.delete(task.sessionId);
-      this.agentBySessionId.delete(task.sessionId);
+      this.client.session
+        .abort({
+          path: { id: task.sessionId },
+        })
+        .catch(() => {});
     }
 
     // Send notification to parent session

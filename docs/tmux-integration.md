@@ -216,6 +216,46 @@ tmux switch -t project2
    tail -f ~/.config/opencode/logs/opencode.log
    ```
 
+### Ghost Panes and Orphaned Processes
+
+**Problem:** Tmux panes remain open after tasks complete, or `opencode attach` processes accumulate
+
+**This issue is fixed in the latest version.** The session lifecycle now properly closes panes and terminates processes.
+
+**To verify the fix is working:**
+```bash
+# After running some background tasks, check for orphans
+ps aux | grep "opencode attach" | grep -v grep
+# Should return no results
+
+# Check active tmux panes
+tmux list-panes
+# Should only show your main session pane(s)
+```
+
+**If you still see orphaned processes:**
+1. **Kill all orphaned processes:**
+   ```bash
+   pkill -f "opencode attach"
+   ```
+
+2. **Close all ghost panes:**
+   ```bash
+   # In tmux, close panes manually
+   tmux kill-pane -t <pane-id>
+   ```
+
+3. **Restart OpenCode** with the updated plugin
+
+**Technical Details:**
+The fix implements proper session lifecycle management:
+- `session.abort()` is called after task completion
+- Graceful shutdown with Ctrl+C before killing panes
+- Event handlers for `session.deleted` events
+- Automatic cleanup of tmux panes and processes
+
+See [AGENTS.md](../AGENTS.md) for implementation details.
+
 ### Port Conflicts
 
 **Problem:** "Port already in use" or agents not connecting

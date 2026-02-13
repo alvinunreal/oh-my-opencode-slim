@@ -179,6 +179,22 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           properties?: { sessionID?: string; status?: { type: string } };
         },
       );
+
+      // Handle session.deleted events for:
+      // 1. BackgroundTaskManager: task cleanup
+      // 2. TmuxSessionManager: pane cleanup
+      await backgroundManager.handleSessionDeleted(
+        input.event as {
+          type: string;
+          properties?: { info?: { id?: string }; sessionID?: string };
+        },
+      );
+      await tmuxSessionManager.onSessionDeleted(
+        input.event as {
+          type: string;
+          properties?: { sessionID?: string };
+        },
+      );
     },
 
     // Inject phase reminder before sending to API (doesn't show in UI)
