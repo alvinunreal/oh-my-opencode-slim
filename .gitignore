@@ -45,6 +45,7 @@ local
 .ignore
 opencode
 oh-my-opencode
+oh-my-opencode-slim.json
 
 # Python
 __pycache__/

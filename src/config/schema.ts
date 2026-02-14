@@ -7,6 +7,8 @@ const FALLBACK_AGENT_NAMES = [
   'explorer',
   'librarian',
   'fixer',
+  'long-fixer',
+  'quick-fixer',
 ] as const;
 
 const MANUAL_AGENT_NAMES = [
@@ -72,6 +74,8 @@ const FallbackChainsSchema = z
     explorer: AgentModelChainSchema.optional(),
     librarian: AgentModelChainSchema.optional(),
     fixer: AgentModelChainSchema.optional(),
+    'long-fixer': AgentModelChainSchema.optional(),
+    'quick-fixer': AgentModelChainSchema.optional(),
   })
   .catchall(AgentModelChainSchema);
 
@@ -131,6 +135,13 @@ export const FailoverConfigSchema = z.object({
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
+// Experimental configuration
+export const ExperimentalConfigSchema = z.object({
+  granularFixers: z.boolean().default(false),
+});
+
+export type ExperimentalConfig = z.infer<typeof ExperimentalConfigSchema>;
+
 // Main plugin config
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
@@ -143,6 +154,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
+  experimental: ExperimentalConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;
