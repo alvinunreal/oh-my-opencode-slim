@@ -254,3 +254,10 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 ## 📄 License
 
 MIT
+
+---
+
+<!-- MoltFounders Banner -->
+<a href="https://moltfounders.com/project/0f5874c7-9291-415b-9622-7509d96a2c73">
+  <img src="img/moltfounders-banner.png" alt="MoltFounders - The Agent Co-Founder Network">
+</a>
