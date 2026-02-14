@@ -452,9 +452,6 @@ export class BackgroundTaskManager {
     if (task.status === 'running' || task.status === 'pending') {
       log(`[background-manager] Session deleted, cancelling task: ${task.id}`);
 
-      // Clear completion resolver if waiting
-      this.completionResolvers.delete(taskId);
-
       // Mark as cancelled
       (task as BackgroundTask & { status: string }).status = 'cancelled';
       task.completedAt = new Date();
@@ -545,6 +542,13 @@ export class BackgroundTaskManager {
       task.result = resultOrError;
     } else {
       task.error = resultOrError;
+    }
+
+    // Clean up session tracking maps as fallback
+    // (handleSessionDeleted also does this when session.deleted event fires)
+    if (task.sessionId) {
+      this.tasksBySessionId.delete(task.sessionId);
+      this.agentBySessionId.delete(task.sessionId);
     }
 
     // Abort session to trigger pane cleanup and free resources
