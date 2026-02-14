@@ -46,6 +46,9 @@ local
 opencode
 oh-my-opencode
 
+# AI Memory
+.aim/
+
 # Python
 __pycache__/
 *.py[cod]
