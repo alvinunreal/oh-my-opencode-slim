@@ -37,6 +37,7 @@ function createMockContext(overrides?: {
           }
           return {};
         }),
+        abort: mock(async () => ({})),
       },
     },
     directory: '/test/directory',

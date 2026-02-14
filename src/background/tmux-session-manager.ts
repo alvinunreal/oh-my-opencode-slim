@@ -141,6 +141,24 @@ export class TmuxSessionManager {
     }
   }
 
+  /**
+   * Handle session.deleted events.
+   * When a session is deleted, close its tmux pane immediately.
+   */
+  async onSessionDeleted(event: SessionEvent): Promise<void> {
+    if (!this.enabled) return;
+    if (event.type !== 'session.deleted') return;
+
+    const sessionId = event.properties?.sessionID;
+    if (!sessionId) return;
+
+    log('[tmux-session-manager] session deleted, closing pane', {
+      sessionId,
+    });
+
+    await this.closeSession(sessionId);
+  }
+
   private startPolling(): void {
     if (this.pollInterval) return;
 
