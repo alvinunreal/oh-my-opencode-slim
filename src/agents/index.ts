@@ -1,4 +1,4 @@
-import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk';
+import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
 import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
   type AgentOverrideConfig,
@@ -29,13 +29,14 @@ type AgentFactory = (
 
 /**
  * Apply user-provided overrides to an agent's configuration.
- * Supports overriding model and temperature.
+ * Supports overriding model, variant, and temperature.
  */
 function applyOverrides(
   agent: AgentDefinition,
   override: AgentOverrideConfig,
 ): void {
   if (override.model) agent.config.model = override.model;
+  if (override.variant) agent.config.variant = override.variant;
   if (override.temperature !== undefined)
     agent.config.temperature = override.temperature;
 }
