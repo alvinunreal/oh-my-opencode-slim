@@ -5,7 +5,7 @@ import {
 } from '@opencode-ai/plugin';
 import type { BackgroundTaskManager } from '../background';
 import type { PluginConfig } from '../config';
-import { SUBAGENT_NAMES } from '../config';
+import { getActiveSubagentNames } from '../config';
 import type { TmuxConfig } from '../config/schema';
 
 const z = tool.schema;
@@ -24,7 +24,7 @@ export function createBackgroundTools(
   _tmuxConfig?: TmuxConfig,
   _pluginConfig?: PluginConfig,
 ): Record<string, ToolDefinition> {
-  const agentNames = SUBAGENT_NAMES.join(', ');
+  const agentNames = getActiveSubagentNames(_pluginConfig).join(', ');
 
   // Tool for launching agent tasks (fire-and-forget)
   const background_task = tool({

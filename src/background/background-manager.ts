@@ -17,6 +17,7 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
 import {
   FALLBACK_FAILOVER_TIMEOUT_MS,
+  isGranularFixer,
   SUBAGENT_DELEGATION_RULES,
 } from '../config';
 import type { TmuxConfig } from '../config/schema';
@@ -133,11 +134,19 @@ export class BackgroundTaskManager {
    * to add new background agent types without updating SUBAGENT_DELEGATION_RULES.
    */
   private getSubagentRules(agentName: string): readonly string[] {
-    return (
-      SUBAGENT_DELEGATION_RULES[
-        agentName as keyof typeof SUBAGENT_DELEGATION_RULES
-      ] ?? ['explorer']
-    );
+    const rules = SUBAGENT_DELEGATION_RULES[
+      agentName as keyof typeof SUBAGENT_DELEGATION_RULES
+    ] ?? ['explorer'];
+
+    // Filter out granular fixers when the experimental flag is disabled,
+    // keeping delegation rules consistent with the agents actually created
+    // by createAgents().
+    const granularFixers = this.config?.experimental?.granularFixers ?? false;
+    if (!granularFixers) {
+      return rules.filter((name) => !isGranularFixer(name));
+    }
+
+    return rules;
   }
 
   /**

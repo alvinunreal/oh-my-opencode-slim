@@ -4,15 +4,21 @@ import {
   type AgentOverrideConfig,
   DEFAULT_MODELS,
   getAgentOverride,
+  isGranularFixer,
   loadAgentPrompt,
   type PluginConfig,
   SUBAGENT_NAMES,
+  type SubagentName,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
 
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
-import { createFixerAgent } from './fixer';
+import {
+  createFixerAgent,
+  createLongFixerAgent,
+  createQuickFixerAgent,
+} from './fixer';
 import { createLibrarianAgent } from './librarian';
 import { createOracleAgent } from './oracle';
 import { type AgentDefinition, createOrchestratorAgent } from './orchestrator';
@@ -73,7 +79,7 @@ function applyDefaultPermissions(
 
 // Agent Classification
 
-export type SubagentName = (typeof SUBAGENT_NAMES)[number];
+export type { SubagentName };
 
 export function isSubagent(name: string): name is SubagentName {
   return (SUBAGENT_NAMES as readonly string[]).includes(name);
@@ -87,6 +93,8 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   oracle: createOracleAgent,
   designer: createDesignerAgent,
   fixer: createFixerAgent,
+  'long-fixer': createLongFixerAgent,
+  'quick-fixer': createQuickFixerAgent,
 };
 
 // Public API
@@ -99,28 +107,58 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
-  // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
-  // existing users who don't have fixer in their config yet
+  // Get model for an agent with fallback logic for backwards compatibility.
+  // long-fixer and quick-fixer fall back to fixer's config, then their own DEFAULT_MODELS entry.
+  // fixer falls back to librarian's model if not configured (for backwards compatibility).
   const getModelForAgent = (name: SubagentName): string => {
-    if (name === 'fixer' && !getAgentOverride(config, 'fixer')?.model) {
+    const agentOverride = getAgentOverride(config, name);
+    if (agentOverride?.model) {
+      return agentOverride.model;
+    }
+
+    // For long-fixer and quick-fixer, fall back to fixer's config
+    if (isGranularFixer(name)) {
+      const fixerOverride = getAgentOverride(config, 'fixer');
+      if (fixerOverride?.model) {
+        return fixerOverride.model;
+      }
+      // Use the agent's own default model from DEFAULT_MODELS
+      return DEFAULT_MODELS[name];
+    }
+
+    // For fixer, fall back to librarian (backwards compatibility)
+    if (name === 'fixer') {
       return (
         getAgentOverride(config, 'librarian')?.model ?? DEFAULT_MODELS.librarian
       );
     }
+
     return DEFAULT_MODELS[name];
   };
 
+  // Determine if granular fixers are enabled
+  const granularFixersEnabled = config?.experimental?.granularFixers ?? false;
+
   // 1. Gather all sub-agent definitions with custom prompts
+  // Filter out long-fixer and quick-fixer when granularFixers is not enabled
   const protoSubAgents = (
     Object.entries(SUBAGENT_FACTORIES) as [SubagentName, AgentFactory][]
-  ).map(([name, factory]) => {
-    const customPrompts = loadAgentPrompt(name);
-    return factory(
-      getModelForAgent(name),
-      customPrompts.prompt,
-      customPrompts.appendPrompt,
-    );
-  });
+  )
+    .filter(([name]) => {
+      // Exclude granular fixers unless the experimental flag is enabled
+      if (isGranularFixer(name)) {
+        return granularFixersEnabled;
+      }
+      return true;
+    })
+    .map(([name, factory]) => {
+      const customPrompts = loadAgentPrompt(name);
+      return factory(
+        getModelForAgent(name),
+        customPrompts.prompt,
+        customPrompts.appendPrompt,
+      );
+    });
 
   // 2. Apply overrides and default permissions to each agent
   const allSubAgents = protoSubAgents.map((agent) => {
@@ -141,6 +179,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     orchestratorModel,
     orchestratorPrompts.prompt,
     orchestratorPrompts.appendPrompt,
+    granularFixersEnabled,
   );
   const oOverride = getAgentOverride(config, 'orchestrator');
   applyDefaultPermissions(orchestrator, oOverride?.skills);
