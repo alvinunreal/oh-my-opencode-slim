@@ -1340,7 +1340,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (resolvedConfig.dryRun) {
     const liteConfig = generateLiteConfig(resolvedConfig);
     printInfo('Dry run mode - configuration that would be written:');
-    console.log('\n' + JSON.stringify(liteConfig, null, 2) + '\n');
+    console.log(`\n${JSON.stringify(liteConfig, null, 2)}\n`);
   } else {
     const liteResult = writeLiteConfig(resolvedConfig);
     if (!handleStepResult(liteResult, 'Config written')) return 1;
