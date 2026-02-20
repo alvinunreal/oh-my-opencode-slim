@@ -2,6 +2,7 @@
   <img src="img/team.png" alt="Pantheon agents" width="420">
   <p><i>Six divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.</i></p>
   <p><b>Open Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
+  <p><a href="https://moltfounders.com/project/0f5874c7-9291-415b-9622-7509d96a2c73"><img src="https://moltfounders.com/badges/4.png" alt="MoltFounders" height="30"></a></p>
 </div>
 
 ---

@@ -1,4 +1,4 @@
-import type { AgentConfig } from '@opencode-ai/sdk';
+import type { AgentConfig } from '@opencode-ai/sdk/v2';
 
 export interface AgentDefinition {
   name: string;
@@ -67,7 +67,7 @@ Each specialist delivers 10x results in their domain:
 - @explorer → Parallel discovery when you need to find unknowns, not read knowns
 - @librarian → Complex/evolving APIs where docs prevent errors, not basic usage
 - @oracle → High-stakes decisions where wrong choice is costly, not routine calls
-- @designer → User-facing experiences where polish matters, not internal logic  
+- @designer → User-facing experiences where polish matters, not internal logic
 - @fixer → Parallel execution of clear specs, not explaining trivial changes
 
 **Delegation efficiency:**
