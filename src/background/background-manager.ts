@@ -254,6 +254,12 @@ export class BackgroundTaskManager {
     args: Parameters<OpencodeClient['session']['prompt']>[0],
     timeoutMs: number,
   ): Promise<void> {
+    // No timeout when fallback disabled (timeoutMs = 0)
+    if (timeoutMs <= 0) {
+      await this.client.session.prompt(args);
+      return;
+    }
+
     await Promise.race([
       this.client.session.prompt(args),
       new Promise<never>((_, reject) => {
@@ -340,9 +346,10 @@ export class BackgroundTaskManager {
         parts: [{ type: 'text' as const, text: task.prompt }],
       } as PromptBody) as unknown as PromptBody;
 
-      const timeoutMs =
-        this.config?.fallback?.timeoutMs ?? FALLBACK_FAILOVER_TIMEOUT_MS;
       const fallbackEnabled = this.config?.fallback?.enabled ?? true;
+      const timeoutMs = fallbackEnabled
+        ? (this.config?.fallback?.timeoutMs ?? FALLBACK_FAILOVER_TIMEOUT_MS)
+        : 0; // 0 = no timeout when fallback disabled
       const chain = fallbackEnabled
         ? this.resolveFallbackChain(task.agent)
         : [];
