@@ -89,14 +89,14 @@ Active providers: OpenAI + Gemini + Chutes + Copilot + OpenCode Free
 - Preset: `antigravity-mixed-openai`
 - Agents:
   - `orchestrator`: `chutes/kimi-k2.5`
-  - `oracle`: `openai/gpt-5.3-codex` (`high`)
+  - `oracle`: `google/antigravity-gemini-3.1-pro` (`high`)
   - `designer`: `chutes/kimi-k2.5` (`medium`)
   - `explorer`: `opencode/gpt-5-nano`
   - `librarian`: `opencode/gpt-5-nano`
   - `fixer`: `opencode/gpt-5-nano`
 - Fallback chains:
   - `orchestrator`: `chutes/kimi-k2.5 -> openai/gpt-5.3-codex -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> opencode/glm-4.7-free -> opencode/big-pickle`
-  - `oracle`: `openai/gpt-5.3-codex -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-pro -> chutes/kimi-k2.5 -> opencode/glm-4.7-free -> opencode/big-pickle`
+  - `oracle`: `google/antigravity-gemini-3.1-pro -> openai/gpt-5.3-codex -> github-copilot/grok-code-fast-1 -> chutes/kimi-k2.5 -> opencode/glm-4.7-free -> opencode/big-pickle`
   - `designer`: `chutes/kimi-k2.5 -> openai/gpt-5.1-codex-mini -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> opencode/glm-4.7-free -> opencode/big-pickle`
   - `explorer`: `opencode/gpt-5-nano -> openai/gpt-5.1-codex-mini -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> chutes/minimax-m2.1 -> opencode/big-pickle`
   - `librarian`: `opencode/gpt-5-nano -> openai/gpt-5.1-codex-mini -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> chutes/minimax-m2.1 -> opencode/big-pickle`
@@ -143,14 +143,14 @@ Active providers: OpenAI + Anthropic + Chutes + OpenCode Free
 
 Active providers: OpenAI + Copilot + ZAI Plan + Gemini + OpenCode Free
 
-- V1 agents: `oracle=google/antigravity-gemini-3-pro`, `orchestrator=google/antigravity-gemini-3-pro`, `fixer=openai/gpt-5.1-codex-mini`, `designer=github-copilot/grok-code-fast-1`, `librarian=zai-coding-plan/glm-4.7`, `explorer=google/antigravity-gemini-3-flash`
+- V1 agents: `oracle=google/antigravity-gemini-3.1-pro`, `orchestrator=openai/gpt-5.3-codex`, `fixer=openai/gpt-5.1-codex-mini`, `designer=google/antigravity-gemini-3.1-pro`, `librarian=zai-coding-plan/glm-4.7`, `explorer=github-copilot/grok-code-fast-1`
 - V2 agents: same as V1 for this composition
 
 ### C3 (curated)
 
 Active providers: Kimi + Gemini + Chutes + OpenCode Free
 
-- V1 agents: `oracle=google/antigravity-gemini-3-pro`, `orchestrator=google/antigravity-gemini-3-pro`, `fixer=chutes/minimax-m2.1`, `designer=kimi-for-coding/k2p5`, `librarian=google/antigravity-gemini-3-pro`, `explorer=google/antigravity-gemini-3-flash`
+- V1 agents: `oracle=google/antigravity-gemini-3.1-pro`, `orchestrator=google/antigravity-gemini-3.1-pro`, `fixer=chutes/minimax-m2.1`, `designer=kimi-for-coding/k2p5`, `librarian=google/antigravity-gemini-3.1-pro`, `explorer=google/antigravity-gemini-3-flash`
 - V2 agents: same except `fixer=chutes/kimi-k2.5`
 
 ### R1 (random)
@@ -171,8 +171,8 @@ Active providers: OpenAI + Kimi + ZAI Plan + Chutes + OpenCode Free
 
 Active providers: Gemini + Anthropic + Chutes + OpenCode Free
 
-- V1 agents: `oracle=google/antigravity-gemini-3-pro`, `orchestrator=google/antigravity-gemini-3-pro`, `fixer=chutes/minimax-m2.1`, `designer=anthropic/claude-opus-4-6`, `librarian=google/antigravity-gemini-3-pro`, `explorer=google/antigravity-gemini-3-flash`
-- V2 agents: `oracle=google/antigravity-gemini-3-pro`, `orchestrator=google/antigravity-gemini-3-pro`, `fixer=anthropic/claude-opus-4-6`, `designer=chutes/kimi-k2.5`, `librarian=google/antigravity-gemini-3-pro`, `explorer=google/antigravity-gemini-3-flash`
+- V1 agents: `oracle=google/antigravity-gemini-3.1-pro`, `orchestrator=google/antigravity-gemini-3.1-pro`, `fixer=chutes/minimax-m2.1`, `designer=anthropic/claude-opus-4-6`, `librarian=google/antigravity-gemini-3.1-pro`, `explorer=google/antigravity-gemini-3-flash`
+- V2 agents: `oracle=google/antigravity-gemini-3.1-pro`, `orchestrator=google/antigravity-gemini-3.1-pro`, `fixer=anthropic/claude-opus-4-6`, `designer=chutes/kimi-k2.5`, `librarian=google/antigravity-gemini-3.1-pro`, `explorer=google/antigravity-gemini-3-flash`
 
 ## Notes
 

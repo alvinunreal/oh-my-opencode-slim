@@ -262,8 +262,8 @@ export function addGoogleProvider(): ConfigMergeResult {
 
     providers.google = {
       models: {
-        'antigravity-gemini-3-pro': {
-          name: 'Gemini 3 Pro (Antigravity)',
+        'antigravity-gemini-3.1-pro': {
+          name: 'Gemini 3.1 Pro (Antigravity)',
           limit: { context: 1048576, output: 65535 },
           modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
           variants: {
@@ -320,8 +320,8 @@ export function addGoogleProvider(): ConfigMergeResult {
           limit: { context: 1048576, output: 65536 },
           modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
         },
-        'gemini-3-pro-preview': {
-          name: 'Gemini 3 Pro Preview (Gemini CLI)',
+        'gemini-3.1-pro-preview': {
+          name: 'Gemini 3.1 Pro Preview (Gemini CLI)',
           limit: { context: 1048576, output: 65535 },
           modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
         },
