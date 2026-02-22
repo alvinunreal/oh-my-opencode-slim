@@ -218,7 +218,7 @@ describe('dynamic-model-selection', () => {
   test('does not apply a positive Gemini bonus in v1 scoring', () => {
     const catalog = [
       m({
-        model: 'google/antigravity-gemini-3-pro',
+        model: 'google/antigravity-gemini-3.1-pro',
         reasoning: true,
         toolcall: true,
       }),

@@ -650,8 +650,8 @@ async function runManualSetupMode(
 
   if (antigravity === 'yes') {
     availableModels.push({
-      model: 'google/antigravity-gemini-3-pro',
-      name: 'Gemini 3 Pro',
+      model: 'google/antigravity-gemini-3.1-pro',
+      name: 'Gemini 3.1 Pro',
     });
     availableModels.push({
       model: 'google/antigravity-gemini-3-flash',
