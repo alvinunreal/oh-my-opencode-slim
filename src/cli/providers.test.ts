@@ -339,7 +339,9 @@ describe('providers', () => {
     });
 
     const agents = (config.presets as any)['zen-free'];
-    expect(agents.orchestrator.mcps).toContain('websearch');
+    // Orchestrator has no MCP access - receives packets from delegates
+    expect(agents.orchestrator.mcps).toEqual([]);
+    // Librarian (researcher) has all research MCPs
     expect(agents.librarian.mcps).toContain('websearch');
     expect(agents.librarian.mcps).toContain('context7');
     expect(agents.librarian.mcps).toContain('grep_app');

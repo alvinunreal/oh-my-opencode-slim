@@ -19,26 +19,22 @@ const FIXER_PROMPT = `You are Fixer - a fast, focused implementation specialist.
 - If context is insufficient, read the files listed; only ask for missing inputs you cannot retrieve
 
 **Output Format**:
-<summary>
-Brief summary of what was implemented
-</summary>
-<changes>
-- file1.ts: Changed X to Y
-- file2.ts: Added Z function
-</changes>
-<verification>
-- Tests passed: [yes/no/skip reason]
-- LSP diagnostics: [clean/errors found/skip reason]
-</verification>
+Always conclude with a PACKET containing your changes:
 
-Use the following when no code changes were made:
-<summary>
-No changes required
-</summary>
-<verification>
-- Tests passed: [not run - reason]
-- LSP diagnostics: [not run - reason]
-</verification>`;
+\`\`\`packet
+tldr:
+  - [What was changed]
+  - [Key modification]
+evidence:
+  - file:/path/to/changed/file.ts
+  - file:/path/to/another/file.ts
+recommendation: [What the orchestrator should verify next]
+next_actions:
+  - [Suggested verification step]
+  - [Suggested next step]
+\`\`\`
+
+Evidence should use file: pointers to changed files.`;
 
 export function createFixerAgent(
   model: string,

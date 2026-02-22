@@ -9,6 +9,7 @@ import {
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
+import { getModelForAgent } from '../token-discipline/model-config-loader';
 
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
@@ -16,6 +17,7 @@ import { createFixerAgent } from './fixer';
 import { createLibrarianAgent } from './librarian';
 import { createOracleAgent } from './oracle';
 import { type AgentDefinition, createOrchestratorAgent } from './orchestrator';
+import { createSummarizerAgent } from './summarizer';
 
 export type { AgentDefinition } from './orchestrator';
 
@@ -88,6 +90,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   oracle: createOracleAgent,
   designer: createDesignerAgent,
   fixer: createFixerAgent,
+  summarizer: createSummarizerAgent,
 };
 
 // Public API
@@ -96,16 +99,33 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * Create all agent definitions with optional configuration overrides.
  * Instantiates the orchestrator and all subagents, applying user config and defaults.
  *
+ * Priority for model selection (highest to lowest):
+ * 1. Explicit model in PluginConfig.agents[name].model
+ * 2. omoslim.json model_assignments (pre-resolved via modelAssignments param)
+ * 3. DEFAULT_MODELS from constants
+ *
  * @param config - Optional plugin configuration with agent overrides
+ * @param modelAssignments - Pre-resolved model assignments from omoslim.json
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
-export function createAgents(config?: PluginConfig): AgentDefinition[] {
-  // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
-  // existing users who don't have fixer in their config yet
-  const getModelForAgent = (name: SubagentName): string => {
-    if (name === 'fixer' && !getAgentOverride(config, 'fixer')?.model) {
+export function createAgents(
+  config?: PluginConfig,
+  modelAssignments?: Record<string, string>,
+): AgentDefinition[] {
+  const resolveModel = (name: SubagentName | 'orchestrator'): string => {
+    // 1. Explicit config override wins
+    const overrideModel = getAgentOverride(config, name)?.model;
+    if (overrideModel) return overrideModel;
+
+    // 2. omoslim.json model assignment
+    if (modelAssignments?.[name]) return modelAssignments[name];
+
+    // 3. Constants fallback (fixer inherits from librarian if not set)
+    if (name === 'fixer') {
       return (
-        getAgentOverride(config, 'librarian')?.model ?? DEFAULT_MODELS.librarian
+        modelAssignments?.librarian ??
+        getAgentOverride(config, 'librarian')?.model ??
+        DEFAULT_MODELS.librarian
       );
     }
     return DEFAULT_MODELS[name];
@@ -117,7 +137,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   ).map(([name, factory]) => {
     const customPrompts = loadAgentPrompt(name);
     return factory(
-      getModelForAgent(name),
+      resolveModel(name),
       customPrompts.prompt,
       customPrompts.appendPrompt,
     );
@@ -134,9 +154,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   });
 
   // 3. Create Orchestrator (with its own overrides and custom prompts)
-  const orchestratorModel =
-    getAgentOverride(config, 'orchestrator')?.model ??
-    DEFAULT_MODELS.orchestrator;
+  const orchestratorModel = resolveModel('orchestrator');
   const orchestratorPrompts = loadAgentPrompt('orchestrator');
   const orchestrator = createOrchestratorAgent(
     orchestratorModel,
@@ -153,16 +171,52 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
 }
 
 /**
- * Get agent configurations formatted for the OpenCode SDK.
- * Converts agent definitions to SDK config format and applies classification metadata.
+ * Async variant: loads model assignments from omoslim.json before creating agents.
+ * Use this at plugin init time to ensure omoslim.json is honoured.
  *
  * @param config - Optional plugin configuration with agent overrides
- * @returns Record mapping agent names to their SDK configurations
+ * @returns Promise of array of agent definitions
  */
-export function getAgentConfigs(
+export async function createAgentsWithModelConfig(
+  config?: PluginConfig,
+): Promise<AgentDefinition[]> {
+  // Resolve all agent models from omoslim.json concurrently
+  const agentNames: Array<SubagentName | 'orchestrator'> = [
+    'orchestrator',
+    'explorer',
+    'librarian',
+    'oracle',
+    'designer',
+    'fixer',
+    'summarizer',
+  ];
+
+  const modelEntries = await Promise.all(
+    agentNames.map(async (name) => {
+      try {
+        const model = await getModelForAgent(name);
+        return [name, model] as [string, string];
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const modelAssignments = Object.fromEntries(
+    modelEntries.filter((e): e is [string, string] => e !== null),
+  );
+
+  return createAgents(config, modelAssignments);
+}
+
+/**
+ * Convert an array of agent definitions into the SDK config format.
+ * Applies classification metadata (mode, mcps) to each agent.
+ */
+function agentDefinitionsToSdkConfigs(
+  agents: AgentDefinition[],
   config?: PluginConfig,
 ): Record<string, SDKAgentConfig> {
-  const agents = createAgents(config);
   return Object.fromEntries(
     agents.map((a) => {
       const sdkConfig: SDKAgentConfig & { mcps?: string[] } = {
@@ -171,7 +225,6 @@ export function getAgentConfigs(
         mcps: getAgentMcpList(a.name, config),
       };
 
-      // Apply classification-based visibility and mode
       if (isSubagent(a.name)) {
         sdkConfig.mode = 'subagent';
       } else if (a.name === 'orchestrator') {
@@ -181,4 +234,34 @@ export function getAgentConfigs(
       return [a.name, sdkConfig];
     }),
   );
+}
+
+/**
+ * Get agent configurations formatted for the OpenCode SDK.
+ * Converts agent definitions to SDK config format and applies classification metadata.
+ *
+ * @param config - Optional plugin configuration with agent overrides
+ * @param modelAssignments - Pre-resolved model assignments from omoslim.json
+ * @returns Record mapping agent names to their SDK configurations
+ */
+export function getAgentConfigs(
+  config?: PluginConfig,
+  modelAssignments?: Record<string, string>,
+): Record<string, SDKAgentConfig> {
+  const agents = createAgents(config, modelAssignments);
+  return agentDefinitionsToSdkConfigs(agents, config);
+}
+
+/**
+ * Async variant: loads model assignments from omoslim.json, then returns SDK configs.
+ * Use at plugin init time to ensure omoslim.json model assignments are applied.
+ *
+ * @param config - Optional plugin configuration with agent overrides
+ * @returns Promise of SDK agent config record
+ */
+export async function getAgentConfigsWithModelConfig(
+  config?: PluginConfig,
+): Promise<Record<string, SDKAgentConfig>> {
+  const agents = await createAgentsWithModelConfig(config);
+  return agentDefinitionsToSdkConfigs(agents, config);
 }

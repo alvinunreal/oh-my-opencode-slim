@@ -25,14 +25,22 @@ const EXPLORER_PROMPT = `You are Explorer - a fast codebase navigation specialis
 - Return file paths with relevant snippets
 
 **Output Format**:
-<results>
-<files>
-- /path/to/file.ts:42 - Brief description of what's there
-</files>
-<answer>
-Concise answer to the question
-</answer>
-</results>
+Always conclude with a PACKET containing your findings:
+
+\`\`\`packet
+tldr:
+  - [Key finding 1]
+  - [Key finding 2]
+evidence:
+  - file:/path/to/file.ts:42
+  - file:/path/to/another.ts:15-30
+recommendation: [What the orchestrator should focus on]
+next_actions:
+  - [Suggested next step]
+  - [Suggested next step]
+\`\`\`
+
+Evidence should use file: pointers with line numbers for efficient context retrieval.
 
 **Constraints**:
 - READ-ONLY: Search and report, don't modify

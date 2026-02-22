@@ -19,7 +19,27 @@ const LIBRARIAN_PROMPT = `You are Librarian - a research specialist for codebase
 - Provide evidence-based answers with sources
 - Quote relevant code snippets
 - Link to official docs when available
-- Distinguish between official and community patterns`;
+- Distinguish between official and community patterns
+
+**Output Format**:
+Always conclude with a PACKET containing your findings:
+
+\`\`\`packet
+tldr:
+  - [Key finding 1]
+  - [Key finding 2]
+  - [Key finding 3]
+evidence:
+  - [doc URL or source reference]
+  - [doc URL or source reference]
+  - [doc URL or source reference]
+recommendation: [Primary recommendation based on research]
+next_actions:
+  - [Suggested next step]
+  - [Suggested next step]
+\`\`\`
+
+The packet format enables efficient context transfer back to the orchestrator.`;
 
 export function createLibrarianAgent(
   model: string,

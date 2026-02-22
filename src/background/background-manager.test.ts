@@ -1420,7 +1420,7 @@ describe('BackgroundTaskManager', () => {
       const ctx = createMockContext();
       const manager = new BackgroundTaskManager(ctx);
 
-      // Orchestrator -> all 5 subagent names
+      // Orchestrator -> all 6 subagent names
       const orchestratorTask = manager.launch({
         agent: 'orchestrator',
         prompt: 'test',
@@ -1441,6 +1441,7 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'summarizer',
       ]);
 
       // Fixer -> only explorer
@@ -1502,6 +1503,7 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'summarizer',
       ]);
     });
   });

@@ -10,6 +10,7 @@ export const SUBAGENT_NAMES = [
   'oracle',
   'designer',
   'fixer',
+  'summarizer',
 ] as const;
 
 export const ORCHESTRATOR_NAME = 'orchestrator' as const;
@@ -32,9 +33,9 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   explorer: [],
   librarian: [],
   oracle: [],
+  summarizer: [],
 };
 
-// Default models for each agent
 export const DEFAULT_MODELS: Record<AgentName, string> = {
   orchestrator: 'kimi-for-coding/k2p5',
   oracle: 'openai/gpt-5.2-codex',
@@ -42,6 +43,7 @@ export const DEFAULT_MODELS: Record<AgentName, string> = {
   explorer: 'openai/gpt-5.1-codex-mini',
   designer: 'kimi-for-coding/k2p5',
   fixer: 'openai/gpt-5.1-codex-mini',
+  summarizer: 'openai/gpt-5.1-codex-mini',
 };
 
 // Polling configuration

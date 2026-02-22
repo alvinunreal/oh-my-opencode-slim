@@ -1,5 +1,21 @@
 import { z } from 'zod';
 
+export {
+  type PacketV1,
+  PacketV1Schema,
+} from '../token-discipline/types';
+
+export const TokenDisciplineSettingsSchema = z.object({
+  enforceIsolation: z.boolean().default(true),
+  maxPacketSize: z.number().min(500).max(5000).default(2500),
+  maxResolutionsPerTask: z.number().min(1).max(10).default(3),
+  threadArchiveHours: z.number().min(1).max(168).default(24),
+});
+
+export type TokenDisciplineSettings = z.infer<
+  typeof TokenDisciplineSettingsSchema
+>;
+
 const FALLBACK_AGENT_NAMES = [
   'orchestrator',
   'oracle',
@@ -131,7 +147,13 @@ export const FailoverConfigSchema = z.object({
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
-// Main plugin config
+export const TokenDisciplineConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  settings: TokenDisciplineSettingsSchema.optional(),
+});
+
+export type TokenDisciplineConfig = z.infer<typeof TokenDisciplineConfigSchema>;
+
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
   scoringEngineVersion: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
@@ -143,6 +165,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
+  tokenDiscipline: TokenDisciplineConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;

@@ -3,7 +3,7 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import type { BackgroundTaskManager } from '../background';
+import type { BackgroundTaskManager } from '../background/background-manager';
 import type { PluginConfig } from '../config';
 import { SUBAGENT_NAMES } from '../config';
 import type { TmuxConfig } from '../config/schema';
