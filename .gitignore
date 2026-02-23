@@ -46,6 +46,12 @@ local
 opencode
 oh-my-opencode
 
+# AI Memory
+.aim/
+
+# Planning docs (not for commit)
+TIMEOUT_PLAN.md
+
 # Python
 __pycache__/
 *.py[cod]

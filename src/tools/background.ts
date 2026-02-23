@@ -56,13 +56,20 @@ Key behaviors:
       const agent = String(args.agent);
       const prompt = String(args.prompt);
       const description = String(args.description);
+      const parentSessionId = (toolContext as { sessionID: string }).sessionID;
+
+      // Validate agent against delegation rules
+      if (!manager.isAgentAllowed(parentSessionId, agent)) {
+        const allowed = manager.getAllowedSubagents(parentSessionId);
+        return `Agent '${agent}' is not allowed. Allowed agents: ${allowed.join(', ')}`;
+      }
 
       // Fire-and-forget launch
       const task = manager.launch({
         agent,
         prompt,
         description,
-        parentSessionId: (toolContext as { sessionID: string }).sessionID,
+        parentSessionId,
       });
 
       return `Background task launched.

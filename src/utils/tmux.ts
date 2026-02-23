@@ -309,6 +309,20 @@ export async function closeTmuxPane(paneId: string): Promise<boolean> {
   }
 
   try {
+    // Send Ctrl+C for graceful shutdown first
+    log('[tmux] closeTmuxPane: sending Ctrl+C for graceful shutdown', {
+      paneId,
+    });
+    const ctrlCProc = spawn([tmux, 'send-keys', '-t', paneId, 'C-c'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    await ctrlCProc.exited;
+
+    // Wait for graceful shutdown
+    await new Promise((r) => setTimeout(r, 250));
+
+    log('[tmux] closeTmuxPane: killing pane', { paneId });
     const proc = spawn([tmux, 'kill-pane', '-t', paneId], {
       stdout: 'pipe',
       stderr: 'pipe',

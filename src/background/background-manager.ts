@@ -15,7 +15,10 @@
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
-import { FALLBACK_FAILOVER_TIMEOUT_MS } from '../config';
+import {
+  FALLBACK_FAILOVER_TIMEOUT_MS,
+  SUBAGENT_DELEGATION_RULES,
+} from '../config';
 import type { TmuxConfig } from '../config/schema';
 import { applyAgentVariant, resolveAgentVariant } from '../utils';
 import { log } from '../utils/logger';
@@ -90,6 +93,8 @@ function generateTaskId(): string {
 export class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTask>();
   private tasksBySessionId = new Map<string, string>();
+  // Track which agent type owns each session for delegation permission checks
+  private agentBySessionId = new Map<string, string>();
   private client: OpencodeClient;
   private directory: string;
   private tmuxEnabled: boolean;
@@ -120,6 +125,50 @@ export class BackgroundTaskManager {
       maxConcurrentStarts: 10,
     };
     this.maxConcurrentStarts = this.backgroundConfig.maxConcurrentStarts;
+  }
+
+  /**
+   * Look up the delegation rules for an agent type.
+   * Unknown agent types default to explorer-only access, making it easy
+   * to add new background agent types without updating SUBAGENT_DELEGATION_RULES.
+   */
+  private getSubagentRules(agentName: string): readonly string[] {
+    return (
+      SUBAGENT_DELEGATION_RULES[
+        agentName as keyof typeof SUBAGENT_DELEGATION_RULES
+      ] ?? ['explorer']
+    );
+  }
+
+  /**
+   * Check if a parent session is allowed to delegate to a specific agent type.
+   * @param parentSessionId - The session ID of the parent
+   * @param requestedAgent - The agent type being requested
+   * @returns true if allowed, false if not
+   */
+  isAgentAllowed(parentSessionId: string, requestedAgent: string): boolean {
+    // Untracked sessions are the root orchestrator (created by OpenCode, not by us)
+    const parentAgentName =
+      this.agentBySessionId.get(parentSessionId) ?? 'orchestrator';
+
+    const allowedSubagents = this.getSubagentRules(parentAgentName);
+
+    if (allowedSubagents.length === 0) return false;
+
+    return allowedSubagents.includes(requestedAgent);
+  }
+
+  /**
+   * Get the list of allowed subagents for a parent session.
+   * @param parentSessionId - The session ID of the parent
+   * @returns Array of allowed agent names, empty if none
+   */
+  getAllowedSubagents(parentSessionId: string): readonly string[] {
+    // Untracked sessions are the root orchestrator (created by OpenCode, not by us)
+    const parentAgentName =
+      this.agentBySessionId.get(parentSessionId) ?? 'orchestrator';
+
+    return this.getSubagentRules(parentAgentName);
   }
 
   /**
@@ -205,6 +254,12 @@ export class BackgroundTaskManager {
     args: Parameters<OpencodeClient['session']['prompt']>[0],
     timeoutMs: number,
   ): Promise<void> {
+    // No timeout when fallback disabled (timeoutMs = 0)
+    if (timeoutMs <= 0) {
+      await this.client.session.prompt(args);
+      return;
+    }
+
     await Promise.race([
       this.client.session.prompt(args),
       new Promise<never>((_, reject) => {
@@ -213,6 +268,31 @@ export class BackgroundTaskManager {
         }, timeoutMs);
       }),
     ]);
+  }
+
+  /**
+   * Calculate tool permissions for a spawned agent based on its own delegation rules.
+   * Agents that cannot delegate (leaf nodes) get delegation tools disabled entirely,
+   * preventing models from even seeing tools they can never use.
+   *
+   * @param agentName - The agent type being spawned
+   * @returns Tool permissions object with background_task and task enabled/disabled
+   */
+  private calculateToolPermissions(agentName: string): {
+    background_task: boolean;
+    task: boolean;
+  } {
+    const allowedSubagents = this.getSubagentRules(agentName);
+
+    // Leaf agents (no delegation rules) get tools hidden entirely
+    if (allowedSubagents.length === 0) {
+      return { background_task: false, task: false };
+    }
+
+    // Agent can delegate - enable the delegation tools
+    // The restriction of WHICH specific subagents are allowed is enforced
+    // by the background_task tool via isAgentAllowed()
+    return { background_task: true, task: true };
   }
 
   /**
@@ -245,6 +325,8 @@ export class BackgroundTaskManager {
 
       task.sessionId = session.data.id;
       this.tasksBySessionId.set(session.data.id, task.id);
+      // Track the agent type for this session for delegation checks
+      this.agentBySessionId.set(session.data.id, task.agent);
       task.status = 'running';
 
       // Give TmuxSessionManager time to spawn the pane
@@ -252,18 +334,22 @@ export class BackgroundTaskManager {
         await new Promise((r) => setTimeout(r, 500));
       }
 
+      // Calculate tool permissions based on the spawned agent's own delegation rules
+      const toolPermissions = this.calculateToolPermissions(task.agent);
+
       // Send prompt
       const promptQuery: Record<string, string> = { directory: this.directory };
       const resolvedVariant = resolveAgentVariant(this.config, task.agent);
       const basePromptBody = applyAgentVariant(resolvedVariant, {
         agent: task.agent,
-        tools: { background_task: false, task: false },
+        tools: toolPermissions,
         parts: [{ type: 'text' as const, text: task.prompt }],
       } as PromptBody) as unknown as PromptBody;
 
-      const timeoutMs =
-        this.config?.fallback?.timeoutMs ?? FALLBACK_FAILOVER_TIMEOUT_MS;
       const fallbackEnabled = this.config?.fallback?.enabled ?? true;
+      const timeoutMs = fallbackEnabled
+        ? (this.config?.fallback?.timeoutMs ?? FALLBACK_FAILOVER_TIMEOUT_MS)
+        : 0; // 0 = no timeout when fallback disabled
       const chain = fallbackEnabled
         ? this.resolveFallbackChain(task.agent)
         : [];
@@ -351,6 +437,51 @@ export class BackgroundTaskManager {
   }
 
   /**
+   * Handle session.deleted events for cleanup.
+   * When a session is deleted, cancel associated tasks and clean up.
+   */
+  async handleSessionDeleted(event: {
+    type: string;
+    properties?: { info?: { id?: string }; sessionID?: string };
+  }): Promise<void> {
+    if (event.type !== 'session.deleted') return;
+
+    const sessionId = event.properties?.info?.id ?? event.properties?.sessionID;
+    if (!sessionId) return;
+
+    const taskId = this.tasksBySessionId.get(sessionId);
+    if (!taskId) return;
+
+    const task = this.tasks.get(taskId);
+    if (!task) return;
+
+    // Only handle if task is still active
+    if (task.status === 'running' || task.status === 'pending') {
+      log(`[background-manager] Session deleted, cancelling task: ${task.id}`);
+
+      // Mark as cancelled
+      (task as BackgroundTask & { status: string }).status = 'cancelled';
+      task.completedAt = new Date();
+      task.error = 'Session deleted';
+
+      // Clean up session tracking
+      this.tasksBySessionId.delete(sessionId);
+      this.agentBySessionId.delete(sessionId);
+
+      // Resolve any waiting callers
+      const resolver = this.completionResolvers.get(taskId);
+      if (resolver) {
+        resolver(task);
+        this.completionResolvers.delete(taskId);
+      }
+
+      log(
+        `[background-manager] Task cancelled due to session deletion: ${task.id}`,
+      );
+    }
+  }
+
+  /**
    * Extract task result and mark complete.
    */
   private async extractAndCompleteTask(task: BackgroundTask): Promise<void> {
@@ -420,9 +551,20 @@ export class BackgroundTaskManager {
       task.error = resultOrError;
     }
 
-    // Clean up tasksBySessionId map to prevent memory leak
+    // Clean up session tracking maps as fallback
+    // (handleSessionDeleted also does this when session.deleted event fires)
     if (task.sessionId) {
       this.tasksBySessionId.delete(task.sessionId);
+      this.agentBySessionId.delete(task.sessionId);
+    }
+
+    // Abort session to trigger pane cleanup and free resources
+    if (task.sessionId) {
+      this.client.session
+        .abort({
+          path: { id: task.sessionId },
+        })
+        .catch(() => {});
     }
 
     // Send notification to parent session
@@ -587,5 +729,6 @@ export class BackgroundTaskManager {
     this.completionResolvers.clear();
     this.tasks.clear();
     this.tasksBySessionId.clear();
+    this.agentBySessionId.clear();
   }
 }

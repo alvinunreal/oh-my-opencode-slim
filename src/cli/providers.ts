@@ -58,7 +58,7 @@ export const MODEL_MAPPINGS = {
   },
   antigravity: {
     orchestrator: { model: 'google/antigravity-gemini-3-flash' },
-    oracle: { model: 'google/antigravity-gemini-3-pro' },
+    oracle: { model: 'google/antigravity-gemini-3.1-pro' },
     librarian: {
       model: 'google/antigravity-gemini-3-flash',
       variant: 'low',

@@ -66,6 +66,17 @@ describe('agent alias backward compatibility', () => {
     const explorer = agents.find((a) => a.name === 'explorer');
     expect(explorer?.config.temperature).toBe(0.5);
   });
+
+  test('variant override via old alias', () => {
+    const config: PluginConfig = {
+      agents: {
+        explore: { variant: 'low' },
+      },
+    };
+    const agents = createAgents(config);
+    const explorer = agents.find((a) => a.name === 'explorer');
+    expect(explorer?.config.variant).toBe('low');
+  });
 });
 
 describe('fixer agent fallback', () => {
@@ -117,6 +128,17 @@ describe('orchestrator agent', () => {
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator?.config.model).toBe('custom-orchestrator-model');
     expect(orchestrator?.config.temperature).toBe(0.3);
+  });
+
+  test('orchestrator accepts variant override', () => {
+    const config: PluginConfig = {
+      agents: {
+        orchestrator: { variant: 'high' },
+      },
+    };
+    const agents = createAgents(config);
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    expect(orchestrator?.config.variant).toBe('high');
   });
 });
 

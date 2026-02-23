@@ -400,7 +400,7 @@ describe('providers', () => {
       expect(agents.orchestrator.model).toBe('kimi-for-coding/k2p5');
 
       // Oracle should use Antigravity (no OpenAI)
-      expect(agents.oracle.model).toBe('google/antigravity-gemini-3-pro');
+      expect(agents.oracle.model).toBe('google/antigravity-gemini-3.1-pro');
 
       // Others should use Antigravity Flash
       expect(agents.explorer.model).toBe('google/antigravity-gemini-3-flash');
@@ -459,7 +459,7 @@ describe('providers', () => {
       expect(agents.orchestrator.model).toBe(
         'google/antigravity-gemini-3-flash',
       );
-      expect(agents.oracle.model).toBe('google/antigravity-gemini-3-pro');
+      expect(agents.oracle.model).toBe('google/antigravity-gemini-3.1-pro');
       expect(agents.explorer.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.librarian.model).toBe('google/antigravity-gemini-3-flash');
       expect(agents.designer.model).toBe('google/antigravity-gemini-3-flash');

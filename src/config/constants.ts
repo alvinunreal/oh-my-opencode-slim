@@ -19,6 +19,21 @@ export const ALL_AGENT_NAMES = [ORCHESTRATOR_NAME, ...SUBAGENT_NAMES] as const;
 // Agent name type (for use in DEFAULT_MODELS)
 export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 
+// Subagent delegation rules: which agents can spawn which subagents
+// orchestrator: can spawn all subagents (full delegation)
+// fixer: can spawn explorer (for research during implementation)
+// designer: can spawn explorer (for research during design)
+// explorer/librarian/oracle: cannot spawn any subagents (leaf nodes)
+// Unknown agent types not listed here default to explorer-only access
+export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
+  orchestrator: SUBAGENT_NAMES,
+  fixer: ['explorer'],
+  designer: ['explorer'],
+  explorer: [],
+  librarian: [],
+  oracle: [],
+};
+
 // Default models for each agent
 export const DEFAULT_MODELS: Record<AgentName, string> = {
   orchestrator: 'kimi-for-coding/k2p5',

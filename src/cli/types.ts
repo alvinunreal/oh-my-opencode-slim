@@ -111,6 +111,27 @@ export interface DynamicPlanScoringMeta {
   diffs?: Record<string, { v1TopModel?: string; v2TopModel?: string }>;
 }
 
+export type ScoringEngineVersion = 'v1' | 'v2-shadow' | 'v2';
+
+export type ResolutionLayerName =
+  | 'opencode-direct-override'
+  | 'manual-user-plan'
+  | 'pinned-model'
+  | 'dynamic-recommendation'
+  | 'provider-fallback-policy'
+  | 'system-default';
+
+export interface AgentResolutionProvenance {
+  winnerLayer: ResolutionLayerName;
+  winnerModel: string;
+}
+
+export interface DynamicPlanScoringMeta {
+  engineVersionApplied: 'v1' | 'v2';
+  shadowCompared: boolean;
+  diffs?: Record<string, { v1TopModel?: string; v2TopModel?: string }>;
+}
+
 export interface DynamicModelPlan {
   agents: Record<string, DynamicAgentAssignment>;
   chains: Record<string, string[]>;

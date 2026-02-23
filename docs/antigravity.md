@@ -29,8 +29,8 @@ The installer automatically:
 
 ### Antigravity Models (via Google Infrastructure)
 
-1. **antigravity-gemini-3-pro**
-   - Name: Gemini 3 Pro (Antigravity)
+1. **antigravity-gemini-3.1-pro**
+   - Name: Gemini 3.1 Pro (Antigravity)
    - Context: 1M tokens, Output: 65K tokens
    - Variants: low, high thinking levels
    - Best for: Complex reasoning, high-quality outputs
@@ -75,8 +75,8 @@ The installer automatically:
    - Context: 1M tokens, Output: 65K tokens
    - Requires: Gemini CLI authentication
 
-9. **gemini-3-pro-preview**
-   - Name: Gemini 3 Pro Preview (Gemini CLI)
+9. **gemini-3.1-pro-preview**
+   - Name: Gemini 3.1 Pro Preview (Gemini CLI)
    - Context: 1M tokens, Output: 65K tokens
    - Requires: Gemini CLI authentication
 
@@ -91,7 +91,7 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 
 ### antigravity-mixed-kimi (Kimi + Antigravity)
 - **Orchestrator**: Kimi k2p5
-- **Oracle**: Gemini 3 Pro (Antigravity)
+- **Oracle**: Gemini 3.1 Pro (Antigravity)
 - **Explorer/Librarian/Designer/Fixer**: Gemini 3 Flash (Antigravity)
 
 ### antigravity-mixed-openai (OpenAI + Antigravity)
@@ -101,7 +101,7 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 
 ### antigravity (Pure Antigravity)
 - **Orchestrator**: Gemini 3 Flash (Antigravity)
-- **Oracle**: Gemini 3 Pro (Antigravity)
+- **Oracle**: Gemini 3.1 Pro (Antigravity)
 - **Explorer/Librarian/Designer/Fixer**: Gemini 3 Flash (Antigravity)
 
 ## Manual Configuration
@@ -119,7 +119,7 @@ If you prefer to configure manually, edit `~/.config/opencode/oh-my-opencode-sli
         "mcps": ["websearch"]
       },
       "oracle": {
-        "model": "google/antigravity-gemini-3-pro",
+        "model": "google/antigravity-gemini-3.1-pro",
         "skills": [],
         "mcps": []
       },

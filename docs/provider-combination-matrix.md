@@ -89,14 +89,14 @@ Active providers: OpenAI + Gemini + Chutes + Copilot + OpenCode Free
 - Preset: `antigravity-mixed-openai`
 - Agents:
   - `orchestrator`: `chutes/kimi-k2.5`
-  - `oracle`: `openai/gpt-5.3-codex` (`high`)
+  - `oracle`: `google/antigravity-gemini-3.1-pro` (`high`)
   - `designer`: `chutes/kimi-k2.5` (`medium`)
   - `explorer`: `opencode/gpt-5-nano`
   - `librarian`: `opencode/gpt-5-nano`
   - `fixer`: `opencode/gpt-5-nano`
 - Fallback chains:
   - `orchestrator`: `chutes/kimi-k2.5 -> openai/gpt-5.3-codex -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> opencode/glm-4.7-free -> opencode/big-pickle`
-  - `oracle`: `openai/gpt-5.3-codex -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-pro -> chutes/kimi-k2.5 -> opencode/glm-4.7-free -> opencode/big-pickle`
+  - `oracle`: `google/antigravity-gemini-3.1-pro -> openai/gpt-5.3-codex -> github-copilot/grok-code-fast-1 -> chutes/kimi-k2.5 -> opencode/glm-4.7-free -> opencode/big-pickle`
   - `designer`: `chutes/kimi-k2.5 -> openai/gpt-5.1-codex-mini -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> opencode/glm-4.7-free -> opencode/big-pickle`
   - `explorer`: `opencode/gpt-5-nano -> openai/gpt-5.1-codex-mini -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> chutes/minimax-m2.1 -> opencode/big-pickle`
   - `librarian`: `opencode/gpt-5-nano -> openai/gpt-5.1-codex-mini -> github-copilot/grok-code-fast-1 -> google/antigravity-gemini-3-flash -> chutes/minimax-m2.1 -> opencode/big-pickle`

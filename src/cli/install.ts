@@ -1646,6 +1646,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
       const providerScopedCatalog = filterCatalogToEnabledProviders(
         catalogDiscovery.models,
         resolvedConfig,
+        signals,
       );
 
       if (providerScopedCatalog.length === 0) {
@@ -1745,6 +1746,20 @@ async function runInstall(config: InstallConfig): Promise<number> {
           printInfo(`V1 backup created at ${backupResult.backupPath}`);
         }
       }
+    } else {
+      let skillsInstalled = 0;
+      for (const skill of RECOMMENDED_SKILLS) {
+        printInfo(`Installing ${skill.name}...`);
+        if (installSkill(skill)) {
+          printSuccess(`Installed: ${skill.name}`);
+          skillsInstalled++;
+        } else {
+          printWarning(`Failed to install: ${skill.name}`);
+        }
+      }
+      printSuccess(
+        `${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`,
+      );
     }
 
     const liteResult = writeLiteConfig(resolvedConfig);
