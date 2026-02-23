@@ -1,12 +1,11 @@
 import type { Plugin } from '@opencode-ai/plugin';
-import { getAgentConfigsWithModelConfig } from './agents';
+import { getAgentConfigs } from './agents';
 import { TmuxSessionManager } from './background';
 import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import { createPacketTools, PacketTaskManager } from './delegates';
 import { createAirlockHook, createAutoUpdateCheckerHook } from './hooks';
 import { createBuiltinMcps } from './mcp';
-import { setConfigDirectory } from './token-discipline';
 import {
   ast_grep_replace,
   ast_grep_search,
@@ -20,17 +19,15 @@ import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
-  // Initialize token-discipline config directory so omoslim.json is found
-  setConfigDirectory(ctx.directory);
-
   const config = loadPluginConfig(ctx.directory);
 
-  // Load model assignments from omoslim.json and build agent configs.
-  // Priority: PluginConfig.agents[name].model > omoslim.json > DEFAULT_MODELS
-  const agents = await getAgentConfigsWithModelConfig(config);
+  // Build agent configs from PluginConfig (preset-based or direct)
+  // Priority: PluginConfig.agents[name].model > DEFAULT_MODEL_ASSIGNMENTS
+  const agents = getAgentConfigs(config);
 
   const tmuxConfig: TmuxConfig = {
     enabled: config.tmux?.enabled ?? false,
+    lazy: config.tmux?.lazy ?? false,
     layout: config.tmux?.layout ?? 'main-vertical',
     main_pane_size: config.tmux?.main_pane_size ?? 60,
   };

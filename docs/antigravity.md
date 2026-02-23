@@ -29,7 +29,7 @@ The installer automatically:
 
 ### Antigravity Models (via Google Infrastructure)
 
-1. **antigravity-gemini-3-pro**
+1. **antigravity-gemini-3.1-pro**
    - Name: Gemini 3 Pro (Antigravity)
    - Context: 1M tokens, Output: 65K tokens
    - Variants: low, high thinking levels
@@ -119,7 +119,7 @@ If you prefer to configure manually, edit `~/.config/opencode/omoslim.json` (or 
         "mcps": ["websearch"]
       },
       "oracle": {
-        "model": "google/antigravity-gemini-3-pro",
+        "model": "google/antigravity-gemini-3.1-pro",
         "skills": [],
         "mcps": []
       },

@@ -262,7 +262,7 @@ export function addGoogleProvider(): ConfigMergeResult {
 
     providers.google = {
       models: {
-        'antigravity-gemini-3-pro': {
+        'antigravity-gemini-3.1-pro': {
           name: 'Gemini 3 Pro (Antigravity)',
           limit: { context: 1048576, output: 65535 },
           modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },

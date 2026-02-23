@@ -105,7 +105,7 @@ opencode auth login
 
 **Available Models:**
 - `google/antigravity-gemini-3-flash`
-- `google/antigravity-gemini-3-pro`
+- `google/antigravity-gemini-3.1-pro`
 - `google/antigravity-claude-sonnet-4-5`
 - `google/antigravity-claude-sonnet-4-5-thinking`
 - `google/antigravity-claude-opus-4-5-thinking`

@@ -8,10 +8,11 @@
     "emitDeclarationOnly": true,
     "strict": true,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "types": ["bun-types"],
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.json"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

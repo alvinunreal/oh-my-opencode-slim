@@ -30,14 +30,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.skills = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--opencode-free=')) {
       result.opencodeFree = arg.split('=')[1] as BooleanArg;
-    } else if (arg.startsWith('--balanced-spend=')) {
-      result.balancedSpend = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--opencode-free-model=')) {
       result.opencodeFreeModel = arg.split('=')[1];
-    } else if (arg.startsWith('--aa-key=')) {
-      result.aaKey = arg.slice('--aa-key='.length);
-    } else if (arg.startsWith('--openrouter-key=')) {
-      result.openrouterKey = arg.slice('--openrouter-key='.length);
     } else if (arg === '--dry-run') {
       result.dryRun = true;
     } else if (arg === '--models-only') {

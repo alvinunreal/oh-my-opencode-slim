@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_MODEL_CONFIG,
   MODEL_COSTS,
@@ -6,15 +6,6 @@ import {
   ROLE_TO_AGENT,
   validateModelConfig,
 } from './model-config';
-import {
-  clearCache,
-  getAllAssignments,
-  getModelCost,
-  getModelForRole,
-  getTokenDisciplineSettings,
-  setConfigDirectory,
-  validateConfig,
-} from './model-config-loader';
 
 describe('model-config', () => {
   test('DEFAULT_MODEL_CONFIG has all required roles', () => {
@@ -152,61 +143,5 @@ describe('model-config', () => {
     expect(MODEL_COSTS['anthropic/claude-opus-4']).toBeDefined();
     expect(MODEL_COSTS['openai/gpt-4o']).toBeDefined();
     expect(MODEL_COSTS['anthropic/claude-haiku-3.5']).toBeDefined();
-  });
-});
-
-describe('model-config-loader', () => {
-  beforeEach(() => {
-    clearCache();
-  });
-
-  afterEach(() => {
-    clearCache();
-  });
-
-  test('getModelForRole returns default model for unknown role', async () => {
-    setConfigDirectory('/nonexistent');
-    clearCache();
-    const model = await getModelForRole('ORCHESTRATOR');
-    expect(model).toBeDefined();
-    expect(typeof model).toBe('string');
-  });
-
-  test('getTokenDisciplineSettings returns defaults', async () => {
-    setConfigDirectory('/nonexistent');
-    clearCache();
-    const settings = await getTokenDisciplineSettings();
-    expect(settings.maxPacketSize).toBe(2500);
-    expect(settings.maxResolutionsPerTask).toBe(3);
-    expect(settings.enforceIsolation).toBe(true);
-  });
-
-  test('getModelCost returns costs for known model', () => {
-    const costs = getModelCost('anthropic/claude-opus-4');
-    expect(costs.input).toBe(15.0);
-    expect(costs.output).toBe(75.0);
-  });
-
-  test('getModelCost returns zero for unknown model', () => {
-    const costs = getModelCost('unknown/model');
-    expect(costs.input).toBe(0);
-    expect(costs.output).toBe(0);
-  });
-
-  test('getAllAssignments returns all roles', async () => {
-    setConfigDirectory('/nonexistent');
-    clearCache();
-    const assignments = await getAllAssignments();
-    expect(assignments.orchestrator).toBeDefined();
-    expect(assignments.researcher).toBeDefined();
-    expect(assignments.implementer).toBeDefined();
-  });
-
-  test('validateConfig returns validation result', async () => {
-    setConfigDirectory('/nonexistent');
-    clearCache();
-    const result = await validateConfig();
-    expect(result).toHaveProperty('valid');
-    expect(result).toHaveProperty('errors');
   });
 });

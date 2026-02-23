@@ -1,4 +1,15 @@
-import type { AgentResolutionProvenance, ResolutionLayerName } from './types';
+export type ResolutionLayerName =
+  | 'opencode-direct-override'
+  | 'manual-user-plan'
+  | 'pinned-model'
+  | 'tier-selection'
+  | 'provider-fallback-policy'
+  | 'system-default';
+
+export interface AgentResolutionProvenance {
+  winnerLayer: ResolutionLayerName;
+  winnerModel: string;
+}
 
 export interface AgentLayerInput {
   agentName: string;
@@ -49,7 +60,7 @@ function buildLayerOrder(input: AgentLayerInput): LayerCandidate[] {
       models: input.pinnedModel ? [input.pinnedModel] : [],
     },
     {
-      layer: 'dynamic-recommendation',
+      layer: 'tier-selection',
       models: input.dynamicRecommendation ?? [],
     },
     {

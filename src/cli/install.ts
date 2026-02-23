@@ -4,13 +4,10 @@ import {
   addChutesProvider,
   addGoogleProvider,
   addPluginToOpenCodeConfig,
-  buildDynamicModelPlan,
   detectCurrentConfig,
   disableDefaultAgents,
-  discoverModelCatalog,
   discoverOpenCodeFreeModels,
   discoverProviderModels,
-  fetchExternalModelSignals,
   generateLiteConfig,
   getOpenCodePath,
   getOpenCodeVersion,
@@ -148,9 +145,6 @@ function formatConfigSummary(config: InstallConfig): string {
     `  ${config.hasChutes ? SYMBOLS.check : `${DIM}○${RESET}`} Chutes`,
   );
   lines.push(`  ${SYMBOLS.check} Opencode Zen`);
-  lines.push(
-    `  ${config.balanceProviderUsage ? SYMBOLS.check : `${DIM}○${RESET}`} Balanced provider spend`,
-  );
   if (config.useOpenCodeFreeModels && config.selectedOpenCodePrimaryModel) {
     lines.push(
       `  ${SYMBOLS.check} OpenCode Free Primary: ${BLUE}${config.selectedOpenCodePrimaryModel}${RESET}`,
@@ -223,9 +217,6 @@ function argsToConfig(args: InstallArgs): InstallConfig {
       args.opencodeFreeModel && args.opencodeFreeModel !== 'auto'
         ? args.opencodeFreeModel
         : undefined,
-    artificialAnalysisApiKey: args.aaKey,
-    openRouterApiKey: args.openrouterKey,
-    balanceProviderUsage: args.balancedSpend === 'yes',
     hasTmux: args.tmux === 'yes',
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes', // Install custom skills when skills=yes
@@ -648,7 +639,7 @@ async function runManualSetupMode(
 
   if (antigravity === 'yes') {
     availableModels.push({
-      model: 'google/antigravity-gemini-3-pro',
+      model: 'google/antigravity-gemini-3.1-pro',
       name: 'Gemini 3 Pro',
     });
     availableModels.push({
@@ -696,14 +687,6 @@ async function runManualSetupMode(
     );
   }
 
-  // Ask for remaining options
-  const balancedSpend = await askYesNo(
-    rl,
-    'Do you have subscriptions or pay per API? If yes, we will distribute assignments evenly across selected providers so your subscriptions last longer.',
-    'no',
-  );
-  console.log();
-
   let skills: BooleanArg = 'no';
   let customSkills: BooleanArg = 'no';
   if (!modelsOnly) {
@@ -748,9 +731,6 @@ async function runManualSetupMode(
       useOpenCodeFree === 'yes' && availableOpenCodeFreeModels !== undefined,
     availableOpenCodeFreeModels,
     availableChutesModels,
-    artificialAnalysisApiKey,
-    openRouterApiKey,
-    balanceProviderUsage: balancedSpend === 'yes',
     hasTmux: false,
     installSkills: skills === 'yes',
     installCustomSkills: customSkills === 'yes',
@@ -995,14 +975,6 @@ async function runInteractiveMode(
       }
     }
 
-    console.log(`${BOLD}Question 11/${totalQuestions}:${RESET}`);
-    const balancedSpend = await askYesNo(
-      rl,
-      'Do you have subscriptions or pay per API? If yes, we will distribute assignments evenly across selected providers so your subscriptions last longer.',
-      'no',
-    );
-    console.log();
-
     // TODO: tmux has a bug, disabled for now
     // let tmux: BooleanArg = "no"
     // if (tmuxInstalled) {
@@ -1061,9 +1033,6 @@ async function runInteractiveMode(
       selectedChutesPrimaryModel,
       selectedChutesSecondaryModel,
       availableChutesModels,
-      artificialAnalysisApiKey,
-      openRouterApiKey,
-      balanceProviderUsage: balancedSpend === 'yes',
       hasTmux: false,
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
@@ -1286,41 +1255,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
       const chutesProviderResult = addChutesProvider();
       if (!handleStepResult(chutesProviderResult, 'Chutes auth flow ready'))
         return 1;
-    }
-  }
-
-  if (hasAnyEnabledProvider) {
-    printStep(step++, totalSteps, 'Resolving dynamic model assignments...');
-    const catalogDiscovery = await discoverModelCatalog();
-    if (catalogDiscovery.models.length === 0) {
-      printWarning(
-        catalogDiscovery.error ??
-          'Unable to discover model catalog. Falling back to static mappings.',
-      );
-    } else {
-      const { signals, warnings } = await fetchExternalModelSignals({
-        artificialAnalysisApiKey: resolvedConfig.artificialAnalysisApiKey,
-        openRouterApiKey: resolvedConfig.openRouterApiKey,
-      });
-      for (const warning of warnings) {
-        printInfo(warning);
-      }
-
-      const dynamicPlan = buildDynamicModelPlan(
-        catalogDiscovery.models,
-        resolvedConfig,
-        signals,
-      );
-      if (!dynamicPlan) {
-        printWarning(
-          'Dynamic planner found no suitable models. Using static mappings.',
-        );
-      } else {
-        resolvedConfig.dynamicModelPlan = dynamicPlan;
-        printSuccess(
-          `Dynamic assignments ready (${Object.keys(dynamicPlan.agents).length} agents)`,
-        );
-      }
     }
   }
 

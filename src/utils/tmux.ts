@@ -231,8 +231,12 @@ export async function spawnTmuxPane(
 
   try {
     // Use `opencode attach <url> --session <id>` to connect to the existing server
-    // This ensures the TUI receives streaming updates from the same server handling the prompt
-    const opencodeCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
+    // This ensures the TUI receives streaming updates from the same server handling the prompt.
+    // In lazy mode, just print the attach command so the user can run it manually.
+    const attachCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
+    const opencodeCmd = config.lazy
+      ? `echo "Subagent ready — run: ${attachCmd}"; $SHELL`
+      : attachCmd;
 
     // Simple split - layout will handle positioning
     // Use -h for horizontal split (new pane to the right) as default

@@ -49,36 +49,6 @@ describe('loadPluginConfig', () => {
     expect(config.agents?.oracle?.model).toBe('test/model');
   });
 
-  test('loads scoringEngineVersion flag when configured', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'omoslim.json'),
-      JSON.stringify({
-        scoringEngineVersion: 'v2-shadow',
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir);
-    expect(config.scoringEngineVersion).toBe('v2-shadow');
-  });
-
-  test('loads balanceProviderUsage flag when configured', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'omoslim.json'),
-      JSON.stringify({
-        balanceProviderUsage: true,
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir);
-    expect(config.balanceProviderUsage).toBe(true);
-  });
-
   test('loads manual plan structure when configured', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');

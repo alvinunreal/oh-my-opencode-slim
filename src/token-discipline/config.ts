@@ -1,5 +1,3 @@
-import { getModelForRole as fetchModelForRole } from './model-config-loader';
-
 export const TOOL_CAPS = {
   bash: { maxLines: 250 },
   git_diff: { maxLines: 400 },
@@ -64,10 +62,10 @@ export const ROLE_PRIORITY: Record<AgentRole, number> = {
   SUMMARIZER: 10,
 };
 
+/**
+ * Get model for a role. Now just returns the default since config is handled elsewhere.
+ * @deprecated Use getModelForAgent from config/model-helpers instead
+ */
 export async function getModelForRole(role: AgentRole): Promise<string> {
-  try {
-    return await fetchModelForRole(role);
-  } catch {
-    return DEFAULT_MODEL_ASSIGNMENTS[role];
-  }
+  return DEFAULT_MODEL_ASSIGNMENTS[role];
 }

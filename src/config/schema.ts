@@ -5,6 +5,61 @@ export {
   PacketV1Schema,
 } from '../token-discipline/types';
 
+// Model tier system
+export const ModelTierSchema = z.enum([
+  'premium',
+  'high',
+  'medium',
+  'low',
+  'free',
+]);
+
+export type ModelTier = z.infer<typeof ModelTierSchema>;
+
+export const ModelCapabilitySchema = z.enum([
+  'reasoning',
+  'toolcall',
+  'code',
+  'fast',
+  'vision',
+  'large-context',
+]);
+
+export type ModelCapability = z.infer<typeof ModelCapabilitySchema>;
+
+export const ModelDefinitionSchema = z.object({
+  tier: ModelTierSchema,
+  capabilities: z.array(ModelCapabilitySchema),
+  context: z.number().optional(),
+  output: z.number().optional(),
+  variants: z.array(z.string()).optional(),
+});
+
+export type ModelDefinition = z.infer<typeof ModelDefinitionSchema>;
+
+export const ProviderModelsSchema = z.object({
+  models: z.record(z.string(), ModelDefinitionSchema),
+});
+
+export type ProviderModels = z.infer<typeof ProviderModelsSchema>;
+
+export const AgentRequirementsSchema = z.object({
+  preferredTier: ModelTierSchema,
+  fallbackTiers: z.array(ModelTierSchema),
+  requiredCapabilities: z.array(ModelCapabilitySchema),
+  preferredCapabilities: z.array(ModelCapabilitySchema),
+  defaultVariant: z.string().nullable(),
+});
+
+export type AgentRequirements = z.infer<typeof AgentRequirementsSchema>;
+
+export const ModelsConfigSchema = z.object({
+  providers: z.record(z.string(), ProviderModelsSchema),
+  agentRequirements: z.record(z.string(), AgentRequirementsSchema),
+});
+
+export type ModelsConfig = z.infer<typeof ModelsConfigSchema>;
+
 export const TokenDisciplineSettingsSchema = z.object({
   enforceIsolation: z.boolean().default(true),
   maxPacketSize: z.number().min(500).max(5000).default(2500),
@@ -95,6 +150,7 @@ export type TmuxLayout = z.infer<typeof TmuxLayoutSchema>;
 // Tmux integration configuration
 export const TmuxConfigSchema = z.object({
   enabled: z.boolean().default(false),
+  lazy: z.boolean().default(false), // spawn pane but don't auto-attach; shows attach command instead
   layout: TmuxLayoutSchema.default('main-vertical'),
   main_pane_size: z.number().min(20).max(80).default(60), // percentage for main pane
 });
@@ -135,11 +191,11 @@ export type TokenDisciplineConfig = z.infer<typeof TokenDisciplineConfigSchema>;
 
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
-  scoringEngineVersion: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
-  balanceProviderUsage: z.boolean().optional(),
   manualPlan: ManualPlanSchema.optional(),
   presets: z.record(z.string(), PresetSchema).optional(),
   agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
+  providers: z.record(z.string(), ProviderModelsSchema).optional(),
+  agentRequirements: z.record(z.string(), AgentRequirementsSchema).optional(),
   disabled_mcps: z.array(z.string()).optional(),
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),

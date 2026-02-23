@@ -198,61 +198,116 @@ is essential to the next decision.
 
 ### Configuration (`omoslim.json`)
 
-The `omoslim.json` file (located at `~/.config/opencode/omoslim.json`) uses **role-based keys**, not agent names:
+The `omoslim.json` file (located at `~/.config/opencode/omoslim.json`) uses **agent names** in a preset-based structure:
 
-| Role Key | Agent | Description |
-|----------|-------|-------------|
-| `orchestrator` | orchestrator | Primary decision-maker |
-| `researcher` | librarian | External docs and library research |
-| `repo_scout` | explorer | Codebase analysis and file finding |
-| `implementer` | fixer | Code generation and changes |
-| `validator` | oracle | Testing and code review |
-| `designer` | designer | UI/UX and styling work |
-| `summarizer` | summarizer | Emergency packet compression |
+| Agent Name | Description |
+|------------|-------------|
+| `orchestrator` | Primary decision-maker |
+| `librarian` | External docs and library research |
+| `explorer` | Codebase analysis and file finding |
+| `fixer` | Code generation and changes |
+| `oracle` | Testing and code review |
+| `designer` | UI/UX and styling work |
+| `summarizer` | Emergency packet compression |
 
-**Example `omoslim.json`:**
+### Tier-Based Model Selection
+
+Models are organized into tiers based on capability and cost:
+
+| Tier | Description | Example Models |
+|------|-------------|----------------|
+| `premium` | Most capable, highest cost | claude-opus-4, gpt-5.3-codex, antigravity-gemini-3.1-pro |
+| `high` | Strong reasoning, balanced cost | claude-sonnet-4, gpt-4o, kimi-k2.5 |
+| `medium` | Good for routine tasks | gpt-5.1-codex-mini, gemini-2.5-flash |
+| `low` | Fast, efficient | claude-haiku-3.5, gpt-4o-mini, gemini-2.0-flash |
+| `free` | No cost, basic capability | opencode/big-pickle |
+
+Each agent has preferred tiers and required capabilities:
+
+| Agent | Preferred Tier | Required Capabilities |
+|-------|---------------|----------------------|
+| `orchestrator` | premium | reasoning, toolcall |
+| `oracle` | high | reasoning |
+| `fixer` | medium | toolcall, code |
+| `designer` | medium | toolcall |
+| `explorer` | low | toolcall |
+| `librarian` | low | toolcall |
+| `summarizer` | free | (none) |
+
+Model capabilities include: `reasoning`, `toolcall`, `code`, `fast`, `vision`, `large-context`.
+
+### Model Configuration
+
+Models are defined in `src/config/models.default.json` and can be overridden in `omoslim.json`:
 
 ```json
 {
-  "model_assignments": {
-    "orchestrator": {
-      "model": "anthropic/claude-opus-4",
-      "tier": "premium"
-    },
-    "researcher": {
-      "model": "anthropic/claude-haiku-3.5",
-      "tier": "cheap"
-    },
-    "repo_scout": {
-      "model": "anthropic/claude-haiku-3.5",
-      "tier": "cheap"
-    },
-    "implementer": {
-      "model": "anthropic/claude-sonnet-4",
-      "tier": "mid"
-    },
-    "validator": {
-      "model": "anthropic/claude-sonnet-4",
-      "tier": "mid"
-    },
-    "designer": {
-      "model": "anthropic/claude-sonnet-4",
-      "tier": "mid"
-    },
-    "summarizer": {
-      "model": "anthropic/claude-haiku-3.5",
-      "tier": "cheap"
+  "providers": {
+    "anthropic": {
+      "models": {
+        "claude-opus-4": {
+          "tier": "premium",
+          "capabilities": ["reasoning", "toolcall", "code"],
+          "context": 200000,
+          "output": 64000
+        }
+      }
     }
   },
-  "model_fallbacks": {
-    "premium": ["anthropic/claude-opus-4", "openai/gpt-4o"],
-    "mid": ["anthropic/claude-sonnet-4", "openai/gpt-4o"],
-    "cheap": ["anthropic/claude-haiku-3.5", "openai/gpt-4o-mini"]
+  "agentRequirements": {
+    "orchestrator": {
+      "preferredTier": "premium",
+      "fallbackTiers": ["high", "medium"],
+      "requiredCapabilities": ["reasoning", "toolcall"],
+      "preferredCapabilities": ["code"],
+      "defaultVariant": null
+    }
   }
 }
 ```
 
-See `omoslim.example.json` in the repository root for a complete example.
+**Example `omoslim.json` with explicit presets:**
+
+```json
+{
+  "preset": "default",
+  "presets": {
+    "default": {
+      "orchestrator": {
+        "model": "anthropic/claude-opus-4"
+      },
+      "librarian": {
+        "model": "anthropic/claude-haiku-3.5",
+        "mcps": ["websearch", "context7", "grep_app"]
+      },
+      "explorer": {
+        "model": "anthropic/claude-haiku-3.5"
+      },
+      "fixer": {
+        "model": "anthropic/claude-sonnet-4"
+      },
+      "oracle": {
+        "model": "anthropic/claude-sonnet-4"
+      },
+      "designer": {
+        "model": "anthropic/claude-sonnet-4"
+      },
+      "summarizer": {
+        "model": "anthropic/claude-haiku-3.5"
+      }
+    }
+  },
+  "fallback": {
+    "enabled": true,
+    "timeoutMs": 15000
+  }
+}
+```
+
+Fallback chains are now automatically derived from tier preferences — no need to
+specify explicit chains.
+
+See `omoslim.example.json` in the repository root for a complete example with multiple presets.
 
 ### OMOSLIM_PRESET Environment Variable
 

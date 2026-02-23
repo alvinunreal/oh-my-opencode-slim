@@ -9,10 +9,11 @@
  * - Model assignments read from omoslim.json
  * - Multi-delegate packet merging
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { capBytes, capLines, capToolOutput, stripNoise } from './airlock';
 import {
   DEFAULT_MODEL_ASSIGNMENTS,
+  getModelForRole,
   PACKET_CONSTRAINTS,
   TOOL_CAPS,
 } from './config';
@@ -27,12 +28,6 @@ import {
   startTaskTracking,
 } from './metrics';
 import { DEFAULT_MODEL_CONFIG, ROLE_TO_AGENT } from './model-config';
-import {
-  clearCache,
-  getModelForAgent,
-  getModelForRole,
-  setConfigDirectory,
-} from './model-config-loader';
 import { buildPacketContext, PACKET_FORMAT_INSTRUCTIONS } from './orchestrator';
 import { mergePackets } from './packet-merger';
 import { PointerResolver } from './pointer-resolver';
@@ -423,15 +418,7 @@ describe('task router — smart classification', () => {
 // 6. Model Config — omoslim.json assignments
 // ---------------------------------------------------------------------------
 
-describe('model config — omoslim.json integration', () => {
-  beforeEach(() => {
-    clearCache();
-  });
-
-  afterEach(() => {
-    clearCache();
-  });
-
+describe('model config — defaults', () => {
   test('DEFAULT_MODEL_CONFIG has all 7 required role assignments', () => {
     const requiredRoles = [
       'orchestrator',
@@ -478,48 +465,10 @@ describe('model config — omoslim.json integration', () => {
     }
   });
 
-  test('getModelForRole falls back to default when config missing', async () => {
-    setConfigDirectory('/nonexistent/path/that/does/not/exist');
-    clearCache();
+  test('getModelForRole returns default model', async () => {
     const model = await getModelForRole('ORCHESTRATOR');
     expect(model).toBeTruthy();
     expect(typeof model).toBe('string');
-  });
-
-  test('getModelForAgent falls back to default when config missing', async () => {
-    setConfigDirectory('/nonexistent/path/that/does/not/exist');
-    clearCache();
-    const model = await getModelForAgent('orchestrator');
-    expect(model).toBeTruthy();
-    expect(typeof model).toBe('string');
-  });
-
-  test('all agent names resolve to non-empty models', async () => {
-    setConfigDirectory('/nonexistent/path/that/does/not/exist');
-    clearCache();
-    const agentNames = [
-      'orchestrator',
-      'librarian',
-      'explorer',
-      'fixer',
-      'oracle',
-      'designer',
-      'summarizer',
-    ] as const;
-    for (const name of agentNames) {
-      const model = await getModelForAgent(name);
-      expect(model).toBeTruthy();
-    }
-  });
-
-  test('omoslim.json actual file is loaded correctly at project root', async () => {
-    // Point at the real project directory which has omoslim.json
-    setConfigDirectory('/Users/halloweed/Coding/Projects/omoslim');
-    clearCache();
-    const model = await getModelForRole('ORCHESTRATOR');
-    // Should be the model from omoslim.json (not the empty string default)
-    expect(model).toBeTruthy();
-    expect(model.length).toBeGreaterThan(0);
   });
 });
 

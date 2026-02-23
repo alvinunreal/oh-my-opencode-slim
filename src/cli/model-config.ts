@@ -1,14 +1,16 @@
 #!/usr/bin/env bun
-import { MODEL_COSTS } from '../token-discipline/model-config';
+import type { AgentName } from '../config/constants';
 import {
-  clearCache,
   createDefaultConfig,
-  getAllAssignments,
+  getAllAgentModels,
   getModelCost,
   getTokenDisciplineSettings,
-  updateModelForRole,
-  validateConfig,
-} from '../token-discipline/model-config-loader';
+  loadConfig,
+  saveConfig,
+  setModelForAgent,
+  validatePluginConfig,
+} from '../config/model-helpers';
+import { MODEL_COSTS } from '../token-discipline/model-config';
 
 function printHelp(): void {
   console.log(`
@@ -17,26 +19,26 @@ omoslim model configuration CLI
 Usage: bunx omoslim model <command> [OPTIONS]
 
 Commands:
-  list              List current model assignments
-  set <role> <model> Set model for a specific role
-  validate          Validate omoslim.json configuration
-  costs             Show estimated costs for current model assignments
-  init              Create default omoslim.json configuration
-  settings          Show token discipline settings
+  list                List current model assignments
+  set <agent> <model> Set model for a specific agent
+  validate            Validate omoslim.json configuration
+  costs               Show estimated costs for current model assignments
+  init                Create default omoslim.json configuration
+  settings            Show token discipline settings
 
-Roles:
-  orchestrator      Primary decision-maker
-  researcher        External docs and library research
-  repo_scout        Codebase analysis and file finding
-  implementer       Code generation and changes
-  validator         Testing and code review
-  designer          UI/UX and styling work
-  summarizer        Emergency packet compression fallback
+Agents:
+  orchestrator        Primary decision-maker
+  librarian           External docs and library research (researcher)
+  explorer            Codebase analysis and file finding (repo_scout)
+  fixer               Code generation and changes (implementer)
+  oracle              Testing and code review (validator)
+  designer            UI/UX and styling work
+  summarizer          Emergency packet compression fallback
 
 Examples:
   bunx omoslim model list
   bunx omoslim model set orchestrator anthropic/claude-opus-4
-  bunx omoslim model set researcher openai/gpt-4o-mini
+  bunx omoslim model set librarian openai/gpt-4o-mini
   bunx omoslim model validate
   bunx omoslim model costs
 `);
@@ -72,64 +74,67 @@ export async function modelCommand(args: string[]): Promise<number> {
 }
 
 async function listModels(): Promise<number> {
-  const assignments = await getAllAssignments();
+  const config = loadConfig();
+  const models = getAllAgentModels(config);
 
   console.log('\n📋 Current Model Assignments:\n');
 
-  const roleOrder = [
+  if (config.preset) {
+    console.log(`Active preset: ${config.preset}\n`);
+  }
+
+  const agentOrder: AgentName[] = [
     'orchestrator',
-    'researcher',
-    'repo_scout',
-    'implementer',
-    'validator',
+    'librarian',
+    'explorer',
+    'fixer',
+    'oracle',
     'designer',
     'summarizer',
   ];
 
-  for (const role of roleOrder) {
-    const assignment = assignments[role];
-    if (assignment) {
-      console.log(
-        `  ${role.padEnd(15)} → ${(assignment.model ?? 'unknown').padEnd(25)} (${assignment.tier ?? 'unknown'})`,
-      );
-      if (assignment.description) {
-        console.log(`  ${' '.repeat(15)}   ${assignment.description}`);
-      }
-      console.log();
+  for (const agent of agentOrder) {
+    const model = models[agent];
+    if (model) {
+      console.log(`  ${agent.padEnd(15)} → ${model}`);
     }
   }
+
+  console.log();
 
   return 0;
 }
 
 async function setModel(args: string[]): Promise<number> {
   if (args.length < 2) {
-    console.error('Usage: bunx omoslim model set <role> <model>');
+    console.error('Usage: bunx omoslim model set <agent> <model>');
     return 1;
   }
 
-  const role = args[0].toLowerCase();
+  const agentName = args[0].toLowerCase() as AgentName;
   const model = args[1];
 
-  const validRoles = [
+  const validAgents: AgentName[] = [
     'orchestrator',
-    'researcher',
-    'repo_scout',
-    'implementer',
-    'validator',
+    'librarian',
+    'explorer',
+    'fixer',
+    'oracle',
     'designer',
     'summarizer',
   ];
 
-  if (!validRoles.includes(role)) {
-    console.error(`Unknown role: ${role}`);
-    console.error(`Valid roles: ${validRoles.join(', ')}`);
+  if (!validAgents.includes(agentName)) {
+    console.error(`Unknown agent: ${agentName}`);
+    console.error(`Valid agents: ${validAgents.join(', ')}`);
     return 1;
   }
 
   try {
-    await updateModelForRole(role, model);
-    console.log(`✅ Updated ${role} → ${model}`);
+    const config = loadConfig();
+    const updatedConfig = setModelForAgent(config, agentName, model);
+    saveConfig(updatedConfig);
+    console.log(`✅ Updated ${agentName} → ${model}`);
     return 0;
   } catch (error) {
     console.error(
@@ -140,7 +145,8 @@ async function setModel(args: string[]): Promise<number> {
 }
 
 async function validateModel(): Promise<number> {
-  const result = await validateConfig();
+  const config = loadConfig();
+  const result = validatePluginConfig(config);
 
   if (result.valid) {
     console.log('✅ Configuration is valid');
@@ -155,27 +161,27 @@ async function validateModel(): Promise<number> {
 }
 
 async function showCosts(): Promise<number> {
-  const assignments = await getAllAssignments();
+  const config = loadConfig();
+  const models = getAllAgentModels(config);
 
   console.log('\n💰 Cost Estimates (per 1M tokens):\n');
 
-  const roleOrder = [
+  const agentOrder: AgentName[] = [
     'orchestrator',
-    'researcher',
-    'repo_scout',
-    'implementer',
-    'validator',
+    'librarian',
+    'explorer',
+    'fixer',
+    'oracle',
     'designer',
     'summarizer',
   ];
 
-  for (const role of roleOrder) {
-    const assignment = assignments[role];
-    if (assignment) {
-      const model = assignment.model ?? 'unknown';
+  for (const agent of agentOrder) {
+    const model = models[agent];
+    if (model) {
       const costs = getModelCost(model);
 
-      console.log(`  ${role.padEnd(15)} (${model})`);
+      console.log(`  ${agent.padEnd(15)} (${model})`);
       if (costs.input > 0) {
         console.log(`  ${' '.repeat(15)} Input:  $${costs.input.toFixed(2)}`);
         console.log(`  ${' '.repeat(15)} Output: $${costs.output.toFixed(2)}`);
@@ -201,14 +207,14 @@ async function showCosts(): Promise<number> {
 }
 
 async function initConfig(): Promise<number> {
-  clearCache();
-  await createDefaultConfig();
+  createDefaultConfig();
   console.log('✅ Created default omoslim.json configuration');
   return 0;
 }
 
 async function showSettings(): Promise<number> {
-  const settings = await getTokenDisciplineSettings();
+  const config = loadConfig();
+  const settings = getTokenDisciplineSettings(config);
 
   console.log('\n⚙️  Token Discipline Settings:\n');
   console.log(`  Enforce Isolation:     ${settings.enforceIsolation}`);
