@@ -9,14 +9,19 @@ import {
 // Non-global regexes: .test() on a global regex advances lastIndex, causing
 // every second call to return false even when a match exists. We only need
 // presence detection, so no /g flag is required.
-const FORBIDDEN_PATTERNS = [
+
+// Patterns banned everywhere — code blocks, stack traces, build noise.
+const UNIVERSAL_FORBIDDEN = [
   /```[\s\S]*?```/,
-  /https?:\/\/[^\s]+/i,
   /stderr:/i,
   /traceback:/i,
   /npm warn/i,
   /error:/i,
 ];
+
+// Patterns banned in content fields (tldr, recommendation, next_actions) but
+// NOT in evidence — evidence entries are source pointers and may include URLs.
+const CONTENT_FORBIDDEN = [/https?:\/\/[^\s]+/i];
 
 export function validatePacketV1(packet: unknown): ValidatedPacket {
   const parsed = PacketV1Schema.parse(packet);
@@ -44,6 +49,8 @@ export function validatePacketV1(packet: unknown): ValidatedPacket {
 
 export function detectForbiddenContent(packet: PacketV1): string[] {
   const violations: string[] = [];
+
+  // All text across every field — check universal patterns here.
   const allText = [
     ...packet.tldr,
     ...packet.evidence,
@@ -52,9 +59,26 @@ export function detectForbiddenContent(packet: PacketV1): string[] {
     ...(packet.options ?? []),
   ].join('\n');
 
-  for (const pattern of FORBIDDEN_PATTERNS) {
+  for (const pattern of UNIVERSAL_FORBIDDEN) {
     if (pattern.test(allText)) {
       violations.push(`Pattern ${pattern.source} found in packet`);
+    }
+  }
+
+  // Content-only fields: URLs are forbidden (must be original synthesis).
+  // Evidence is excluded — URLs there are legitimate source pointers.
+  const contentOnlyText = [
+    ...packet.tldr,
+    packet.recommendation,
+    ...packet.next_actions,
+    ...(packet.options ?? []),
+  ].join('\n');
+
+  for (const pattern of CONTENT_FORBIDDEN) {
+    if (pattern.test(contentOnlyText)) {
+      violations.push(
+        `Pattern ${pattern.source} found in content fields (tldr/recommendation/next_actions)`,
+      );
     }
   }
 
@@ -76,7 +100,8 @@ export function assertNoRawContextLeak(
   }
 
   if (rawDelegateResponse.length > 10_000) {
-    const hasLeakedOutput = FORBIDDEN_PATTERNS.some((pattern) =>
+    const allForbidden = [...UNIVERSAL_FORBIDDEN, ...CONTENT_FORBIDDEN];
+    const hasLeakedOutput = allForbidden.some((pattern) =>
       pattern.test(serialized),
     );
     if (hasLeakedOutput) {
@@ -87,45 +112,4 @@ export function assertNoRawContextLeak(
   if (violations.length > 0) {
     throw createContextLeakError(threadId, violations);
   }
-}
-
-export function autoSummarizeToPacket(
-  delegateResponse: string,
-  role: string,
-): PacketV1 {
-  const lines = delegateResponse.split('\n').filter((l) => l.trim());
-
-  const tldr: string[] = [];
-  const evidence: string[] = [];
-  const next_actions: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      if (tldr.length < 3) {
-        tldr.push(trimmed.slice(2));
-      } else if (evidence.length < 5) {
-        evidence.push(trimmed.slice(2));
-      }
-    }
-  }
-
-  if (tldr.length === 0 && lines.length > 0) {
-    tldr.push(lines[0].trim().slice(0, 200));
-  }
-
-  if (evidence.length === 0) {
-    evidence.push(`thread:${role}#context`);
-  }
-
-  if (next_actions.length === 0) {
-    next_actions.push('Review delegate output for actionable items');
-  }
-
-  return {
-    tldr,
-    evidence,
-    recommendation: tldr[0] ?? 'Review delegate output',
-    next_actions,
-  };
 }

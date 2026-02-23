@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-The `src/tools/` directory provides the core tool implementations for the oh-my-opencode-slim plugin. It exposes three main categories of tools:
+The `src/tools/` directory provides the core tool implementations for the omoslim plugin. It exposes three main categories of tools:
 
 1. **Grep** - Fast regex-based content search using ripgrep (with fallback to system grep)
 2. **LSP** - Language Server Protocol integration for code intelligence (definition, references, diagnostics, rename)
@@ -291,13 +291,13 @@ export { createBackgroundTools } from './background';
 #### Ripgrep (grep/downloader.ts)
 - **Version**: 14.1.1
 - **Platforms**: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64
-- **Install location**: `~/.cache/oh-my-opencode-slim/bin/rg` (Linux/macOS), `%LOCALAPPDATA%\oh-my-opencode-slim\bin\rg.exe` (Windows)
+- **Install location**: `~/.cache/omoslim/bin/rg` (Linux/macOS), `%LOCALAPPDATA%\omoslim\bin\rg.exe` (Windows)
 - **Fallback**: System grep if ripgrep unavailable
 
 #### AST-grep (ast-grep/downloader.ts)
 - **Version**: 0.40.0 (synced with @ast-grep/cli package)
 - **Platforms**: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, win32-arm64, win32-ia32
-- **Install location**: `~/.cache/oh-my-opencode-slim/bin/sg` (Linux/macOS), `%LOCALAPPDATA%\oh-my-opencode-slim\bin\sg.exe` (Windows)
+- **Install location**: `~/.cache/omoslim/bin/sg` (Linux/macOS), `%LOCALAPPDATA%\omoslim\bin\sg.exe` (Windows)
 - **Fallback**: Manual installation instructions
 
 ### Error Handling Integration

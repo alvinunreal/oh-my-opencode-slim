@@ -1,17 +1,16 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { POINTER_CONSTRAINTS } from './config';
 import { recordPointerResolution } from './metrics';
 import { loadThreadArchive } from './thread-manager';
 import type { ParsedPointer } from './types';
 
-const ARCHIVE_DIR = join(import.meta.dir, 'thread-archive');
-
 export class PointerResolver {
   private resolutionCount = 0;
   private readonly maxResolutions: number;
 
-  constructor(maxResolutions = POINTER_CONSTRAINTS.maxResolutionsPerTask) {
+  constructor(
+    maxResolutions: number = POINTER_CONSTRAINTS.maxResolutionsPerTask,
+  ) {
     this.maxResolutions = maxResolutions;
   }
 
@@ -40,7 +39,8 @@ export class PointerResolver {
         result = await this.resolveThreadPointer(parsed);
         break;
       case 'cmd':
-        result = await this.resolveCmdPointer(parsed);
+        // cmd: pointers reference transient tool outputs that are not persisted.
+        result = `[Command output ${parsed.id} not available]`;
         break;
       case 'file':
         result = await this.resolveFilePointer(parsed);
@@ -105,30 +105,6 @@ export class PointerResolver {
     }
 
     return JSON.stringify(archive.packet, null, 2);
-  }
-
-  private async resolveCmdPointer(
-    parsed: ParsedPointer,
-  ): Promise<string | null> {
-    try {
-      const outputPath = join(
-        ARCHIVE_DIR,
-        parsed.id.split('#')[0],
-        'outputs',
-        `${parsed.id}.raw`,
-      );
-      const content = await readFile(outputPath, 'utf-8');
-
-      if (parsed.detail) {
-        const lines = content.split('\n');
-        const [start, end] = parsed.detail.split('-').map(Number);
-        return lines.slice(start - 1, end ?? start).join('\n');
-      }
-
-      return content;
-    } catch {
-      return `[Command output ${parsed.id} not found]`;
-    }
   }
 
   private async resolveFilePointer(

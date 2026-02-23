@@ -26,18 +26,28 @@ Always conclude with a PACKET containing your findings:
 
 \`\`\`packet
 tldr:
-  - [Key finding 1]
-  - [Key finding 2]
-  - [Key finding 3]
+  - [Key finding in your own words — no URLs, no code]
+  - [Key finding in your own words — no URLs, no code]
+  - [Key finding in your own words — no URLs, no code]
 evidence:
-  - [doc URL or source reference]
-  - [doc URL or source reference]
-  - [doc URL or source reference]
-recommendation: [Primary recommendation based on research]
+  - https://docs.example.com/api/reference (URLs are valid evidence pointers)
+  - https://github.com/org/repo/blob/main/src/file.ts#L42
+  - thread:abc123#context
+recommendation: [Primary recommendation in your own words — no URLs]
 next_actions:
-  - [Suggested next step]
-  - [Suggested next step]
+  - [Suggested next step — no URLs]
+  - [Suggested next step — no URLs]
 \`\`\`
+
+**Evidence rules**:
+- Evidence entries ARE allowed to be URLs — they are source pointers, not content
+- Example: \`https://docs.anthropic.com/claude/reference\`
+- Example: \`https://github.com/org/repo/blob/main/readme.md\`
+
+**Content rules** (tldr, recommendation, next_actions):
+- Summarize findings in your own words — do NOT copy URLs into these fields
+- Do not include code blocks or raw outputs in any field
+- Keep total packet under 2,500 characters
 
 The packet format enables efficient context transfer back to the orchestrator.`;
 

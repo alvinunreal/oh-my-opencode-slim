@@ -12,7 +12,7 @@ The module is structured around a few focused responsibilities: `constants.ts` h
 
 ## Flow
 
-1. Callers pass `GrepOptions` to `runRg` (or `runRgCount`); the CLI module first resolves the best backend via `resolveGrepCli`, which itself may probe bundled paths, the system `rg`, a cached install under `~/.cache/oh-my-opencode-slim/bin`, or finally `grep`. 2. `buildArgs` chooses `rg` versus `grep` flag sets, adds safety arguments, globs, excludes, and finally the search pattern and paths. 3. Bun spawns the selected executable with the assembled arguments and a timeout promise; stdout is read, truncated if necessary, and converted into `GrepMatch` objects via `parseOutput`/`parseCountOutput`. 4. The parsed matches are returned as a `GrepResult`, which `tools.ts` later formats (`formatGrepResult`) with grouped file sections before presenting to the user.
+1. Callers pass `GrepOptions` to `runRg` (or `runRgCount`); the CLI module first resolves the best backend via `resolveGrepCli`, which itself may probe bundled paths, the system `rg`, a cached install under `~/.cache/omoslim/bin`, or finally `grep`. 2. `buildArgs` chooses `rg` versus `grep` flag sets, adds safety arguments, globs, excludes, and finally the search pattern and paths. 3. Bun spawns the selected executable with the assembled arguments and a timeout promise; stdout is read, truncated if necessary, and converted into `GrepMatch` objects via `parseOutput`/`parseCountOutput`. 4. The parsed matches are returned as a `GrepResult`, which `tools.ts` later formats (`formatGrepResult`) with grouped file sections before presenting to the user.
 
 ## Integration
 

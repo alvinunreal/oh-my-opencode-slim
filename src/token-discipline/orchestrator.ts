@@ -4,23 +4,13 @@ import {
   extractPacketFromResponse,
   formatPacketForContext,
 } from './context-cleaner';
-import { recordDelegateResult, recordPacketRejection } from './metrics';
-import type { PointerResolver } from './pointer-resolver';
 import { createThreadArchive, finalizeThread } from './thread-manager';
-import type {
-  DelegateResult,
-  MergedPacket,
-  PacketV1,
-  ValidatedPacket,
-} from './types';
+import type { DelegateResult, PacketV1, ValidatedPacket } from './types';
 import { validatePacketV1 } from './validator';
 
 export interface OrchestratorContext {
   userRequest: string;
   packets: ValidatedPacket[];
-  mergedPacket: MergedPacket | null;
-  taskPlan: null;
-  pointerResolver: PointerResolver;
 }
 
 export function buildPacketContext(packets: ValidatedPacket[]): string {
@@ -59,12 +49,26 @@ export async function processDelegateOutput(
 
   let packet: PacketV1;
   try {
-    packet = extractPacketFromResponse(delegateResponse) ?? {
-      tldr: ['Delegate completed'],
-      evidence: [`thread:${threadId}#context`],
-      recommendation: 'Review delegate output',
-      next_actions: ['Check archived thread for details'],
-    };
+    const extracted = extractPacketFromResponse(delegateResponse);
+
+    if (!extracted) {
+      // No packet found in response — produce a fallback pointing to the thread
+      packet = {
+        tldr: ['Delegate completed without packet'],
+        evidence: [
+          threadId
+            ? `thread:${threadId}#context`
+            : 'Delegate output invalid - no thread archive available',
+        ],
+        options: ['[fallback: extraction error]'],
+        recommendation: 'Review archived thread for full details',
+        next_actions: [
+          'Use resolve_pointer on the thread: evidence pointer, or delegate to @summarizer',
+        ],
+      };
+    } else {
+      packet = extracted;
+    }
 
     const validated = validatePacketV1(packet);
 
@@ -78,19 +82,41 @@ export async function processDelegateOutput(
       tokenCount,
     };
 
-    recordDelegateResult(result);
     context.packets.push(validated);
 
     return result;
   } catch (error) {
-    recordPacketRejection();
+    // Any validation failure (size exceeded, forbidden content, schema error)
+    // produces a graceful fallback packet pointing to the thread archive rather
+    // than surfacing an exception that would mark the task as failed.
+    if (error instanceof Error) {
+      let fallbackReason: string;
+      if (error.message.includes('exceeds max chars')) {
+        fallbackReason = '[fallback: size limit exceeded]';
+      } else if (error.message.includes('forbidden content')) {
+        fallbackReason = '[fallback: forbidden content]';
+      } else if (
+        error.message.includes('validation') ||
+        error.message.includes('parse')
+      ) {
+        fallbackReason = '[fallback: validation failed]';
+      } else {
+        fallbackReason = '[fallback: extraction error]';
+      }
 
-    if (error instanceof Error && error.message.includes('exceeds max chars')) {
+      const evidencePointer = threadId
+        ? `thread:${threadId}#context`
+        : 'Delegate output invalid - no thread archive available';
+
       packet = {
-        tldr: ['Packet size limit exceeded - output archived'],
-        evidence: [`thread:${threadId}#context`],
+        tldr: ['Delegate output archived — packet could not be extracted'],
+        evidence: [evidencePointer],
+        options: [fallbackReason],
         recommendation: 'Review archived thread for full details',
-        next_actions: ['Access thread archive for complete output'],
+        next_actions: [
+          'Use resolve_pointer on the thread: evidence pointer for a quick peek',
+          'Or delegate to @summarizer for full compression',
+        ],
       };
 
       const validated = validatePacketV1(packet);
@@ -104,7 +130,6 @@ export async function processDelegateOutput(
         tokenCount,
       };
 
-      recordDelegateResult(result);
       context.packets.push(validated);
 
       return result;
@@ -122,9 +147,10 @@ tldr:
   - Key insight 1
   - Key insight 2
 evidence:
-  - file:path:line-range OR thread:id OR URL
-  - Supporting evidence pointer
-recommendation: Single clear recommendation
+  - file:src/main.ts:42-80
+  - thread:abc123#context
+  - https://docs.example.com/api-reference
+recommendation: Single clear recommendation using your own words
 next_actions:
   - Actionable step 1
   - Actionable step 2
@@ -133,9 +159,20 @@ next_actions:
 Requirements:
 - Total packet: ≤2,500 characters
 - tldr: 1-3 bullets
-- evidence: 1-5 bullets with pointers
+- evidence: 1-5 bullets with source pointers
 - recommendation: 1 bullet
 - next_actions: 1-5 bullets
 - No raw tool outputs, diffs, or code blocks
-- Use pointers (file:path:line, thread:id, cmd:id) for detailed references
+
+Evidence field accepts source pointers:
+  ✓ Files:   file:src/main.ts:42-80
+  ✓ Threads: thread:abc123#context
+  ✓ URLs:    https://docs.anthropic.com/reference
+  ✓ Cmds:    cmd:xyz789#line:50-100
+
+Content fields (tldr, recommendation, next_actions) must use your own words:
+  ✗ tldr: "See https://docs.example.com for details"
+  ✓ tldr: "Solution uses middleware pattern for auth"
+  ✗ recommendation: "Check https://github.com/..."
+  ✓ recommendation: "Use NextAuth.js with App Router adapter"
 `;

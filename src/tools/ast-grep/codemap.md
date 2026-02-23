@@ -18,7 +18,7 @@
 - Tools (`ast_grep_search`, `ast_grep_replace`) call `runSg`, populating CLI arguments (pattern, rewrite, globs, context) and routing output through `formatSearchResult`/`formatReplaceResult` before reporting via `showOutputToUser` (`tools.ts`).
 - `runSg` constructs the command, ensures the CLI binary exists (resetting via `getAstGrepPath` which may call `findSgCliPathSync` or trigger a download), spawns the process with timeout handling, and parses compact JSON while guarding against truncated output and CLI errors (`cli.ts`).
 - Binary resolution uses `constants.ts` helpers to detect cached binaries, installed packages, platform-specific packages, or Homebrew paths, and exposes environment checks/formatting to upstream callers (`constants.ts`).
-- `downloader.ts` is the fallback path: it infers the platform key, downloads the matching GitHub release, extracts `sg`, sets executable bits, and caches it under `~/.cache/oh-my-opencode-slim/bin` (or Windows AppData) so subsequent commands reuse the binary.
+- `downloader.ts` is the fallback path: it infers the platform key, downloads the matching GitHub release, extracts `sg`, sets executable bits, and caches it under `~/.cache/omoslim/bin` (or Windows AppData) so subsequent commands reuse the binary.
 
 ## Integration Points
 

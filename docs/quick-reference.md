@@ -1,6 +1,6 @@
 # Quick Reference Guide
 
-Complete reference for oh-my-opencode-slim configuration and capabilities.
+Complete reference for omoslim configuration and capabilities.
 
 ## Table of Contents
 
@@ -43,7 +43,7 @@ Useful flags:
 
 **Method 1: Edit Config File**
 
-Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and change the `preset` field:
+Edit `~/.config/opencode/omoslim.json` (or `.jsonc`) and change the `preset` field:
 
 ```json
 {
@@ -56,7 +56,7 @@ Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and change the 
 Set the environment variable before running OpenCode:
 
 ```bash
-export OH_MY_OPENCODE_SLIM_PRESET=openai
+export OMOSLIM_PRESET=openai
 opencode
 ```
 
@@ -88,7 +88,7 @@ Access Claude 4.5 and Gemini 3 models through Google's Antigravity infrastructur
 
 **Installation:**
 ```bash
-bunx oh-my-opencode-slim install --antigravity=yes --opencode-free=yes --opencode-free-model=auto
+bunx omoslim install --antigravity=yes --opencode-free=yes --opencode-free-model=auto
 ```
 
 **Agent Mapping:**
@@ -216,7 +216,7 @@ python3 ~/.config/opencode/skills/cartography/scripts/cartographer.py update --r
 
 ### Skills Assignment
 
-You can customize which skills each agent is allowed to use in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
+You can customize which skills each agent is allowed to use in `~/.config/opencode/omoslim.json` (or `.jsonc`).
 
 **Syntax:**
 
@@ -277,7 +277,7 @@ Control which agents can access which MCP servers using per-agent allowlists:
 
 ### Configuration & Syntax
 
-You can configure MCP access in your plugin configuration file: `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
+You can configure MCP access in your plugin configuration file: `~/.config/opencode/omoslim.json` (or `.jsonc`).
 
 **Per-Agent Permissions**
 
@@ -332,7 +332,7 @@ You can disable specific MCP servers globally by adding them to the `disabled_mc
 
 #### Quick Setup
 
-1. **Enable tmux integration** in `oh-my-opencode-slim.json` (or `.jsonc`):
+1. **Enable tmux integration** in `omoslim.json` (or `.jsonc`):
 
    ```json
    {
@@ -410,14 +410,14 @@ OpenCode automatically formats files after they're written or edited using langu
 | File | Purpose |
 |------|---------|
 | `~/.config/opencode/opencode.json` | OpenCode core settings |
-| `~/.config/opencode/oh-my-opencode-slim.json` or `.jsonc` | Plugin settings (agents, tmux, MCPs) |
-| `.opencode/oh-my-opencode-slim.json` or `.jsonc` | Project-local plugin overrides (optional) |
+| `~/.config/opencode/omoslim.json` or `.jsonc` | Plugin settings (agents, tmux, MCPs) |
+| `.opencode/omoslim.json` or `.jsonc` | Project-local plugin overrides (optional) |
 
 > **💡 JSONC Support:** Configuration files support JSONC format (JSON with Comments). Use `.jsonc` extension to enable comments and trailing commas. If both `.jsonc` and `.json` exist, `.jsonc` takes precedence.
 
 ### Prompt Overriding
 
-You can customize agent prompts by creating markdown files in `~/.config/opencode/oh-my-opencode-slim/`:
+You can customize agent prompts by creating markdown files in `~/.config/opencode/omoslim/`:
 
 | File | Purpose |
 |------|---------|
@@ -427,7 +427,7 @@ You can customize agent prompts by creating markdown files in `~/.config/opencod
 **Example:**
 
 ```
-~/.config/opencode/oh-my-opencode-slim/
+~/.config/opencode/omoslim/
   ├── orchestrator.md          # Custom orchestrator prompt
   ├── orchestrator_append.md   # Append to default orchestrator prompt
   ├── explorer.md
@@ -453,8 +453,8 @@ The plugin supports **JSONC** format for configuration files, allowing you to:
 - Use trailing commas in arrays and objects
 
 **File Priority:**
-1. `oh-my-opencode-slim.jsonc` (preferred if exists)
-2. `oh-my-opencode-slim.json` (fallback)
+1. `omoslim.jsonc` (preferred if exists)
+2. `omoslim.json` (fallback)
 
 **Example JSONC Configuration:**
 
@@ -479,7 +479,7 @@ The plugin supports **JSONC** format for configuration files, allowing you to:
 }
 ```
 
-### Plugin Config (`oh-my-opencode-slim.json` or `oh-my-opencode-slim.jsonc`)
+### Plugin Config (`omoslim.json` or `omoslim.jsonc`)
 
 The installer generates this file based on your providers. You can manually customize it to mix and match models. See the [Presets](#presets) section for detailed configuration options.
 

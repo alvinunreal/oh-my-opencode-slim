@@ -1,6 +1,6 @@
 # Installation Guide
 
-Complete installation instructions for oh-my-opencode-slim.
+Complete installation instructions for omoslim.
 
 ## Table of Contents
 
@@ -18,13 +18,13 @@ Complete installation instructions for oh-my-opencode-slim.
 Run the interactive installer:
 
 ```bash
-bunx oh-my-opencode-slim@latest install
+bunx omoslim@latest install
 ```
 
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+bunx omoslim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
 ```
 
 ### Provider Options
@@ -46,7 +46,7 @@ It then filters to free `opencode/*` models only, picks a coding-first primary m
 
 Enable during installation:
 ```bash
-bunx oh-my-opencode-slim install --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto
+bunx omoslim install --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto
 ```
 
 ### After Installation
@@ -61,7 +61,7 @@ opencode auth login
 
 Once authenticated, run opencode and `ping all agents` to verify all agents respond.
 
-> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely. See [Configuration](quick-reference.md#configuration) for details.
+> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/omoslim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely. See [Configuration](quick-reference.md#configuration) for details.
 
 ### Alternative: Ask Any Coding Agent
 
@@ -69,14 +69,14 @@ Paste this into Claude Code, AmpCode, Cursor, or any coding agent:
 
 ```
 Install and configure by following the instructions here:
-https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
+https://raw.githubusercontent.com/alvinunreal/omoslim/refs/heads/master/README.md
 ```
 
 ---
 
 ## For LLM Agents
 
-If you're an LLM Agent helping set up oh-my-opencode-slim, follow these steps.
+If you're an LLM Agent helping set up omoslim, follow these steps.
 
 ### Step 1: Check OpenCode Installation
 
@@ -116,32 +116,32 @@ Help the user understand the tradeoffs:
 Based on answers, run:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --opencode-free=<yes|no> --opencode-free-model=<id|auto> --tmux=<yes|no> --skills=<yes|no>
+bunx omoslim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --opencode-free=<yes|no> --opencode-free-model=<id|auto> --tmux=<yes|no> --skills=<yes|no>
 ```
 
 **Examples:**
 ```bash
 # Kimi + OpenAI + Antigravity
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+bunx omoslim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
 
 # OpenAI only
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=no --tmux=no --skills=yes
+bunx omoslim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=no --tmux=no --skills=yes
 
 # OpenCode free models only (auto-select)
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+bunx omoslim@latest install --no-tui --kimi=no --openai=no --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
 
 # OpenCode free models + OpenAI (manual primary model)
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=opencode/gpt-5-nano --tmux=no --skills=yes
+bunx omoslim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=opencode/gpt-5-nano --tmux=no --skills=yes
 ```
 
 The installer automatically:
 - Adds the plugin to `~/.config/opencode/opencode.json`
-- Generates agent model mappings in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
+- Generates agent model mappings in `~/.config/opencode/omoslim.json` (or `.jsonc`)
 
 **Crucial Advice for the User:**
-- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
+- They can easily assign **different models to different agents** by editing `~/.config/opencode/omoslim.json` (or `.jsonc`).
 - If they add a new provider later, they just need to update this file.
-- Read generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file and report the model configuration.
+- Read generated `~/.config/opencode/omoslim.json` (or `.jsonc`) file and report the model configuration.
 
 ### Step 4: Authenticate with Providers
 
@@ -177,11 +177,11 @@ opencode auth login
 
 Check the expected config format:
 ```bash
-bunx oh-my-opencode-slim@latest install --help
+bunx omoslim@latest install --help
 ```
 
 Then manually create the config files at:
-- `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
+- `~/.config/opencode/omoslim.json` (or `.jsonc`)
 
 ### Agents Not Responding
 
@@ -192,7 +192,7 @@ Then manually create the config files at:
 
 2. Verify your config file exists and is valid:
    ```bash
-   cat ~/.config/opencode/oh-my-opencode-slim.json
+   cat ~/.config/opencode/omoslim.json
    ```
 
 3. Check that your provider is configured in `~/.config/opencode/opencode.json`
@@ -213,7 +213,7 @@ If providers are not working:
 
 3. Verify your config file has the correct provider configuration:
    ```bash
-   cat ~/.config/opencode/oh-my-opencode-slim.json
+   cat ~/.config/opencode/omoslim.json
    ```
 
 ### Tmux Integration Not Working
@@ -234,12 +234,12 @@ See the [Quick Reference](quick-reference.md#tmux-integration) for more details.
 
 1. **Remove the plugin from your OpenCode config**:
 
-   Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
+   Edit `~/.config/opencode/opencode.json` and remove `"omoslim"` from the `plugin` array.
 
 2. **Remove configuration files (optional)**:
    ```bash
-   rm -f ~/.config/opencode/oh-my-opencode-slim.json
-   rm -f .opencode/oh-my-opencode-slim.json
+   rm -f ~/.config/opencode/omoslim.json
+   rm -f .opencode/omoslim.json
    ```
 
 3. **Remove skills (optional)**:

@@ -4,7 +4,7 @@
 
 1. Install with Antigravity support:
    ```bash
-   bunx oh-my-opencode-slim install --antigravity=yes
+   bunx omoslim install --antigravity=yes
    ```
 
 2. Authenticate:
@@ -106,7 +106,7 @@ When you install with `--antigravity=yes`, the preset depends on other providers
 
 ## Manual Configuration
 
-If you prefer to configure manually, edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) and add a pure Antigravity preset:
+If you prefer to configure manually, edit `~/.config/opencode/omoslim.json` (or `.jsonc`) and add a pure Antigravity preset:
 
 ```json
 {
@@ -170,16 +170,16 @@ opencode auth login
 cat ~/.config/opencode/opencode.json | grep antigravity
 
 # Reinstall plugin
-bunx oh-my-opencode-slim install --antigravity=yes --no-tui --kimi=no --openai=no --tmux=no --skills=no
+bunx omoslim install --antigravity=yes --no-tui --kimi=no --openai=no --tmux=no --skills=no
 ```
 
 ### Wrong Model Selected
 ```bash
 # Check current preset
-echo $OH_MY_OPENCODE_SLIM_PRESET
+echo $OMOSLIM_PRESET
 
 # Change preset
-export OH_MY_OPENCODE_SLIM_PRESET=antigravity
+export OMOSLIM_PRESET=antigravity
 opencode
 ```
 
@@ -190,7 +190,7 @@ lsof -i :8317
 
 # Restart the service
 # (Follow your Antigravity/LLM-Mux restart procedure)
-# Or edit ~/.config/opencode/oh-my-opencode-slim.json (or .jsonc)
+# Or edit ~/.config/opencode/omoslim.json (or .jsonc)
 # Change the "preset" field and restart OpenCode
 ```
 

@@ -40,7 +40,6 @@ import { classifyAndRoute } from './task-router';
 import type { DelegateResult, PacketV1, ValidatedPacket } from './types';
 import {
   assertNoRawContextLeak,
-  autoSummarizeToPacket,
   detectForbiddenContent,
   validatePacketV1,
 } from './validator';
@@ -82,25 +81,21 @@ describe('airlock — tool output capping', () => {
       { length: 1000 },
       (_, i) => `line ${i + 1}`,
     ).join('\n');
-    const result = capToolOutput('bash', thousandLines, 'thread_01');
+    const output = capToolOutput('bash', thousandLines);
 
-    const outputLines = result.output
-      .split('\n')
-      .filter((l) => !l.startsWith('...'));
+    const outputLines = output.split('\n').filter((l) => !l.startsWith('...'));
     // Capped output should have ≤250 content lines plus one truncation message
     expect(outputLines.length).toBeLessThanOrEqual(251);
-    expect(result.capped).toBe(true);
-    expect(result.output).toContain('truncated');
-    expect(result.output).toContain('750 lines');
+    expect(output).toContain('truncated');
+    expect(output).toContain('750 lines');
   });
 
   test('bash: output ≤250 lines is NOT capped', () => {
     const shortOutput = Array.from({ length: 100 }, (_, i) => `line ${i}`).join(
       '\n',
     );
-    const result = capToolOutput('bash', shortOutput, 'thread_02');
-    expect(result.capped).toBe(false);
-    expect(result.output).not.toContain('truncated');
+    const output = capToolOutput('bash', shortOutput);
+    expect(output).not.toContain('truncated');
   });
 
   test('git_diff: output over 400 lines is capped', () => {
@@ -146,11 +141,13 @@ describe('airlock — tool output capping', () => {
     );
   });
 
-  test('capToolOutput returns pointer in cmd: format', () => {
-    const output = Array.from({ length: 300 }, () => 'line').join('\n');
-    const result = capToolOutput('bash', output, 'thread_03');
-    expect(result.pointer).toMatch(/^cmd:cmd_\d+$/);
-    expect(result.originalSize).toBeGreaterThan(result.cappedSize);
+  test('capToolOutput caps and strips noise', () => {
+    const output =
+      'npm WARN deprecated pkg\n' +
+      Array.from({ length: 300 }, () => 'line').join('\n');
+    const result = capToolOutput('bash', output);
+    expect(result).toContain('truncated');
+    expect(result).not.toContain('npm WARN');
   });
 
   test('noise stripping removes npm warnings before capping', () => {
@@ -207,9 +204,27 @@ describe('packet validation — size and schema enforcement', () => {
     expect(() => validatePacketV1(packet)).toThrow();
   });
 
-  test('forbidden content detection — URLs flagged', () => {
+  test('forbidden content detection — URL in evidence is NOT flagged (evidence pointers are allowed)', () => {
     const packet = makeValidPacket({
       evidence: ['https://example.com/some-api-doc'],
+    });
+    const violations = detectForbiddenContent(packet);
+    // URLs are valid source pointers in evidence — must not produce a violation
+    expect(violations.filter((v) => v.includes('https'))).toHaveLength(0);
+  });
+
+  test('forbidden content detection — URL in tldr IS flagged', () => {
+    const packet = makeValidPacket({
+      tldr: ['See https://example.com/docs for details'],
+    });
+    const violations = detectForbiddenContent(packet);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => v.includes('https'))).toBe(true);
+  });
+
+  test('forbidden content detection — URL in recommendation IS flagged', () => {
+    const packet = makeValidPacket({
+      recommendation: 'Read https://example.com/guide and follow it',
     });
     const violations = detectForbiddenContent(packet);
     expect(violations.length).toBeGreaterThan(0);
@@ -227,8 +242,9 @@ describe('packet validation — size and schema enforcement', () => {
   test('forbidden content detection is not stateful (regex bug check)', () => {
     // Run detectForbiddenContent twice on the SAME packet to prove the regex
     // fix works — stateful /g regexes would return empty on the second call.
+    // Use a URL in tldr (content field) which IS forbidden, so violations > 0.
     const packet = makeValidPacket({
-      evidence: ['https://example.com/api'],
+      tldr: ['See https://example.com/api for details'],
     });
     const first = detectForbiddenContent(packet);
     const second = detectForbiddenContent(packet);
@@ -655,25 +671,6 @@ next_actions:
     const response = 'Just a plain text response without any packet.';
     const packet = extractPacketFromResponse(response);
     expect(packet).toBeNull();
-  });
-
-  test('autoSummarizeToPacket produces valid packet from noisy output', () => {
-    const noisyOutput = `
-      - Found the bug in authentication
-      - Missing null check causes crash
-      - Token validation is broken
-      
-      The main issue is in src/auth/validator.ts.
-    `;
-    const packet = autoSummarizeToPacket(noisyOutput, 'IMPLEMENTER');
-    expect(packet.tldr.length).toBeGreaterThan(0);
-    expect(packet.tldr.length).toBeLessThanOrEqual(3);
-    expect(packet.evidence.length).toBeGreaterThan(0);
-    expect(packet.recommendation).toBeTruthy();
-    expect(packet.next_actions.length).toBeGreaterThan(0);
-
-    // Resulting packet must be valid
-    expect(() => validatePacketV1(packet)).not.toThrow();
   });
 });
 

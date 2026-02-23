@@ -16,24 +16,6 @@ export type TokenDisciplineSettings = z.infer<
   typeof TokenDisciplineSettingsSchema
 >;
 
-const FALLBACK_AGENT_NAMES = [
-  'orchestrator',
-  'oracle',
-  'designer',
-  'explorer',
-  'librarian',
-  'fixer',
-] as const;
-
-const MANUAL_AGENT_NAMES = [
-  'orchestrator',
-  'oracle',
-  'designer',
-  'explorer',
-  'librarian',
-  'fixer',
-] as const;
-
 const ProviderModelIdSchema = z
   .string()
   .regex(
@@ -74,7 +56,6 @@ export const ManualPlanSchema = z
   })
   .strict();
 
-export type ManualAgentName = (typeof MANUAL_AGENT_NAMES)[number];
 export type ManualAgentPlan = z.infer<typeof ManualAgentPlanSchema>;
 export type ManualPlan = z.infer<typeof ManualPlanSchema>;
 
@@ -90,8 +71,6 @@ const FallbackChainsSchema = z
     fixer: AgentModelChainSchema.optional(),
   })
   .catchall(AgentModelChainSchema);
-
-export type FallbackAgentName = (typeof FALLBACK_AGENT_NAMES)[number];
 
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const AgentOverrideConfigSchema = z.object({

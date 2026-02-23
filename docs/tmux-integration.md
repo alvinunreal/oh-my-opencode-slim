@@ -1,6 +1,6 @@
 # Tmux Integration Guide
 
-Complete guide for using tmux integration with oh-my-opencode-slim to watch agents work in real-time through automatic pane spawning.
+Complete guide for using tmux integration with omoslim to watch agents work in real-time through automatic pane spawning.
 
 ## Table of Contents
 
@@ -34,7 +34,7 @@ Complete guide for using tmux integration with oh-my-opencode-slim to watch agen
 
 ### Step 1: Enable Tmux Integration
 
-Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
+Edit `~/.config/opencode/omoslim.json` (or `.jsonc`):
 
 ```json
 {
@@ -64,7 +64,7 @@ That's it! Your agents will now spawn panes automatically.
 
 ### Tmux Settings
 
-Configure tmux behavior in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
+Configure tmux behavior in `~/.config/opencode/omoslim.json` (or `.jsonc`):
 
 ```json
 {
@@ -196,7 +196,7 @@ tmux switch -t project2
 **Solutions:**
 1. **Verify tmux integration is enabled:**
    ```bash
-    cat ~/.config/opencode/oh-my-opencode-slim.json | grep tmux # (or .jsonc)
+    cat ~/.config/opencode/omoslim.json | grep tmux # (or .jsonc)
    ```
 
 2. **Check port configuration:**

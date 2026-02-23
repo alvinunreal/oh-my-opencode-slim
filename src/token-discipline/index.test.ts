@@ -5,7 +5,7 @@ import { mergePackets } from './packet-merger';
 import { PointerResolver } from './pointer-resolver';
 import { classifyAndRoute } from './task-router';
 import type { PacketV1 } from './types';
-import { autoSummarizeToPacket, validatePacketV1 } from './validator';
+import { validatePacketV1 } from './validator';
 
 describe('config', () => {
   test('PACKET_CONSTRAINTS has correct limits', () => {
@@ -57,21 +57,6 @@ describe('validator', () => {
 
     expect(() => validatePacketV1(packet)).toThrow();
   });
-
-  test('autoSummarizeToPacket creates valid packet', () => {
-    const response = `
-      - Found 3 issues
-      - Need to update imports
-      - Tests are failing
-      
-      Recommendation: Fix imports first
-    `;
-
-    const packet = autoSummarizeToPacket(response, 'TEST');
-    expect(packet.tldr.length).toBeGreaterThan(0);
-    expect(packet.recommendation).toBeDefined();
-    expect(packet.next_actions.length).toBeGreaterThan(0);
-  });
 });
 
 describe('airlock', () => {
@@ -103,11 +88,12 @@ describe('airlock', () => {
     expect(capped).toContain('truncated');
   });
 
-  test('capToolOutput applies correct caps', () => {
-    const output = Array(300).fill('line').join('\n');
-    const result = capToolOutput('bash', output, 'thread123');
-    expect(result.capped).toBe(true);
-    expect(result.pointer).toMatch(/^cmd:/);
+  test('capToolOutput strips noise and applies caps', () => {
+    const output =
+      'npm WARN deprecated pkg\n' + Array(300).fill('line').join('\n');
+    const result = capToolOutput('bash', output);
+    expect(result).toContain('truncated');
+    expect(result).not.toContain('npm WARN');
   });
 });
 

@@ -20,7 +20,7 @@ import type {
   OpenCodeConfig,
 } from './types';
 
-const PACKAGE_NAME = 'oh-my-opencode-slim';
+const PACKAGE_NAME = 'omoslim';
 
 /**
  * Strip JSON comments (single-line // and multi-line) and trailing commas for JSONC support.
@@ -117,7 +117,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     const config = parsedConfig ?? {};
     const plugins = config.plugin ?? [];
 
-    // Remove existing oh-my-opencode-slim entries
+    // Remove existing omoslim entries
     const filteredPlugins = plugins.filter(
       (p) => p !== PACKAGE_NAME && !p.startsWith(`${PACKAGE_NAME}@`),
     );

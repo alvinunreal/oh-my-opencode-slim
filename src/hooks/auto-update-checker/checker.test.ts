@@ -4,11 +4,10 @@ import { extractChannel, findPluginEntry, getLocalDevVersion } from './checker';
 
 // Mock the dependencies
 mock.module('./constants', () => ({
-  PACKAGE_NAME: 'oh-my-opencode-slim',
+  PACKAGE_NAME: 'omoslim',
   USER_OPENCODE_CONFIG: '/mock/config/opencode.json',
   USER_OPENCODE_CONFIG_JSONC: '/mock/config/opencode.jsonc',
-  INSTALLED_PACKAGE_JSON:
-    '/mock/cache/node_modules/oh-my-opencode-slim/package.json',
+  INSTALLED_PACKAGE_JSON: '/mock/cache/node_modules/omoslim/package.json',
 }));
 
 mock.module('node:fs', () => ({
@@ -61,12 +60,12 @@ describe('auto-update-checker/checker', () => {
       readMock.mockImplementation((p: string) => {
         if (p.includes('opencode.json')) {
           return JSON.stringify({
-            plugin: ['file:///dev/oh-my-opencode-slim'],
+            plugin: ['file:///dev/omoslim'],
           });
         }
         if (p.includes('package.json')) {
           return JSON.stringify({
-            name: 'oh-my-opencode-slim',
+            name: 'omoslim',
             version: '1.2.3-dev',
           });
         }
@@ -85,13 +84,13 @@ describe('auto-update-checker/checker', () => {
       existsMock.mockImplementation((p: string) => p.includes('opencode.json'));
       readMock.mockImplementation(() =>
         JSON.stringify({
-          plugin: ['oh-my-opencode-slim'],
+          plugin: ['omoslim'],
         }),
       );
 
       const entry = findPluginEntry('/test');
       expect(entry).not.toBeNull();
-      expect(entry?.entry).toBe('oh-my-opencode-slim');
+      expect(entry?.entry).toBe('omoslim');
       expect(entry?.isPinned).toBe(false);
       expect(entry?.pinnedVersion).toBeNull();
     });
@@ -103,7 +102,7 @@ describe('auto-update-checker/checker', () => {
       existsMock.mockImplementation((p: string) => p.includes('opencode.json'));
       readMock.mockImplementation(() =>
         JSON.stringify({
-          plugin: ['oh-my-opencode-slim@1.0.0'],
+          plugin: ['omoslim@1.0.0'],
         }),
       );
 

@@ -24,5 +24,5 @@
 
 - Hooks into the OpenCode plugin lifecycle via `ctx.client.tui.showToast` and the `session.created` event, leveraging `PluginInput` to know the working directory and show UI feedback.
 - Reads OpenCode configuration files exposed by `../../cli/config-manager` to locate plugin entries, pinned versions, and local `file://` installs, so it stays aligned with the same config sources that enable plugin loading.
-- Uses shared `../../utils/logger` for tracing background operations and errors while talking to platform APIs (`fetch`, `Bun.spawn`, `fs`) to inspect, mutate, and reinstall the `oh-my-opencode-slim` package stored under `CACHE_DIR`.
+- Uses shared `../../utils/logger` for tracing background operations and errors while talking to platform APIs (`fetch`, `Bun.spawn`, `fs`) to inspect, mutate, and reinstall the `omoslim` package stored under `CACHE_DIR`.
 - Exposes `AutoUpdateCheckerOptions` for consumers (via `index.ts`) to opt out of toasts or automatic installs while still reusing the same checker/cache helpers.

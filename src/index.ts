@@ -60,7 +60,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const airlockHook = createAirlockHook();
 
   return {
-    name: 'oh-my-opencode-slim',
+    name: 'omoslim',
 
     agent: agents,
 

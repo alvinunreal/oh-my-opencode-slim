@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-The `src/cli/` directory provides the command-line interface for installing and configuring **oh-my-opencode-slim**, an OpenCode plugin. It handles:
+The `src/cli/` directory provides the command-line interface for installing and configuring **omoslim**, an OpenCode plugin. It handles:
 
 - **Installation orchestration**: Interactive and non-interactive installation flows
 - **Configuration management**: Reading, parsing, and writing OpenCode configuration files
@@ -137,7 +137,7 @@ Standardized result type for configuration operations.
 ### Installation Flow
 
 ```
-User runs: bunx oh-my-opencode-slim install
+User runs: bunx omoslim install
          │
          ▼
 ┌─────────────────────────────────────────┐
@@ -178,7 +178,7 @@ User runs: bunx oh-my-opencode-slim install
 │   └─> config-io.ts:                     │
 │      addPluginToOpenCodeConfig()        │
 │      - Parse existing config            │
-│      - Add 'oh-my-opencode-slim'        │
+│      - Add 'omoslim'        │
 │      - Remove old versions              │
 │      - Atomic write                     │
 │                                         │
@@ -227,7 +227,7 @@ detectCurrentConfig() [config-io.ts]
                   │
                   ▼
 ┌─────────────────────────────────────────┐
-│ Parse oh-my-opencode-slim.json          │
+│ Parse omoslim.json          │
 │ - Extract preset name                   │
 │ - Check agent models for OpenAI/Zen     │
 │ - Check tmux.enabled flag               │
@@ -298,11 +298,11 @@ config-manager.ts (barrel)
 |------|----------|---------|
 | `opencode.json` | `~/.config/opencode/` | Main OpenCode config |
 | `opencode.jsonc` | `~/.config/opencode/` | Main config with comments |
-| `oh-my-opencode-slim.json` | `~/.config/opencode/` | Plugin-specific config |
+| `omoslim.json` | `~/.config/opencode/` | Plugin-specific config |
 
 ### Consumers
 
-1. **End Users**: Via `bunx oh-my-opencode-slim install`
+1. **End Users**: Via `bunx omoslim install`
 2. **OpenCode**: Reads generated configs to load plugin and agents
 3. **CI/CD**: Via `--no-tui` flag for automated installations
 

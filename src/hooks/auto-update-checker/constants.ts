@@ -2,7 +2,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { getOpenCodeConfigPaths } from '../../cli/config-manager';
 
-export const PACKAGE_NAME = 'oh-my-opencode-slim';
+export const PACKAGE_NAME = 'omoslim';
 export const NPM_REGISTRY_URL = `https://registry.npmjs.org/-/package/${PACKAGE_NAME}/dist-tags`;
 export const NPM_FETCH_TIMEOUT = 5000;
 

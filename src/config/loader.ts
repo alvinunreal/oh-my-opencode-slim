@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
 import { type PluginConfig, PluginConfigSchema } from './schema';
 
-const PROMPTS_DIR_NAME = 'oh-my-opencode-slim';
+const PROMPTS_DIR_NAME = 'omoslim';
 
 /**
  * Get the user's configuration directory following XDG Base Directory specification.
@@ -33,7 +33,7 @@ function loadConfigFromPath(configPath: string): PluginConfig | null {
     const result = PluginConfigSchema.safeParse(rawConfig);
 
     if (!result.success) {
-      console.warn(`[oh-my-opencode-slim] Invalid config at ${configPath}:`);
+      console.warn(`[omoslim] Invalid config at ${configPath}:`);
       console.warn(result.error.format());
       return null;
     }
@@ -47,7 +47,7 @@ function loadConfigFromPath(configPath: string): PluginConfig | null {
       (error as NodeJS.ErrnoException).code !== 'ENOENT'
     ) {
       console.warn(
-        `[oh-my-opencode-slim] Error reading config from ${configPath}:`,
+        `[omoslim] Error reading config from ${configPath}:`,
         error.message,
       );
     }
@@ -59,7 +59,7 @@ function loadConfigFromPath(configPath: string): PluginConfig | null {
  * Find existing config file path, preferring .jsonc over .json.
  * Checks for .jsonc first, then falls back to .json.
  *
- * @param basePath - Base path without extension (e.g., /path/to/oh-my-opencode-slim)
+ * @param basePath - Base path without extension (e.g., /path/to/omoslim)
  * @returns Path to existing config file, or null if neither exists
  */
 function findConfigPath(basePath: string): string | null {
@@ -119,8 +119,8 @@ function deepMerge<T extends Record<string, unknown>>(
  * Load plugin configuration from user and project config files, merging them appropriately.
  *
  * Configuration is loaded from two locations:
- * 1. User config: ~/.config/opencode/oh-my-opencode-slim.jsonc or .json (or $XDG_CONFIG_HOME)
- * 2. Project config: <directory>/.opencode/oh-my-opencode-slim.jsonc or .json
+ * 1. User config: ~/.config/opencode/omoslim.jsonc or .json (or $XDG_CONFIG_HOME)
+ * 2. Project config: <directory>/.opencode/omoslim.jsonc or .json
  *
  * JSONC format is preferred over JSON (allows comments and trailing commas).
  * Project config takes precedence over user config. Nested objects (agents, tmux) are
@@ -133,14 +133,10 @@ export function loadPluginConfig(directory: string): PluginConfig {
   const userConfigBasePath = path.join(
     getUserConfigDir(),
     'opencode',
-    'oh-my-opencode-slim',
+    'omoslim',
   );
 
-  const projectConfigBasePath = path.join(
-    directory,
-    '.opencode',
-    'oh-my-opencode-slim',
-  );
+  const projectConfigBasePath = path.join(directory, '.opencode', 'omoslim');
 
   // Find existing config files (preferring .jsonc over .json)
   const userConfigPath = findConfigPath(userConfigBasePath);
@@ -164,7 +160,7 @@ export function loadPluginConfig(directory: string): PluginConfig {
   }
 
   // Override preset from environment variable if set
-  const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+  const envPreset = process.env.OMOSLIM_PRESET;
   if (envPreset) {
     config.preset = envPreset;
   }
@@ -183,7 +179,7 @@ export function loadPluginConfig(directory: string): PluginConfig {
         ? Object.keys(config.presets).join(', ')
         : 'none';
       console.warn(
-        `[oh-my-opencode-slim] Preset "${config.preset}" not found (from ${presetSource}). Available presets: ${availablePresets}`,
+        `[omoslim] Preset "${config.preset}" not found (from ${presetSource}). Available presets: ${availablePresets}`,
       );
     }
   }
@@ -216,7 +212,7 @@ export function loadAgentPrompt(agentName: string): {
       result.prompt = fs.readFileSync(promptPath, 'utf-8');
     } catch (error) {
       console.warn(
-        `[oh-my-opencode-slim] Error reading prompt file ${promptPath}:`,
+        `[omoslim] Error reading prompt file ${promptPath}:`,
         error instanceof Error ? error.message : String(error),
       );
     }
@@ -229,7 +225,7 @@ export function loadAgentPrompt(agentName: string): {
       result.appendPrompt = fs.readFileSync(appendPromptPath, 'utf-8');
     } catch (error) {
       console.warn(
-        `[oh-my-opencode-slim] Error reading append prompt file ${appendPromptPath}:`,
+        `[omoslim] Error reading append prompt file ${appendPromptPath}:`,
         error instanceof Error ? error.message : String(error),
       );
     }

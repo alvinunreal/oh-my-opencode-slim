@@ -108,6 +108,14 @@ export class PacketTaskManager {
 
   private completionResolvers = new Map<string, (task: PacketTask) => void>();
 
+  /** Pointer resolver — one per plugin lifetime, quota reset per user request. */
+  readonly pointerResolver = new PointerResolver();
+
+  /** Bypass the readonly union to set task status internally. */
+  private setTaskStatus(task: PacketTask, status: PacketTask['status']): void {
+    (task as { status: PacketTask['status'] }).status = status;
+  }
+
   // Phase 11: track whether metrics tracking has been started for the current
   // orchestrator session. Keyed by parentSessionId so parallel sessions don't
   // clobber each other's module-level metrics state.
@@ -228,7 +236,9 @@ export class PacketTaskManager {
     task.status = 'starting';
     this.activeStarts++;
 
-    if ((task as PacketTask & { status: string }).status === 'cancelled') {
+    // Status may have been set to 'cancelled' by a concurrent cancel() call
+    // before this async startTask reached this point.
+    if ((task.status as string) === 'cancelled') {
       this.completeTask(task, 'cancelled', 'Task cancelled before start');
       return;
     }
@@ -376,7 +386,7 @@ export class PacketTaskManager {
     if (!task) return;
     if (task.status === 'running' || task.status === 'pending') {
       log(`[packet-manager] Session deleted, cancelling task: ${task.id}`);
-      (task as PacketTask & { status: string }).status = 'cancelled';
+      this.setTaskStatus(task, 'cancelled');
       task.completedAt = new Date();
       task.error = 'Session deleted';
       this.tasksBySessionId.delete(sessionId);
@@ -422,14 +432,11 @@ export class PacketTaskManager {
       const estimatedTokens = Math.ceil(responseText.length / 4);
       task.tokenCount = estimatedTokens;
 
-      // Phase 4-5: processDelegateOutput extracts packet, archives thread, validates schema
+      // processDelegateOutput extracts packet, archives thread, validates schema
       const result = await processDelegateOutput(
         {
           userRequest: task.prompt,
           packets: [],
-          mergedPacket: null,
-          taskPlan: null,
-          pointerResolver: new PointerResolver(),
         },
         task.role,
         responseText,
@@ -495,12 +502,6 @@ export class PacketTaskManager {
         .catch(() => {});
     }
 
-    if (task.parentSessionId) {
-      this.sendCompletionNotification(task).catch((err) => {
-        log(`[packet-manager] notification failed: ${err}`);
-      });
-    }
-
     const resolver = this.completionResolvers.get(task.id);
     if (resolver) {
       resolver(task);
@@ -510,17 +511,6 @@ export class PacketTaskManager {
     log(`[packet-manager] task ${status}: ${task.id}`, {
       description: task.description,
       hasPacket: !!task.packet,
-    });
-  }
-
-  private async sendCompletionNotification(task: PacketTask): Promise<void> {
-    const message =
-      task.status === 'completed'
-        ? `[Packet task "${task.description}" completed]`
-        : `[Packet task "${task.description}" failed: ${task.error}]`;
-    await this.client.session.prompt({
-      path: { id: task.parentSessionId },
-      body: { parts: [{ type: 'text' as const, text: message }] },
     });
   }
 
@@ -564,7 +554,7 @@ export class PacketTaskManager {
       ) {
         this.completionResolvers.delete(taskId);
         const inStartQueue = task.status === 'pending';
-        (task as PacketTask & { status: string }).status = 'cancelled';
+        this.setTaskStatus(task, 'cancelled');
         if (inStartQueue) {
           const idx = this.startQueue.findIndex((t) => t.id === taskId);
           if (idx >= 0) this.startQueue.splice(idx, 1);
@@ -584,7 +574,7 @@ export class PacketTaskManager {
       ) {
         this.completionResolvers.delete(task.id);
         const inStartQueue = task.status === 'pending';
-        (task as PacketTask & { status: string }).status = 'cancelled';
+        this.setTaskStatus(task, 'cancelled');
         if (inStartQueue) {
           const idx = this.startQueue.findIndex((t) => t.id === task.id);
           if (idx >= 0) this.startQueue.splice(idx, 1);
@@ -629,13 +619,23 @@ export function createPacketTools(
    * Phase 8: delegate_task routes tasks automatically when a routing hint is
    * present.  The orchestrator can still specify an explicit agent; if omitted
    * the task-router classifies the prompt and picks the most appropriate one.
+   *
+   * wait=true (default): blocks until the delegate finishes and returns the
+   * formatted packet directly — identical to what packet_context returns.
+   * wait=false: fires the delegate and returns the task ID immediately. Use
+   * this for the parallel launch pattern, then retrieve all results in a
+   * single packet_context(task_id="id1,id2,...") call.
    */
   const delegate_task = tool({
     description: `Launch a delegate and get back a compact packet (≤${PACKET_CONSTRAINTS.maxChars} chars).
 
+**Default (wait=true):** blocks until complete, returns packet directly.
+**Parallel pattern (wait=false):** returns task ID immediately. Then use
+  \`packet_context(task_id="id1,id2,id3", timeout=120000)\` to retrieve all.
+
 Packets contain:
 - tldr: 1-3 key insights
-- evidence: 1-5 file/thread/cmd pointers
+- evidence: 1-5 file/thread/cmd/URL pointers
 - recommendation: single action to take
 - next_actions: 1-5 concrete steps
 
@@ -649,6 +649,12 @@ Omit \`agent\` to auto-route based on the prompt.`,
         .string()
         .optional()
         .describe(`Delegate to use: ${agentNames}. Omit to auto-route.`),
+      wait: z
+        .boolean()
+        .optional()
+        .describe(
+          'If true (default), block until complete and return packet. If false, return task ID immediately for parallel patterns.',
+        ),
     },
     async execute(args, toolContext) {
       if (
@@ -662,6 +668,8 @@ Omit \`agent\` to auto-route based on the prompt.`,
       const prompt = String(args.prompt);
       const description = String(args.description);
       const parentSessionId = (toolContext as { sessionID: string }).sessionID;
+      // Default wait=true — block unless caller explicitly opts out
+      const shouldWait = args.wait !== false;
 
       // Phase 8 + 11: classify prompt once — used for both auto-routing and
       // metrics classification. Computing it unconditionally avoids a second
@@ -696,10 +704,13 @@ Omit \`agent\` to auto-route based on the prompt.`,
       // Calling startTaskTracking resets the module-level mutable state, so
       // we must not call it again on subsequent delegate launches from the
       // same session — that would wipe already-recorded delegate data.
+      // Also reset pointer resolver quota for the new user request.
       if (!manager.isTrackingStarted(parentSessionId)) {
         startTaskTracking(prompt);
         setTaskClassification(routingPlan.isTrivial);
         manager.markTrackingStarted(parentSessionId);
+        // Reset pointer resolution quota — 3 resolutions per user request
+        manager.pointerResolver.reset();
       }
 
       const task = manager.launch({
@@ -709,13 +720,66 @@ Omit \`agent\` to auto-route based on the prompt.`,
         parentSessionId,
       });
 
-      return `Delegate task launched.
+      // wait=false: caller is doing parallel launches and will use packet_context
+      if (!shouldWait) {
+        return `Delegate task launched.
 
 Task ID: ${task.id}
 Agent:   ${agent}
 Status:  ${task.status}
 
-Use \`packet_context\` with task_id="${task.id}" to retrieve the packet.`;
+Use \`packet_context\` with task_id="${task.id}" (or comma-separated IDs) to retrieve packets.`;
+      }
+
+      // wait=true (default): block until the delegate completes and return
+      // the formatted packet directly — no separate packet_context call needed.
+      const completed = await manager.waitForCompletion(task.id, 120000);
+      if (!completed) {
+        return `Task ${task.id} timed out or not found`;
+      }
+
+      const duration = completed.completedAt
+        ? `${Math.floor((completed.completedAt.getTime() - completed.startedAt.getTime()) / 1000)}s`
+        : `${Math.floor((Date.now() - completed.startedAt.getTime()) / 1000)}s`;
+
+      if (completed.status === 'completed' && completed.packet) {
+        const packet = completed.packet;
+
+        // Finalize metrics after delegate completes
+        setOrchestratorTokens(completed.tokenCount);
+        finalizeTaskTracking()
+          .then((m) => {
+            if (!m) return;
+            const alerts = getAlerts(m);
+            for (const alert of alerts) {
+              log(`[packet-metrics] ALERT: ${alert}`);
+            }
+          })
+          .catch(() => {});
+
+        const ctx = buildPacketContext([packet]);
+        return `${ctx}
+---
+Agent: ${completed.agent} | Task: ${completed.id} | Duration: ${duration} | ~${completed.tokenCount} tokens | Packet: ${packet.charCount} chars`;
+      }
+
+      if (completed.status === 'completed' && completed.result) {
+        return `Task: ${completed.id} | Agent: ${completed.agent} | Duration: ${duration}
+
+${completed.result}`;
+      }
+
+      if (completed.status === 'failed') {
+        return `Task: ${completed.id} | Agent: ${completed.agent} | Status: FAILED | Duration: ${duration}
+
+Error: ${completed.error}`;
+      }
+
+      if (completed.status === 'cancelled') {
+        return `Task: ${completed.id} | Status: CANCELLED (${duration})`;
+      }
+
+      return `Task: ${completed.id} | Agent: ${completed.agent} | Status: ${completed.status} | Running for ${duration}`;
     },
   });
 
@@ -858,7 +922,87 @@ Error: ${task.error}`;
     },
   });
 
-  return { delegate_task, packet_context };
+  /**
+   * Part 2 — resolve_pointer: dereference thread:, file:, or cmd: evidence
+   * pointers from packets. Backed by the manager's shared PointerResolver
+   * (quota of 3 per user request, reset on new orchestrator task boundary).
+   *
+   * Use surgically — max 3 per user request. Designed for inspecting fallback
+   * packets or reading file lines before acting on a recommendation.
+   */
+  const resolve_pointer = tool({
+    description: `Dereference a thread:, file:, or cmd: evidence pointer from a packet.
+
+Returns up to 500 chars of resolved content.
+Quota: 3 resolutions per user request (resets on new orchestrator task).
+
+Use cases:
+- Inspect a fallback packet: resolve_pointer("thread:abc123#context")
+- Read file lines: resolve_pointer("file:src/foo.ts:42-55")
+
+Error cases:
+- Thread not found → clear error message
+- File not found → clear error message
+- Invalid format → error with expected format
+- Quota exceeded → error showing usage count`,
+
+    args: {
+      pointer: z
+        .string()
+        .describe(
+          'Pointer to resolve. Formats: thread:id#fragment, file:path:lines, cmd:id',
+        ),
+    },
+    async execute(args) {
+      const pointer = String(args.pointer).trim();
+
+      if (!manager.pointerResolver.canResolve()) {
+        const used = 3 - manager.pointerResolver.remaining();
+        return `Error: Pointer resolution quota exceeded (${used}/3 used for this task)`;
+      }
+
+      // Validate format before attempting resolution
+      const validFormats =
+        /^(thread:[^#\s]+(#[^\s]+)?|file:[^:\s]+:\d+(-\d+)?|cmd:[^\s]+(#line:\d+(-\d+)?)?)$/;
+      if (!validFormats.test(pointer)) {
+        return `Error: Invalid pointer format. Expected: thread:id#fragment, file:path:lines, or cmd:id`;
+      }
+
+      const result = await manager.pointerResolver.resolve(pointer);
+
+      if (result === null) {
+        // resolve() returned null — pointer parsed but content unavailable
+        if (pointer.startsWith('thread:')) {
+          const id = pointer.replace(/^thread:/, '').split('#')[0];
+          return `Error: Thread '${id}' not found in archive`;
+        }
+        if (pointer.startsWith('file:')) {
+          const path = pointer.replace(/^file:/, '').split(':')[0];
+          return `Error: File '${path}' does not exist`;
+        }
+        return `Error: Could not resolve pointer '${pointer}'`;
+      }
+
+      // PointerResolver itself returns error strings for quota / invalid format
+      // but we handle those above. Any remaining string is resolved content.
+      if (result.startsWith('[Resolution quota exceeded')) {
+        const used = 3 - manager.pointerResolver.remaining();
+        return `Error: Pointer resolution quota exceeded (${used}/3 used for this task)`;
+      }
+
+      if (result.startsWith('[Invalid pointer format')) {
+        return `Error: Invalid pointer format. Expected: thread:id#fragment, file:path:lines, or cmd:id`;
+      }
+
+      log(`[packet-manager] resolve_pointer: ${pointer}`, {
+        remaining: manager.pointerResolver.remaining(),
+      });
+
+      return result;
+    },
+  });
+
+  return { delegate_task, packet_context, resolve_pointer };
 }
 
 export type { PacketV1, ValidatedPacket };

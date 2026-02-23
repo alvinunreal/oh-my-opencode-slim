@@ -1,0 +1,58 @@
+{
+  "model_assignments": {
+    "orchestrator": {
+      "model": "anthropic/claude-opus-4",
+      "tier": "premium",
+      "description": "Primary decision-maker, receives packets only"
+    },
+    "researcher": {
+      "model": "anthropic/claude-haiku-3.5",
+      "tier": "cheap",
+      "description": "External docs and library research (librarian agent)"
+    },
+    "repo_scout": {
+      "model": "anthropic/claude-haiku-3.5",
+      "tier": "cheap",
+      "description": "Codebase analysis and file finding (explorer agent)"
+    },
+    "implementer": {
+      "model": "anthropic/claude-sonnet-4",
+      "tier": "mid",
+      "description": "Code generation and changes (fixer agent)"
+    },
+    "validator": {
+      "model": "anthropic/claude-sonnet-4",
+      "tier": "mid",
+      "description": "Testing and code review (oracle agent)"
+    },
+    "designer": {
+      "model": "anthropic/claude-sonnet-4",
+      "tier": "mid",
+      "description": "UI/UX and styling work"
+    },
+    "summarizer": {
+      "model": "anthropic/claude-haiku-3.5",
+      "tier": "cheap",
+      "description": "Emergency packet compression fallback"
+    }
+  },
+  "model_fallbacks": {
+    "premium": ["anthropic/claude-opus-4", "openai/gpt-4o", "openai/o1"],
+    "mid": [
+      "anthropic/claude-sonnet-4",
+      "openai/gpt-4o",
+      "google/gemini-2.0-flash"
+    ],
+    "cheap": [
+      "anthropic/claude-haiku-3.5",
+      "openai/gpt-4o-mini",
+      "google/gemini-2.0-flash"
+    ]
+  },
+  "token_discipline": {
+    "enforceIsolation": true,
+    "maxPacketSize": 2500,
+    "maxResolutionsPerTask": 3,
+    "threadArchiveHours": 24
+  }
+}

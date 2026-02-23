@@ -2,13 +2,17 @@ import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
 import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
   type AgentOverrideConfig,
-  DEFAULT_MODELS,
   getAgentOverride,
   loadAgentPrompt,
   type PluginConfig,
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
+import {
+  type AgentRole,
+  DEFAULT_MODEL_ASSIGNMENTS,
+} from '../token-discipline/config';
+import { AGENT_TO_ROLE } from '../token-discipline/model-config';
 import { getModelForAgent } from '../token-discipline/model-config-loader';
 
 import { createDesignerAgent } from './designer';
@@ -102,8 +106,9 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * Priority for model selection (highest to lowest):
  * 1. Explicit model in PluginConfig.agents[name].model
  * 2. omoslim.json model_assignments (pre-resolved via modelAssignments param)
- * 3. DEFAULT_MODELS from constants
+ * 3. DEFAULT_MODEL_ASSIGNMENTS from token-discipline/config (single source of truth)
  *
+ * @internal Prefer {@link createAgentsWithModelConfig} at call sites.
  * @param config - Optional plugin configuration with agent overrides
  * @param modelAssignments - Pre-resolved model assignments from omoslim.json
  * @returns Array of agent definitions (orchestrator first, then subagents)
@@ -120,15 +125,9 @@ export function createAgents(
     // 2. omoslim.json model assignment
     if (modelAssignments?.[name]) return modelAssignments[name];
 
-    // 3. Constants fallback (fixer inherits from librarian if not set)
-    if (name === 'fixer') {
-      return (
-        modelAssignments?.librarian ??
-        getAgentOverride(config, 'librarian')?.model ??
-        DEFAULT_MODELS.librarian
-      );
-    }
-    return DEFAULT_MODELS[name];
+    // 3. Token-discipline defaults keyed by role (single source of truth)
+    const role = AGENT_TO_ROLE[name] as AgentRole | undefined;
+    return DEFAULT_MODEL_ASSIGNMENTS[role ?? 'IMPLEMENTER'];
   };
 
   // 1. Gather all sub-agent definitions with custom prompts
@@ -240,6 +239,7 @@ function agentDefinitionsToSdkConfigs(
  * Get agent configurations formatted for the OpenCode SDK.
  * Converts agent definitions to SDK config format and applies classification metadata.
  *
+ * @internal Prefer {@link getAgentConfigsWithModelConfig} at call sites.
  * @param config - Optional plugin configuration with agent overrides
  * @param modelAssignments - Pre-resolved model assignments from omoslim.json
  * @returns Record mapping agent names to their SDK configurations

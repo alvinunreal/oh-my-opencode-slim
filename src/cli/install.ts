@@ -55,9 +55,7 @@ const SYMBOLS = {
 
 function printHeader(isUpdate: boolean): void {
   console.log();
-  console.log(
-    `${BOLD}oh-my-opencode-slim ${isUpdate ? 'Update' : 'Install'}${RESET}`,
-  );
+  console.log(`${BOLD}omoslim ${isUpdate ? 'Update' : 'Install'}${RESET}`);
   console.log('='.repeat(30));
   console.log();
 }
@@ -774,7 +772,7 @@ async function runInteractiveMode(
   try {
     // Ask for setup mode first
     console.log();
-    console.log(`${BOLD}oh-my-opencode-slim Setup${RESET}`);
+    console.log(`${BOLD}omoslim Setup${RESET}`);
     console.log('='.repeat(25));
     console.log();
 
@@ -1248,7 +1246,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   if (!modelsOnly) {
-    printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
+    printStep(step++, totalSteps, 'Adding omoslim plugin...');
     if (resolvedConfig.dryRun) {
       printInfo('Dry run mode - skipping plugin installation');
     } else {
@@ -1336,7 +1334,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
     }
   }
 
-  printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
+  printStep(step++, totalSteps, 'Writing omoslim configuration...');
   if (resolvedConfig.dryRun) {
     const liteConfig = generateLiteConfig(resolvedConfig);
     printInfo('Dry run mode - configuration that would be written:');
@@ -1505,7 +1503,7 @@ export async function install(args: InstallArgs): Promise<number> {
       }
       console.log();
       printInfo(
-        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --anthropic=<yes|no> --copilot=<yes|no> --zai-plan=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --balanced-spend=<yes|no> --tmux=<yes|no>',
+        'Usage: bunx omoslim install --no-tui --kimi=<yes|no> --openai=<yes|no> --anthropic=<yes|no> --copilot=<yes|no> --zai-plan=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --balanced-spend=<yes|no> --tmux=<yes|no>',
       );
       console.log();
       return 1;

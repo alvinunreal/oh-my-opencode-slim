@@ -60,7 +60,7 @@ export function createAutoUpdateCheckerHook(
           showToast(
             ctx,
             `OMO-Slim ${displayVersion ?? 'unknown'}`,
-            'oh-my-opencode-slim is active.',
+            'omoslim is active.',
             'info',
           );
         }

@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import type { AgentName } from '../config/constants';
+import {
+  type TokenDisciplineSettings,
+  TokenDisciplineSettingsSchema,
+} from '../config/schema';
+
+export { TokenDisciplineSettingsSchema, type TokenDisciplineSettings };
 
 export const ModelTierSchema = z.enum(['premium', 'mid', 'cheap']);
 export type ModelTier = z.infer<typeof ModelTierSchema>;
@@ -19,17 +25,6 @@ export const ModelFallbacksSchema = z.object({
 });
 
 export type ModelFallbacks = z.infer<typeof ModelFallbacksSchema>;
-
-export const TokenDisciplineSettingsSchema = z.object({
-  enforceIsolation: z.boolean().default(true),
-  maxPacketSize: z.number().min(500).max(5000).default(2500),
-  maxResolutionsPerTask: z.number().min(1).max(10).default(3),
-  threadArchiveHours: z.number().min(1).max(168).default(24),
-});
-
-export type TokenDisciplineSettings = z.infer<
-  typeof TokenDisciplineSettingsSchema
->;
 
 export const ModelConfigSchema = z.object({
   model_assignments: z.record(z.string(), ModelAssignmentSchema),
@@ -60,7 +55,7 @@ export const ROLE_TO_AGENT: Record<string, AgentName> = {
   IMPLEMENTER: 'fixer',
   VALIDATOR: 'oracle',
   DESIGNER: 'designer',
-  SUMMARIZER: 'librarian',
+  SUMMARIZER: 'summarizer',
 };
 
 export const AGENT_TO_ROLE: Record<AgentName, string> = {

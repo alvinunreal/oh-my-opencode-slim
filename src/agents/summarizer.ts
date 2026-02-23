@@ -12,7 +12,7 @@ const SUMMARIZER_PROMPT = `You are Summarizer - an emergency packet compression 
 **Your Task**:
 Transform verbose content into a concise, valid PACKET:
 
-\`\`\`packet
+\`\`\`yaml
 tldr:
   - [Most critical finding - 1 line max]
   - [Second most critical - 1 line max]

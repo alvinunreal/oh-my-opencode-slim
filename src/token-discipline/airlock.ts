@@ -1,5 +1,4 @@
 import { TOOL_CAPS } from './config';
-import type { ToolCapResult } from './types';
 
 const NOISE_PATTERNS = [
   /\[=*=>*\s*\]/g,
@@ -8,13 +7,6 @@ const NOISE_PATTERNS = [
   /yarn warning.*/g,
   /pnpm warn.*/g,
 ];
-
-let commandCounter = 0;
-
-function generateCommandId(): string {
-  commandCounter++;
-  return `cmd_${commandCounter.toString().padStart(3, '0')}`;
-}
 
 export function stripNoise(output: string): string {
   let cleaned = output;
@@ -50,37 +42,34 @@ export function capBytes(output: string, maxBytes: number): string {
   return `${result}\n\n... [truncated ${bytes.length - maxBytes} bytes]`;
 }
 
-export function capToolOutput(
-  toolName: string,
-  rawOutput: string,
-  _threadId: string,
-): ToolCapResult {
-  const cmdId = generateCommandId();
-  const originalSize = rawOutput.length;
-
+/**
+ * Canonical tool output capping pipeline:
+ * 1. Strip package-manager noise (npm/yarn/pnpm warnings, progress bars)
+ * 2. Cap to per-tool limit (lines or bytes)
+ *
+ * Returns the cleaned, capped string ready to inject into agent context.
+ */
+export function capToolOutput(toolName: string, rawOutput: string): string {
   const cleaned = stripNoise(rawOutput);
-  let capped = cleaned;
 
   const caps = TOOL_CAPS[toolName as keyof typeof TOOL_CAPS];
-  if (caps) {
-    if ('maxLines' in caps) {
-      capped = capLines(cleaned, caps.maxLines);
-    } else if ('maxBytes' in caps) {
-      capped = capBytes(cleaned, caps.maxBytes);
-    } else if ('maxResults' in caps) {
-      const lines = cleaned.split('\n');
-      if (lines.length > caps.maxResults) {
-        capped = lines.slice(0, caps.maxResults).join('\n');
-        capped += `\n\n... [truncated ${lines.length - caps.maxResults} results]`;
-      }
+  if (!caps) return cleaned;
+
+  if ('maxLines' in caps) {
+    return capLines(cleaned, caps.maxLines);
+  }
+  if ('maxBytes' in caps) {
+    return capBytes(cleaned, caps.maxBytes);
+  }
+  if ('maxResults' in caps) {
+    const lines = cleaned.split('\n');
+    if (lines.length > caps.maxResults) {
+      return (
+        lines.slice(0, caps.maxResults).join('\n') +
+        `\n\n... [truncated ${lines.length - caps.maxResults} results]`
+      );
     }
   }
 
-  return {
-    capped: capped !== rawOutput,
-    output: capped,
-    pointer: `cmd:${cmdId}`,
-    originalSize,
-    cappedSize: capped.length,
-  };
+  return cleaned;
 }

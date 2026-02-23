@@ -1,7 +1,7 @@
 # src/
 
 ## Responsibility
-- `src/index.ts` delivers the oh-my-opencode-slim plugin by merging configuration, instantiating orchestrator/subagent definitions, wiring background managers, tmux helpers, built-in tools, MCPs, and lifecycle hooks so OpenCode sees a single cohesive module.
+- `src/index.ts` delivers the omoslim plugin by merging configuration, instantiating orchestrator/subagent definitions, wiring background managers, tmux helpers, built-in tools, MCPs, and lifecycle hooks so OpenCode sees a single cohesive module.
 - `config/`, `agents/`, `tools/`, `background/`, `hooks/`, and `utils/` contain the reusable building blocks (loader/schema/constants, agent factories/permission helpers, tool factories, background polling/session managers, hook implementations, and tmux/variant/log helpers) that power that entry point.
 - `cli/` exposes the install/update script (argument parsing + interactive prompts) that edits OpenCode config, installs recommended/custom skills, and updates provider credentials to bootstrap this plugin on a host machine.
 

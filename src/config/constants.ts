@@ -17,7 +17,6 @@ export const ORCHESTRATOR_NAME = 'orchestrator' as const;
 
 export const ALL_AGENT_NAMES = [ORCHESTRATOR_NAME, ...SUBAGENT_NAMES] as const;
 
-// Agent name type (for use in DEFAULT_MODELS)
 export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 
 // Subagent delegation rules: which agents can spawn which subagents
@@ -36,19 +35,8 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   summarizer: [],
 };
 
-export const DEFAULT_MODELS: Record<AgentName, string> = {
-  orchestrator: 'kimi-for-coding/k2p5',
-  oracle: 'openai/gpt-5.2-codex',
-  librarian: 'openai/gpt-5.1-codex-mini',
-  explorer: 'openai/gpt-5.1-codex-mini',
-  designer: 'kimi-for-coding/k2p5',
-  fixer: 'openai/gpt-5.1-codex-mini',
-  summarizer: 'openai/gpt-5.1-codex-mini',
-};
-
 // Polling configuration
 export const POLL_INTERVAL_MS = 500;
-export const POLL_INTERVAL_SLOW_MS = 1000;
 export const POLL_INTERVAL_BACKGROUND_MS = 2000;
 
 // Timeouts

@@ -99,6 +99,55 @@ describe('model-config', () => {
     expect(result.errors.length).toBeGreaterThan(0);
   });
 
+  test('validateModelConfig requires role names not agent names', () => {
+    const agentBasedConfig = {
+      model_assignments: {
+        orchestrator: { model: 'test/model-1', tier: 'premium' },
+        librarian: { model: 'test/model-2', tier: 'cheap' },
+        explorer: { model: 'test/model-3', tier: 'cheap' },
+        fixer: { model: 'test/model-4', tier: 'mid' },
+        oracle: { model: 'test/model-5', tier: 'mid' },
+        designer: { model: 'test/model-6', tier: 'mid' },
+        summarizer: { model: 'test/model-7', tier: 'cheap' },
+      },
+      model_fallbacks: DEFAULT_MODEL_CONFIG.model_fallbacks,
+    };
+
+    const result = validateModelConfig(agentBasedConfig);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain(
+      'Missing model assignment for role: researcher',
+    );
+    expect(result.errors).toContain(
+      'Missing model assignment for role: repo_scout',
+    );
+    expect(result.errors).toContain(
+      'Missing model assignment for role: implementer',
+    );
+    expect(result.errors).toContain(
+      'Missing model assignment for role: validator',
+    );
+  });
+
+  test('validateModelConfig accepts correct role-name-based config', () => {
+    const roleBasedConfig = {
+      model_assignments: {
+        orchestrator: { model: 'test/model-1', tier: 'premium' },
+        researcher: { model: 'test/model-2', tier: 'cheap' },
+        repo_scout: { model: 'test/model-3', tier: 'cheap' },
+        implementer: { model: 'test/model-4', tier: 'mid' },
+        validator: { model: 'test/model-5', tier: 'mid' },
+        designer: { model: 'test/model-6', tier: 'mid' },
+        summarizer: { model: 'test/model-7', tier: 'cheap' },
+      },
+      model_fallbacks: DEFAULT_MODEL_CONFIG.model_fallbacks,
+    };
+
+    const result = validateModelConfig(roleBasedConfig);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
   test('MODEL_COSTS has known models', () => {
     expect(MODEL_COSTS['anthropic/claude-opus-4']).toBeDefined();
     expect(MODEL_COSTS['openai/gpt-4o']).toBeDefined();

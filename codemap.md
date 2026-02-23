@@ -1,8 +1,8 @@
-# Repository Atlas: oh-my-opencode-slim
+# Repository Atlas: omoslim
 
 ## Project Responsibility
 
-**oh-my-opencode-slim** is a lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode. It provides a multi-agent system that enables specialized AI agents to work together under an orchestrator to optimize coding tasks for quality, speed, cost, and reliability.
+**omoslim** is a lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode. It provides a multi-agent system that enables specialized AI agents to work together under an orchestrator to optimize coding tasks for quality, speed, cost, and reliability.
 
 The plugin integrates with OpenCode to provide:
 - **Multi-agent orchestration** with specialized roles (Orchestrator, Explorer, Librarian, Oracle, Designer, Fixer)
@@ -18,7 +18,7 @@ The plugin integrates with OpenCode to provide:
 
 | File | Purpose | Key Exports |
 |------|---------|-------------|
-| `package.json` | Project manifest, dependencies, and build scripts | `oh-my-opencode-slim` CLI, `dist/index.js` main entry |
+| `package.json` | Project manifest, dependencies, and build scripts | `omoslim` CLI, `dist/index.js` main entry |
 | `src/index.ts` | Main plugin entry point | `OhMyOpenCodeLite` plugin, agent configs, tools, MCPs |
 | `src/cli/index.ts` | CLI installer entry point | `install` command, configuration management |
 | `tsconfig.json` | TypeScript compiler configuration | Build settings, type checking, declaration generation |

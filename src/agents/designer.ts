@@ -51,7 +51,7 @@ const DESIGNER_PROMPT = `You are a Designer - a frontend UI/UX specialist who cr
 ## Output Format
 Always conclude with a PACKET containing your design decisions:
 
-\`\`\`packet
+\`\`\`yaml
 tldr:
   - [Design direction chosen]
   - [Key visual change]

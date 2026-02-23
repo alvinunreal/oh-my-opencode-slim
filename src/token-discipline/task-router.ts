@@ -36,9 +36,6 @@ const CODEBASE_KEYWORDS = [
   'show me',
 ];
 
-const _TRIVIAL_TASK_MAX_LINES = 50;
-const _TRIVIAL_TASK_MAX_FILES = 1;
-
 export interface TaskPlan {
   isTrivial: boolean;
   delegates: Array<{

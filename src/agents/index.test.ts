@@ -80,7 +80,7 @@ describe('agent alias backward compatibility', () => {
 });
 
 describe('fixer agent fallback', () => {
-  test('fixer inherits librarian model when no fixer config provided', () => {
+  test('fixer falls back to DEFAULT_MODEL_ASSIGNMENTS when not configured', () => {
     const config: PluginConfig = {
       agents: {
         librarian: { model: 'librarian-custom-model' },
@@ -88,8 +88,8 @@ describe('fixer agent fallback', () => {
     };
     const agents = createAgents(config);
     const fixer = agents.find((a) => a.name === 'fixer');
-    const librarian = agents.find((a) => a.name === 'librarian');
-    expect(fixer?.config.model).toBe(librarian?.config.model);
+    // fixer's own role (IMPLEMENTER) default is used, not librarian's model
+    expect(fixer?.config.model).toBe('openai/gpt-5.2-codex');
   });
 
   test('fixer uses its own model when explicitly configured', () => {

@@ -46,7 +46,7 @@ function getPlatformKey(): string {
 
 function getInstallDir(): string {
   const homeDir = process.env.HOME || process.env.USERPROFILE || '.';
-  return join(homeDir, '.cache', 'oh-my-opencode-slim', 'bin');
+  return join(homeDir, '.cache', 'omoslim', 'bin');
 }
 
 function getRgPath(): string {
@@ -130,7 +130,7 @@ export async function downloadAndInstallRipgrep(): Promise<string> {
   const archivePath = join(installDir, filename);
 
   try {
-    console.log(`[oh-my-opencode-slim] Downloading ripgrep...`);
+    console.log(`[omoslim] Downloading ripgrep...`);
     await downloadFile(url, archivePath);
 
     if (config.extension === 'tar.gz') {
@@ -147,7 +147,7 @@ export async function downloadAndInstallRipgrep(): Promise<string> {
       throw new Error('ripgrep binary not found after extraction');
     }
 
-    console.log(`[oh-my-opencode-slim] ripgrep ready.`);
+    console.log(`[omoslim] ripgrep ready.`);
     return rgPath;
   } finally {
     if (existsSync(archivePath)) {

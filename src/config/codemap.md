@@ -15,9 +15,9 @@ The `src/config/` module is responsible for:
 ### Key Patterns
 
 **Multi-Source Configuration Merging**
-- User config: `~/.config/opencode/oh-my-opencode-slim.json` (or `$XDG_CONFIG_HOME`)
-- Project config: `<directory>/.opencode/oh-my-opencode-slim.json`
-- Environment override: `OH_MY_OPENCODE_SLIM_PRESET`
+- User config: `~/.config/opencode/omoslim.json` (or `$XDG_CONFIG_HOME`)
+- Project config: `<directory>/.opencode/omoslim.json`
+- Environment override: `OMOSLIM_PRESET`
 - Project config takes precedence over user config
 - Nested objects (agents, tmux) are deep-merged; arrays are replaced
 
@@ -92,11 +92,11 @@ TmuxConfig
 ```
 loadPluginConfig(directory)
 │
-├─→ Load user config from ~/.config/opencode/oh-my-opencode-slim.json
+├─→ Load user config from ~/.config/opencode/omoslim.json
 │   └─→ Validate with PluginConfigSchema
 │       └─→ Return null if invalid/missing
 │
-├─→ Load project config from <directory>/.opencode/oh-my-opencode-slim.json
+├─→ Load project config from <directory>/.opencode/omoslim.json
 │   └─→ Validate with PluginConfigSchema
 │       └─→ Return null if invalid/missing
 │
@@ -104,7 +104,7 @@ loadPluginConfig(directory)
 │   ├─→ Top-level: project replaces user
 │   └─→ Nested (agents, tmux): deep merge
 │
-├─→ Apply environment preset override (OH_MY_OPENCODE_SLIM_PRESET)
+├─→ Apply environment preset override (OMOSLIM_PRESET)
 │
 └─→ Resolve and merge preset
     ├─→ Find preset in config.presets[preset]
@@ -117,10 +117,10 @@ loadPluginConfig(directory)
 ```
 loadAgentPrompt(agentName)
 │
-├─→ Check ~/.config/opencode/oh-my-opencode-slim/{agentName}.md
+├─→ Check ~/.config/opencode/omoslim/{agentName}.md
 │   └─→ If exists → read as replacement prompt
 │
-└─→ Check ~/.config/opencode/oh-my-opencode-slim/{agentName}_append.md
+└─→ Check ~/.config/opencode/omoslim/{agentName}_append.md
     └─→ If exists → read as append prompt
 ```
 
