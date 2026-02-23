@@ -687,9 +687,21 @@ Omit \`agent\` to auto-route based on the prompt.`,
         throw new Error('Invalid toolContext: missing sessionID');
       }
 
+      // Cast to access metadata() — present at runtime (same as oh-my-opencode)
+      const ctx = toolContext as {
+        sessionID: string;
+        messageID: string;
+        agent: string;
+        abort: AbortSignal;
+        metadata?: (input: {
+          title?: string;
+          metadata?: Record<string, unknown>;
+        }) => void | Promise<void>;
+      };
+
       const prompt = String(args.prompt);
       const description = String(args.description);
-      const parentSessionId = (toolContext as { sessionID: string }).sessionID;
+      const parentSessionId = ctx.sessionID;
       // Default wait=true — block unless caller explicitly opts out
       const shouldWait = args.wait !== false;
 
@@ -742,6 +754,41 @@ Omit \`agent\` to auto-route based on the prompt.`,
         parentSessionId,
       });
 
+      // Emit metadata so the TUI renders a clickable subagent box.
+      // This is the key mechanism — oh-my-opencode does the same.
+      await ctx.metadata?.({
+        title: description,
+        metadata: {
+          task_id: task.id,
+          agent,
+          description,
+          sessionId: task.sessionId ?? 'pending',
+        },
+      });
+
+      // Once the session is created (async), update metadata with sessionId
+      // so the TUI can link to the child session.
+      const pollForSession = async () => {
+        const start = Date.now();
+        while (Date.now() - start < 10000) {
+          const current = manager.getResult(task.id);
+          if (current?.sessionId) {
+            await ctx.metadata?.({
+              title: description,
+              metadata: {
+                task_id: task.id,
+                agent,
+                description,
+                sessionId: current.sessionId,
+              },
+            });
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      };
+      pollForSession().catch(() => {});
+
       // wait=false: caller is doing parallel launches and will use packet_context
       if (!shouldWait) {
         return `Delegate task launched.
@@ -779,8 +826,8 @@ Use \`packet_context\` with task_id="${task.id}" (or comma-separated IDs) to ret
           })
           .catch(() => {});
 
-        const ctx = buildPacketContext([packet]);
-        return `${ctx}
+        const packetCtx = buildPacketContext([packet]);
+        return `${packetCtx}
 ---
 Agent: ${completed.agent} | Task: ${completed.id} | Duration: ${duration} | ~${completed.tokenCount} tokens | Packet: ${packet.charCount} chars`;
       }
@@ -918,8 +965,8 @@ ${merged.next_actions.map((b) => `- ${b}`).join('\n')}`;
           .catch(() => {});
 
         // Build context string using token-discipline's formatter
-        const ctx = buildPacketContext([packet]);
-        return `${ctx}
+        const packetCtx = buildPacketContext([packet]);
+        return `${packetCtx}
 ---
 Agent: ${task.agent} | Task: ${task.id} | Duration: ${duration} | ~${task.tokenCount} tokens | Packet: ${packet.charCount} chars`;
       }
