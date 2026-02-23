@@ -283,7 +283,14 @@ export class PacketTaskManager {
       const basePromptBody = applyAgentVariant(resolvedVariant, {
         agent: task.agent,
         tools: toolPermissions,
-        parts: [{ type: 'text' as const, text: packetPrompt }],
+        parts: [
+          {
+            type: 'subtask' as const,
+            prompt: packetPrompt,
+            description: task.description,
+            agent: task.agent,
+          },
+        ],
       } as PromptBody) as unknown as PromptBody;
 
       const fallbackEnabled = this.config?.fallback?.enabled ?? true;
