@@ -10,10 +10,7 @@ export type PromptBody = {
   noReply?: boolean;
   system?: string;
   tools?: { [key: string]: boolean };
-  parts: Array<
-    | { type: 'text'; text: string }
-    | { type: 'subtask'; prompt: string; description: string; agent: string }
-  >;
+  parts: Array<{ type: 'text'; text: string }>;
   variant?: string;
 };
 

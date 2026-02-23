@@ -283,14 +283,7 @@ export class PacketTaskManager {
       const basePromptBody = applyAgentVariant(resolvedVariant, {
         agent: task.agent,
         tools: toolPermissions,
-        parts: [
-          {
-            type: 'subtask' as const,
-            prompt: packetPrompt,
-            description: task.description,
-            agent: task.agent,
-          },
-        ],
+        parts: [{ type: 'text' as const, text: packetPrompt }],
       } as PromptBody) as unknown as PromptBody;
 
       const fallbackEnabled = this.config?.fallback?.enabled ?? true;
@@ -345,23 +338,45 @@ export class PacketTaskManager {
     }
   }
 
+  /**
+   * Fire-and-forget prompt using promptAsync.
+   * Unlike session.prompt (blocking), promptAsync returns as soon as the
+   * prompt is accepted — the agent processes in the background. This lets
+   * the TUI see the child session in "running" state and render a clickable
+   * subagent box. Completion is detected via handleSessionStatus (idle).
+   */
   private async promptWithTimeout(
     args: Parameters<OpencodeClient['session']['prompt']>[0],
     timeoutMs: number,
   ): Promise<void> {
+    // Cast to access promptAsync — it exists at runtime but isn't in
+    // the plugin ToolContext types (same pattern as oh-my-opencode).
+    const sessionApi = this.client.session as typeof this.client.session & {
+      promptAsync: (
+        opts: Parameters<OpencodeClient['session']['prompt']>[0],
+      ) => Promise<unknown>;
+    };
+
+    const promptPromise = sessionApi.promptAsync(args);
+
     if (timeoutMs <= 0) {
-      await this.client.session.prompt(args);
+      await promptPromise;
       return;
     }
-    await Promise.race([
-      this.client.session.prompt(args),
-      new Promise<never>((_, reject) => {
-        setTimeout(
-          () => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+
+    try {
+      await Promise.race([promptPromise, timeoutPromise]);
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
   }
 
   async handleSessionStatus(event: {
