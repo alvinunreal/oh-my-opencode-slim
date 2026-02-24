@@ -498,5 +498,21 @@ The installer generates this file based on your providers. You can manually cust
 | `tmux.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20-80) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally (e.g., `"websearch"`) |
+| `todo_continuation.enabled` | boolean | `true` | Static ON/OFF toggle for `todo-continuation-enforcer` hook. Set `false` to hard-disable auto continuation. |
 
 > **Note:** Agent configuration should be defined within `presets`. The root-level `agents` field is deprecated.
+
+### Todo Continuation Toggle
+
+If auto continuation feels too aggressive, use a deterministic static toggle:
+
+```jsonc
+{
+  "todo_continuation": {
+    "enabled": false
+  }
+}
+```
+
+- `true` (default): keeps `todo-continuation-enforcer` active
+- `false`: disables `todo-continuation-enforcer` via `disabled_hooks` (hard OFF)

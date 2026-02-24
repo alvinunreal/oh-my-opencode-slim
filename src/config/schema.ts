@@ -132,6 +132,14 @@ export const FailoverConfigSchema = z.object({
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
 // Main plugin config
+export const TodoContinuationConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+});
+
+export type TodoContinuationConfig = z.infer<
+  typeof TodoContinuationConfigSchema
+>;
+
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
   scoringEngineVersion: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
@@ -143,6 +151,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
+  todo_continuation: TodoContinuationConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;

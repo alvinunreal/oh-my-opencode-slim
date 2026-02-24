@@ -90,6 +90,29 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       (opencodeConfig as { default_agent?: string }).default_agent =
         'orchestrator';
 
+      // Static toggle for todo continuation enforcement.
+      // enabled=true  -> remove hook from disabled_hooks (allow continuation)
+      // enabled=false -> add hook to disabled_hooks (hard off)
+      const continuationEnabled = config.todo_continuation?.enabled ?? true;
+      const disabledHooks = Array.isArray(
+        (opencodeConfig as { disabled_hooks?: unknown }).disabled_hooks,
+      )
+        ? [
+            ...((opencodeConfig as { disabled_hooks: unknown[] })
+              .disabled_hooks as string[]),
+          ]
+        : [];
+
+      const continuationHook = 'todo-continuation-enforcer';
+      const withoutContinuationHook = disabledHooks.filter(
+        (name) => name !== continuationHook,
+      );
+
+      (opencodeConfig as { disabled_hooks?: string[] }).disabled_hooks =
+        continuationEnabled
+          ? withoutContinuationHook
+          : [...withoutContinuationHook, continuationHook];
+
       // Merge Agent configs
       if (!opencodeConfig.agent) {
         opencodeConfig.agent = { ...agents };
