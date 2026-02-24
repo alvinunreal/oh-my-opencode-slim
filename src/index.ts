@@ -7,6 +7,7 @@ import {
   createAutoUpdateCheckerHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
+  createTodoContinuationEnforcer,
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
 import {
@@ -67,6 +68,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize post-read nudge hook
   const postReadNudgeHook = createPostReadNudgeHook();
+
+  // Initialize todo continuation enforcer
+  const todoContinuationEnforcer = createTodoContinuationEnforcer({
+    ctx,
+    defaultEnabled: config.todo_continuation?.enabled ?? true,
+  });
 
   return {
     name: 'oh-my-opencode-slim',
@@ -173,9 +180,26 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
+    'chat.message': async (input, output) => {
+      await todoContinuationEnforcer['chat.message'](
+        input as { sessionID?: string },
+        output as { parts?: unknown },
+      );
+    },
+
     event: async (input) => {
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
+
+      // Handle todo continuation events (idle/deleted)
+      await todoContinuationEnforcer.event(
+        input as {
+          event: {
+            type: string;
+            properties?: { sessionID?: string; info?: { id?: string } };
+          };
+        },
+      );
 
       // Handle tmux pane spawning for OpenCode's Task tool sessions
       await tmuxSessionManager.onSessionCreated(

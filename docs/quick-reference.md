@@ -516,3 +516,10 @@ If auto continuation feels too aggressive, use a deterministic static toggle:
 
 - `true` (default): keeps `todo-continuation-enforcer` active
 - `false`: disables `todo-continuation-enforcer` via `disabled_hooks` (hard OFF)
+
+Runtime per-session toggle commands in chat:
+- `/todo-cont on`
+- `/todo-cont off`
+- `/todo-cont status`
+
+These commands update session-local continuation state immediately without AI heuristics.
