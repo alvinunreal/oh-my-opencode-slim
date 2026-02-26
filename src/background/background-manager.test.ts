@@ -748,7 +748,7 @@ describe('BackgroundTaskManager', () => {
       });
     });
 
-    test('spawned designer gets tools enabled (can delegate to explorer)', async () => {
+    test('spawned designer gets tools disabled (leaf node)', async () => {
       const ctx = createMockContext();
       const manager = new BackgroundTaskManager(ctx);
 
@@ -763,7 +763,7 @@ describe('BackgroundTaskManager', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // Launch designer from orchestrator - designer can delegate to explorer, so tools enabled
+      // Launch designer from orchestrator - designer is a leaf node, so tools are disabled
       const orchestratorSessionId = orchestratorTask.sessionId;
       if (!orchestratorSessionId)
         throw new Error('Expected sessionId to be defined');
@@ -778,14 +778,14 @@ describe('BackgroundTaskManager', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // Designer can delegate (to explorer), so delegation tools are enabled
+      // Designer is a leaf node, so delegation tools are hidden
       const promptCalls = ctx.client.session.prompt.mock.calls as Array<
         [{ body: { tools?: Record<string, boolean> } }]
       >;
       const lastCall = promptCalls[promptCalls.length - 1];
       expect(lastCall[0].body.tools).toEqual({
-        background_task: true,
-        task: true,
+        background_task: false,
+        task: false,
       });
     });
 
@@ -1145,18 +1145,18 @@ describe('BackgroundTaskManager', () => {
       if (!designerSessionId)
         throw new Error('Expected sessionId to be defined');
 
-      // Designer gets tools ENABLED (can delegate to explorer)
+      // Designer is a leaf node, so delegation tools stay disabled
       const promptCalls = ctx.client.session.prompt.mock.calls as Array<
         [{ body: { tools?: Record<string, boolean> } }]
       >;
       const designerPromptCall = promptCalls[1];
       expect(designerPromptCall[0].body.tools).toEqual({
-        background_task: true,
-        task: true,
+        background_task: false,
+        task: false,
       });
 
-      // Designer can only spawn explorer
-      expect(manager.isAgentAllowed(designerSessionId, 'explorer')).toBe(true);
+      // Designer is a leaf node and cannot spawn subagents
+      expect(manager.isAgentAllowed(designerSessionId, 'explorer')).toBe(false);
       expect(manager.isAgentAllowed(designerSessionId, 'fixer')).toBe(false);
       expect(manager.isAgentAllowed(designerSessionId, 'oracle')).toBe(false);
 
@@ -1356,9 +1356,7 @@ describe('BackgroundTaskManager', () => {
       if (!designerSessionId)
         throw new Error('Expected sessionId to be defined');
 
-      expect(manager.getAllowedSubagents(designerSessionId)).toEqual([
-        'explorer',
-      ]);
+      expect(manager.getAllowedSubagents(designerSessionId)).toEqual([]);
 
       // Explorer -> empty (leaf)
       const explorerTask = manager.launch({
