@@ -27,8 +27,8 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 // Unknown agent types not listed here default to explorer-only access
 export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   orchestrator: SUBAGENT_NAMES,
-  fixer: [], // leaf node — prompt forbids delegation; use grep/glob for lookups
-  designer: ['explorer'],
+  fixer: [],
+  designer: [],
   explorer: [],
   librarian: [],
   oracle: [],
