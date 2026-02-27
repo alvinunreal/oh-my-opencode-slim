@@ -5,6 +5,7 @@ import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import {
   createAutoUpdateCheckerHook,
+  createModelRefreshCheckerHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
 } from './hooks';
@@ -60,6 +61,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
     showStartupToast: true,
     autoUpdate: true,
+  });
+
+  const modelRefreshChecker = createModelRefreshCheckerHook(ctx, {
+    enabled: config.model_refresh?.enabled ?? true,
+    intervalHours: config.model_refresh?.interval_hours ?? 24,
+    showToast: config.model_refresh?.show_toast ?? false,
   });
 
   // Initialize phase reminder hook for workflow compliance
@@ -153,6 +160,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     event: async (input) => {
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
+
+      modelRefreshChecker.event(input);
 
       // Handle tmux pane spawning for OpenCode's Task tool sessions
       await tmuxSessionManager.onSessionCreated(

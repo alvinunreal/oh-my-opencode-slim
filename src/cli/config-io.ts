@@ -384,6 +384,7 @@ export function detectCurrentConfig(): DetectedConfig {
     hasZaiPlan: false,
     hasAntigravity: false,
     hasChutes: false,
+    hasNanoGpt: false,
     hasOpencodeZen: false,
     hasTmux: false,
   };
@@ -404,6 +405,7 @@ export function detectCurrentConfig(): DetectedConfig {
   result.hasCopilot = !!providers?.['github-copilot'];
   result.hasZaiPlan = !!providers?.['zai-coding-plan'];
   result.hasChutes = !!providers?.chutes;
+  result.hasNanoGpt = !!providers?.nanogpt;
   if (providers?.google) result.hasAntigravity = true;
 
   // Try to detect from lite config
@@ -430,6 +432,9 @@ export function detectCurrentConfig(): DetectedConfig {
       }
       if (models.some((m) => m?.startsWith('chutes/'))) {
         result.hasChutes = true;
+      }
+      if (models.some((m) => m?.startsWith('nanogpt/'))) {
+        result.hasNanoGpt = true;
       }
     }
 

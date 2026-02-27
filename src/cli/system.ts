@@ -60,7 +60,6 @@ export function resolveOpenCodePath(): string {
     try {
       const stat = statSync(opencodePath);
       if (stat.isFile()) {
-        cachedOpenCodePath = opencodePath;
         return opencodePath;
       }
     } catch {

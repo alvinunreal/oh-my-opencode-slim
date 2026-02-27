@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">NanoGPT Smart Routing Flow</title>
+  <desc id="desc">Flow diagram showing model discovery, enrichment, scoring, assignment, rollout, and rollback.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .card { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 14; }
+      .source { fill: #eef6ff; }
+      .engine { fill: #eefbf3; }
+      .guard { fill: #fff7ed; }
+      .text { fill: #111827; font-family: 'SF Pro Text', 'Segoe UI', Arial, sans-serif; font-size: 20px; }
+      .small { fill: #374151; font-family: 'SF Pro Text', 'Segoe UI', Arial, sans-serif; font-size: 16px; }
+      .title { fill: #0f172a; font-family: 'SF Pro Display', 'Segoe UI', Arial, sans-serif; font-size: 36px; font-weight: 700; }
+      .arrow { stroke: #334155; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
+      .line { stroke: #94a3b8; stroke-width: 2; fill: none; }
+    </style>
+    <marker id="arrowhead" markerWidth="12" markerHeight="8" refX="10" refY="4" orient="auto">
+      <polygon points="0 0, 12 4, 0 8" fill="#334155" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="980" />
+  <text class="title" x="80" y="72">NanoGPT + Chutes + OpenCode Smart Routing Flow</text>
+
+  <rect class="card source" x="80" y="120" width="320" height="150" />
+  <text class="text" x="105" y="165">1) OpenCode Discovery</text>
+  <text class="small" x="105" y="198">opencode models</text>
+  <text class="small" x="105" y="222">--verbose --refresh</text>
+
+  <rect class="card source" x="80" y="300" width="320" height="120" />
+  <text class="text" x="105" y="345">2) models.dev</text>
+  <text class="small" x="105" y="375">Catalog enrichment</text>
+
+  <rect class="card source" x="80" y="450" width="320" height="120" />
+  <text class="text" x="105" y="495">3) AA Signals</text>
+  <text class="small" x="105" y="525">Quality + latency</text>
+
+  <rect class="card source" x="80" y="600" width="320" height="120" />
+  <text class="text" x="105" y="645">4) OpenRouter Signals</text>
+  <text class="small" x="105" y="675">Pricing + metadata</text>
+
+  <rect class="card" x="500" y="180" width="420" height="170" />
+  <text class="text" x="525" y="225">5) Normalize Catalog</text>
+  <text class="small" x="525" y="255">Merge to DiscoveredModel</text>
+  <text class="small" x="525" y="280">Alias dedupe + provider metadata</text>
+  <text class="small" x="525" y="305">Availability truth = OpenCode</text>
+
+  <rect class="card engine" x="500" y="390" width="420" height="200" />
+  <text class="text" x="525" y="435">6) Combination Fingerprint</text>
+  <text class="small" x="525" y="465">providers + policy + budgets + catalog hash</text>
+  <text class="small" x="525" y="495">Top-K per provider per role</text>
+  <text class="small" x="525" y="525">Beam search for best team composition</text>
+  <text class="small" x="525" y="555">No unnecessary provider exclusion</text>
+
+  <rect class="card engine" x="980" y="180" width="500" height="230" />
+  <text class="text" x="1005" y="225">7) Scoring Engine</text>
+  <text class="small" x="1005" y="255">total = roleFit + capability + cost + latency</text>
+  <text class="small" x="1005" y="282">       + context + reliability + policyFit</text>
+  <text class="small" x="1005" y="309">Hard constraints: toolcall/context/policy/budget</text>
+  <text class="small" x="1005" y="336">Winner only if delta &gt; epsilon vs #2</text>
+  <text class="small" x="1005" y="363">Else conservative tie-break (risk/cost stability)</text>
+
+  <rect class="card guard" x="980" y="450" width="500" height="210" />
+  <text class="text" x="1005" y="495">8) Safe Promotion Pipeline</text>
+  <text class="small" x="1005" y="525">Shadow evaluation for new models</text>
+  <text class="small" x="1005" y="552">Canary rollout per role</text>
+  <text class="small" x="1005" y="579">Monitor success, p95 latency, cost, fallback rate</text>
+  <text class="small" x="1005" y="606">Auto rollback on regression thresholds</text>
+  <text class="small" x="1005" y="633">Autonomous lifecycle: discover -&gt; qualify -&gt; promote</text>
+
+  <rect class="card" x="500" y="640" width="420" height="180" />
+  <text class="text" x="525" y="685">9) Output</text>
+  <text class="small" x="525" y="715">Per-agent primary assignment</text>
+  <text class="small" x="525" y="742">Per-agent ranked fallback chains</text>
+  <text class="small" x="525" y="769">Provider-balanced mixed composition</text>
+  <text class="small" x="525" y="796">Deterministic OpenCode safety tail</text>
+
+  <line class="arrow" x1="400" y1="195" x2="500" y2="240" />
+  <line class="arrow" x1="400" y1="360" x2="500" y2="260" />
+  <line class="arrow" x1="400" y1="510" x2="500" y2="290" />
+  <line class="arrow" x1="400" y1="660" x2="500" y2="320" />
+
+  <line class="arrow" x1="710" y1="350" x2="710" y2="390" />
+  <line class="arrow" x1="920" y1="490" x2="980" y2="300" />
+  <line class="arrow" x1="920" y1="490" x2="980" y2="555" />
+  <line class="arrow" x1="1230" y1="410" x2="1230" y2="450" />
+  <line class="arrow" x1="980" y1="620" x2="920" y2="730" />
+
+  <line class="line" x1="980" y1="705" x2="1480" y2="705" />
+  <text class="small" x="1005" y="735">Closed-loop re-evaluation on each refresh and runtime drift.</text>
+</svg>

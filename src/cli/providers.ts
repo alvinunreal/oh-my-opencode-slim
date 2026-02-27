@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
+import { normalizeModelPreferences } from './model-preferences';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
 
@@ -79,6 +80,14 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'chutes/minimax-m2.1', variant: 'low' },
     designer: { model: 'chutes/kimi-k2.5', variant: 'medium' },
     fixer: { model: 'chutes/minimax-m2.1', variant: 'low' },
+  },
+  nanogpt: {
+    orchestrator: { model: 'nanogpt/gpt-4o' },
+    oracle: { model: 'nanogpt/gpt-4o', variant: 'high' },
+    librarian: { model: 'nanogpt/gpt-4o-mini', variant: 'low' },
+    explorer: { model: 'nanogpt/gpt-4o-mini', variant: 'low' },
+    designer: { model: 'nanogpt/gpt-4o', variant: 'medium' },
+    fixer: { model: 'nanogpt/gpt-4o-mini', variant: 'low' },
   },
   'zen-free': {
     orchestrator: { model: 'opencode/big-pickle' },
@@ -215,11 +224,32 @@ export function generateAntigravityMixedPreset(
 export function generateLiteConfig(
   installConfig: InstallConfig,
 ): Record<string, unknown> {
+  const normalizedModelPreferences = normalizeModelPreferences(
+    installConfig.preferredModelsByAgent,
+  );
   const config: Record<string, unknown> = {
     preset: 'zen-free',
     presets: {},
     balanceProviderUsage: installConfig.balanceProviderUsage ?? false,
   };
+
+  if (installConfig.nanoGptRoutingPolicy) {
+    config.nanoGptRoutingPolicy = installConfig.nanoGptRoutingPolicy;
+  }
+
+  if (normalizedModelPreferences) {
+    config.modelPreferences = normalizedModelPreferences;
+  }
+
+  if (installConfig._migratedFromV1 === true) {
+    config._migratedFromV1 = true;
+    if (installConfig._migrationTimestamp) {
+      config._migrationTimestamp = installConfig._migrationTimestamp;
+    }
+    if (installConfig._migrationWarnings) {
+      config._migrationWarnings = installConfig._migrationWarnings;
+    }
+  }
 
   // Handle manual configuration mode
   if (
@@ -286,6 +316,7 @@ export function generateLiteConfig(
     | 'zai-plan'
     | 'antigravity'
     | 'chutes'
+    | 'nanogpt'
     | 'antigravity-mixed-both'
     | 'antigravity-mixed-kimi'
     | 'antigravity-mixed-openai'
@@ -316,6 +347,8 @@ export function generateLiteConfig(
     activePreset = 'zai-plan';
   } else if (installConfig.hasChutes) {
     activePreset = 'chutes';
+  } else if (installConfig.hasNanoGpt) {
+    activePreset = 'nanogpt';
   }
 
   config.preset = activePreset;
@@ -387,6 +420,18 @@ export function generateLiteConfig(
   ) => {
     if (!installConfig.useOpenCodeFreeModels) return;
 
+    if (installConfig.selectedOpenCodeModelsByAgent) {
+      for (const [agentName, assignment] of Object.entries(
+        installConfig.selectedOpenCodeModelsByAgent,
+      )) {
+        presetAgents[agentName] = createAgentConfig(agentName, {
+          model: assignment.model,
+          variant: assignment.variant,
+        });
+      }
+      return;
+    }
+
     const primaryModel = installConfig.selectedOpenCodePrimaryModel;
     const secondaryModel =
       installConfig.selectedOpenCodeSecondaryModel ?? primaryModel;
@@ -411,13 +456,26 @@ export function generateLiteConfig(
   const applyChutesAssignments = (presetAgents: Record<string, unknown>) => {
     if (!installConfig.hasChutes) return;
 
+    if (installConfig.selectedChutesModelsByAgent) {
+      for (const [agentName, assignment] of Object.entries(
+        installConfig.selectedChutesModelsByAgent,
+      )) {
+        presetAgents[agentName] = createAgentConfig(agentName, {
+          model: assignment.model,
+          variant: assignment.variant,
+        });
+      }
+      return;
+    }
+
     const hasExternalProviders =
       installConfig.hasKimi ||
       installConfig.hasOpenAI ||
       installConfig.hasAnthropic ||
       installConfig.hasCopilot ||
       installConfig.hasZaiPlan ||
-      installConfig.hasAntigravity;
+      installConfig.hasAntigravity ||
+      installConfig.hasNanoGpt;
 
     if (hasExternalProviders && activePreset !== 'chutes') return;
 
@@ -454,6 +512,9 @@ export function generateLiteConfig(
 
   const getOpenCodeFallbackForAgent = (agentName: AgentName) => {
     if (!installConfig.useOpenCodeFreeModels) return undefined;
+    const explicit =
+      installConfig.selectedOpenCodeModelsByAgent?.[agentName]?.model;
+    if (explicit) return explicit;
     const isSupport =
       agentName === 'explorer' ||
       agentName === 'librarian' ||
@@ -469,6 +530,9 @@ export function generateLiteConfig(
 
   const getChutesFallbackForAgent = (agentName: AgentName) => {
     if (!installConfig.hasChutes) return undefined;
+    const explicit =
+      installConfig.selectedChutesModelsByAgent?.[agentName]?.model;
+    if (explicit) return explicit;
     const isSupport =
       agentName === 'explorer' ||
       agentName === 'librarian' ||
@@ -514,9 +578,14 @@ export function generateLiteConfig(
         installConfig.hasAntigravity
           ? MODEL_MAPPINGS.antigravity[agentName].model
           : undefined,
+        installConfig.hasNanoGpt
+          ? MODEL_MAPPINGS.nanogpt[agentName].model
+          : undefined,
         getChutesFallbackForAgent(agentName),
         getOpenCodeFallbackForAgent(agentName),
-        MODEL_MAPPINGS['zen-free'][agentName].model,
+        installConfig.useOpenCodeFreeModels
+          ? MODEL_MAPPINGS['zen-free'][agentName].model
+          : undefined,
       ]);
 
       if (chain.length > 0) {
@@ -569,6 +638,7 @@ export function generateLiteConfig(
         installConfig.hasCopilot ||
         installConfig.hasZaiPlan ||
         installConfig.hasAntigravity ||
+        installConfig.hasNanoGpt ||
         installConfig.hasChutes === true,
     );
     applyChutesAssignments(
@@ -590,6 +660,7 @@ export function generateLiteConfig(
         installConfig.hasCopilot ||
         installConfig.hasZaiPlan ||
         installConfig.hasAntigravity ||
+        installConfig.hasNanoGpt ||
         installConfig.hasChutes === true,
     );
     applyChutesAssignments(

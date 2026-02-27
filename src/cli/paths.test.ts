@@ -9,8 +9,10 @@ import {
   getConfigDir,
   getConfigJson,
   getConfigJsonc,
+  getDataDir,
   getExistingConfigPath,
   getLiteConfig,
+  getOpenCodeAuthPaths,
   getOpenCodeConfigPaths,
 } from './paths';
 
@@ -37,6 +39,28 @@ describe('paths', () => {
     expect(getOpenCodeConfigPaths()).toEqual([
       '/tmp/xdg-config/opencode/opencode.json',
       '/tmp/xdg-config/opencode/opencode.jsonc',
+    ]);
+  });
+
+  test('getDataDir() uses XDG_DATA_HOME when set', () => {
+    process.env.XDG_DATA_HOME = '/tmp/xdg-data';
+    expect(getDataDir()).toBe('/tmp/xdg-data/opencode');
+  });
+
+  test('getDataDir() falls back to ~/.local/share when XDG_DATA_HOME is unset', () => {
+    delete process.env.XDG_DATA_HOME;
+    const expected = join(homedir(), '.local', 'share', 'opencode');
+    expect(getDataDir()).toBe(expected);
+  });
+
+  test('getOpenCodeAuthPaths() prioritizes data dir auth files', () => {
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+    process.env.XDG_DATA_HOME = '/tmp/xdg-data';
+    expect(getOpenCodeAuthPaths()).toEqual([
+      '/tmp/xdg-data/opencode/auth.json',
+      '/tmp/xdg-data/opencode/auth.jsonc',
+      '/tmp/xdg-config/opencode/auth.json',
+      '/tmp/xdg-config/opencode/auth.jsonc',
     ]);
   });
 

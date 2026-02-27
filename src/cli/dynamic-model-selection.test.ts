@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildDynamicModelPlan,
+  filterCatalogToEnabledProviders,
   rankModelsV1WithBreakdown,
 } from './dynamic-model-selection';
 import type { DiscoveredModel, InstallConfig } from './types';
@@ -215,10 +216,10 @@ describe('dynamic-model-selection', () => {
     expect(explorer[0]?.model).toContain('minimax-m2.1');
   });
 
-  test('does not apply a positive Gemini bonus in v1 scoring', () => {
+  test('prefers Gemini 3 over older peers in v1 scoring', () => {
     const catalog = [
       m({
-        model: 'google/antigravity-gemini-3.1-pro',
+        model: 'google/antigravity-gemini-3-pro',
         reasoning: true,
         toolcall: true,
       }),
@@ -230,9 +231,124 @@ describe('dynamic-model-selection', () => {
     const designer = rankModelsV1WithBreakdown(catalog, 'designer');
     const librarian = rankModelsV1WithBreakdown(catalog, 'librarian');
 
-    expect(oracle[0]?.model).toBe('openai/gpt-5.3-codex');
-    expect(orchestrator[0]?.model).toBe('openai/gpt-5.3-codex');
-    expect(designer[0]?.model).toBe('openai/gpt-5.3-codex');
-    expect(librarian[0]?.model).toBe('openai/gpt-5.3-codex');
+    expect(oracle[0]?.model).toBe('google/antigravity-gemini-3-pro');
+    expect(orchestrator[0]?.model).toBe('google/antigravity-gemini-3-pro');
+    expect(designer[0]?.model).toBe('google/antigravity-gemini-3-pro');
+    expect(librarian[0]?.model).toBe('google/antigravity-gemini-3-pro');
+  });
+
+  test('filters provider catalog to explicit selection only', () => {
+    const catalog = [
+      m({ model: 'nanogpt/gpt-4o' }),
+      m({ model: 'openai/gpt-5.3-codex' }),
+      m({ model: 'google/gemini-2.5-flash' }),
+    ];
+
+    const filtered = filterCatalogToEnabledProviders(catalog, {
+      ...baseInstallConfig(),
+      hasOpenAI: false,
+      hasCopilot: false,
+      hasZaiPlan: false,
+      hasChutes: false,
+      hasAntigravity: false,
+      hasNanoGpt: true,
+      useOpenCodeFreeModels: false,
+    });
+
+    expect(filtered.map((model) => model.model)).toEqual(['nanogpt/gpt-4o']);
+  });
+
+  test('keeps dynamic assignments inside selected providers only', () => {
+    const plan = buildDynamicModelPlan(
+      [
+        m({ model: 'nanogpt/gpt-4o', reasoning: true, toolcall: true }),
+        m({ model: 'nanogpt/gpt-4o-mini', reasoning: true, toolcall: true }),
+        m({ model: 'openai/gpt-5.3-codex', reasoning: true, toolcall: true }),
+        m({
+          model: 'google/gemini-2.5-flash',
+          reasoning: true,
+          toolcall: true,
+        }),
+      ],
+      {
+        ...baseInstallConfig(),
+        hasOpenAI: false,
+        hasCopilot: false,
+        hasZaiPlan: false,
+        hasChutes: false,
+        hasAntigravity: false,
+        hasNanoGpt: true,
+        useOpenCodeFreeModels: false,
+      },
+    );
+
+    expect(plan).not.toBeNull();
+    for (const assignment of Object.values(plan?.agents ?? {})) {
+      expect(assignment.model.startsWith('nanogpt/')).toBe(true);
+    }
+  });
+
+  test('subscription-only policy uses NanoGPT subscription endpoint model list', () => {
+    const filtered = filterCatalogToEnabledProviders(
+      [
+        m({
+          model: 'nanogpt/qwen/qwen3.5-plus-thinking',
+          costInput: 0.4,
+          costOutput: 2.4,
+        }),
+        m({
+          model: 'nanogpt/qwen/qwen3-coder',
+          costInput: 1,
+          costOutput: 2,
+        }),
+      ],
+      {
+        ...baseInstallConfig(),
+        hasOpenAI: false,
+        hasCopilot: false,
+        hasZaiPlan: false,
+        hasChutes: false,
+        hasAntigravity: false,
+        hasNanoGpt: true,
+        useOpenCodeFreeModels: false,
+        nanoGptRoutingPolicy: 'subscription-only',
+        nanoGptSubscriptionModels: ['nanogpt/qwen/qwen3-coder'],
+      },
+    );
+
+    expect(filtered.map((model) => model.model)).toEqual([
+      'nanogpt/qwen/qwen3-coder',
+    ]);
+  });
+
+  test('applies per-agent preferred models when available', () => {
+    const plan = buildDynamicModelPlan(
+      [
+        m({ model: 'openai/gpt-5.3-codex', reasoning: true, toolcall: true }),
+        m({
+          model: 'openai/gpt-5.1-codex-mini',
+          reasoning: true,
+          toolcall: true,
+        }),
+        m({
+          model: 'chutes/MiniMaxAI/MiniMax-M2.5-TEE',
+          reasoning: true,
+          toolcall: true,
+        }),
+      ],
+      {
+        ...baseInstallConfig(),
+        hasCopilot: false,
+        hasZaiPlan: false,
+        hasKimi: false,
+        hasAntigravity: false,
+        preferredModelsByAgent: {
+          fixer: ['chutes/MiniMaxAI/MiniMax-M2.5-TEE'],
+        },
+      },
+    );
+
+    expect(plan?.agents.fixer?.model).toBe('chutes/MiniMaxAI/MiniMax-M2.5-TEE');
+    expect(plan?.provenance?.fixer?.winnerLayer).toBe('pinned-model');
   });
 });

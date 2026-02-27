@@ -12,9 +12,29 @@ export function getConfigDir(): string {
   return join(userConfigDir, 'opencode');
 }
 
+export function getDataDir(): string {
+  const userDataDir = process.env.XDG_DATA_HOME
+    ? process.env.XDG_DATA_HOME
+    : join(homedir(), '.local', 'share');
+
+  return join(userDataDir, 'opencode');
+}
+
 export function getOpenCodeConfigPaths(): string[] {
   const configDir = getConfigDir();
   return [join(configDir, 'opencode.json'), join(configDir, 'opencode.jsonc')];
+}
+
+export function getOpenCodeAuthPaths(): string[] {
+  const configDir = getConfigDir();
+  const dataDir = getDataDir();
+
+  return [
+    join(dataDir, 'auth.json'),
+    join(dataDir, 'auth.jsonc'),
+    join(configDir, 'auth.json'),
+    join(configDir, 'auth.jsonc'),
+  ];
 }
 
 export function getConfigJson(): string {

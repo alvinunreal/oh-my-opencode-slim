@@ -1,6 +1,8 @@
 import { buildModelKeyAliases } from './model-key-normalization';
+import { resolvePreferredModelForAgent } from './model-preferences';
 import { resolveAgentWithPrecedence } from './precedence-resolver';
 import { rankModelsV2, scoreCandidateV2 } from './scoring-v2';
+import { scoreRoutingCandidate } from './smart-routing-v3/scoring';
 import type {
   DiscoveredModel,
   DynamicModelPlan,
@@ -46,7 +48,7 @@ const ROLE_VARIANT: Record<AgentName, string | undefined> = {
   fixer: 'low',
 };
 
-function getEnabledProviders(config: InstallConfig): string[] {
+export function getEnabledProviders(config: InstallConfig): string[] {
   const providers: string[] = [];
   if (config.hasOpenAI) providers.push('openai');
   if (config.hasAnthropic) providers.push('anthropic');
@@ -55,8 +57,79 @@ function getEnabledProviders(config: InstallConfig): string[] {
   if (config.hasKimi) providers.push('kimi-for-coding');
   if (config.hasAntigravity) providers.push('google');
   if (config.hasChutes) providers.push('chutes');
+  if (config.hasNanoGpt) providers.push('nanogpt');
   if (config.useOpenCodeFreeModels) providers.push('opencode');
   return providers;
+}
+
+export function filterCatalogToEnabledProviders(
+  catalog: DiscoveredModel[],
+  config: InstallConfig,
+): DiscoveredModel[] {
+  const enabledProviders = new Set(getEnabledProviders(config));
+  const preferredNanoCatalog =
+    config.availableNanoGptModels?.filter(
+      (model) => model.providerID === 'nanogpt',
+    ) ?? [];
+  const nanoAllowlistFromPolicy = (() => {
+    if (config.nanoGptRoutingPolicy === 'subscription-only') {
+      return config.nanoGptSubscriptionModels ?? [];
+    }
+    if (config.nanoGptRoutingPolicy === 'paygo-only') {
+      return config.nanoGptPaidModels ?? [];
+    }
+    return [
+      ...(config.nanoGptSubscriptionModels ?? []),
+      ...(config.nanoGptPaidModels ?? []),
+    ];
+  })();
+  const nanoAllowlist =
+    preferredNanoCatalog.length > 0
+      ? new Set(preferredNanoCatalog.map((model) => model.model.toLowerCase()))
+      : nanoAllowlistFromPolicy.length > 0
+        ? new Set(nanoAllowlistFromPolicy.map((model) => model.toLowerCase()))
+        : null;
+  const nanoAccessByModel = new Map(
+    preferredNanoCatalog.map((model) => [
+      model.model.toLowerCase(),
+      model.nanoGptAccess,
+    ]),
+  );
+  for (const model of config.nanoGptSubscriptionModels ?? []) {
+    if (!nanoAccessByModel.has(model.toLowerCase())) {
+      nanoAccessByModel.set(model.toLowerCase(), 'subscription');
+    }
+  }
+  for (const model of config.nanoGptPaidModels ?? []) {
+    if (!nanoAccessByModel.has(model.toLowerCase())) {
+      nanoAccessByModel.set(model.toLowerCase(), 'paid');
+    }
+  }
+
+  return catalog.flatMap((model) => {
+    if (!enabledProviders.has(model.providerID)) return [];
+    if (model.providerID === 'chutes' && /qwen/i.test(model.model)) {
+      return [];
+    }
+
+    if (model.providerID !== 'nanogpt') {
+      return [model];
+    }
+
+    const key = model.model.toLowerCase();
+    if (nanoAllowlist && !nanoAllowlist.has(key)) {
+      return [];
+    }
+
+    const access = nanoAccessByModel.get(key);
+    if (!access) return [model];
+    return [
+      {
+        ...model,
+        nanoGptAccess: access,
+      },
+    ];
+  });
 }
 
 function tokenScore(name: string, re: RegExp, points: number): number {
@@ -254,9 +327,15 @@ function geminiPreferenceAdjustment(
   model: DiscoveredModel,
 ): number {
   const lowered = `${model.model} ${model.name}`.toLowerCase();
+  const isGemini3 = /gemini[-_ ]?3/.test(lowered);
+  const isGemini25Flash = /gemini-2\.5-flash/.test(lowered);
   const isGemini25Pro = /gemini-2\.5-pro/.test(lowered);
 
-  return isGemini25Pro ? -14 : 0;
+  return (
+    (isGemini3 ? 26 : 0) +
+    (isGemini25Flash ? -12 : 0) +
+    (isGemini25Pro ? -14 : 0)
+  );
 }
 
 function chutesPreferenceAdjustment(
@@ -268,7 +347,8 @@ function chutesPreferenceAdjustment(
   const lowered = `${model.model} ${model.name}`.toLowerCase();
   const isQwen3 = /qwen3/.test(lowered);
   const isKimiK25 = /kimi-k2\.5|k2\.5/.test(lowered);
-  const isMinimaxM21 = /minimax[-_ ]?m2\.1/.test(lowered);
+  const isMinimaxM25 = /minimax[-_ ]?m2\.5/.test(lowered);
+  const isGlm5 = /glm[-_ ]?5/.test(lowered);
 
   const qwenPenalty: Record<AgentName, number> = {
     oracle: -12,
@@ -287,18 +367,27 @@ function chutesPreferenceAdjustment(
     explorer: 4,
   };
   const minimaxBonus: Record<AgentName, number> = {
-    oracle: 0,
-    orchestrator: 0,
-    fixer: 10,
-    designer: 3,
-    librarian: 9,
-    explorer: 12,
+    oracle: 8,
+    orchestrator: 10,
+    fixer: 18,
+    designer: 8,
+    librarian: 14,
+    explorer: 22,
+  };
+  const glm5Bonus: Record<AgentName, number> = {
+    oracle: 18,
+    orchestrator: 16,
+    fixer: 12,
+    designer: 10,
+    librarian: 12,
+    explorer: 4,
   };
 
   return (
     (isQwen3 ? qwenPenalty[agent] : 0) +
     (isKimiK25 ? kimiBonus[agent] : 0) +
-    (isMinimaxM21 ? minimaxBonus[agent] : 0)
+    (isMinimaxM25 ? minimaxBonus[agent] : 0) +
+    (isGlm5 ? glm5Bonus[agent] : 0)
   );
 }
 
@@ -589,8 +678,12 @@ function combinedScore(
   );
 }
 
-function effectiveEngine(engineVersion: ScoringEngineVersion): 'v1' | 'v2' {
-  return engineVersion === 'v2' ? 'v2' : 'v1';
+function effectiveEngine(
+  engineVersion: ScoringEngineVersion,
+): 'v1' | 'v2' | 'v3' {
+  if (engineVersion === 'v2') return 'v2';
+  if (engineVersion === 'v3') return 'v3';
+  return 'v1';
 }
 
 function scoreForEngine(
@@ -602,6 +695,24 @@ function scoreForEngine(
 ): number {
   if (effectiveEngine(engineVersion) === 'v2') {
     return scoreCandidateV2(model, agent, externalSignals).totalScore;
+  }
+
+  if (effectiveEngine(engineVersion) === 'v3') {
+    return scoreRoutingCandidate(model, agent, {
+      policy: {
+        mode: 'hybrid',
+        subscriptionBudget: {
+          enforcement: 'soft',
+        },
+      },
+      quotaStatus: {
+        dailyRemaining: 999,
+        monthlyRemaining: 9_999,
+        lastCheckedAt: new Date(0),
+      },
+      providerUsage: new Map<string, number>(),
+      externalSignals,
+    }).totalScore;
   }
 
   return combinedScore(agent, model, externalSignals, versionRecencyMap);
@@ -1023,6 +1134,15 @@ export function buildDynamicModelPlan(
     config.selectedChutesSecondaryModel,
     config.selectedOpenCodePrimaryModel,
     config.selectedOpenCodeSecondaryModel,
+    ...Object.values(config.selectedChutesModelsByAgent ?? {}).map(
+      (assignment) => assignment.model,
+    ),
+    ...Object.values(config.selectedOpenCodeModelsByAgent ?? {}).map(
+      (assignment) => assignment.model,
+    ),
+    ...Object.values(config.selectedNanoGptModelsByAgent ?? {}).map(
+      (assignment) => assignment.model,
+    ),
   ].reduce((acc, modelID) => ensureSyntheticModel(acc, modelID), catalog);
 
   const enabledProviders = new Set(getEnabledProviders(config));
@@ -1085,6 +1205,8 @@ export function buildDynamicModelPlan(
 
   const getSelectedChutesForAgent = (agent: AgentName): string | undefined => {
     if (!config.hasChutes) return undefined;
+    const explicit = config.selectedChutesModelsByAgent?.[agent]?.model;
+    if (explicit) return explicit;
     return agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
       ? (config.selectedChutesSecondaryModel ??
           config.selectedChutesPrimaryModel)
@@ -1095,10 +1217,17 @@ export function buildDynamicModelPlan(
     agent: AgentName,
   ): string | undefined => {
     if (!config.useOpenCodeFreeModels) return undefined;
+    const explicit = config.selectedOpenCodeModelsByAgent?.[agent]?.model;
+    if (explicit) return explicit;
     return agent === 'explorer' || agent === 'librarian' || agent === 'fixer'
       ? (config.selectedOpenCodeSecondaryModel ??
           config.selectedOpenCodePrimaryModel)
       : config.selectedOpenCodePrimaryModel;
+  };
+
+  const getSelectedNanoGptForAgent = (agent: AgentName): string | undefined => {
+    if (!config.hasNanoGpt) return undefined;
+    return config.selectedNanoGptModelsByAgent?.[agent]?.model;
   };
 
   const getPinnedModelForProvider = (
@@ -1107,6 +1236,7 @@ export function buildDynamicModelPlan(
   ): string | undefined => {
     if (providerID === 'chutes') return getSelectedChutesForAgent(agent);
     if (providerID === 'opencode') return getSelectedOpenCodeForAgent(agent);
+    if (providerID === 'nanogpt') return getSelectedNanoGptForAgent(agent);
     return undefined;
   };
 
@@ -1186,10 +1316,12 @@ export function buildDynamicModelPlan(
 
     const selectedOpencode = getSelectedOpenCodeForAgent(agent);
     const selectedChutes = getSelectedChutesForAgent(agent);
+    const selectedNanoGpt = getSelectedNanoGptForAgent(agent);
 
     const chain = dedupe([
       primary.model,
       ...nonFreePerProviderBest,
+      selectedNanoGpt,
       selectedChutes,
       selectedOpencode,
       ...freePerProviderBest,
@@ -1203,7 +1335,7 @@ export function buildDynamicModelPlan(
     const finalizedChain = finalizeChainWithTail(chain, deterministicFreeTail);
 
     const providerPolicyChain = dedupe([selectedChutes, selectedOpencode]);
-    const systemDefaultModel = selectedOpencode ?? 'opencode/big-pickle';
+    const systemDefaultModel = selectedOpencode ?? primary.model;
     const resolved = resolveAgentWithPrecedence({
       agentName: agent,
       dynamicRecommendation: finalizedChain,
@@ -1232,6 +1364,18 @@ export function buildDynamicModelPlan(
       finalChain = dedupe([selectedChutesForAgent, ...finalChain]);
     }
 
+    const preferredModel = resolvePreferredModelForAgent({
+      agent,
+      preferences: config.preferredModelsByAgent,
+      candidates: ranked.map((entry) => entry.model),
+    });
+    const usedPreferredModel =
+      typeof preferredModel === 'string' && preferredModel !== finalModel;
+    if (preferredModel) {
+      finalModel = preferredModel;
+      finalChain = dedupe([preferredModel, ...finalChain]);
+    }
+
     const wasForced = forceChutes || forceOpenCode;
 
     agents[agent] = {
@@ -1240,9 +1384,11 @@ export function buildDynamicModelPlan(
     };
     chains[agent] = finalChain;
     provenance[agent] = {
-      winnerLayer: wasForced
-        ? 'manual-user-plan'
-        : resolved.provenance.winnerLayer,
+      winnerLayer: usedPreferredModel
+        ? 'pinned-model'
+        : wasForced
+          ? 'manual-user-plan'
+          : resolved.provenance.winnerLayer,
       winnerModel: finalModel,
     };
   }
@@ -1331,6 +1477,29 @@ export function buildDynamicModelPlan(
     );
   }
 
+  for (const agent of PRIMARY_ASSIGNMENT_ORDER) {
+    const current = agents[agent];
+    if (!current) continue;
+    if (provenance[agent]?.winnerLayer === 'manual-user-plan') continue;
+
+    const preferredModel = resolvePreferredModelForAgent({
+      agent,
+      preferences: config.preferredModelsByAgent,
+      candidates: getRankedModels(agent).map((entry) => entry.model),
+    });
+    if (!preferredModel || preferredModel === current.model) continue;
+
+    current.model = preferredModel;
+    chains[agent] = dedupe([preferredModel, ...(chains[agent] ?? [])]).slice(
+      0,
+      10,
+    );
+    provenance[agent] = {
+      winnerLayer: 'pinned-model',
+      winnerModel: preferredModel,
+    };
+  }
+
   if (Object.keys(agents).length === 0) {
     return null;
   }
@@ -1340,7 +1509,8 @@ export function buildDynamicModelPlan(
     chains,
     provenance,
     scoring: {
-      engineVersionApplied: engineVersion === 'v2' ? 'v2' : 'v1',
+      engineVersionApplied:
+        engineVersion === 'v2' ? 'v2' : engineVersion === 'v3' ? 'v3' : 'v1',
       shadowCompared: engineVersion === 'v2-shadow',
       diffs: engineVersion === 'v2-shadow' ? shadowDiffs : undefined,
     },

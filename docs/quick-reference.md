@@ -497,6 +497,10 @@ The installer generates this file based on your providers. You can manually cust
 | `tmux.enabled` | boolean | `false` | Enable tmux pane spawning for sub-agents |
 | `tmux.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20-80) |
+| `model_refresh.enabled` | boolean | `true` | Enable startup model refresh check |
+| `model_refresh.interval_hours` | number | `24` | Minimum hours between automatic refresh runs |
+| `model_refresh.show_toast` | boolean | `false` | Show a toast after automatic model refresh |
+| `modelPreferences.<agent>` | string[] | unset | Ordered model preference list per agent (`orchestrator`,`oracle`,`designer`,`explorer`,`librarian`,`fixer`) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally (e.g., `"websearch"`) |
 
 > **Note:** Agent configuration should be defined within `presets`. The root-level `agents` field is deprecated.

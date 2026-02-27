@@ -101,6 +101,7 @@ openai/gpt-5.3-codex
   test('pickBestCodingOpenCodeModel prefers stronger coding profile', () => {
     const models = [
       {
+        providerID: 'opencode',
         model: 'opencode/gpt-5-nano',
         name: 'GPT-5 Nano',
         status: 'active' as const,
@@ -111,6 +112,7 @@ openai/gpt-5.3-codex
         attachment: true,
       },
       {
+        providerID: 'opencode',
         model: 'opencode/trinity-large-preview-free',
         name: 'Trinity Large Preview',
         status: 'active' as const,
@@ -129,6 +131,7 @@ openai/gpt-5.3-codex
   test('pickSupportOpenCodeModel picks helper model different from primary', () => {
     const models = [
       {
+        providerID: 'opencode',
         model: 'opencode/glm-4.7-free',
         name: 'GLM-4.7 Free',
         status: 'active' as const,
@@ -139,6 +142,7 @@ openai/gpt-5.3-codex
         attachment: false,
       },
       {
+        providerID: 'opencode',
         model: 'opencode/gpt-5-nano',
         name: 'GPT-5 Nano',
         status: 'active' as const,
@@ -152,5 +156,85 @@ openai/gpt-5.3-codex
 
     const support = pickSupportOpenCodeModel(models, 'opencode/glm-4.7-free');
     expect(support?.model).toBe('opencode/gpt-5-nano');
+  });
+
+  test('pickBestCodingOpenCodeModel demotes unstable runtime health', () => {
+    const models = [
+      {
+        providerID: 'opencode',
+        model: 'opencode/gpt-5-nano',
+        name: 'GPT-5 Nano',
+        status: 'active' as const,
+        contextLimit: 400000,
+        outputLimit: 128000,
+        reasoning: true,
+        toolcall: true,
+        attachment: true,
+        dailyRequestLimit: 5000,
+      },
+      {
+        providerID: 'opencode',
+        model: 'opencode/glm-4.7-free',
+        name: 'GLM-4.7 Free',
+        status: 'active' as const,
+        contextLimit: 204800,
+        outputLimit: 131072,
+        reasoning: true,
+        toolcall: true,
+        attachment: false,
+        dailyRequestLimit: 5000,
+      },
+    ];
+
+    const best = pickBestCodingOpenCodeModel(models, {
+      runtimeHealthByModel: {
+        'opencode/gpt-5-nano': {
+          successRate: 0.79,
+          fallbackRate: 0.26,
+          timeoutRate: 0.15,
+          avgLatencyMs: 2600,
+        },
+        'opencode/glm-4.7-free': {
+          successRate: 0.98,
+          fallbackRate: 0.01,
+          timeoutRate: 0,
+          avgLatencyMs: 650,
+        },
+      },
+    });
+
+    expect(best?.model).toBe('opencode/glm-4.7-free');
+  });
+
+  test('pickBestCodingOpenCodeModel favors healthier quota/status candidates', () => {
+    const models = [
+      {
+        providerID: 'opencode',
+        model: 'opencode/old-deprecated-fast',
+        name: 'Deprecated Fast',
+        status: 'deprecated' as const,
+        contextLimit: 500000,
+        outputLimit: 128000,
+        reasoning: true,
+        toolcall: true,
+        attachment: true,
+        dailyRequestLimit: 300,
+      },
+      {
+        providerID: 'opencode',
+        model: 'opencode/stable-balanced',
+        name: 'Stable Balanced',
+        status: 'active' as const,
+        contextLimit: 300000,
+        outputLimit: 131072,
+        reasoning: true,
+        toolcall: true,
+        attachment: true,
+        dailyRequestLimit: 5000,
+      },
+    ];
+
+    const best = pickBestCodingOpenCodeModel(models);
+    expect(best?.model).toBe('opencode/stable-balanced');
   });
 });

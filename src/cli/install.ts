@@ -1,20 +1,29 @@
+import { existsSync } from 'node:fs';
 import * as readline from 'node:readline/promises';
 import {
   addAntigravityPlugin,
   addChutesProvider,
   addGoogleProvider,
   addPluginToOpenCodeConfig,
+  backupV1ConfigBeforeMigration,
   buildDynamicModelPlan,
+  buildSmartRoutingPlanV3,
   detectCurrentConfig,
   disableDefaultAgents,
   discoverModelCatalog,
+  discoverNanoGptModelsByPolicy,
   discoverOpenCodeFreeModels,
   discoverProviderModels,
   fetchExternalModelSignals,
+  fetchProviderUsageSnapshot,
+  filterCatalogToEnabledProviders,
   generateLiteConfig,
+  getLiteConfig,
   getOpenCodePath,
   getOpenCodeVersion,
   isOpenCodeInstalled,
+  migrateLegacyAssignmentsV1ToV2,
+  parseConfig,
   pickBestCodingChutesModel,
   pickBestCodingOpenCodeModel,
   pickSupportChutesModel,
@@ -22,6 +31,7 @@ import {
   writeLiteConfig,
 } from './config-manager';
 import { CUSTOM_SKILLS, installCustomSkill } from './custom-skills';
+import { normalizeModelPreferences } from './model-preferences';
 import { installSkill, RECOMMENDED_SKILLS } from './skills';
 import type {
   BooleanArg,
@@ -149,6 +159,12 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push(
     `  ${config.hasChutes ? SYMBOLS.check : `${DIM}○${RESET}`} Chutes`,
   );
+  lines.push(
+    `  ${config.hasNanoGpt ? SYMBOLS.check : `${DIM}○${RESET}`} NanoGPT`,
+  );
+  lines.push(
+    `  ${config.smartRoutingV3 ? SYMBOLS.check : `${DIM}○${RESET}`} Smart Routing v3`,
+  );
   lines.push(`  ${SYMBOLS.check} Opencode Zen`);
   lines.push(
     `  ${config.balanceProviderUsage ? SYMBOLS.check : `${DIM}○${RESET}`} Balanced provider spend`,
@@ -171,6 +187,11 @@ function formatConfigSummary(config: InstallConfig): string {
   if (config.hasChutes && config.selectedChutesSecondaryModel) {
     lines.push(
       `  ${SYMBOLS.check} Chutes Support: ${BLUE}${config.selectedChutesSecondaryModel}${RESET}`,
+    );
+  }
+  if (config.hasChutes && config.chutesPacingMode) {
+    lines.push(
+      `  ${SYMBOLS.check} Chutes Monthly Pacing: ${BLUE}${config.chutesPacingMode}${RESET}`,
     );
   }
   lines.push(
@@ -211,6 +232,8 @@ function printAgentModels(config: InstallConfig): void {
 }
 
 function argsToConfig(args: InstallArgs): InstallConfig {
+  const hasNanoGpt = args.nanogpt === 'yes';
+  const hasChutes = args.chutes === 'yes';
   return {
     hasKimi: args.kimi === 'yes',
     hasOpenAI: args.openai === 'yes',
@@ -218,7 +241,8 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     hasCopilot: args.copilot === 'yes',
     hasZaiPlan: args.zaiPlan === 'yes',
     hasAntigravity: args.antigravity === 'yes',
-    hasChutes: args.chutes === 'yes',
+    hasChutes,
+    hasNanoGpt,
     hasOpencodeZen: true, // Always enabled - free models available to all users
     useOpenCodeFreeModels: args.opencodeFree === 'yes',
     preferredOpenCodeModel:
@@ -228,6 +252,16 @@ function argsToConfig(args: InstallArgs): InstallConfig {
     artificialAnalysisApiKey: args.aaKey,
     openRouterApiKey: args.openrouterKey,
     balanceProviderUsage: args.balancedSpend === 'yes',
+    smartRoutingV3: args.smartRoutingV3 === 'yes',
+    nanoGptRoutingPolicy: hasNanoGpt
+      ? (args.nanogptPolicy ?? 'subscription-only')
+      : undefined,
+    nanoGptDailyBudget: args.nanogptDailyBudget,
+    nanoGptMonthlyBudget: args.nanogptMonthlyBudget,
+    nanoGptMonthlyUsed: args.nanogptMonthlyUsed,
+    chutesPacingMode: hasChutes ? (args.chutesPacing ?? 'balanced') : undefined,
+    chutesMonthlyBudget: args.chutesMonthlyBudget,
+    chutesMonthlyUsed: args.chutesMonthlyUsed,
     hasTmux: args.tmux === 'yes',
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes', // Install custom skills when skills=yes
@@ -306,6 +340,64 @@ async function askOptionalApiKey(
 
   if (!answer) return fromEnv;
   return answer;
+}
+
+async function askOptionalPositiveInt(
+  rl: readline.Interface,
+  prompt: string,
+): Promise<number | undefined> {
+  const answer = (
+    await rl.question(`${BLUE}${prompt}${RESET} ${DIM}[optional]${RESET}: `)
+  ).trim();
+  if (!answer) return undefined;
+  const parsed = Number.parseInt(answer, 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return undefined;
+}
+
+async function askOptionalNonNegativeInt(
+  rl: readline.Interface,
+  prompt: string,
+): Promise<number | undefined> {
+  const answer = (
+    await rl.question(`${BLUE}${prompt}${RESET} ${DIM}[optional]${RESET}: `)
+  ).trim();
+  if (!answer) return undefined;
+  const parsed = Number.parseInt(answer, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return parsed;
+  }
+  return undefined;
+}
+
+async function askChutesPacingMode(
+  rl: readline.Interface,
+  defaultValue: 'quality-first' | 'balanced' | 'economy' = 'balanced',
+): Promise<'quality-first' | 'balanced' | 'economy'> {
+  console.log(`${BOLD}Chutes monthly pacing mode:${RESET}`);
+  console.log(
+    `  ${DIM}1.${RESET} Quality-first ${DIM}(best quality, slows down late-month only when needed)${RESET}`,
+  );
+  console.log(
+    `  ${DIM}2.${RESET} Balanced ${DIM}(recommended; mixes quality and pacing)${RESET}`,
+  );
+  console.log(
+    `  ${DIM}3.${RESET} Economy ${DIM}(strong pacing, favors cheaper Chutes options)${RESET}`,
+  );
+  const answer = (
+    await rl.question(
+      `${BLUE}Selection${RESET} ${DIM}[default: ${defaultValue === 'quality-first' ? 1 : defaultValue === 'balanced' ? 2 : 3}]${RESET}: `,
+    )
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!answer) return defaultValue;
+  if (answer === '1' || answer === 'quality-first') return 'quality-first';
+  if (answer === '3' || answer === 'economy') return 'economy';
+  return 'balanced';
 }
 
 async function askSetupMode(
@@ -513,6 +605,15 @@ async function runManualSetupMode(
 
   let availableOpenCodeFreeModels: OpenCodeFreeModel[] | undefined;
   let availableChutesModels: DiscoveredModel[] | undefined;
+  let availableNanoGptModels: DiscoveredModel[] | undefined;
+  let nanoGptSubscriptionModels: string[] | undefined;
+  let nanoGptPaidModels: string[] | undefined;
+  let chutesPacingMode: 'quality-first' | 'balanced' | 'economy' | undefined;
+  let chutesMonthlyBudget: number | undefined;
+  let chutesMonthlyUsed: number | undefined;
+  let nanoGptDailyBudget: number | undefined;
+  let nanoGptMonthlyBudget: number | undefined;
+  let nanoGptMonthlyUsed: number | undefined;
 
   if (useOpenCodeFree === 'yes') {
     printInfo('Refreshing models with: opencode models --refresh --verbose');
@@ -580,6 +681,13 @@ async function runManualSetupMode(
   );
   console.log();
 
+  const nanogpt = await askYesNo(
+    rl,
+    'Enable NanoGPT provider?',
+    detected.hasNanoGpt ? 'yes' : 'no',
+  );
+  console.log();
+
   if (chutes === 'yes') {
     printInfo(
       'Refreshing Chutes model list with: opencode models --refresh --verbose',
@@ -594,7 +702,54 @@ async function runManualSetupMode(
     } else {
       availableChutesModels = discovery.models;
       printSuccess(`Found ${discovery.models.length} Chutes models`);
+
+      chutesPacingMode = await askChutesPacingMode(rl, 'balanced');
+      chutesMonthlyBudget = await askOptionalPositiveInt(
+        rl,
+        'Chutes monthly budget (requests)',
+      );
+      chutesMonthlyUsed = await askOptionalNonNegativeInt(
+        rl,
+        'Chutes month-to-date used requests',
+      );
     }
+    console.log();
+  }
+
+  if (nanogpt === 'yes') {
+    printInfo(
+      'Refreshing NanoGPT model list with NanoGPT subscription endpoint',
+    );
+    const discovery = await discoverNanoGptModelsByPolicy('subscription-only');
+
+    for (const warning of discovery.warnings) {
+      printInfo(warning);
+    }
+
+    if (discovery.models.length === 0) {
+      printWarning(
+        discovery.warnings[0] ??
+          'No NanoGPT models found. Continuing without NanoGPT dynamic assignment.',
+      );
+    } else {
+      availableNanoGptModels = discovery.models;
+      nanoGptSubscriptionModels = discovery.subscriptionModels;
+      nanoGptPaidModels = discovery.paidModels;
+      printSuccess(`Found ${discovery.models.length} NanoGPT models`);
+    }
+
+    nanoGptDailyBudget = await askOptionalPositiveInt(
+      rl,
+      'NanoGPT daily budget (requests)',
+    );
+    nanoGptMonthlyBudget = await askOptionalPositiveInt(
+      rl,
+      'NanoGPT monthly budget (requests)',
+    );
+    nanoGptMonthlyUsed = await askOptionalNonNegativeInt(
+      rl,
+      'NanoGPT month-to-date used requests',
+    );
     console.log();
   }
 
@@ -650,8 +805,8 @@ async function runManualSetupMode(
 
   if (antigravity === 'yes') {
     availableModels.push({
-      model: 'google/antigravity-gemini-3.1-pro',
-      name: 'Gemini 3.1 Pro',
+      model: 'google/antigravity-gemini-3-pro',
+      name: 'Gemini 3 Pro',
     });
     availableModels.push({
       model: 'google/antigravity-gemini-3-flash',
@@ -661,6 +816,12 @@ async function runManualSetupMode(
 
   if (chutes === 'yes' && availableChutesModels) {
     for (const model of availableChutesModels) {
+      availableModels.push({ model: model.model, name: model.name });
+    }
+  }
+
+  if (nanogpt === 'yes' && availableNanoGptModels) {
+    for (const model of availableNanoGptModels) {
       availableModels.push({ model: model.model, name: model.name });
     }
   }
@@ -745,14 +906,25 @@ async function runManualSetupMode(
     hasZaiPlan: zaiPlan === 'yes',
     hasAntigravity: antigravity === 'yes',
     hasChutes: chutes === 'yes',
+    hasNanoGpt: nanogpt === 'yes',
     hasOpencodeZen: true,
     useOpenCodeFreeModels:
       useOpenCodeFree === 'yes' && availableOpenCodeFreeModels !== undefined,
     availableOpenCodeFreeModels,
     availableChutesModels,
+    availableNanoGptModels,
+    nanoGptSubscriptionModels,
+    nanoGptPaidModels,
     artificialAnalysisApiKey,
     openRouterApiKey,
     balanceProviderUsage: balancedSpend === 'yes',
+    nanoGptRoutingPolicy: nanogpt === 'yes' ? 'subscription-only' : undefined,
+    nanoGptDailyBudget,
+    nanoGptMonthlyBudget,
+    nanoGptMonthlyUsed,
+    chutesPacingMode,
+    chutesMonthlyBudget,
+    chutesMonthlyUsed,
     hasTmux: false,
     installSkills: skills === 'yes',
     installCustomSkills: customSkills === 'yes',
@@ -790,7 +962,7 @@ async function runInteractiveMode(
     // TODO: tmux has a bug, disabled for now
     // const tmuxInstalled = await isTmuxInstalled()
     // const totalQuestions = tmuxInstalled ? 3 : 2
-    const totalQuestions = 11;
+    const totalQuestions = 12;
 
     const existingAaKey = getEnv('ARTIFICIAL_ANALYSIS_API_KEY');
     const existingOpenRouterKey = getEnv('OPENROUTER_API_KEY');
@@ -831,6 +1003,15 @@ async function runInteractiveMode(
     let availableChutesModels: DiscoveredModel[] | undefined;
     let selectedChutesPrimaryModel: string | undefined;
     let selectedChutesSecondaryModel: string | undefined;
+    let chutesPacingMode: 'quality-first' | 'balanced' | 'economy' | undefined;
+    let chutesMonthlyBudget: number | undefined;
+    let chutesMonthlyUsed: number | undefined;
+    let availableNanoGptModels: DiscoveredModel[] | undefined;
+    let nanoGptSubscriptionModels: string[] | undefined;
+    let nanoGptPaidModels: string[] | undefined;
+    let nanoGptDailyBudget: number | undefined;
+    let nanoGptMonthlyBudget: number | undefined;
+    let nanoGptMonthlyUsed: number | undefined;
 
     if (useOpenCodeFree === 'yes') {
       printInfo('Refreshing models with: opencode models --refresh --verbose');
@@ -993,11 +1174,56 @@ async function runInteractiveMode(
           );
         }
 
+        chutesPacingMode = await askChutesPacingMode(rl, 'balanced');
+        chutesMonthlyBudget = await askOptionalPositiveInt(
+          rl,
+          'Chutes monthly budget (requests)',
+        );
+        chutesMonthlyUsed = await askOptionalNonNegativeInt(
+          rl,
+          'Chutes month-to-date used requests',
+        );
+
         console.log();
       }
     }
 
     console.log(`${BOLD}Question 11/${totalQuestions}:${RESET}`);
+    const nanogpt = await askYesNo(
+      rl,
+      'Enable NanoGPT provider?',
+      detected.hasNanoGpt ? 'yes' : 'no',
+    );
+    console.log();
+
+    if (nanogpt === 'yes') {
+      const nanoDiscovery =
+        await discoverNanoGptModelsByPolicy('subscription-only');
+      for (const warning of nanoDiscovery.warnings) {
+        printInfo(warning);
+      }
+      if (nanoDiscovery.models.length > 0) {
+        availableNanoGptModels = nanoDiscovery.models;
+        nanoGptSubscriptionModels = nanoDiscovery.subscriptionModels;
+        nanoGptPaidModels = nanoDiscovery.paidModels;
+      }
+
+      nanoGptDailyBudget = await askOptionalPositiveInt(
+        rl,
+        'NanoGPT daily budget (requests)',
+      );
+      nanoGptMonthlyBudget = await askOptionalPositiveInt(
+        rl,
+        'NanoGPT monthly budget (requests)',
+      );
+      nanoGptMonthlyUsed = await askOptionalNonNegativeInt(
+        rl,
+        'NanoGPT month-to-date used requests',
+      );
+      console.log();
+    }
+
+    console.log(`${BOLD}Question 12/${totalQuestions}:${RESET}`);
     const balancedSpend = await askYesNo(
       rl,
       'Do you have subscriptions or pay per API? If yes, we will distribute assignments evenly across selected providers so your subscriptions last longer.',
@@ -1054,6 +1280,7 @@ async function runInteractiveMode(
       hasZaiPlan: zaiPlan === 'yes',
       hasAntigravity: antigravity === 'yes',
       hasChutes: chutes === 'yes',
+      hasNanoGpt: nanogpt === 'yes',
       hasOpencodeZen: true,
       useOpenCodeFreeModels:
         useOpenCodeFree === 'yes' && selectedOpenCodePrimaryModel !== undefined,
@@ -1063,9 +1290,20 @@ async function runInteractiveMode(
       selectedChutesPrimaryModel,
       selectedChutesSecondaryModel,
       availableChutesModels,
+      availableNanoGptModels,
+      nanoGptSubscriptionModels,
+      nanoGptPaidModels,
+      chutesPacingMode,
+      chutesMonthlyBudget,
+      chutesMonthlyUsed,
       artificialAnalysisApiKey,
       openRouterApiKey,
       balanceProviderUsage: balancedSpend === 'yes',
+      nanoGptRoutingPolicy: nanogpt === 'yes' ? 'subscription-only' : undefined,
+      nanoGptDailyBudget,
+      nanoGptMonthlyBudget,
+      nanoGptMonthlyUsed,
+      smartRoutingV3: false,
       hasTmux: false,
       installSkills: skills === 'yes',
       installCustomSkills: customSkills === 'yes',
@@ -1078,14 +1316,38 @@ async function runInteractiveMode(
 }
 
 async function runInstall(config: InstallConfig): Promise<number> {
+  const migration = migrateLegacyAssignmentsV1ToV2(config);
   const resolvedConfig: InstallConfig = {
-    ...config,
+    ...migration.config,
   };
+
+  const existingLiteConfig = parseConfig(getLiteConfig()).config;
+  const existingLiteRecord =
+    existingLiteConfig && typeof existingLiteConfig === 'object'
+      ? (existingLiteConfig as Record<string, unknown>)
+      : null;
+  const existingModelPreferences =
+    normalizeModelPreferences(existingLiteRecord?.modelPreferences) ??
+    normalizeModelPreferences(existingLiteRecord?.model_preferences);
+
+  if (!resolvedConfig.preferredModelsByAgent && existingModelPreferences) {
+    resolvedConfig.preferredModelsByAgent = existingModelPreferences;
+  }
 
   const detected = detectCurrentConfig();
   const isUpdate = detected.isInstalled;
 
   printHeader(isUpdate);
+
+  if (migration.migrated) {
+    printInfo(
+      `Migrated legacy two-slot assignments to per-agent maps (${migration.entries.length} transform${migration.entries.length === 1 ? '' : 's'}).`,
+    );
+    for (const warning of migration.warnings) {
+      printWarning(warning);
+    }
+    console.log();
+  }
 
   const hasAnyEnabledProvider =
     resolvedConfig.hasKimi ||
@@ -1095,6 +1357,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
     resolvedConfig.hasZaiPlan ||
     resolvedConfig.hasAntigravity ||
     resolvedConfig.hasChutes ||
+    resolvedConfig.hasNanoGpt ||
     resolvedConfig.useOpenCodeFreeModels;
 
   const modelsOnly = resolvedConfig.modelsOnly === true;
@@ -1104,6 +1367,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (resolvedConfig.useOpenCodeFreeModels) totalSteps += 1;
   if (!modelsOnly && resolvedConfig.hasAntigravity) totalSteps += 2; // antigravity plugin + google provider
   if (!modelsOnly && resolvedConfig.hasChutes) totalSteps += 1; // chutes provider
+  if (resolvedConfig.hasNanoGpt) totalSteps += 1;
   if (hasAnyEnabledProvider) totalSteps += 1; // dynamic model resolution
   if (!modelsOnly && resolvedConfig.installSkills) totalSteps += 1; // skills installation
   if (!modelsOnly && resolvedConfig.installCustomSkills) totalSteps += 1; // custom skills installation
@@ -1247,6 +1511,37 @@ async function runInstall(config: InstallConfig): Promise<number> {
     );
   }
 
+  if (resolvedConfig.hasNanoGpt) {
+    const nanoPolicy =
+      resolvedConfig.nanoGptRoutingPolicy ?? 'subscription-only';
+    printStep(
+      step++,
+      totalSteps,
+      `Refreshing NanoGPT models (${nanoPolicy}) via NanoGPT endpoints...`,
+    );
+    const discovery = await discoverNanoGptModelsByPolicy(nanoPolicy);
+    for (const warning of discovery.warnings) {
+      printInfo(warning);
+    }
+
+    if (discovery.models.length === 0) {
+      printWarning(
+        `No NanoGPT models found for policy ${nanoPolicy}. Disabling NanoGPT for this run.`,
+      );
+      resolvedConfig.hasNanoGpt = false;
+      resolvedConfig.availableNanoGptModels = undefined;
+      resolvedConfig.nanoGptSubscriptionModels = undefined;
+      resolvedConfig.nanoGptPaidModels = undefined;
+    } else {
+      resolvedConfig.availableNanoGptModels = discovery.models;
+      resolvedConfig.nanoGptSubscriptionModels = discovery.subscriptionModels;
+      resolvedConfig.nanoGptPaidModels = discovery.paidModels;
+      printSuccess(
+        `NanoGPT models ready (${discovery.models.length} models found for ${nanoPolicy})`,
+      );
+    }
+  }
+
   if (!modelsOnly) {
     printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
     if (resolvedConfig.dryRun) {
@@ -1308,19 +1603,113 @@ async function runInstall(config: InstallConfig): Promise<number> {
         printInfo(warning);
       }
 
-      const dynamicPlan = buildDynamicModelPlan(
+      const usageFetch = await fetchProviderUsageSnapshot();
+      for (const warning of usageFetch.warnings) {
+        printInfo(warning);
+      }
+
+      const fetchedNano = usageFetch.usage.nanogpt;
+      const fetchedChutes = usageFetch.usage.chutes;
+
+      const nanoGptDailyBudget =
+        resolvedConfig.nanoGptDailyBudget ?? fetchedNano?.dailyLimit;
+      const nanoGptMonthlyBudget =
+        resolvedConfig.nanoGptMonthlyBudget ?? fetchedNano?.monthlyLimit;
+      const nanoGptMonthlyUsed =
+        resolvedConfig.nanoGptMonthlyUsed ?? fetchedNano?.monthlyUsed;
+
+      const nanoGptDailyRemaining =
+        fetchedNano?.dailyRemaining ??
+        (typeof nanoGptDailyBudget === 'number' &&
+        typeof fetchedNano?.dailyUsed === 'number'
+          ? Math.max(0, nanoGptDailyBudget - fetchedNano.dailyUsed)
+          : (nanoGptDailyBudget ?? 999));
+
+      const nanoGptMonthlyRemaining =
+        fetchedNano?.monthlyRemaining ??
+        (typeof nanoGptMonthlyBudget === 'number' &&
+        typeof nanoGptMonthlyUsed === 'number'
+          ? Math.max(0, nanoGptMonthlyBudget - nanoGptMonthlyUsed)
+          : (nanoGptMonthlyBudget ?? 9_999));
+
+      const chutesMonthlyBudget =
+        resolvedConfig.chutesMonthlyBudget ?? fetchedChutes?.monthlyLimit;
+      const chutesMonthlyUsed =
+        resolvedConfig.chutesMonthlyUsed ?? fetchedChutes?.monthlyUsed;
+
+      resolvedConfig.nanoGptDailyBudget = nanoGptDailyBudget;
+      resolvedConfig.nanoGptMonthlyBudget = nanoGptMonthlyBudget;
+      resolvedConfig.nanoGptMonthlyUsed = nanoGptMonthlyUsed;
+      resolvedConfig.chutesMonthlyBudget = chutesMonthlyBudget;
+      resolvedConfig.chutesMonthlyUsed = chutesMonthlyUsed;
+
+      const providerScopedCatalog = filterCatalogToEnabledProviders(
         catalogDiscovery.models,
         resolvedConfig,
-        signals,
       );
-      if (!dynamicPlan) {
+
+      if (providerScopedCatalog.length === 0) {
+        printWarning(
+          'No models found for selected providers. Using static mappings.',
+        );
+      }
+
+      const dynamicPlan =
+        providerScopedCatalog.length > 0
+          ? buildDynamicModelPlan(
+              providerScopedCatalog,
+              resolvedConfig,
+              signals,
+            )
+          : null;
+      const selectedPolicy =
+        resolvedConfig.hasNanoGpt === true
+          ? (resolvedConfig.nanoGptRoutingPolicy ?? 'subscription-only')
+          : (resolvedConfig.nanoGptRoutingPolicy ?? 'hybrid');
+      const smartV3 =
+        resolvedConfig.smartRoutingV3 === true ||
+        (resolvedConfig.hasNanoGpt === true &&
+          (selectedPolicy === 'subscription-only' ||
+            selectedPolicy === 'paygo-only'));
+
+      const v3Plan =
+        smartV3 && providerScopedCatalog.length > 0
+          ? buildSmartRoutingPlanV3({
+              catalog: providerScopedCatalog,
+              policy: {
+                mode: selectedPolicy,
+                subscriptionBudget: {
+                  dailyRequests: nanoGptDailyBudget,
+                  monthlyRequests: nanoGptMonthlyBudget,
+                  enforcement: 'soft',
+                },
+              },
+              quotaStatus: {
+                dailyRemaining: nanoGptDailyRemaining,
+                monthlyRemaining: nanoGptMonthlyRemaining,
+                lastCheckedAt: new Date(),
+              },
+              chutesPacing:
+                resolvedConfig.hasChutes && resolvedConfig.chutesPacingMode
+                  ? {
+                      mode: resolvedConfig.chutesPacingMode,
+                      monthlyBudget: chutesMonthlyBudget,
+                      monthlyUsed: chutesMonthlyUsed,
+                    }
+                  : undefined,
+              modelPreferences: resolvedConfig.preferredModelsByAgent,
+            })
+          : null;
+
+      if (!dynamicPlan && !v3Plan) {
         printWarning(
           'Dynamic planner found no suitable models. Using static mappings.',
         );
       } else {
-        resolvedConfig.dynamicModelPlan = dynamicPlan;
+        resolvedConfig.dynamicModelPlan =
+          v3Plan?.plan ?? dynamicPlan ?? undefined;
         printSuccess(
-          `Dynamic assignments ready (${Object.keys(dynamicPlan.agents).length} agents)`,
+          `Dynamic assignments ready (${Object.keys((resolvedConfig.dynamicModelPlan ?? { agents: {} }).agents).length} agents)`,
         );
       }
     }
@@ -1342,6 +1731,36 @@ async function runInstall(config: InstallConfig): Promise<number> {
     printInfo('Dry run mode - configuration that would be written:');
     console.log(`\n${JSON.stringify(liteConfig, null, 2)}\n`);
   } else {
+    if (migration.migrated) {
+      const liteConfigPath = getLiteConfig();
+      if (existsSync(liteConfigPath)) {
+        const backupResult = backupV1ConfigBeforeMigration(liteConfigPath);
+        if (!backupResult.success) {
+          printError(
+            `Failed to create V1 backup before migration: ${backupResult.error}`,
+          );
+          return 1;
+        }
+        if (backupResult.created) {
+          printInfo(`V1 backup created at ${backupResult.backupPath}`);
+        }
+      }
+    } else {
+      let skillsInstalled = 0;
+      for (const skill of RECOMMENDED_SKILLS) {
+        printInfo(`Installing ${skill.name}...`);
+        if (installSkill(skill)) {
+          printSuccess(`Installed: ${skill.name}`);
+          skillsInstalled++;
+        } else {
+          printWarning(`Failed to install: ${skill.name}`);
+        }
+      }
+      printSuccess(
+        `${skillsInstalled}/${RECOMMENDED_SKILLS.length} skills installed`,
+      );
+    }
+
     const liteResult = writeLiteConfig(resolvedConfig);
     if (!handleStepResult(liteResult, 'Config written')) return 1;
   }
@@ -1410,7 +1829,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
     !resolvedConfig.hasCopilot &&
     !resolvedConfig.hasZaiPlan &&
     !resolvedConfig.hasAntigravity &&
-    !resolvedConfig.hasChutes
+    !resolvedConfig.hasChutes &&
+    !resolvedConfig.hasNanoGpt
   ) {
     printWarning(
       'No providers configured. Zen Big Pickle models will be used as fallback.',
@@ -1433,7 +1853,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
     resolvedConfig.hasCopilot ||
     resolvedConfig.hasZaiPlan ||
     resolvedConfig.hasAntigravity ||
-    resolvedConfig.hasChutes
+    resolvedConfig.hasChutes ||
+    resolvedConfig.hasNanoGpt
   ) {
     console.log(`  ${nextStep++}. Authenticate with your providers:`);
     console.log(`     ${BLUE}$ opencode auth login${RESET}`);
@@ -1460,6 +1881,10 @@ async function runInstall(config: InstallConfig): Promise<number> {
     if (resolvedConfig.hasChutes) {
       console.log();
       console.log(`     Then select ${BOLD}chutes${RESET} provider.`);
+    }
+    if (resolvedConfig.hasNanoGpt) {
+      console.log();
+      console.log(`     Then select ${BOLD}nanogpt${RESET} provider.`);
     }
     console.log();
   }
@@ -1489,6 +1914,8 @@ export async function install(args: InstallArgs): Promise<number> {
       'zaiPlan',
       'antigravity',
       'chutes',
+      'nanogpt',
+      'smartRoutingV3',
       'tmux',
     ] as const;
     const errors = requiredArgs.filter((key) => {
@@ -1500,12 +1927,17 @@ export async function install(args: InstallArgs): Promise<number> {
       printHeader(false);
       printError('Missing or invalid arguments:');
       for (const key of errors) {
-        const flagName = key === 'zaiPlan' ? 'zai-plan' : key;
+        const flagName =
+          key === 'zaiPlan'
+            ? 'zai-plan'
+            : key === 'smartRoutingV3'
+              ? 'smart-routing-v3'
+              : key;
         console.log(`  ${SYMBOLS.bullet} --${flagName}=<yes|no>`);
       }
       console.log();
       printInfo(
-        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --anthropic=<yes|no> --copilot=<yes|no> --zai-plan=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --balanced-spend=<yes|no> --tmux=<yes|no>',
+        'Usage: bunx oh-my-opencode-slim install --no-tui --kimi=<yes|no> --openai=<yes|no> --anthropic=<yes|no> --copilot=<yes|no> --zai-plan=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --nanogpt=<yes|no> --smart-routing-v3=<yes|no> --balanced-spend=<yes|no> --tmux=<yes|no>',
       );
       console.log();
       return 1;

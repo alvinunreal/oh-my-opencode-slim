@@ -131,6 +131,35 @@ export const FailoverConfigSchema = z.object({
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
+export const ModelRefreshConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  interval_hours: z
+    .number()
+    .min(1)
+    .max(24 * 30)
+    .default(24),
+  show_toast: z.boolean().default(false),
+});
+
+export type ModelRefreshConfig = z.infer<typeof ModelRefreshConfigSchema>;
+
+const ModelPreferenceListSchema = z.array(ProviderModelIdSchema).min(1);
+
+export const ModelPreferencesConfigSchema = z
+  .object({
+    orchestrator: ModelPreferenceListSchema.optional(),
+    oracle: ModelPreferenceListSchema.optional(),
+    designer: ModelPreferenceListSchema.optional(),
+    explorer: ModelPreferenceListSchema.optional(),
+    librarian: ModelPreferenceListSchema.optional(),
+    fixer: ModelPreferenceListSchema.optional(),
+  })
+  .strict();
+
+export type ModelPreferencesConfig = z.infer<
+  typeof ModelPreferencesConfigSchema
+>;
+
 // Main plugin config
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
@@ -143,6 +172,9 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
+  model_refresh: ModelRefreshConfigSchema.optional(),
+  model_preferences: ModelPreferencesConfigSchema.optional(),
+  modelPreferences: ModelPreferencesConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;
