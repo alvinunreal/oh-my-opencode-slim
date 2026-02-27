@@ -6,6 +6,7 @@ import { parseList } from './config/agent-mcps';
 import {
   createAutoUpdateCheckerHook,
   createDelegateTaskRetryHook,
+  createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
 } from './hooks';
@@ -71,6 +72,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize delegate-task retry guidance hook
   const delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
+
+  // Initialize JSON parse error recovery hook
+  const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
 
   return {
     name: 'oh-my-opencode-slim',
@@ -210,6 +214,19 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await delegateTaskRetryHook['tool.execute.after'](
         input as { tool: string },
         output as { output: unknown },
+      );
+
+      await jsonErrorRecoveryHook['tool.execute.after'](
+        input as {
+          tool: string;
+          sessionID: string;
+          callID: string;
+        },
+        output as {
+          title: string;
+          output: unknown;
+          metadata: unknown;
+        },
       );
 
       await postReadNudgeHook['tool.execute.after'](
