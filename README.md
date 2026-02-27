@@ -45,13 +45,6 @@ Paste this into any coding agent:
 Install and configure by following the instructions here:
 https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
 ```
-
-**Detailed installation guide:** [docs/installation.md](docs/installation.md)
-
-**Additional guides:**
-- **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration  
-- **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
-
 ---
 
 ## 🏛️ Meet the Pantheon
@@ -249,6 +242,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 - **[Cartography Skill](docs/cartography.md)** - Custom skill for repository mapping + codemap generation
 - **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
+- **[Autopilot Todo Continuation](docs/autopilot.md)** - Session-scoped todo continuation mode via `autopilot`
 
 ---
 

@@ -131,6 +131,16 @@ export const FailoverConfigSchema = z.object({
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
+export const AutopilotConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  keyword: z.string().min(1).default('autopilot'),
+  disableKeyword: z.string().min(1).default('manual'),
+  cooldownMs: z.number().min(0).default(8000),
+  maxAutoContinues: z.number().min(1).default(10),
+});
+
+export type AutopilotConfig = z.infer<typeof AutopilotConfigSchema>;
+
 // Main plugin config
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
@@ -143,6 +153,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
+  autopilot: AutopilotConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;
