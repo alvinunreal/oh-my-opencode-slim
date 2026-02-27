@@ -5,6 +5,7 @@ import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import {
   createAutoUpdateCheckerHook,
+  createDelegateTaskRetryHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
 } from './hooks';
@@ -67,6 +68,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize post-read nudge hook
   const postReadNudgeHook = createPostReadNudgeHook();
+
+  // Initialize delegate-task retry guidance hook
+  const delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
 
   return {
     name: 'oh-my-opencode-slim',
@@ -201,8 +205,26 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'experimental.chat.messages.transform':
       phaseReminderHook['experimental.chat.messages.transform'],
 
-    // Nudge after file reads to encourage delegation
-    'tool.execute.after': postReadNudgeHook['tool.execute.after'],
+    // Post-tool hooks: retry guidance for delegation errors + post-read nudge
+    'tool.execute.after': async (input, output) => {
+      await delegateTaskRetryHook['tool.execute.after'](
+        input as { tool: string },
+        output as { output: unknown },
+      );
+
+      await postReadNudgeHook['tool.execute.after'](
+        input as {
+          tool: string;
+          sessionID?: string;
+          callID?: string;
+        },
+        output as {
+          title: string;
+          output: string;
+          metadata: Record<string, unknown>;
+        },
+      );
+    },
   };
 };
 
