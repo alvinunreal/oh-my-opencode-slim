@@ -8,9 +8,9 @@
  *
  * Uses experimental.chat.messages.transform so it doesn't show in UI.
  */
-const PHASE_REMINDER = `<reminder>⚠️ MANDATORY: Understand→DELEGATE(! based on each agent rules)→Split-and-Parallelize(?)→Plan→Execute→Verify
-Available Specialist: @oracle @librarian @explorer @designer @fixer
-</reminder>`;
+const PHASE_REMINDER = `<reminder>Recall Workflow Rules:
+Understand → find the best path (delegate based on rules and parallelize independent work) → execute → verify.
+If delegating, launch the specialist in the same turn you mention it.</reminder>`;
 
 interface MessageInfo {
   role: string;

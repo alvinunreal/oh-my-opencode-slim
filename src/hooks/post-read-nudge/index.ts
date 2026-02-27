@@ -4,7 +4,7 @@
  */
 
 const NUDGE =
-  '\n\n---\nReminder to follow the workflow instructions, consider delegation to specialist(s)';
+  '\n\n---\nWorkflow Reminder: delegate based on rules; If mentioning a specialist, launch it in this same turn.';
 
 interface ToolExecuteAfterInput {
   tool: string;
