@@ -4,6 +4,7 @@ import { BackgroundTaskManager, TmuxSessionManager } from './background';
 import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import {
+  createAutopilotHook,
   createAutoUpdateCheckerHook,
   createDelegateTaskRetryHook,
   createJsonErrorRecoveryHook,
@@ -66,6 +67,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize phase reminder hook for workflow compliance
   const phaseReminderHook = createPhaseReminderHook();
+
+  // Initialize session-scoped autopilot hook (keyword + todo continuation)
+  const autopilotHook = createAutopilotHook(ctx, config);
 
   // Initialize post-read nudge hook
   const postReadNudgeHook = createPostReadNudgeHook();
@@ -203,11 +207,33 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           properties?: { sessionID?: string };
         },
       );
+
+      // Handle autopilot session state + continuation on idle
+      await autopilotHook.event(
+        input as {
+          event: {
+            type: string;
+            properties?: {
+              sessionID?: string;
+              status?: { type?: string };
+              info?: { id?: string };
+            };
+          };
+        },
+      );
     },
 
     // Inject phase reminder before sending to API (doesn't show in UI)
-    'experimental.chat.messages.transform':
-      phaseReminderHook['experimental.chat.messages.transform'],
+    'experimental.chat.messages.transform': async (input, output) => {
+      await phaseReminderHook['experimental.chat.messages.transform'](
+        input,
+        output,
+      );
+      await autopilotHook['experimental.chat.messages.transform'](
+        input,
+        output,
+      );
+    },
 
     // Post-tool hooks: retry guidance for delegation errors + post-read nudge
     'tool.execute.after': async (input, output) => {
