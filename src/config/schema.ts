@@ -79,7 +79,20 @@ export type FallbackAgentName = (typeof FALLBACK_AGENT_NAMES)[number];
 
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const AgentOverrideConfigSchema = z.object({
-  model: z.union([z.string(), z.array(z.string())]).optional(),
+  model: z
+    .union([
+      z.string(),
+      z.array(
+        z.union([
+          z.string(),
+          z.object({
+            id: z.string(),
+            variant: z.string().optional(),
+          }),
+        ]),
+      ),
+    ])
+    .optional(),
   temperature: z.number().min(0).max(2).optional(),
   variant: z.string().optional().catch(undefined),
   skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
@@ -107,6 +120,9 @@ export const TmuxConfigSchema = z.object({
 export type TmuxConfig = z.infer<typeof TmuxConfigSchema>;
 
 export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
+
+/** Normalized model entry with optional per-model variant. */
+export type ModelEntry = { id: string; variant?: string };
 
 export const PresetSchema = z.record(z.string(), AgentOverrideConfigSchema);
 

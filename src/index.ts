@@ -31,7 +31,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Build a map of agent name → priority model array for runtime fallback.
   // Populated when the user configures model as an array in their plugin config.
-  const modelArrayMap: Record<string, string[]> = {};
+  const modelArrayMap: Record<
+    string,
+    Array<{ id: string; variant?: string }>
+  > = {};
   for (const agentDef of agentDefs) {
     if (agentDef._modelArray && agentDef._modelArray.length > 0) {
       modelArrayMap[agentDef.name] = agentDef._modelArray;
@@ -129,20 +132,24 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           modelArrayMap,
         )) {
           let resolved = false;
-          for (const modelStr of modelArray) {
-            const slashIdx = modelStr.indexOf('/');
+          for (const modelEntry of modelArray) {
+            const slashIdx = modelEntry.id.indexOf('/');
             if (slashIdx === -1) continue;
-            const providerID = modelStr.slice(0, slashIdx);
+            const providerID = modelEntry.id.slice(0, slashIdx);
             if (configuredProviders.includes(providerID)) {
               const entry = configAgent[agentName] as
                 | Record<string, unknown>
                 | undefined;
               if (entry) {
-                entry.model = modelStr;
+                entry.model = modelEntry.id;
+                if (modelEntry.variant) {
+                  entry.variant = modelEntry.variant;
+                }
               }
               log('[plugin] resolved model fallback', {
                 agent: agentName,
-                model: modelStr,
+                model: modelEntry.id,
+                variant: modelEntry.variant,
               });
               resolved = true;
               break;

@@ -4,8 +4,8 @@ export interface AgentDefinition {
   name: string;
   description?: string;
   config: AgentConfig;
-  /** Priority-ordered model array for runtime fallback resolution via chat.message hook. */
-  _modelArray?: string[];
+  /** Priority-ordered model entries for runtime fallback resolution. */
+  _modelArray?: Array<{ id: string; variant?: string }>;
 }
 
 const ORCHESTRATOR_PROMPT = `<Role>
@@ -143,7 +143,9 @@ When user's approach seems problematic:
 `;
 
 export function createOrchestratorAgent(
-  model?: string | string[],
+  model?:
+    | string
+    | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
@@ -166,7 +168,9 @@ export function createOrchestratorAgent(
   };
 
   if (Array.isArray(model)) {
-    definition._modelArray = model;
+    definition._modelArray = model.map((m) =>
+      typeof m === 'string' ? { id: m } : m,
+    );
   } else if (typeof model === 'string' && model) {
     definition.config.model = model;
   }

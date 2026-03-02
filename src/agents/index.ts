@@ -39,7 +39,9 @@ function applyOverrides(
 ): void {
   if (override.model) {
     if (Array.isArray(override.model)) {
-      agent._modelArray = override.model;
+      agent._modelArray = override.model.map((m) =>
+        typeof m === 'string' ? { id: m } : m,
+      );
       agent.config.model = undefined; // cleared; runtime hook resolves from _modelArray
     } else {
       agent.config.model = override.model;
@@ -114,9 +116,14 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const getModelForAgent = (name: SubagentName): string => {
     if (name === 'fixer' && !getAgentOverride(config, 'fixer')?.model) {
       const librarianOverride = getAgentOverride(config, 'librarian')?.model;
-      const librarianModel = Array.isArray(librarianOverride)
-        ? librarianOverride[0]
-        : librarianOverride;
+      let librarianModel: string | undefined;
+      if (Array.isArray(librarianOverride)) {
+        const first = librarianOverride[0];
+        librarianModel =
+          typeof first === 'string' ? first : first?.id;
+      } else {
+        librarianModel = librarianOverride;
+      }
       return librarianModel ?? (DEFAULT_MODELS.librarian as string);
     }
     // Subagents always have a defined default model; cast is safe here
