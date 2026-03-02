@@ -79,7 +79,7 @@ export type FallbackAgentName = (typeof FALLBACK_AGENT_NAMES)[number];
 
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const AgentOverrideConfigSchema = z.object({
-  model: z.string().optional(),
+  model: z.union([z.string(), z.array(z.string())]).optional(),
   temperature: z.number().min(0).max(2).optional(),
   variant: z.string().optional().catch(undefined),
   skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)

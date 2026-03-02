@@ -14,8 +14,7 @@ export const DELEGATE_TASK_ERROR_PATTERNS: DelegateTaskErrorPattern[] = [
   {
     pattern: 'load_skills',
     errorType: 'missing_load_skills',
-    fixHint:
-      'Add load_skills=[] (empty array when no skill is needed).',
+    fixHint: 'Add load_skills=[] (empty array when no skill is needed).',
   },
   {
     pattern: 'category OR subagent_type',
@@ -32,8 +31,7 @@ export const DELEGATE_TASK_ERROR_PATTERNS: DelegateTaskErrorPattern[] = [
   {
     pattern: 'Unknown category',
     errorType: 'unknown_category',
-    fixHint:
-      'Use a valid category listed in the error output.',
+    fixHint: 'Use a valid category listed in the error output.',
   },
   {
     pattern: 'Unknown agent',

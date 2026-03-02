@@ -238,7 +238,9 @@ describe('getAgentConfigs', () => {
     const configs = getAgentConfigs();
     expect(configs.orchestrator).toBeDefined();
     expect(configs.explorer).toBeDefined();
-    expect(configs.orchestrator.model).toBeDefined();
+    // orchestrator has no hardcoded default model; resolved at runtime via
+    // chat.message hook when _modelArray is configured, or left to the user
+    expect(configs.explorer.model).toBeDefined();
   });
 
   test('includes description in SDK config', () => {

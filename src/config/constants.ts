@@ -35,8 +35,9 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
 };
 
 // Default models for each agent
-export const DEFAULT_MODELS: Record<AgentName, string> = {
-  orchestrator: 'kimi-for-coding/k2p5',
+// orchestrator is undefined so its model is fully resolved at runtime via priority fallback
+export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
+  orchestrator: undefined,
   oracle: 'openai/gpt-5.2-codex',
   librarian: 'openai/gpt-5.1-codex-mini',
   explorer: 'openai/gpt-5.1-codex-mini',

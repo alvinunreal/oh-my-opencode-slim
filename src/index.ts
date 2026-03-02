@@ -1,5 +1,5 @@
 import type { Plugin } from '@opencode-ai/plugin';
-import { getAgentConfigs } from './agents';
+import { createAgents, getAgentConfigs } from './agents';
 import { BackgroundTaskManager, TmuxSessionManager } from './background';
 import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
@@ -26,8 +26,17 @@ import { log } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
+  const agentDefs = createAgents(config);
   const agents = getAgentConfigs(config);
 
+  // Build a map of agent name → priority model array for runtime fallback.
+  // Populated when the user configures model as an array in their plugin config.
+  const modelArrayMap: Record<string, string[]> = {};
+  for (const agentDef of agentDefs) {
+    if (agentDef._modelArray && agentDef._modelArray.length > 0) {
+      modelArrayMap[agentDef.name] = agentDef._modelArray;
+    }
+  }
   // Parse tmux config with defaults
   const tmuxConfig: TmuxConfig = {
     enabled: config.tmux?.enabled ?? false,
@@ -105,6 +114,49 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         Object.assign(opencodeConfig.agent, agents);
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
+
+      // Runtime model fallback: resolve model arrays to the first
+      // provider/model whose provider is configured in OpenCode.
+      // NOTE: We cannot call ctx.client.provider.list() here because
+      // the HTTP server is still initializing (causes deadlock).
+      // Instead, inspect opencodeConfig.provider directly.
+      if (Object.keys(modelArrayMap).length > 0) {
+        const providerConfig =
+          (opencodeConfig.provider as Record<string, unknown>) ?? {};
+        const configuredProviders = Object.keys(providerConfig);
+
+        for (const [agentName, modelArray] of Object.entries(
+          modelArrayMap,
+        )) {
+          let resolved = false;
+          for (const modelStr of modelArray) {
+            const slashIdx = modelStr.indexOf('/');
+            if (slashIdx === -1) continue;
+            const providerID = modelStr.slice(0, slashIdx);
+            if (configuredProviders.includes(providerID)) {
+              const entry = configAgent[agentName] as
+                | Record<string, unknown>
+                | undefined;
+              if (entry) {
+                entry.model = modelStr;
+              }
+              log('[plugin] resolved model fallback', {
+                agent: agentName,
+                model: modelStr,
+              });
+              resolved = true;
+              break;
+            }
+          }
+          // If no provider matched, leave model unset so OpenCode
+          // uses the UI-selected model (fixes #138).
+          if (!resolved) {
+            log('[plugin] no provider match for model array', {
+              agent: agentName,
+            });
+          }
+        }
+      }
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as

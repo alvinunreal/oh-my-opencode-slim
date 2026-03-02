@@ -29,13 +29,22 @@ type AgentFactory = (
 
 /**
  * Apply user-provided overrides to an agent's configuration.
- * Supports overriding model, variant, and temperature.
+ * Supports overriding model (string or priority array), variant, and temperature.
+ * When model is an array, stores it as _modelArray for runtime fallback resolution
+ * and clears config.model so OpenCode does not pre-resolve a stale value.
  */
 function applyOverrides(
   agent: AgentDefinition,
   override: AgentOverrideConfig,
 ): void {
-  if (override.model) agent.config.model = override.model;
+  if (override.model) {
+    if (Array.isArray(override.model)) {
+      agent._modelArray = override.model;
+      agent.config.model = undefined; // cleared; runtime hook resolves from _modelArray
+    } else {
+      agent.config.model = override.model;
+    }
+  }
   if (override.variant) agent.config.variant = override.variant;
   if (override.temperature !== undefined)
     agent.config.temperature = override.temperature;
@@ -104,11 +113,14 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   // existing users who don't have fixer in their config yet
   const getModelForAgent = (name: SubagentName): string => {
     if (name === 'fixer' && !getAgentOverride(config, 'fixer')?.model) {
-      return (
-        getAgentOverride(config, 'librarian')?.model ?? DEFAULT_MODELS.librarian
-      );
+      const librarianOverride = getAgentOverride(config, 'librarian')?.model;
+      const librarianModel = Array.isArray(librarianOverride)
+        ? librarianOverride[0]
+        : librarianOverride;
+      return librarianModel ?? (DEFAULT_MODELS.librarian as string);
     }
-    return DEFAULT_MODELS[name];
+    // Subagents always have a defined default model; cast is safe here
+    return DEFAULT_MODELS[name] as string;
   };
 
   // 1. Gather all sub-agent definitions with custom prompts
@@ -134,19 +146,20 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   });
 
   // 3. Create Orchestrator (with its own overrides and custom prompts)
+  // DEFAULT_MODELS.orchestrator is undefined; model is resolved via override or
+  // left unset so the runtime chat.message hook can pick it from _modelArray.
+  const orchestratorOverride = getAgentOverride(config, 'orchestrator');
   const orchestratorModel =
-    getAgentOverride(config, 'orchestrator')?.model ??
-    DEFAULT_MODELS.orchestrator;
+    orchestratorOverride?.model ?? DEFAULT_MODELS.orchestrator;
   const orchestratorPrompts = loadAgentPrompt('orchestrator');
   const orchestrator = createOrchestratorAgent(
     orchestratorModel,
     orchestratorPrompts.prompt,
     orchestratorPrompts.appendPrompt,
   );
-  const oOverride = getAgentOverride(config, 'orchestrator');
-  applyDefaultPermissions(orchestrator, oOverride?.skills);
-  if (oOverride) {
-    applyOverrides(orchestrator, oOverride);
+  applyDefaultPermissions(orchestrator, orchestratorOverride?.skills);
+  if (orchestratorOverride) {
+    applyOverrides(orchestrator, orchestratorOverride);
   }
 
   return [orchestrator, ...allSubAgents];
