@@ -980,6 +980,97 @@ describe('loadAgentPrompt', () => {
     }
   });
 
+  test('prefers preset prompt files over root prompts', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const presetDir = path.join(promptsDir, 'test');
+    fs.mkdirSync(presetDir, { recursive: true });
+
+    fs.writeFileSync(path.join(promptsDir, 'oracle.md'), 'root replacement');
+    fs.writeFileSync(path.join(presetDir, 'oracle.md'), 'preset replacement');
+    fs.writeFileSync(
+      path.join(promptsDir, 'oracle_append.md'),
+      'root append prompt',
+    );
+    fs.writeFileSync(
+      path.join(presetDir, 'oracle_append.md'),
+      'preset append prompt',
+    );
+
+    const result = loadAgentPrompt('oracle', 'test');
+    expect(result.prompt).toBe('preset replacement');
+    expect(result.appendPrompt).toBe('preset append prompt');
+  });
+
+  test('falls back to root prompt files when preset files are missing', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const presetDir = path.join(promptsDir, 'test');
+    fs.mkdirSync(presetDir, { recursive: true });
+
+    fs.writeFileSync(path.join(promptsDir, 'oracle.md'), 'root replacement');
+    fs.writeFileSync(
+      path.join(promptsDir, 'oracle_append.md'),
+      'root append prompt',
+    );
+
+    const result = loadAgentPrompt('oracle', 'test');
+    expect(result.prompt).toBe('root replacement');
+    expect(result.appendPrompt).toBe('root append prompt');
+  });
+
+  test('falls back independently between preset and root files', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const presetDir = path.join(promptsDir, 'test');
+    fs.mkdirSync(presetDir, { recursive: true });
+
+    fs.writeFileSync(path.join(presetDir, 'oracle.md'), 'preset replacement');
+    fs.writeFileSync(
+      path.join(promptsDir, 'oracle_append.md'),
+      'root append prompt',
+    );
+
+    const result = loadAgentPrompt('oracle', 'test');
+    expect(result.prompt).toBe('preset replacement');
+    expect(result.appendPrompt).toBe('root append prompt');
+  });
+
+  test('ignores unsafe preset names for prompt lookup', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(path.join(promptsDir, 'oracle.md'), 'root replacement');
+
+    const result = loadAgentPrompt('oracle', '../test');
+    expect(result.prompt).toBe('root replacement');
+    expect(result.appendPrompt).toBeUndefined();
+  });
+
+  test('falls back to root when preset prompt file read fails', () => {
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const presetDir = path.join(promptsDir, 'test');
+    fs.mkdirSync(presetDir, { recursive: true });
+    const presetPromptPath = path.join(presetDir, 'oracle.md');
+    fs.writeFileSync(presetPromptPath, 'preset replacement');
+    fs.writeFileSync(path.join(promptsDir, 'oracle.md'), 'root replacement');
+
+    const consoleWarnSpy = spyOn(console, 'warn');
+    const originalReadFileSync = fs.readFileSync;
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(
+      (p: any, o: any) => {
+        if (typeof p === 'string' && p === presetPromptPath) {
+          throw new Error('Preset read error');
+        }
+        return originalReadFileSync(p, o);
+      },
+    );
+
+    try {
+      const result = loadAgentPrompt('oracle', 'test');
+      expect(result.prompt).toBe('root replacement');
+      expect(consoleWarnSpy).toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   test('works with XDG_CONFIG_HOME environment variable', () => {
     const customConfigHome = path.join(tempDir, 'custom-xdg');
     process.env.XDG_CONFIG_HOME = customConfigHome;

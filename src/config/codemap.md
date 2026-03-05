@@ -115,13 +115,20 @@ loadPluginConfig(directory)
 ### Prompt Loading Flow
 
 ```
-loadAgentPrompt(agentName)
+loadAgentPrompt(agentName, preset?)
 │
-├─→ Check ~/.config/opencode/oh-my-opencode-slim/{agentName}.md
-│   └─→ If exists → read as replacement prompt
+├─→ Build prompt search dirs
+│   ├─→ If preset is safe (`[a-zA-Z0-9_-]+`):
+│   │   1) ~/.config/opencode/oh-my-opencode-slim/{preset}
+│   │   2) ~/.config/opencode/oh-my-opencode-slim
+│   └─→ Otherwise:
+│       1) ~/.config/opencode/oh-my-opencode-slim
 │
-└─→ Check ~/.config/opencode/oh-my-opencode-slim/{agentName}_append.md
-    └─→ If exists → read as append prompt
+├─→ Read first existing {agentName}.md from search dirs
+│   └─→ If found → replacement prompt
+│
+└─→ Read first existing {agentName}_append.md from search dirs
+    └─→ If found → append prompt
 ```
 
 ### MCP Resolution Flow
@@ -160,7 +167,7 @@ deepMerge(base, override)
 - `node:fs`, `node:os`, `node:path`: File system operations
 
 **Internal Dependencies**
-- None (this is a leaf module)
+- `src/cli/config-io.ts` - JSONC comment stripping utility
 
 ### Consumers
 
@@ -189,7 +196,7 @@ deepMerge(base, override)
 
 4. **Prompt Customization**
    ```typescript
-   const { prompt, appendPrompt } = loadAgentPrompt(agentName);
+   const { prompt, appendPrompt } = loadAgentPrompt(agentName, config?.preset);
    ```
 
 ### Constants Usage
