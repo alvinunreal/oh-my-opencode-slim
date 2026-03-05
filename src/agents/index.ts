@@ -119,8 +119,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
       let librarianModel: string | undefined;
       if (Array.isArray(librarianOverride)) {
         const first = librarianOverride[0];
-        librarianModel =
-          typeof first === 'string' ? first : first?.id;
+        librarianModel = typeof first === 'string' ? first : first?.id;
       } else {
         librarianModel = librarianOverride;
       }
@@ -134,7 +133,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const protoSubAgents = (
     Object.entries(SUBAGENT_FACTORIES) as [SubagentName, AgentFactory][]
   ).map(([name, factory]) => {
-    const customPrompts = loadAgentPrompt(name);
+    const customPrompts = loadAgentPrompt(name, config?.preset);
     return factory(
       getModelForAgent(name),
       customPrompts.prompt,
@@ -158,7 +157,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const orchestratorOverride = getAgentOverride(config, 'orchestrator');
   const orchestratorModel =
     orchestratorOverride?.model ?? DEFAULT_MODELS.orchestrator;
-  const orchestratorPrompts = loadAgentPrompt('orchestrator');
+  const orchestratorPrompts = loadAgentPrompt('orchestrator', config?.preset);
   const orchestrator = createOrchestratorAgent(
     orchestratorModel,
     orchestratorPrompts.prompt,

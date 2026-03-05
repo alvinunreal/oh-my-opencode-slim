@@ -194,46 +194,66 @@ export function loadPluginConfig(directory: string): PluginConfig {
 /**
  * Load custom prompt for an agent from the prompts directory.
  * Checks for {agent}.md (replaces default) and {agent}_append.md (appends to default).
+ * If preset is provided and safe for paths, it first checks {preset}/ subdirectory,
+ * then falls back to the root prompts directory.
  *
  * @param agentName - Name of the agent (e.g., "orchestrator", "explorer")
+ * @param preset - Optional preset name for preset-scoped prompt lookup
  * @returns Object with prompt and/or appendPrompt if files exist
  */
-export function loadAgentPrompt(agentName: string): {
+export function loadAgentPrompt(
+  agentName: string,
+  preset?: string,
+): {
   prompt?: string;
   appendPrompt?: string;
 } {
+  const presetDirName =
+    preset && /^[a-zA-Z0-9_-]+$/.test(preset) ? preset : undefined;
   const promptsDir = path.join(
     getUserConfigDir(),
     'opencode',
     PROMPTS_DIR_NAME,
   );
+  const promptSearchDirs = presetDirName
+    ? [path.join(promptsDir, presetDirName), promptsDir]
+    : [promptsDir];
   const result: { prompt?: string; appendPrompt?: string } = {};
 
-  // Check for replacement prompt
-  const promptPath = path.join(promptsDir, `${agentName}.md`);
-  if (fs.existsSync(promptPath)) {
-    try {
-      result.prompt = fs.readFileSync(promptPath, 'utf-8');
-    } catch (error) {
-      console.warn(
-        `[oh-my-opencode-slim] Error reading prompt file ${promptPath}:`,
-        error instanceof Error ? error.message : String(error),
-      );
+  const readFirstPrompt = (
+    fileName: string,
+    errorPrefix: string,
+  ): string | undefined => {
+    for (const dir of promptSearchDirs) {
+      const promptPath = path.join(dir, fileName);
+      if (!fs.existsSync(promptPath)) {
+        continue;
+      }
+
+      try {
+        return fs.readFileSync(promptPath, 'utf-8');
+      } catch (error) {
+        console.warn(
+          `[oh-my-opencode-slim] ${errorPrefix} ${promptPath}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
-  }
+
+    return undefined;
+  };
+
+  // Check for replacement prompt
+  result.prompt = readFirstPrompt(
+    `${agentName}.md`,
+    'Error reading prompt file',
+  );
 
   // Check for append prompt
-  const appendPromptPath = path.join(promptsDir, `${agentName}_append.md`);
-  if (fs.existsSync(appendPromptPath)) {
-    try {
-      result.appendPrompt = fs.readFileSync(appendPromptPath, 'utf-8');
-    } catch (error) {
-      console.warn(
-        `[oh-my-opencode-slim] Error reading append prompt file ${appendPromptPath}:`,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
+  result.appendPrompt = readFirstPrompt(
+    `${agentName}_append.md`,
+    'Error reading append prompt file',
+  );
 
   return result;
 }
