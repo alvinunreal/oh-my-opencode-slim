@@ -1,68 +1,63 @@
-import { describe, expect, mock, test } from 'bun:test';
-import type { PluginInput } from '@opencode-ai/plugin';
+import { describe, expect, test } from 'bun:test';
+import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
 import { createPhaseReminderHook, PHASE_REMINDER } from './index';
 
-function createMockContext(agent?: string) {
-  return {
-    client: {
-      session: {
-        messages: mock(async () => ({
-          data: [
-            {
-              info: {
-                id: 'message-1',
-                sessionID: 'session-1',
-                role: 'user',
-                time: { created: Date.now() },
-                agent: agent ?? 'orchestrator',
-                model: {
-                  providerID: 'github-copilot',
-                  modelID: 'claude',
-                },
-              },
-              parts: [{ type: 'text', text: 'hello' }],
-            },
-          ],
-        })),
-      },
-    },
-  } as unknown as PluginInput;
-}
-
 describe('createPhaseReminderHook', () => {
-  test('appends reminder for orchestrator sessions', async () => {
-    const hook = createPhaseReminderHook(createMockContext());
-    const output = { system: ['base system'] };
+  test('prepends reminder for orchestrator sessions', async () => {
+    const hook = createPhaseReminderHook();
+    const output = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    };
 
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 'session-1' },
-      output,
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts[0].text).toBe(
+      `${PHASE_REMINDER}\n\n---\n\nhello`,
     );
-
-    expect(output.system).toEqual(['base system', PHASE_REMINDER]);
   });
 
   test('skips non-orchestrator sessions', async () => {
-    const hook = createPhaseReminderHook(createMockContext('explorer'));
-    const output = { system: ['base system'] };
+    const hook = createPhaseReminderHook();
+    const output = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'explorer' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    };
 
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 'session-1' },
-      output,
-    );
+    await hook['experimental.chat.messages.transform']({}, output);
 
-    expect(output.system).toEqual(['base system']);
+    expect(output.messages[0].parts[0].text).toBe('hello');
   });
 
-  test('does not add duplicate reminders', async () => {
-    const hook = createPhaseReminderHook(createMockContext());
-    const output = { system: ['base system', PHASE_REMINDER] };
+  test('skips internal notification turns', async () => {
+    const hook = createPhaseReminderHook();
+    const output = {
+      messages: [
+        {
+          info: { role: 'user' },
+          parts: [
+            {
+              type: 'text',
+              text: `[Background task "x" completed]\n${SLIM_INTERNAL_INITIATOR_MARKER}`,
+            },
+          ],
+        },
+      ],
+    };
 
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 'session-1' },
-      output,
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts[0].text).toContain(
+      SLIM_INTERNAL_INITIATOR_MARKER,
     );
-
-    expect(output.system).toEqual(['base system', PHASE_REMINDER]);
+    expect(output.messages[0].parts[0].text).not.toContain(PHASE_REMINDER);
   });
 });
