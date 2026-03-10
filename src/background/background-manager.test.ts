@@ -705,13 +705,13 @@ describe('BackgroundTaskManager', () => {
       expect(ctx.client.session.prompt).toHaveBeenCalled();
 
       const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [{ body?: { parts?: Array<{ metadata?: Record<string, unknown> }> } }]
+        [{ body?: { parts?: Array<{ text?: string }> } }]
       >;
       const notificationCall = promptCalls[promptCalls.length - 1];
       expect(
-        notificationCall[0].body?.parts?.[0]?.metadata?.[
-          SLIM_INTERNAL_INITIATOR_MARKER
-        ],
+        notificationCall[0].body?.parts?.[0]?.text?.includes(
+          SLIM_INTERNAL_INITIATOR_MARKER,
+        ),
       ).toBe(true);
     });
   });

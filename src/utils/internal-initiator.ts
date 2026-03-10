@@ -1,7 +1,5 @@
-const INTERNAL_INITIATOR_SOURCE = 'oh-my-opencode-slim';
-
 export const SLIM_INTERNAL_INITIATOR_MARKER =
-  'oh-my-opencode-slim/internal-initiator';
+  '<!-- SLIM_INTERNAL_INITIATOR -->';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -10,18 +8,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function createInternalAgentTextPart(text: string): {
   type: 'text';
   text: string;
-  synthetic: true;
-  metadata: Record<string, unknown>;
 } {
   return {
     type: 'text',
-    text,
-    synthetic: true,
-    metadata: {
-      [SLIM_INTERNAL_INITIATOR_MARKER]: true,
-      initiator: 'agent',
-      source: INTERNAL_INITIATOR_SOURCE,
-    },
+    text: `${text}\n${SLIM_INTERNAL_INITIATOR_MARKER}`,
   };
 }
 
@@ -30,10 +20,9 @@ export function hasInternalInitiatorMarker(part: unknown): boolean {
     return false;
   }
 
-  const { metadata } = part;
-  if (!isRecord(metadata)) {
+  if (typeof part.text !== 'string') {
     return false;
   }
 
-  return metadata[SLIM_INTERNAL_INITIATOR_MARKER] === true;
+  return part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER);
 }
