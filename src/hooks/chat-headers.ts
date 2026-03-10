@@ -47,10 +47,10 @@ async function hasInternalMarker(
     );
 
     if (hasMarker) {
-      internalMarkerCache.set(cacheKey, true);
-      if (internalMarkerCache.size > INTERNAL_MARKER_CACHE_LIMIT) {
+      if (internalMarkerCache.size >= INTERNAL_MARKER_CACHE_LIMIT) {
         internalMarkerCache.clear();
       }
+      internalMarkerCache.set(cacheKey, true);
     }
 
     return hasMarker;
