@@ -5,6 +5,7 @@ import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import {
   createAutoUpdateCheckerHook,
+  createChatHeadersHook,
   createDelegateTaskRetryHook,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
@@ -82,6 +83,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // Initialize post-read nudge hook
   const postReadNudgeHook = createPostReadNudgeHook();
 
+  const chatHeadersHook = createChatHeadersHook(ctx);
+
   // Initialize delegate-task retry guidance hook
   const delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
 
@@ -128,9 +131,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           (opencodeConfig.provider as Record<string, unknown>) ?? {};
         const configuredProviders = Object.keys(providerConfig);
 
-        for (const [agentName, modelArray] of Object.entries(
-          modelArrayMap,
-        )) {
+        for (const [agentName, modelArray] of Object.entries(modelArrayMap)) {
           let resolved = false;
           for (const modelEntry of modelArray) {
             const slashIdx = modelEntry.id.indexOf('/');
@@ -263,6 +264,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
       );
     },
+
+    'chat.headers': chatHeadersHook['chat.headers'],
 
     // Inject phase reminder before sending to API (doesn't show in UI)
     'experimental.chat.messages.transform':

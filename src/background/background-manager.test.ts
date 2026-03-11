@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { SLIM_INTERNAL_INITIATOR_MARKER } from '../utils';
 import { BackgroundTaskManager } from './background-manager';
 
 // Mock the plugin context
@@ -702,6 +703,16 @@ describe('BackgroundTaskManager', () => {
 
       // Should have called prompt.append for notification
       expect(ctx.client.session.prompt).toHaveBeenCalled();
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body?: { parts?: Array<{ text?: string }> } }]
+      >;
+      const notificationCall = promptCalls[promptCalls.length - 1];
+      expect(
+        notificationCall[0].body?.parts?.[0]?.text?.includes(
+          SLIM_INTERNAL_INITIATOR_MARKER,
+        ),
+      ).toBe(true);
     });
   });
 

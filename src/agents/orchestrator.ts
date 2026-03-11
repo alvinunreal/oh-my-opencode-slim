@@ -143,9 +143,7 @@ When user's approach seems problematic:
 `;
 
 export function createOrchestratorAgent(
-  model?:
-    | string
-    | Array<string | { id: string; variant?: string }>,
+  model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
