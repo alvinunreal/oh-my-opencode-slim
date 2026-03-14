@@ -6,6 +6,7 @@ import { parseList } from './config/agent-mcps';
 import {
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
+  createCodemapContextHook,
   createDelegateTaskRetryHook,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
@@ -79,6 +80,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize phase reminder hook for workflow compliance
   const phaseReminderHook = createPhaseReminderHook();
+
+  // Initialize codemap context injection hook
+  const codemapContextHook = createCodemapContextHook(ctx);
 
   // Initialize post-read nudge hook
   const postReadNudgeHook = createPostReadNudgeHook();
@@ -283,9 +287,20 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     'chat.headers': chatHeadersHook['chat.headers'],
 
-    // Inject phase reminder before sending to API (doesn't show in UI)
-    'experimental.chat.messages.transform':
-      phaseReminderHook['experimental.chat.messages.transform'],
+    // Inject phase reminder and codemap context before sending to API (doesn't show in UI)
+    'experimental.chat.messages.transform': async (
+      input: Record<string, never>,
+      output: { messages: unknown[] },
+    ) => {
+      await phaseReminderHook['experimental.chat.messages.transform'](
+        input,
+        output as { messages: never[] },
+      );
+      await codemapContextHook['experimental.chat.messages.transform'](
+        input,
+        output as { messages: never[] },
+      );
+    },
 
     // Post-tool hooks: retry guidance for delegation errors + post-read nudge
     'tool.execute.after': async (input, output) => {
