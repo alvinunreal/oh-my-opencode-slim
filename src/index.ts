@@ -113,11 +113,27 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       (opencodeConfig as { default_agent?: string }).default_agent =
         'orchestrator';
 
-      // Merge Agent configs
+      // Merge Agent configs — per-agent shallow merge to preserve
+      // user-supplied fields (e.g. tools, permission) from opencode.json
       if (!opencodeConfig.agent) {
         opencodeConfig.agent = { ...agents };
       } else {
-        Object.assign(opencodeConfig.agent, agents);
+        for (const [name, pluginAgent] of Object.entries(agents)) {
+          const existing = (opencodeConfig.agent as Record<string, unknown>)[
+            name
+          ] as Record<string, unknown> | undefined;
+          if (existing) {
+            // Shallow merge: plugin defaults first, user overrides win
+            (opencodeConfig.agent as Record<string, unknown>)[name] = {
+              ...pluginAgent,
+              ...existing,
+            };
+          } else {
+            (opencodeConfig.agent as Record<string, unknown>)[name] = {
+              ...pluginAgent,
+            };
+          }
+        }
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
 
