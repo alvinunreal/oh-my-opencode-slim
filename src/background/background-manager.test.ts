@@ -497,7 +497,7 @@ describe('BackgroundTaskManager', () => {
           const modelRef = args.body?.model;
           if (
             modelRef?.providerID === 'openai' &&
-            modelRef?.modelID === 'gpt-5.2-codex'
+            modelRef?.modelID === 'gpt-5.4'
           ) {
             throw new Error('primary failed');
           }
@@ -510,7 +510,7 @@ describe('BackgroundTaskManager', () => {
           enabled: true,
           timeoutMs: 15000,
           chains: {
-            explorer: ['openai/gpt-5.2-codex', 'opencode/gpt-5-nano'],
+            explorer: ['openai/gpt-5.4', 'opencode/gpt-5-nano'],
           },
         },
       });
@@ -547,7 +547,7 @@ describe('BackgroundTaskManager', () => {
           enabled: true,
           timeoutMs: 15000,
           chains: {
-            explorer: ['openai/gpt-5.2-codex', 'opencode/gpt-5-nano'],
+            explorer: ['openai/gpt-5.4', 'opencode/gpt-5-nano'],
           },
         },
       });

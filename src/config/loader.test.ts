@@ -88,37 +88,37 @@ describe('loadPluginConfig', () => {
       JSON.stringify({
         manualPlan: {
           orchestrator: {
-            primary: 'openai/gpt-5.3-codex',
+            primary: 'openai/gpt-5.4',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           oracle: {
-            primary: 'openai/gpt-5.3-codex',
+            primary: 'openai/gpt-5.4',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE',
             fallback3: 'opencode/gpt-5-nano',
           },
           designer: {
-            primary: 'openai/gpt-5.3-codex',
+            primary: 'openai/gpt-5.4',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           explorer: {
-            primary: 'openai/gpt-5.3-codex',
+            primary: 'openai/gpt-5.4',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           librarian: {
-            primary: 'openai/gpt-5.3-codex',
+            primary: 'openai/gpt-5.4',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           fixer: {
-            primary: 'openai/gpt-5.3-codex',
+            primary: 'openai/gpt-5.4',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
@@ -350,7 +350,7 @@ describe('deepMerge behavior', () => {
         fallback: {
           timeoutMs: 15000,
           chains: {
-            oracle: ['openai/gpt-5.2-codex', 'opencode/glm-4.7-free'],
+            oracle: ['openai/gpt-5.4', 'opencode/glm-4.7-free'],
           },
         },
       }),
@@ -373,7 +373,7 @@ describe('deepMerge behavior', () => {
     const config = loadPluginConfig(projectDir);
     expect(config.fallback?.timeoutMs).toBe(15000);
     expect(config.fallback?.chains.oracle).toEqual([
-      'openai/gpt-5.2-codex',
+      'openai/gpt-5.4',
       'opencode/glm-4.7-free',
     ]);
     expect(config.fallback?.chains.explorer).toEqual([
@@ -390,14 +390,14 @@ describe('deepMerge behavior', () => {
       JSON.stringify({
         fallback: {
           chains: {
-            writing: ['openai/gpt-5.2-codex'],
+            writing: ['openai/gpt-5.4'],
           },
         },
       }),
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.fallback?.chains.writing).toEqual(['openai/gpt-5.2-codex']);
+    expect(config.fallback?.chains.writing).toEqual(['openai/gpt-5.4']);
   });
 });
 

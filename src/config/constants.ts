@@ -38,11 +38,11 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
 // orchestrator is undefined so its model is fully resolved at runtime via priority fallback
 export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   orchestrator: undefined,
-  oracle: 'openai/gpt-5.2-codex',
-  librarian: 'openai/gpt-5.1-codex-mini',
-  explorer: 'openai/gpt-5.1-codex-mini',
+  oracle: 'openai/gpt-5.4',
+  librarian: 'openai/gpt-5-codex',
+  explorer: 'openai/gpt-5-codex',
   designer: 'kimi-for-coding/k2p5',
-  fixer: 'openai/gpt-5.1-codex-mini',
+  fixer: 'openai/gpt-5-codex',
 };
 
 // Polling configuration
@@ -57,3 +57,4 @@ export const FALLBACK_FAILOVER_TIMEOUT_MS = 15_000;
 
 // Polling stability
 export const STABLE_POLLS_THRESHOLD = 3;
+

@@ -229,11 +229,11 @@ deepMerge(base, override)
 | Agent      | Model                          |
 |------------|--------------------------------|
 | orchestrator | `kimi-for-coding/k2p5`        |
-| oracle      | `openai/gpt-5.2-codex`        |
-| librarian   | `openai/gpt-5.1-codex-mini`   |
-| explorer    | `openai/gpt-5.1-codex-mini`   |
+| oracle      | `openai/gpt-5.4`        |
+| librarian   | `openai/gpt-5-codex`   |
+| explorer    | `openai/gpt-5-codex`   |
 | designer    | `kimi-for-coding/k2p5`        |
-| fixer       | `openai/gpt-5.1-codex-mini`   |
+| fixer       | `openai/gpt-5-codex`   |
 
 ## File Organization
 

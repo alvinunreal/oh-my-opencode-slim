@@ -15,27 +15,17 @@
 bunx oh-my-opencode-slim@latest install
 ```
 
-The installer can refresh and use OpenCode free models directly:
+The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5-codex`). No provider questions asked.
+
+For non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
 ```
 
-Then authenticate:
+### For Alternative Providers
 
-```bash
-opencode auth login
-```
-
-Run `ping all agents` to verify everything works.
-
-OpenCode free-model mode uses `opencode models --refresh --verbose`, filters to free `opencode/*` models, and applies coding-first selection:
-- OpenCode-only mode can use multiple OpenCode free models across agents.
-- Hybrid mode can combine OpenCode free models with OpenAI, Kimi, and/or Antigravity.
-- In hybrid mode, `designer` stays on the external provider mapping.
-- Chutes mode auto-selects primary/support models with daily-cap awareness (300/2000/5000).
-
-> **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to assign any model to any agent.
+The default configuration uses OpenAI. To use Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step instructions and config examples.
 
 ### For LLM Agents
 
@@ -49,7 +39,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 **Detailed installation guide:** [docs/installation.md](docs/installation.md)
 
 **Additional guides:**
-- **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration  
+- **[Provider Configurations](docs/provider-configurations.md)** - Config examples for all supported providers
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
 
 ---
@@ -80,7 +70,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>kimi-for-coding/k2p5</code> <code>openai/gpt-5.2-codex</code>
+      <b>Default Model:</b> <code>openai/gpt-5.4</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>kimi-for-coding/k2p5</code>
     </td>
   </tr>
 </table>
@@ -111,7 +106,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3-flash</code> <code>openai/gpt-5.1-codex-mini</code>
+      <b>Default Model:</b> <code>openai/gpt-5-codex</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5-codex</code>
     </td>
   </tr>
 </table>
@@ -142,7 +142,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.2-codex</code> <code>kimi-for-coding/k2p5</code>
+      <b>Default Model:</b> <code>openai/gpt-5.4</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>kimi-for-coding/k2p5</code>
     </td>
   </tr>
 </table>
@@ -173,7 +178,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3-flash</code> <code>openai/gpt-5.1-codex-mini</code>
+      <b>Default Model:</b> <code>openai/gpt-5-codex</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5-codex</code>
     </td>
   </tr>
 </table>
@@ -204,7 +214,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3-flash</code>
+      <b>Default Model:</b> <code>kimi-for-coding/k2p5</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code>
     </td>
   </tr>
 </table>
@@ -235,7 +250,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3-flash</code> <code>openai/gpt-5.1-codex-mini</code>
+      <b>Default Model:</b> <code>openai/gpt-5-codex</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5-codex</code>
     </td>
   </tr>
 </table>
@@ -244,10 +264,10 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 
 ## 📚 Documentation
 
-- **[Quick Reference](docs/quick-reference.md)** - Presets, Skills, MCPs, Tools, Configuration
+- **[Quick Reference](docs/quick-reference.md)** - Skills, MCPs, Tools, Configuration
+- **[Provider Configurations](docs/provider-configurations.md)** - Config examples for OpenAI, Kimi, Copilot, ZAI
 - **[Installation Guide](docs/installation.md)** - Detailed installation and troubleshooting
 - **[Cartography Skill](docs/cartography.md)** - Custom skill for repository mapping + codemap generation
-- **[Antigravity Setup](docs/antigravity.md)** - Complete guide for Antigravity provider configuration
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
 
 ---
