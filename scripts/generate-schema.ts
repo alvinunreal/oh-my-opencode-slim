@@ -20,13 +20,12 @@ const schema = z.toJSONSchema(PluginConfigSchema, {
   io: 'input',
 });
 
-// Add metadata
 const jsonSchema = {
+  ...schema,
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   title: 'oh-my-opencode-slim',
   description:
     'Configuration schema for oh-my-opencode-slim plugin for OpenCode',
-  ...schema,
 };
 
 const json = JSON.stringify(jsonSchema, null, 2);
