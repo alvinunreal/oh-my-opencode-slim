@@ -37,6 +37,19 @@ OpenCode free-model mode uses `opencode models --refresh --verbose`, filters to 
 
 > **💡 Models are fully customizable.** Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to assign any model to any agent.
 
+### JSON Schema
+
+An official JSON Schema is included in the package for editor validation and autocomplete. Add a `$schema` reference to your config file:
+
+```jsonc
+{
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  // your config...
+}
+```
+
+This enables autocomplete and inline validation in VS Code, Neovim, and other editors that support JSON Schema.
+
 ### For LLM Agents
 
 Paste this into any coding agent:
