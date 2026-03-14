@@ -27,6 +27,19 @@ bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
 
 The default configuration uses OpenAI. To use Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step instructions and config examples.
 
+### JSON Schema
+
+An official JSON Schema is included in the package for editor validation and autocomplete. Add a `$schema` reference to your config file:
+
+```jsonc
+{
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  // your config...
+}
+```
+
+This enables autocomplete and inline validation in VS Code, Neovim, and other editors that support JSON Schema.
+
 ### For LLM Agents
 
 Paste this into any coding agent:

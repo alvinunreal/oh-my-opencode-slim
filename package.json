@@ -31,11 +31,13 @@
   "files": [
     "dist",
     "src/skills",
+    "oh-my-opencode-slim.schema.json",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target bun --format esm && bun build src/cli/index.ts --outdir dist/cli --target bun --format esm && tsc --emitDeclarationOnly",
+    "build": "bun build src/index.ts --outdir dist --target bun --format esm && bun build src/cli/index.ts --outdir dist/cli --target bun --format esm && tsc --emitDeclarationOnly && bun run generate-schema",
+    "generate-schema": "bun run scripts/generate-schema.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome lint .",

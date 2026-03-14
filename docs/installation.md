@@ -216,6 +216,19 @@ If providers are not working:
    cat ~/.config/opencode/oh-my-opencode-slim.json
    ```
 
+### Editor Validation
+
+Add a `$schema` reference to your config for autocomplete and inline validation:
+
+```jsonc
+{
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  // your config...
+}
+```
+
+Works in VS Code, Neovim (with `jsonls`), and any editor that supports JSON Schema. Catches typos and wrong nesting immediately (e.g., placing `chains` directly under `fallback` instead of `fallback.chains`).
+
 ### Tmux Integration Not Working
 
 Make sure you're running OpenCode with the `--port` flag and the port matches your `OPENCODE_PORT` environment variable:
