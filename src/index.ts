@@ -113,7 +113,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       (opencodeConfig as { default_agent?: string }).default_agent =
         'orchestrator';
 
-      // Merge Agent configs — deep merge per agent to preserve
+      // Merge Agent configs — per-agent shallow merge to preserve
       // user-supplied fields (e.g. tools, permission) from opencode.json
       if (!opencodeConfig.agent) {
         opencodeConfig.agent = { ...agents };
