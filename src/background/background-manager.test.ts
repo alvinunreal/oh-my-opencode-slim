@@ -522,12 +522,13 @@ describe('BackgroundTaskManager', () => {
         parentSessionId: 'parent-123',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await new Promise((r) => setTimeout(r, 10));
+      // Wait for abort delay (500ms) between fallback attempts
+      await new Promise((r) => setTimeout(r, 700));
 
       expect(task.status).toBe('running');
       expect(promptCalls).toBe(2);
+      // Verify session.abort was called between attempts
+      expect(ctx.client.session.abort).toHaveBeenCalled();
     });
 
     test('fails task when all fallback models fail', async () => {
@@ -559,12 +560,13 @@ describe('BackgroundTaskManager', () => {
         parentSessionId: 'parent-123',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await new Promise((r) => setTimeout(r, 10));
+      // Wait for abort delay (500ms) between fallback attempts
+      await new Promise((r) => setTimeout(r, 700));
 
       expect(task.status).toBe('failed');
       expect(task.error).toContain('All fallback models failed');
+      // Verify session.abort was called: once between attempts + once in completeTask
+      expect(ctx.client.session.abort).toHaveBeenCalledTimes(2);
     });
 
     test('extracts content from multiple types and messages', async () => {

@@ -273,14 +273,27 @@ export class BackgroundTaskManager {
       return;
     }
 
-    await Promise.race([
-      this.client.session.prompt(args),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Prompt timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
+    const sessionId = args.path.id;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      await Promise.race([
+        this.client.session.prompt(args),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            // Abort the running prompt so the session is no longer busy.
+            // Without this, session.prompt() continues running server-side
+            // and blocks subsequent fallback attempts on the same session.
+            this.client.session
+              .abort({ path: { id: sessionId } })
+              .catch(() => {});
+            reject(new Error(`Prompt timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -370,8 +383,11 @@ export class BackgroundTaskManager {
 
       const errors: string[] = [];
       let succeeded = false;
+      const sessionId = session.data.id;
 
-      for (const model of attemptModels) {
+      for (let i = 0; i < attemptModels.length; i++) {
+        const model = attemptModels[i];
+        const modelLabel = model ?? 'default-model';
         try {
           const body: PromptBody = {
             ...basePromptBody,
@@ -386,9 +402,16 @@ export class BackgroundTaskManager {
             body.model = ref;
           }
 
+          if (i > 0) {
+            log(
+              `[background-manager] fallback attempt ${i + 1}/${attemptModels.length}: ${modelLabel}`,
+              { taskId: task.id },
+            );
+          }
+
           await this.promptWithTimeout(
             {
-              path: { id: session.data.id },
+              path: { id: sessionId },
               body,
               query: promptQuery,
             },
@@ -399,10 +422,26 @@ export class BackgroundTaskManager {
           break;
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
-          if (model) {
-            errors.push(`${model}: ${msg}`);
-          } else {
-            errors.push(`default-model: ${msg}`);
+          errors.push(`${modelLabel}: ${msg}`);
+          log(`[background-manager] model failed: ${modelLabel} — ${msg}`, {
+            taskId: task.id,
+          });
+
+          // Abort the session before trying the next model.
+          // The previous prompt may still be running server-side;
+          // without aborting, the session stays busy and rejects
+          // subsequent prompts, breaking the entire fallback chain.
+          if (i < attemptModels.length - 1) {
+            try {
+              await this.client.session.abort({
+                path: { id: sessionId },
+              });
+              // Allow server time to finalize the abort before
+              // the next prompt attempt (matches reference impl).
+              await new Promise((r) => setTimeout(r, 500));
+            } catch {
+              // Session may already be idle; safe to ignore.
+            }
           }
         }
       }
