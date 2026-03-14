@@ -32,12 +32,12 @@ export const MODEL_MAPPINGS = {
     fixer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
   },
   copilot: {
-    orchestrator: { model: 'github-copilot/grok-code-fast-1' },
-    oracle: { model: 'github-copilot/grok-code-fast-1', variant: 'high' },
+    orchestrator: { model: 'github-copilot/claude-opus-4-6' },
+    oracle: { model: 'github-copilot/claude-opus-4-6', variant: 'high' },
     librarian: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
     explorer: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
-    designer: { model: 'github-copilot/grok-code-fast-1', variant: 'medium' },
-    fixer: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
+    designer: { model: 'github-copilot/gemini-3-pro', variant: 'medium' },
+    fixer: { model: 'github-copilot/claude-sonnet-4-6', variant: 'low' },
   },
   'zai-plan': {
     orchestrator: { model: 'zai-coding-plan/glm-5' },

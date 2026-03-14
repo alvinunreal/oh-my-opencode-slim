@@ -61,12 +61,12 @@ To use GitHub Copilot with Grok Code Fast:
   "preset": "copilot",
   "presets": {
     "copilot": {
-      "orchestrator": { "model": "github-copilot/grok-code-fast-1", "variant": "high", "skills": ["*"], "mcps": ["websearch"] },
-      "oracle": { "model": "github-copilot/grok-code-fast-1", "variant": "high", "skills": [], "mcps": [] },
+      "orchestrator": { "model": "github-copilot/claude-opus-4-6", "variant": "high", "skills": ["*"], "mcps": ["websearch"] },
+      "oracle": { "model": "github-copilot/claude-opus-4-6", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
       "explorer": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": [], "mcps": [] },
-      "designer": { "model": "github-copilot/grok-code-fast-1", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
-      "fixer": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": [], "mcps": [] }
+      "designer": { "model": "github-copilot/gemini-3-pro", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
+      "fixer": { "model": "github-copilot/claude-sonnet-4-6", "variant": "low", "skills": [], "mcps": [] }
     }
   }
 }
