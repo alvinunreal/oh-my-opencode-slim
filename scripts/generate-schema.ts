@@ -15,8 +15,9 @@ const rootDir = join(__dirname, '..');
 const outputPath = join(rootDir, 'oh-my-opencode-slim.schema.json');
 
 const schema = z.toJSONSchema(PluginConfigSchema, {
-  // Use $ref strategy that works well with IDE tooling
-  io: 'output',
+  // Use 'input' so defaulted fields are optional in the schema,
+  // matching how users actually write their config files
+  io: 'input',
 });
 
 // Add metadata

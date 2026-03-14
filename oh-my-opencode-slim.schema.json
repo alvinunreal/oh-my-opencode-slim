@@ -46,8 +46,7 @@
             "fallback1",
             "fallback2",
             "fallback3"
-          ],
-          "additionalProperties": false
+          ]
         },
         "oracle": {
           "type": "object",
@@ -74,8 +73,7 @@
             "fallback1",
             "fallback2",
             "fallback3"
-          ],
-          "additionalProperties": false
+          ]
         },
         "designer": {
           "type": "object",
@@ -102,8 +100,7 @@
             "fallback1",
             "fallback2",
             "fallback3"
-          ],
-          "additionalProperties": false
+          ]
         },
         "explorer": {
           "type": "object",
@@ -130,8 +127,7 @@
             "fallback1",
             "fallback2",
             "fallback3"
-          ],
-          "additionalProperties": false
+          ]
         },
         "librarian": {
           "type": "object",
@@ -158,8 +154,7 @@
             "fallback1",
             "fallback2",
             "fallback3"
-          ],
-          "additionalProperties": false
+          ]
         },
         "fixer": {
           "type": "object",
@@ -186,8 +181,7 @@
             "fallback1",
             "fallback2",
             "fallback3"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [
@@ -237,8 +231,7 @@
                         },
                         "required": [
                           "id"
-                        ],
-                        "additionalProperties": false
+                        ]
                       }
                     ]
                   }
@@ -265,8 +258,7 @@
                 "type": "string"
               }
             }
-          },
-          "additionalProperties": false
+          }
         }
       }
     },
@@ -302,8 +294,7 @@
                       },
                       "required": [
                         "id"
-                      ],
-                      "additionalProperties": false
+                      ]
                     }
                   ]
                 }
@@ -330,8 +321,7 @@
               "type": "string"
             }
           }
-        },
-        "additionalProperties": false
+        }
       }
     },
     "disabled_mcps": {
@@ -364,13 +354,7 @@
           "minimum": 20,
           "maximum": 80
         }
-      },
-      "required": [
-        "enabled",
-        "layout",
-        "main_pane_size"
-      ],
-      "additionalProperties": false
+      }
     },
     "background": {
       "type": "object",
@@ -381,11 +365,7 @@
           "minimum": 1,
           "maximum": 50
         }
-      },
-      "required": [
-        "maxConcurrentStarts"
-      ],
-      "additionalProperties": false
+      }
     },
     "fallback": {
       "type": "object",
@@ -454,14 +434,7 @@
             }
           }
         }
-      },
-      "required": [
-        "enabled",
-        "timeoutMs",
-        "chains"
-      ],
-      "additionalProperties": false
+      }
     }
-  },
-  "additionalProperties": false
+  }
 }
