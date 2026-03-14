@@ -1,7 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "oh-my-opencode-slim",
-  "description": "Configuration schema for oh-my-opencode-slim plugin for OpenCode",
   "type": "object",
   "properties": {
     "preset": {
@@ -436,5 +434,7 @@
         }
       }
     }
-  }
+  },
+  "title": "oh-my-opencode-slim",
+  "description": "Configuration schema for oh-my-opencode-slim plugin for OpenCode"
 }
