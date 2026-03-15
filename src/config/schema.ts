@@ -151,6 +151,7 @@ export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 // Main plugin config
 export const PluginConfigSchema = z.object({
   preset: z.string().optional(),
+  setDefaultAgent: z.boolean().optional(),
   scoringEngineVersion: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
   balanceProviderUsage: z.boolean().optional(),
   manualPlan: ManualPlanSchema.optional(),

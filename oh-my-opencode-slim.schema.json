@@ -5,6 +5,9 @@
     "preset": {
       "type": "string"
     },
+    "setDefaultAgent": {
+      "type": "boolean"
+    },
     "scoringEngineVersion": {
       "type": "string",
       "enum": [
@@ -374,6 +377,11 @@
         },
         "timeoutMs": {
           "default": 15000,
+          "type": "number",
+          "minimum": 0
+        },
+        "retryDelayMs": {
+          "default": 500,
           "type": "number",
           "minimum": 0
         },

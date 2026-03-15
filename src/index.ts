@@ -110,8 +110,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcp: mcps,
 
     config: async (opencodeConfig: Record<string, unknown>) => {
-      (opencodeConfig as { default_agent?: string }).default_agent =
-        'orchestrator';
+      // Only set default_agent if not already configured by the user
+      // and the plugin config doesn't explicitly disable this behavior
+      if (
+        config.setDefaultAgent !== false &&
+        !(opencodeConfig as { default_agent?: string }).default_agent
+      ) {
+        (opencodeConfig as { default_agent?: string }).default_agent =
+          'orchestrator';
+      }
 
       // Merge Agent configs — per-agent shallow merge to preserve
       // user-supplied fields (e.g. tools, permission) from opencode.json
