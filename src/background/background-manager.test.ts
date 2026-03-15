@@ -509,6 +509,7 @@ describe('BackgroundTaskManager', () => {
         fallback: {
           enabled: true,
           timeoutMs: 15000,
+          retryDelayMs: 0,
           chains: {
             explorer: ['openai/gpt-5.2-codex', 'opencode/gpt-5-nano'],
           },
@@ -522,8 +523,9 @@ describe('BackgroundTaskManager', () => {
         parentSessionId: 'parent-123',
       });
 
-      // Wait for abort delay (500ms) between fallback attempts
-      await new Promise((r) => setTimeout(r, 700));
+      // Yield to let the fire-and-forget async chain complete
+      // (retryDelayMs: 0 eliminates the inter-attempt delay)
+      await new Promise((r) => setTimeout(r, 10));
 
       expect(task.status).toBe('running');
       expect(promptCalls).toBe(2);
@@ -547,6 +549,7 @@ describe('BackgroundTaskManager', () => {
         fallback: {
           enabled: true,
           timeoutMs: 15000,
+          retryDelayMs: 0,
           chains: {
             explorer: ['openai/gpt-5.2-codex', 'opencode/gpt-5-nano'],
           },
@@ -560,8 +563,9 @@ describe('BackgroundTaskManager', () => {
         parentSessionId: 'parent-123',
       });
 
-      // Wait for abort delay (500ms) between fallback attempts
-      await new Promise((r) => setTimeout(r, 700));
+      // Yield to let the fire-and-forget async chain complete
+      // (retryDelayMs: 0 eliminates the inter-attempt delay)
+      await new Promise((r) => setTimeout(r, 10));
 
       expect(task.status).toBe('failed');
       expect(task.error).toContain('All fallback models failed');

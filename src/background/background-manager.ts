@@ -277,8 +277,15 @@ export class BackgroundTaskManager {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     try {
+      // Attach a no-op .catch() so that when the timeout fires and
+      // session.abort() causes the prompt to reject after the race has
+      // already settled, the late rejection does not become unhandled
+      // (which would crash the process in Node ≥15 / Bun).
+      const promptPromise = this.client.session.prompt(args);
+      promptPromise.catch(() => {});
+
       await Promise.race([
-        this.client.session.prompt(args),
+        promptPromise,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             // Abort the running prompt so the session is no longer busy.
@@ -376,6 +383,7 @@ export class BackgroundTaskManager {
       const timeoutMs = fallbackEnabled
         ? (this.config?.fallback?.timeoutMs ?? FALLBACK_FAILOVER_TIMEOUT_MS)
         : 0; // 0 = no timeout when fallback disabled
+      const retryDelayMs = this.config?.fallback?.retryDelayMs ?? 500;
       const chain = fallbackEnabled
         ? this.resolveFallbackChain(task.agent)
         : [];
@@ -438,7 +446,7 @@ export class BackgroundTaskManager {
               });
               // Allow server time to finalize the abort before
               // the next prompt attempt (matches reference impl).
-              await new Promise((r) => setTimeout(r, 500));
+              await new Promise((r) => setTimeout(r, retryDelayMs));
             } catch {
               // Session may already be idle; safe to ignore.
             }

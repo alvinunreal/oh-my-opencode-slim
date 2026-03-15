@@ -142,6 +142,7 @@ export type BackgroundTaskConfig = z.infer<typeof BackgroundTaskConfigSchema>;
 export const FailoverConfigSchema = z.object({
   enabled: z.boolean().default(true),
   timeoutMs: z.number().min(0).default(15000),
+  retryDelayMs: z.number().min(0).default(500),
   chains: FallbackChainsSchema.default({}),
 });
 
