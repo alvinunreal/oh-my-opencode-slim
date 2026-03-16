@@ -36,7 +36,10 @@ export const MODEL_MAPPINGS = {
     oracle: { model: 'github-copilot/claude-opus-4.6', variant: 'high' },
     librarian: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
     explorer: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
-    designer: { model: 'github-copilot/gemini-3.1-pro-preview', variant: 'medium' },
+    designer: {
+      model: 'github-copilot/gemini-3.1-pro-preview',
+      variant: 'medium',
+    },
     fixer: { model: 'github-copilot/claude-sonnet-4.6', variant: 'low' },
   },
   'zai-plan': {

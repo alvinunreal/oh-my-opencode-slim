@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
+
 /**
  * Generates a JSON Schema from the Zod PluginConfigSchema.
  * Run as part of the build step so the schema stays in sync with the source.
  */
 
+import { writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { PluginConfigSchema } from '../src/config/schema';
-import { writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');

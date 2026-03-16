@@ -24,44 +24,51 @@ bunx oh-my-opencode-slim@latest install
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
 ```
 
-### Provider Options
+### Configuration Options
 
-The installer supports multiple providers:
-- **OpenCode Free Models**: Live-refreshed free `opencode/*` models
-- **Kimi For Coding**: High-performance coding models
-- **OpenAI**: GPT-4 and GPT-3.5 models
-- **Antigravity (Google)**: Claude 4.5 and Gemini 3 models via Google's infrastructure
-- **Chutes**: Live-refreshed `chutes/*` models via OpenCode auth flow
+The installer supports the following options:
 
-When OpenCode free mode is enabled, the installer runs:
+| Option | Description |
+|--------|-------------|
+| `--tmux=yes|no` | Enable tmux integration (yes/no) |
+| `--skills=yes|no` | Install recommended skills (yes/no) |
+| `--no-tui` | Non-interactive mode |
+| `--dry-run` | Simulate install without writing files |
+| `--reset` | Force overwrite of existing configuration |
+
+### Non-Destructive Behavior
+
+By default, the installer is non-destructive. If an `oh-my-opencode-slim.json` configuration file already exists, the installer will **not** overwrite it. Instead, it will display a message:
+
+```
+ℹ Configuration already exists at ~/.config/opencode/oh-my-opencode-slim.json. Use --reset to overwrite.
+```
+
+To force overwrite of your existing configuration, use the `--reset` flag:
 
 ```bash
-opencode models --refresh --verbose
+bunx oh-my-opencode-slim@latest install --reset
 ```
 
-It then filters to free `opencode/*` models only, picks a coding-first primary model, and picks a support model for search/implementation agents.
-
-Enable during installation:
-```bash
-bunx oh-my-opencode-slim install --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto
-```
+**Note:** When using `--reset`, the installer creates a `.bak` backup file before overwriting, so your previous configuration is preserved.
 
 ### After Installation
 
-Authenticate with your providers:
+The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5-codex` models). To use alternative providers like Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](provider-configurations.md)** for step-by-step instructions.
+
+Authenticate with your provider:
 
 ```bash
 opencode auth login
 # Select your provider → Complete OAuth flow
-# Repeat for each provider you enabled
 ```
 
-Once authenticated, run opencode and `ping all agents` to verify all agents respond.
+Once authenticated, run OpenCode and `ping all agents` to verify all agents respond.
 
-> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely. See [Configuration](quick-reference.md#configuration) for details.
+> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely.
 
 ### Alternative: Ask Any Coding Agent
 
@@ -86,88 +93,56 @@ opencode --version
 
 If not installed, direct the user to https://opencode.ai/docs first.
 
-### Step 2: Ask About Provider Access
+### Step 2: Run the Installer
 
-Ask these questions **one at a time**, waiting for responses:
-
-1. "Do you have access to **Kimi For Coding**?" *(Provides Kimi k1.5 models)*
-2. "Do you have access to **OpenAI** API?" *(Enables `openai/` models)*
-3. "Do you have access to **Antigravity (Google)**?" *(Enables `google/` models via Antigravity)*
-4. "Do you want to use **Chutes**?" *(Enables `chutes/` models with daily-cap aware selection)*
-5. "Do you want to use **OpenCode free models**?" *(Refreshes and selects from free `opencode/*` models)*
-
-Help the user understand the tradeoffs:
-- OpenCode free mode discovers the latest free `opencode/*` models using `opencode models --refresh --verbose`.
-- OpenCode-only mode can assign more than one OpenCode model across agents.
-- Hybrid mode can combine OpenCode free models with OpenAI, Kimi, and/or Antigravity.
-- In hybrid mode, `designer` remains on the external provider mapping.
-- Chutes selection prioritizes stronger models for orchestrator/oracle and higher-cap models for support agents.
-- Kimi For Coding provides powerful coding models.
-- OpenAI enables `openai/` models.
-- Antigravity (Google) provides Claude and Gemini models via Google infrastructure.
-- Chutes uses OpenCode provider authentication (`opencode auth login` -> select `chutes`).
-- Optional external ranking signals:
-  - `ARTIFICIAL_ANALYSIS_API_KEY` (quality/coding/latency/price)
-  - `OPENROUTER_API_KEY` (model pricing metadata)
-  If set, installer dynamic planning uses these signals to improve model ranking.
-
-### Step 3: Run the Installer
-
-Based on answers, run:
+The installer generates an OpenAI configuration by default:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=<yes|no> --openai=<yes|no> --antigravity=<yes|no> --chutes=<yes|no> --opencode-free=<yes|no> --opencode-free-model=<id|auto> --tmux=<yes|no> --skills=<yes|no>
+bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
 ```
 
 **Examples:**
 ```bash
-# Kimi + OpenAI + Antigravity
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=yes --openai=yes --antigravity=yes --chutes=yes --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+# Interactive install (asks about tmux and skills)
+bunx oh-my-opencode-slim@latest install
 
-# OpenAI only
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=no --tmux=no --skills=yes
+# Non-interactive with tmux and skills
+bunx oh-my-opencode-slim@latest install --no-tui --tmux=yes --skills=yes
 
-# OpenCode free models only (auto-select)
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=no --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=auto --tmux=no --skills=yes
+# Non-interactive without tmux or skills
+bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=no
 
-# OpenCode free models + OpenAI (manual primary model)
-bunx oh-my-opencode-slim@latest install --no-tui --kimi=no --openai=yes --antigravity=no --chutes=no --opencode-free=yes --opencode-free-model=opencode/gpt-5-nano --tmux=no --skills=yes
+# Force overwrite existing configuration
+bunx oh-my-opencode-slim@latest install --reset
 ```
 
 The installer automatically:
 - Adds the plugin to `~/.config/opencode/opencode.json`
+- Disables default OpenCode agents
 - Generates agent model mappings in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
 
-**Crucial Advice for the User:**
-- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
-- If they add a new provider later, they just need to update this file.
-- Read generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file and report the model configuration.
+### Step 3: Authenticate with Providers
 
-### Step 4: Authenticate with Providers
+Ask user to run the following command. Don't run it yourself, it requires user interaction.
 
-**For Kimi (if enabled):**
-Ask user to run the following command.
-Don't run it yourself, it requires user interaction.
-```bash
-opencode auth login
-# Select "Kimi For Coding" provider and complete OAuth flow
-```
-
-**For OpenAI (if enabled):**
-Ask user to run the following command.
-Don't run it yourself, it requires user interaction.
 ```bash
 opencode auth login
 # Select your provider and complete OAuth flow
 ```
 
-**For Antigravity (if enabled):**
-Ask user to run the following command.
-Don't run it yourself, it requires user interaction.
-```bash
-opencode auth login
-# Select "Antigravity (Google)" provider and complete OAuth flow
-```
+### Step 4: Verify Installation
+
+Ask the user to:
+
+1. Start OpenCode: `opencode`
+2. Run: `ping all agents`
+
+Verify all agents respond successfully.
+
+**Crucial Advice for the User:**
+- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
+- If they want to add a different provider later (Kimi, GitHub Copilot, ZAI), they can update this file manually. See **[Provider Configurations](provider-configurations.md)** for examples.
+- Read the generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file to understand the current configuration.
 
 ---
 
@@ -182,6 +157,18 @@ bunx oh-my-opencode-slim@latest install --help
 
 Then manually create the config files at:
 - `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
+
+### Configuration Already Exists
+
+If the installer reports that the configuration already exists, you have two options:
+
+1. **Keep existing config**: The installer will skip the configuration step and continue with other operations (like adding the plugin or installing skills).
+
+2. **Reset configuration**: Use `--reset` to overwrite:
+   ```bash
+   bunx oh-my-opencode-slim@latest install --reset
+   ```
+   A `.bak` backup file will be created automatically.
 
 ### Agents Not Responding
 
@@ -227,7 +214,7 @@ Add a `$schema` reference to your config for autocomplete and inline validation:
 }
 ```
 
-Works in VS Code, Neovim (with `jsonls`), and any editor that supports JSON Schema. Catches typos and wrong nesting immediately (e.g., placing `chains` directly under `fallback` instead of `fallback.chains`).
+Works in VS Code, Neovim (with `jsonls`), and any editor that supports JSON Schema. Catches typos and wrong nesting immediately.
 
 ### Tmux Integration Not Working
 
@@ -239,7 +226,7 @@ export OPENCODE_PORT=4096
 opencode --port 4096
 ```
 
-See the [Quick Reference](quick-reference.md#tmux-integration) for more details.
+See the [Tmux Integration Guide](tmux-integration.md) for more details.
 
 ---
 
@@ -252,7 +239,7 @@ See the [Quick Reference](quick-reference.md#tmux-integration) for more details.
 2. **Remove configuration files (optional)**:
    ```bash
    rm -f ~/.config/opencode/oh-my-opencode-slim.json
-   rm -f .opencode/oh-my-opencode-slim.json
+   rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
    ```
 
 3. **Remove skills (optional)**:

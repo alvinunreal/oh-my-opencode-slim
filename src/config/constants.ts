@@ -57,4 +57,3 @@ export const FALLBACK_FAILOVER_TIMEOUT_MS = 15_000;
 
 // Polling stability
 export const STABLE_POLLS_THRESHOLD = 3;
-

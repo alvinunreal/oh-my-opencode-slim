@@ -23,6 +23,11 @@ For non-interactive mode:
 bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
 ```
 
+To force overwrite of an existing configuration:
+```bash
+bunx oh-my-opencode-slim@latest install --reset
+```
+
 ### For Alternative Providers
 
 The default configuration uses OpenAI. To use Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step instructions and config examples.

@@ -16,6 +16,8 @@ function parseArgs(args: string[]): InstallArgs {
       result.skills = arg.split('=')[1] as BooleanArg;
     } else if (arg === '--dry-run') {
       result.dryRun = true;
+    } else if (arg === '--reset') {
+      result.reset = true;
     } else if (arg === '-h' || arg === '--help') {
       printHelp();
       process.exit(0);
@@ -36,6 +38,7 @@ Options:
   --skills=yes|no        Install recommended skills (yes/no)
   --no-tui               Non-interactive mode
   --dry-run              Simulate install without writing files
+  --reset                Force overwrite of existing configuration
   -h, --help             Show this help message
 
 The installer generates an OpenAI configuration by default.
@@ -44,6 +47,7 @@ For alternative providers, see docs/provider-configurations.md.
 Examples:
   bunx oh-my-opencode-slim install
   bunx oh-my-opencode-slim install --no-tui --tmux=no --skills=yes
+  bunx oh-my-opencode-slim install --reset
 `);
 }
 
