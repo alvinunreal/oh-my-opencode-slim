@@ -10,7 +10,7 @@ import {
   writeLiteConfig,
 } from './config-manager';
 import { CUSTOM_SKILLS, installCustomSkill } from './custom-skills';
-import { getLiteConfig } from './paths';
+import { getExistingLiteConfigPath } from './paths';
 import { installSkill, RECOMMENDED_SKILLS } from './skills';
 import type { ConfigMergeResult, InstallArgs, InstallConfig } from './types';
 
@@ -154,7 +154,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
     printInfo('Dry run mode - configuration that would be written:');
     console.log(`\n${JSON.stringify(liteConfig, null, 2)}\n`);
   } else {
-    const configPath = getLiteConfig();
+    const configPath = getExistingLiteConfigPath();
     const configExists = existsSync(configPath);
 
     if (configExists && !config.reset) {
