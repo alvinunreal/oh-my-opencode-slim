@@ -162,7 +162,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
         `Configuration already exists at ${configPath}. Use --reset to overwrite.`,
       );
     } else {
-      const liteResult = writeLiteConfig(config);
+      const liteResult = writeLiteConfig(config, configExists ? configPath : undefined);
       if (
         !handleStepResult(
           liteResult,

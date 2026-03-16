@@ -142,8 +142,9 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
 
 export function writeLiteConfig(
   installConfig: InstallConfig,
+  targetPath?: string,
 ): ConfigMergeResult {
-  const configPath = getLiteConfig();
+  const configPath = targetPath ?? getLiteConfig();
 
   try {
     ensureConfigDir();
