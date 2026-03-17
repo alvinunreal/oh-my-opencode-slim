@@ -1,9 +1,15 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export function getConfigDir(): string {
-  // Keep this aligned with OpenCode itself and the plugin config loader:
+  // If OPENCODE_CONFIG is set, it points to a custom config file
+  // (e.g. /custom/path/opencode.json). The config directory is its parent.
+  if (process.env.OPENCODE_CONFIG) {
+    return dirname(process.env.OPENCODE_CONFIG);
+  }
+
+  // Otherwise, follow XDG Base Directory specification:
   // base dir is $XDG_CONFIG_HOME (if set) else ~/.config, and OpenCode config lives under /opencode.
   const userConfigDir = process.env.XDG_CONFIG_HOME
     ? process.env.XDG_CONFIG_HOME

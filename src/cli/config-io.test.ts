@@ -28,6 +28,7 @@ describe('config-io', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'opencode-io-test-'));
+    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = tmpDir;
   });
 

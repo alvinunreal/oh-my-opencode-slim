@@ -7,13 +7,22 @@ import { type PluginConfig, PluginConfigSchema } from './schema';
 const PROMPTS_DIR_NAME = 'oh-my-opencode-slim';
 
 /**
- * Get the user's configuration directory following XDG Base Directory specification.
- * Falls back to ~/.config if XDG_CONFIG_HOME is not set.
+ * Get the OpenCode configuration directory.
  *
- * @returns The absolute path to the user's config directory
+ * Resolution order:
+ * 1. OPENCODE_CONFIG env var (points to a config file; we use its parent directory)
+ * 2. XDG_CONFIG_HOME/opencode (if XDG_CONFIG_HOME is set)
+ * 3. ~/.config/opencode (default fallback)
+ *
+ * @returns The absolute path to the OpenCode config directory
  */
-function getUserConfigDir(): string {
-  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+function getOpenCodeConfigDir(): string {
+  if (process.env.OPENCODE_CONFIG) {
+    return path.dirname(process.env.OPENCODE_CONFIG);
+  }
+  const baseDir =
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(baseDir, 'opencode');
 }
 
 /**
@@ -119,7 +128,7 @@ function deepMerge<T extends Record<string, unknown>>(
  * Load plugin configuration from user and project config files, merging them appropriately.
  *
  * Configuration is loaded from two locations:
- * 1. User config: ~/.config/opencode/oh-my-opencode-slim.jsonc or .json (or $XDG_CONFIG_HOME)
+ * 1. User config: $OPENCODE_CONFIG dir, or ~/.config/opencode/oh-my-opencode-slim.jsonc or .json (or $XDG_CONFIG_HOME)
  * 2. Project config: <directory>/.opencode/oh-my-opencode-slim.jsonc or .json
  *
  * JSONC format is preferred over JSON (allows comments and trailing commas).
@@ -131,8 +140,7 @@ function deepMerge<T extends Record<string, unknown>>(
  */
 export function loadPluginConfig(directory: string): PluginConfig {
   const userConfigBasePath = path.join(
-    getUserConfigDir(),
-    'opencode',
+    getOpenCodeConfigDir(),
     'oh-my-opencode-slim',
   );
 
@@ -210,11 +218,7 @@ export function loadAgentPrompt(
 } {
   const presetDirName =
     preset && /^[a-zA-Z0-9_-]+$/.test(preset) ? preset : undefined;
-  const promptsDir = path.join(
-    getUserConfigDir(),
-    'opencode',
-    PROMPTS_DIR_NAME,
-  );
+  const promptsDir = path.join(getOpenCodeConfigDir(), PROMPTS_DIR_NAME);
   const promptSearchDirs = presetDirName
     ? [path.join(promptsDir, presetDirName), promptsDir]
     : [promptsDir];

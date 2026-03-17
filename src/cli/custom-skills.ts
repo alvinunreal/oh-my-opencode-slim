@@ -5,13 +5,13 @@ import {
   readdirSync,
   statSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getConfigDir } from './paths';
 
 /**
  * A custom skill bundled in this repository.
- * Unlike npx-installed skills, these are copied from src/skills/ to ~/.config/opencode/skills/
+ * Unlike npx-installed skills, these are copied from src/skills/ to the OpenCode skills directory
  */
 export interface CustomSkill {
   /** Skill name (folder name) */
@@ -40,7 +40,7 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
  * Get the target directory for custom skills installation.
  */
 export function getCustomSkillsDir(): string {
-  return join(homedir(), '.config', 'opencode', 'skills');
+  return join(getConfigDir(), 'skills');
 }
 
 /**
@@ -70,7 +70,7 @@ function copyDirRecursive(src: string, dest: string): void {
 }
 
 /**
- * Install a custom skill by copying from src/skills/ to ~/.config/opencode/skills/
+ * Install a custom skill by copying from src/skills/ to the OpenCode skills directory
  * @param skill - The custom skill to install
  * @param projectRoot - Root directory of oh-my-opencode-slim project
  * @returns True if installation succeeded, false otherwise
