@@ -153,6 +153,32 @@ describe('loadPluginConfig', () => {
     );
     expect(loadPluginConfig(projectDir)).toEqual({});
   });
+
+  test('respects OPENCODE_CONFIG for user config location', () => {
+    // Set up a custom config directory via OPENCODE_CONFIG
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omc-opencode-config-'),
+    );
+    process.env.OPENCODE_CONFIG = path.join(customDir, 'opencode.json');
+
+    // Write plugin config in the custom directory
+    fs.writeFileSync(
+      path.join(customDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: 'custom/model-from-opencode-config' } },
+      }),
+    );
+
+    const projectDir = path.join(tempDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe(
+      'custom/model-from-opencode-config',
+    );
+
+    fs.rmSync(customDir, { recursive: true, force: true });
+  });
 });
 
 describe('deepMerge behavior', () => {
@@ -1091,5 +1117,24 @@ describe('loadAgentPrompt', () => {
 
     const result = loadAgentPrompt('xdg-agent');
     expect(result.prompt).toBe('xdg prompt');
+  });
+
+  test('respects OPENCODE_CONFIG for prompt location', () => {
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omc-prompt-config-'),
+    );
+    process.env.OPENCODE_CONFIG = path.join(customDir, 'opencode.json');
+
+    const promptsDir = path.join(customDir, 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(promptsDir, 'oracle.md'),
+      'prompt from OPENCODE_CONFIG dir',
+    );
+
+    const result = loadAgentPrompt('oracle');
+    expect(result.prompt).toBe('prompt from OPENCODE_CONFIG dir');
+
+    fs.rmSync(customDir, { recursive: true, force: true });
   });
 });
