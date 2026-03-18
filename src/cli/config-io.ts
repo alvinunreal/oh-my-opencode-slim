@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import {
   ensureConfigDir,
-  getConfigDir,
+  ensureOpenCodeConfigDir,
   getExistingConfigPath,
   getLiteConfig,
 } from './paths';
@@ -93,17 +93,17 @@ export function writeConfig(configPath: string, config: OpenCodeConfig): void {
 }
 
 export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
+  const configPath = getExistingConfigPath();
+
   try {
-    ensureConfigDir();
+    ensureOpenCodeConfigDir();
   } catch (err) {
     return {
       success: false,
-      configPath: getConfigDir(),
+      configPath,
       error: `Failed to create config directory: ${err}`,
     };
   }
-
-  const configPath = getExistingConfigPath();
 
   try {
     const { config: parsedConfig, error } = parseConfig(configPath);
@@ -177,7 +177,7 @@ export function disableDefaultAgents(): ConfigMergeResult {
   const configPath = getExistingConfigPath();
 
   try {
-    ensureConfigDir();
+    ensureOpenCodeConfigDir();
     const { config: parsedConfig, error } = parseConfig(configPath);
     if (error) {
       return {

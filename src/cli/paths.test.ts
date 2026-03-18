@@ -22,24 +22,42 @@ describe('paths', () => {
   });
 
   test('getConfigDir() uses OPENCODE_CONFIG parent dir when set', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     process.env.OPENCODE_CONFIG = '/custom/path/opencode.json';
     delete process.env.XDG_CONFIG_HOME;
     expect(getConfigDir()).toBe('/custom/path');
   });
 
   test('getConfigDir() prefers OPENCODE_CONFIG over XDG_CONFIG_HOME', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     process.env.OPENCODE_CONFIG = '/custom/path/opencode.json';
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getConfigDir()).toBe('/custom/path');
   });
 
+  test('getConfigDir() uses OPENCODE_CONFIG_DIR when set', () => {
+    process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
+    delete process.env.OPENCODE_CONFIG;
+    delete process.env.XDG_CONFIG_HOME;
+    expect(getConfigDir()).toBe('/custom/directory');
+  });
+
+  test('getConfigDir() prefers OPENCODE_CONFIG_DIR over OPENCODE_CONFIG', () => {
+    process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
+    process.env.OPENCODE_CONFIG = '/custom/path/opencode.json';
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+    expect(getConfigDir()).toBe('/custom/directory');
+  });
+
   test('getConfigDir() uses XDG_CONFIG_HOME when set', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getConfigDir()).toBe('/tmp/xdg-config/opencode');
   });
 
   test('getConfigDir() falls back to ~/.config when XDG_CONFIG_HOME is unset', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     delete process.env.XDG_CONFIG_HOME;
     const expected = join(homedir(), '.config', 'opencode');
@@ -47,6 +65,7 @@ describe('paths', () => {
   });
 
   test('getOpenCodeConfigPaths() returns both json and jsonc paths', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getOpenCodeConfigPaths()).toEqual([
@@ -56,6 +75,7 @@ describe('paths', () => {
   });
 
   test('getOpenCodeConfigPaths() respects OPENCODE_CONFIG', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     process.env.OPENCODE_CONFIG = '/custom/path/opencode.json';
     expect(getOpenCodeConfigPaths()).toEqual([
       '/custom/path/opencode.json',
@@ -63,19 +83,62 @@ describe('paths', () => {
     ]);
   });
 
+  test('getOpenCodeConfigPaths() preserves non-standard OPENCODE_CONFIG filename', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.OPENCODE_CONFIG = '/custom/path/settings.json';
+    expect(getOpenCodeConfigPaths()).toEqual([
+      '/custom/path/settings.json',
+      '/custom/path/settings.jsonc',
+    ]);
+  });
+
+  test('getOpenCodeConfigPaths() handles OPENCODE_CONFIG with .jsonc extension', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.OPENCODE_CONFIG = '/custom/path/settings.jsonc';
+    expect(getOpenCodeConfigPaths()).toEqual([
+      '/custom/path/settings.json',
+      '/custom/path/settings.jsonc',
+    ]);
+  });
+
+  test('getOpenCodeConfigPaths() ignores OPENCODE_CONFIG_DIR when OPENCODE_CONFIG is unset', () => {
+    process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
+    delete process.env.OPENCODE_CONFIG;
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+    expect(getOpenCodeConfigPaths()).toEqual([
+      '/tmp/xdg-config/opencode/opencode.json',
+      '/tmp/xdg-config/opencode/opencode.jsonc',
+    ]);
+  });
+
   test('getConfigJson() returns correct path', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getConfigJson()).toBe('/tmp/xdg-config/opencode/opencode.json');
   });
 
+  test('getConfigJson() respects OPENCODE_CONFIG filename', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.OPENCODE_CONFIG = '/custom/path/settings.json';
+    expect(getConfigJson()).toBe('/custom/path/settings.json');
+  });
+
   test('getConfigJsonc() returns correct path', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getConfigJsonc()).toBe('/tmp/xdg-config/opencode/opencode.jsonc');
   });
 
+  test('getConfigJsonc() respects OPENCODE_CONFIG filename', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.OPENCODE_CONFIG = '/custom/path/settings.json';
+    expect(getConfigJsonc()).toBe('/custom/path/settings.jsonc');
+  });
+
   test('getLiteConfig() returns correct path', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getLiteConfig()).toBe(
@@ -84,8 +147,15 @@ describe('paths', () => {
   });
 
   test('getLiteConfig() respects OPENCODE_CONFIG', () => {
+    delete process.env.OPENCODE_CONFIG_DIR;
     process.env.OPENCODE_CONFIG = '/custom/path/opencode.json';
     expect(getLiteConfig()).toBe('/custom/path/oh-my-opencode-slim.json');
+  });
+
+  test('getLiteConfig() respects OPENCODE_CONFIG_DIR', () => {
+    process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
+    delete process.env.OPENCODE_CONFIG;
+    expect(getLiteConfig()).toBe('/custom/directory/oh-my-opencode-slim.json');
   });
 
   describe('getExistingConfigPath()', () => {
@@ -99,6 +169,7 @@ describe('paths', () => {
 
     test('returns .json if it exists', () => {
       tmpDir = mkdtempSync(join(tmpdir(), 'opencode-test-'));
+      delete process.env.OPENCODE_CONFIG_DIR;
       delete process.env.OPENCODE_CONFIG;
       process.env.XDG_CONFIG_HOME = tmpDir;
 
@@ -113,6 +184,7 @@ describe('paths', () => {
 
     test("returns .jsonc if .json doesn't exist but .jsonc does", () => {
       tmpDir = mkdtempSync(join(tmpdir(), 'opencode-test-'));
+      delete process.env.OPENCODE_CONFIG_DIR;
       delete process.env.OPENCODE_CONFIG;
       process.env.XDG_CONFIG_HOME = tmpDir;
 
@@ -127,6 +199,7 @@ describe('paths', () => {
 
     test('returns default .json if neither exists', () => {
       tmpDir = mkdtempSync(join(tmpdir(), 'opencode-test-'));
+      delete process.env.OPENCODE_CONFIG_DIR;
       delete process.env.OPENCODE_CONFIG;
       process.env.XDG_CONFIG_HOME = tmpDir;
 
@@ -137,6 +210,7 @@ describe('paths', () => {
 
   test("ensureConfigDir() creates directory if it doesn't exist", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'opencode-test-'));
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = tmpDir;
     const configDir = join(tmpDir, 'opencode');

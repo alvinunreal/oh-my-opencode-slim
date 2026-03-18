@@ -17,6 +17,7 @@ describe('loadPluginConfig', () => {
     userConfigDir = path.join(tempDir, 'user-config');
     originalEnv = { ...process.env };
     // Isolate from real user config
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = userConfigDir;
   });
@@ -192,6 +193,7 @@ describe('deepMerge behavior', () => {
     originalEnv = { ...process.env };
 
     // Set XDG_CONFIG_HOME to control user config location
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = userConfigDir;
   });
@@ -436,6 +438,7 @@ describe('preset resolution', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'preset-test-'));
     originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
   });
@@ -616,6 +619,7 @@ describe('environment variable preset override', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-preset-test-'));
     originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
   });
@@ -742,6 +746,7 @@ describe('JSONC config support', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonc-test-'));
     originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
   });
@@ -929,6 +934,7 @@ describe('loadAgentPrompt', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-test-'));
     originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = tempDir;
   });
