@@ -10,26 +10,9 @@ function getDefaultOpenCodeConfigDir(): string {
   return join(userConfigDir, 'opencode');
 }
 
-function getCustomOpenCodeConfigPath(): string | undefined {
-  const configPath = process.env.OPENCODE_CONFIG?.trim();
-  return configPath && configPath.length > 0 ? configPath : undefined;
-}
-
 function getCustomOpenCodeConfigDir(): string | undefined {
   const configDir = process.env.OPENCODE_CONFIG_DIR?.trim();
   return configDir && configDir.length > 0 ? configDir : undefined;
-}
-
-function getPathsForCustomConfigFile(configPath: string): string[] {
-  if (configPath.endsWith('.jsonc')) {
-    return [configPath.replace(/\.jsonc$/, '.json'), configPath];
-  }
-
-  if (configPath.endsWith('.json')) {
-    return [configPath, configPath.replace(/\.json$/, '.jsonc')];
-  }
-
-  return [configPath, `${configPath}.jsonc`];
 }
 
 /**
@@ -37,9 +20,8 @@ function getPathsForCustomConfigFile(configPath: string): string[] {
  *
  * Resolution order:
  * 1. OPENCODE_CONFIG_DIR (custom OpenCode directory)
- * 2. OPENCODE_CONFIG parent dir (custom OpenCode config path)
- * 3. XDG_CONFIG_HOME/opencode
- * 4. ~/.config/opencode
+ * 2. XDG_CONFIG_HOME/opencode
+ * 3. ~/.config/opencode
  */
 export function getConfigDir(): string {
   const customConfigDir = getCustomOpenCodeConfigDir();
@@ -47,22 +29,10 @@ export function getConfigDir(): string {
     return customConfigDir;
   }
 
-  // If OPENCODE_CONFIG is set, it points to a custom config file
-  // (e.g. /custom/path/opencode.json). The config directory is its parent.
-  const customConfigPath = getCustomOpenCodeConfigPath();
-  if (customConfigPath) {
-    return dirname(customConfigPath);
-  }
-
   return getDefaultOpenCodeConfigDir();
 }
 
 export function getOpenCodeConfigPaths(): string[] {
-  const customConfigPath = getCustomOpenCodeConfigPath();
-  if (customConfigPath) {
-    return getPathsForCustomConfigFile(customConfigPath);
-  }
-
   const configDir = getDefaultOpenCodeConfigDir();
   return [join(configDir, 'opencode.json'), join(configDir, 'opencode.jsonc')];
 }

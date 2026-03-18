@@ -18,7 +18,6 @@ describe('loadPluginConfig', () => {
     originalEnv = { ...process.env };
     // Isolate from real user config
     delete process.env.OPENCODE_CONFIG_DIR;
-    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = userConfigDir;
   });
 
@@ -155,18 +154,17 @@ describe('loadPluginConfig', () => {
     expect(loadPluginConfig(projectDir)).toEqual({});
   });
 
-  test('respects OPENCODE_CONFIG for user config location', () => {
-    // Set up a custom config directory via OPENCODE_CONFIG
+  test('respects OPENCODE_CONFIG_DIR for user config location', () => {
     const customDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'omc-opencode-config-'),
     );
-    process.env.OPENCODE_CONFIG = path.join(customDir, 'opencode.json');
+    process.env.OPENCODE_CONFIG_DIR = customDir;
 
     // Write plugin config in the custom directory
     fs.writeFileSync(
       path.join(customDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        agents: { oracle: { model: 'custom/model-from-opencode-config' } },
+        agents: { oracle: { model: 'custom/model-from-opencode-config-dir' } },
       }),
     );
 
@@ -175,7 +173,7 @@ describe('loadPluginConfig', () => {
 
     const config = loadPluginConfig(projectDir);
     expect(config.agents?.oracle?.model).toBe(
-      'custom/model-from-opencode-config',
+      'custom/model-from-opencode-config-dir',
     );
 
     fs.rmSync(customDir, { recursive: true, force: true });
@@ -194,7 +192,6 @@ describe('deepMerge behavior', () => {
 
     // Set XDG_CONFIG_HOME to control user config location
     delete process.env.OPENCODE_CONFIG_DIR;
-    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = userConfigDir;
   });
 
@@ -439,7 +436,6 @@ describe('preset resolution', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'preset-test-'));
     originalEnv = { ...process.env };
     delete process.env.OPENCODE_CONFIG_DIR;
-    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
   });
 
@@ -620,7 +616,6 @@ describe('environment variable preset override', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-preset-test-'));
     originalEnv = { ...process.env };
     delete process.env.OPENCODE_CONFIG_DIR;
-    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
   });
 
@@ -747,7 +742,6 @@ describe('JSONC config support', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonc-test-'));
     originalEnv = { ...process.env };
     delete process.env.OPENCODE_CONFIG_DIR;
-    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
   });
 
@@ -935,7 +929,6 @@ describe('loadAgentPrompt', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-test-'));
     originalEnv = { ...process.env };
     delete process.env.OPENCODE_CONFIG_DIR;
-    delete process.env.OPENCODE_CONFIG;
     process.env.XDG_CONFIG_HOME = tempDir;
   });
 
@@ -1125,21 +1118,21 @@ describe('loadAgentPrompt', () => {
     expect(result.prompt).toBe('xdg prompt');
   });
 
-  test('respects OPENCODE_CONFIG for prompt location', () => {
+  test('respects OPENCODE_CONFIG_DIR for prompt location', () => {
     const customDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'omc-prompt-config-'),
     );
-    process.env.OPENCODE_CONFIG = path.join(customDir, 'opencode.json');
+    process.env.OPENCODE_CONFIG_DIR = customDir;
 
     const promptsDir = path.join(customDir, 'oh-my-opencode-slim');
     fs.mkdirSync(promptsDir, { recursive: true });
     fs.writeFileSync(
       path.join(promptsDir, 'oracle.md'),
-      'prompt from OPENCODE_CONFIG dir',
+      'prompt from OPENCODE_CONFIG_DIR dir',
     );
 
     const result = loadAgentPrompt('oracle');
-    expect(result.prompt).toBe('prompt from OPENCODE_CONFIG dir');
+    expect(result.prompt).toBe('prompt from OPENCODE_CONFIG_DIR dir');
 
     fs.rmSync(customDir, { recursive: true, force: true });
   });
