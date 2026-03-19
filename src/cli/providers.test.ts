@@ -21,7 +21,7 @@ describe('providers', () => {
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('openai/gpt-5.4');
     expect(agents.orchestrator.variant).toBeUndefined();
-    expect(agents.fixer.model).toBe('openai/gpt-5-codex');
+    expect(agents.fixer.model).toBe('openai/gpt-5.4-mini');
     expect(agents.fixer.variant).toBe('low');
   });
 
@@ -38,11 +38,11 @@ describe('providers', () => {
     );
     expect(agents.oracle.model).toBe('openai/gpt-5.4');
     expect(agents.oracle.variant).toBe('high');
-    expect(agents.librarian.model).toBe('openai/gpt-5-codex');
+    expect(agents.librarian.model).toBe('openai/gpt-5.4-mini');
     expect(agents.librarian.variant).toBe('low');
-    expect(agents.explorer.model).toBe('openai/gpt-5-codex');
+    expect(agents.explorer.model).toBe('openai/gpt-5.4-mini');
     expect(agents.explorer.variant).toBe('low');
-    expect(agents.designer.model).toBe('openai/gpt-5-codex');
+    expect(agents.designer.model).toBe('openai/gpt-5.4-mini');
     expect(agents.designer.variant).toBe('medium');
   });
 

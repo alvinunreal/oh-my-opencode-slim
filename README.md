@@ -15,7 +15,7 @@
 bunx oh-my-opencode-slim@latest install
 ```
 
-The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5-codex`). No provider questions asked.
+The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5.4-mini`). No provider questions asked.
 
 For non-interactive mode:
 
@@ -119,12 +119,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>openai/gpt-5-codex</code>
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5-codex</code>
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
 </table>
@@ -191,12 +191,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>openai/gpt-5-codex</code>
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5-codex</code>
+      <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
 </table>
@@ -263,12 +263,12 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>openai/gpt-5-codex</code>
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5-codex</code>
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>google/gemini-3.1-pro-preview</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
 </table>

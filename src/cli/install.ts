@@ -230,7 +230,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`     ${BLUE}$ opencode${RESET}`);
   console.log();
   console.log(
-    `${BOLD}Default configuration uses OpenAI models (gpt-5.4 / gpt-5-codex).${RESET}`,
+    `${BOLD}Default configuration uses OpenAI models (gpt-5.4 / gpt-5.4-mini).${RESET}`,
   );
   console.log(
     `${BOLD}For alternative providers (Kimi, GitHub Copilot, ZAI Coding Plan), see:${RESET}`,

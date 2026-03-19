@@ -51,10 +51,10 @@ Uses OpenAI models exclusively:
     "openai": {
       "orchestrator": { "model": "openai/gpt-5.4", "skills": ["*"], "mcps": ["websearch"] },
       "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": [], "mcps": [] },
-      "librarian": { "model": "openai/gpt-5-codex", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "openai/gpt-5-codex", "variant": "low", "skills": [], "mcps": [] },
-      "designer": { "model": "openai/gpt-5-codex", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
-      "fixer": { "model": "openai/gpt-5-codex", "variant": "low", "skills": [], "mcps": [] }
+      "librarian": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "openai/gpt-5.4-mini", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
+      "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
     }
   }
 }
@@ -401,7 +401,7 @@ The plugin supports **JSONC** format for configuration files, allowing you to:
     "openai": {
       // Fast models for quick iteration
       "oracle": { "model": "openai/gpt-5.4" },
-      "explorer": { "model": "openai/gpt-5-codex" },
+      "explorer": { "model": "openai/gpt-5.4-mini" },
     },
   },
 

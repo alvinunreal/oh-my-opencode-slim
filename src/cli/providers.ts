@@ -18,10 +18,10 @@ export const MODEL_MAPPINGS = {
   openai: {
     orchestrator: { model: 'openai/gpt-5.4' },
     oracle: { model: 'openai/gpt-5.4', variant: 'high' },
-    librarian: { model: 'openai/gpt-5-codex', variant: 'low' },
-    explorer: { model: 'openai/gpt-5-codex', variant: 'low' },
-    designer: { model: 'openai/gpt-5-codex', variant: 'medium' },
-    fixer: { model: 'openai/gpt-5-codex', variant: 'low' },
+    librarian: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+    explorer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+    designer: { model: 'openai/gpt-5.4-mini', variant: 'medium' },
+    fixer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
   },
   kimi: {
     orchestrator: { model: 'kimi-for-coding/k2p5' },

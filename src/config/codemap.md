@@ -230,10 +230,10 @@ deepMerge(base, override)
 |------------|--------------------------------|
 | orchestrator | `kimi-for-coding/k2p5`        |
 | oracle      | `openai/gpt-5.4`        |
-| librarian   | `openai/gpt-5-codex`   |
-| explorer    | `openai/gpt-5-codex`   |
+| librarian   | `openai/gpt-5.4-mini`   |
+| explorer    | `openai/gpt-5.4-mini`   |
 | designer    | `kimi-for-coding/k2p5`        |
-| fixer       | `openai/gpt-5-codex`   |
+| fixer       | `openai/gpt-5.4-mini`   |
 
 ## File Organization
 
