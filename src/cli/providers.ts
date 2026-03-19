@@ -24,12 +24,12 @@ export const MODEL_MAPPINGS = {
     fixer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
   },
   kimi: {
-    orchestrator: { model: 'kimi-for-coding/k2p5' },
-    oracle: { model: 'kimi-for-coding/k2p5', variant: 'high' },
-    librarian: { model: 'kimi-for-coding/k2p5', variant: 'low' },
-    explorer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
-    designer: { model: 'kimi-for-coding/k2p5', variant: 'medium' },
-    fixer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
+    orchestrator: { model: 'openai/gpt-5.4-mini' },
+    oracle: { model: 'openai/gpt-5.4-mini', variant: 'high' },
+    librarian: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+    explorer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+    designer: { model: 'openai/gpt-5.4-mini', variant: 'medium' },
+    fixer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
   },
   copilot: {
     orchestrator: { model: 'github-copilot/claude-opus-4.6' },

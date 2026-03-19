@@ -41,7 +41,7 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   oracle: 'openai/gpt-5.4',
   librarian: 'openai/gpt-5.4-mini',
   explorer: 'openai/gpt-5.4-mini',
-  designer: 'kimi-for-coding/k2p5',
+  designer: 'openai/gpt-5.4-mini',
   fixer: 'openai/gpt-5.4-mini',
 };
 

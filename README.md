@@ -88,7 +88,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>kimi-for-coding/k2p5</code>
+      <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
 </table>
@@ -160,7 +160,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>kimi-for-coding/k2p5</code>
+      <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
 </table>
@@ -227,7 +227,7 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>kimi-for-coding/k2p5</code>
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
   <tr>
