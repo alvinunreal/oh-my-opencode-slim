@@ -12,7 +12,7 @@ function getDefaultOpenCodeConfigDir(): string {
 
 function getCustomOpenCodeConfigDir(): string | undefined {
   const configDir = process.env.OPENCODE_CONFIG_DIR?.trim();
-  return configDir && configDir.length > 0 ? configDir : undefined;
+  return configDir || undefined;
 }
 
 /**
