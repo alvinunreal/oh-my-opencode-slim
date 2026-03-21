@@ -1,13 +1,46 @@
-// Simplified LSP config - just PATH lookup, no multi-tier config merging
+// Simplified LSP config - uses OpenCode's lsp config from opencode.json
+// Falls back to BUILTIN_SERVERS if no user config exists
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { getAllUserLspConfigs, hasUserLspConfig } from './config-store';
 import { BUILTIN_SERVERS, EXT_TO_LANG, LSP_INSTALL_HINTS } from './constants';
 import type { ResolvedServer, ServerLookupResult } from './types';
 
 export function findServerForExtension(ext: string): ServerLookupResult {
-  // Find matching server
+  // First, try user config from opencode.json
+  if (hasUserLspConfig()) {
+    for (const [, config] of getAllUserLspConfigs()) {
+      // Skip disabled servers
+      if (config.disabled === true) {
+        continue;
+      }
+      if (config.extensions?.includes(ext)) {
+        const server: ResolvedServer = {
+          id: config.id,
+          command: config.command ?? [],
+          extensions: config.extensions ?? [],
+          env: config.env,
+          initialization: config.initialization,
+        };
+
+        if (config.command && isServerInstalled(config.command)) {
+          return { status: 'found', server };
+        }
+
+        return {
+          status: 'not_installed',
+          server,
+          installHint: config.command
+            ? `Install '${config.command[0]}' and add to PATH`
+            : 'No command configured for this LSP server',
+        };
+      }
+    }
+  }
+
+  // Fall back to built-in servers
   for (const [id, config] of Object.entries(BUILTIN_SERVERS)) {
     if (config.extensions.includes(ext)) {
       const server: ResolvedServer = {

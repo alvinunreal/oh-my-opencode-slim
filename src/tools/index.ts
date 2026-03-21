@@ -9,4 +9,5 @@ export {
   lsp_goto_definition,
   lsp_rename,
   lspManager,
+  setUserLspConfig,
 } from './lsp';

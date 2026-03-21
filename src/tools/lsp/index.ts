@@ -1,6 +1,7 @@
 // LSP Module - Explicit exports
 
 export { lspManager } from './client';
+export { getUserLspConfig, setUserLspConfig } from './config-store';
 export {
   lsp_diagnostics,
   lsp_find_references,

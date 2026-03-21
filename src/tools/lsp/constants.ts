@@ -41,7 +41,11 @@ export const SEVERITY_MAP: Record<number, string> = {
 export const DEFAULT_MAX_REFERENCES = 200;
 export const DEFAULT_MAX_DIAGNOSTICS = 200;
 
-// Slim server list - common languages + popular frontend
+/**
+ * @deprecated BUILTIN_SERVERS is now a FALLBACK only.
+ * User configuration from opencode.json lsp section takes precedence.
+ * These servers are used only when the user has not configured any LSP servers.
+ */
 export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   // JavaScript/TypeScript ecosystem
   typescript: {

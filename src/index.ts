@@ -21,6 +21,7 @@ import {
   lsp_find_references,
   lsp_goto_definition,
   lsp_rename,
+  setUserLspConfig,
 } from './tools';
 import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
@@ -110,6 +111,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcp: mcps,
 
     config: async (opencodeConfig: Record<string, unknown>) => {
+      // Set user's lsp config from opencode.json for LSP tools
+      const lspConfig = opencodeConfig.lsp as
+        | Record<string, unknown>
+        | undefined;
+      setUserLspConfig(lspConfig);
+
       // Only set default_agent if not already configured by the user
       // and the plugin config doesn't explicitly disable this behavior
       if (
