@@ -80,4 +80,4 @@ This plugin injects three commands into OpenCode config:
 | `/batch <change>` | Plans a large parallelizable migration → approval gate → isolated workers → status report |
 | `/deep-review [focus\|PR]` | 3-agent parallel review (correctness, security, tests/scope) → read-only report with verdict (runs under plan agent) |
 
-The command prompts live in `commands/*.md`, so you can edit frontmatter/templates without changing TypeScript code.
+The command prompts live in `commands/*.md`, so you can edit frontmatter/templates without changing TypeScript code. On plugin load they are synced to `~/.config/opencode/commands/` (global).

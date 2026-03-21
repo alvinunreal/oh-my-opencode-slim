@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
@@ -45,14 +46,32 @@ export function loadCommandConfigs(commandsDir: string): Record<string, Record<s
 }
 
 /**
- * Copies plugin command markdown files into the project's `.opencode/commands/`
- * directory so OpenCode discovers them natively (TUI autocomplete, etc.).
- *
- * Existing user files with the same name are NOT overwritten — user overrides
- * take precedence. Files are only written when missing or when the plugin
- * version has changed (detected by a marker comment in the copied file).
+ * Copies plugin command markdown files into a project's `.opencode/commands/`
+ * directory so OpenCode discovers them natively.
  */
-export function installCommandFiles(commandsDir: string, projectDir: string): void {
+export function installProjectCommandFiles(commandsDir: string, projectDir: string): void {
+  installCommandFilesToTarget(commandsDir, resolve(projectDir, ".opencode", "commands"));
+}
+
+/**
+ * Copies plugin command markdown files into global OpenCode commands directory
+ * (`~/.config/opencode/commands` or `$XDG_CONFIG_HOME/opencode/commands`) so
+ * commands are available across all projects.
+ */
+export function installGlobalCommandFiles(
+  commandsDir: string,
+  configHome?: string
+): void {
+  const resolvedHome = configHome ?? process.env.XDG_CONFIG_HOME ?? resolve(homedir(), ".config");
+  installCommandFilesToTarget(commandsDir, resolve(resolvedHome, "opencode", "commands"));
+}
+
+/**
+ * Existing user files with the same name are NOT overwritten — user overrides
+ * take precedence. Files are only written when missing or when the plugin file
+ * is explicitly marked as plugin-managed.
+ */
+function installCommandFilesToTarget(commandsDir: string, targetDir: string): void {
   let entries: string[];
   try {
     entries = readdirSync(commandsDir).filter((f) => f.endsWith(".md") && f !== "README.md");
@@ -62,12 +81,8 @@ export function installCommandFiles(commandsDir: string, projectDir: string): vo
 
   if (entries.length === 0) return;
 
-  const targetDir = resolve(projectDir, ".opencode", "commands");
-
   try {
-    if (!existsSync(targetDir)) {
-      mkdirSync(targetDir, { recursive: true });
-    }
+    mkdirSync(targetDir, { recursive: true });
   } catch {
     return;
   }

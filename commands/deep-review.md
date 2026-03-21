@@ -1,13 +1,14 @@
 ---
 description: "Deep 3-agent parallel code review: correctness, security, tests, and scope."
-agent: plan
+agent: build
 ---
 
-Run a thorough code review on the current branch's changes before merge.
+Do not restate these instructions. Execute the following workflow immediately, starting at step 1.
 
+Goal: run a thorough code review on the current branch's changes before merge.
 Optional focus or PR reference: $ARGUMENTS
 
-Workflow:
+Steps:
 
 1. Determine the review target.
    - If $ARGUMENTS contains a PR number or URL:

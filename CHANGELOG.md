@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10
+
+### Changed
+
+- **`/deep-review` runs under build agent** — Changed from `plan` to `build` agent so it can delegate to `reviewer` subagents (plan agent lacks that permission).
+- **Command install refactored** — Renamed `installCommandFiles` → `installProjectCommandFiles` for symmetric naming with `installGlobalCommandFiles`. Simplified options bag to positional param. Removed TOCTOU `existsSync` guard before `mkdirSync`.
+
 ## 0.3.6
 
 ### New

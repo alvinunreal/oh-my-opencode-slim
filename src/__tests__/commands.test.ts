@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { DisciplinePlugin } from "../index";
-import { installCommandFiles } from "../commands";
+import { installProjectCommandFiles, installGlobalCommandFiles } from "../commands";
 
 const tempDirs: string[] = [];
 
@@ -76,7 +76,7 @@ describe("command config", () => {
     expect(batchTemplate).toContain("You do NOT edit code directly");
 
     expect(commands["deep-review"]).toBeDefined();
-    expect(commands["deep-review"].agent).toBe("plan");
+    expect(commands["deep-review"].agent).toBe("build");
     expect(typeof commands["deep-review"].description).toBe("string");
 
     const reviewTemplate = commands["deep-review"].template as string;
@@ -117,12 +117,12 @@ describe("command config", () => {
   });
 });
 
-describe("installCommandFiles", () => {
+describe("installProjectCommandFiles", () => {
   test("copies command files to .opencode/commands/ with marker", () => {
     const worktree = createWorktree();
     const sourceDir = join(__dirname, "../../commands");
 
-    installCommandFiles(sourceDir, worktree);
+    installProjectCommandFiles(sourceDir, worktree);
 
     const targetDir = join(worktree, ".opencode", "commands");
     expect(existsSync(targetDir)).toBe(true);
@@ -147,7 +147,7 @@ describe("installCommandFiles", () => {
     const userContent = "---\ndescription: my custom simplify\n---\nDo my thing.";
     writeFileSync(join(targetDir, "simplify.md"), userContent, "utf-8");
 
-    installCommandFiles(sourceDir, worktree);
+    installProjectCommandFiles(sourceDir, worktree);
 
     // User file should be preserved
     const result = readFileSync(join(targetDir, "simplify.md"), "utf-8");
@@ -168,12 +168,27 @@ describe("installCommandFiles", () => {
     const oldContent = "---\n# managed-by: opencode-discipline\ndescription: old version\n---\nOld template.";
     writeFileSync(join(targetDir, "simplify.md"), oldContent, "utf-8");
 
-    installCommandFiles(sourceDir, worktree);
+    installProjectCommandFiles(sourceDir, worktree);
 
     // Should be updated with the new content
     const result = readFileSync(join(targetDir, "simplify.md"), "utf-8");
     expect(result).not.toBe(oldContent);
     expect(result).toContain("# managed-by: opencode-discipline");
     expect(result).toContain("recently changed code");
+  });
+});
+
+describe("installGlobalCommandFiles", () => {
+  test("copies command files into global config commands directory", () => {
+    const tempConfigHome = createWorktree();
+    const sourceDir = join(__dirname, "../../commands");
+
+    installGlobalCommandFiles(sourceDir, tempConfigHome);
+
+    const targetDir = join(tempConfigHome, "opencode", "commands");
+    expect(existsSync(targetDir)).toBe(true);
+    expect(existsSync(join(targetDir, "simplify.md"))).toBe(true);
+    expect(existsSync(join(targetDir, "batch.md"))).toBe(true);
+    expect(existsSync(join(targetDir, "deep-review.md"))).toBe(true);
   });
 });
