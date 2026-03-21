@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { DisciplinePlugin } from "../index";
+import { installCommandFiles } from "../commands";
 
 const tempDirs: string[] = [];
 
@@ -113,5 +114,66 @@ describe("command config", () => {
     expect(commands.simplify.subtask).toBe(true);
     expect(typeof commands.simplify.template).toBe("string");
     expect(commands.simplify.agent).toBe("build");
+  });
+});
+
+describe("installCommandFiles", () => {
+  test("copies command files to .opencode/commands/ with marker", () => {
+    const worktree = createWorktree();
+    const sourceDir = join(__dirname, "../../commands");
+
+    installCommandFiles(sourceDir, worktree);
+
+    const targetDir = join(worktree, ".opencode", "commands");
+    expect(existsSync(targetDir)).toBe(true);
+
+    for (const name of ["simplify.md", "batch.md", "deep-review.md"]) {
+      const dest = join(targetDir, name);
+      expect(existsSync(dest)).toBe(true);
+
+      const content = readFileSync(dest, "utf-8");
+      expect(content).toContain("# managed-by: opencode-discipline");
+      expect(content).toContain("---");
+    }
+  });
+
+  test("does not overwrite user-created command files (no marker)", () => {
+    const worktree = createWorktree();
+    const sourceDir = join(__dirname, "../../commands");
+    const targetDir = join(worktree, ".opencode", "commands");
+    mkdirSync(targetDir, { recursive: true });
+
+    // User creates their own simplify.md without the marker
+    const userContent = "---\ndescription: my custom simplify\n---\nDo my thing.";
+    writeFileSync(join(targetDir, "simplify.md"), userContent, "utf-8");
+
+    installCommandFiles(sourceDir, worktree);
+
+    // User file should be preserved
+    const result = readFileSync(join(targetDir, "simplify.md"), "utf-8");
+    expect(result).toBe(userContent);
+
+    // Other plugin files should still be installed
+    expect(existsSync(join(targetDir, "batch.md"))).toBe(true);
+    expect(existsSync(join(targetDir, "deep-review.md"))).toBe(true);
+  });
+
+  test("overwrites plugin-managed files (has marker)", () => {
+    const worktree = createWorktree();
+    const sourceDir = join(__dirname, "../../commands");
+    const targetDir = join(worktree, ".opencode", "commands");
+    mkdirSync(targetDir, { recursive: true });
+
+    // Simulate a previously installed plugin file
+    const oldContent = "---\n# managed-by: opencode-discipline\ndescription: old version\n---\nOld template.";
+    writeFileSync(join(targetDir, "simplify.md"), oldContent, "utf-8");
+
+    installCommandFiles(sourceDir, worktree);
+
+    // Should be updated with the new content
+    const result = readFileSync(join(targetDir, "simplify.md"), "utf-8");
+    expect(result).not.toBe(oldContent);
+    expect(result).toContain("# managed-by: opencode-discipline");
+    expect(result).toContain("recently changed code");
   });
 });

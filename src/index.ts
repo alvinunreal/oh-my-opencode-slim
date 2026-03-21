@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { tool, type Plugin } from "@opencode-ai/plugin";
 
 import { loadAgentConfigs } from "./agents";
-import { loadCommandConfigs } from "./commands";
+import { loadCommandConfigs, installCommandFiles } from "./commands";
 
 import { WaveStateManager } from "./wave-state";
 
@@ -1187,7 +1187,11 @@ export const DisciplinePlugin: Plugin = async ({ worktree, directory, client }) 
   const pluginDir = dirname(fileURLToPath(import.meta.url));
   const pluginVersion = readPluginVersion(pluginDir);
   const agentConfigs = loadAgentConfigs(resolve(pluginDir, "../agents"));
-  const commandConfigs = loadCommandConfigs(resolve(pluginDir, "../commands"));
+  const commandsSourceDir = resolve(pluginDir, "../commands");
+  const commandConfigs = loadCommandConfigs(commandsSourceDir);
+
+  // Install command markdown files into .opencode/commands/ so the TUI discovers them natively
+  installCommandFiles(commandsSourceDir, worktree);
 
   const ctx: PluginContext = {
     manager: new WaveStateManager(worktree),
