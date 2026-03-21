@@ -60,6 +60,27 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 - **[Provider Configurations](docs/provider-configurations.md)** - Config examples for all supported providers
 - **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
 
+### ✅ Verify Your Setup
+
+After installation and authentication, verify all agents are configured and responding:
+
+```bash
+opencode
+```
+
+Then run:
+
+```
+ping all agents
+```
+
+<div align="center">
+  <img src="img/ping.png" alt="Ping all agents" width="600">
+  <p><i>Confirmation that all six agents are online and ready.</i></p>
+</div>
+
+If any agent fails to respond, check your provider authentication and config file.
+
 ---
 
 ## 🏛️ Meet the Pantheon
