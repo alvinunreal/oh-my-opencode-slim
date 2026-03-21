@@ -4,15 +4,12 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "declaration": true,
-    "declarationDir": "./dist",
-    "emitDeclarationOnly": true,
+    "emitDeclarationOnly": false,
+    "outDir": "dist",
     "strict": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "types": ["bun-types"],
-    "outDir": "./dist",
-    "rootDir": "./src"
+    "types": ["bun-types"]
   },
-  "include": ["src/**/*.ts", "src/**/*.json"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/__tests__/**/*.ts"]
 }
