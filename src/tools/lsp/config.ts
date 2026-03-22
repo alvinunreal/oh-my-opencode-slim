@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import whichSync from 'which';
 import { getAllUserLspConfigs, hasUserLspConfig } from './config-store';
 import {
   BUILTIN_SERVERS,
@@ -12,43 +13,91 @@ import {
 } from './constants';
 import type { ResolvedServer, ServerLookupResult } from './types';
 
-export function findServerForExtension(ext: string): ServerLookupResult {
-  // First, try user config from opencode.json
+/**
+ * Merged server config that combines built-in and user config.
+ */
+interface MergedServerConfig {
+  id: string;
+  command: string[];
+  extensions: string[];
+  rootPatterns?: string[];
+  excludePatterns?: string[];
+  env?: Record<string, string>;
+  initialization?: Record<string, unknown>;
+}
+
+/**
+ * Build the merged server list by combining built-in servers with user config.
+ * This mirrors OpenCode core's pattern: start with built-in, then merge user config.
+ */
+function buildMergedServers(): Map<string, MergedServerConfig> {
+  const servers = new Map<string, MergedServerConfig>();
+
+  // Start with built-in servers
+  for (const [id, config] of Object.entries(BUILTIN_SERVERS)) {
+    servers.set(id, {
+      id,
+      command: config.command,
+      extensions: config.extensions,
+      rootPatterns: config.rootPatterns,
+      excludePatterns: config.excludePatterns,
+      env: config.env,
+      initialization: config.initialization,
+    });
+  }
+
+  // Apply user config (merge with existing or add new)
   if (hasUserLspConfig()) {
-    for (const [, config] of getAllUserLspConfigs()) {
-      // Skip disabled servers
-      if (config.disabled === true) {
+    for (const [id, userConfig] of getAllUserLspConfigs()) {
+      // Handle disabled: remove built-in from consideration
+      if (userConfig.disabled === true) {
+        servers.delete(id);
         continue;
       }
-      if (config.extensions?.includes(ext)) {
-        const server: ResolvedServer = {
-          id: config.id,
-          command: config.command ?? [],
-          extensions: config.extensions ?? [],
-          env: config.env,
-          initialization: config.initialization,
-        };
 
-        if (config.command && isServerInstalled(config.command)) {
-          return { status: 'found', server };
-        }
+      const existing = servers.get(id);
 
-        return {
-          status: 'not_installed',
-          server,
-          installHint: config.command
-            ? `Install '${config.command[0]}' and add to PATH`
-            : 'No command configured for this LSP server',
-        };
+      if (existing) {
+        // Merge user config with built-in, preserving rootPatterns from built-in
+        servers.set(id, {
+          ...existing,
+          id,
+          // User config overrides command if provided
+          command: userConfig.command ?? existing.command,
+          // User config overrides extensions if provided
+          extensions: userConfig.extensions ?? existing.extensions,
+          // Preserve rootPatterns from built-in (not overrideable)
+          rootPatterns: existing.rootPatterns,
+          excludePatterns: existing.excludePatterns,
+          // User config overrides env/initialization
+          env: userConfig.env ?? existing.env,
+          initialization: userConfig.initialization ?? existing.initialization,
+        });
+      } else {
+        // New server defined by user config
+        servers.set(id, {
+          id,
+          command: userConfig.command ?? [],
+          extensions: userConfig.extensions ?? [],
+          rootPatterns: undefined,
+          excludePatterns: undefined,
+          env: userConfig.env,
+          initialization: userConfig.initialization,
+        });
       }
     }
   }
 
-  // Fall back to built-in servers
-  for (const [id, config] of Object.entries(BUILTIN_SERVERS)) {
+  return servers;
+}
+
+export function findServerForExtension(ext: string): ServerLookupResult {
+  const servers = buildMergedServers();
+
+  for (const [, config] of servers) {
     if (config.extensions.includes(ext)) {
       const server: ResolvedServer = {
-        id,
+        id: config.id,
         command: config.command,
         extensions: config.extensions,
         rootPatterns: config.rootPatterns,
@@ -65,7 +114,7 @@ export function findServerForExtension(ext: string): ServerLookupResult {
         status: 'not_installed',
         server,
         installHint:
-          LSP_INSTALL_HINTS[id] ||
+          LSP_INSTALL_HINTS[config.id] ||
           `Install '${config.command[0]}' and add to PATH`,
       };
     }
@@ -91,27 +140,25 @@ export function isServerInstalled(command: string[]): boolean {
   const isWindows = process.platform === 'win32';
   const ext = isWindows ? '.exe' : '';
 
-  // Check PATH
-  const pathEnv = process.env.PATH || '';
-  const pathSeparator = isWindows ? ';' : ':';
-  const paths = pathEnv.split(pathSeparator);
+  // Check PATH using which (mirrors core's approach)
+  // Include ~/.config/opencode/bin in the search path
+  const opencodeBin = join(homedir(), '.config', 'opencode', 'bin');
+  const searchPath = process.env.PATH + (isWindows ? ';' : ':') + opencodeBin;
 
-  for (const p of paths) {
-    if (existsSync(join(p, cmd)) || existsSync(join(p, cmd + ext))) {
-      return true;
-    }
-  }
+  const result = whichSync.sync(cmd, {
+    path: searchPath,
+    pathExt: isWindows ? process.env.PATHEXT : undefined,
+    nothrow: true,
+  });
 
-  // Check local node_modules
-  const cwd = process.cwd();
-  const localBin = join(cwd, 'node_modules', '.bin', cmd);
-  if (existsSync(localBin) || existsSync(localBin + ext)) {
+  if (result !== null) {
     return true;
   }
 
-  // Check global opencode bin
-  const globalBin = join(homedir(), '.config', 'opencode', 'bin', cmd);
-  if (existsSync(globalBin) || existsSync(globalBin + ext)) {
+  // Check local node_modules (where npm/yarn/pnpm install binaries)
+  const cwd = process.cwd();
+  const localBin = join(cwd, 'node_modules', '.bin', cmd);
+  if (existsSync(localBin) || existsSync(localBin + ext)) {
     return true;
   }
 

@@ -25,12 +25,49 @@ import type {
 } from './types';
 
 /**
+ * Generator that walks up the directory tree yielding each directory.
+ * Mirrors OpenCode core's Filesystem.up() utility.
+ *
+ * @param start - Starting path (file or directory)
+ * @param stop - Directory to stop at (inclusive boundary)
+ */
+function* walkUpDirectories(
+  start: string,
+  stop: string,
+): Generator<string, void, unknown> {
+  let dir = resolve(start);
+
+  // If start is a file, start from its directory
+  try {
+    const stat = statSync(dir);
+    if (!stat.isDirectory()) {
+      dir = dirname(dir);
+    }
+  } catch {
+    dir = dirname(dir);
+  }
+
+  let prevDir = '';
+  while (dir !== prevDir && dir !== stop && dir !== '/') {
+    yield dir;
+    prevDir = dir;
+    dir = dirname(dir);
+  }
+}
+
+/**
  * Find the project root for a specific LSP server using its root patterns.
  * Mirrors OpenCode core's NearestRoot functionality.
  *
+ * Key behaviors (matching OpenCode core):
+ * 1. If no root patterns, uses the starting directory
+ * 2. Walks up from file's directory looking for root markers
+ * 3. If excluded pattern found, returns undefined
+ * 4. Returns cwd as fallback when no patterns match
+ *
  * @param filePath - The file to find the root for
  * @param server - The LSP server config with rootPatterns
- * @returns The project root directory, or undefined if no root found
+ * @returns The project root directory, or undefined if excluded
  */
 export function findServerProjectRoot(
   filePath: string,
@@ -38,41 +75,34 @@ export function findServerProjectRoot(
 ): string | undefined {
   const rootPatterns = server.rootPatterns ?? [];
   const excludePatterns = server.excludePatterns ?? [];
+  const stopDir = process.cwd();
 
-  // If no patterns, use the file's directory
+  // If no root patterns, use the file's directory
   if (rootPatterns.length === 0) {
     return dirname(resolve(filePath));
   }
 
-  let dir = dirname(resolve(filePath));
-  const stopDir = process.cwd(); // Stop at current working directory
-
-  let prevDir = '';
-  while (dir !== prevDir && dir !== stopDir && dir !== '/') {
-    // Check for exclusion patterns first
-    if (excludePatterns.length > 0) {
-      const excluded = false;
-      for (const pattern of excludePatterns) {
-        if (existsSync(join(dir, pattern))) {
-          // Found an exclusion marker, don't use this directory
-          return undefined;
-        }
+  // Check for exclusion patterns first (matches core's behavior)
+  for (const dir of walkUpDirectories(filePath, stopDir)) {
+    for (const pattern of excludePatterns) {
+      if (existsSync(join(dir, pattern))) {
+        // Found an exclusion marker - this project is excluded
+        return undefined;
       }
     }
+  }
 
-    // Check for root patterns
+  // Find nearest root pattern
+  for (const dir of walkUpDirectories(filePath, stopDir)) {
     for (const pattern of rootPatterns) {
       if (existsSync(join(dir, pattern))) {
         return dir;
       }
     }
-
-    prevDir = dir;
-    dir = dirname(dir);
   }
 
-  // No root found, return the instance directory (file's directory)
-  return dirname(resolve(filePath));
+  // No root found - return cwd as fallback (matches core's Instance.directory)
+  return stopDir;
 }
 
 /**

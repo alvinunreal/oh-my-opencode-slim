@@ -84,7 +84,7 @@ describe('utils', () => {
       expect(result).toBe('/project');
     });
 
-    test('should fall back to file directory when no patterns match', () => {
+    test('should fall back to cwd when no patterns match', () => {
       (existsSync as any).mockImplementation(() => false);
       const server = {
         id: 'test',
@@ -93,7 +93,36 @@ describe('utils', () => {
         rootPatterns: ['Makefile'],
       };
       const result = findServerProjectRoot('/project/src/file.ts', server);
+      // Now returns cwd (matching OpenCode core's Instance.directory fallback)
+      expect(result).toBe(process.cwd());
+    });
+
+    test('should return file directory when rootPatterns is empty', () => {
+      const server = {
+        id: 'test',
+        command: ['test'],
+        extensions: ['.ts'],
+        rootPatterns: [],
+      };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
       expect(result).toBe('/project/src');
+    });
+
+    test('should check exclusion patterns before root patterns', () => {
+      // Mock: package.json exists (root), deno.json also exists (exclusion)
+      (existsSync as any).mockImplementation((path: string) => {
+        return path === '/project/deno.json';
+      });
+      const server = {
+        id: 'typescript',
+        command: ['tsserver'],
+        extensions: ['.ts'],
+        rootPatterns: ['package.json'],
+        excludePatterns: ['deno.json'],
+      };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
+      // Should return undefined because excluded
+      expect(result).toBeUndefined();
     });
   });
 
