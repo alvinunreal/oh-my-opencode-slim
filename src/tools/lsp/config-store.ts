@@ -2,6 +2,12 @@
 // This allows the config hook to set the lsp config once,
 // and the LSP tools to read it at execution time.
 
+// Note: imported lazily to avoid circular dependency
+let invalidateCache: (() => void) | null = null;
+export function setCacheInvalidator(fn: () => void): void {
+  invalidateCache = fn;
+}
+
 /**
  * User-provided LSP server config (from opencode.json lsp section).
  * Fields are optional because user config may not include all properties.
@@ -29,6 +35,7 @@ export function setUserLspConfig(
   config: Record<string, unknown> | undefined,
 ): void {
   userConfig.clear();
+  invalidateCache?.();
   if (config) {
     for (const [id, server] of Object.entries(config)) {
       if (server && typeof server === 'object') {

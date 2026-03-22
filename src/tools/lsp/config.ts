@@ -5,13 +5,34 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import whichSync from 'which';
-import { getAllUserLspConfigs, hasUserLspConfig } from './config-store';
+import {
+  getAllUserLspConfigs,
+  hasUserLspConfig,
+  setCacheInvalidator,
+} from './config-store';
+
+// Register cache invalidator so config-store can clear the merged servers cache
+setCacheInvalidator(invalidateMergedServersCache);
+
 import {
   BUILTIN_SERVERS,
   LANGUAGE_EXTENSIONS,
   LSP_INSTALL_HINTS,
 } from './constants';
 import type { ResolvedServer, ServerLookupResult } from './types';
+
+/**
+ * Cache for merged servers - invalidated when user config changes.
+ */
+let mergedServersCache: Map<string, MergedServerConfig> | null = null;
+
+/**
+ * Invalidate the merged servers cache.
+ * Called when user LSP config changes.
+ */
+export function invalidateMergedServersCache(): void {
+  mergedServersCache = null;
+}
 
 /**
  * Merged server config that combines built-in and user config.
@@ -28,8 +49,11 @@ interface MergedServerConfig {
 /**
  * Build the merged server list by combining built-in servers with user config.
  * This mirrors OpenCode core's pattern: start with built-in, then merge user config.
+ * Result is cached until user config changes.
  */
 function buildMergedServers(): Map<string, MergedServerConfig> {
+  if (mergedServersCache) return mergedServersCache;
+
   const servers = new Map<string, MergedServerConfig>();
 
   // Start with built-in servers
@@ -84,6 +108,7 @@ function buildMergedServers(): Map<string, MergedServerConfig> {
     }
   }
 
+  mergedServersCache = servers;
   return servers;
 }
 

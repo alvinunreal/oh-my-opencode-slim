@@ -19,7 +19,12 @@ mock.module('which', () => ({
 
 import { existsSync } from 'node:fs';
 // Now import the code to test
-import { findServerForExtension, isServerInstalled } from './config';
+import {
+  findServerForExtension,
+  invalidateMergedServersCache,
+  isServerInstalled,
+} from './config';
+import { setUserLspConfig } from './config-store';
 
 describe('config', () => {
   beforeEach(() => {
@@ -121,5 +126,61 @@ describe('config', () => {
         expect(result.installHint).toContain('Install Deno');
       }
     });
+  });
+});
+
+// Test cache invalidation using static imports
+describe('merged servers cache', () => {
+  beforeEach(() => {
+    invalidateMergedServersCache();
+    setUserLspConfig(undefined);
+  });
+
+  test('should cache merged servers - same server returned on subsequent calls', () => {
+    (existsSync as any).mockReturnValue(true);
+
+    const result1 = findServerForExtension('.ts');
+    const result2 = findServerForExtension('.ts');
+
+    expect(result1.status).toBe('found');
+    expect(result2.status).toBe('found');
+    if (result1.status === 'found' && result2.status === 'found') {
+      expect(result1.server.id).toBe(result2.server.id);
+      expect(result1.server.command).toEqual(result2.server.command);
+    }
+  });
+
+  test('should invalidate cache when user config changes - server disabled', () => {
+    (existsSync as any).mockReturnValue(true);
+
+    const result1 = findServerForExtension('.ts');
+    expect(result1.status).toBe('found');
+    if (result1.status === 'found') {
+      expect(result1.server.id).toBe('deno');
+    }
+
+    setUserLspConfig({ deno: { disabled: true } });
+
+    const result2 = findServerForExtension('.ts');
+    expect(result2.status).toBe('found');
+    if (result2.status === 'found') {
+      expect(result2.server.id).not.toBe('deno');
+    }
+  });
+
+  test('should rebuild cache after explicit invalidation', () => {
+    (existsSync as any).mockReturnValue(true);
+
+    const result1 = findServerForExtension('.ts');
+    expect(result1.status).toBe('found');
+
+    invalidateMergedServersCache();
+    setUserLspConfig({ deno: { disabled: true } });
+
+    const result2 = findServerForExtension('.ts');
+    expect(result2.status).toBe('found');
+    if (result2.status === 'found') {
+      expect(result2.server.id).not.toBe('deno');
+    }
   });
 });
