@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { join } from 'node:path';
 
 // Mock fs and os BEFORE importing the modules that use them
@@ -183,4 +183,8 @@ describe('merged servers cache', () => {
       expect(result2.server.id).not.toBe('deno');
     }
   });
+});
+
+afterEach(() => {
+  mock.restore();
 });

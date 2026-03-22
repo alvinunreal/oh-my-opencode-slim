@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs';
 import { invalidatePackage } from './cache';
 
@@ -70,4 +70,8 @@ describe('auto-update-checker/cache', () => {
       expect(savedJson.dependencies['other-pkg']).toBe('1.0.0');
     });
   });
+});
+
+afterEach(() => {
+  mock.restore();
 });

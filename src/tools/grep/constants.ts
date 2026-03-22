@@ -72,12 +72,33 @@ function getOpenCodeBundledRg(): string | null {
 }
 
 export function resolveGrepCli(): ResolvedCli {
-  if (cachedCli) return cachedCli;
+  if (cachedCli) {
+    // Verify cached cli still works (may have been invalidated by test mocks)
+    const result = spawnSync(cachedCli.path, ['--version'], {
+      stdio: 'ignore',
+    });
+    if (result.status !== 0) {
+      const err = result.error as { code?: string } | undefined;
+      if (err?.code === 'ENOENT') {
+        cachedCli = null;
+      } else {
+        return cachedCli;
+      }
+    } else {
+      return cachedCli;
+    }
+  }
 
   const bundledRg = getOpenCodeBundledRg();
   if (bundledRg) {
-    cachedCli = { path: bundledRg, backend: 'rg' };
-    return cachedCli;
+    // Verify bundled rg actually exists before caching
+    const result = spawnSync(bundledRg, ['--version'], {
+      stdio: 'ignore',
+    });
+    if (result.status === 0) {
+      cachedCli = { path: bundledRg, backend: 'rg' };
+      return cachedCli;
+    }
   }
 
   const systemRg = findExecutable('rg');

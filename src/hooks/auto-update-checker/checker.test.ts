@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs';
 import { extractChannel, findPluginEntry, getLocalDevVersion } from './checker';
 
@@ -113,4 +113,8 @@ describe('auto-update-checker/checker', () => {
       expect(entry?.pinnedVersion).toBe('1.0.0');
     });
   });
+});
+
+afterEach(() => {
+  mock.restore();
 });

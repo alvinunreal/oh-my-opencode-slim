@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 // Mock fs BEFORE importing modules
 mock.module('fs', () => ({
@@ -212,4 +212,8 @@ describe('utils', () => {
       expect(formatted).toContain('Applied 1 edit(s)');
     });
   });
+});
+
+afterEach(() => {
+  mock.restore();
 });

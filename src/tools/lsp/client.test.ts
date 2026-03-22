@@ -49,6 +49,7 @@ describe('LSPServerManager', () => {
   });
 
   afterEach(async () => {
+    mock.restore();
     startSpy.mockRestore();
     initSpy.mockRestore();
     aliveSpy.mockRestore();
