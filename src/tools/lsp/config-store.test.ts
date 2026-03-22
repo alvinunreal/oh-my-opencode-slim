@@ -1,23 +1,14 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
+import {
+  getAllUserLspConfigs,
+  getUserLspConfig,
+  hasUserLspConfig,
+  setUserLspConfig,
+} from './config-store';
 
 describe('LSP Config Store', () => {
-  let setUserLspConfig: (config: Record<string, unknown> | undefined) => void;
-  let getUserLspConfig: (
-    serverId: string,
-  ) => import('./config-store').UserLspConfig | undefined;
-  let getAllUserLspConfigs: () => Map<
-    string,
-    import('./config-store').UserLspConfig
-  >;
-  let hasUserLspConfig: () => boolean;
-
-  beforeEach(async () => {
-    // Import fresh module and clear state
-    const module = await import('./config-store');
-    setUserLspConfig = module.setUserLspConfig;
-    getUserLspConfig = module.getUserLspConfig;
-    getAllUserLspConfigs = module.getAllUserLspConfigs;
-    hasUserLspConfig = module.hasUserLspConfig;
+  beforeEach(() => {
+    // Clear config state before each test
     setUserLspConfig(undefined);
   });
 
