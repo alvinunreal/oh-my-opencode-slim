@@ -247,7 +247,7 @@ function escapePowerShellString(value: string): string {
   return value.replaceAll("'", "''");
 }
 
-function shellEscape(value: string): string {
+function escapePosixShellValue(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
@@ -361,12 +361,12 @@ class NotificationManager {
       const command = interpolateNotificationCommand(
         this.commandTemplate,
         input,
-        isWindows ? escapeCmdExeValue : shellEscape
+        isWindows ? escapeCmdExeValue : escapePosixShellValue
       );
       this.spawnDetached(
         isWindows ? "cmd.exe" : "sh",
         isWindows ? ["/d", "/s", "/c", command] : ["-lc", command],
-        { env: buildNotificationEnv(input) }
+        buildNotificationEnv(input)
       );
       return;
     }
@@ -400,15 +400,13 @@ class NotificationManager {
   private spawnDetached(
     command: string,
     args: string[],
-    options?: {
-      env?: NodeJS.ProcessEnv;
-    }
+    env?: NodeJS.ProcessEnv
   ): void {
     try {
       const child = spawn(command, args, {
         stdio: "ignore",
         detached: true,
-        ...options
+        ...(env ? { env } : undefined)
       });
       child.on("error", () => {
         // Ignore missing notifier binary and continue silently.
@@ -1041,8 +1039,7 @@ async function handleToolExecuteAfter(
     return;
   }
 
-  const trimmedOutput = output.output.trim();
-  if (trimmedOutput.startsWith("Error:") || trimmedOutput.startsWith("error:")) {
+  if (output.output.trim().toLowerCase().startsWith("error:")) {
     return;
   }
 
