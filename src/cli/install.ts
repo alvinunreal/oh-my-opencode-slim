@@ -78,9 +78,9 @@ async function checkOpenCodeInstalled(): Promise<{
   }
   const version = await getOpenCodeVersion();
   const path = getOpenCodePath();
-  printSuccess(
-    `OpenCode ${version ?? ''} detected${path ? ` (${DIM}${path}${RESET})` : ''}`,
-  );
+  const detectedVersion = version ?? '';
+  const pathInfo = path ? ` (${DIM}${path}${RESET})` : '';
+  printSuccess(`OpenCode ${detectedVersion} detected${pathInfo}`);
   return { ok: true, version: version ?? undefined, path: path ?? undefined };
 }
 
@@ -104,13 +104,10 @@ function formatConfigSummary(): string {
   lines.push('');
   lines.push(`  ${BOLD}Preset:${RESET} ${BLUE}openai${RESET}`);
   lines.push(`  ${SYMBOLS.check} OpenAI (default)`);
-  lines.push(`  ${DIM}○ Kimi — see docs/provider-configurations.md${RESET}`);
-  lines.push(
-    `  ${DIM}○ GitHub Copilot — see docs/provider-configurations.md${RESET}`,
-  );
-  lines.push(
-    `  ${DIM}○ ZAI Coding Plan — see docs/provider-configurations.md${RESET}`,
-  );
+  const seeDocs = 'see docs/provider-configurations.md';
+  lines.push(`  ${DIM}○ Kimi — ${seeDocs}${RESET}`);
+  lines.push(`  ${DIM}○ GitHub Copilot — ${seeDocs}${RESET}`);
+  lines.push(`  ${DIM}○ ZAI Coding Plan — ${seeDocs}${RESET}`);
   return lines.join('\n');
 }
 
@@ -159,10 +156,14 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
     if (configExists && !config.reset) {
       printInfo(
-        `Configuration already exists at ${configPath}. Use --reset to overwrite.`,
+        `Configuration already exists at ${configPath}. ` +
+          'Use --reset to overwrite.',
       );
     } else {
-      const liteResult = writeLiteConfig(config, configExists ? configPath : undefined);
+      const liteResult = writeLiteConfig(
+        config,
+        configExists ? configPath : undefined,
+      );
       if (
         !handleStepResult(
           liteResult,
@@ -217,8 +218,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
           printInfo(`Skipped: ${skill.name} (already installed)`);
         }
       }
+      const totalCustom = CUSTOM_SKILLS.length;
       printSuccess(
-        `${customSkillsInstalled}/${CUSTOM_SKILLS.length} custom skills processed`,
+        `${customSkillsInstalled}/${totalCustom} custom skills processed`,
       );
     }
   }
@@ -228,9 +230,10 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(formatConfigSummary());
   console.log();
 
-  console.log(
-    `${SYMBOLS.star} ${BOLD}${GREEN}${isUpdate ? 'Configuration updated!' : 'Installation complete!'}${RESET}`,
-  );
+  const statusMsg = isUpdate
+    ? 'Configuration updated!'
+    : 'Installation complete!';
+  console.log(`${SYMBOLS.star} ${BOLD}${GREEN}${statusMsg}${RESET}`);
   console.log();
   console.log(`${BOLD}Next steps:${RESET}`);
   console.log();
@@ -238,15 +241,16 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`  1. Start OpenCode:`);
   console.log(`     ${BLUE}$ opencode${RESET}`);
   console.log();
-  console.log(
-    `${BOLD}Default configuration uses OpenAI models (gpt-5.4 / gpt-5.4-mini).${RESET}`,
-  );
-  console.log(
-    `${BOLD}For alternative providers (Kimi, GitHub Copilot, ZAI Coding Plan), see:${RESET}`,
-  );
-  console.log(
-    `  ${BLUE}https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/docs/provider-configurations.md${RESET}`,
-  );
+  const modelsInfo =
+    'Default configuration uses OpenAI models (gpt-5.4 / gpt-5.4-mini).';
+  console.log(`${BOLD}${modelsInfo}${RESET}`);
+  const altProviders =
+    'For alternative providers (Kimi, GitHub Copilot, ZAI Coding Plan)';
+  console.log(`${BOLD}${altProviders}, see:${RESET}`);
+  const docsUrl =
+    'https://github.com/alvinunreal/oh-my-opencode-slim/' +
+    'blob/master/docs/provider-configurations.md';
+  console.log(`  ${BLUE}${docsUrl}${RESET}`);
   console.log();
 
   return 0;

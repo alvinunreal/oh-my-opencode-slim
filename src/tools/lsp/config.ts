@@ -20,8 +20,7 @@ interface MergedServerConfig {
   id: string;
   command: string[];
   extensions: string[];
-  rootPatterns?: string[];
-  excludePatterns?: string[];
+  root?: (file: string) => string | undefined;
   env?: Record<string, string>;
   initialization?: Record<string, unknown>;
 }
@@ -39,8 +38,7 @@ function buildMergedServers(): Map<string, MergedServerConfig> {
       id,
       command: config.command,
       extensions: config.extensions,
-      rootPatterns: config.rootPatterns,
-      excludePatterns: config.excludePatterns,
+      root: config.root,
       env: config.env,
       initialization: config.initialization,
     });
@@ -58,7 +56,7 @@ function buildMergedServers(): Map<string, MergedServerConfig> {
       const existing = servers.get(id);
 
       if (existing) {
-        // Merge user config with built-in, preserving rootPatterns from built-in
+        // Merge user config with built-in, preserving root function from built-in
         servers.set(id, {
           ...existing,
           id,
@@ -66,9 +64,8 @@ function buildMergedServers(): Map<string, MergedServerConfig> {
           command: userConfig.command ?? existing.command,
           // User config overrides extensions if provided
           extensions: userConfig.extensions ?? existing.extensions,
-          // Preserve rootPatterns from built-in (not overrideable)
-          rootPatterns: existing.rootPatterns,
-          excludePatterns: existing.excludePatterns,
+          // Preserve root function from built-in (not overrideable)
+          root: existing.root,
           // User config overrides env/initialization
           env: userConfig.env ?? existing.env,
           initialization: userConfig.initialization ?? existing.initialization,
@@ -79,8 +76,7 @@ function buildMergedServers(): Map<string, MergedServerConfig> {
           id,
           command: userConfig.command ?? [],
           extensions: userConfig.extensions ?? [],
-          rootPatterns: undefined,
-          excludePatterns: undefined,
+          root: undefined,
           env: userConfig.env,
           initialization: userConfig.initialization,
         });
@@ -100,8 +96,7 @@ export function findServerForExtension(ext: string): ServerLookupResult {
         id: config.id,
         command: config.command,
         extensions: config.extensions,
-        rootPatterns: config.rootPatterns,
-        excludePatterns: config.excludePatterns,
+        root: config.root,
         env: config.env,
         initialization: config.initialization,
       };
@@ -143,7 +138,8 @@ export function isServerInstalled(command: string[]): boolean {
   // Check PATH using which (mirrors core's approach)
   // Include ~/.config/opencode/bin in the search path
   const opencodeBin = join(homedir(), '.config', 'opencode', 'bin');
-  const searchPath = process.env.PATH + (isWindows ? ';' : ':') + opencodeBin;
+  const searchPath =
+    (process.env.PATH ?? '') + (isWindows ? ';' : ':') + opencodeBin;
 
   const result = whichSync.sync(cmd, {
     path: searchPath,

@@ -30,6 +30,6 @@ const jsonSchema = {
 };
 
 const json = JSON.stringify(jsonSchema, null, 2);
-writeFileSync(outputPath, json + '\n');
+writeFileSync(outputPath, `${json}\n`);
 
 console.log(`✅ Schema written to ${outputPath}`);

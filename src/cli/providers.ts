@@ -2,17 +2,6 @@ import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
 
-const AGENT_NAMES = [
-  'orchestrator',
-  'oracle',
-  'designer',
-  'explorer',
-  'librarian',
-  'fixer',
-] as const;
-
-type AgentName = (typeof AGENT_NAMES)[number];
-
 // Model mappings by provider - only 4 supported providers
 export const MODEL_MAPPINGS = {
   openai: {

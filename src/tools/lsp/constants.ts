@@ -1,7 +1,9 @@
 // LSP constants - mirrors OpenCode core servers (no auto-download)
 // All server definitions from OpenCode's LSPServer namespace
 
-import type { LSPServerConfig } from './types';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import type { LSPServerConfig, RootFunction } from './types';
 
 export const SYMBOL_KIND_MAP: Record<number, string> = {
   1: 'File',
@@ -52,16 +54,89 @@ const LOCK_FILE_PATTERNS = [
 ];
 
 /**
+ * Generator that walks up the directory tree yielding each directory.
+ * Mirrors OpenCode core's Filesystem.up() utility.
+ */
+function* walkUpDirectories(
+  start: string,
+  stop: string,
+): Generator<string, void, unknown> {
+  let dir = resolve(start);
+
+  // If start is a file (not a directory), start from its parent
+  try {
+    if (!statSync(dir).isDirectory()) {
+      dir = dirname(dir);
+    }
+  } catch {
+    dir = dirname(dir);
+  }
+
+  let prevDir = '';
+  while (dir !== prevDir && dir !== '/') {
+    yield dir;
+    prevDir = dir;
+    if (dir === stop) break;
+    dir = dirname(dir);
+  }
+}
+
+/**
+ * NearestRoot helper - mirrors OpenCode core's NearestRoot function.
+ * Creates a RootFunction that walks up directories looking for root markers.
+ */
+export function NearestRoot(
+  includePatterns: string[],
+  excludePatterns?: string[],
+): RootFunction {
+  return (file: string): string | undefined => {
+    const cwd = process.cwd();
+
+    // Check for exclusion patterns first
+    if (excludePatterns) {
+      for (const dir of walkUpDirectories(file, cwd)) {
+        for (const pattern of excludePatterns) {
+          if (existsSync(`${dir}/${pattern}`)) {
+            // Found an exclusion marker - this server should not activate
+            return undefined;
+          }
+        }
+      }
+    }
+
+    // Find nearest root pattern
+    for (const dir of walkUpDirectories(file, cwd)) {
+      for (const pattern of includePatterns) {
+        if (pattern.includes('*')) {
+          // Handle glob patterns (e.g., *.xcodeproj, *.tf)
+          try {
+            const entries = readdirSync(dir);
+            const regex = new RegExp(
+              `^${pattern.replace(/\./g, '\\.').replace(/\*/g, '.*')}$`,
+            );
+            if (entries.some((entry) => regex.test(entry))) {
+              return dir;
+            }
+          } catch {
+            // Skip directories that can't be read
+          }
+        } else if (existsSync(`${dir}/${pattern}`)) {
+          return dir;
+        }
+      }
+    }
+
+    // No root found - return undefined (let caller decide fallback)
+    return undefined;
+  };
+}
+
+/**
  * Built-in LSP servers - mirrors OpenCode core LSPServer namespace.
- * User configuration from opencode.json lsp section takes precedence over these.
- * These servers are used only when the user has not configured any LSP servers.
- *
- * Fields:
- * - command: Command and arguments to spawn the language server
- * - extensions: File extensions this server handles
- * - rootPatterns: Files that indicate the project root (for root detection)
- * - env: Optional environment variables
- * - initialization: Optional LSP initialization options
+ * User configuration from opencode.json lsp section takes precedence and is
+ * merged on top of these: user settings override command/extensions/env, while
+ * root patterns are always preserved from built-in. Servers can be removed by
+ * setting `"disabled": true` in the user config.
  */
 export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   // ============ JavaScript/TypeScript Ecosystem ============
@@ -69,21 +144,19 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   deno: {
     command: ['deno', 'lsp'],
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.mjs'],
-    rootPatterns: ['deno.json', 'deno.jsonc'],
+    root: NearestRoot(['deno.json', 'deno.jsonc']),
   },
 
   typescript: {
     command: ['typescript-language-server', '--stdio'],
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'],
-    rootPatterns: [...LOCK_FILE_PATTERNS],
-    // Exclude deno projects - TypeScript server should not activate in deno projects
-    excludePatterns: ['deno.json', 'deno.jsonc'],
+    root: NearestRoot(LOCK_FILE_PATTERNS, ['deno.json', 'deno.jsonc']),
   },
 
   vue: {
     command: ['vue-language-server', '--stdio'],
     extensions: ['.vue'],
-    rootPatterns: LOCK_FILE_PATTERNS,
+    root: NearestRoot(LOCK_FILE_PATTERNS),
   },
 
   eslint: {
@@ -99,7 +172,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
       '.cts',
       '.vue',
     ],
-    rootPatterns: LOCK_FILE_PATTERNS,
+    root: NearestRoot(LOCK_FILE_PATTERNS),
   },
 
   oxlint: {
@@ -117,7 +190,11 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
       '.astro',
       '.svelte',
     ],
-    rootPatterns: ['.oxlintrc.json', ...LOCK_FILE_PATTERNS, 'package.json'],
+    root: NearestRoot([
+      '.oxlintrc.json',
+      ...LOCK_FILE_PATTERNS,
+      'package.json',
+    ]),
   },
 
   biome: {
@@ -141,7 +218,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
       '.gql',
       '.html',
     ],
-    rootPatterns: ['biome.json', 'biome.jsonc', ...LOCK_FILE_PATTERNS],
+    root: NearestRoot(['biome.json', 'biome.jsonc', ...LOCK_FILE_PATTERNS]),
   },
 
   // ============ Backend Languages ============
@@ -149,19 +226,22 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   gopls: {
     command: ['gopls'],
     extensions: ['.go'],
-    rootPatterns: ['go.work', 'go.mod', 'go.sum'],
+    root: NearestRoot(['go.work', 'go.mod', 'go.sum']),
   },
 
   ruby_lsp: {
+    // Note: uses rubocop --lsp (RuboCop's built-in LSP linting mode),
+    // not the separate ruby-lsp gem. Users wanting full ruby-lsp features
+    // should configure: { command: ["ruby-lsp"] }
     command: ['rubocop', '--lsp'],
     extensions: ['.rb', '.rake', '.gemspec', '.ru'],
-    rootPatterns: ['Gemfile'],
+    root: NearestRoot(['Gemfile']),
   },
 
   ty: {
     command: ['ty', 'server'],
     extensions: ['.py', '.pyi'],
-    rootPatterns: [
+    root: NearestRoot([
       'pyproject.toml',
       'ty.toml',
       'setup.py',
@@ -169,32 +249,32 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
       'requirements.txt',
       'Pipfile',
       'pyrightconfig.json',
-    ],
+    ]),
   },
 
   pyright: {
     command: ['pyright-langserver', '--stdio'],
     extensions: ['.py', '.pyi'],
-    rootPatterns: [
+    root: NearestRoot([
       'pyproject.toml',
       'setup.py',
       'setup.cfg',
       'requirements.txt',
       'Pipfile',
       'pyrightconfig.json',
-    ],
+    ]),
   },
 
   elixir_ls: {
     command: ['elixir-ls'],
     extensions: ['.ex', '.exs'],
-    rootPatterns: ['mix.exs', 'mix.lock'],
+    root: NearestRoot(['mix.exs', 'mix.lock']),
   },
 
   zls: {
     command: ['zls'],
     extensions: ['.zig', '.zon'],
-    rootPatterns: ['build.zig'],
+    root: NearestRoot(['build.zig']),
   },
 
   // ============ .NET Languages ============
@@ -202,13 +282,13 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   csharp: {
     command: ['csharp-ls'],
     extensions: ['.cs'],
-    rootPatterns: ['.slnx', '.sln', '.csproj', 'global.json'],
+    root: NearestRoot(['.slnx', '.sln', '.csproj', 'global.json']),
   },
 
   fsharp: {
     command: ['fsautocomplete'],
     extensions: ['.fs', '.fsi', '.fsx', '.fsscript'],
-    rootPatterns: ['.slnx', '.sln', '.fsproj', 'global.json'],
+    root: NearestRoot(['.slnx', '.sln', '.fsproj', 'global.json']),
   },
 
   // ============ Apple Languages ============
@@ -216,7 +296,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   sourcekit_lsp: {
     command: ['sourcekit-lsp'],
     extensions: ['.swift', '.objc', '.objcpp'],
-    rootPatterns: ['Package.swift', '*.xcodeproj', '*.xcworkspace'],
+    root: NearestRoot(['Package.swift', '*.xcodeproj', '*.xcworkspace']),
   },
 
   // ============ Rust ============
@@ -224,7 +304,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   rust: {
     command: ['rust-analyzer'],
     extensions: ['.rs'],
-    rootPatterns: ['Cargo.toml', 'Cargo.lock'],
+    root: NearestRoot(['Cargo.toml', 'Cargo.lock']),
   },
 
   // ============ C/C++ ============
@@ -243,13 +323,13 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
       '.hxx',
       '.h++',
     ],
-    rootPatterns: [
+    root: NearestRoot([
       'compile_commands.json',
       'compile_flags.txt',
       '.clangd',
       'CMakeLists.txt',
       'Makefile',
-    ],
+    ]),
   },
 
   // ============ Frontend Frameworks ============
@@ -257,13 +337,13 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   svelte: {
     command: ['svelteserver', '--stdio'],
     extensions: ['.svelte'],
-    rootPatterns: LOCK_FILE_PATTERNS,
+    root: NearestRoot(LOCK_FILE_PATTERNS),
   },
 
   astro: {
     command: ['astro-ls', '--stdio'],
     extensions: ['.astro'],
-    rootPatterns: LOCK_FILE_PATTERNS,
+    root: NearestRoot(LOCK_FILE_PATTERNS),
   },
 
   // ============ Java/JVM Languages ============
@@ -273,26 +353,26 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
     // Users should configure their own command for JDTLS
     command: ['jdtls'],
     extensions: ['.java'],
-    rootPatterns: [
+    root: NearestRoot([
       'pom.xml',
       'build.gradle',
       'build.gradle.kts',
       '.project',
       '.classpath',
-    ],
+    ]),
   },
 
   kotlin_ls: {
     command: ['kotlin-lsp', '--stdio'],
     extensions: ['.kt', '.kts'],
-    rootPatterns: [
+    root: NearestRoot([
       'settings.gradle.kts',
       'settings.gradle',
       'gradlew',
       'build.gradle.kts',
       'build.gradle',
       'pom.xml',
-    ],
+    ]),
   },
 
   // ============ Config/ Markup Languages ============
@@ -300,44 +380,44 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   yaml_ls: {
     command: ['yaml-language-server', '--stdio'],
     extensions: ['.yaml', '.yml'],
-    rootPatterns: LOCK_FILE_PATTERNS,
+    root: NearestRoot(LOCK_FILE_PATTERNS),
   },
 
   lua_ls: {
     command: ['lua-language-server'],
     extensions: ['.lua'],
-    rootPatterns: [
+    root: NearestRoot([
       '.luarc.json',
       '.luarc.jsonc',
       '.luacheckrc',
       'stylua.toml',
       'selene.toml',
       'selene.yml',
-    ],
+    ]),
   },
 
   php_intelephense: {
     command: ['intelephense', '--stdio'],
     extensions: ['.php'],
-    rootPatterns: ['composer.json', 'composer.lock', '.php-version'],
+    root: NearestRoot(['composer.json', 'composer.lock', '.php-version']),
   },
 
   prisma: {
     command: ['prisma', 'language-server'],
     extensions: ['.prisma'],
-    rootPatterns: ['schema.prisma', 'prisma/schema.prisma', 'prisma'],
+    root: NearestRoot(['schema.prisma', 'prisma/schema.prisma', 'prisma']),
   },
 
   dart: {
     command: ['dart', 'language-server', '--lsp'],
     extensions: ['.dart'],
-    rootPatterns: ['pubspec.yaml', 'analysis_options.yaml'],
+    root: NearestRoot(['pubspec.yaml', 'analysis_options.yaml']),
   },
 
   ocaml_lsp: {
     command: ['ocamllsp'],
     extensions: ['.ml', '.mli'],
-    rootPatterns: ['dune-project', 'dune-workspace', '.merlin', 'opam'],
+    root: NearestRoot(['dune-project', 'dune-workspace', '.merlin', 'opam']),
   },
 
   // ============ Shell/Scripts ============
@@ -345,7 +425,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   bash: {
     command: ['bash-language-server', 'start'],
     extensions: ['.sh', '.bash', '.zsh', '.ksh'],
-    rootPatterns: [], // Root is always the instance directory
+    root: undefined, // No root detection needed - uses file directory
   },
 
   // ============ Infrastructure/ DevOps ============
@@ -353,7 +433,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   terraform_ls: {
     command: ['terraform-ls', 'serve'],
     extensions: ['.tf', '.tfvars'],
-    rootPatterns: ['.terraform.lock.hcl', 'terraform.tfstate', '*.tf'],
+    root: NearestRoot(['.terraform.lock.hcl', 'terraform.tfstate', '*.tf']),
   },
 
   // ============ Document/ Publishing ============
@@ -361,13 +441,13 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   texlab: {
     command: ['texlab'],
     extensions: ['.tex', '.bib'],
-    rootPatterns: ['.latexmkrc', 'latexmkrc', '.texlabroot', 'texlabroot'],
+    root: NearestRoot(['.latexmkrc', 'latexmkrc', '.texlabroot', 'texlabroot']),
   },
 
   dockerfile: {
     command: ['docker-langserver', '--stdio'],
     extensions: ['.dockerfile', 'Dockerfile'],
-    rootPatterns: [], // Root is always the instance directory
+    root: undefined, // No root detection needed - uses file directory
   },
 
   // ============ Functional Languages ============
@@ -375,37 +455,37 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
   gleam: {
     command: ['gleam', 'lsp'],
     extensions: ['.gleam'],
-    rootPatterns: ['gleam.toml'],
+    root: NearestRoot(['gleam.toml']),
   },
 
   clojure_lsp: {
     command: ['clojure-lsp', 'listen'],
     extensions: ['.clj', '.cljs', '.cljc', '.edn'],
-    rootPatterns: [
+    root: NearestRoot([
       'deps.edn',
       'project.clj',
       'shadow-cljs.edn',
       'bb.edn',
       'build.boot',
-    ],
+    ]),
   },
 
   nixd: {
     command: ['nixd'],
     extensions: ['.nix'],
-    rootPatterns: ['flake.nix'],
+    root: NearestRoot(['flake.nix']),
   },
 
   tinymist: {
     command: ['tinymist'],
     extensions: ['.typ', '.typc'],
-    rootPatterns: ['typst.toml'],
+    root: NearestRoot(['typst.toml']),
   },
 
   haskell_language_server: {
     command: ['haskell-language-server-wrapper', '--lsp'],
     extensions: ['.hs', '.lhs'],
-    rootPatterns: ['stack.yaml', 'cabal.project', 'hie.yaml', '*.cabal'],
+    root: NearestRoot(['stack.yaml', 'cabal.project', 'hie.yaml', '*.cabal']),
   },
 
   julials: {
@@ -417,7 +497,7 @@ export const BUILTIN_SERVERS: Record<string, Omit<LSPServerConfig, 'id'>> = {
       'using LanguageServer; runserver()',
     ],
     extensions: ['.jl'],
-    rootPatterns: ['Project.toml', 'Manifest.toml', '*.jl'],
+    root: NearestRoot(['Project.toml', 'Manifest.toml', '*.jl']),
   },
 };
 
@@ -433,7 +513,7 @@ export const LSP_INSTALL_HINTS: Record<string, string> = {
   // Backend Languages
   gopls: 'go install golang.org/x/tools/gopls@latest',
   ruby_lsp: 'gem install rubocop (Ruby LSP runs via rubocop --lsp)',
-  ty: 'pip install ty or see https://github.com/jeansantefior/ty',
+  ty: 'pip install ty or see https://github.com/astral-sh/ty',
   pyright: 'pip install pyright',
   elixir_ls:
     'Download from https://github.com/elixir-lsp/elixir-ls/releases or build from source',
