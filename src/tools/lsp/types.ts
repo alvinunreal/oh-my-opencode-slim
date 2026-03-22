@@ -20,6 +20,8 @@ export interface LSPServerConfig {
   id: string;
   command: string[];
   extensions: string[];
+  rootPatterns?: string[];
+  excludePatterns?: string[];
   disabled?: boolean;
   env?: Record<string, string>;
   initialization?: Record<string, unknown>;
@@ -29,6 +31,8 @@ export interface ResolvedServer {
   id: string;
   command: string[];
   extensions: string[];
+  rootPatterns?: string[];
+  excludePatterns?: string[];
   env?: Record<string, string>;
   initialization?: Record<string, unknown>;
 }

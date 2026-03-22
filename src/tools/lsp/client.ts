@@ -11,6 +11,7 @@ import {
   StreamMessageReader,
   StreamMessageWriter,
 } from 'vscode-jsonrpc/node';
+import { log } from '../../utils/logger';
 import { getLanguageId } from './config';
 import type { Diagnostic, ResolvedServer } from './types';
 
@@ -29,6 +30,7 @@ class LSPServerManager {
   private readonly IDLE_TIMEOUT = 5 * 60 * 1000;
 
   private constructor() {
+    log('[lsp] manager initialized');
     this.startCleanupTimer();
     this.registerProcessCleanup();
   }
@@ -95,17 +97,32 @@ class LSPServerManager {
     const managed = this.clients.get(key);
     if (managed) {
       if (managed.initPromise) {
+        log('[lsp] getClient: waiting for init', { key, server: server.id });
         await managed.initPromise;
       }
       if (managed.client.isAlive()) {
         managed.refCount++;
         managed.lastUsedAt = Date.now();
+        log('[lsp] getClient: reuse pooled client', {
+          key,
+          server: server.id,
+          refCount: managed.refCount,
+        });
         return managed.client;
       }
+      log('[lsp] getClient: client dead, recreating', {
+        key,
+        server: server.id,
+      });
       await managed.client.stop();
       this.clients.delete(key);
     }
 
+    log('[lsp] getClient: creating new client', {
+      key,
+      server: server.id,
+      root,
+    });
     const client = new LSPClient(root, server);
     const initPromise = (async () => {
       await client.start();
@@ -127,7 +144,13 @@ class LSPServerManager {
         m.initPromise = undefined;
         m.isInitializing = false;
       }
+      log('[lsp] getClient: client ready', { key, server: server.id });
     } catch (err) {
+      log('[lsp] getClient: init failed', {
+        key,
+        server: server.id,
+        error: String(err),
+      });
       this.clients.delete(key);
       throw err;
     }
@@ -141,6 +164,11 @@ class LSPServerManager {
     if (managed && managed.refCount > 0) {
       managed.refCount--;
       managed.lastUsedAt = Date.now();
+      log('[lsp] releaseClient', {
+        key,
+        server: serverId,
+        refCount: managed.refCount,
+      });
     }
   }
 
@@ -151,14 +179,19 @@ class LSPServerManager {
   }
 
   async stopAll(): Promise<void> {
-    for (const [, managed] of this.clients) {
+    log('[lsp] stopAll: shutting down all clients', {
+      count: this.clients.size,
+    });
+    for (const [key, managed] of this.clients) {
       await managed.client.stop();
+      log('[lsp] stopAll: client stopped', { key });
     }
     this.clients.clear();
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+    log('[lsp] stopAll: complete');
   }
 }
 
@@ -178,6 +211,12 @@ export class LSPClient {
   ) {}
 
   async start(): Promise<void> {
+    log('[lsp] LSPClient.start: spawning server', {
+      server: this.server.id,
+      command: this.server.command.join(' '),
+      root: this.root,
+    });
+
     this.proc = spawn(this.server.command, {
       stdin: 'pipe',
       stdout: 'pipe',
@@ -274,11 +313,17 @@ export class LSPClient {
 
     if (this.proc.exitCode !== null) {
       const stderr = this.stderrBuffer.join('\n');
+      log('[lsp] LSPClient.start: server exited immediately', {
+        server: this.server.id,
+        exitCode: this.proc.exitCode,
+        stderr: stderr.slice(0, 500),
+      });
       throw new Error(
         `LSP server exited immediately with code ${this.proc.exitCode}` +
           (stderr ? `\nstderr: ${stderr}` : ''),
       );
     }
+    log('[lsp] LSPClient.start: server spawned', { server: this.server.id });
   }
 
   private startStderrReading(): void {
@@ -304,6 +349,11 @@ export class LSPClient {
 
   async initialize(): Promise<void> {
     if (!this.connection) throw new Error('LSP connection not established');
+
+    log('[lsp] LSPClient.initialize: sending initialize request', {
+      server: this.server.id,
+      root: this.root,
+    });
 
     const rootUri = pathToFileURL(this.root).href;
     await this.connection.sendRequest('initialize', {
@@ -336,15 +386,25 @@ export class LSPClient {
     });
     this.connection.sendNotification('initialized');
     await new Promise((r) => setTimeout(r, 300));
+    log('[lsp] LSPClient.initialize: complete', { server: this.server.id });
   }
 
   async openFile(filePath: string): Promise<void> {
     const absPath = resolve(filePath);
-    if (this.openedFiles.has(absPath)) return;
+    if (this.openedFiles.has(absPath)) {
+      log('[lsp] openFile: already open, skipping', { filePath: absPath });
+      return;
+    }
 
     const text = readFileSync(absPath, 'utf-8');
     const ext = extname(absPath);
     const languageId = getLanguageId(ext);
+
+    log('[lsp] openFile: opening document', {
+      filePath: absPath,
+      languageId,
+      size: text.length,
+    });
 
     this.connection?.sendNotification('textDocument/didOpen', {
       textDocument: {
@@ -430,6 +490,7 @@ export class LSPClient {
   }
 
   async stop(): Promise<void> {
+    log('[lsp] LSPClient.stop: stopping', { server: this.server.id });
     try {
       if (this.connection) {
         await this.connection.sendRequest('shutdown');
@@ -442,5 +503,6 @@ export class LSPClient {
     this.connection = null;
     this.processExited = true;
     this.diagnosticsStore.clear();
+    log('[lsp] LSPClient.stop: complete', { server: this.server.id });
   }
 }

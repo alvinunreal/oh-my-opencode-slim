@@ -89,16 +89,18 @@ describe('config', () => {
       const result = findServerForExtension('.ts');
       expect(result.status).toBe('found');
       if (result.status === 'found') {
-        expect(result.server.id).toBe('typescript');
+        // deno is first in OpenCode core order
+        expect(result.server.id).toBe('deno');
       }
     });
 
-    test('should return found for .py extension if installed (prefers basedpyright)', () => {
+    test('should return found for .py extension if installed', () => {
       (existsSync as any).mockReturnValue(true);
       const result = findServerForExtension('.py');
       expect(result.status).toBe('found');
       if (result.status === 'found') {
-        expect(result.server.id).toBe('basedpyright');
+        // ty is first Python server in OpenCode core order
+        expect(result.server.id).toBe('ty');
       }
     });
 
@@ -112,10 +114,9 @@ describe('config', () => {
       const result = findServerForExtension('.ts');
       expect(result.status).toBe('not_installed');
       if (result.status === 'not_installed') {
-        expect(result.server.id).toBe('typescript');
-        expect(result.installHint).toContain(
-          'npm install -g typescript-language-server',
-        );
+        // deno is first .ts server in OpenCode core order
+        expect(result.server.id).toBe('deno');
+        expect(result.installHint).toContain('deno');
       }
     });
   });
@@ -141,18 +142,18 @@ describe('config', () => {
     test('should skip disabled user servers', () => {
       (existsSync as any).mockReturnValue(true);
       setUserLspConfig({
-        pyright: {
+        ty: {
           disabled: true,
-          command: ['pyright'],
+          command: ['ty'],
           extensions: ['.py'],
         },
       });
 
-      // Should fall back to built-in basedpyright
+      // Should fall back to built-in ty (first Python server in OpenCode core)
       const result = findServerForExtension('.py');
       expect(result.status).toBe('found');
       if (result.status === 'found') {
-        expect(result.server.id).toBe('basedpyright');
+        expect(result.server.id).toBe('ty');
       }
     });
 
@@ -223,10 +224,10 @@ describe('config', () => {
       });
 
       const result = findServerForExtension('.py');
-      // Should fall back to built-in
+      // Should fall back to built-in ty (first Python server)
       expect(result.status).toBe('found');
       if (result.status === 'found') {
-        expect(result.server.id).toBe('basedpyright');
+        expect(result.server.id).toBe('ty');
       }
     });
 
@@ -266,11 +267,11 @@ describe('config', () => {
       // Clear config
       setUserLspConfig(undefined);
 
-      // Should fall back to built-in
+      // Should fall back to built-in deno for .ts (first server with .ts)
       const afterResult = findServerForExtension('.ts');
       expect(afterResult.status).toBe('found');
       if (afterResult.status === 'found') {
-        expect(afterResult.server.id).toBe('typescript');
+        expect(afterResult.server.id).toBe('deno');
       }
     });
   });

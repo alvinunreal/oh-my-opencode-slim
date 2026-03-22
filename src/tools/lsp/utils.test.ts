@@ -5,14 +5,15 @@ mock.module('fs', () => ({
   readFileSync: mock(() => ''),
   writeFileSync: mock(),
   unlinkSync: mock(),
-  existsSync: mock(() => true),
+  existsSync: mock(() => false),
   statSync: mock(() => ({ isDirectory: () => false })),
 }));
 
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import {
   applyWorkspaceEdit,
   filterDiagnosticsBySeverity,
+  findServerProjectRoot,
   formatApplyResult,
   formatDiagnostic,
   formatLocation,
@@ -25,6 +26,75 @@ describe('utils', () => {
     (readFileSync as any).mockClear();
     (writeFileSync as any).mockClear();
     (unlinkSync as any).mockClear();
+    (existsSync as any).mockClear();
+    (existsSync as any).mockImplementation(() => false);
+  });
+
+  describe('findServerProjectRoot', () => {
+    test('should return file directory when no root patterns', () => {
+      const server = { id: 'test', command: ['test'], extensions: ['.ts'] };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
+      expect(result).toContain('src');
+    });
+
+    test('should find root when root pattern exists', () => {
+      // Mock existsSync to return true only for deno.json
+      (existsSync as any).mockImplementation((path: string) => {
+        return path === '/project/deno.json';
+      });
+      const server = {
+        id: 'deno',
+        command: ['deno', 'lsp'],
+        extensions: ['.ts'],
+        rootPatterns: ['deno.json'],
+      };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
+      expect(result).toBe('/project');
+    });
+
+    test('should return undefined when excluded by excludePattern', () => {
+      // Mock existsSync to return true for deno.json (exclusion pattern)
+      (existsSync as any).mockImplementation((path: string) => {
+        return path === '/project/deno.json';
+      });
+      const server = {
+        id: 'typescript',
+        command: ['tsserver'],
+        extensions: ['.ts'],
+        rootPatterns: ['package.json'],
+        excludePatterns: ['deno.json'],
+      };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
+      expect(result).toBeUndefined();
+    });
+
+    test('should find root when exclude pattern is not present', () => {
+      // Mock existsSync to return true for package.json but not deno.json
+      (existsSync as any).mockImplementation((path: string) => {
+        return path === '/project/package.json';
+      });
+      const server = {
+        id: 'typescript',
+        command: ['tsserver'],
+        extensions: ['.ts'],
+        rootPatterns: ['package.json'],
+        excludePatterns: ['deno.json'],
+      };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
+      expect(result).toBe('/project');
+    });
+
+    test('should fall back to file directory when no patterns match', () => {
+      (existsSync as any).mockImplementation(() => false);
+      const server = {
+        id: 'test',
+        command: ['test'],
+        extensions: ['.ts'],
+        rootPatterns: ['Makefile'],
+      };
+      const result = findServerProjectRoot('/project/src/file.ts', server);
+      expect(result).toBe('/project/src');
+    });
   });
 
   describe('uriToPath', () => {

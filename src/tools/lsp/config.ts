@@ -5,7 +5,11 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getAllUserLspConfigs, hasUserLspConfig } from './config-store';
-import { BUILTIN_SERVERS, EXT_TO_LANG, LSP_INSTALL_HINTS } from './constants';
+import {
+  BUILTIN_SERVERS,
+  LANGUAGE_EXTENSIONS,
+  LSP_INSTALL_HINTS,
+} from './constants';
 import type { ResolvedServer, ServerLookupResult } from './types';
 
 export function findServerForExtension(ext: string): ServerLookupResult {
@@ -47,6 +51,8 @@ export function findServerForExtension(ext: string): ServerLookupResult {
         id,
         command: config.command,
         extensions: config.extensions,
+        rootPatterns: config.rootPatterns,
+        excludePatterns: config.excludePatterns,
         env: config.env,
         initialization: config.initialization,
       };
@@ -69,7 +75,7 @@ export function findServerForExtension(ext: string): ServerLookupResult {
 }
 
 export function getLanguageId(ext: string): string {
-  return EXT_TO_LANG[ext] || 'plaintext';
+  return LANGUAGE_EXTENSIONS[ext] || 'plaintext';
 }
 
 export function isServerInstalled(command: string[]): boolean {

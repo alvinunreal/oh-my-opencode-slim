@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { log } from '../../utils/logger';
 import type { LSPClient } from './client';
 import { lspManager } from './client';
 import { findServerForExtension } from './config';
@@ -17,11 +18,67 @@ import type {
   Diagnostic,
   Location,
   LocationLink,
+  ResolvedServer,
   ServerLookupResult,
   TextEdit,
   WorkspaceEdit,
 } from './types';
 
+/**
+ * Find the project root for a specific LSP server using its root patterns.
+ * Mirrors OpenCode core's NearestRoot functionality.
+ *
+ * @param filePath - The file to find the root for
+ * @param server - The LSP server config with rootPatterns
+ * @returns The project root directory, or undefined if no root found
+ */
+export function findServerProjectRoot(
+  filePath: string,
+  server: ResolvedServer,
+): string | undefined {
+  const rootPatterns = server.rootPatterns ?? [];
+  const excludePatterns = server.excludePatterns ?? [];
+
+  // If no patterns, use the file's directory
+  if (rootPatterns.length === 0) {
+    return dirname(resolve(filePath));
+  }
+
+  let dir = dirname(resolve(filePath));
+  const stopDir = process.cwd(); // Stop at current working directory
+
+  let prevDir = '';
+  while (dir !== prevDir && dir !== stopDir && dir !== '/') {
+    // Check for exclusion patterns first
+    if (excludePatterns.length > 0) {
+      const excluded = false;
+      for (const pattern of excludePatterns) {
+        if (existsSync(join(dir, pattern))) {
+          // Found an exclusion marker, don't use this directory
+          return undefined;
+        }
+      }
+    }
+
+    // Check for root patterns
+    for (const pattern of rootPatterns) {
+      if (existsSync(join(dir, pattern))) {
+        return dir;
+      }
+    }
+
+    prevDir = dir;
+    dir = dirname(dir);
+  }
+
+  // No root found, return the instance directory (file's directory)
+  return dirname(resolve(filePath));
+}
+
+/**
+ * Legacy function for backward compatibility.
+ * @deprecated Use findServerProjectRoot with server-specific patterns instead.
+ */
 export function findWorkspaceRoot(filePath: string): string {
   let dir = resolve(filePath);
 
@@ -84,24 +141,46 @@ export async function withLspClient<T>(
   const result = findServerForExtension(ext);
 
   if (result.status !== 'found') {
+    log('[lsp] withLspClient: server not found', {
+      filePath: absPath,
+      extension: ext,
+    });
     throw new Error(formatServerLookupError(result));
   }
 
   const server = result.server;
-  const root = findWorkspaceRoot(absPath);
+  // Use server-specific root detection instead of generic workspace root
+  // Fall back to file's directory if no root patterns match
+  const root = findServerProjectRoot(absPath, server) ?? dirname(absPath);
+
+  log('[lsp] withLspClient: acquiring client', {
+    filePath: absPath,
+    server: server.id,
+    root,
+  });
+
   const client = await lspManager.getClient(root, server);
 
   try {
-    return await fn(client);
+    const result = await fn(client);
+    log('[lsp] withLspClient: operation complete', { server: server.id });
+    return result;
   } catch (e) {
     if (e instanceof Error && e.message.includes('timeout')) {
       const isInitializing = lspManager.isServerInitializing(root, server.id);
       if (isInitializing) {
+        log('[lsp] withLspClient: timeout during init', {
+          server: server.id,
+        });
         throw new Error(
           `LSP server is still initializing. Please retry in a few seconds.`,
         );
       }
     }
+    log('[lsp] withLspClient: operation failed', {
+      server: server.id,
+      error: String(e),
+    });
     throw e;
   } finally {
     lspManager.releaseClient(root, server.id);
@@ -221,6 +300,7 @@ export interface ApplyResult {
 
 export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
   if (!edit) {
+    log('[lsp] applyWorkspaceEdit: no edit provided');
     return {
       success: false,
       filesModified: [],
@@ -228,6 +308,11 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
       errors: ['No edit provided'],
     };
   }
+
+  const changeCount =
+    (edit.changes ? Object.keys(edit.changes).length : 0) +
+    (edit.documentChanges ? edit.documentChanges.length : 0);
+  log('[lsp] applyWorkspaceEdit: applying', { changeCount });
 
   const result: ApplyResult = {
     success: true,
@@ -299,6 +384,13 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
       }
     }
   }
+
+  log('[lsp] applyWorkspaceEdit: complete', {
+    success: result.success,
+    filesModified: result.filesModified.length,
+    totalEdits: result.totalEdits,
+    errors: result.errors.length,
+  });
 
   return result;
 }
