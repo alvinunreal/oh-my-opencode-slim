@@ -29,7 +29,6 @@
     "@types/bun": "latest",
     "bun-types": "latest",
     "typescript": "^5.7",
-    "vitest": "^3.0",
     "yaml": "^2.8.2"
   }
 }

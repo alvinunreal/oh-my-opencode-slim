@@ -236,11 +236,56 @@ async function handleEvent(
 }
 
 function escapeAppleScriptString(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\n", " ")
+    .replaceAll("\r", "");
 }
 
 function escapePowerShellString(value: string): string {
   return value.replaceAll("'", "''");
+}
+
+function shellEscape(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function escapeCmdExeValue(value: string): string {
+  const escaped = value
+    .replaceAll("^", "^^")
+    .replaceAll("%", "%%")
+    .replaceAll("!", "^^!")
+    .replaceAll("&", "^&")
+    .replaceAll("|", "^|")
+    .replaceAll("<", "^<")
+    .replaceAll(">", "^>")
+    .replaceAll("(", "^(")
+    .replaceAll(")", "^)")
+    .replaceAll('"', '\\"');
+  return `"${escaped}"`;
+}
+
+function interpolateNotificationCommand(
+  template: string,
+  input: NotificationInput,
+  escapeValue: (value: string) => string
+): string {
+  return template
+    .replaceAll("{event}", escapeValue(input.event))
+    .replaceAll("{title}", escapeValue(input.title))
+    .replaceAll("{message}", escapeValue(input.message))
+    .replaceAll("{sessionID}", escapeValue(input.sessionID));
+}
+
+function buildNotificationEnv(input: NotificationInput): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    DISCIPLINE_EVENT: input.event,
+    DISCIPLINE_TITLE: input.title,
+    DISCIPLINE_MESSAGE: input.message,
+    DISCIPLINE_SESSION_ID: input.sessionID
+  };
 }
 
 class NotificationManager {
@@ -312,12 +357,17 @@ class NotificationManager {
 
   private emitOsNotification(input: NotificationInput): void {
     if (this.commandTemplate) {
-      const command = this.commandTemplate
-        .replaceAll("{event}", input.event)
-        .replaceAll("{title}", input.title)
-        .replaceAll("{message}", input.message)
-        .replaceAll("{sessionID}", input.sessionID);
-      this.spawnDetached(process.platform === "win32" ? "cmd.exe" : "sh", process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command]);
+      const isWindows = process.platform === "win32";
+      const command = interpolateNotificationCommand(
+        this.commandTemplate,
+        input,
+        isWindows ? escapeCmdExeValue : shellEscape
+      );
+      this.spawnDetached(
+        isWindows ? "cmd.exe" : "sh",
+        isWindows ? ["/d", "/s", "/c", command] : ["-lc", command],
+        { env: buildNotificationEnv(input) }
+      );
       return;
     }
 
@@ -334,16 +384,12 @@ class NotificationManager {
 
     if (process.platform === "win32") {
       const script = [
-        "Add-Type -AssemblyName System.Windows.Forms",
-        "$notify = New-Object System.Windows.Forms.NotifyIcon",
-        "$notify.Icon = [System.Drawing.SystemIcons]::Information",
-        "$notify.BalloonTipTitle = '",
-        escapePowerShellString(input.title),
-        "'",
-        "$notify.BalloonTipText = '",
-        escapePowerShellString(input.message),
-        "'",
-        "$notify.Visible = $true",
+        "Add-Type -AssemblyName System.Windows.Forms;",
+        "$notify = New-Object System.Windows.Forms.NotifyIcon;",
+        "$notify.Icon = [System.Drawing.SystemIcons]::Information;",
+        `$notify.BalloonTipTitle = '${escapePowerShellString(input.title)}';`,
+        `$notify.BalloonTipText = '${escapePowerShellString(input.message)}';`,
+        "$notify.Visible = $true;",
         "$notify.ShowBalloonTip(4000)"
       ].join(" ");
 
@@ -351,11 +397,18 @@ class NotificationManager {
     }
   }
 
-  private spawnDetached(command: string, args: string[]): void {
+  private spawnDetached(
+    command: string,
+    args: string[],
+    options?: {
+      env?: NodeJS.ProcessEnv;
+    }
+  ): void {
     try {
       const child = spawn(command, args, {
         stdio: "ignore",
-        detached: true
+        detached: true,
+        ...options
       });
       child.on("error", () => {
         // Ignore missing notifier binary and continue silently.
@@ -555,12 +608,12 @@ function buildCompactionContext(state: {
   acceptedBySessionID?: string;
 }): string {
   const oracleLine = state.oracleReviewedAt
-    ? `- Oracle gap review completed at: ${state.oracleReviewedAt}`
-    : "- Oracle gap review pending for Wave 2 -> 3 transition.";
+    ? `Oracle gap review completed at: ${state.oracleReviewedAt}`
+    : "Oracle gap review pending for Wave 2 -> 3 transition.";
 
   const acceptedLine = state.acceptedAt
-    ? `- Accepted timestamp: ${state.acceptedAt}${state.acceptedBySessionID ? ` (build session ${state.acceptedBySessionID})` : ""}`
-    : "- accept_plan controls handoff to Build; if accepted, preserve build session id and accepted timestamp.";
+    ? `Accepted timestamp: ${state.acceptedAt}${state.acceptedBySessionID ? ` (build session ${state.acceptedBySessionID})` : ""}`
+    : "accept_plan controls handoff to Build; if accepted, preserve build session id and accepted timestamp.";
 
   return [
     "## Discipline Plugin — Compaction Context",
@@ -570,9 +623,9 @@ function buildCompactionContext(state: {
     `- Plan name: ${state.planName}`,
     `- Plan file target: tasks/plans/${state.planName}.md`,
     "- The advance_wave tool must be called to progress between waves.",
-    oracleLine,
+    `- ${oracleLine}`,
     "- Writing to tasks/plans/*.md is blocked until Wave 3.",
-    `- ${acceptedLine.replace(/^-\s*/, "")}`,
+    `- ${acceptedLine}`,
     "",
     `Resume from Wave ${state.wave} after compaction.`
   ].join("\n");
@@ -645,6 +698,40 @@ function extractTodosFromTodoWriteArgs(args: unknown): Todo[] {
   }
 
   return extractTodos(value.todos);
+}
+
+function buildQuestionNotificationText(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+
+  const value = args as Record<string, unknown>;
+  const rawQuestions = value.questions;
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+    return undefined;
+  }
+
+  const prompts = rawQuestions
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+
+      const question = (item as Record<string, unknown>).question;
+      return typeof question === "string" ? question.trim() : undefined;
+    })
+    .filter((item): item is string => Boolean(item));
+
+  if (prompts.length === 0) {
+    return undefined;
+  }
+
+  const first = prompts[0];
+  if (prompts.length === 1) {
+    return first;
+  }
+
+  return `${prompts.length} questions waiting. First: ${first}`;
 }
 
 function getOrCreateTodoNudgeState(ctx: PluginContext, sessionID: string): TodoNudgeState {
@@ -888,8 +975,24 @@ async function handleSystemTransform(
 async function handleToolExecuteBefore(
   ctx: PluginContext,
   input: { tool: string; sessionID: string; callID: string },
-  output: { args: any }
+  output: { args: any; metadata?: unknown }
 ): Promise<void> {
+  if (input.tool === "question") {
+    const QUESTION_FALLBACK = "The agent asked a question and is waiting for your answer.";
+    const sourceText = buildQuestionNotificationText(output.args) ?? QUESTION_FALLBACK;
+    const condensed = sourceText.replace(/\s+/g, " ").trim();
+    const questionText = condensed.length > 180 ? `${condensed.slice(0, 177)}...` : condensed;
+
+    ctx.notifications.notify({
+      sessionID: input.sessionID,
+      event: "need_answers",
+      title: "Agent needs your answers",
+      message: questionText,
+      dedupeKey: `question-${input.callID}`,
+      toolContext: output
+    });
+  }
+
   const filePath = output.args?.filePath;
   if (typeof filePath === "string") {
     if (input.tool === "read" && isBlockedEnvRead(filePath)) {
@@ -919,21 +1022,6 @@ async function handleToolExecuteAfter(
   input: { tool: string; sessionID: string; callID: string; args: unknown },
   output: { title: string; output: string; metadata: unknown }
 ): Promise<void> {
-  if (input.tool === "question") {
-    const condensed = output.output.replace(/\s+/g, " ").trim();
-    const questionText = condensed.length > 180 ? `${condensed.slice(0, 177)}...` : condensed;
-
-    ctx.notifications.notify({
-      sessionID: input.sessionID,
-      event: "need_answers",
-      title: "Need your answers",
-      message: questionText || "The agent asked a question and is waiting for your answer.",
-      dedupeKey: `question-${input.callID}`,
-      toolContext: output
-    });
-    return;
-  }
-
   const state = ctx.manager.getState(input.sessionID);
   if (!state || state.accepted) {
     return;
@@ -953,7 +1041,8 @@ async function handleToolExecuteAfter(
     return;
   }
 
-  if (output.output.trim().toLowerCase().startsWith("error")) {
+  const trimmedOutput = output.output.trim();
+  if (trimmedOutput.startsWith("Error:") || trimmedOutput.startsWith("error:")) {
     return;
   }
 

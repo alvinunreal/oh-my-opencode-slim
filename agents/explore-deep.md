@@ -17,7 +17,13 @@ permission:
     "*": deny
     "rtk *": allow
     "find *": allow
+    "find * | grep *": allow
+    "find * | grep * | head *": allow
+    "grep *": allow
+    "rg *": allow
     "ls *": allow
+    "pwd": allow
+    "pwd *": allow
     "cat *": allow
     "head *": allow
     "tail *": allow

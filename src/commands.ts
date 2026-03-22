@@ -2,21 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 
-import { parse as parseYaml } from "yaml";
-
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-
-function parseFrontmatter(content: string): { data: Record<string, unknown>; body: string } {
-  const match = content.match(FRONTMATTER_RE);
-  if (!match) {
-    return { data: {}, body: content.trim() };
-  }
-
-  return {
-    data: (parseYaml(match[1]) ?? {}) as Record<string, unknown>,
-    body: match[2].trim()
-  };
-}
+import { parseFrontmatter } from "./frontmatter";
 
 /**
  * Reads all command `.md` files from the given directory and converts them

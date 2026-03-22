@@ -163,6 +163,11 @@ function pickWord(words: readonly string[]): string {
   return words[index];
 }
 
+/**
+ * Generates a random three-word plan name (adjective-gerund-noun).
+ * 50 x 50 x 50 = 125,000 combinations. No collision detection -
+ * callers should verify uniqueness if needed.
+ */
 export function generatePlanName(): string {
   return `${pickWord(ADJECTIVES)}-${pickWord(GERUNDS)}-${pickWord(NOUNS)}`;
 }

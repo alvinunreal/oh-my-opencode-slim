@@ -51,6 +51,7 @@ async function createHooks(worktree: string, client: Record<string, unknown> = {
   if (
     !hooks.tool?.advance_wave ||
     !hooks.tool.accept_plan ||
+    !hooks["tool.execute.before"] ||
     !hooks["tool.execute.after"] ||
     !hooks["session.idle"] ||
     !hooks.event
@@ -61,6 +62,7 @@ async function createHooks(worktree: string, client: Record<string, unknown> = {
   return {
     advanceWave: hooks.tool.advance_wave,
     acceptPlan: hooks.tool.accept_plan,
+    beforeHook: hooks["tool.execute.before"],
     afterHook: hooks["tool.execute.after"],
     sessionIdleHook: hooks["session.idle"],
     eventHook: hooks.event
@@ -110,6 +112,29 @@ afterEach(() => {
     process.env.OPENCODE_DISCIPLINE_NOTIFY_COMMAND = originalNotifyCommand;
   }
 });
+
+function collectMetadata(): {
+  events: Array<Record<string, unknown>>;
+  collector: (payload: unknown) => void;
+} {
+  const events: Array<Record<string, unknown>> = [];
+  return {
+    events,
+    collector(payload: unknown) {
+      if (payload && typeof payload === "object") {
+        events.push(payload as Record<string, unknown>);
+      }
+    }
+  };
+}
+
+function findNeedAnswersEvent(
+  events: Array<Record<string, unknown>>
+): Record<string, unknown> | undefined {
+  return events.find(
+    (item) => item.type === "discipline.notification" && item.event === "need_answers"
+  );
+}
 
 describe("notifications", () => {
   test("shows startup toast with plugin version", async () => {
@@ -162,34 +187,63 @@ describe("notifications", () => {
     delete process.env.OPENCODE_DISCIPLINE_NOTIFY_COMMAND;
 
     const worktree = createWorktree();
+    const { beforeHook } = await createHooks(worktree);
+    const { events, collector } = collectMetadata();
+
+    await (beforeHook as any)(
+      { tool: "question", sessionID: "session-question", callID: "question-1" },
+      {
+        args: { questions: [{ question: "Need scope?", header: "Scope", options: [] }] },
+        metadata: collector
+      }
+    );
+
+    const event = findNeedAnswersEvent(events);
+    expect(event).toBeDefined();
+    expect(event?.title).toBe("Agent needs your answers");
+    expect(event?.message).toBe("Need scope?");
+  });
+
+  test("uses question args when question is asked", async () => {
+    process.env.OPENCODE_DISCIPLINE_NOTIFY = "metadata";
+    delete process.env.OPENCODE_DISCIPLINE_NOTIFY_COMMAND;
+
+    const worktree = createWorktree();
+    const { beforeHook } = await createHooks(worktree);
+    const { events, collector } = collectMetadata();
+
+    await (beforeHook as any)(
+      { tool: "question", sessionID: "session-question-answered", callID: "question-2" },
+      {
+        args: { questions: [{ question: "Which tier fits best?", header: "Tier", options: [] }] },
+        metadata: collector
+      }
+    );
+
+    const event = findNeedAnswersEvent(events);
+    expect(event).toBeDefined();
+    expect(event?.message).toBe("Which tier fits best?");
+  });
+
+  test("does not emit need_answers notification after question tool completes", async () => {
+    process.env.OPENCODE_DISCIPLINE_NOTIFY = "metadata";
+    delete process.env.OPENCODE_DISCIPLINE_NOTIFY_COMMAND;
+
+    const worktree = createWorktree();
     const { afterHook } = await createHooks(worktree);
-    const metadataEvents: Array<Record<string, unknown>> = [];
+    const { events, collector } = collectMetadata();
 
     await afterHook(
       {
         tool: "question",
-        sessionID: "session-question",
-        callID: "question-1",
-        args: {
-          questions: [{ question: "Need scope?", header: "Scope", options: [] }]
-        }
+        sessionID: "session-question-after",
+        callID: "question-3",
+        args: { questions: [{ question: "Need scope?", header: "Scope", options: [] }] }
       },
-      {
-        title: "Question asked",
-        output: "Need scope?",
-        metadata(payload: unknown) {
-          if (payload && typeof payload === "object") {
-            metadataEvents.push(payload as Record<string, unknown>);
-          }
-        }
-      }
+      { title: "Question answered", output: "User answered", metadata: collector }
     );
 
-    const event = metadataEvents.find(
-      (item) => item.type === "discipline.notification" && item.event === "need_answers"
-    );
-    expect(event).toBeDefined();
-    expect(event?.title).toBe("Need your answers");
+    expect(findNeedAnswersEvent(events)).toBeUndefined();
   });
 
   test("emits plan_ready notification at wave 4 when plan file exists", async () => {
