@@ -126,7 +126,10 @@ export class ForegroundFallbackManager {
           typeof info.providerID === 'string' &&
           typeof info.modelID === 'string'
         ) {
-          this.sessionModel.set(sessionID, `${info.providerID}/${info.modelID}`);
+          this.sessionModel.set(
+            sessionID,
+            `${info.providerID}/${info.modelID}`,
+          );
         }
         // Rate-limit on an individual message
         if (info.error && isRateLimitError(info.error)) {
@@ -220,13 +223,17 @@ export class ForegroundFallbackManager {
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
       if (!chain.length) {
-        log('[foreground-fallback] no chain configured', { sessionID, agentName });
+        log('[foreground-fallback] no chain configured', {
+          sessionID,
+          agentName,
+        });
         return;
       }
 
       if (!this.sessionTried.has(sessionID)) {
         this.sessionTried.set(sessionID, new Set());
       }
+      // biome-ignore lint/style/noNonNullAssertion: We just set this above
       const tried = this.sessionTried.get(sessionID)!;
       if (currentModel) tried.add(currentModel);
 

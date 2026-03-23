@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { ForegroundFallbackManager, isRateLimitError } from './index';
 
 // ---------------------------------------------------------------------------
@@ -61,9 +61,9 @@ describe('isRateLimitError', () => {
   });
 
   test('returns true for "quota exceeded" in responseBody', () => {
-    expect(
-      isRateLimitError({ data: { responseBody: 'quota exceeded' } }),
-    ).toBe(true);
+    expect(isRateLimitError({ data: { responseBody: 'quota exceeded' } })).toBe(
+      true,
+    );
   });
 
   test('returns true for "usage exceeded"', () => {
