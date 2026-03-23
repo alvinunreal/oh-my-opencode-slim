@@ -181,8 +181,14 @@ export class ForegroundFallbackManager {
       case 'session.deleted': {
         // Clean up all per-session state to prevent unbounded memory growth
         // in long-running instances with many subagent sessions.
-        const props = event.properties as { sessionID?: string } | undefined;
-        const id = props?.sessionID;
+        // OpenCode emits two shapes depending on context:
+        //   { properties: { sessionID } }   — subagent / task sessions
+        //   { properties: { info: { id } } } — top-level session deletion
+        // Mirror the same dual-shape lookup used by BackgroundTaskManager.
+        const props = event.properties as
+          | { sessionID?: string; info?: { id?: string } }
+          | undefined;
+        const id = props?.info?.id ?? props?.sessionID;
         if (id) {
           this.sessionModel.delete(id);
           this.sessionAgent.delete(id);
@@ -314,19 +320,26 @@ export class ForegroundFallbackManager {
    * Determine the fallback chain to use for a session.
    *
    * Priority:
-   * 1. Agent name known → return that agent's chain directly
-   * 2. Agent name unknown → search all chains for the current model
-   * 3. Nothing matches → flatten all chains as a last resort
+   * 1. Agent name known AND has a configured chain → return it directly
+   * 2. Agent name known but NO chain configured → return [] (no fallback;
+   *    do NOT bleed into other agents' chains which would re-prompt the
+   *    session with a model belonging to a completely different agent)
+   * 3. Agent name unknown, current model known → search all chains for
+   *    the model to infer which chain to use
+   * 4. Nothing matches → flatten all chains as a last resort (only
+   *    reached when both agent name and current model are unavailable)
    */
   private resolveChain(
     agentName: string | undefined,
     currentModel: string | undefined,
   ): string[] {
     if (agentName) {
-      const chain = this.chains[agentName];
-      if (chain?.length) return chain;
+      // Agent is known: use its chain exactly, or no chain at all.
+      // Never fall through to cross-agent chains when the agent is identified.
+      return this.chains[agentName] ?? [];
     }
 
+    // Agent unknown: try to infer from the current model.
     if (currentModel) {
       for (const chain of Object.values(this.chains)) {
         if (chain.includes(currentModel)) return chain;
@@ -334,6 +347,7 @@ export class ForegroundFallbackManager {
     }
 
     // Last resort: merged list across all agents preserving insertion order.
+    // Only reached when both agent name and current model are unavailable.
     const all: string[] = [];
     const seen = new Set<string>();
     for (const chain of Object.values(this.chains)) {

@@ -518,4 +518,107 @@ describe('ForegroundFallbackManager session.deleted', () => {
       mgr.handleEvent({ type: 'session.deleted', properties: {} }),
     ).resolves.toBeUndefined();
   });
+
+  test('cleans up state using info.id shape (top-level session deletion)', async () => {
+    // OpenCode emits { properties: { info: { id } } } for top-level sessions
+    // and { properties: { sessionID } } for subagent sessions. Both must clean up.
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    // Seed state for the session
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-info-del',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    // Delete via the info.id shape
+    await mgr.handleEvent({
+      type: 'session.deleted',
+      properties: { info: { id: 'sess-info-del' } },
+    });
+
+    // State is cleared: a new rate-limit on same ID should behave as fresh session
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-info-del',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    // Triggered (dedup was cleared by deletion)
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ForegroundFallbackManager — resolveChain correctness
+// ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
+  test('does not use another agent chain when known agent has no configured chain', async () => {
+    // oracle has no chain in runtimeChains; without the fix resolveChain would
+    // fall through to the cross-agent "last resort" and pick a model from
+    // orchestrator's chain — re-prompting oracle with an orchestrator model.
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      {
+        // oracle intentionally absent — no chain configured
+        orchestrator: ['openai/gpt-4o', 'google/gemini-2.5-pro'],
+      },
+      true,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'oracle-sess',
+          agent: 'oracle', // agent IS known
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          error: { message: 'rate limit exceeded' },
+        },
+      },
+    });
+
+    // oracle has no chain → should not fall back at all
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('uses cross-agent last-resort only when agent name is unknown', async () => {
+    // When the agent name is genuinely unknown AND current model is not in any
+    // chain, the last-resort flattened chain is acceptable.
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      { orchestrator: ['openai/gpt-4o'] },
+      true,
+    );
+
+    // No agent name tracked, no model tracked — triggers session.error
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'unknown-agent-sess',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    // Falls through to last-resort → picks first model from any chain
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.model.providerID).toBe('openai');
+    expect(call[0].body.model.modelID).toBe('gpt-4o');
+  });
 });
