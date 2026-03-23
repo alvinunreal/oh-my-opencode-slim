@@ -7,17 +7,16 @@ import {
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
   createDelegateTaskRetryHook,
-  ForegroundFallbackManager,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
+  ForegroundFallbackManager,
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
 import {
   ast_grep_replace,
   ast_grep_search,
   createBackgroundTools,
-  grep,
   lsp_diagnostics,
   lsp_find_references,
   lsp_goto_definition,
@@ -138,7 +137,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       lsp_find_references,
       lsp_diagnostics,
       lsp_rename,
-      grep,
       ast_grep_search,
       ast_grep_replace,
     },
