@@ -7,6 +7,7 @@ import {
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
   createDelegateTaskRetryHook,
+  ForegroundFallbackManager,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
@@ -42,6 +43,33 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       modelArrayMap[agentDef.name] = agentDef._modelArray;
     }
   }
+  // Build runtime fallback chains for all foreground agents.
+  // Each chain is an ordered list of model strings to try when the current
+  // model is rate-limited. Seeds from _modelArray entries (when the user
+  // configures model as an array), then appends fallback.chains entries.
+  const runtimeChains: Record<string, string[]> = {};
+  for (const agentDef of agentDefs) {
+    if (agentDef._modelArray?.length) {
+      runtimeChains[agentDef.name] = agentDef._modelArray.map((m) => m.id);
+    }
+  }
+  if (config.fallback?.enabled !== false) {
+    const chains =
+      (config.fallback?.chains as Record<string, string[] | undefined>) ?? {};
+    for (const [agentName, chainModels] of Object.entries(chains)) {
+      if (!chainModels?.length) continue;
+      const existing = runtimeChains[agentName] ?? [];
+      const seen = new Set(existing);
+      for (const m of chainModels) {
+        if (!seen.has(m)) {
+          seen.add(m);
+          existing.push(m);
+        }
+      }
+      runtimeChains[agentName] = existing;
+    }
+  }
+
   // Parse tmux config with defaults
   const tmuxConfig: TmuxConfig = {
     enabled: config.tmux?.enabled ?? false,
@@ -91,6 +119,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize JSON parse error recovery hook
   const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
+
+  // Initialize foreground fallback manager for runtime model switching
+  const foregroundFallback = new ForegroundFallbackManager(
+    ctx.client,
+    runtimeChains,
+    config.fallback?.enabled !== false && Object.keys(runtimeChains).length > 0,
+  );
 
   return {
     name: 'oh-my-opencode-slim',
@@ -151,17 +186,67 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
 
-      // Runtime model fallback: resolve model arrays to the first
-      // provider/model whose provider is configured in OpenCode.
+      // Model resolution for foreground agents: pick the best available model
+      // by combining _modelArray entries with fallback.chains config.
+      //
       // NOTE: We cannot call ctx.client.provider.list() here because
       // the HTTP server is still initializing (causes deadlock).
       // Instead, inspect opencodeConfig.provider directly.
-      if (Object.keys(modelArrayMap).length > 0) {
+      //
+      // NOTE: This is startup-time selection only. Runtime failover on API
+      // errors (e.g. rate limits mid-conversation) is not supported for
+      // foreground agents by the current plugin API — that capability exists
+      // only for background tasks via BackgroundTaskManager.
+      const fallbackChainsEnabled = config.fallback?.enabled !== false;
+      const fallbackChains = fallbackChainsEnabled
+        ? ((config.fallback?.chains as Record<string, string[] | undefined>) ??
+          {})
+        : {};
+
+      // Build effective model arrays: seed from _modelArray, then append
+      // fallback.chains entries so the resolver considers the full chain
+      // when picking the best available provider at startup.
+      const effectiveArrays: Record<
+        string,
+        Array<{ id: string; variant?: string }>
+      > = {};
+
+      for (const [agentName, models] of Object.entries(modelArrayMap)) {
+        effectiveArrays[agentName] = [...models];
+      }
+
+      for (const [agentName, chainModels] of Object.entries(fallbackChains)) {
+        if (!chainModels || chainModels.length === 0) continue;
+
+        if (!effectiveArrays[agentName]) {
+          // Agent has no _modelArray — seed from its current string model so
+          // the fallback chain appends after it rather than replacing it.
+          const entry = configAgent[agentName] as
+            | Record<string, unknown>
+            | undefined;
+          const currentModel =
+            typeof entry?.model === 'string' ? entry.model : undefined;
+          effectiveArrays[agentName] = currentModel
+            ? [{ id: currentModel }]
+            : [];
+        }
+
+        const seen = new Set(effectiveArrays[agentName].map((m) => m.id));
+        for (const chainModel of chainModels) {
+          if (!seen.has(chainModel)) {
+            seen.add(chainModel);
+            effectiveArrays[agentName].push({ id: chainModel });
+          }
+        }
+      }
+
+      if (Object.keys(effectiveArrays).length > 0) {
         const providerConfig =
           (opencodeConfig.provider as Record<string, unknown>) ?? {};
         const hasProviderConfig = Object.keys(providerConfig).length > 0;
 
-        for (const [agentName, modelArray] of Object.entries(modelArrayMap)) {
+        for (const [agentName, modelArray] of Object.entries(effectiveArrays)) {
+          if (modelArray.length === 0) continue;
           let resolved = false;
 
           if (hasProviderConfig) {
@@ -267,6 +352,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     event: async (input) => {
+      // Runtime model fallback for foreground agents (rate-limit detection)
+      await foregroundFallback.handleEvent(input.event);
+
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
 
