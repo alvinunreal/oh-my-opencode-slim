@@ -193,10 +193,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // the HTTP server is still initializing (causes deadlock).
       // Instead, inspect opencodeConfig.provider directly.
       //
-      // NOTE: This is startup-time selection only. Runtime failover on API
-      // errors (e.g. rate limits mid-conversation) is not supported for
-      // foreground agents by the current plugin API — that capability exists
-      // only for background tasks via BackgroundTaskManager.
+      // NOTE: This is startup-time selection only — it picks the best
+      // available provider at plugin init. Runtime failover on API errors
+      // (e.g. rate limits mid-conversation) is handled separately by
+      // ForegroundFallbackManager via the event hook.
       const fallbackChainsEnabled = config.fallback?.enabled !== false;
       const fallbackChains = fallbackChainsEnabled
         ? ((config.fallback?.chains as Record<string, string[] | undefined>) ??

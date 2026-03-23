@@ -177,6 +177,21 @@ export class ForegroundFallbackManager {
         }
         break;
       }
+
+      case 'session.deleted': {
+        // Clean up all per-session state to prevent unbounded memory growth
+        // in long-running instances with many subagent sessions.
+        const props = event.properties as { sessionID?: string } | undefined;
+        const id = props?.sessionID;
+        if (id) {
+          this.sessionModel.delete(id);
+          this.sessionAgent.delete(id);
+          this.sessionTried.delete(id);
+          this.inProgress.delete(id);
+          this.lastTrigger.delete(id);
+        }
+        break;
+      }
     }
   }
 

@@ -300,43 +300,89 @@ describe('ForegroundFallbackManager session.status', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager chain exhaustion', () => {
-  test('stops after exhausting all chain models', async () => {
+  test('does not call promptAsync when the only chain model is already the current model', async () => {
+    // Scenario: chain = ['openai/gpt-b'], current model IS 'openai/gpt-b'.
+    // tryFallback adds 'openai/gpt-b' to tried → chain.find() returns undefined → exhausted.
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       client,
-      { orchestrator: ['anthropic/claude-a', 'openai/gpt-b'] },
+      { orchestrator: ['openai/gpt-b'] },
       true,
     );
 
-    // First fallback: claude-a fails → switch to gpt-b
+    // Seed current model as the only chain entry
     await mgr.handleEvent({
       type: 'message.updated',
       properties: {
         info: {
           sessionID: 's',
-          providerID: 'anthropic',
-          modelID: 'claude-a',
+          providerID: 'openai',
+          modelID: 'gpt-b',
+        },
+      },
+    });
+
+    // Rate limit fires — only model in chain is already current → nothing to fall back to
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: 's', error: { message: 'rate limit exceeded' } },
+    });
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('does not call promptAsync when all chain models have been tried', async () => {
+    // Scenario: chain = ['anthropic/claude-a', 'openai/gpt-b'].
+    // Current model is 'openai/gpt-b' (the last fallback already in use).
+    // tried will contain: 'openai/gpt-b' (current) → chain.find() → 'anthropic/claude-a'
+    // would be picked… unless we also mark it tried via a prior switch.
+    // Use agent name tracking so we can target the right chain, then seed tried
+    // by having the manager go through both models via sequential events
+    // (each on a distinct session so dedup does not interfere).
+    const { client, mocks } = createMockClient();
+    const chain = ['openai/model-x', 'openai/model-y'];
+    const mgr = new ForegroundFallbackManager(
+      client,
+      { orchestrator: chain },
+      true,
+    );
+
+    // Session A: current model is model-x, which IS in the chain → picks model-y ✓
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-exhaust',
+          agent: 'orchestrator',
+          providerID: 'openai',
+          modelID: 'model-x',
           error: { message: 'rate limit exceeded' },
         },
       },
     });
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
 
-    // Advance time past the dedup window by resetting lastTrigger (simulate new trigger)
-    // We do this by creating a new event after dedup clears naturally — but we can also
-    // test via session.error which bypasses message.updated dedup tracking.
-    // Instead, test directly: fire error event after dedup window by using a different event type.
-    // For simplicity we will just note that subsequent triggers within DEDUP_WINDOW are no-ops.
-    // Fire the SAME session from session.error immediately → should be deduped
-    await mgr.handleEvent({
-      type: 'session.error',
+    // Session B (fresh session, different ID): only model-y is in chain and it IS
+    // the current model → tried gets model-y → chain.find() = undefined → exhausted
+    const { client: client2, mocks: mocks2 } = createMockClient();
+    const mgr2 = new ForegroundFallbackManager(
+      client2,
+      { orchestrator: ['openai/model-y'] }, // single-entry chain already in use
+      true,
+    );
+    await mgr2.handleEvent({
+      type: 'message.updated',
       properties: {
-        sessionID: 's',
-        error: { message: 'rate limit exceeded' },
+        info: {
+          sessionID: 'sess-exhaust-2',
+          agent: 'orchestrator',
+          providerID: 'openai',
+          modelID: 'model-y',
+          error: { message: 'rate limit exceeded' },
+        },
       },
     });
-    // Still only 1 call because dedup window is active
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks2.promptAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -411,5 +457,65 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
     // no current model tracked → first untried = openai/gpt-4o-mini
     expect(call[0].body.model.providerID).toBe('openai');
     expect(call[0].body.model.modelID).toBe('gpt-4o-mini');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ForegroundFallbackManager — session.deleted cleanup
+// ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager session.deleted', () => {
+  test('cleans up session state on session.deleted preventing memory leaks', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    // Populate all maps for this session
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-del',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    // Delete the session
+    await mgr.handleEvent({
+      type: 'session.deleted',
+      properties: { sessionID: 'sess-del' },
+    });
+
+    // After deletion, a new rate-limit on the same ID should behave as a fresh
+    // session (no prior model known → uses chain from start, dedup cleared)
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-del',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    // Should have triggered (dedup was cleared by session.deleted)
+    // and should pick the first chain model (no current model seed after deletion)
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    // orchestrator chain: ['anthropic/claude-opus-4-5', 'openai/gpt-4o', 'google/gemini-2.5-pro']
+    // no current model → first untried = anthropic/claude-opus-4-5
+    expect(call[0].body.model.providerID).toBe('anthropic');
+    expect(call[0].body.model.modelID).toBe('claude-opus-4-5');
+  });
+
+  test('ignores session.deleted with no sessionID', async () => {
+    const { client } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+    // Should not throw
+    await expect(
+      mgr.handleEvent({ type: 'session.deleted', properties: {} }),
+    ).resolves.toBeUndefined();
   });
 });
