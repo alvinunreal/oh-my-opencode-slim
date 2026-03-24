@@ -239,61 +239,31 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       if (Object.keys(effectiveArrays).length > 0) {
-        const providerConfig =
-          (opencodeConfig.provider as Record<string, unknown>) ?? {};
-        const hasProviderConfig = Object.keys(providerConfig).length > 0;
-
         for (const [agentName, modelArray] of Object.entries(effectiveArrays)) {
           if (modelArray.length === 0) continue;
-          let resolved = false;
 
-          if (hasProviderConfig) {
-            const configuredProviders = Object.keys(providerConfig);
-            for (const modelEntry of modelArray) {
-              const slashIdx = modelEntry.id.indexOf('/');
-              if (slashIdx === -1) continue;
-              const providerID = modelEntry.id.slice(0, slashIdx);
-              if (configuredProviders.includes(providerID)) {
-                const entry = configAgent[agentName] as
-                  | Record<string, unknown>
-                  | undefined;
-                if (entry) {
-                  entry.model = modelEntry.id;
-                  if (modelEntry.variant) {
-                    entry.variant = modelEntry.variant;
-                  }
-                }
-                log('[plugin] resolved model fallback', {
-                  agent: agentName,
-                  model: modelEntry.id,
-                  variant: modelEntry.variant,
-                });
-                resolved = true;
-                break;
-              }
+          // Use the first model in the effective array.
+          // Not all providers require entries in opencodeConfig.provider —
+          // some are loaded automatically by opencode (e.g. github-copilot,
+          // openrouter). We cannot distinguish these from truly unconfigured
+          // providers at config-hook time, so we cannot gate on the provider
+          // config keys. Runtime failover is handled separately by
+          // ForegroundFallbackManager.
+          const chosen = modelArray[0];
+          const entry = configAgent[agentName] as
+            | Record<string, unknown>
+            | undefined;
+          if (entry) {
+            entry.model = chosen.id;
+            if (chosen.variant) {
+              entry.variant = chosen.variant;
             }
           }
-
-          // If no provider config or no provider matched, use the first model
-          // in the array. This ensures model arrays work even without explicit
-          // provider configuration.
-          if (!resolved) {
-            const firstModel = modelArray[0];
-            const entry = configAgent[agentName] as
-              | Record<string, unknown>
-              | undefined;
-            if (entry) {
-              entry.model = firstModel.id;
-              if (firstModel.variant) {
-                entry.variant = firstModel.variant;
-              }
-            }
-            log('[plugin] resolved model from array (no provider config)', {
-              agent: agentName,
-              model: firstModel.id,
-              variant: firstModel.variant,
-            });
-          }
+          log('[plugin] resolved model from array', {
+            agent: agentName,
+            model: chosen.id,
+            variant: chosen.variant,
+          });
         }
       }
 

@@ -3,44 +3,32 @@ import type { ModelEntry } from '../config/schema';
 
 /**
  * Test the model array resolution logic that runs in the config hook.
- * This logic determines which model to use based on provider configuration.
+ * This logic determines which model to use from an effective model array.
+ *
+ * The resolver always picks the first model in the effective array,
+ * regardless of provider configuration. This is correct because:
+ * - Not all providers require entries in opencodeConfig.provider — some are
+ *   loaded automatically by opencode (e.g. github-copilot, openrouter).
+ * - We cannot distinguish "auto-loaded provider" from "provider not configured"
+ *   without calling the API, which isn't available at config-hook time.
+ * - Runtime failover (rate-limit handling) is handled separately by
+ *   ForegroundFallbackManager.
  */
 
 describe('model array resolution', () => {
   /**
-   * Simulates the resolution logic from src/index.ts
-   * Returns the resolved model entry or null if no resolution possible
+   * Simulates the resolution logic from src/index.ts.
+   * Always returns the first model in the array.
    */
   function resolveModelFromArray(
     modelArray: Array<{ id: string; variant?: string }>,
-    providerConfig: Record<string, unknown> | undefined,
   ): { model: string; variant?: string } | null {
     if (!modelArray || modelArray.length === 0) return null;
 
-    const hasProviderConfig =
-      providerConfig && Object.keys(providerConfig).length > 0;
-
-    // Case 1: Provider config exists - try to match
-    if (hasProviderConfig) {
-      const configuredProviders = Object.keys(providerConfig);
-      for (const modelEntry of modelArray) {
-        const slashIdx = modelEntry.id.indexOf('/');
-        if (slashIdx === -1) continue;
-        const providerID = modelEntry.id.slice(0, slashIdx);
-        if (configuredProviders.includes(providerID)) {
-          return {
-            model: modelEntry.id,
-            variant: modelEntry.variant,
-          };
-        }
-      }
-    }
-
-    // Case 2: No provider config or no match - use first model in array
-    const firstModel = modelArray[0];
+    const chosen = modelArray[0];
     return {
-      model: firstModel.id,
-      variant: firstModel.variant,
+      model: chosen.id,
+      variant: chosen.variant,
     };
   }
 
@@ -49,72 +37,30 @@ describe('model array resolution', () => {
       { id: 'opencode/big-pickle', variant: 'high' },
       { id: 'iflowcn/qwen3-235b-a22b-thinking-2507', variant: 'high' },
     ];
-    const providerConfig = undefined;
 
-    const result = resolveModelFromArray(modelArray, providerConfig);
-
-    expect(result?.model).toBe('opencode/big-pickle');
-    expect(result?.variant).toBe('high');
-  });
-
-  test('uses first model when provider config is empty', () => {
-    const modelArray: ModelEntry[] = [
-      { id: 'opencode/big-pickle', variant: 'high' },
-      { id: 'iflowcn/qwen3-235b-a22b-thinking-2507', variant: 'high' },
-    ];
-    const providerConfig = {};
-
-    const result = resolveModelFromArray(modelArray, providerConfig);
+    const result = resolveModelFromArray(modelArray);
 
     expect(result?.model).toBe('opencode/big-pickle');
     expect(result?.variant).toBe('high');
   });
 
-  test('uses matching provider model when configured', () => {
+  test('uses first model even when other providers are configured', () => {
     const modelArray: ModelEntry[] = [
-      { id: 'opencode/big-pickle', variant: 'high' },
-      { id: 'anthropic/claude-3.5-sonnet', variant: 'medium' },
+      { id: 'github-copilot/claude-opus-4.6', variant: 'high' },
+      { id: 'zai-coding-plan/glm-5' },
     ];
-    const providerConfig = { anthropic: {} };
 
-    const result = resolveModelFromArray(modelArray, providerConfig);
+    const result = resolveModelFromArray(modelArray);
 
-    expect(result?.model).toBe('anthropic/claude-3.5-sonnet');
-    expect(result?.variant).toBe('medium');
-  });
-
-  test('falls back to first model when providers configured but none match', () => {
-    const modelArray: ModelEntry[] = [
-      { id: 'opencode/big-pickle', variant: 'high' },
-      { id: 'iflowcn/qwen3-235b-a22b-thinking-2507' },
-    ];
-    // User has anthropic configured, but model array uses opencode/iflowcn
-    const providerConfig = { anthropic: {}, openai: {} };
-
-    const result = resolveModelFromArray(modelArray, providerConfig);
-
-    // Should use first model, not UI default
-    expect(result?.model).toBe('opencode/big-pickle');
+    // Auto-loaded provider should not be skipped in favor of configured one
+    expect(result?.model).toBe('github-copilot/claude-opus-4.6');
     expect(result?.variant).toBe('high');
-  });
-
-  test('skips models without provider prefix', () => {
-    const modelArray: ModelEntry[] = [
-      { id: 'invalid-model-no-prefix' },
-      { id: 'opencode/big-pickle' },
-    ];
-    const providerConfig = { opencode: {} };
-
-    const result = resolveModelFromArray(modelArray, providerConfig);
-
-    expect(result?.model).toBe('opencode/big-pickle');
   });
 
   test('returns null for empty model array', () => {
     const modelArray: ModelEntry[] = [];
-    const providerConfig = { opencode: {} };
 
-    const result = resolveModelFromArray(modelArray, providerConfig);
+    const result = resolveModelFromArray(modelArray);
 
     expect(result).toBeNull();
   });
@@ -133,14 +79,12 @@ describe('fallback.chains merging for foreground agents', () => {
     modelArray?: Array<{ id: string; variant?: string }>;
     currentModel?: string;
     chainModels?: string[];
-    providerConfig?: Record<string, unknown>;
     fallbackEnabled?: boolean;
   }): string | null {
     const {
       modelArray,
       currentModel,
       chainModels,
-      providerConfig,
       fallbackEnabled = true,
     } = opts;
 
@@ -164,56 +108,14 @@ describe('fallback.chains merging for foreground agents', () => {
 
     if (effectiveArray.length === 0) return null;
 
-    const hasProviderConfig =
-      providerConfig && Object.keys(providerConfig).length > 0;
-
-    if (hasProviderConfig) {
-      const configuredProviders = Object.keys(providerConfig);
-      for (const modelEntry of effectiveArray) {
-        const slashIdx = modelEntry.id.indexOf('/');
-        if (slashIdx === -1) continue;
-        const providerID = modelEntry.id.slice(0, slashIdx);
-        if (configuredProviders.includes(providerID)) {
-          return modelEntry.id;
-        }
-      }
-    }
-
+    // Resolution: always use first model in effective array
     return effectiveArray[0].id;
   }
 
-  test('fallback.chains used when agent has a string model and primary provider is not configured', () => {
-    const result = resolveWithChains({
-      currentModel: 'anthropic/claude-opus-4-5',
-      chainModels: ['openai/gpt-4o', 'google/gemini-pro'],
-      providerConfig: { openai: {} }, // only openai configured
-    });
-    expect(result).toBe('openai/gpt-4o');
-  });
-
-  test('primary model wins when its provider IS configured', () => {
+  test('primary model wins regardless of provider config', () => {
     const result = resolveWithChains({
       currentModel: 'anthropic/claude-opus-4-5',
       chainModels: ['openai/gpt-4o'],
-      providerConfig: { anthropic: {}, openai: {} },
-    });
-    expect(result).toBe('anthropic/claude-opus-4-5');
-  });
-
-  test('falls through full chain to find a configured provider', () => {
-    const result = resolveWithChains({
-      currentModel: 'anthropic/claude-opus-4-5',
-      chainModels: ['openai/gpt-4o', 'google/gemini-2.5-pro'],
-      providerConfig: { google: {} }, // only google configured
-    });
-    expect(result).toBe('google/gemini-2.5-pro');
-  });
-
-  test('falls back to primary (first) when no chain provider is configured', () => {
-    const result = resolveWithChains({
-      currentModel: 'anthropic/claude-opus-4-5',
-      chainModels: ['openai/gpt-4o'],
-      providerConfig: {}, // nothing configured
     });
     expect(result).toBe('anthropic/claude-opus-4-5');
   });
@@ -222,7 +124,6 @@ describe('fallback.chains merging for foreground agents', () => {
     const result = resolveWithChains({
       currentModel: 'anthropic/claude-opus-4-5',
       chainModels: ['openai/gpt-4o'],
-      providerConfig: { openai: {} },
       fallbackEnabled: false,
     });
     // chain not applied; no effectiveArray entry → falls through to null (no _modelArray either)
@@ -236,31 +137,40 @@ describe('fallback.chains merging for foreground agents', () => {
         { id: 'anthropic/claude-sonnet-4-5' },
       ],
       chainModels: ['openai/gpt-4o'],
-      providerConfig: { openai: {} }, // only openai configured
     });
-    // anthropic entries in array are skipped; openai/gpt-4o from chain is picked
-    expect(result).toBe('openai/gpt-4o');
+    // First entry in _modelArray wins; chain only used for runtime failover
+    expect(result).toBe('anthropic/claude-opus-4-5');
   });
 
   test('duplicate model ids across array and chain are deduplicated', () => {
-    // openai/gpt-4o appears in both _modelArray and chains — should not duplicate
     const result = resolveWithChains({
       modelArray: [
         { id: 'anthropic/claude-opus-4-5' },
         { id: 'openai/gpt-4o' },
       ],
       chainModels: ['openai/gpt-4o', 'google/gemini-pro'],
-      providerConfig: { openai: {} },
+    });
+    expect(result).toBe('anthropic/claude-opus-4-5');
+  });
+
+  test('no currentModel and no _modelArray with chain still resolves', () => {
+    const result = resolveWithChains({
+      chainModels: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5'],
     });
     expect(result).toBe('openai/gpt-4o');
   });
 
-  test('no currentModel and no _modelArray with chain still resolves', () => {
-    // Edge case: agent has no model set yet, chain provides candidates
+  test('built-in provider not skipped when other providers are configured', () => {
+    // Regression test: github-copilot is auto-loaded by opencode and doesn't
+    // need an entry in opencodeConfig.provider. The resolver must not skip
+    // it in favor of a configured provider later in the chain.
     const result = resolveWithChains({
-      chainModels: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5'],
-      providerConfig: { anthropic: {} },
+      currentModel: 'github-copilot/claude-opus-4.6',
+      chainModels: [
+        'github-copilot/gemini-3.1-pro-preview',
+        'zai-coding-plan/glm-5',
+      ],
     });
-    expect(result).toBe('anthropic/claude-sonnet-4-5');
+    expect(result).toBe('github-copilot/claude-opus-4.6');
   });
 });
