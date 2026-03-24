@@ -64,6 +64,44 @@ Uses OpenAI models exclusively:
 
 For Kimi, GitHub Copilot, and ZAI Coding Plan presets, see **[Provider Configurations](provider-configurations.md)**.
 
+### Fallback / Failover
+
+The plugin can fail over from one model to the next when a prompt times out or errors. This is the runtime fallback path used by the background task manager; it is separate from your preset selection.
+
+**How it works:**
+
+- Each agent can have a fallback chain under `fallback.chains.<agent>`
+- The active prompt uses the agent's configured model first
+- If that model fails, the manager aborts the session, waits briefly, and tries the next model in the chain
+- Duplicate model IDs are ignored, so the same model is not retried twice
+- If fallback is disabled, the task runs with no failover timeout
+
+**Minimal example:**
+
+```jsonc
+{
+  "fallback": {
+    "enabled": true,
+    "timeoutMs": 15000,
+    "retryDelayMs": 500,
+    "chains": {
+      "orchestrator": [
+        "openai/gpt-5.4",
+        "anthropic/claude-sonnet-4-6",
+        "google/gemini-3.1-pro"
+      ]
+    }
+  }
+}
+```
+
+**Important notes:**
+
+- Fallback models must use the `provider/model` format
+- Chains are per agent (`orchestrator`, `oracle`, `designer`, `explorer`, `librarian`, `fixer`)
+- If an agent has no configured chain, only its primary model is used
+- This is documented here because it is easy to miss in the config file
+
 ---
 
 ## Skills
