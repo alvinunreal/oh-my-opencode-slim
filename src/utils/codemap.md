@@ -1,19 +1,61 @@
 # src/utils/
 
-Helper utilities shared across the OpenCode CLI, focused on agent configuration, TMUX orchestration, generic polling, logging, and platform-aware tooling like ZIP extraction.
+Shared utility modules providing low-level services: TMUX orchestration, environment variables, polling, logging, ZIP extraction, agent variant resolution, and internal agent marker handling.
 
 ## Responsibility
 
-Provide durable, low-level services that other features lean on: resolving agent variants from plugin config, managing TMUX panes and layouts, backing a reusable polling strategy, writing trace logs to a temp file, and extracting ZIP archives in a cross-platform way.
+- **tmux.ts**: Terminal multiplexer pane lifecycle management—spawning, closing, layout rebalancing, and server health probing for background task sessions
+- **env.ts**: Cross-platform environment variable access supporting Bun and Node.js runtime with empty string filtering
+- **internal-initiator.ts**: Marker-based identification for internal agent text parts in MCP protocol communication
+- **polling.ts**: Generic polling utility with stability detection and abort signal support for asynchronous condition waiting
+- **zip-extractor.ts**: Cross-platform ZIP/TAR extraction supporting Windows (tar, pwsh, powershell) and Unix (unzip)
+- **logger.ts**: File-based structured logging to temp directory with timestamp and JSON serialization
+- **agent-variant.ts**: Agent name normalization and variant resolution from plugin configuration with non-overriding application
+- **index.ts**: Central re-export barrel for all utils
 
 ## Design
 
-Each helper lives in its own module and re-exports through `src/utils/index.ts`, keeping public surface area flat. Key ideas include memoized state (cached TMUX path, server availability cache, stored layouts), configuration defaults fed from `../config` constants, defensive guards (abort checks, empty-string variants), and layered platform detection (Windows build/tar, PowerShell fallbacks). Logging is best-effort: synchronous file append inside a try/catch so it never throws upstream.
+- **Lazy initialization**: TMUX binary path discovery is deferred and cached after first check
+- **Defensive guards**: Empty string filtering on env vars, server availability checks before pane spawns, abort signal propagation in polling
+- **Graceful shutdown protocol**: TMUX panes receive SIGINT (Ctrl+C) before termination to allow clean process exit
+- **Layout persistence**: Stored config enables rebalancing remaining panes after pane closure
+- **Server health probing**: HTTP `/health` endpoint validation with retry logic and result caching
+- **Platform detection**: `process.env.TMUX` check for tmux context, `process.platform` for OS-specific extraction strategy
+- **Stability threshold**: Polling waits for N consecutive stable results before returning success
+- **Non-overriding variant application**: Agent variant is applied only if body doesn't already contain one
+- **PowerShell path escaping**: Single quotes escaped as doubled single quotes for Windows archive extraction
 
 ## Flow
 
-Agent variant helpers normalize names, read `PluginConfig.agents`, trim/validate variants, and only mutate request bodies when a variant is missing; `log` simply timestamps and appends strings to a temp file. `pollUntilStable` loops with configurable intervals, fetch callbacks, and stability guards, honoring max time and abort signals before returning a typed `PollResult`. TMUX helpers scan for the binary (`which/where`), cache the result, verify layouts, spawn panes with `opencode attach`, reapply stored layouts on close, and guard against missing servers by checking `/health`. `extractZip` detects the OS (tar on modern Windows, pwsh/powershell fallback) before spawning native unpack commands and bubbling errors when processes fail.
+**tmux.ts**:
+- `spawnTmuxPane()` → validate config.enabled → check tmux context → probe server health → discover tmux binary → split pane with `opencode attach <url> --session <id>` → rename pane → apply layout → return paneId
+- `closeTmuxPane()` → send Ctrl+C → wait 250ms → kill-pane → reapply layout to rebalance
+- `isServerRunning()` → GET `/health` with 3s timeout → retry up to 2 times → cache result
+
+**env.ts**:
+- `getEnv(name)` → check `Bun.env` first → fallback to `process.env` → filter empty strings
+
+**internal-initiator.ts**:
+- `createInternalAgentTextPart()` → append marker to text
+- `hasInternalInitiatorMarker()` → check if part.type === 'text' and contains marker
+
+**polling.ts**:
+- `pollUntilStable()` → loop with configurable interval → call fetchFn → check stability predicate → increment stable count on match → reset on failure → return on threshold or timeout
+- `delay(ms)` → Promise-wrapped setTimeout
+
+**zip-extractor.ts**:
+- `extractZip()` → detect platform → Windows: check build number for tar support, fallback to pwsh/powershell → Unix: use unzip → spawn process → await exit code → throw on failure
+
+**logger.ts**:
+- `log()` → construct timestamp → serialize data to JSON → append to temp log file → catch and ignore errors
+
+**agent-variant.ts**:
+- `normalizeAgentName()` → trim whitespace → strip @ prefix
+- `resolveAgentVariant()` → normalize name → lookup in config.agents → validate type and non-empty → return trimmed variant
+- `applyAgentVariant()` → return original body if variant falsy or body already has variant → spread merge variant into body
 
 ## Integration
 
-Imported wherever safe, reusable utilities are needed: agent variant helpers are used by CLI commands that build request payloads, polling is shared by logic that waits for stable responses, TMUX orchestration ties into session management to open/close panes, `log` is consumed across modules for diagnostics, and `extractZip` supports tooling that unpacks bundles. The folder’s re-exports let features import everything from `src/utils`, which keeps higher-level modules free of implementation detail changes here.
+- **Consumers**: Background task manager spawns/closes tmux panes, MCP protocol layer checks for internal initiator markers, polling used by background task status monitoring, ZIP extraction for plugin updates, agent variant applied in request pipeline
+- **Dependencies**: Imports `TmuxConfig`, `TmuxLayout` from `../config/schema`, constants from `../config` (POLL_INTERVAL_MS, MAX_POLL_TIME_MS, STABLE_POLLS_THRESHOLD), logging from `./logger`, `PluginConfig` type from `../config`
+- **Exports**: All modules re-exported via `src/utils/index.ts` barrel file

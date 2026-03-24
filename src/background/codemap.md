@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-The `src/background/` module manages long-running AI agent tasks that execute asynchronously in isolated sessions. It enables fire-and-forget task execution, allowing users to continue working while background tasks complete independently. The module handles task lifecycle management, session creation, completion detection, and optional tmux pane integration for visual task tracking.
+The `src/background/` module manages long-running AI agent tasks that execute asynchronously in isolated sessions. It enables fire-and-forget task execution, allowing users to continue working while background tasks complete independently. The module handles task lifecycle management, session creation, completion detection, optional tmux pane integration for visual task tracking, and subagent delegation permission enforcement.
 
 ## Design
 
@@ -49,9 +49,10 @@ Two-phase task launch:
 - Extracts final output from session messages
 - Falls back to polling for reliability
 
-#### 4. Dual-Index Task Tracking
+#### 4. Triple-Index Task Tracking
 - `tasks` Map: Task ID → BackgroundTask
 - `tasksBySessionId` Map: Session ID → Task ID
+- `agentBySessionId` Map: Session ID → Agent name (for delegation permission checks)
 - Enables bidirectional lookups for event handling
 
 #### 5. Promise-Based Waiting
@@ -64,6 +65,17 @@ Two-phase task launch:
 - Checks cancellation status in `startTask()` after incrementing `activeStarts`
 - Uses type assertion to bypass TypeScript strictness during race handling
 
+#### 7. Subagent Delegation Permission System
+- `SUBAGENT_DELEGATION_RULES` defines allowed subagents per agent type
+- `isAgentAllowed()` checks if parent session can delegate to specific agent
+- `calculateToolPermissions()` hides delegation tools from leaf agents
+- Unknown agent types default to `explorer`-only access
+
+#### 8. Fallback Chain with Timeout
+- `resolveFallbackChain()` builds model failover sequence
+- `promptWithTimeout()` enforces per-model timeout
+- Aborts session between fallback attempts to prevent blocking
+
 ### Classes
 
 #### BackgroundTaskManager
@@ -72,6 +84,7 @@ Main orchestrator for background task lifecycle:
 **State:**
 - `tasks`: Map of all tracked tasks
 - `tasksBySessionId`: Session ID to task ID mapping
+- `agentBySessionId`: Session ID to agent name mapping (delegation checks)
 - `client`: OpenCode client API
 - `directory`: Working directory for tasks
 - `tmuxEnabled`: Whether tmux integration is active
@@ -84,7 +97,10 @@ Main orchestrator for background task lifecycle:
 
 **Key Methods:**
 - `launch(opts)`: Create and queue a new background task (sync)
-- `handleSessionStatus(event)`: Process session.status events
+- `isAgentAllowed(parentSessionId, requestedAgent)`: Check delegation permission
+- `getAllowedSubagents(parentSessionId)`: Get allowed subagents for session
+- `handleSessionStatus(event)`: Process session.status events (completion)
+- `handleSessionDeleted(event)`: Process session.deleted events (cleanup)
 - `getResult(taskId)`: Retrieve current task state
 - `waitForCompletion(taskId, timeout)`: Wait for task completion
 - `cancel(taskId?)`: Cancel one or all tasks
@@ -104,6 +120,7 @@ Manages tmux pane lifecycle for background sessions:
 **Key Methods:**
 - `onSessionCreated(event)`: Spawn tmux pane for child sessions
 - `onSessionStatus(event)`: Close pane when session becomes idle
+- `onSessionDeleted(event)`: Close pane when session is deleted
 - `pollSessions()`: Fallback polling for status updates
 - `closeSession(sessionId)`: Close pane and remove tracking
 - `cleanup()`: Close all panes and stop polling
@@ -120,7 +137,7 @@ Manages tmux pane lifecycle for background sessions:
 - `missingSince`: When session went missing (optional)
 
 #### SessionEvent
-- `type`: Event type (`session.created`, `session.status`)
+- `type`: Event type (`session.created`, `session.status`, `session.deleted`)
 - `properties`: Event properties containing session info
 
 ## Flow
@@ -145,9 +162,12 @@ startTask() executes (async)
   ├─ Check for cancellation (race condition)
   ├─ Create OpenCode session
   ├─ Store sessionId in tasksBySessionId
+  ├─ Store agent in agentBySessionId (delegation tracking)
   ├─ Set status='running'
   ├─ Wait 500ms (if tmux enabled)
-  ├─ Send prompt to session
+  ├─ Calculate tool permissions based on agent's delegation rules
+  ├─ Resolve fallback chain (if enabled)
+  ├─ Send prompt with timeout (with fallback attempts)
   └─ Decrement activeStarts and processQueue()
 ```
 
@@ -175,9 +195,30 @@ extractAndCompleteTask()
       ├─ Set status='completed'
       ├─ Set result or error
       ├─ Delete from tasksBySessionId
+      ├─ Delete from agentBySessionId
+      ├─ Abort session (triggers pane cleanup)
       ├─ Send notification to parent session
       ├─ Resolve completionResolvers
       └─ Log completion
+```
+
+### Session Deletion Flow
+
+```
+session.deleted event received
+  ↓
+handleSessionDeleted() checks event type
+  ↓
+Extract sessionId from event properties
+  ↓
+Lookup taskId from tasksBySessionId
+  ↓
+Verify task is active (running/pending)
+  ↓
+  ├─ Mark task as cancelled
+  ├─ Set error='Session deleted'
+  ├─ Clean up session tracking maps
+  └─ Resolve completionResolvers
 ```
 
 ### Cancellation Flow
@@ -228,6 +269,14 @@ closeSession()
   └─ Stop polling if no sessions left
 ```
 
+```
+session.deleted event received
+  ↓
+onSessionDeleted() checks enabled
+  ↓
+closeSession() (same as above)
+```
+
 ### Polling Fallback Flow (TmuxSessionManager)
 
 ```
@@ -250,8 +299,8 @@ For each tracked session:
 
 #### Internal Dependencies
 - `@opencode-ai/plugin`: PluginInput type, client API
-- `../config`: BackgroundTaskConfig, PluginConfig, TmuxConfig, POLL_INTERVAL_BACKGROUND_MS
-- `../utils`: applyAgentVariant, resolveAgentVariant, log, tmux utilities
+- `../config`: BackgroundTaskConfig, PluginConfig, TmuxConfig, POLL_INTERVAL_BACKGROUND_MS, SUBAGENT_DELEGATION_RULES, FALLBACK_FAILOVER_TIMEOUT_MS
+- `../utils`: applyAgentVariant, resolveAgentVariant, createInternalAgentTextPart, log, tmux utilities
 
 #### External Dependencies
 - None (uses only OpenCode SDK and standard Node.js APIs)
@@ -271,14 +320,20 @@ For each tracked session:
 2. **Event Handling**
    - Both managers register as event handlers for session events
    - BackgroundTaskManager handles `session.status` for completion detection
-   - TmuxSessionManager handles `session.created` and `session.status`
+   - BackgroundTaskManager handles `session.deleted` for cleanup
+   - TmuxSessionManager handles `session.created`, `session.status`, and `session.deleted`
 
 3. **Skill Integration**
    - Background task skill calls `launch()` to create tasks
    - Skill calls `getResult()` and `waitForCompletion()` to retrieve results
    - Skill calls `cancel()` to cancel tasks
 
-4. **Cleanup**
+4. **Delegation Permission Checks**
+   - Called by skill when processing background_task tool invocations
+   - `isAgentAllowed()` validates delegation requests
+   - `getAllowedSubagents()` returns allowed agents for UI display
+
+5. **Cleanup**
    - Both managers provide `cleanup()` methods
    - Called during plugin shutdown to release resources
 
@@ -298,12 +353,16 @@ For each tracked session:
 - Tmux pane spawn failures are logged but don't fail the task
 - Polling errors are logged but don't stop the manager
 - Notification failures are logged but don't affect task completion
+- Fallback chain failures attempt next model, then mark as failed if all fail
 
 ### Logging
 
 All operations are logged with context:
 - Task launch, start, completion, failure, cancellation
+- Delegation permission checks (allowed/subagent queries)
+- Fallback attempt logging (model failures and retries)
 - Session creation and pane spawning
+- Session deletion handling
 - Polling lifecycle
 - Error conditions
 

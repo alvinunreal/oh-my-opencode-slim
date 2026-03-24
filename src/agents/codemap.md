@@ -2,18 +2,20 @@
 
 ## Responsibility
 
-The `src/agents/` directory defines and configures the multi-agent orchestration system for OpenCode. It creates specialized AI agents with distinct roles, capabilities, and behaviors that work together under an orchestrator to optimize coding tasks for quality, speed, cost, and reliability.
+The `src/agents/` directory implements a multi-agent orchestration system for OpenCode. It defines specialized AI agents with distinct roles, capabilities, and behaviors that collaborate under an orchestrator to optimize coding tasks across quality, speed, cost, and reliability dimensions.
 
 ## Design
 
 ### Core Architecture
 
-**Agent Definition Interface**
+**Agent Definition Interface** (defined in `orchestrator.ts`)
 ```typescript
 interface AgentDefinition {
   name: string;
   description?: string;
   config: AgentConfig;
+  /** Priority-ordered model entries for runtime fallback resolution. */
+  _modelArray?: Array<{ id: string; variant?: string }>;
 }
 ```
 
@@ -21,23 +23,25 @@ All agents follow a consistent factory pattern:
 - `createXAgent(model, customPrompt?, customAppendPrompt?)` → `AgentDefinition`
 - Custom prompts can fully replace or append to default prompts
 - Temperature varies by agent role (0.1-0.7) to balance precision vs creativity
+- Model can be string or priority-ordered array for runtime fallback resolution
 
 ### Agent Classification
 
 **Primary Agent**
-- **Orchestrator**: Central coordinator that delegates tasks to specialists
+- **Orchestrator**: Central coordinator that delegates tasks to specialists based on quality/speed/cost/reliability trade-offs
 
 **Subagents** (5 specialized agents)
-1. **Explorer** - Codebase navigation and search (temperature: 0.1)
-2. **Librarian** - Documentation and library research (temperature: 0.1)
-3. **Oracle** - Strategic technical advisor (temperature: 0.1)
-4. **Designer** - UI/UX specialist (temperature: 0.7)
+1. **Explorer** - Codebase navigation and pattern matching (temperature: 0.1)
+2. **Librarian** - External documentation and library research (temperature: 0.1)
+3. **Oracle** - Strategic technical advisor and architecture guidance (temperature: 0.1)
+4. **Designer** - UI/UX design and implementation (temperature: 0.7)
 5. **Fixer** - Fast implementation specialist (temperature: 0.2)
 
 ### Configuration System
 
 **Override Application**
 - Model and temperature can be overridden per agent via user config
+- Model can be string or priority-ordered array for runtime fallback resolution
 - Fallback mechanism: Fixer inherits Librarian's model if not configured
 - Default models defined in `../config/DEFAULT_MODELS`
 
@@ -45,6 +49,7 @@ All agents follow a consistent factory pattern:
 - All agents get `question: 'allow'` by default
 - Skill permissions applied via `getSkillPermissionsForAgent()`
 - Nested permission structure: `{ question, skill: { ... } }`
+- Supports per-agent skill lists via `configuredSkills` parameter
 
 **Custom Prompts**
 - Loaded via `loadAgentPrompt(name)` from config
@@ -55,11 +60,11 @@ All agents follow a consistent factory pattern:
 
 | Agent | Primary Focus | Tools | Constraints | Temperature |
 |-------|--------------|-------|-------------|-------------|
-| Explorer | Codebase search | grep, glob, ast_grep_search | Read-only, parallel | 0.1 |
-| Librarian | External docs | context7, grep_app, websearch | Evidence-based | 0.1 |
-| Oracle | Architecture | Analysis tools | Read-only, advisory | 0.1 |
-| Designer | UI/UX | Tailwind, CSS | Visual excellence | 0.7 |
-| Fixer | Implementation | Edit/write tools | No research/delegation | 0.2 |
+| Explorer | Codebase navigation | grep, glob, ast_grep_search | Read-only, parallel | 0.1 |
+| Librarian | External docs | context7, grep_app, websearch | Evidence-based, citations required | 0.1 |
+| Oracle | Architecture guidance | Analysis tools, code review | Read-only, advisory | 0.1 |
+| Designer | UI/UX implementation | Tailwind, CSS, animations | Visual excellence priority | 0.7 |
+| Fixer | Implementation | Edit/write, lsp_diagnostics | No research/delegation, structured output | 0.2 |
 
 ## Flow
 
@@ -72,11 +77,11 @@ createAgents(config?)
   │   ├─→ Get model (with fallback for fixer)
   │   ├─→ Load custom prompts
   │   ├─→ Call factory function
-  │   ├─→ Apply overrides (model, temperature)
-  │   └─→ Apply default permissions
+  │   ├─→ Apply overrides (model, temperature, variant)
+  │   └─→ Apply default permissions (question: 'allow', skill permissions)
   │
   ├─→ Create orchestrator:
-  │   ├─→ Get model
+  │   ├─→ Get model (or leave unset for runtime resolution)
   │   ├─→ Load custom prompts
   │   ├─→ Call factory function
   │   ├─→ Apply overrides
@@ -164,7 +169,6 @@ Orchestrator (implements or delegates to Fixer)
 Orchestrator
     ↓ delegates to
 Designer (UI/UX implementation)
-    ↓ (Designer may use Fixer for parallel tasks)
 ```
 
 ## Integration
@@ -242,7 +246,8 @@ Agents are configured with specific MCP tool lists:
 ```
 src/agents/
 ├── index.ts          # Main entry point, agent factory registry, config application
-├── orchestrator.ts   # Orchestrator agent definition and delegation workflow
+├── index.test.ts     # Unit tests for agent creation and configuration
+├── orchestrator.ts   # Orchestrator agent definition, delegation workflow, AgentDefinition interface
 ├── explorer.ts       # Codebase navigation specialist
 ├── librarian.ts      # Documentation and library research specialist
 ├── oracle.ts         # Strategic technical advisor

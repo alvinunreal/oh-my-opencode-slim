@@ -4,10 +4,9 @@
 
 The `src/tools/` directory provides the core tool implementations for the oh-my-opencode-slim plugin. It exposes three main categories of tools:
 
-1. **Grep** - Fast regex-based content search using ripgrep (with fallback to system grep)
+1. **AST-grep** - AST-aware structural code search and replacement across 25+ languages
 2. **LSP** - Language Server Protocol integration for code intelligence (definition, references, diagnostics, rename)
-3. **AST-grep** - AST-aware structural code search and replacement across 25 languages
-4. **Background Tasks** - Fire-and-forget agent task management with automatic notification
+3. **Background Tasks** - Fire-and-forget agent task management with automatic notification
 
 These tools are consumed by the OpenCode plugin system and exposed to AI agents for code navigation, analysis, and modification tasks.
 
@@ -20,28 +19,23 @@ These tools are consumed by the OpenCode plugin system and exposed to AI agents 
 ```
 src/tools/
 ├── index.ts              # Central export point
-├── background.ts         # Background task tools
-├── grep/                 # Regex search (ripgrep-based)
-│   ├── cli.ts           # CLI execution layer
-│   ├── tools.ts         # Tool definition
-│   ├── types.ts         # TypeScript interfaces
-│   ├── utils.ts         # Output formatting
-│   ├── constants.ts     # Safety limits & CLI resolution
-│   └── downloader.ts    # Binary auto-download
-├── lsp/                  # Language Server Protocol
-│   ├── client.ts        # LSP client & connection pooling
-│   ├── tools.ts         # 4 tool definitions
-│   ├── types.ts         # LSP type re-exports
-│   ├── utils.ts         # Formatters & workspace edit application
-│   ├── config.ts        # Server discovery & language mapping
-│   └── constants.ts     # Built-in server configs
-└── ast-grep/            # AST-aware search
-    ├── cli.ts           # CLI execution layer
-    ├── tools.ts         # 2 tool definitions
-    ├── types.ts         # TypeScript interfaces
-    ├── utils.ts         # Output formatting & hints
-    ├── constants.ts     # CLI resolution & environment checks
-    └── downloader.ts    # Binary auto-download
+├── background.ts         # Background task tools (3 tools)
+├── ast-grep/
+│   ├── cli.ts            # CLI execution, path resolution, binary download
+│   ├── index.ts          # Module re-exports
+│   ├── types.ts          # TypeScript interfaces (CliLanguage, CliMatch, SgResult)
+│   ├── utils.ts          # Output formatting (formatSearchResult, formatReplaceResult)
+│   ├── constants.ts      # CLI path resolution, safety limits
+│   └── downloader.ts     # Binary auto-download for missing ast-grep
+└── lsp/
+    ├── client.ts         # LSP client & connection pooling (LSPServerManager singleton)
+    ├── config.ts         # Server discovery & language mapping
+    ├── constants.ts      # Built-in server configs (45+ servers), extensions, install hints
+    ├── index.ts          # Module re-exports
+    ├── types.ts          # LSP type re-exports (Diagnostic, Location, WorkspaceEdit, etc.)
+    ├── utils.ts          # Formatters & workspace edit application
+    ├── config-store.ts   # User LSP config runtime storage
+    └── tools.ts          # 4 tool definitions
 ```
 
 ### Key Patterns
@@ -56,61 +50,68 @@ export const toolName: ToolDefinition = tool({
 });
 ```
 
-#### 2. CLI Abstraction Layer
-Both `grep/` and `ast-grep/` use a similar CLI execution pattern:
-- **cli.ts**: Low-level subprocess spawning with timeout handling
-- **tools.ts**: High-level tool definitions that call CLI functions
-- **constants.ts**: CLI path resolution with fallback chain
+#### 2. CLI Abstraction Layer (ast-grep)
+The ast-grep module uses a CLI execution pattern:
+- **cli.ts**: Low-level subprocess spawning with timeout handling and JSON output parsing
+- **constants.ts**: CLI path resolution with fallback chain (cached binary → @ast-grep/cli → platform-specific → Homebrew → download)
 - **downloader.ts**: Binary auto-download for missing dependencies
+- **utils.ts**: Output formatting and truncation handling
 
 #### 3. Connection Pooling (LSP)
 The LSP module implements a singleton `LSPServerManager` with:
-- **Connection pooling**: Reuse LSP clients per workspace root
-- **Reference counting**: Track active usage
-- **Idle cleanup**: Auto-shutdown after 5 minutes of inactivity
-- **Initialization tracking**: Prevent concurrent initialization
+- **Connection pooling**: Reuse LSP clients per workspace root (key: `root::serverId`)
+- **Reference counting**: Track active usage via `refCount`, increment on acquire, decrement on release
+- **Idle cleanup**: Auto-shutdown after 5 minutes of inactivity (check every 60s)
+- **Initialization tracking**: Prevent concurrent initialization races via `initPromise`
 
 #### 4. Safety Limits
 All tools enforce strict safety limits:
-- **Timeout**: 60s (grep), 300s (ast-grep, LSP)
-- **Output size**: 10MB (grep), 1MB (ast-grep)
-- **Match limits**: 500 matches (grep), 200 diagnostics/references (LSP)
-- **Depth limits**: 20 directories (grep)
+- **Timeout**: 300s (ast-grep, LSP initialization)
+- **Output size**: 1MB (ast-grep)
+- **Match limits**: 500 matches (ast-grep), 200 diagnostics (LSP), 200 references (LSP)
 
 #### 5. Error Handling
-- Graceful degradation (ripgrep → grep fallback)
-- Clear error messages with installation hints
+- Clear error messages with installation hints for missing binaries
 - Timeout handling with process cleanup
-- Truncation detection and reporting
+- Truncation detection and reporting with reason codes
+- Graceful fallback chains for CLI resolution
 
 ---
 
 ## Flow
 
-### Grep Tool Flow
+### AST-grep Tool Flow
 
 ```
-User Request
+User Request (ast_grep_search or ast_grep_replace)
     ↓
-grep tool (tools.ts)
+Tool definition (ast-grep/tools.ts)
     ↓
-runRg() (cli.ts)
+runSg() (cli.ts)
+    ├─→ getAstGrepPath()
+    │   ├─→ Check cached path
+    │   ├─→ findSgCliPathSync()
+    │   │   ├─→ Cached binary in ~/.cache
+    │   │   ├─→ @ast-grep/cli package
+    │   │   ├─→ Platform-specific package (@ast-grep/cli-*)
+    │   │   └─→ Homebrew (macOS)
+    │   └─→ ensureAstGrepBinary() → download if missing
+    └─→ Build args: pattern, lang, rewrite, globs, paths
     ↓
-resolveGrepCli() (constants.ts)
-    ├─→ OpenCode bundled rg
-    ├─→ System PATH rg
-    ├─→ Cached download
-    └─→ System grep (fallback)
+spawn([sg, 'run', '-p', pattern, '--lang', lang, ...])
     ↓
-buildArgs() → Safety flags + user options
+Parse JSON output → CliMatch[]
     ↓
-spawn([cli, ...args]) with timeout
+Handle truncation (max_output_bytes, max_matches, timeout)
     ↓
-parseOutput() → GrepMatch[]
+formatSearchResult() / formatReplaceResult() (utils.ts)
+    ├─→ Group by file
+    ├─→ Truncate long text
+    └─→ Add summary
     ↓
-formatGrepResult() (utils.ts)
+Add empty result hints (getEmptyResultHint)
     ↓
-Group by file → Return formatted output
+Return formatted output
 ```
 
 ### LSP Tool Flow
@@ -118,13 +119,14 @@ Group by file → Return formatted output
 ```
 User Request (e.g., lsp_goto_definition)
     ↓
-Tool definition (tools.ts)
+Tool definition (lsp/tools.ts)
     ↓
 withLspClient() (utils.ts)
     ├─→ findServerForExtension() (config.ts)
     │   ├─→ Match extension to BUILTIN_SERVERS
+    │   ├─→ Merge with user config from config-store
     │   └─→ isServerInstalled() → PATH check
-    ├─→ findWorkspaceRoot() → .git, package.json, etc.
+    ├─→ findServerProjectRoot() → server-specific root patterns
     └─→ lspManager.getClient() (client.ts)
         ├─→ Check cache (root::serverId)
         ├─→ If cached: increment refCount, return
@@ -150,7 +152,7 @@ Return formatted output
 start()
   ├─→ spawn(command)
   ├─→ Create JSON-RPC connection (vscode-jsonrpc)
-  ├─→ Register handlers (diagnostics, configuration)
+  ├─→ Register handlers (diagnostics, configuration, window)
   └─→ Wait for process to stabilize
     ↓
 initialize()
@@ -168,40 +170,6 @@ stop()
   └─→ kill process
 ```
 
-### AST-grep Tool Flow
-
-```
-User Request (ast_grep_search or ast_grep_replace)
-    ↓
-Tool definition (tools.ts)
-    ↓
-runSg() (cli.ts)
-    ├─→ getAstGrepPath()
-    │   ├─→ Check cached path
-    │   ├─→ findSgCliPathSync()
-    │   │   ├─→ Cached binary
-    │   │   ├─→ @ast-grep/cli package
-    │   │   ├─→ Platform-specific package
-    │   │   └─→ Homebrew (macOS)
-    │   └─→ ensureAstGrepBinary() → download if missing
-    └─→ Build args: pattern, lang, rewrite, globs, paths
-    ↓
-spawn([sg, 'run', '-p', pattern, '--lang', lang, ...])
-    ↓
-Parse JSON output → CliMatch[]
-    ↓
-Handle truncation (max_output_bytes, max_matches)
-    ↓
-formatSearchResult() / formatReplaceResult() (utils.ts)
-    ├─→ Group by file
-    ├─→ Truncate long text
-    └─→ Add summary
-    ↓
-Add empty result hints (getEmptyResultHint)
-    ↓
-Return formatted output
-```
-
 ### Background Task Flow
 
 ```
@@ -210,6 +178,7 @@ User Request (background_task)
 Tool definition (background.ts)
     ↓
 manager.launch()
+    ├─→ Validate agent against delegation rules
     ├─→ Create task with unique ID
     ├─→ Store in BackgroundTaskManager
     └─→ Return task_id immediately (~1ms)
@@ -223,12 +192,12 @@ User Request (background_output)
     ↓
 manager.getResult(task_id)
     ├─→ If timeout > 0: waitForCompletion()
-    └─→ Return status/result/error
+    └─→ Return status/result/error/duration
     ↓
 User Request (background_cancel)
     ↓
 manager.cancel(task_id) or manager.cancel(all)
-    └─→ Cancel running tasks only
+    └─→ Cancel pending/starting/running tasks only
 ```
 
 ---
@@ -242,72 +211,58 @@ manager.cancel(task_id) or manager.cancel(all)
 - **vscode-jsonrpc**: LSP JSON-RPC protocol implementation
 - **vscode-languageserver-protocol**: LSP type definitions
 - **bun**: Subprocess spawning (`spawn`), file operations (`Bun.write`)
+- **which**: PATH resolution for CLI binaries
 
 #### Internal Dependencies
 - **src/background**: `BackgroundTaskManager` for background task tools
 - **src/config**: `SUBAGENT_NAMES`, `PluginConfig`, `TmuxConfig`
 - **src/utils**: `extractZip` for binary extraction
+- **src/utils/logger**: Logging utilities
 
 ### Consumers
 
 #### Direct Consumers
 - **src/index.ts**: Main plugin entry point imports all tools
-- **src/cli/index.ts**: CLI entry point may use tools directly
 
 #### Tool Registry
 All tools are exported from `src/tools/index.ts`:
 ```typescript
-export { grep } from './grep';
-export { ast_grep_search, ast_grep_replace } from './ast-grep';
+export { ast_grep_replace, ast_grep_search } from './ast-grep';
+export { createBackgroundTools } from './background';
 export {
   lsp_diagnostics,
   lsp_find_references,
   lsp_goto_definition,
   lsp_rename,
   lspManager,
+  setUserLspConfig,
 } from './lsp';
-export { createBackgroundTools } from './background';
 ```
 
 ### Configuration
 
 #### LSP Server Configuration
-- **BUILTIN_SERVERS** (lsp/constants.ts): Pre-configured servers for 12 languages
-- **EXT_TO_LANG** (lsp/constants.ts): Extension to language ID mapping
+- **BUILTIN_SERVERS** (lsp/constants.ts): Pre-configured servers for 45+ languages
+- **LANGUAGE_EXTENSIONS** (lsp/constants.ts): Extension to LSP language ID mapping
 - **LSP_INSTALL_HINTS** (lsp/constants.ts): Installation instructions per server
+- **NearestRoot** (lsp/constants.ts): Factory for root pattern matching functions
 
-#### Grep Configuration
-- **Safety limits** (grep/constants.ts): Max depth, filesize, count, columns, timeout
-- **RG_SAFETY_FLAGS**: `--no-follow`, `--color=never`, `--no-heading`, `--line-number`, `--with-filename`
-- **GREP_SAFETY_FLAGS**: `-n`, `-H`, `--color=never`
+#### User LSP Configuration
+- **config-store.ts**: Runtime storage for user-provided LSP config from opencode.json
+- Merged at runtime: built-in servers + user config (user config overrides command/extensions/env, root patterns preserved from built-in)
+- Can disable servers with `"disabled": true`
 
 #### AST-grep Configuration
-- **CLI_LANGUAGES** (ast-grep/types.ts): 25 supported languages
-- **LANG_EXTENSIONS** (ast-grep/constants.ts): Language to file extension mapping
+- **CLI_LANGUAGES** (ast-grep/types.ts): Supported languages
 - **Safety limits**: Timeout (300s), max output (1MB), max matches (500)
 
 ### Binary Management
-
-#### Ripgrep (grep/downloader.ts)
-- **Version**: 14.1.1
-- **Platforms**: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64
-- **Install location**: `~/.cache/oh-my-opencode-slim/bin/rg` (Linux/macOS), `%LOCALAPPDATA%\oh-my-opencode-slim\bin\rg.exe` (Windows)
-- **Fallback**: System grep if ripgrep unavailable
 
 #### AST-grep (ast-grep/downloader.ts)
 - **Version**: 0.40.0 (synced with @ast-grep/cli package)
 - **Platforms**: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, win32-arm64, win32-ia32
 - **Install location**: `~/.cache/oh-my-opencode-slim/bin/sg` (Linux/macOS), `%LOCALAPPDATA%\oh-my-opencode-slim\bin\sg.exe` (Windows)
-- **Fallback**: Manual installation instructions
-
-### Error Handling Integration
-
-All tools follow a consistent error handling pattern:
-1. Try-catch around execution
-2. Return formatted error messages
-3. Include installation hints for missing binaries
-4. Graceful degradation (fallback tools)
-5. Timeout handling with process cleanup
+- **Fallback chain**: @ast-grep/cli → platform-specific package → Homebrew → download from GitHub
 
 ### Performance Considerations
 
@@ -324,31 +279,22 @@ All tools follow a consistent error handling pattern:
 
 ### Root Level
 - **index.ts**: Central export point for all tools
-- **background.ts**: Background task management (3 tools: launch, output, cancel)
-
-### grep/
-- **index.ts**: Re-exports grep module
-- **cli.ts**: `runRg()`, `runRgCount()` - subprocess execution with timeout
-- **tools.ts**: `grep` tool definition
-- **types.ts**: `GrepMatch`, `GrepResult`, `CountResult`, `GrepOptions`
-- **utils.ts**: `formatGrepResult()` - output formatting
-- **constants.ts**: Safety limits, `resolveGrepCli()`, `resolveGrepCliWithAutoInstall()`
-- **downloader.ts**: `downloadAndInstallRipgrep()`, `getInstalledRipgrepPath()`
-
-### lsp/
-- **index.ts**: Re-exports LSP module and types
-- **client.ts**: `LSPServerManager` (singleton), `LSPClient` class
-- **tools.ts**: 4 tools: `lsp_goto_definition`, `lsp_find_references`, `lsp_diagnostics`, `lsp_rename`
-- **types.ts**: LSP type re-exports from vscode-languageserver-protocol
-- **utils.ts**: `withLspClient()`, formatters, `applyWorkspaceEdit()`
-- **config.ts**: `findServerForExtension()`, `getLanguageId()`, `isServerInstalled()`
-- **constants.ts**: `BUILTIN_SERVERS`, `EXT_TO_LANG`, `LSP_INSTALL_HINTS`, safety limits
+- **background.ts**: Background task management (3 tools: background_task, background_output, background_cancel)
 
 ### ast-grep/
-- **index.ts**: Re-exports ast-grep module
-- **cli.ts**: `runSg()`, `getAstGrepPath()`, `startBackgroundInit()`
-- **tools.ts**: 2 tools: `ast_grep_search`, `ast_grep_replace`
-- **types.ts**: `CliLanguage`, `CliMatch`, `SgResult`, `CLI_LANGUAGES`
-- **utils.ts**: `formatSearchResult()`, `formatReplaceResult()`, `getEmptyResultHint()`
-- **constants.ts**: `findSgCliPathSync()`, `checkEnvironment()`, safety limits
-- **downloader.ts**: `downloadAstGrep()`, `ensureAstGrepBinary()`, cache management
+- **index.ts**: Re-exports ast-grep module and types
+- **cli.ts**: `runSg()`, `getAstGrepPath()`, `startBackgroundInit()`, `isCliAvailable()`, `ensureCliAvailable()` - CLI execution layer
+- **types.ts**: `CliLanguage`, `CliMatch`, `SgResult`, `CLI_LANGUAGES` - TypeScript interfaces
+- **utils.ts**: `formatSearchResult()`, `formatReplaceResult()`, `getEmptyResultHint()` - Output formatting
+- **constants.ts**: `findSgCliPathSync()`, `getSgCliPath()`, `setSgCliPath()`, `checkEnvironment()`, `formatEnvironmentCheck()`, safety limits
+- **downloader.ts**: `downloadAstGrep()`, `ensureAstGrepBinary()`, `getCacheDir()`, `getCachedBinaryPath()` - Binary management
+
+### lsp/
+- **index.ts**: Re-exports LSP module, tools, and types
+- **client.ts**: `LSPServerManager` (singleton), `LSPClient` class - full connection lifecycle management
+- **tools.ts**: 4 tools: `lsp_goto_definition`, `lsp_find_references`, `lsp_diagnostics`, `lsp_rename`
+- **types.ts**: LSP type re-exports from vscode-languageserver-protocol (`Diagnostic`, `Location`, `WorkspaceEdit`, etc.)
+- **utils.ts**: `withLspClient()`, `findServerProjectRoot()`, formatters, `applyWorkspaceEdit()`, `formatApplyResult()`
+- **config.ts**: `findServerForExtension()`, `getLanguageId()`, `isServerInstalled()`, `buildMergedServers()`
+- **config-store.ts**: `setUserLspConfig()`, `getUserLspConfig()`, `getAllUserLspConfigs()`, `hasUserLspConfig()`
+- **constants.ts**: `BUILTIN_SERVERS` (45+ servers), `LANGUAGE_EXTENSIONS`, `LSP_INSTALL_HINTS`, `NearestRoot()`, safety limits
