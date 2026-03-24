@@ -184,17 +184,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
 
-      // Model resolution for foreground agents: pick the best available model
-      // by combining _modelArray entries with fallback.chains config.
+      // Model resolution for foreground agents: combine _modelArray entries
+      // with fallback.chains config, then pick the first model in the
+      // effective array for startup-time selection.
       //
-      // NOTE: We cannot call ctx.client.provider.list() here because
-      // the HTTP server is still initializing (causes deadlock).
-      // Instead, inspect opencodeConfig.provider directly.
-      //
-      // NOTE: This is startup-time selection only — it picks the best
-      // available provider at plugin init. Runtime failover on API errors
-      // (e.g. rate limits mid-conversation) is handled separately by
-      // ForegroundFallbackManager via the event hook.
+      // Runtime failover on API errors (e.g. rate limits mid-conversation)
+      // is handled separately by ForegroundFallbackManager via the event hook.
       const fallbackChainsEnabled = config.fallback?.enabled !== false;
       const fallbackChains = fallbackChainsEnabled
         ? ((config.fallback?.chains as Record<string, string[] | undefined>) ??
