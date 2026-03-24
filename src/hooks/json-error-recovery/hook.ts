@@ -4,7 +4,6 @@ export const JSON_ERROR_TOOL_EXCLUDE_LIST = [
   'bash',
   'read',
   'glob',
-  'grep',
   'webfetch',
   'grep_app_searchgithub',
   'websearch_web_search_exa',

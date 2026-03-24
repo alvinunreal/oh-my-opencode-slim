@@ -245,7 +245,10 @@ describe('fallback.chains merging for foreground agents', () => {
   test('duplicate model ids across array and chain are deduplicated', () => {
     // openai/gpt-4o appears in both _modelArray and chains — should not duplicate
     const result = resolveWithChains({
-      modelArray: [{ id: 'anthropic/claude-opus-4-5' }, { id: 'openai/gpt-4o' }],
+      modelArray: [
+        { id: 'anthropic/claude-opus-4-5' },
+        { id: 'openai/gpt-4o' },
+      ],
       chainModels: ['openai/gpt-4o', 'google/gemini-pro'],
       providerConfig: { openai: {} },
     });

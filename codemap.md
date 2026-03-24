@@ -46,17 +46,18 @@ The plugin integrates with OpenCode to provide:
 | `src/background/` | Background task/session managers and tmux pane orchestration for off-thread agent runs. | [View Map](src/background/codemap.md) |
 | `src/cli/` | Installer CLI flow, config edits, provider setup, and skill installation helpers. | [View Map](src/cli/codemap.md) |
 | `src/config/` | Plugin configuration schemas, defaults, loaders, and MCP/agent override helpers. | [View Map](src/config/codemap.md) |
-| `src/hooks/` | Re-exported hook factories and option types for lifecycle hooks. | [View Map](src/hooks/codemap.md) |
+| `src/hooks/` | Lifecycle hooks for message transforms, error recovery, and rate-limit fallbacks. | [View Map](src/hooks/codemap.md) |
 | `src/hooks/auto-update-checker/` | Startup update check hook with cache invalidation and optional auto-install. | [View Map](src/hooks/auto-update-checker/codemap.md) |
 | `src/hooks/phase-reminder/` | Orchestrator message transform hook that injects phase reminders. | [View Map](src/hooks/phase-reminder/codemap.md) |
 | `src/hooks/post-read-nudge/` | Read tool after-hook that appends delegation nudges. | [View Map](src/hooks/post-read-nudge/codemap.md) |
+| `src/hooks/delegate-task-retry/` | Error detection and retry guidance with pattern matching and assistance. | [View Map](src/hooks/delegate-task-retry/codemap.md) |
+| `src/hooks/foreground-fallback/` | Rate-limit fallback manager for interactive sessions. | [View Map](src/hooks/foreground-fallback/codemap.md) |
+| `src/hooks/json-error-recovery/` | JSON parse error detection and recovery helpers. | [View Map](src/hooks/json-error-recovery/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and config types for remote connectors. | [View Map](src/mcp/codemap.md) |
-| `src/tools/` | Tool registry plus background task tool implementations. | [View Map](src/tools/codemap.md) |
+| `src/tools/` | Tool registry plus LSP, AST-grep, and background task implementations. | [View Map](src/tools/codemap.md) |
 | `src/tools/ast-grep/` | AST-grep CLI discovery, execution, and tool definitions. | [View Map](src/tools/ast-grep/codemap.md) |
-| `src/tools/grep/` | Ripgrep/grep runner, downloader, and tool definition. | [View Map](src/tools/grep/codemap.md) |
 | `src/tools/lsp/` | LSP client stack and tool surface for definitions, diagnostics, and rename. | [View Map](src/tools/lsp/codemap.md) |
-
-| `src/utils/` | Shared helpers for variants, tmux, polling, logging, and zip extraction. | [View Map](src/utils/codemap.md) |
+| `src/utils/` | Shared helpers for tmux, environment variables, internal initiation, and config. | [View Map](src/utils/codemap.md) |
 
 ## Architecture Overview
 
