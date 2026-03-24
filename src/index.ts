@@ -7,10 +7,10 @@ import {
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
   createDelegateTaskRetryHook,
-  ForegroundFallbackManager,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostReadNudgeHook,
+  ForegroundFallbackManager,
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
 import {
@@ -26,6 +26,41 @@ import {
 } from './tools';
 import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function mergePluginAgentConfig(
+  pluginAgent: Record<string, unknown>,
+  existing?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!existing) {
+    return { ...pluginAgent };
+  }
+
+  const merged: Record<string, unknown> = {
+    ...existing,
+    ...pluginAgent,
+  };
+
+  if ('tools' in existing) {
+    merged.tools = existing.tools;
+  }
+
+  if ('permission' in existing) {
+    if (isRecord(pluginAgent.permission) && isRecord(existing.permission)) {
+      merged.permission = {
+        ...pluginAgent.permission,
+        ...existing.permission,
+      };
+    } else {
+      merged.permission = existing.permission;
+    }
+  }
+
+  return merged;
+}
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const config = loadPluginConfig(ctx.directory);
@@ -172,11 +207,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             name
           ] as Record<string, unknown> | undefined;
           if (existing) {
-            // Shallow merge: plugin defaults first, user overrides win
-            (opencodeConfig.agent as Record<string, unknown>)[name] = {
-              ...pluginAgent,
-              ...existing,
-            };
+            (opencodeConfig.agent as Record<string, unknown>)[name] =
+              mergePluginAgentConfig(
+                pluginAgent as Record<string, unknown>,
+                existing,
+              );
           } else {
             (opencodeConfig.agent as Record<string, unknown>)[name] = {
               ...pluginAgent,
