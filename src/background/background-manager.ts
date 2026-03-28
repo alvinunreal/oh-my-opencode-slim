@@ -26,34 +26,15 @@ import {
   resolveAgentVariant,
 } from '../utils';
 import { log } from '../utils/logger';
-
-type PromptBody = {
-  messageID?: string;
-  model?: { providerID: string; modelID: string };
-  agent?: string;
-  noReply?: boolean;
-  system?: string;
-  tools?: { [key: string]: boolean };
-  parts: Array<{ type: 'text'; text: string }>;
-  variant?: string;
-};
+import {
+  extractSessionResult,
+  type PromptBody,
+  parseModelReference,
+  promptWithTimeout,
+} from '../utils/session';
+import { SubagentDepthTracker } from './subagent-depth';
 
 type OpencodeClient = PluginInput['client'];
-
-function parseModelReference(model: string): {
-  providerID: string;
-  modelID: string;
-} | null {
-  const slashIndex = model.indexOf('/');
-  if (slashIndex <= 0 || slashIndex >= model.length - 1) {
-    return null;
-  }
-
-  return {
-    providerID: model.slice(0, slashIndex),
-    modelID: model.slice(slashIndex + 1),
-  };
-}
 
 /**
  * Represents a background task running in an isolated session.
@@ -99,6 +80,7 @@ export class BackgroundTaskManager {
   private tasksBySessionId = new Map<string, string>();
   // Track which agent type owns each session for delegation permission checks
   private agentBySessionId = new Map<string, string>();
+  private depthTracker: SubagentDepthTracker;
   private client: OpencodeClient;
   private directory: string;
   private tmuxEnabled: boolean;
@@ -129,6 +111,7 @@ export class BackgroundTaskManager {
       maxConcurrentStarts: 10,
     };
     this.maxConcurrentStarts = this.backgroundConfig.maxConcurrentStarts;
+    this.depthTracker = new SubagentDepthTracker();
   }
 
   /**
@@ -263,46 +246,6 @@ export class BackgroundTaskManager {
     return chain;
   }
 
-  private async promptWithTimeout(
-    args: Parameters<OpencodeClient['session']['prompt']>[0],
-    timeoutMs: number,
-  ): Promise<void> {
-    // No timeout when fallback disabled (timeoutMs = 0)
-    if (timeoutMs <= 0) {
-      await this.client.session.prompt(args);
-      return;
-    }
-
-    const sessionId = args.path.id;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    try {
-      // Attach a no-op .catch() so that when the timeout fires and
-      // session.abort() causes the prompt to reject after the race has
-      // already settled, the late rejection does not become unhandled
-      // (which would crash the process in Node ≥15 / Bun).
-      const promptPromise = this.client.session.prompt(args);
-      promptPromise.catch(() => {});
-
-      await Promise.race([
-        promptPromise,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            // Abort the running prompt so the session is no longer busy.
-            // Without this, session.prompt() continues running server-side
-            // and blocks subsequent fallback attempts on the same session.
-            this.client.session
-              .abort({ path: { id: sessionId } })
-              .catch(() => {});
-            reject(new Error(`Prompt timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   /**
    * Calculate tool permissions for a spawned agent based on its own delegation rules.
    * Agents that cannot delegate (leaf nodes) get delegation tools disabled entirely,
@@ -343,6 +286,18 @@ export class BackgroundTaskManager {
     }
 
     try {
+      // Check subagent spawn depth BEFORE creating session
+      const parentDepth = this.depthTracker.getDepth(task.parentSessionId);
+      if (parentDepth + 1 > this.depthTracker.maxDepth) {
+        log('[background-manager] spawn blocked: max depth exceeded', {
+          parentSessionId: task.parentSessionId,
+          parentDepth,
+          maxDepth: this.depthTracker.maxDepth,
+        });
+        this.completeTask(task, 'failed', 'Subagent depth exceeded');
+        return;
+      }
+
       // Create session
       const session = await this.client.session.create({
         body: {
@@ -361,6 +316,9 @@ export class BackgroundTaskManager {
       // Track the agent type for this session for delegation checks
       this.agentBySessionId.set(session.data.id, task.agent);
       task.status = 'running';
+
+      // Register depth after session creation succeeds
+      this.depthTracker.registerChild(task.parentSessionId, session.data.id);
 
       // Give TmuxSessionManager time to spawn the pane
       if (this.tmuxEnabled) {
@@ -417,7 +375,8 @@ export class BackgroundTaskManager {
             );
           }
 
-          await this.promptWithTimeout(
+          await promptWithTimeout(
+            this.client,
             {
               path: { id: sessionId },
               body,
@@ -527,6 +486,7 @@ export class BackgroundTaskManager {
       // Clean up session tracking
       this.tasksBySessionId.delete(sessionId);
       this.agentBySessionId.delete(sessionId);
+      this.depthTracker.cleanup(sessionId);
 
       // Resolve any waiting callers
       const resolver = this.completionResolvers.get(taskId);
@@ -548,32 +508,10 @@ export class BackgroundTaskManager {
     if (!task.sessionId) return;
 
     try {
-      const messagesResult = await this.client.session.messages({
-        path: { id: task.sessionId },
-      });
-      const messages = (messagesResult.data ?? []) as Array<{
-        info?: { role: string };
-        parts?: Array<{ type: string; text?: string }>;
-      }>;
-      const assistantMessages = messages.filter(
-        (m) => m.info?.role === 'assistant',
+      const responseText = await extractSessionResult(
+        this.client,
+        task.sessionId,
       );
-
-      const extractedContent: string[] = [];
-      for (const message of assistantMessages) {
-        for (const part of message.parts ?? []) {
-          if (
-            (part.type === 'text' || part.type === 'reasoning') &&
-            part.text
-          ) {
-            extractedContent.push(part.text);
-          }
-        }
-      }
-
-      const responseText = extractedContent
-        .filter((t) => t.length > 0)
-        .join('\n\n');
 
       if (responseText) {
         this.completeTask(task, 'completed', responseText);
@@ -790,5 +728,13 @@ export class BackgroundTaskManager {
     this.tasks.clear();
     this.tasksBySessionId.clear();
     this.agentBySessionId.clear();
+    this.depthTracker.cleanupAll();
+  }
+
+  /**
+   * Get the depth tracker instance for use by other managers.
+   */
+  getDepthTracker(): SubagentDepthTracker {
+    return this.depthTracker;
   }
 }

@@ -10,6 +10,9 @@ export const SUBAGENT_NAMES = [
   'oracle',
   'designer',
   'fixer',
+  'council',
+  'councillor',
+  'council-master',
 ] as const;
 
 export const ORCHESTRATOR_NAME = 'orchestrator' as const;
@@ -25,13 +28,27 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 // designer: can spawn explorer (for research during design)
 // explorer/librarian/oracle: cannot spawn any subagents (leaf nodes)
 // Unknown agent types not listed here default to explorer-only access
+// Which agents each agent type can spawn via background_task tool.
+// councillor and council-master are internal — only CouncilManager spawns them.
+export const ORCHESTRATABLE_AGENTS = [
+  'explorer',
+  'librarian',
+  'oracle',
+  'designer',
+  'fixer',
+  'council',
+] as const;
+
 export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
-  orchestrator: SUBAGENT_NAMES,
+  orchestrator: ORCHESTRATABLE_AGENTS,
   fixer: [],
   designer: [],
   explorer: [],
   librarian: [],
   oracle: [],
+  council: [],
+  councillor: [],
+  'council-master': [],
 };
 
 // Default models for each agent
@@ -43,6 +60,9 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   explorer: 'openai/gpt-5.4-mini',
   designer: 'openai/gpt-5.4-mini',
   fixer: 'openai/gpt-5.4-mini',
+  council: 'openai/gpt-5.4-mini',
+  councillor: 'openai/gpt-5.4-mini',
+  'council-master': 'openai/gpt-5.4-mini',
 };
 
 // Polling configuration
@@ -54,6 +74,15 @@ export const POLL_INTERVAL_BACKGROUND_MS = 2000;
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 export const MAX_POLL_TIME_MS = 5 * 60 * 1000; // 5 minutes
 export const FALLBACK_FAILOVER_TIMEOUT_MS = 15_000;
+
+// Subagent depth limits
+export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
+
+// Tmux pane spawn delay (ms) — gives TmuxSessionManager time to create pane
+export const TMUX_SPAWN_DELAY_MS = 500;
+
+// Stagger delay (ms) between parallel councillor launches to avoid tmux collisions
+export const COUNCILLOR_STAGGER_MS = 250;
 
 // Polling stability
 export const STABLE_POLLS_THRESHOLD = 3;

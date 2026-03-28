@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CouncilConfigSchema } from './council-schema';
 
 const FALLBACK_AGENT_NAMES = [
   'orchestrator',
@@ -18,7 +19,7 @@ const MANUAL_AGENT_NAMES = [
   'fixer',
 ] as const;
 
-const ProviderModelIdSchema = z
+export const ProviderModelIdSchema = z
   .string()
   .regex(
     /^[^/\s]+\/[^\s]+$/,
@@ -161,6 +162,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
+  council: CouncilConfigSchema.optional(),
 });
 
 export type PluginConfig = z.infer<typeof PluginConfigSchema>;

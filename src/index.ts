@@ -3,6 +3,7 @@ import { createAgents, getAgentConfigs } from './agents';
 import { BackgroundTaskManager, TmuxSessionManager } from './background';
 import { loadPluginConfig, type TmuxConfig } from './config';
 import { parseList } from './config/agent-mcps';
+import { CouncilManager } from './council';
 import {
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
@@ -17,6 +18,7 @@ import {
   ast_grep_replace,
   ast_grep_search,
   createBackgroundTools,
+  createCouncilTool,
   lsp_diagnostics,
   lsp_find_references,
   lsp_goto_definition,
@@ -94,6 +96,20 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tmuxConfig,
     config,
   );
+
+  // Initialize council tools (only when council is configured)
+  const councilTools = config.council
+    ? createCouncilTool(
+        ctx,
+        new CouncilManager(
+          ctx,
+          config,
+          backgroundManager.getDepthTracker(),
+          tmuxConfig.enabled,
+        ),
+      )
+    : {};
+
   const mcps = createBuiltinMcps(config.disabled_mcps);
 
   // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
@@ -133,6 +149,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     tool: {
       ...backgroundTools,
+      ...councilTools,
       lsp_goto_definition,
       lsp_find_references,
       lsp_diagnostics,

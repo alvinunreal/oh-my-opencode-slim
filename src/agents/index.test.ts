@@ -275,7 +275,12 @@ describe('agent classification', () => {
 
     // Subagents
     for (const name of SUBAGENT_NAMES) {
-      expect(configs[name].mode).toBe('subagent');
+      // Council is a dual-mode agent ("all"), rest are subagents
+      if (name === 'council') {
+        expect(configs[name].mode).toBe('all');
+      } else {
+        expect(configs[name].mode).toBe('subagent');
+      }
     }
   });
 });
@@ -292,9 +297,9 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 6 agents (1 primary + 5 subagents)', () => {
+  test('creates exactly 9 agents (1 primary + 8 subagents)', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(6);
+    expect(agents.length).toBe(9);
   });
 });
 

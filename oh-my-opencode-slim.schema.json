@@ -10,7 +10,11 @@
     },
     "scoringEngineVersion": {
       "type": "string",
-      "enum": ["v1", "v2-shadow", "v2"]
+      "enum": [
+        "v1",
+        "v2-shadow",
+        "v2"
+      ]
     },
     "balanceProviderUsage": {
       "type": "boolean"
@@ -38,7 +42,12 @@
               "pattern": "^[^/\\s]+\\/[^\\s]+$"
             }
           },
-          "required": ["primary", "fallback1", "fallback2", "fallback3"]
+          "required": [
+            "primary",
+            "fallback1",
+            "fallback2",
+            "fallback3"
+          ]
         },
         "oracle": {
           "type": "object",
@@ -60,7 +69,12 @@
               "pattern": "^[^/\\s]+\\/[^\\s]+$"
             }
           },
-          "required": ["primary", "fallback1", "fallback2", "fallback3"]
+          "required": [
+            "primary",
+            "fallback1",
+            "fallback2",
+            "fallback3"
+          ]
         },
         "designer": {
           "type": "object",
@@ -82,7 +96,12 @@
               "pattern": "^[^/\\s]+\\/[^\\s]+$"
             }
           },
-          "required": ["primary", "fallback1", "fallback2", "fallback3"]
+          "required": [
+            "primary",
+            "fallback1",
+            "fallback2",
+            "fallback3"
+          ]
         },
         "explorer": {
           "type": "object",
@@ -104,7 +123,12 @@
               "pattern": "^[^/\\s]+\\/[^\\s]+$"
             }
           },
-          "required": ["primary", "fallback1", "fallback2", "fallback3"]
+          "required": [
+            "primary",
+            "fallback1",
+            "fallback2",
+            "fallback3"
+          ]
         },
         "librarian": {
           "type": "object",
@@ -126,7 +150,12 @@
               "pattern": "^[^/\\s]+\\/[^\\s]+$"
             }
           },
-          "required": ["primary", "fallback1", "fallback2", "fallback3"]
+          "required": [
+            "primary",
+            "fallback1",
+            "fallback2",
+            "fallback3"
+          ]
         },
         "fixer": {
           "type": "object",
@@ -148,7 +177,12 @@
               "pattern": "^[^/\\s]+\\/[^\\s]+$"
             }
           },
-          "required": ["primary", "fallback1", "fallback2", "fallback3"]
+          "required": [
+            "primary",
+            "fallback1",
+            "fallback2",
+            "fallback3"
+          ]
         }
       },
       "required": [
@@ -196,7 +230,9 @@
                             "type": "string"
                           }
                         },
-                        "required": ["id"]
+                        "required": [
+                          "id"
+                        ]
                       }
                     ]
                   }
@@ -257,7 +293,9 @@
                           "type": "string"
                         }
                       },
-                      "required": ["id"]
+                      "required": [
+                        "id"
+                      ]
                     }
                   ]
                 }
@@ -403,6 +441,81 @@
           }
         }
       }
+    },
+    "council": {
+      "type": "object",
+      "properties": {
+        "master": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "^[^/\\s]+\\/[^\\s]+$",
+              "description": "Model ID for the council master (e.g. \"anthropic/claude-opus-4-6\")"
+            },
+            "variant": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "model"
+          ]
+        },
+        "presets": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "pattern": "^[^/\\s]+\\/[^\\s]+$",
+                  "description": "Model ID in provider/model format (e.g. \"openai/gpt-5.4-mini\")"
+                },
+                "variant": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "model"
+              ]
+            }
+          }
+        },
+        "master_timeout": {
+          "default": 300000,
+          "type": "number",
+          "minimum": 0
+        },
+        "councillors_timeout": {
+          "default": 180000,
+          "type": "number",
+          "minimum": 0
+        },
+        "default_preset": {
+          "default": "default",
+          "type": "string"
+        },
+        "master_fallback": {
+          "description": "Fallback models for the council master. Tried in order if the primary model fails. Example: [\"anthropic/claude-sonnet-4-6\", \"openai/gpt-5.4\"]",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[^/\\s]+\\/[^\\s]+$"
+          }
+        }
+      },
+      "required": [
+        "master",
+        "presets"
+      ]
     }
   },
   "title": "oh-my-opencode-slim",

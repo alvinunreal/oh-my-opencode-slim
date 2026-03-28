@@ -10,6 +10,9 @@ import {
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
 
+import { createCouncilAgent } from './council';
+import { createCouncilMasterAgent } from './council-master';
+import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
@@ -56,6 +59,9 @@ function applyOverrides(
  * Apply default permissions to an agent.
  * Sets 'question' permission to 'allow' and includes skill permission presets.
  * If configuredSkills is provided, it honors that list instead of defaults.
+ *
+ * Note: If the agent already explicitly sets question to 'deny', that is
+ * respected (e.g. councillor and council-master should not ask questions).
  */
 function applyDefaultPermissions(
   agent: AgentDefinition,
@@ -72,9 +78,12 @@ function applyDefaultPermissions(
     configuredSkills,
   );
 
+  // Respect explicit deny on question (councillor, council-master)
+  const questionPerm = existing.question === 'deny' ? 'deny' : 'allow';
+
   agent.config.permission = {
     ...existing,
-    question: 'allow',
+    question: questionPerm,
     // Apply skill permissions as nested object under 'skill' key
     skill: {
       ...(typeof existing.skill === 'object' ? existing.skill : {}),
@@ -99,6 +108,9 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   oracle: createOracleAgent,
   designer: createDesignerAgent,
   fixer: createFixerAgent,
+  council: createCouncilAgent,
+  councillor: createCouncillorAgent,
+  'council-master': createCouncilMasterAgent,
 };
 
 // Public API
@@ -191,7 +203,15 @@ export function getAgentConfigs(
       };
 
       // Apply classification-based visibility and mode
-      if (isSubagent(a.name)) {
+      if (a.name === 'council') {
+        // Council is callable both as a primary agent (user-facing)
+        // and as a subagent (orchestrator can delegate to it)
+        sdkConfig.mode = 'all';
+      } else if (a.name === 'councillor' || a.name === 'council-master') {
+        // Internal agents — subagent mode, hidden from @ autocomplete
+        sdkConfig.mode = 'subagent';
+        sdkConfig.hidden = true;
+      } else if (isSubagent(a.name)) {
         sdkConfig.mode = 'subagent';
       } else if (a.name === 'orchestrator') {
         sdkConfig.mode = 'primary';

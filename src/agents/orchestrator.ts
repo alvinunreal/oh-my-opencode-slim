@@ -8,6 +8,21 @@ export interface AgentDefinition {
   _modelArray?: Array<{ id: string; variant?: string }>;
 }
 
+/**
+ * Resolve agent prompt from base/custom/append inputs.
+ * If customPrompt is provided, it replaces the base entirely.
+ * Otherwise, customAppendPrompt is appended to the base.
+ */
+export function resolvePrompt(
+  base: string,
+  customPrompt?: string,
+  customAppendPrompt?: string,
+): string {
+  if (customPrompt) return customPrompt;
+  if (customAppendPrompt) return `${base}\n\n${customAppendPrompt}`;
+  return base;
+}
+
 const ORCHESTRATOR_PROMPT = `<Role>
 You are an AI coding orchestrator that optimizes for quality, speed, cost, and reliability by delegating to specialists when it provides net efficiency gains.
 </Role>
@@ -50,6 +65,13 @@ You are an AI coding orchestrator that optimizes for quality, speed, cost, and r
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining > doing • Tight integration with your current work • Sequential dependencies
 - **Parallelization:** 3+ independent tasks → spawn multiple @fixers. 1-2 simple tasks → do yourself.
 - **Rule of thumb:** Explaining > doing? → yourself. Can split to parallel streams? → multiple @fixers.
+
+@council
+- Role: Multi-LLM consensus engine for high-confidence answers
+- Capabilities: Runs multiple models in parallel, synthesizes their responses via a council master
+- **Delegate when:** Critical decisions needing diverse model perspectives • High-stakes architectural choices where consensus reduces risk • Ambiguous problems where multi-model disagreement is informative • Security-sensitive design reviews
+- **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Single-model answer is sufficient • Routine implementation work
+- **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.
 
 </Agents>
 
@@ -147,13 +169,11 @@ export function createOrchestratorAgent(
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
-  let prompt = ORCHESTRATOR_PROMPT;
-
-  if (customPrompt) {
-    prompt = customPrompt;
-  } else if (customAppendPrompt) {
-    prompt = `${ORCHESTRATOR_PROMPT}\n\n${customAppendPrompt}`;
-  }
+  const prompt = resolvePrompt(
+    ORCHESTRATOR_PROMPT,
+    customPrompt,
+    customAppendPrompt,
+  );
 
   const definition: AgentDefinition = {
     name: 'orchestrator',

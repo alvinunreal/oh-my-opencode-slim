@@ -64,9 +64,19 @@ bun test -t "test-name-pattern"
 
 ```
 oh-my-opencode-slim/
-├── src/              # TypeScript source files
+├── src/
+│   ├── agents/       # Agent factories (orchestrator, explorer, oracle, etc.)
+│   ├── background/   # Background task management
+│   ├── cli/          # CLI entry point
+│   ├── config/       # Constants, schemas, MCP defaults
+│   ├── council/      # Council manager (multi-LLM session orchestration)
+│   ├── hooks/        # OpenCode lifecycle hooks
+│   ├── mcp/          # MCP server definitions
+│   ├── skills/       # Skill definitions (included in package publish)
+│   ├── tools/        # Tool definitions (background tasks, council, etc.)
+│   └── utils/        # Shared utilities (tmux, session helpers)
 ├── dist/             # Built JavaScript and declarations
-├── node_modules/     # Dependencies
+├── docs/             # User-facing documentation
 ├── biome.json        # Biome configuration
 ├── tsconfig.json     # TypeScript configuration
 └── package.json      # Project manifest and scripts
@@ -230,6 +240,9 @@ OpenCode has a built-in `/review` command that automatically performs comprehens
 - This is an OpenCode plugin - most functionality lives in `src/`
 - The CLI entry point is `src/cli/index.ts`
 - The main plugin export is `src/index.ts`
+- Agent factories are in `src/agents/` — each agent has its own file + optional `.test.ts`
 - Skills are located in `src/skills/` (included in package publish)
 - Background task management is in `src/background/`
+- Council manager (multi-LLM orchestration) is in `src/council/`
 - Tmux utilities are in `src/utils/tmux.ts`
+- 468 tests across 35 files — run `bun test` to verify

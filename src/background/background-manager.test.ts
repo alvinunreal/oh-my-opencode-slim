@@ -1340,6 +1340,7 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'council',
       ]);
 
       // Fixer -> empty (leaf node)
@@ -1399,6 +1400,7 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'council',
       ]);
     });
   });
