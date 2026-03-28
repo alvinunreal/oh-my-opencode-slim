@@ -98,7 +98,7 @@ The plugin can fail over from one model to the next when a prompt times out or e
 **Important notes:**
 
 - Fallback models must use the `provider/model` format
-- Chains are per agent (`orchestrator`, `oracle`, `designer`, `explorer`, `librarian`, `fixer`)
+- Chains are per agent (`orchestrator`, `oracle`, `designer`, `explorer`, `librarian`, `fixer`, `councillor`, `council-master`)
 - If an agent has no configured chain, only its primary model is used
 - This is documented here because it is easy to miss in the config file
 
@@ -240,6 +240,8 @@ Control which agents can access which MCP servers using per-agent allowlists:
 | `librarian` | `websearch`, `context7`, `grep_app` |
 | `explorer` | none |
 | `fixer` | none |
+| `councillor` | none |
+| `council-master` | none |
 
 ### Configuration & Syntax
 
@@ -325,6 +327,51 @@ You can disable specific MCP servers globally by adding them to the `disabled_mc
 | `even-vertical` | All panes stacked vertically |
 
 > **Detailed Guide:** For complete tmux integration documentation, troubleshooting, and advanced usage, see [Tmux Integration](tmux-integration.md)
+
+### Council Agent
+
+**Multi-model consensus for higher-confidence answers.** The Council agent sends your prompt to multiple LLMs in parallel, then a council master synthesises the best response.
+
+#### Quick Setup
+
+Add council configuration to `oh-my-opencode-slim.json` (or `.jsonc`):
+
+```jsonc
+{
+  "council": {
+    "master": { "model": "anthropic/claude-opus-4-6" },
+    "presets": {
+      "default": {
+        "alpha": { "model": "openai/gpt-5.4-mini" },
+        "beta":  { "model": "google/gemini-3-pro" },
+        "gamma": { "model": "openai/gpt-5.3-codex" }
+      }
+    }
+  }
+}
+```
+
+Then invoke: `@council What's the best approach for rate limiting?`
+
+#### How It Works
+
+1. Prompt is sent to all councillors in parallel as agent sessions with read-only codebase access
+2. Each councillor examines the codebase (read, glob, grep, lsp, codesearch) and provides independent analysis
+3. A council master reviews all responses and synthesises the optimal answer
+4. Result is returned with a summary including model composition (`Council: 3/3 councillors responded (alpha: gpt-5.4-mini, beta: gemini-3-pro, gamma: gpt-5.3-codex)`)
+
+#### Preset Sizes
+
+| Preset | Councillors | Best For |
+|--------|-------------|----------|
+| 1-councillor | 1 | Quick second opinion from a different model |
+| 2-councillor | 2 | Compare & contrast (e.g., analytical vs. creative) |
+| 3-councillor | 3 | General consensus (default) |
+| N-councillor | N | Full review board for high-stakes decisions |
+
+Each councillor has its own model (and optional variant). Define multiple named presets and select at invocation time.
+
+> **Detailed Guide:** For complete council documentation, configuration examples, and troubleshooting, see [Council Agent](council.md)
 
 ### Background Tasks
 
@@ -469,3 +516,11 @@ The installer generates this file with the OpenAI preset by default. You can man
 | `tmux.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20-80) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally (e.g., `"websearch"`) |
+| `council.master.model` | string | - | **Required if using council.** Model ID for the council master (e.g., `"anthropic/claude-opus-4-6"`) |
+| `council.master.variant` | string | - | Variant for the council master model |
+| `council.presets` | object | - | **Required if using council.** Named councillor presets (see [Council Agent](council.md)) |
+| `council.presets.<name>.<councillor>.model` | string | - | Model ID for the councillor |
+| `council.default_preset` | string | `"default"` | Which preset to use when none is specified |
+| `council.master_timeout` | number | `300000` | Master synthesis timeout in ms |
+| `council.councillors_timeout` | number | `180000` | Per-councillor timeout in ms |
+| `council.master_fallback` | string[] | — | Optional fallback models for the council master (tried in order on primary failure) |
