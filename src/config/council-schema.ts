@@ -87,7 +87,8 @@ export const CouncilConfigSchema = z.object({
       if (!val) return val;
       const unique = [...new Set(val)];
       if (unique.length !== val.length) {
-        // Zod will catch this — dedupe and let the transform proceed
+        // Silently deduplicate — no validation error is raised for
+        // duplicate entries; duplicates are removed transparently.
         return unique;
       }
       return val;

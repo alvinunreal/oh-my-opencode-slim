@@ -328,7 +328,9 @@ export class CouncilManager {
       (async () => {
         // Stagger launches to avoid tmux split-window collisions
         if (index > 0) {
-          await new Promise((r) => setTimeout(r, COUNCILLOR_STAGGER_MS));
+          await new Promise((r) =>
+            setTimeout(r, index * COUNCILLOR_STAGGER_MS),
+          );
         }
 
         const modelLabel = shortModelLabel(config.model);
