@@ -133,3 +133,45 @@ You can mix models from different providers across agents. Create a custom prese
 export OH_MY_OPENCODE_SLIM_PRESET=my-mix
 opencode
 ```
+
+---
+
+## Fallback / Failover
+
+The plugin can automatically fail over from one model to the next when a prompt times out or errors. This is separate from your preset selection — it's a runtime safety net.
+
+**How it works:**
+
+- Each agent can have a fallback chain under `fallback.chains.<agent>`
+- The agent uses its configured model first
+- If that model fails or times out, the manager aborts the session, waits briefly, and tries the next model in the chain
+- Duplicate model IDs are ignored — the same model is never retried twice
+- If fallback is disabled, tasks run with no failover
+
+**Example:**
+
+```jsonc
+{
+  "fallback": {
+    "enabled": true,
+    "timeoutMs": 15000,
+    "retryDelayMs": 500,
+    "chains": {
+      "orchestrator": [
+        "openai/gpt-5.4",
+        "anthropic/claude-sonnet-4-6",
+        "google/gemini-3.1-pro"
+      ],
+      "fixer": [
+        "fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo",
+        "openai/gpt-5.4-mini"
+      ]
+    }
+  }
+}
+```
+
+**Notes:**
+- Model IDs must use `provider/model` format
+- Chains are per agent: `orchestrator`, `oracle`, `designer`, `explorer`, `librarian`, `fixer`, `councillor`, `council-master`
+- If an agent has no chain configured, only its primary model is used

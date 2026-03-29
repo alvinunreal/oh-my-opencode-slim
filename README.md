@@ -56,11 +56,6 @@ https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/mas
 
 **Detailed installation guide:** [docs/installation.md](docs/installation.md)
 
-**Additional guides:**
-- **[Provider Configurations](docs/provider-configurations.md)** - Config examples for all supported providers
-- **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
-**[Quick Reference](docs/quick-reference.md)** - Config, fallback behavior, skills, MCPs
-
 ### ✅ Verify Your Setup
 
 After installation and authentication, verify all agents are configured and responding:
@@ -304,12 +299,35 @@ If any agent fails to respond, check your provider authentication and config fil
 
 ## 📚 Documentation
 
-- **[Quick Reference](docs/quick-reference.md)** - Skills, MCPs, Tools, Configuration
-- **[Provider Configurations](docs/provider-configurations.md)** - Config examples for OpenAI, Kimi, Copilot, ZAI
-- **[Installation Guide](docs/installation.md)** - Detailed installation and troubleshooting
-- **[Cartography Skill](docs/cartography.md)** - Custom skill for repository mapping + codemap generation
-- **[Tmux Integration](docs/tmux-integration.md)** - Real-time agent monitoring with tmux
-**[Quick Reference](docs/quick-reference.md)** - Config, fallback behavior, skills, MCPs
+### 🚀 Getting Started
+
+| Doc | Contents |
+|-----|----------|
+| **[Installation Guide](docs/installation.md)** | CLI flags, `--reset`, auth, troubleshooting |
+| **[Provider Configurations](docs/provider-configurations.md)** | OpenAI, Kimi, Copilot, ZAI, Fireworks AI — mixing providers, fallback chains |
+
+### ✨ Features
+
+| Feature | Doc | What it does |
+|---------|-----|--------------|
+| **Council** | [council.md](docs/council.md) | Run N models in parallel, synthesize one answer (`@council`) |
+| **Tmux Integration** | [tmux-integration.md](docs/tmux-integration.md) | Watch agents work in real-time with auto-spawned panes |
+| **Cartography Skill** | [cartography.md](docs/cartography.md) | Auto-generate hierarchical codemaps for any codebase |
+
+### ⚙️ Config & Reference
+
+| Doc | Contents |
+|-----|----------|
+| **[Skills](docs/skills.md)** | `simplify`, `agent-browser`, `cartography` — assignment syntax |
+| **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app` — permissions per agent |
+| **[Tools](docs/tools.md)** | Background tasks, LSP, code search, formatters |
+| **[Configuration](docs/configuration.md)** | Config files, prompt overriding, JSONC, full option reference |
+
+### 💡 Author's Setup
+
+| Doc | Contents |
+|-----|----------|
+| **[Author's Preset](docs/authors-preset.md)** | The exact config the author runs daily — OpenAI + Fireworks AI + GitHub Copilot |
 
 ---
 
