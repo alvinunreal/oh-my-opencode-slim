@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="img/team.png" alt="Pantheon agents" width="420">
-  <p><i>Six divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.</i></p>
+  <img src="img/team.png" alt="Pantheon agents" style="border-radius: 10px;" width="620">
+  <p><i>Seven divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.</i></p>
   <p><b>Open Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
   <p><a href="https://moltfounders.com/jobs/09d1c6e7-9e0e-4683-8d78-e2376aaa2333"><img src="https://moltfounders.com/badges/4.png" alt="MoltFounders" height="30"></a></p>
 </div>
@@ -183,6 +183,47 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Recommended Models:</b> <code>openai/gpt-5.4 (high)</code> <code>google/gemini-3.1-pro-preview (high)</code>
+    </td>
+  </tr>
+</table>
+
+---
+
+### Council: The Chorus of Minds
+
+<table>
+  <tr>
+    <td width="30%" align="center" valign="top">
+      <img src="img/council.png" width="240" style="border-radius: 10px;">
+      <br><sub><i>Many minds, one verdict.</i></sub>
+    </td>
+    <td width="70%" valign="top">
+      The Council is not a lone being but a chamber of minds summoned when one answer is not enough. It sends your question to multiple models in parallel, gathers their competing judgments, and places them before a master who distills the strongest ideas into a single verdict. Where a solitary agent may miss a path, the Council cross-examines possibility itself.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Role:</b> <code>Multi-LLM consensus and synthesis</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Prompt:</b> <a href="src/agents/council.ts"><code>council.ts</code></a>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Guide:</b> <a href="docs/council.md"><code>docs/council.md</code></a>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Default Setup:</b> <code>Config-driven</code> — council master + councillors are chosen from your configured preset
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Setup:</b> <code>Strong master</code> + <code>diverse councillors</code> across providers
     </td>
   </tr>
 </table>
