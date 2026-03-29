@@ -1,0 +1,55 @@
+name: Contributors
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      login:
+        description: GitHub username to add
+        required: true
+        type: string
+      contributions:
+        description: Comma-separated contribution types
+        required: false
+        default: code
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  add-contributor:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+      github.event.pull_request.user.type != 'Bot')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Add contributor
+        env:
+          CONTRIBUTOR_LOGIN: ${{ github.event_name == 'workflow_dispatch' && inputs.login || github.event.pull_request.user.login }}
+          CONTRIBUTION_TYPES: ${{ github.event_name == 'workflow_dispatch' && inputs.contributions || 'code' }}
+        run: bunx all-contributors add "$CONTRIBUTOR_LOGIN" "$CONTRIBUTION_TYPES"
+
+      - name: Commit contributors update
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs: update contributors [skip ci]"
+          file_pattern: ".all-contributorsrc README.md"
