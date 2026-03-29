@@ -80,7 +80,7 @@ export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 
 // Workflow reminders
 export const PHASE_REMINDER_TEXT = `Recall Workflow Rules:
-Understand → build the best path (delegated based on rules, splitted and parallelized as much as possible) → execute → verify.
+Understand → build the best path (delegated based on Agent rules, split and parallelized as much as possible) → execute → verify.
 If delegating, launch the specialist in the same turn you mention it.`;
 
 // Tmux pane spawn delay (ms) — gives TmuxSessionManager time to create pane
