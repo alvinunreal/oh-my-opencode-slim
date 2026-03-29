@@ -122,6 +122,7 @@ export class CouncilManager {
 
     const councillorsTimeout = councilConfig.councillors_timeout ?? 180000;
     const masterTimeout = councilConfig.master_timeout ?? 300000;
+    const executionMode = councilConfig.councillor_execution_mode ?? 'parallel';
 
     const councillorCount = Object.keys(preset.councillors).length;
 
@@ -138,12 +139,13 @@ export class CouncilManager {
       },
     );
 
-    // Phase 1: Run councillors in parallel
+    // Phase 1: Run councillors (parallel or serial based on config)
     const councillorResults = await this.runCouncillors(
       prompt,
       preset.councillors,
       parentSessionId,
       councillorsTimeout,
+      executionMode,
     );
 
     const completedCount = councillorResults.filter(
@@ -325,18 +327,24 @@ export class CouncilManager {
     councillors: Record<string, CouncillorConfig>,
     parentSessionId: string,
     timeout: number,
+    executionMode: 'parallel' | 'serial' = 'parallel',
   ): Promise<CouncilResult['councillorResults']> {
     const entries = Object.entries(councillors);
-    const promises = entries.map(([name, config], index) =>
-      (async () => {
-        // Stagger launches to avoid tmux split-window collisions
-        if (index > 0) {
-          await new Promise((r) =>
-            setTimeout(r, index * COUNCILLOR_STAGGER_MS),
-          );
-        }
+    const results: Array<{
+      name: string;
+      model: string;
+      status: 'completed' | 'failed' | 'timed_out';
+      result?: string;
+      error?: string;
+    }> = [];
 
+    if (executionMode === 'serial') {
+      // Serial execution: run each councillor one at a time
+      for (const [name, config] of entries) {
         const modelLabel = shortModelLabel(config.model);
+        log(
+          `[council-manager] Running councillor "${name}" (${modelLabel}) serially`,
+        );
 
         try {
           const result = await this.runAgentSession({
@@ -350,52 +358,100 @@ export class CouncilManager {
             includeReasoning: false,
           });
 
-          return {
+          results.push({
             name,
             model: config.model,
             status: 'completed' as const,
             result,
-          };
+          });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
 
-          return {
+          results.push({
             name,
             model: config.model,
             status: msg.includes('timed out')
               ? ('timed_out' as const)
               : ('failed' as const),
             error: `Councillor "${name}": ${msg}`,
-          };
+          });
         }
-      })(),
-    );
-
-    const settled = await Promise.allSettled(promises);
-
-    return settled.map((result, index) => {
-      const [name, cfg] = entries[index];
-
-      if (result.status === 'fulfilled') {
-        return {
-          name,
-          model: cfg.model,
-          status: result.value.status,
-          result: result.value.result,
-          error: result.value.error,
-        };
       }
+    } else {
+      // Parallel execution (default): run all councillors concurrently
+      const promises = entries.map(([name, config], index) =>
+        (async () => {
+          // Stagger launches to avoid tmux split-window collisions
+          if (index > 0) {
+            await new Promise((r) =>
+              setTimeout(r, index * COUNCILLOR_STAGGER_MS),
+            );
+          }
 
-      return {
-        name,
-        model: cfg.model,
-        status: 'failed' as const,
-        error:
-          result.reason instanceof Error
-            ? result.reason.message
-            : String(result.reason),
-      };
-    });
+          const modelLabel = shortModelLabel(config.model);
+
+          try {
+            const result = await this.runAgentSession({
+              parentSessionId,
+              title: `Council ${name} (${modelLabel})`,
+              agent: 'councillor',
+              model: config.model,
+              promptText: formatCouncillorPrompt(prompt, config.prompt),
+              variant: config.variant,
+              timeout,
+              includeReasoning: false,
+            });
+
+            return {
+              name,
+              model: config.model,
+              status: 'completed' as const,
+              result,
+            };
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+
+            return {
+              name,
+              model: config.model,
+              status: msg.includes('timed out')
+                ? ('timed_out' as const)
+                : ('failed' as const),
+              error: `Councillor "${name}": ${msg}`,
+            };
+          }
+        })(),
+      );
+
+      const settled = await Promise.allSettled(promises);
+
+      for (let index = 0; index < settled.length; index++) {
+        const result = settled[index];
+        const [name, cfg] = entries[index];
+
+        if (result.status === 'fulfilled') {
+          results.push({
+            name,
+            model: cfg.model,
+            status: result.value.status,
+            result: result.value.result,
+            error: result.value.error,
+          });
+        } else {
+          results.push({
+            name,
+            model: cfg.model,
+            status: 'failed' as const,
+            error:
+              result.reason instanceof Error
+                ? result.reason.message
+                : String(result.reason),
+          });
+        }
+      }
+    }
+
+    return results;
   }
 
   // -------------------------------------------------------------------------

@@ -122,6 +122,19 @@ export const CouncilMasterConfigSchema = z.object({
 export type CouncilMasterConfig = z.infer<typeof CouncilMasterConfigSchema>;
 
 /**
+ * Execution mode for councillors.
+ * - parallel: Run all councillors concurrently (default, fastest for multi-model systems)
+ * - serial: Run councillors one at a time (required for single-model systems to avoid conflicts)
+ */
+export const CouncillorExecutionModeSchema = z
+  .enum(['parallel', 'serial'])
+  .default('parallel')
+  .describe(
+    'Execution mode for councillors. Use "serial" for single-model systems to avoid conflicts. ' +
+      'Use "parallel" for multi-model systems for faster execution.',
+  );
+
+/**
  * Top-level council configuration.
  *
  * Example JSONC:
@@ -137,7 +150,8 @@ export type CouncilMasterConfig = z.infer<typeof CouncilMasterConfigSchema>;
  *       }
  *     },
  *     "master_timeout": 300000,
- *     "councillors_timeout": 180000
+ *     "councillors_timeout": 180000,
+ *     "councillor_execution_mode": "serial"
  *   }
  * }
  * ```
@@ -165,9 +179,15 @@ export const CouncilConfigSchema = z.object({
       'Fallback models for the council master. Tried in order if the primary model fails. ' +
         'Example: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]',
     ),
+  councillor_execution_mode: CouncillorExecutionModeSchema.describe(
+    'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
+  ),
 });
 
 export type CouncilConfig = z.infer<typeof CouncilConfigSchema>;
+export type CouncillorExecutionMode = z.infer<
+  typeof CouncillorExecutionModeSchema
+>;
 
 /**
  * A sensible default council configuration that users can copy into their

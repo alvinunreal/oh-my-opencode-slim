@@ -505,6 +505,15 @@
             "type": "string",
             "pattern": "^[^/\\s]+\\/[^\\s]+$"
           }
+        },
+        "councillor_execution_mode": {
+          "default": "parallel",
+          "description": "Execution mode for councillors. \"serial\" runs them one at a time (required for single-model systems). \"parallel\" runs them concurrently (default, faster for multi-model systems).",
+          "type": "string",
+          "enum": [
+            "parallel",
+            "serial"
+          ]
         }
       },
       "required": [
