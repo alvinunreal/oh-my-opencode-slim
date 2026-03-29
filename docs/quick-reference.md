@@ -518,8 +518,13 @@ The installer generates this file with the OpenAI preset by default. You can man
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally (e.g., `"websearch"`) |
 | `council.master.model` | string | - | **Required if using council.** Model ID for the council master (e.g., `"anthropic/claude-opus-4-6"`) |
 | `council.master.variant` | string | - | Variant for the council master model |
+| `council.master.prompt` | string | - | Optional guidance for the master's synthesis |
 | `council.presets` | object | - | **Required if using council.** Named councillor presets (see [Council Agent](council.md)) |
 | `council.presets.<name>.<councillor>.model` | string | - | Model ID for the councillor |
+| `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor |
+| `council.presets.<name>.master.model` | string | - | Override the global master model for this preset |
+| `council.presets.<name>.master.variant` | string | - | Override the global master variant for this preset |
+| `council.presets.<name>.master.prompt` | string | - | Override the global master prompt for this preset |
 | `council.default_preset` | string | `"default"` | Which preset to use when none is specified |
 | `council.master_timeout` | number | `300000` | Master synthesis timeout in ms |
 | `council.councillors_timeout` | number | `180000` | Per-councillor timeout in ms |

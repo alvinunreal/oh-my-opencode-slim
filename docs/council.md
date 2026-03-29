@@ -8,6 +8,7 @@ Multi-LLM consensus system that runs several models in parallel and synthesises 
 - [Quick Setup](#quick-setup)
 - [Configuration](#configuration)
 - [Preset Examples](#preset-examples)
+- [Role Prompts](#role-prompts)
 - [Usage](#usage)
 - [Timeouts & Error Handling](#timeouts--error-handling)
 - [Troubleshooting](#troubleshooting)
@@ -110,6 +111,7 @@ Configure in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 | `master` | object | — | **Required.** Council master configuration (see below) |
 | `master.model` | string | — | **Required.** Model ID in `provider/model` format |
 | `master.variant` | string | — | Optional variant for the master model |
+| `master.prompt` | string | — | Optional guidance for the master's synthesis (see [Role Prompts](#role-prompts)) |
 | `presets` | object | — | **Required.** Named councillor presets (see below) |
 | `default_preset` | string | `"default"` | Which preset to use when none is specified |
 | `master_timeout` | number | `300000` | Master synthesis timeout in ms (5 minutes) |
@@ -124,6 +126,36 @@ Each councillor within a preset:
 |-------|------|----------|-------------|
 | `model` | string | Yes | Model ID in `provider/model` format |
 | `variant` | string | No | Model variant (e.g., `"high"`, `"low"`) |
+| `prompt` | string | No | Role-specific guidance injected into the councillor's user prompt (see [Role Prompts](#role-prompts)) |
+
+### Per-Preset Master Override
+
+Each preset can optionally override the global master's `model`, `variant`, and `prompt` using a reserved `"master"` key:
+
+```jsonc
+{
+  "council": {
+    "master": { "model": "anthropic/claude-opus-4-6" },
+    "presets": {
+      "fast-review": {
+        "master": { "model": "openai/gpt-5.4" },
+        "alpha": { "model": "openai/gpt-5.4-mini" },
+        "beta":  { "model": "google/gemini-3-pro" }
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `presets.<name>.master.model` | string | No | Overrides the global master model for this preset |
+| `presets.<name>.master.variant` | string | No | Overrides the global master variant for this preset |
+| `presets.<name>.master.prompt` | string | No | Overrides the global master prompt for this preset |
+
+**Merge behaviour:** Each field uses nullish coalescing — if a field is omitted in the preset override, the global value is used. If no `"master"` key exists in the preset, the global master is used as-is.
+
+**Reserved key:** `"master"` inside a preset is reserved for this override and is not treated as a councillor name. Any councillor named `"master"` will be ignored.
 
 ### Constraints
 
@@ -253,6 +285,85 @@ Define several presets and choose at invocation time:
 | User via `@council` | The council agent can pass a `preset` argument to the `council_session` tool |
 | Orchestrator delegates | Orchestrator invokes `@council`, which selects the preset |
 | No preset specified | Falls back to `default_preset` (defaults to `"default"`) |
+
+---
+
+### Role Prompts
+
+Both councillors and the master accept an optional `prompt` field that injects role-specific guidance into the user prompt. This lets you steer each participant's behaviour without changing the system prompt.
+
+**Councillor prompt** — prepended to the user prompt before the divider:
+
+```
+<role prompt>
+---
+<user prompt>
+```
+
+**Master prompt** — appended after the synthesis instruction:
+
+```
+<synthesis instruction>
+
+---
+**Master Guidance**:
+<role prompt>
+```
+
+#### Example: Specialised Review Board
+
+Both councillors and the master accept an optional `prompt` field. The master prompt can be set globally (`council.master.prompt`) or per-preset (`presets.<name>.master.prompt`):
+
+```jsonc
+{
+  "council": {
+    "master": { "model": "anthropic/claude-opus-4-6" },
+    "presets": {
+      "review-board": {
+        "master": {
+          "prompt": "Prioritise correctness and security over creativity. Flag any risks."
+        },
+        "reviewer": {
+          "model": "openai/gpt-5.4",
+          "prompt": "You are a meticulous code reviewer. Focus on edge cases, error handling, and potential bugs."
+        },
+        "architect": {
+          "model": "google/gemini-3-pro",
+          "prompt": "You are a systems architect. Focus on design patterns, scalability, and maintainability."
+        },
+        "optimiser": {
+          "model": "openai/gpt-5.3-codex",
+          "prompt": "You are a performance specialist. Focus on latency, throughput, and resource usage."
+        }
+      }
+    }
+  }
+}
+```
+
+#### Example: Per-Preset Master Model + Councillor Prompt
+
+Override the master model for a specific preset while customising one councillor's role:
+
+```jsonc
+{
+  "council": {
+    "master": { "model": "anthropic/claude-opus-4-6" },
+    "presets": {
+      "fast": {
+        "master": { "model": "openai/gpt-5.4" },
+        "alpha": { "model": "openai/gpt-5.4-mini" },
+        "beta": {
+          "model": "google/gemini-3-pro",
+          "prompt": "Respond as a devil's advocate. Challenge assumptions and find weaknesses."
+        }
+      }
+    }
+  }
+}
+```
+
+Without a `prompt`, the councillor or master uses its default behaviour — no changes to the prompt.
 
 ---
 

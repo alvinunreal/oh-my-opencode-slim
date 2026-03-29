@@ -186,8 +186,10 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillor1: { model: 'openai/gpt-5.4-mini' },
-              councillor2: { model: 'openai/gpt-5.3-codex' },
+              councillors: {
+                councillor1: { model: 'openai/gpt-5.4-mini' },
+                councillor2: { model: 'openai/gpt-5.3-codex' },
+              },
             },
           },
         },
@@ -231,10 +233,14 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
             custom: {
-              beta: { model: 'openai/gpt-5.3-codex' },
+              councillors: {
+                beta: { model: 'openai/gpt-5.3-codex' },
+              },
             },
           },
           default_preset: 'custom',
@@ -281,8 +287,10 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              timeout: { model: 'openai/gpt-5.4-mini' },
-              success: { model: 'openai/gpt-5.3-codex' },
+              councillors: {
+                timeout: { model: 'openai/gpt-5.4-mini' },
+                success: { model: 'openai/gpt-5.3-codex' },
+              },
             },
           },
         },
@@ -339,8 +347,10 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
-              beta: { model: 'openai/gpt-5.3-codex' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+                beta: { model: 'openai/gpt-5.3-codex' },
+              },
             },
           },
         },
@@ -376,7 +386,9 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+              },
             },
           },
         },
@@ -412,7 +424,9 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6', variant: 'high' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
           },
         },
@@ -445,8 +459,10 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
-              beta: { model: 'openai/gpt-5.3-codex' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+                beta: { model: 'openai/gpt-5.3-codex' },
+              },
             },
           },
         },
@@ -466,7 +482,9 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              badmodel: { model: 'invalid-model-no-slash' },
+              councillors: {
+                badmodel: { model: 'invalid-model-no-slash' },
+              },
             },
           },
         },
@@ -519,7 +537,9 @@ describe('CouncilManager', () => {
           master: { model: 'invalid-model-no-slash' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
           },
         },
@@ -557,7 +577,9 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
           },
         },
@@ -780,7 +802,9 @@ describe('CouncilManager', () => {
           master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
           },
         },
@@ -833,7 +857,9 @@ describe('CouncilManager', () => {
           master_fallback: ['anthropic/fallback-model'],
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
           },
         },
@@ -881,7 +907,9 @@ describe('CouncilManager', () => {
           master_fallback: ['anthropic/fallback-one', 'google/fallback-two'],
           presets: {
             default: {
-              alpha: { model: 'openai/gpt-5.4-mini' },
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
             },
           },
         },
@@ -901,6 +929,334 @@ describe('CouncilManager', () => {
       expect(agentPromptCount).toBe(4);
       // Degraded result from councillor
       expect(result.result).toBeDefined();
+    });
+
+    test('passes councillor prompt to councillor session', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response with role guidance' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          presets: {
+            default: {
+              councillors: {
+                alpha: {
+                  model: 'openai/gpt-5.4-mini',
+                  prompt:
+                    'You are a meticulous reviewer focused on edge cases.',
+                },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      await manager.runCouncil('test prompt', undefined, 'parent-id');
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [
+          {
+            body?: {
+              parts?: Array<{ type: string; text?: string }>;
+              agent?: string;
+            };
+          },
+        ]
+      >;
+      const councillorCall = promptCalls.find(
+        (c) => c[0].body?.agent === 'councillor',
+      );
+      expect(councillorCall).toBeDefined();
+      const promptText = councillorCall?.[0]?.body?.parts?.[0]?.text;
+      expect(promptText).toContain('test prompt');
+      expect(promptText).toContain(
+        'You are a meticulous reviewer focused on edge cases.',
+      );
+    });
+
+    test('passes master prompt to master session', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Synthesized response' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: {
+            model: 'anthropic/claude-opus-4-6',
+            prompt: 'Prioritize correctness over creativity.',
+          },
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      await manager.runCouncil('test prompt', undefined, 'parent-id');
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [
+          {
+            body?: {
+              parts?: Array<{ type: string; text?: string }>;
+              agent?: string;
+            };
+          },
+        ]
+      >;
+      // Last call is master
+      const masterCall = promptCalls[promptCalls.length - 1];
+      expect(masterCall[0].body?.agent).toBe('council-master');
+      const promptText = masterCall[0]?.body?.parts?.[0]?.text;
+      expect(promptText).toContain('Prioritize correctness over creativity.');
+    });
+
+    test('works without any prompt overrides (backward compatible)', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      const result = await manager.runCouncil(
+        'test prompt',
+        undefined,
+        'parent-id',
+      );
+
+      expect(result.success).toBe(true);
+      // Verify no prompt contamination — councillor gets raw prompt
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [
+          {
+            body?: {
+              parts?: Array<{ type: string; text?: string }>;
+              agent?: string;
+            };
+          },
+        ]
+      >;
+      const councillorCall = promptCalls.find(
+        (c) => c[0].body?.agent === 'councillor',
+      );
+      // Without prompt override, councillor gets just the raw user prompt
+      expect(councillorCall?.[0]?.body?.parts?.[0]?.text).toBe('test prompt');
+    });
+
+    test('per-preset master model override replaces global master model', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+              master: { model: 'google/gemini-3-pro' },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      await manager.runCouncil('test prompt', undefined, 'parent-id');
+
+      const createCalls = ctx.client.session.create.mock.calls as Array<
+        [{ body?: { title?: string } }]
+      >;
+      // Master title should use the override model, not global
+      const masterCreate = createCalls[createCalls.length - 1];
+      expect(masterCreate[0].body?.title).toBe('Council Master (gemini-3-pro)');
+    });
+
+    test('per-preset master prompt override replaces global master prompt', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: {
+            model: 'anthropic/claude-opus-4-6',
+            prompt: 'Global master prompt.',
+          },
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+              master: { prompt: 'Preset-specific master prompt.' },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      await manager.runCouncil('test prompt', undefined, 'parent-id');
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [
+          {
+            body?: {
+              parts?: Array<{ type: string; text?: string }>;
+              agent?: string;
+            };
+          },
+        ]
+      >;
+      const masterCall = promptCalls[promptCalls.length - 1];
+      const promptText = masterCall[0]?.body?.parts?.[0]?.text;
+      expect(promptText).toContain('Preset-specific master prompt.');
+      expect(promptText).not.toContain('Global master prompt.');
+    });
+
+    test('per-preset master variant override replaces global variant', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: {
+            model: 'anthropic/claude-opus-4-6',
+            variant: 'low',
+          },
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+              master: { variant: 'high' },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      await manager.runCouncil('test prompt', undefined, 'parent-id');
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body?: { variant?: string } }]
+      >;
+      const masterCall = promptCalls[promptCalls.length - 1];
+      expect(masterCall[0].body?.variant).toBe('high');
+    });
+
+    test('no per-preset master override falls back to global master config', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
+      });
+      const config: PluginConfig = {
+        council: {
+          master: {
+            model: 'anthropic/claude-opus-4-6',
+            variant: 'high',
+            prompt: 'Global prompt.',
+          },
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      await manager.runCouncil('test prompt', undefined, 'parent-id');
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [
+          {
+            body?: {
+              parts?: Array<{ type: string; text?: string }>;
+              variant?: string;
+              agent?: string;
+            };
+          },
+        ]
+      >;
+      const masterCall = promptCalls[promptCalls.length - 1];
+      // Uses global model (in title)
+      const createCalls = ctx.client.session.create.mock.calls as Array<
+        [{ body?: { title?: string } }]
+      >;
+      const masterCreate = createCalls[createCalls.length - 1];
+      expect(masterCreate[0].body?.title).toBe(
+        'Council Master (claude-opus-4-6)',
+      );
+      // Uses global variant
+      expect(masterCall[0].body?.variant).toBe('high');
+      // Uses global prompt
+      const promptText = masterCall[0]?.body?.parts?.[0]?.text;
+      expect(promptText).toContain('Global prompt.');
     });
   });
 });

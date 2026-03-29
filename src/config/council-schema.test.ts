@@ -5,8 +5,8 @@ import {
   CouncillorConfigSchema,
   type CouncilMasterConfig,
   CouncilMasterConfigSchema,
-  type CouncilPreset,
   CouncilPresetSchema,
+  PresetMasterOverrideSchema,
 } from './council-schema';
 
 describe('CouncillorConfigSchema', () => {
@@ -49,6 +49,33 @@ describe('CouncillorConfigSchema', () => {
     const result = CouncillorConfigSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
+
+  test('accepts optional prompt field', () => {
+    const config: CouncillorConfig = {
+      model: 'openai/gpt-5.4-mini',
+      prompt: 'Focus on security implications and edge cases.',
+    };
+
+    const result = CouncillorConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.prompt).toBe(
+        'Focus on security implications and edge cases.',
+      );
+    }
+  });
+
+  test('prompt is optional and defaults to undefined', () => {
+    const config: CouncillorConfig = {
+      model: 'openai/gpt-5.4-mini',
+    };
+
+    const result = CouncillorConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.prompt).toBeUndefined();
+    }
+  });
 });
 
 describe('CouncilMasterConfigSchema', () => {
@@ -82,11 +109,38 @@ describe('CouncilMasterConfigSchema', () => {
     const result = CouncilMasterConfigSchema.safeParse(badConfig);
     expect(result.success).toBe(false);
   });
+
+  test('accepts optional prompt field', () => {
+    const config: CouncilMasterConfig = {
+      model: 'anthropic/claude-opus-4-6',
+      prompt: 'Prioritize correctness over creativity. When in doubt, flag it.',
+    };
+
+    const result = CouncilMasterConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.prompt).toBe(
+        'Prioritize correctness over creativity. When in doubt, flag it.',
+      );
+    }
+  });
+
+  test('prompt defaults to undefined when not provided', () => {
+    const config: CouncilMasterConfig = {
+      model: 'anthropic/claude-opus-4-6',
+    };
+
+    const result = CouncilMasterConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.prompt).toBeUndefined();
+    }
+  });
 });
 
 describe('CouncilPresetSchema', () => {
   test('validates a named preset with multiple councillors', () => {
-    const preset: CouncilPreset = {
+    const raw = {
       alpha: {
         model: 'openai/gpt-5.4-mini',
       },
@@ -99,26 +153,80 @@ describe('CouncilPresetSchema', () => {
       },
     };
 
-    const result = CouncilPresetSchema.safeParse(preset);
+    const result = CouncilPresetSchema.safeParse(raw);
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(Object.keys(result.data.councillors)).toEqual([
+        'alpha',
+        'beta',
+        'gamma',
+      ]);
+    }
   });
 
   test('accepts preset with single councillor', () => {
-    const preset: CouncilPreset = {
+    const raw = {
       solo: {
         model: 'openai/gpt-5.4-mini',
       },
     };
 
-    const result = CouncilPresetSchema.safeParse(preset);
+    const result = CouncilPresetSchema.safeParse(raw);
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(Object.keys(result.data.councillors)).toEqual(['solo']);
+    }
   });
 
   test('accepts empty preset (no councillors)', () => {
-    const preset: CouncilPreset = {};
+    const raw = {};
 
-    const result = CouncilPresetSchema.safeParse(preset);
+    const result = CouncilPresetSchema.safeParse(raw);
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.councillors).toEqual({});
+    }
+  });
+
+  test('separates master key from councillors', () => {
+    const raw = {
+      master: { model: 'openai/gpt-5.4', prompt: 'Override prompt.' },
+      alpha: { model: 'openai/gpt-5.4-mini' },
+      beta: { model: 'google/gemini-3-pro' },
+    };
+
+    const result = CouncilPresetSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(Object.keys(result.data.councillors)).toEqual(['alpha', 'beta']);
+      expect(result.data.master).toEqual({
+        model: 'openai/gpt-5.4',
+        prompt: 'Override prompt.',
+      });
+    }
+  });
+
+  test('preset without master key has no master override', () => {
+    const raw = {
+      alpha: { model: 'openai/gpt-5.4-mini' },
+    };
+
+    const result = CouncilPresetSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(Object.keys(result.data.councillors)).toEqual(['alpha']);
+      expect(result.data.master).toBeUndefined();
+    }
+  });
+
+  test('rejects invalid master override in preset', () => {
+    const raw = {
+      master: { model: 'invalid-no-slash' },
+      alpha: { model: 'openai/gpt-5.4-mini' },
+    };
+
+    const result = CouncilPresetSchema.safeParse(raw);
+    expect(result.success).toBe(false);
   });
 });
 
@@ -277,5 +385,80 @@ describe('CouncilConfigSchema', () => {
 
     const result = CouncilConfigSchema.safeParse(config);
     expect(result.success).toBe(true);
+
+    if (result.success) {
+      // Verify prompt is preserved (not silently stripped)
+      const thoroughPreset = result.data.presets.thorough;
+      expect(thoroughPreset.councillors.detailed1.prompt).toBe(
+        'Provide detailed analysis with citations.',
+      );
+      // Verify prompt is undefined when not set
+      expect(thoroughPreset.councillors.detailed2.prompt).toBeUndefined();
+    }
+  });
+
+  test('accepts master with prompt', () => {
+    const config = {
+      master: {
+        model: 'anthropic/claude-opus-4-6',
+        prompt: 'Prioritize correctness over creativity.',
+      },
+      presets: {
+        default: {
+          alpha: { model: 'openai/gpt-5.4-mini' },
+        },
+      },
+    };
+
+    const result = CouncilConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.master.prompt).toBe(
+        'Prioritize correctness over creativity.',
+      );
+    }
+  });
+});
+
+describe('PresetMasterOverrideSchema', () => {
+  test('accepts empty override (all fields optional)', () => {
+    const result = PresetMasterOverrideSchema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts full override with model, variant, and prompt', () => {
+    const override = {
+      model: 'openai/gpt-5.4',
+      variant: 'high',
+      prompt: 'Be extra thorough.',
+    };
+    const result = PresetMasterOverrideSchema.safeParse(override);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.model).toBe('openai/gpt-5.4');
+      expect(result.data.variant).toBe('high');
+      expect(result.data.prompt).toBe('Be extra thorough.');
+    }
+  });
+
+  test('accepts partial override with only model', () => {
+    const result = PresetMasterOverrideSchema.safeParse({
+      model: 'anthropic/claude-sonnet-4-6',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts partial override with only prompt', () => {
+    const result = PresetMasterOverrideSchema.safeParse({
+      prompt: 'Focus on security.',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects invalid model format in override', () => {
+    const result = PresetMasterOverrideSchema.safeParse({
+      model: 'invalid-no-slash',
+    });
+    expect(result.success).toBe(false);
   });
 });

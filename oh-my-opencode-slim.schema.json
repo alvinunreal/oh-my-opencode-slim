@@ -455,6 +455,10 @@
             },
             "variant": {
               "type": "string"
+            },
+            "prompt": {
+              "description": "Optional role/guidance injected into the master synthesis prompt",
+              "type": "string"
             }
           },
           "required": [
@@ -473,19 +477,10 @@
             },
             "additionalProperties": {
               "type": "object",
-              "properties": {
-                "model": {
-                  "type": "string",
-                  "pattern": "^[^/\\s]+\\/[^\\s]+$",
-                  "description": "Model ID in provider/model format (e.g. \"openai/gpt-5.4-mini\")"
-                },
-                "variant": {
-                  "type": "string"
-                }
+              "propertyNames": {
+                "type": "string"
               },
-              "required": [
-                "model"
-              ]
+              "additionalProperties": {}
             }
           }
         },

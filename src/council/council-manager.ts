@@ -18,8 +18,9 @@ import {
 } from '../config/constants';
 import type {
   CouncilConfig,
-  CouncilPreset,
+  CouncillorConfig,
   CouncilResult,
+  PresetMasterOverride,
 } from '../config/council-schema';
 import { log } from '../utils/logger';
 import {
@@ -110,7 +111,7 @@ export class CouncilManager {
       };
     }
 
-    if (Object.keys(preset).length === 0) {
+    if (Object.keys(preset.councillors).length === 0) {
       log(`[council-manager] Preset "${resolvedPreset}" has no councillors`);
       return {
         success: false,
@@ -122,24 +123,25 @@ export class CouncilManager {
     const councillorsTimeout = councilConfig.councillors_timeout ?? 180000;
     const masterTimeout = councilConfig.master_timeout ?? 300000;
 
+    const councillorCount = Object.keys(preset.councillors).length;
+
     log(`[council-manager] Starting council with preset "${resolvedPreset}"`, {
-      councillors: Object.keys(preset),
+      councillors: Object.keys(preset.councillors),
     });
 
     // Notify parent session that council is starting
-    this.sendStartNotification(
-      parentSessionId,
-      Object.keys(preset).length,
-    ).catch((err) => {
-      log('[council-manager] Failed to send start notification', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    this.sendStartNotification(parentSessionId, councillorCount).catch(
+      (err) => {
+        log('[council-manager] Failed to send start notification', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
 
     // Phase 1: Run councillors in parallel
     const councillorResults = await this.runCouncillors(
       prompt,
-      preset,
+      preset.councillors,
       parentSessionId,
       councillorsTimeout,
     );
@@ -167,6 +169,7 @@ export class CouncilManager {
       councilConfig,
       parentSessionId,
       masterTimeout,
+      preset.master,
     );
 
     if (!masterResult.success) {
@@ -319,11 +322,11 @@ export class CouncilManager {
 
   private async runCouncillors(
     prompt: string,
-    preset: CouncilPreset,
+    councillors: Record<string, CouncillorConfig>,
     parentSessionId: string,
     timeout: number,
   ): Promise<CouncilResult['councillorResults']> {
-    const entries = Object.entries(preset);
+    const entries = Object.entries(councillors);
     const promises = entries.map(([name, config], index) =>
       (async () => {
         // Stagger launches to avoid tmux split-window collisions
@@ -341,7 +344,7 @@ export class CouncilManager {
             title: `Council ${name} (${modelLabel})`,
             agent: 'councillor',
             model: config.model,
-            promptText: formatCouncillorPrompt(prompt),
+            promptText: formatCouncillorPrompt(prompt, config.prompt),
             variant: config.variant,
             timeout,
             includeReasoning: false,
@@ -405,17 +408,25 @@ export class CouncilManager {
     councilConfig: CouncilConfig,
     parentSessionId: string,
     timeout: number,
+    presetMasterOverride?: PresetMasterOverride,
   ): Promise<{ success: boolean; result?: string; error?: string }> {
     const masterConfig = councilConfig.master;
     const fallbackModels = councilConfig.master_fallback ?? [];
 
+    // Merge per-preset master override with global config
+    const effectiveModel = presetMasterOverride?.model ?? masterConfig.model;
+    const effectiveVariant =
+      presetMasterOverride?.variant ?? masterConfig.variant;
+    const effectivePrompt = presetMasterOverride?.prompt ?? masterConfig.prompt;
+
     // Build ordered list of models to try (primary first, then fallbacks)
-    const attemptModels = [masterConfig.model, ...fallbackModels];
+    const attemptModels = [effectiveModel, ...fallbackModels];
 
     // Build synthesis prompt (data only — agent factory provides system prompt)
     const synthesisPrompt = formatMasterSynthesisPrompt(
       prompt,
       councillorResults,
+      effectivePrompt,
     );
 
     // Try each model in order — fresh session per attempt prevents
@@ -439,7 +450,7 @@ export class CouncilManager {
           agent: 'council-master',
           model,
           promptText: synthesisPrompt,
-          variant: masterConfig.variant,
+          variant: effectiveVariant,
           timeout,
         });
 

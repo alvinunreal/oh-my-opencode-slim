@@ -25,7 +25,7 @@ orchestration system that runs consensus across multiple models.
 **Behavior**:
 - Delegate requests directly to council_session
 - Don't pre-analyze or filter the prompt
-- Present the synthesized result clearly
+- Present the synthesized result verbatim — do not re-summarize or condense
 - Briefly explain the consensus if requested`;
 
 export function createCouncilAgent(
@@ -63,9 +63,16 @@ export function createCouncilAgent(
  *
  * Returns the raw user prompt — the agent factory (councillor.ts) provides
  * the system prompt with tool-aware instructions. No duplication.
+ *
+ * If a per-councillor prompt override is provided, it is prepended as
+ * role/guidance context before the user's question.
  */
-export function formatCouncillorPrompt(userPrompt: string): string {
-  return userPrompt;
+export function formatCouncillorPrompt(
+  userPrompt: string,
+  councillorPrompt?: string,
+): string {
+  if (!councillorPrompt) return userPrompt;
+  return `${councillorPrompt}\n\n---\n\n${userPrompt}`;
 }
 
 /**
@@ -74,6 +81,8 @@ export function formatCouncillorPrompt(userPrompt: string): string {
  * Formats councillor results as structured data — the agent factory
  * (council-master.ts) provides the system prompt with synthesis instructions.
  * Returns a special prompt when all councillors failed to produce output.
+ *
+ * @param masterPrompt - Optional per-master guidance appended to the synthesis.
  */
 export function formatMasterSynthesisPrompt(
   originalPrompt: string,
@@ -84,6 +93,7 @@ export function formatMasterSynthesisPrompt(
     result?: string;
     error?: string;
   }>,
+  masterPrompt?: string,
 ): string {
   const completedWithResults = councillorResults.filter(
     (cr) => cr.status === 'completed' && cr.result,
@@ -112,6 +122,10 @@ export function formatMasterSynthesisPrompt(
   }
 
   prompt += '\n\n---\n\nSynthesize the optimal response based on the above.';
+
+  if (masterPrompt) {
+    prompt += `\n\n---\n\n**Master Guidance**:\n${masterPrompt}`;
+  }
 
   return prompt;
 }

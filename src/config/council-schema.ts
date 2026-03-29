@@ -24,15 +24,77 @@ export const CouncillorConfigSchema = z.object({
     'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini")',
   ),
   variant: z.string().optional(),
+  prompt: z
+    .string()
+    .optional()
+    .describe(
+      'Optional role/guidance injected into the councillor user prompt',
+    ),
 });
 
 export type CouncillorConfig = z.infer<typeof CouncillorConfigSchema>;
 
 /**
- * A named preset grouping several councillors.
- * Key = councillor name (e.g. "alpha", "beta", "gamma").
+ * Per-preset master override. All fields are optional — any field
+ * provided here overrides the global `council.master` for this preset.
+ * Fields not provided fall back to the global master config.
  */
-export const CouncilPresetSchema = z.record(z.string(), CouncillorConfigSchema);
+export const PresetMasterOverrideSchema = z.object({
+  model: ModelIdSchema.optional().describe(
+    'Override the master model for this preset',
+  ),
+  variant: z
+    .string()
+    .optional()
+    .describe('Override the master variant for this preset'),
+  prompt: z
+    .string()
+    .optional()
+    .describe('Override the master synthesis guidance for this preset'),
+});
+
+export type PresetMasterOverride = z.infer<typeof PresetMasterOverrideSchema>;
+
+/**
+ * A named preset grouping several councillors with an optional master override.
+ *
+ * The reserved key `"master"` provides per-preset overrides for the council
+ * master (model, variant, prompt). All other keys are treated as councillor
+ * names mapping to councillor configs.
+ *
+ * After parsing, the preset resolves to:
+ * `{ councillors: Record<string, CouncillorConfig>, master?: PresetMasterOverride }`
+ */
+export const CouncilPresetSchema = z
+  .record(z.string(), z.record(z.string(), z.unknown()))
+  .transform((entries, ctx) => {
+    const councillors: Record<string, CouncillorConfig> = {};
+    let masterOverride: PresetMasterOverride | undefined;
+
+    for (const [key, raw] of Object.entries(entries)) {
+      if (key === 'master') {
+        const parsed = PresetMasterOverrideSchema.safeParse(raw);
+        if (!parsed.success) {
+          ctx.addIssue(
+            `Invalid master override in preset: ${parsed.error.issues.map((i) => i.message).join(', ')}`,
+          );
+          return z.NEVER;
+        }
+        masterOverride = parsed.data;
+      } else {
+        const parsed = CouncillorConfigSchema.safeParse(raw);
+        if (!parsed.success) {
+          ctx.addIssue(
+            `Invalid councillor "${key}": ${parsed.error.issues.map((i) => i.message).join(', ')}`,
+          );
+          return z.NEVER;
+        }
+        councillors[key] = parsed.data;
+      }
+    }
+
+    return { councillors, master: masterOverride };
+  });
 
 export type CouncilPreset = z.infer<typeof CouncilPresetSchema>;
 
@@ -49,6 +111,12 @@ export const CouncilMasterConfigSchema = z.object({
     'Model ID for the council master (e.g. "anthropic/claude-opus-4-6")',
   ),
   variant: z.string().optional(),
+  prompt: z
+    .string()
+    .optional()
+    .describe(
+      'Optional role/guidance injected into the master synthesis prompt',
+    ),
 });
 
 export type CouncilMasterConfig = z.infer<typeof CouncilMasterConfigSchema>;
