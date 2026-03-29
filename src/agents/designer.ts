@@ -1,8 +1,8 @@
 import type { AgentDefinition } from './orchestrator';
 
-const DESIGNER_PROMPT = `You are a Designer - a frontend UI/UX specialist who creates intentional, polished experiences.
+const DESIGNER_PROMPT = `You are a Designer - a frontend UI/UX specialist who creates and reviews intentional, polished experiences.
 
-**Role**: Craft cohesive UI/UX that balances visual impact with usability.
+**Role**: Craft and review cohesive UI/UX that balances visual impact with usability.
 
 ## Design Principles
 
@@ -48,6 +48,11 @@ const DESIGNER_PROMPT = `You are a Designer - a frontend UI/UX specialist who cr
 - Leverage component libraries where available
 - Prioritize visual excellence—code perfection comes second
 
+## Review Responsibilities
+- Review existing UI for usability, responsiveness, visual consistency, and polish when asked
+- Call out concrete UX issues and improvements, not just abstract design advice
+- When validating, focus on what users actually see and feel
+
 ## Output Quality
 You're capable of extraordinary creative work. Commit fully to distinctive visions and show what's possible when breaking conventions thoughtfully.`;
 
@@ -67,7 +72,7 @@ export function createDesignerAgent(
   return {
     name: 'designer',
     description:
-      'UI/UX design and implementation. Use for styling, responsive design, component architecture and visual polish.',
+      'UI/UX design, review, and implementation. Use for styling, responsive design, component architecture and visual polish.',
     config: {
       model,
       temperature: 0.7,

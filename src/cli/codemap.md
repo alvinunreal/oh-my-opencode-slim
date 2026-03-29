@@ -393,7 +393,7 @@ InstallConfig (preferences)
 
 | Name | Repo | Agents | Description |
 |------|------|--------|-------------|
-| `simplify` | brianlovin/claude-config | orchestrator | YAGNI code simplification expert |
+| `simplify` | brianlovin/claude-config | oracle | YAGNI code simplification expert |
 | `agent-browser` | vercel-labs/agent-browser | designer | High-performance browser automation |
 
 ### Custom Bundled Skills (copied from src/skills/)

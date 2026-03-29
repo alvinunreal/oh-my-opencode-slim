@@ -12,7 +12,7 @@ Skills are installed via the `oh-my-opencode-slim` installer or manually with `n
 
 | Skill | Description | Assigned to by default |
 |-------|-------------|----------------------|
-| [`simplify`](#simplify) | YAGNI code simplification expert | `orchestrator` |
+| [`simplify`](#simplify) | YAGNI code simplification expert | `oracle` |
 | [`agent-browser`](#agent-browser) | High-performance browser automation | `designer` |
 
 ### Bundled in repo
@@ -28,6 +28,8 @@ Skills are installed via the `oh-my-opencode-slim` installer or manually with `n
 **The Minimalist's sacred truth: every line of code is a liability.**
 
 `simplify` is a specialized skill for complexity analysis and YAGNI enforcement. It identifies unnecessary abstractions, over-engineered patterns, and redundant code — and suggests minimal, direct implementations instead.
+
+By default, this skill is assigned to `oracle`, which owns code review, maintainability review, and simplification guidance. The `orchestrator` should route simplification requests to `oracle` instead of handling them as a top-level specialty itself.
 
 ---
 
@@ -81,10 +83,13 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
   "presets": {
     "my-preset": {
       "orchestrator": {
-        "skills": ["*", "!agent-browser"]
+        "skills": ["cartography"]
+      },
+      "oracle": {
+        "skills": ["simplify"]
       },
       "designer": {
-        "skills": ["agent-browser", "simplify"]
+        "skills": ["agent-browser"]
       },
       "fixer": {
         "skills": []

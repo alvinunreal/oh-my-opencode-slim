@@ -17,9 +17,9 @@ describe('skills permissions', () => {
     const designerPerms = getSkillPermissionsForAgent('designer');
     expect(designerPerms['agent-browser']).toBe('allow');
 
-    // Developer (orchestrator) should have simplify allowed (and everything else via *)
-    const orchPerms = getSkillPermissionsForAgent('orchestrator');
-    expect(orchPerms.simplify).toBe('allow');
+    // Oracle should have simplify allowed by recommendation
+    const oraclePerms = getSkillPermissionsForAgent('oracle');
+    expect(oraclePerms.simplify).toBe('allow');
   });
 
   it('should honor explicit skill list overrides', () => {

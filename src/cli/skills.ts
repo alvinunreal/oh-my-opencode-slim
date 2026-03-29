@@ -41,7 +41,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     name: 'simplify',
     repo: 'https://github.com/brianlovin/claude-config',
     skillName: 'simplify',
-    allowedAgents: ['orchestrator'],
+    allowedAgents: ['oracle'],
     description: 'YAGNI code simplification expert',
   },
   {
