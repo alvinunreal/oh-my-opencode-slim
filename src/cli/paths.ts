@@ -32,6 +32,23 @@ export function getConfigDir(): string {
   return getDefaultOpenCodeConfigDir();
 }
 
+/**
+ * Get OpenCode config directories in read/search order.
+ *
+ * Resolution order:
+ * 1. OPENCODE_CONFIG_DIR (if set)
+ * 2. XDG_CONFIG_HOME/opencode or ~/.config/opencode
+ *
+ * Duplicate entries are removed.
+ */
+export function getConfigSearchDirs(): string[] {
+  const dirs = [getCustomOpenCodeConfigDir(), getDefaultOpenCodeConfigDir()];
+
+  return dirs.filter((dir, index): dir is string => {
+    return Boolean(dir) && dirs.indexOf(dir) === index;
+  });
+}
+
 export function getOpenCodeConfigPaths(): string[] {
   const configDir = getDefaultOpenCodeConfigDir();
   return [join(configDir, 'opencode.json'), join(configDir, 'opencode.jsonc')];

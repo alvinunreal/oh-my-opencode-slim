@@ -10,7 +10,7 @@ import {
   createDelegateTaskRetryHook,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
-  createPostReadNudgeHook,
+  createPostFileToolNudgeHook,
   ForegroundFallbackManager,
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
@@ -124,8 +124,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // Initialize phase reminder hook for workflow compliance
   const phaseReminderHook = createPhaseReminderHook();
 
-  // Initialize post-read nudge hook
-  const postReadNudgeHook = createPostReadNudgeHook();
+  // Initialize post-file-tool nudge hook
+  const postFileToolNudgeHook = createPostFileToolNudgeHook();
 
   const chatHeadersHook = createChatHeadersHook(ctx);
 
@@ -387,7 +387,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'experimental.chat.messages.transform':
       phaseReminderHook['experimental.chat.messages.transform'],
 
-    // Post-tool hooks: retry guidance for delegation errors + post-read nudge
+    // Post-tool hooks: retry guidance for delegation errors + file-tool nudge
     'tool.execute.after': async (input, output) => {
       await delegateTaskRetryHook['tool.execute.after'](
         input as { tool: string },
@@ -407,7 +407,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
       );
 
-      await postReadNudgeHook['tool.execute.after'](
+      await postFileToolNudgeHook['tool.execute.after'](
         input as {
           tool: string;
           sessionID?: string;

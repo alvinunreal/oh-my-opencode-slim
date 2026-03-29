@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
-import { getConfigDir } from '../cli/paths';
+import { getConfigDir, getConfigSearchDirs } from '../cli/paths';
 import { type PluginConfig, PluginConfigSchema } from './schema';
 
 const PROMPTS_DIR_NAME = 'oh-my-opencode-slim';
@@ -66,6 +66,20 @@ function findConfigPath(basePath: string): string | null {
   return null;
 }
 
+function findConfigPathInDirs(
+  configDirs: string[],
+  baseName: string,
+): string | null {
+  for (const configDir of configDirs) {
+    const configPath = findConfigPath(path.join(configDir, baseName));
+    if (configPath) {
+      return configPath;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Recursively merge two objects, with override values taking precedence.
  * For nested objects, merges recursively. For arrays and primitives, override replaces base.
@@ -121,7 +135,10 @@ function deepMerge<T extends Record<string, unknown>>(
  * @returns Merged plugin configuration (empty object if no configs found)
  */
 export function loadPluginConfig(directory: string): PluginConfig {
-  const userConfigBasePath = path.join(getConfigDir(), 'oh-my-opencode-slim');
+  const userConfigPath = findConfigPathInDirs(
+    getConfigSearchDirs(),
+    'oh-my-opencode-slim',
+  );
 
   const projectConfigBasePath = path.join(
     directory,
@@ -130,7 +147,6 @@ export function loadPluginConfig(directory: string): PluginConfig {
   );
 
   // Find existing config files (preferring .jsonc over .json)
-  const userConfigPath = findConfigPath(userConfigBasePath);
   const projectConfigPath = findConfigPath(projectConfigBasePath);
 
   let config: PluginConfig = userConfigPath
@@ -197,10 +213,12 @@ export function loadAgentPrompt(
 } {
   const presetDirName =
     preset && /^[a-zA-Z0-9_-]+$/.test(preset) ? preset : undefined;
-  const promptsDir = path.join(getConfigDir(), PROMPTS_DIR_NAME);
-  const promptSearchDirs = presetDirName
-    ? [path.join(promptsDir, presetDirName), promptsDir]
-    : [promptsDir];
+  const promptSearchDirs = getConfigSearchDirs().flatMap((configDir) => {
+    const promptsDir = path.join(configDir, PROMPTS_DIR_NAME);
+    return presetDirName
+      ? [path.join(promptsDir, presetDirName), promptsDir]
+      : [promptsDir];
+  });
   const result: { prompt?: string; appendPrompt?: string } = {};
 
   const readFirstPrompt = (

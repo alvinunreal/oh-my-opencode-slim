@@ -178,6 +178,30 @@ describe('loadPluginConfig', () => {
 
     fs.rmSync(customDir, { recursive: true, force: true });
   });
+
+  test('falls back to default user config dir when OPENCODE_CONFIG_DIR has no config', () => {
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omc-opencode-config-empty-'),
+    );
+    process.env.OPENCODE_CONFIG_DIR = customDir;
+
+    const defaultConfigDir = path.join(userConfigDir, 'opencode');
+    fs.mkdirSync(defaultConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(defaultConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: 'fallback/default-config' } },
+      }),
+    );
+
+    const projectDir = path.join(tempDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('fallback/default-config');
+
+    fs.rmSync(customDir, { recursive: true, force: true });
+  });
 });
 
 describe('deepMerge behavior', () => {
@@ -989,14 +1013,15 @@ describe('loadAgentPrompt', () => {
 
     // Use a unique agent name and check for it specifically
     const originalReadFileSync = fs.readFileSync;
-    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(
-      (p: any, o: any) => {
-        if (typeof p === 'string' && p.includes('error-agent.md')) {
-          throw new Error('Read error');
-        }
-        return originalReadFileSync(p, o);
-      },
-    );
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(((
+      ...args: Parameters<typeof fs.readFileSync>
+    ) => {
+      const [p] = args;
+      if (typeof p === 'string' && p.includes('error-agent.md')) {
+        throw new Error('Read error');
+      }
+      return originalReadFileSync(...args);
+    }) as typeof fs.readFileSync);
 
     try {
       const result = loadAgentPrompt('error-agent');
@@ -1084,14 +1109,15 @@ describe('loadAgentPrompt', () => {
 
     const consoleWarnSpy = spyOn(console, 'warn');
     const originalReadFileSync = fs.readFileSync;
-    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(
-      (p: any, o: any) => {
-        if (typeof p === 'string' && p === presetPromptPath) {
-          throw new Error('Preset read error');
-        }
-        return originalReadFileSync(p, o);
-      },
-    );
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(((
+      ...args: Parameters<typeof fs.readFileSync>
+    ) => {
+      const [p] = args;
+      if (typeof p === 'string' && p === presetPromptPath) {
+        throw new Error('Preset read error');
+      }
+      return originalReadFileSync(...args);
+    }) as typeof fs.readFileSync);
 
     try {
       const result = loadAgentPrompt('oracle', 'test');
@@ -1133,6 +1159,22 @@ describe('loadAgentPrompt', () => {
 
     const result = loadAgentPrompt('oracle');
     expect(result.prompt).toBe('prompt from OPENCODE_CONFIG_DIR dir');
+
+    fs.rmSync(customDir, { recursive: true, force: true });
+  });
+
+  test('falls back to default prompt dir when OPENCODE_CONFIG_DIR has no prompt', () => {
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omc-prompt-config-empty-'),
+    );
+    process.env.OPENCODE_CONFIG_DIR = customDir;
+
+    const promptsDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(promptsDir, { recursive: true });
+    fs.writeFileSync(path.join(promptsDir, 'oracle.md'), 'fallback prompt');
+
+    const result = loadAgentPrompt('oracle');
+    expect(result.prompt).toBe('fallback prompt');
 
     fs.rmSync(customDir, { recursive: true, force: true });
   });

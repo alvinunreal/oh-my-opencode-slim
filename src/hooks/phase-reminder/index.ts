@@ -8,11 +8,10 @@
  *
  * Uses experimental.chat.messages.transform so it doesn't show in UI.
  */
+import { PHASE_REMINDER_TEXT } from '../../config/constants';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
 
-export const PHASE_REMINDER = `<reminder>Recall Workflow Rules:
-Understand → find the best path (delegate based on rules and parallelize independent work) → execute → verify.
-If delegating, launch the specialist in the same turn you mention it.</reminder>`;
+export const PHASE_REMINDER = `<reminder>${PHASE_REMINDER_TEXT}</reminder>`;
 
 interface MessageInfo {
   role: string;

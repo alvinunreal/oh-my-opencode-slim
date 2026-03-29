@@ -9,6 +9,7 @@ import {
   getConfigDir,
   getConfigJson,
   getConfigJsonc,
+  getConfigSearchDirs,
   getExistingConfigPath,
   getLiteConfig,
   getOpenCodeConfigPaths,
@@ -42,6 +43,23 @@ describe('paths', () => {
     delete process.env.XDG_CONFIG_HOME;
     const expected = join(homedir(), '.config', 'opencode');
     expect(getConfigDir()).toBe(expected);
+  });
+
+  test('getConfigSearchDirs() returns custom dir first, then default dir', () => {
+    process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+
+    expect(getConfigSearchDirs()).toEqual([
+      '/custom/directory',
+      '/tmp/xdg-config/opencode',
+    ]);
+  });
+
+  test('getConfigSearchDirs() de-duplicates identical dirs', () => {
+    process.env.OPENCODE_CONFIG_DIR = '/tmp/xdg-config/opencode';
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+
+    expect(getConfigSearchDirs()).toEqual(['/tmp/xdg-config/opencode']);
   });
 
   test('getOpenCodeConfigPaths() returns both json and jsonc paths', () => {

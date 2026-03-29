@@ -78,6 +78,11 @@ export const FALLBACK_FAILOVER_TIMEOUT_MS = 15_000;
 // Subagent depth limits
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 
+// Workflow reminders
+export const PHASE_REMINDER_TEXT = `Recall Workflow Rules:
+Understand → build the best path (delegated based on Agent rules, split and parallelized as much as possible) → execute → verify.
+If delegating, launch the specialist in the same turn you mention it.`;
+
 // Tmux pane spawn delay (ms) — gives TmuxSessionManager time to create pane
 export const TMUX_SPAWN_DELAY_MS = 500;
 
