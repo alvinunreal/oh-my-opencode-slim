@@ -8,6 +8,7 @@ import {
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
   createDelegateTaskRetryHook,
+  createFilterAvailableSkillsHook,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
@@ -123,6 +124,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize phase reminder hook for workflow compliance
   const phaseReminderHook = createPhaseReminderHook();
+
+  // Initialize available skills filter hook
+  const filterAvailableSkillsHook = createFilterAvailableSkillsHook(
+    ctx,
+    config,
+  );
 
   // Initialize post-file-tool nudge hook
   const postFileToolNudgeHook = createPostFileToolNudgeHook();
@@ -290,7 +297,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       // Get all MCP names from the merged config (built-in + custom)
-      const mergedMcpConfig = opencodeConfig.mcp as Record<string, unknown> | undefined;
+      const mergedMcpConfig = opencodeConfig.mcp as
+        | Record<string, unknown>
+        | undefined;
       const allMcpNames = Object.keys(mergedMcpConfig ?? mcps);
 
       // For each agent, create permission rules based on their mcps list
@@ -384,9 +393,31 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     'chat.headers': chatHeadersHook['chat.headers'],
 
-    // Inject phase reminder before sending to API (doesn't show in UI)
-    'experimental.chat.messages.transform':
-      phaseReminderHook['experimental.chat.messages.transform'],
+    // Inject phase reminder and filter available skills before sending to API (doesn't show in UI)
+    'experimental.chat.messages.transform': async (
+      input: Record<string, never>,
+      output: { messages: unknown[] },
+    ): Promise<void> => {
+      // Type assertion since we know the structure matches MessageWithParts[]
+      const typedOutput = output as {
+        messages: Array<{
+          info: { role: string; agent?: string; sessionID?: string };
+          parts: Array<{
+            type: string;
+            text?: string;
+            [key: string]: unknown;
+          }>;
+        }>;
+      };
+      await phaseReminderHook['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
+      await filterAvailableSkillsHook['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
+    },
 
     // Post-tool hooks: retry guidance for delegation errors + file-tool nudge
     'tool.execute.after': async (input, output) => {
