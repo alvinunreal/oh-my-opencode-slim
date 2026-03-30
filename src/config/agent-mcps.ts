@@ -38,7 +38,7 @@ export function parseList(items: string[], allAvailable: string[]): string[] {
     return allAvailable.filter((item) => !deny.includes(item));
   }
 
-  return allow.filter((item) => !deny.includes(item));
+  return allow.filter((item) => !deny.includes(item) && allAvailable.includes(item));
 }
 
 /**
