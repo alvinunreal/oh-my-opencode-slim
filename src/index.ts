@@ -289,8 +289,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         Object.assign(configMcp, mcps);
       }
 
-      // Get all MCP names from our config
-      const allMcpNames = Object.keys(mcps);
+      // Get all MCP names from the merged config (built-in + custom)
+      const mergedMcpConfig = opencodeConfig.mcp as Record<string, unknown> | undefined;
+      const allMcpNames = Object.keys(mergedMcpConfig ?? mcps);
 
       // For each agent, create permission rules based on their mcps list
       for (const [agentName, agentConfig] of Object.entries(agents)) {
