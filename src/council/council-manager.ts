@@ -103,10 +103,11 @@ export class CouncilManager {
     const preset = councilConfig.presets[resolvedPreset];
 
     if (!preset) {
+      const available = Object.keys(councilConfig.presets).join(', ');
       log(`[council-manager] Preset "${resolvedPreset}" not found`);
       return {
         success: false,
-        error: `Preset "${resolvedPreset}" not found`,
+        error: `Preset "${resolvedPreset}" does not exist. Omit the preset parameter to use the default, or call again with one of: ${available}`,
         councillorResults: [],
       };
     }

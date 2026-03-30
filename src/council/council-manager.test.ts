@@ -656,6 +656,33 @@ describe('CouncilManager', () => {
       expect(result.councillorResults).toHaveLength(0);
     });
 
+    test('returns available presets when invalid preset name given', async () => {
+      const ctx = createMockContext();
+      const config = createTestCouncilConfig({
+        presets: {
+          default: {
+            alpha: { model: 'openai/gpt-5.4-mini' },
+          },
+          roled: {
+            beta: { model: 'openai/gpt-5.3-codex' },
+          },
+        },
+      });
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      const result = await manager.runCouncil(
+        'test prompt',
+        'architect',
+        'parent-id',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Preset "architect" does not exist');
+      expect(result.error).toContain('Omit the preset parameter');
+      expect(result.error).toContain('default, roled');
+      expect(result.councillorResults).toHaveLength(0);
+    });
+
     test('returns error when depth exceeded', async () => {
       const ctx = createMockContext();
       const config = createTestCouncilConfig();
