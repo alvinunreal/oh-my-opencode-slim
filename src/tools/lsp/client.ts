@@ -67,6 +67,18 @@ function withTimeout<T>(
   });
 }
 
+export function getWorkspaceConfiguration(
+  items: Array<{ section?: string } | undefined>,
+): Array<unknown> {
+  return items.map((item) => {
+    if (item?.section === 'json') {
+      return { validate: { enable: true } };
+    }
+
+    return null;
+  });
+}
+
 interface ManagedClient {
   client: LSPClient;
   lastUsedAt: number;
@@ -256,6 +268,11 @@ export class LSPClient {
   private stderrBuffer: string[] = [];
   private processExited = false;
   private diagnosticsStore = new Map<string, Diagnostic[]>();
+  private documents = new Map<
+    string,
+    { version: number; text: string; languageId: string }
+  >();
+  private supportsPullDiagnostics = false;
 
   constructor(
     private root: string,
@@ -349,13 +366,9 @@ export class LSPClient {
     this.connection.onRequest(
       'workspace/configuration',
       (params: { items?: unknown[] }) => {
-        const items = params.items ?? [];
-        return items.map((item: unknown) => {
-          const configItem = item as { section?: string };
-          if (configItem.section === 'json')
-            return { validate: { enable: true } };
-          return {};
-        });
+        return getWorkspaceConfiguration(
+          (params.items ?? []) as Array<{ section?: string } | undefined>,
+        );
       },
     );
 
@@ -415,7 +428,7 @@ export class LSPClient {
     });
 
     const rootUri = pathToFileURL(this.root).href;
-    await withTimeout(
+    const result = await withTimeout(
       this.connection.sendRequest('initialize', {
         processId: process.pid,
         rootUri,
@@ -423,6 +436,7 @@ export class LSPClient {
         workspaceFolders: [{ uri: rootUri, name: 'workspace' }],
         capabilities: {
           textDocument: {
+            diagnostic: {},
             hover: { contentFormat: ['markdown', 'plaintext'] },
             definition: { linkSupport: true },
             references: {},
@@ -447,39 +461,93 @@ export class LSPClient {
       LSP_TIMEOUTS.request,
       `LSP initialize (${this.server.id})`,
     );
-    this.connection.sendNotification('initialized');
+
+    this.supportsPullDiagnostics = Boolean(
+      result &&
+        typeof result === 'object' &&
+        'capabilities' in result &&
+        result.capabilities &&
+        typeof result.capabilities === 'object' &&
+        'diagnosticProvider' in result.capabilities,
+    );
+
+    this.connection.sendNotification('initialized', {});
     await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.initializeDelay));
     log('[lsp] LSPClient.initialize: complete', { server: this.server.id });
   }
 
-  async openFile(filePath: string): Promise<void> {
-    const absPath = resolve(filePath);
-    if (this.openedFiles.has(absPath)) {
-      log('[lsp] openFile: already open, skipping', { filePath: absPath });
-      return;
+  private async waitForPublishedDiagnostics(
+    uri: string,
+    timeoutMs = LSP_TIMEOUTS.request,
+  ): Promise<Diagnostic[] | undefined> {
+    const cachedDiagnostics = this.diagnosticsStore.get(uri);
+    if (cachedDiagnostics) {
+      return cachedDiagnostics;
     }
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 100));
+      const diagnostics = this.diagnosticsStore.get(uri);
+      if (diagnostics) {
+        return diagnostics;
+      }
+    }
+
+    return this.diagnosticsStore.get(uri);
+  }
+
+  async openFile(filePath: string): Promise<void> {
+    await this.ensureDocumentSynced(filePath);
+  }
+
+  private async ensureDocumentSynced(filePath: string): Promise<void> {
+    const absPath = resolve(filePath);
+    const uri = pathToFileURL(absPath).href;
 
     const text = readFileSync(absPath, 'utf-8');
     const ext = extname(absPath);
     const languageId = getLanguageId(ext);
 
-    log('[lsp] openFile: opening document', {
-      filePath: absPath,
-      languageId,
-      size: text.length,
-    });
+    const existing = this.documents.get(uri);
 
-    this.connection?.sendNotification('textDocument/didOpen', {
-      textDocument: {
-        uri: pathToFileURL(absPath).href,
+    if (!existing) {
+      log('[lsp] ensureDocumentSynced: didOpen', {
+        filePath: absPath,
         languageId,
-        version: 1,
-        text,
-      },
-    });
-    this.openedFiles.add(absPath);
+        size: text.length,
+      });
+      this.connection?.sendNotification('textDocument/didOpen', {
+        textDocument: { uri, languageId, version: 1, text },
+      });
+      this.documents.set(uri, { version: 1, text, languageId });
+      this.openedFiles.add(absPath);
+      // allow server to settle
+      await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.openFileDelay));
+      return;
+    }
 
-    await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.openFileDelay));
+    if (existing.text !== text) {
+      const newVersion = existing.version + 1;
+      log('[lsp] ensureDocumentSynced: didChange', {
+        filePath: absPath,
+        languageId,
+        oldVersion: existing.version,
+        newVersion,
+        size: text.length,
+      });
+      this.connection?.sendNotification('textDocument/didChange', {
+        textDocument: { uri, version: newVersion },
+        contentChanges: [{ text }],
+      });
+      this.documents.set(uri, { version: newVersion, text, languageId });
+      // Invalidate cached publishDiagnostics so we wait for fresh results
+      this.diagnosticsStore.delete(uri);
+      // allow server to settle after change
+      await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.openFileDelay));
+    } else {
+      log('[lsp] ensureDocumentSynced: already synced', { filePath: absPath });
+    }
   }
 
   async definition(
@@ -528,30 +596,29 @@ export class LSPClient {
     await this.openFile(absPath);
     await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.diagnosticSettleDelay));
 
-    try {
-      const result = this.connection
-        ? await withTimeout(
-            this.connection.sendRequest('textDocument/diagnostic', {
-              textDocument: { uri },
-            }),
-            LSP_TIMEOUTS.request,
-            `LSP diagnostics (${this.server.id})`,
-            async () => {
-              await this.stop();
-            },
-          )
-        : undefined;
-      if (result && typeof result === 'object' && 'items' in result) {
-        return result as { items: Diagnostic[] };
+    if (this.supportsPullDiagnostics) {
+      try {
+        const result = this.connection
+          ? await withTimeout(
+              this.connection.sendRequest('textDocument/diagnostic', {
+                textDocument: { uri },
+              }),
+              LSP_TIMEOUTS.request,
+              `LSP diagnostics (${this.server.id})`,
+            )
+          : undefined;
+        if (result && typeof result === 'object' && 'items' in result) {
+          return result as { items: Diagnostic[] };
+        }
+      } catch (error) {
+        log('[lsp] diagnostics: falling back to cached publishDiagnostics', {
+          server: this.server.id,
+          error: String(error),
+        });
       }
-    } catch (error) {
-      log('[lsp] diagnostics: falling back to cached publishDiagnostics', {
-        server: this.server.id,
-        error: String(error),
-      });
     }
 
-    const cachedDiagnostics = this.diagnosticsStore.get(uri);
+    const cachedDiagnostics = await this.waitForPublishedDiagnostics(uri);
     if (cachedDiagnostics) {
       return { items: cachedDiagnostics };
     }
@@ -605,6 +672,7 @@ export class LSPClient {
     this.proc = null;
     this.connection = null;
     this.processExited = true;
+    this.supportsPullDiagnostics = false;
     this.diagnosticsStore.clear();
     log('[lsp] LSPClient.stop: complete', { server: this.server.id });
   }

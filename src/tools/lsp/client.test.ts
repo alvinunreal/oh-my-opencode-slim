@@ -8,7 +8,7 @@ import {
   test,
 } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Mock spawn from bun
@@ -33,7 +33,12 @@ mock.module('bun', () => ({
   }),
 }));
 
-import { LSP_TIMEOUTS, LSPClient, lspManager } from './client';
+import {
+  getWorkspaceConfiguration,
+  LSP_TIMEOUTS,
+  LSPClient,
+  lspManager,
+} from './client';
 
 describe('LSPServerManager', () => {
   let startSpy: any;
@@ -175,6 +180,8 @@ describe('LSPClient diagnostics', () => {
       extensions: ['.ts'],
     });
 
+    (client as any).supportsPullDiagnostics = true;
+
     (client as any).connection = {
       sendNotification: mock(),
       sendRequest: mock((method: string) => {
@@ -215,7 +222,7 @@ describe('LSPClient diagnostics', () => {
       extensions: ['.ts'],
     });
 
-    const stopSpy = spyOn(client, 'stop').mockResolvedValue(undefined);
+    (client as any).supportsPullDiagnostics = true;
 
     (client as any).connection = {
       sendNotification: mock(),
@@ -231,10 +238,189 @@ describe('LSPClient diagnostics', () => {
       await expect(client.diagnostics(tempFile)).rejects.toThrow(
         'Unable to retrieve diagnostics',
       );
-      expect(stopSpy).toHaveBeenCalled();
     } finally {
-      stopSpy.mockRestore();
       LSP_TIMEOUTS.request = originalRequestTimeout;
     }
+  });
+
+  test('diagnostics uses cached publishDiagnostics for push-only servers', async () => {
+    const originalRequestTimeout = LSP_TIMEOUTS.request;
+    LSP_TIMEOUTS.request = 200;
+
+    const client = new LSPClient(tempDir, {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    const sendRequest = mock(() => Promise.resolve({}));
+
+    (client as any).connection = {
+      sendNotification: mock(
+        (method: string, params?: { textDocument?: { uri?: string } }) => {
+          if (method === 'textDocument/didOpen') {
+            setTimeout(() => {
+              (client as any).diagnosticsStore.set(params?.textDocument?.uri, [
+                {
+                  message: 'push diagnostic',
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 1 },
+                  },
+                  severity: 2,
+                },
+              ]);
+            }, 10);
+          }
+        },
+      ),
+      sendRequest,
+    };
+
+    try {
+      const result = await client.diagnostics(tempFile);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]?.message).toBe('push diagnostic');
+      expect(sendRequest).not.toHaveBeenCalledWith(
+        'textDocument/diagnostic',
+        expect.anything(),
+      );
+    } finally {
+      LSP_TIMEOUTS.request = originalRequestTimeout;
+    }
+  });
+
+  test('external file change invalidates cached diagnostics and waits for fresh publish', async () => {
+    const tempDir = join(process.cwd(), '.tmp-lsp-tests');
+    const tempFile = join(tempDir, 'index.ts');
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(tempFile, 'const a = 1;\n');
+
+    const client = new LSPClient(tempDir, {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    const sendNotification = mock((method: string, params?: any) => {
+      if (method === 'textDocument/didOpen') {
+        // initial publish
+        (client as any).diagnosticsStore.set(params.textDocument.uri, [
+          {
+            message: 'initial',
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+            severity: 2,
+          },
+        ]);
+      }
+    });
+
+    (client as any).connection = {
+      sendNotification,
+      sendRequest: mock(() => Promise.resolve({})),
+    };
+
+    try {
+      // first diagnostics returns initial cached one
+      (client as any).supportsPullDiagnostics = false;
+      const first = await client.diagnostics(tempFile);
+      expect(first.items[0].message).toBe('initial');
+
+      // mutate the file externally
+      writeFileSync(tempFile, 'const b = 2;\n');
+
+      // simulate server publishing new diagnostics after change
+      setTimeout(() => {
+        const uri = pathToFileURL(resolve(tempFile)).href;
+        (client as any).diagnosticsStore.set(uri, [
+          {
+            message: 'after',
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+            severity: 2,
+          },
+        ]);
+      }, 20);
+
+      const second = await client.diagnostics(tempFile);
+      expect(second.items[0].message).toBe('after');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('LSPClient initialize', () => {
+  test('advertises textDocument diagnostic capability', async () => {
+    const client = new LSPClient('/root', {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    const sendRequest = mock(() => Promise.resolve({}));
+    const sendNotification = mock();
+
+    (client as any).connection = {
+      sendRequest,
+      sendNotification,
+    };
+
+    await client.initialize();
+
+    expect((client as any).supportsPullDiagnostics).toBe(false);
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      'initialize',
+      expect.objectContaining({
+        capabilities: expect.objectContaining({
+          textDocument: expect.objectContaining({
+            diagnostic: {},
+          }),
+        }),
+      }),
+    );
+    expect(sendNotification).toHaveBeenCalledWith('initialized', {});
+  });
+
+  test('stores negotiated pull diagnostics support from initialize response', async () => {
+    const client = new LSPClient('/root', {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    (client as any).connection = {
+      sendRequest: mock(() =>
+        Promise.resolve({
+          capabilities: {
+            diagnosticProvider: {
+              interFileDependencies: false,
+              workspaceDiagnostics: false,
+            },
+          },
+        }),
+      ),
+      sendNotification: mock(),
+    };
+
+    await client.initialize();
+
+    expect((client as any).supportsPullDiagnostics).toBe(true);
+  });
+
+  test('returns null for unknown workspace configuration sections', () => {
+    expect(
+      getWorkspaceConfiguration([
+        { section: 'unknown' },
+        { section: 'json' },
+        {},
+      ]),
+    ).toEqual([null, { validate: { enable: true } }, null]);
   });
 });
