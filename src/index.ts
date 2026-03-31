@@ -111,7 +111,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       )
     : {};
 
-  const mcps = createBuiltinMcps(config.disabled_mcps);
+  const mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
 
   // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
   const tmuxSessionManager = new TmuxSessionManager(ctx, tmuxConfig);

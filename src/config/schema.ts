@@ -129,6 +129,12 @@ export const PresetSchema = z.record(z.string(), AgentOverrideConfigSchema);
 
 export type Preset = z.infer<typeof PresetSchema>;
 
+// Websearch provider configuration
+export const WebsearchConfigSchema = z.object({
+  provider: z.enum(['exa', 'tavily']).default('exa'),
+});
+export type WebsearchConfig = z.infer<typeof WebsearchConfigSchema>;
+
 // MCP names
 export const McpNameSchema = z.enum(['websearch', 'context7', 'grep_app']);
 export type McpName = z.infer<typeof McpNameSchema>;
@@ -159,6 +165,7 @@ export const PluginConfigSchema = z.object({
   presets: z.record(z.string(), PresetSchema).optional(),
   agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
   disabled_mcps: z.array(z.string()).optional(),
+  websearch: WebsearchConfigSchema.optional(),
   tmux: TmuxConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
