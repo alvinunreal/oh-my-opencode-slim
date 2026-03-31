@@ -7,6 +7,9 @@ import {
   spyOn,
   test,
 } from 'bun:test';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Mock spawn from bun
 mock.module('bun', () => ({
@@ -30,7 +33,7 @@ mock.module('bun', () => ({
   }),
 }));
 
-import { LSPClient, lspManager } from './client';
+import { LSP_TIMEOUTS, LSPClient, lspManager } from './client';
 
 describe('LSPServerManager', () => {
   let startSpy: any;
@@ -144,5 +147,94 @@ describe('LSPServerManager', () => {
     // Instead, let's just verify that stopAll is exported and works, which we already did.
     expect(onSpy).toBeDefined();
     onSpy.mockRestore();
+  });
+});
+
+describe('LSPClient diagnostics', () => {
+  const tempDir = join(process.cwd(), '.tmp-lsp-tests');
+  const tempFile = join(tempDir, 'index.ts');
+
+  beforeEach(async () => {
+    await lspManager.stopAll();
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(tempFile, 'export const value = 1;\n');
+  });
+
+  afterEach(async () => {
+    rmSync(tempDir, { recursive: true, force: true });
+    await lspManager.stopAll();
+  });
+
+  test('diagnostics falls back to cached publishDiagnostics on timeout', async () => {
+    const originalRequestTimeout = LSP_TIMEOUTS.request;
+    LSP_TIMEOUTS.request = 10;
+
+    const client = new LSPClient(tempDir, {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    (client as any).connection = {
+      sendNotification: mock(),
+      sendRequest: mock((method: string) => {
+        if (method === 'textDocument/diagnostic') {
+          return new Promise(() => {});
+        }
+        return Promise.resolve({});
+      }),
+    };
+
+    (client as any).diagnosticsStore.set(pathToFileURL(tempFile).href, [
+      {
+        message: 'cached diagnostic',
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        severity: 1,
+      },
+    ]);
+
+    try {
+      const result = await client.diagnostics(tempFile);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]?.message).toBe('cached diagnostic');
+    } finally {
+      LSP_TIMEOUTS.request = originalRequestTimeout;
+    }
+  });
+
+  test('diagnostics throws after timeout when no cached diagnostics exist', async () => {
+    const originalRequestTimeout = LSP_TIMEOUTS.request;
+    LSP_TIMEOUTS.request = 10;
+
+    const client = new LSPClient(tempDir, {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    const stopSpy = spyOn(client, 'stop').mockResolvedValue(undefined);
+
+    (client as any).connection = {
+      sendNotification: mock(),
+      sendRequest: mock((method: string) => {
+        if (method === 'textDocument/diagnostic') {
+          return new Promise(() => {});
+        }
+        return Promise.resolve({});
+      }),
+    };
+
+    try {
+      await expect(client.diagnostics(tempFile)).rejects.toThrow(
+        'Unable to retrieve diagnostics',
+      );
+      expect(stopSpy).toHaveBeenCalled();
+    } finally {
+      stopSpy.mockRestore();
+      LSP_TIMEOUTS.request = originalRequestTimeout;
+    }
   });
 });

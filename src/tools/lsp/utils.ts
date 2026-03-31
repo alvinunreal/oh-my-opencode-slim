@@ -106,7 +106,7 @@ export async function withLspClient<T>(
 ): Promise<T> {
   const absPath = resolve(filePath);
   const ext = extname(absPath);
-  const result = findServerForExtension(ext);
+  const result = findServerForExtension(ext, absPath);
 
   if (result.status !== 'found') {
     log('[lsp] withLspClient: server not found', {

@@ -12,8 +12,60 @@ import {
   StreamMessageWriter,
 } from 'vscode-jsonrpc/node';
 import { log } from '../../utils/logger';
-import { getLanguageId } from './config';
+import { getLanguageId, resolveServerCommand } from './config';
 import type { Diagnostic, ResolvedServer } from './types';
+
+const START_TIMEOUT_MS = 5_000;
+const REQUEST_TIMEOUT_MS = 5_000;
+const OPEN_FILE_DELAY_MS = 250;
+const INITIALIZE_DELAY_MS = 100;
+const DIAGNOSTIC_SETTLE_DELAY_MS = 250;
+
+export const LSP_TIMEOUTS = {
+  start: START_TIMEOUT_MS,
+  request: REQUEST_TIMEOUT_MS,
+  openFileDelay: OPEN_FILE_DELAY_MS,
+  initializeDelay: INITIALIZE_DELAY_MS,
+  diagnosticSettleDelay: DIAGNOSTIC_SETTLE_DELAY_MS,
+};
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+  onTimeout?: () => Promise<void> | void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      void Promise.resolve(onTimeout?.()).catch(() => {});
+      reject(new Error(`${label} timeout after ${ms}ms`));
+    }, ms);
+
+    promise.then(
+      (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 interface ManagedClient {
   client: LSPClient;
@@ -211,13 +263,20 @@ export class LSPClient {
   ) {}
 
   async start(): Promise<void> {
+    const command = resolveServerCommand(this.server.command, this.root);
+    if (!command) {
+      throw new Error(
+        `Failed to resolve LSP server command: ${this.server.command.join(' ')}`,
+      );
+    }
+
     log('[lsp] LSPClient.start: spawning server', {
       server: this.server.id,
-      command: this.server.command.join(' '),
+      command: command.join(' '),
       root: this.root,
     });
 
-    this.proc = spawn(this.server.command, {
+    this.proc = spawn(command, {
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -356,36 +415,40 @@ export class LSPClient {
     });
 
     const rootUri = pathToFileURL(this.root).href;
-    await this.connection.sendRequest('initialize', {
-      processId: process.pid,
-      rootUri,
-      rootPath: this.root,
-      workspaceFolders: [{ uri: rootUri, name: 'workspace' }],
-      capabilities: {
-        textDocument: {
-          hover: { contentFormat: ['markdown', 'plaintext'] },
-          definition: { linkSupport: true },
-          references: {},
-          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-          publishDiagnostics: {},
-          rename: {
-            prepareSupport: true,
-            prepareSupportDefaultBehavior: 1,
-            honorsChangeAnnotations: true,
+    await withTimeout(
+      this.connection.sendRequest('initialize', {
+        processId: process.pid,
+        rootUri,
+        rootPath: this.root,
+        workspaceFolders: [{ uri: rootUri, name: 'workspace' }],
+        capabilities: {
+          textDocument: {
+            hover: { contentFormat: ['markdown', 'plaintext'] },
+            definition: { linkSupport: true },
+            references: {},
+            documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+            publishDiagnostics: {},
+            rename: {
+              prepareSupport: true,
+              prepareSupportDefaultBehavior: 1,
+              honorsChangeAnnotations: true,
+            },
+          },
+          workspace: {
+            symbol: {},
+            workspaceFolders: true,
+            configuration: true,
+            applyEdit: true,
+            workspaceEdit: { documentChanges: true },
           },
         },
-        workspace: {
-          symbol: {},
-          workspaceFolders: true,
-          configuration: true,
-          applyEdit: true,
-          workspaceEdit: { documentChanges: true },
-        },
-      },
-      ...this.server.initialization,
-    });
+        ...this.server.initialization,
+      }),
+      LSP_TIMEOUTS.request,
+      `LSP initialize (${this.server.id})`,
+    );
     this.connection.sendNotification('initialized');
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.initializeDelay));
     log('[lsp] LSPClient.initialize: complete', { server: this.server.id });
   }
 
@@ -416,7 +479,7 @@ export class LSPClient {
     });
     this.openedFiles.add(absPath);
 
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.openFileDelay));
   }
 
   async definition(
@@ -426,10 +489,16 @@ export class LSPClient {
   ): Promise<unknown> {
     const absPath = resolve(filePath);
     await this.openFile(absPath);
-    return this.connection?.sendRequest('textDocument/definition', {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-    });
+    return this.connection
+      ? withTimeout(
+          this.connection.sendRequest('textDocument/definition', {
+            textDocument: { uri: pathToFileURL(absPath).href },
+            position: { line: line - 1, character },
+          }),
+          LSP_TIMEOUTS.request,
+          `LSP definition (${this.server.id})`,
+        )
+      : undefined;
   }
 
   async references(
@@ -440,32 +509,56 @@ export class LSPClient {
   ): Promise<unknown> {
     const absPath = resolve(filePath);
     await this.openFile(absPath);
-    return this.connection?.sendRequest('textDocument/references', {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-      context: { includeDeclaration },
-    });
+    return this.connection
+      ? withTimeout(
+          this.connection.sendRequest('textDocument/references', {
+            textDocument: { uri: pathToFileURL(absPath).href },
+            position: { line: line - 1, character },
+            context: { includeDeclaration },
+          }),
+          LSP_TIMEOUTS.request,
+          `LSP references (${this.server.id})`,
+        )
+      : undefined;
   }
 
   async diagnostics(filePath: string): Promise<{ items: Diagnostic[] }> {
     const absPath = resolve(filePath);
     const uri = pathToFileURL(absPath).href;
     await this.openFile(absPath);
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.diagnosticSettleDelay));
 
     try {
-      const result = await this.connection?.sendRequest(
-        'textDocument/diagnostic',
-        {
-          textDocument: { uri },
-        },
-      );
+      const result = this.connection
+        ? await withTimeout(
+            this.connection.sendRequest('textDocument/diagnostic', {
+              textDocument: { uri },
+            }),
+            LSP_TIMEOUTS.request,
+            `LSP diagnostics (${this.server.id})`,
+            async () => {
+              await this.stop();
+            },
+          )
+        : undefined;
       if (result && typeof result === 'object' && 'items' in result) {
         return result as { items: Diagnostic[] };
       }
-    } catch {}
+    } catch (error) {
+      log('[lsp] diagnostics: falling back to cached publishDiagnostics', {
+        server: this.server.id,
+        error: String(error),
+      });
+    }
 
-    return { items: this.diagnosticsStore.get(uri) ?? [] };
+    const cachedDiagnostics = this.diagnosticsStore.get(uri);
+    if (cachedDiagnostics) {
+      return { items: cachedDiagnostics };
+    }
+
+    throw new Error(
+      `Unable to retrieve diagnostics from ${this.server.id}: request timed out or is unsupported.`,
+    );
   }
 
   async rename(
@@ -476,11 +569,17 @@ export class LSPClient {
   ): Promise<unknown> {
     const absPath = resolve(filePath);
     await this.openFile(absPath);
-    return this.connection?.sendRequest('textDocument/rename', {
-      textDocument: { uri: pathToFileURL(absPath).href },
-      position: { line: line - 1, character },
-      newName,
-    });
+    return this.connection
+      ? withTimeout(
+          this.connection.sendRequest('textDocument/rename', {
+            textDocument: { uri: pathToFileURL(absPath).href },
+            position: { line: line - 1, character },
+            newName,
+          }),
+          LSP_TIMEOUTS.request,
+          `LSP rename (${this.server.id})`,
+        )
+      : undefined;
   }
 
   isAlive(): boolean {
@@ -493,7 +592,11 @@ export class LSPClient {
     log('[lsp] LSPClient.stop: stopping', { server: this.server.id });
     try {
       if (this.connection) {
-        await this.connection.sendRequest('shutdown');
+        await withTimeout(
+          this.connection.sendRequest('shutdown'),
+          1_000,
+          `LSP shutdown (${this.server.id})`,
+        );
         this.connection.sendNotification('exit');
         this.connection.dispose();
       }

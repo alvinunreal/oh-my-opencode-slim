@@ -89,9 +89,33 @@ describe('config', () => {
   });
 
   describe('findServerForExtension', () => {
-    test('should return found for .ts extension if installed', () => {
-      (existsSync as any).mockReturnValue(true);
-      const result = findServerForExtension('.ts');
+    test('should skip deno for .ts when project is not a deno workspace', () => {
+      whichSyncMock.mockImplementation((cmd: string) =>
+        cmd === 'typescript-language-server'
+          ? join('/usr/bin', 'typescript-language-server')
+          : null,
+      );
+      (existsSync as any).mockImplementation((path: string) =>
+        path.includes('bun.lock'),
+      );
+      const result = findServerForExtension(
+        '.ts',
+        '/workspace/project/src/index.ts',
+      );
+      expect(result.status).toBe('found');
+      if (result.status === 'found') {
+        expect(result.server.id).toBe('typescript');
+      }
+    });
+
+    test('should prefer deno for .ts in a deno workspace', () => {
+      whichSyncMock.mockImplementation((cmd: string) =>
+        cmd === 'deno' ? join('/usr/bin', 'deno') : null,
+      );
+      (existsSync as any).mockImplementation((path: string) =>
+        path.includes('deno.json'),
+      );
+      const result = findServerForExtension('.ts', '/workspace/app/src/mod.ts');
       expect(result.status).toBe('found');
       if (result.status === 'found') {
         expect(result.server.id).toBe('deno');
@@ -99,7 +123,9 @@ describe('config', () => {
     });
 
     test('should return found for .py extension if installed (prefers ty)', () => {
-      (existsSync as any).mockReturnValue(true);
+      whichSyncMock.mockImplementation((cmd: string) =>
+        cmd === 'ty' ? join('/usr/bin', 'ty') : null,
+      );
       const result = findServerForExtension('.py');
       expect(result.status).toBe('found');
       if (result.status === 'found') {
@@ -112,13 +138,39 @@ describe('config', () => {
       expect(result.status).toBe('not_configured');
     });
 
-    test('should return not_installed if server not in PATH', () => {
-      (existsSync as any).mockReturnValue(false);
-      const result = findServerForExtension('.ts');
+    test('should continue to later matching servers when earlier ones are unavailable', () => {
+      whichSyncMock.mockImplementation((cmd: string) =>
+        cmd === 'typescript-language-server'
+          ? join('/usr/bin', 'typescript-language-server')
+          : null,
+      );
+      (existsSync as any).mockImplementation((path: string) =>
+        path.includes('bun.lock'),
+      );
+
+      const result = findServerForExtension(
+        '.ts',
+        '/workspace/project/src/index.ts',
+      );
+
+      expect(result.status).toBe('found');
+      if (result.status === 'found') {
+        expect(result.server.id).toBe('typescript');
+      }
+    });
+
+    test('should return first applicable not_installed server if no match is launchable', () => {
+      (existsSync as any).mockImplementation((path: string) =>
+        path.includes('bun.lock'),
+      );
+      const result = findServerForExtension(
+        '.ts',
+        '/workspace/project/src/index.ts',
+      );
       expect(result.status).toBe('not_installed');
       if (result.status === 'not_installed') {
-        expect(result.server.id).toBe('deno');
-        expect(result.installHint).toContain('Install Deno');
+        expect(result.server.id).toBe('typescript');
+        expect(result.installHint).toContain('typescript-language-server');
       }
     });
   });

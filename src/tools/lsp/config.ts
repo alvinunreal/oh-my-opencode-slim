@@ -3,8 +3,9 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import whichSync from 'which';
+import { log } from '../../utils';
 import { getAllUserLspConfigs, hasUserLspConfig } from './config-store';
 import {
   BUILTIN_SERVERS,
@@ -87,25 +88,76 @@ function buildMergedServers(): Map<string, MergedServerConfig> {
   return servers;
 }
 
-export function findServerForExtension(ext: string): ServerLookupResult {
-  const servers = buildMergedServers();
+function getServerWorkspace(
+  config: MergedServerConfig,
+  filePath?: string,
+): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
 
-  for (const [, config] of servers) {
-    if (config.extensions.includes(ext)) {
-      const server: ResolvedServer = {
-        id: config.id,
-        command: config.command,
-        extensions: config.extensions,
-        root: config.root,
-        env: config.env,
-        initialization: config.initialization,
-      };
+  if (!config.root) {
+    return dirname(resolve(filePath));
+  }
 
-      if (isServerInstalled(config.command)) {
-        return { status: 'found', server };
-      }
+  return config.root(filePath);
+}
 
-      return {
+function shouldSkipServer(
+  config: MergedServerConfig,
+  filePath?: string,
+): boolean {
+  if (!filePath) {
+    return false;
+  }
+
+  return (
+    config.id === 'deno' && getServerWorkspace(config, filePath) === undefined
+  );
+}
+
+function toResolvedServer(
+  config: MergedServerConfig,
+  command?: string[],
+): ResolvedServer {
+  return {
+    id: config.id,
+    command: command ?? config.command,
+    extensions: config.extensions,
+    root: config.root,
+    env: config.env,
+    initialization: config.initialization,
+  };
+}
+
+function findInstalledServer(
+  configs: MergedServerConfig[],
+  filePath?: string,
+): ServerLookupResult | undefined {
+  let firstNotInstalled: Extract<
+    ServerLookupResult,
+    { status: 'not_installed' }
+  > | null = null;
+
+  for (const config of configs) {
+    const workspace = getServerWorkspace(config, filePath);
+    const resolvedCommand = resolveServerCommand(
+      config.command,
+      workspace ?? (filePath ? dirname(resolve(filePath)) : undefined),
+    );
+    const server = toResolvedServer(config, resolvedCommand ?? undefined);
+
+    log(
+      `[LSP] Considering server for ${config.extensions.join(', ')}: ${config.id} with command ${config.command.join(' ')}`,
+    );
+
+    if (resolvedCommand) {
+      return { status: 'found', server };
+    }
+
+    if (!firstNotInstalled) {
+      log(`[LSP] Server ${config.id} not found in PATH or local node_modules`);
+      firstNotInstalled = {
         status: 'not_installed',
         server,
         installHint:
@@ -115,6 +167,38 @@ export function findServerForExtension(ext: string): ServerLookupResult {
     }
   }
 
+  return firstNotInstalled ?? undefined;
+}
+
+export function findServerForExtension(
+  ext: string,
+  filePath?: string,
+): ServerLookupResult {
+  const servers = [...buildMergedServers().values()].filter((config) =>
+    config.extensions.includes(ext),
+  );
+
+  if (servers.length === 0) {
+    log(`[LSP] No server config found for ${ext}`);
+    return { status: 'not_configured', extension: ext };
+  }
+
+  const candidateServers = servers.filter(
+    (config) => !shouldSkipServer(config, filePath),
+  );
+
+  if (candidateServers.length === 0) {
+    log(`[LSP] No applicable server config found for ${ext} at ${filePath}`);
+    return { status: 'not_configured', extension: ext };
+  }
+
+  const result = findInstalledServer(candidateServers, filePath);
+
+  if (result) {
+    return result;
+  }
+
+  log(`[LSP] No applicable server config found for ${ext}`);
   return { status: 'not_configured', extension: ext };
 }
 
@@ -122,21 +206,21 @@ export function getLanguageId(ext: string): string {
   return LANGUAGE_EXTENSIONS[ext] || 'plaintext';
 }
 
-export function isServerInstalled(command: string[]): boolean {
-  if (command.length === 0) return false;
+export function resolveServerCommand(
+  command: string[],
+  cwd?: string,
+): string[] | null {
+  if (command.length === 0) return null;
 
-  const cmd = command[0];
+  const [cmd, ...args] = command;
 
-  // Absolute paths
   if (cmd.includes('/') || cmd.includes('\\')) {
-    return existsSync(cmd);
+    return existsSync(cmd) ? command : null;
   }
 
   const isWindows = process.platform === 'win32';
   const ext = isWindows ? '.exe' : '';
 
-  // Check PATH using which (mirrors core's approach)
-  // Include ~/.config/opencode/bin in the search path
   const opencodeBin = join(homedir(), '.config', 'opencode', 'bin');
   const searchPath =
     (process.env.PATH ?? '') + (isWindows ? ';' : ':') + opencodeBin;
@@ -148,15 +232,21 @@ export function isServerInstalled(command: string[]): boolean {
   });
 
   if (result !== null) {
-    return true;
+    return [result, ...args];
   }
 
-  // Check local node_modules (where npm/yarn/pnpm install binaries)
-  const cwd = process.cwd();
-  const localBin = join(cwd, 'node_modules', '.bin', cmd);
-  if (existsSync(localBin) || existsSync(localBin + ext)) {
-    return true;
+  const localBinRoot = cwd ?? process.cwd();
+  const localBin = join(localBinRoot, 'node_modules', '.bin', cmd);
+  if (existsSync(localBin)) {
+    return [localBin, ...args];
+  }
+  if (existsSync(localBin + ext)) {
+    return [localBin + ext, ...args];
   }
 
-  return false;
+  return null;
+}
+
+export function isServerInstalled(command: string[]): boolean {
+  return resolveServerCommand(command) !== null;
 }
