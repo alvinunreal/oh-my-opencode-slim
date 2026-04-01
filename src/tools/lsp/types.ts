@@ -63,3 +63,18 @@ export type {
   SymbolInfo,
   DocumentSymbol,
 };
+
+export interface DocumentDiagnosticReportFull {
+  kind: 'full';
+  items: Diagnostic[];
+  resultId?: string;
+}
+
+export interface DocumentDiagnosticReportUnchanged {
+  kind: 'unchanged';
+  resultId?: string;
+}
+
+export type DocumentDiagnosticReport =
+  | DocumentDiagnosticReportFull
+  | DocumentDiagnosticReportUnchanged;

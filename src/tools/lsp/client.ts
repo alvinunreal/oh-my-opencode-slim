@@ -13,7 +13,11 @@ import {
 } from 'vscode-jsonrpc/node';
 import { log } from '../../utils/logger';
 import { getLanguageId, resolveServerCommand } from './config';
-import type { Diagnostic, ResolvedServer } from './types';
+import type {
+  Diagnostic,
+  DocumentDiagnosticReport,
+  ResolvedServer,
+} from './types';
 
 const START_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -268,6 +272,7 @@ export class LSPClient {
   private stderrBuffer: string[] = [];
   private processExited = false;
   private diagnosticsStore = new Map<string, Diagnostic[]>();
+  private diagnosticResultIds = new Map<string, string>();
   private documents = new Map<
     string,
     { version: number; text: string; languageId: string }
@@ -543,6 +548,7 @@ export class LSPClient {
       this.documents.set(uri, { version: newVersion, text, languageId });
       // Invalidate cached publishDiagnostics so we wait for fresh results
       this.diagnosticsStore.delete(uri);
+      this.diagnosticResultIds.delete(uri);
       // allow server to settle after change
       await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.openFileDelay));
     } else {
@@ -602,13 +608,35 @@ export class LSPClient {
           ? await withTimeout(
               this.connection.sendRequest('textDocument/diagnostic', {
                 textDocument: { uri },
+                previousResultId: this.diagnosticResultIds.get(uri),
               }),
               LSP_TIMEOUTS.request,
               `LSP diagnostics (${this.server.id})`,
             )
           : undefined;
+
+        const report = result as DocumentDiagnosticReport | undefined;
+        if (report?.kind === 'full') {
+          if (report.resultId) {
+            this.diagnosticResultIds.set(uri, report.resultId);
+          } else {
+            this.diagnosticResultIds.delete(uri);
+          }
+          this.diagnosticsStore.set(uri, report.items);
+          return { items: report.items };
+        }
+
+        if (report?.kind === 'unchanged') {
+          if (report.resultId) {
+            this.diagnosticResultIds.set(uri, report.resultId);
+          }
+          return { items: this.diagnosticsStore.get(uri) ?? [] };
+        }
+
         if (result && typeof result === 'object' && 'items' in result) {
-          return result as { items: Diagnostic[] };
+          const legacyResult = result as { items: Diagnostic[] };
+          this.diagnosticsStore.set(uri, legacyResult.items);
+          return legacyResult;
         }
       } catch (error) {
         log('[lsp] diagnostics: falling back to cached publishDiagnostics', {
@@ -674,6 +702,8 @@ export class LSPClient {
     this.processExited = true;
     this.supportsPullDiagnostics = false;
     this.diagnosticsStore.clear();
+    this.diagnosticResultIds.clear();
+    this.documents.clear();
     log('[lsp] LSPClient.stop: complete', { server: this.server.id });
   }
 }

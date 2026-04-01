@@ -290,6 +290,81 @@ describe('LSPClient diagnostics', () => {
     }
   });
 
+  test('diagnostics handles pull full reports and stores resultId', async () => {
+    const client = new LSPClient(tempDir, {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    (client as any).supportsPullDiagnostics = true;
+    (client as any).connection = {
+      sendNotification: mock(),
+      sendRequest: mock((method: string) => {
+        if (method === 'textDocument/diagnostic') {
+          return Promise.resolve({
+            kind: 'full',
+            items: [
+              {
+                message: 'pull diagnostic',
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 1 },
+                },
+                severity: 1,
+              },
+            ],
+            resultId: 'r1',
+          });
+        }
+        return Promise.resolve({});
+      }),
+    };
+
+    const result = await client.diagnostics(tempFile);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.message).toBe('pull diagnostic');
+    expect(
+      (client as any).diagnosticResultIds.get(pathToFileURL(tempFile).href),
+    ).toBe('r1');
+  });
+
+  test('diagnostics handles pull unchanged reports using cached diagnostics', async () => {
+    const client = new LSPClient(tempDir, {
+      id: 'test',
+      command: ['/bin/true'],
+      extensions: ['.ts'],
+    });
+
+    const uri = pathToFileURL(tempFile).href;
+    (client as any).supportsPullDiagnostics = true;
+    (client as any).diagnosticsStore.set(uri, [
+      {
+        message: 'cached from previous full',
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 1 },
+        },
+        severity: 2,
+      },
+    ]);
+    (client as any).diagnosticResultIds.set(uri, 'r1');
+    (client as any).connection = {
+      sendNotification: mock(),
+      sendRequest: mock((method: string) => {
+        if (method === 'textDocument/diagnostic') {
+          return Promise.resolve({ kind: 'unchanged', resultId: 'r2' });
+        }
+        return Promise.resolve({});
+      }),
+    };
+
+    const result = await client.diagnostics(tempFile);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.message).toBe('cached from previous full');
+    expect((client as any).diagnosticResultIds.get(uri)).toBe('r2');
+  });
+
   test('external file change invalidates cached diagnostics and waits for fresh publish', async () => {
     const tempDir = join(process.cwd(), '.tmp-lsp-tests');
     const tempFile = join(tempDir, 'index.ts');
