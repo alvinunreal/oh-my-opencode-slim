@@ -19,7 +19,8 @@ import {
   FALLBACK_FAILOVER_TIMEOUT_MS,
   SUBAGENT_DELEGATION_RULES,
 } from '../config';
-import type { TmuxConfig } from '../config/schema';
+import type { MultiplexerConfig } from '../config/schema';
+import { getMultiplexer } from '../multiplexer';
 import {
   applyAgentVariant,
   createInternalAgentTextPart,
@@ -100,12 +101,17 @@ export class BackgroundTaskManager {
 
   constructor(
     ctx: PluginInput,
-    tmuxConfig?: TmuxConfig,
+    multiplexerConfig?: MultiplexerConfig,
     config?: PluginConfig,
   ) {
     this.client = ctx.client;
     this.directory = ctx.directory;
-    this.tmuxEnabled = tmuxConfig?.enabled ?? false;
+    // Check if multiplexer is actually available (handles 'auto' type correctly)
+    this.tmuxEnabled =
+      multiplexerConfig !== undefined &&
+      multiplexerConfig.type !== 'none' &&
+      multiplexerConfig.type !== undefined &&
+      getMultiplexer(multiplexerConfig) !== null;
     this.config = config;
     this.backgroundConfig = config?.background ?? {
       maxConcurrentStarts: 10,

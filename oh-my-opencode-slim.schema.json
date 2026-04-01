@@ -331,6 +331,38 @@
         "type": "string"
       }
     },
+    "multiplexer": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "default": "none",
+          "type": "string",
+          "enum": [
+            "auto",
+            "tmux",
+            "zellij",
+            "none"
+          ]
+        },
+        "layout": {
+          "default": "main-vertical",
+          "type": "string",
+          "enum": [
+            "main-horizontal",
+            "main-vertical",
+            "tiled",
+            "even-horizontal",
+            "even-vertical"
+          ]
+        },
+        "main_pane_size": {
+          "default": 60,
+          "type": "number",
+          "minimum": 20,
+          "maximum": 80
+        }
+      }
+    },
     "tmux": {
       "type": "object",
       "properties": {
@@ -354,6 +386,19 @@
           "type": "number",
           "minimum": 20,
           "maximum": 80
+        }
+      }
+    },
+    "websearch": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "default": "exa",
+          "type": "string",
+          "enum": [
+            "exa",
+            "tavily"
+          ]
         }
       }
     },

@@ -100,8 +100,12 @@ export const AgentOverrideConfigSchema = z.object({
   mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
 });
 
-// Tmux layout options
-export const TmuxLayoutSchema = z.enum([
+// Multiplexer type options
+export const MultiplexerTypeSchema = z.enum(['auto', 'tmux', 'zellij', 'none']);
+export type MultiplexerType = z.infer<typeof MultiplexerTypeSchema>;
+
+// Layout options (shared across multiplexers)
+export const MultiplexerLayoutSchema = z.enum([
   'main-horizontal', // Main pane on top, agents stacked below
   'main-vertical', // Main pane on left, agents stacked on right
   'tiled', // All panes equal size grid
@@ -109,9 +113,23 @@ export const TmuxLayoutSchema = z.enum([
   'even-vertical', // All panes stacked vertically
 ]);
 
-export type TmuxLayout = z.infer<typeof TmuxLayoutSchema>;
+export type MultiplexerLayout = z.infer<typeof MultiplexerLayoutSchema>;
 
-// Tmux integration configuration
+// Legacy Tmux layout options (for backward compatibility)
+export const TmuxLayoutSchema = MultiplexerLayoutSchema;
+export type TmuxLayout = MultiplexerLayout;
+
+// Multiplexer integration configuration (new unified config)
+export const MultiplexerConfigSchema = z.object({
+  type: MultiplexerTypeSchema.default('none'),
+  layout: MultiplexerLayoutSchema.default('main-vertical'),
+  main_pane_size: z.number().min(20).max(80).default(60), // percentage for main pane
+});
+
+export type MultiplexerConfig = z.infer<typeof MultiplexerConfigSchema>;
+
+// Legacy Tmux integration configuration (for backward compatibility)
+// When tmux.enabled is true, it's equivalent to multiplexer.type = 'tmux'
 export const TmuxConfigSchema = z.object({
   enabled: z.boolean().default(false),
   layout: TmuxLayoutSchema.default('main-vertical'),
@@ -165,8 +183,12 @@ export const PluginConfigSchema = z.object({
   presets: z.record(z.string(), PresetSchema).optional(),
   agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
   disabled_mcps: z.array(z.string()).optional(),
-  websearch: WebsearchConfigSchema.optional(),
+  // Multiplexer config (new unified config - preferred)
+  multiplexer: MultiplexerConfigSchema.optional(),
+  // Legacy tmux config (for backward compatibility)
+  // When tmux.enabled is true, it's equivalent to multiplexer.type = 'tmux'
   tmux: TmuxConfigSchema.optional(),
+  websearch: WebsearchConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
   council: CouncilConfigSchema.optional(),

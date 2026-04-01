@@ -26,7 +26,7 @@ The installer generates an OpenAI configuration by default (using `gpt-5.4` and 
 For non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --multiplexer=auto --skills=yes
 ```
 
 To force overwrite of an existing configuration:
@@ -358,7 +358,7 @@ If any agent fails to respond, check your provider authentication and config fil
 | Feature | Doc | What it does |
 |---------|-----|--------------|
 | **Council** | [council.md](docs/council.md) | Run N models in parallel, synthesize one answer (`@council`) |
-| **Tmux Integration** | [tmux-integration.md](docs/tmux-integration.md) | Watch agents work in real-time with auto-spawned panes |
+| **Multiplexer Integration** | [multiplexer-integration.md](docs/multiplexer-integration.md) | Watch agents work in real-time with auto-spawned panes (Tmux/Zellij) |
 | **Cartography Skill** | [cartography.md](docs/cartography.md) | Auto-generate hierarchical codemaps for any codebase |
 
 ### ⚙️ Config & Reference

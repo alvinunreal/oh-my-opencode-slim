@@ -18,8 +18,8 @@ This is the exact configuration the author runs day-to-day. It mixes three provi
       "fixer": { "model": "fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo", "variant": "low", "skills": [], "mcps": [] }
     }
   },
-  "tmux": {
-    "enabled": true,
+  "multiplexer": {
+    "type": "auto",
     "layout": "main-vertical",
     "main_pane_size": 60
   },

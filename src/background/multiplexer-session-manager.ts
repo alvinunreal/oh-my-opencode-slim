@@ -1,8 +1,12 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { POLL_INTERVAL_BACKGROUND_MS } from '../config';
-import type { TmuxConfig } from '../config/schema';
+import type { MultiplexerConfig } from '../config/schema';
+import {
+  getMultiplexer,
+  isServerRunning,
+  type Multiplexer,
+} from '../multiplexer';
 import { log } from '../utils/logger';
-import { closeTmuxPane, isInsideTmux, spawnTmuxPane } from '../utils/tmux';
 
 type OpencodeClient = PluginInput['client'];
 
@@ -32,39 +36,47 @@ const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
 
 /**
- * TmuxSessionManager tracks child sessions and spawns/closes tmux panes for them.
+ * MultiplexerSessionManager tracks child sessions and spawns/closes multiplexer panes for them.
  *
  * Uses session.status events for completion detection instead of polling.
+ * Supports both tmux and zellij multiplexers.
  */
-export class TmuxSessionManager {
+export class MultiplexerSessionManager {
   private client: OpencodeClient;
-  private tmuxConfig: TmuxConfig;
   private serverUrl: string;
+  private multiplexer: Multiplexer | null = null;
   private sessions = new Map<string, TrackedSession>();
   private pollInterval?: ReturnType<typeof setInterval>;
   private enabled = false;
 
-  constructor(ctx: PluginInput, tmuxConfig: TmuxConfig) {
+  constructor(ctx: PluginInput, config: MultiplexerConfig) {
     this.client = ctx.client;
-    this.tmuxConfig = tmuxConfig;
     const defaultPort = process.env.OPENCODE_PORT ?? '4096';
     this.serverUrl =
       ctx.serverUrl?.toString() ?? `http://localhost:${defaultPort}`;
-    this.enabled = tmuxConfig.enabled && isInsideTmux();
 
-    log('[tmux-session-manager] initialized', {
+    // Get the multiplexer instance
+    this.multiplexer = getMultiplexer(config);
+
+    // Enable only if a multiplexer is configured and we're inside a session
+    this.enabled =
+      config.type !== 'none' &&
+      this.multiplexer !== null &&
+      this.multiplexer.isInsideSession();
+
+    log('[multiplexer-session-manager] initialized', {
       enabled: this.enabled,
-      tmuxConfig: this.tmuxConfig,
+      type: config.type,
       serverUrl: this.serverUrl,
     });
   }
 
   /**
    * Handle session.created events.
-   * Spawns a tmux pane for child sessions (those with parentID).
+   * Spawns a multiplexer pane for child sessions (those with parentID).
    */
   async onSessionCreated(event: SessionEvent): Promise<void> {
-    if (!this.enabled) return;
+    if (!this.enabled || !this.multiplexer) return;
     if (event.type !== 'session.created') return;
 
     const info = event.properties?.info;
@@ -79,27 +91,35 @@ export class TmuxSessionManager {
 
     // Skip if we're already tracking this session
     if (this.sessions.has(sessionId)) {
-      log('[tmux-session-manager] session already tracked', { sessionId });
+      log('[multiplexer-session-manager] session already tracked', {
+        sessionId,
+      });
       return;
     }
 
-    log('[tmux-session-manager] child session created, spawning pane', {
+    // Check server is running before spawning
+    const serverRunning = await isServerRunning(this.serverUrl);
+    if (!serverRunning) {
+      log('[multiplexer-session-manager] server not running, skipping', {
+        serverUrl: this.serverUrl,
+      });
+      return;
+    }
+
+    log('[multiplexer-session-manager] child session created, spawning pane', {
       sessionId,
       parentId,
       title,
     });
 
-    const paneResult = await spawnTmuxPane(
-      sessionId,
-      title,
-      this.tmuxConfig,
-      this.serverUrl,
-    ).catch((err) => {
-      log('[tmux-session-manager] failed to spawn pane', {
-        error: String(err),
+    const paneResult = await this.multiplexer
+      .spawnPane(sessionId, title, this.serverUrl)
+      .catch((err) => {
+        log('[multiplexer-session-manager] failed to spawn pane', {
+          error: String(err),
+        });
+        return { success: false, paneId: undefined };
       });
-      return { success: false, paneId: undefined };
-    });
 
     if (paneResult.success && paneResult.paneId) {
       const now = Date.now();
@@ -112,7 +132,7 @@ export class TmuxSessionManager {
         lastSeenAt: now,
       });
 
-      log('[tmux-session-manager] pane spawned', {
+      log('[multiplexer-session-manager] pane spawned', {
         sessionId,
         paneId: paneResult.paneId,
       });
@@ -143,7 +163,7 @@ export class TmuxSessionManager {
 
   /**
    * Handle session.deleted events.
-   * When a session is deleted, close its tmux pane immediately.
+   * When a session is deleted, close its multiplexer pane immediately.
    */
   async onSessionDeleted(event: SessionEvent): Promise<void> {
     if (!this.enabled) return;
@@ -152,7 +172,7 @@ export class TmuxSessionManager {
     const sessionId = event.properties?.sessionID;
     if (!sessionId) return;
 
-    log('[tmux-session-manager] session deleted, closing pane', {
+    log('[multiplexer-session-manager] session deleted, closing pane', {
       sessionId,
     });
 
@@ -166,14 +186,14 @@ export class TmuxSessionManager {
       () => this.pollSessions(),
       POLL_INTERVAL_BACKGROUND_MS,
     );
-    log('[tmux-session-manager] polling started');
+    log('[multiplexer-session-manager] polling started');
   }
 
   private stopPolling(): void {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = undefined;
-      log('[tmux-session-manager] polling stopped');
+      log('[multiplexer-session-manager] polling stopped');
     }
   }
 
@@ -226,20 +246,20 @@ export class TmuxSessionManager {
         await this.closeSession(sessionId);
       }
     } catch (err) {
-      log('[tmux-session-manager] poll error', { error: String(err) });
+      log('[multiplexer-session-manager] poll error', { error: String(err) });
     }
   }
 
   private async closeSession(sessionId: string): Promise<void> {
     const tracked = this.sessions.get(sessionId);
-    if (!tracked) return;
+    if (!tracked || !this.multiplexer) return;
 
-    log('[tmux-session-manager] closing session pane', {
+    log('[multiplexer-session-manager] closing session pane', {
       sessionId,
       paneId: tracked.paneId,
     });
 
-    await closeTmuxPane(tracked.paneId);
+    await this.multiplexer.closePane(tracked.paneId);
     this.sessions.delete(sessionId);
 
     if (this.sessions.size === 0) {
@@ -253,13 +273,14 @@ export class TmuxSessionManager {
   async cleanup(): Promise<void> {
     this.stopPolling();
 
-    if (this.sessions.size > 0) {
-      log('[tmux-session-manager] closing all panes', {
+    if (this.sessions.size > 0 && this.multiplexer) {
+      log('[multiplexer-session-manager] closing all panes', {
         count: this.sessions.size,
       });
+      const multiplexer = this.multiplexer;
       const closePromises = Array.from(this.sessions.values()).map((s) =>
-        closeTmuxPane(s.paneId).catch((err) =>
-          log('[tmux-session-manager] cleanup error for pane', {
+        multiplexer.closePane(s.paneId).catch((err) =>
+          log('[multiplexer-session-manager] cleanup error for pane', {
             paneId: s.paneId,
             error: String(err),
           }),
@@ -269,6 +290,11 @@ export class TmuxSessionManager {
       this.sessions.clear();
     }
 
-    log('[tmux-session-manager] cleanup complete');
+    log('[multiplexer-session-manager] cleanup complete');
   }
 }
+
+/**
+ * @deprecated Use MultiplexerSessionManager instead
+ */
+export const TmuxSessionManager = MultiplexerSessionManager;

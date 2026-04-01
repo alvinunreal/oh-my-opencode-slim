@@ -1,10 +1,11 @@
-# Tmux Integration Guide
+# Multiplexer Integration Guide
 
-Complete guide for using tmux integration with oh-my-opencode-slim to watch agents work in real-time through automatic pane spawning.
+Complete guide for using terminal multiplexer integration (Tmux or Zellij) with oh-my-opencode-slim to watch agents work in real-time through automatic pane spawning.
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Supported Multiplexers](#supported-multiplexers)
 - [Quick Setup](#quick-setup)
 - [Configuration](#configuration)
 - [Layout Options](#layout-options)
@@ -16,7 +17,7 @@ Complete guide for using tmux integration with oh-my-opencode-slim to watch agen
 
 ## Overview
 
-**Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new tmux panes automatically spawn showing each agent's live progress. No more waiting in the dark.
+**Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new panes automatically spawn in a dedicated tab showing each agent's live progress. No more waiting in the dark.
 
 ### Key Benefits
 
@@ -24,33 +25,73 @@ Complete guide for using tmux integration with oh-my-opencode-slim to watch agen
 - **Automatic pane management** - panes spawn and organize automatically
 - **Interactive debugging** - you can jump into any agent's session
 - **Background task monitoring** - see long-running work as it happens
-- **Multi-session support** - different projects can have separate tmux environments
+- **Multi-session support** - different projects can have separate environments
 
-> ⚠️ **Temporary workaround:** Start OpenCode with `--port` to enable tmux integration. The port must match the `OPENCODE_PORT` environment variable (default: 4096). This is required until the upstream issue is resolved. [opencode#9099](https://github.com/anomalyco/opencode/issues/9099).
+> ⚠️ **Temporary workaround:** Start OpenCode with `--port` to enable multiplexer integration. The port must match the `OPENCODE_PORT` environment variable (default: 4096). This is required until the upstream issue is resolved. [opencode#9099](https://github.com/anomalyco/opencode/issues/9099).
+
+---
+
+## Supported Multiplexers
+
+| Multiplexer | Status | Notes |
+|-------------|--------|-------|
+| **Tmux** | ✅ Supported | Full layout control with `main-vertical`, `main-horizontal`, `tiled`, etc. |
+| **Zellij** | ✅ Supported | Creates dedicated "opencode-agents" tab, reuses default pane |
 
 ---
 
 ## Quick Setup
 
-### Step 1: Enable Tmux Integration
+### Step 1: Enable Multiplexer Integration
 
 Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 
+**For Tmux:**
 ```json
 {
-  "tmux": {
-    "enabled": true,
+  "multiplexer": {
+    "type": "tmux",
     "layout": "main-vertical",
     "main_pane_size": 60
   }
 }
 ```
 
-### Step 2: Run OpenCode Inside Tmux
+**For Zellij:**
+```json
+{
+  "multiplexer": {
+    "type": "zellij"
+  }
+}
+```
 
+**Auto-detect (recommended):**
+```json
+{
+  "multiplexer": {
+    "type": "auto",
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  }
+}
+```
+
+### Step 2: Run OpenCode Inside Your Multiplexer
+
+**Tmux:**
 ```bash
 # Start a new tmux session
 tmux
+
+# Start OpenCode with the default port (4096)
+opencode --port 4096
+```
+
+**Zellij:**
+```bash
+# Start a new zellij session
+zellij
 
 # Start OpenCode with the default port (4096)
 opencode --port 4096
@@ -62,9 +103,27 @@ That's it! Your agents will now spawn panes automatically.
 
 ## Configuration
 
-### Tmux Settings
+### Multiplexer Settings
 
-Configure tmux behavior in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
+Configure multiplexer behavior in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
+
+```json
+{
+  "multiplexer": {
+    "type": "auto",
+    "layout": "main-vertical",
+    "main_pane_size": 60
+  }
+}
+```
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, or `"none"` |
+| `layout` | string | `"main-vertical"` | Layout preset (tmux only, see [Layout Options](#layout-options)) |
+| `main_pane_size` | number | `60` | Main pane size as percentage (tmux only, 20-80) |
+
+### Legacy Tmux Config (still supported)
 
 ```json
 {
@@ -76,13 +135,11 @@ Configure tmux behavior in `~/.config/opencode/oh-my-opencode-slim.json` (or `.j
 }
 ```
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | boolean | `false` | Enable/disable tmux pane spawning |
-| `layout` | string | `"main-vertical"` | Layout preset (see [Layout Options](#layout-options)) |
-| `main_pane_size` | number | `60` | Main pane size as percentage (20-80) |
+This is automatically converted to `multiplexer.type: "tmux"`.
 
-### Layout Options
+### Layout Options (Tmux only)
+
+Choose how panes are arranged:
 
 Choose how panes are arranged:
 

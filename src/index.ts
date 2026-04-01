@@ -1,7 +1,7 @@
 import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs } from './agents';
-import { BackgroundTaskManager, TmuxSessionManager } from './background';
-import { loadPluginConfig, type TmuxConfig } from './config';
+import { BackgroundTaskManager, MultiplexerSessionManager } from './background';
+import { loadPluginConfig, type MultiplexerConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import { CouncilManager } from './council';
 import {
@@ -15,6 +15,7 @@ import {
   ForegroundFallbackManager,
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
+import { getMultiplexer, startAvailabilityCheck } from './multiplexer';
 import {
   ast_grep_replace,
   ast_grep_search,
@@ -26,7 +27,6 @@ import {
   lsp_rename,
   setUserLspConfig,
 } from './tools';
-import { startTmuxCheck } from './utils';
 import { log } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
@@ -72,29 +72,38 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
   }
 
-  // Parse tmux config with defaults
-  const tmuxConfig: TmuxConfig = {
-    enabled: config.tmux?.enabled ?? false,
-    layout: config.tmux?.layout ?? 'main-vertical',
-    main_pane_size: config.tmux?.main_pane_size ?? 60,
+  // Parse multiplexer config with defaults
+  const multiplexerConfig: MultiplexerConfig = {
+    type: config.multiplexer?.type ?? 'none',
+    layout: config.multiplexer?.layout ?? 'main-vertical',
+    main_pane_size: config.multiplexer?.main_pane_size ?? 60,
   };
 
-  log('[plugin] initialized with tmux config', {
-    tmuxConfig,
-    rawTmuxConfig: config.tmux,
+  // Get multiplexer instance for capability checks
+  const multiplexer = getMultiplexer(multiplexerConfig);
+  const multiplexerEnabled =
+    multiplexerConfig.type !== 'none' && multiplexer !== null;
+
+  log('[plugin] initialized with multiplexer config', {
+    multiplexerConfig,
+    enabled: multiplexerEnabled,
     directory: ctx.directory,
   });
 
-  // Start background tmux check if enabled
-  if (tmuxConfig.enabled) {
-    startTmuxCheck();
+  // Start background availability check if enabled
+  if (multiplexerEnabled) {
+    startAvailabilityCheck(multiplexerConfig);
   }
 
-  const backgroundManager = new BackgroundTaskManager(ctx, tmuxConfig, config);
+  const backgroundManager = new BackgroundTaskManager(
+    ctx,
+    multiplexerConfig,
+    config,
+  );
   const backgroundTools = createBackgroundTools(
     ctx,
     backgroundManager,
-    tmuxConfig,
+    multiplexerConfig,
     config,
   );
 
@@ -106,15 +115,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           ctx,
           config,
           backgroundManager.getDepthTracker(),
-          tmuxConfig.enabled,
+          multiplexerEnabled,
         ),
       )
     : {};
 
   const mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
 
-  // Initialize TmuxSessionManager to handle OpenCode's built-in Task tool sessions
-  const tmuxSessionManager = new TmuxSessionManager(ctx, tmuxConfig);
+  // Initialize MultiplexerSessionManager to handle OpenCode's built-in Task tool sessions
+  const multiplexerSessionManager = new MultiplexerSessionManager(
+    ctx,
+    multiplexerConfig,
+  );
 
   // Initialize auto-update checker hook
   const autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
@@ -348,8 +360,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
 
-      // Handle tmux pane spawning for OpenCode's Task tool sessions
-      await tmuxSessionManager.onSessionCreated(
+      // Handle multiplexer pane spawning for OpenCode's Task tool sessions
+      await multiplexerSessionManager.onSessionCreated(
         input.event as {
           type: string;
           properties?: {
@@ -360,14 +372,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       // Handle session.status events for:
       // 1. BackgroundTaskManager: completion detection
-      // 2. TmuxSessionManager: pane cleanup
+      // 2. MultiplexerSessionManager: pane cleanup
       await backgroundManager.handleSessionStatus(
         input.event as {
           type: string;
           properties?: { sessionID?: string; status?: { type: string } };
         },
       );
-      await tmuxSessionManager.onSessionStatus(
+      await multiplexerSessionManager.onSessionStatus(
         input.event as {
           type: string;
           properties?: { sessionID?: string; status?: { type: string } };
@@ -376,14 +388,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       // Handle session.deleted events for:
       // 1. BackgroundTaskManager: task cleanup
-      // 2. TmuxSessionManager: pane cleanup
+      // 2. MultiplexerSessionManager: pane cleanup
       await backgroundManager.handleSessionDeleted(
         input.event as {
           type: string;
           properties?: { info?: { id?: string }; sessionID?: string };
         },
       );
-      await tmuxSessionManager.onSessionDeleted(
+      await multiplexerSessionManager.onSessionDeleted(
         input.event as {
           type: string;
           properties?: { sessionID?: string };
@@ -461,6 +473,9 @@ export type {
   AgentName,
   AgentOverrideConfig,
   McpName,
+  MultiplexerConfig,
+  MultiplexerLayout,
+  MultiplexerType,
   PluginConfig,
   TmuxConfig,
   TmuxLayout,
