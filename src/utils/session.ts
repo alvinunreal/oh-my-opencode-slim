@@ -83,19 +83,29 @@ export async function promptWithTimeout(
 }
 
 /**
+ * Result of extracting session content.
+ * `empty` is true when the assistant produced zero text content —
+ * the provider returned an empty response (e.g. rate-limited silently).
+ */
+export interface SessionExtractionResult {
+  text: string;
+  empty: boolean;
+}
+
+/**
  * Extract the result text from a session.
  * Collects all assistant messages and concatenates their text parts.
  * @param client - OpenCode client instance
  * @param sessionId - Session ID to extract from
  * @param options - Optional: `includeReasoning` (default true) controls whether
  *                  reasoning/chain-of-thought parts are included.
- * @returns Concatenated text from all assistant messages
+ * @returns Object with extracted text and an `empty` flag for zero-content detection
  */
 export async function extractSessionResult(
   client: OpencodeClient,
   sessionId: string,
   options?: { includeReasoning?: boolean },
-): Promise<string> {
+): Promise<SessionExtractionResult> {
   const includeReasoning = options?.includeReasoning ?? true;
 
   const messagesResult = await client.session.messages({
@@ -121,5 +131,6 @@ export async function extractSessionResult(
     }
   }
 
-  return extractedContent.filter((t) => t.length > 0).join('\n\n');
+  const text = extractedContent.filter((t) => t.length > 0).join('\n\n');
+  return { text, empty: text.length === 0 };
 }

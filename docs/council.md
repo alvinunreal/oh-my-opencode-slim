@@ -117,6 +117,7 @@ Configure in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 | `master_timeout` | number | `300000` | Master synthesis timeout in ms (5 minutes) |
 | `councillors_timeout` | number | `180000` | Per-councillor timeout in ms (3 minutes) |
 | `master_fallback` | string[] | — | Optional fallback models for the master. Tried in order if the primary model fails or times out |
+| `councillor_retries` | number | `3` | Max retries per councillor and master on empty provider response (0–5). Each retry creates a fresh session |
 
 ### Councillor Configuration
 
@@ -432,6 +433,22 @@ Councillors that don't respond in time are marked `timed_out`. The master procee
 | All councillors fail | Returns error immediately — master is never invoked |
 | Master primary model fails | Tries `master_fallback` models in order before degrading |
 | All master models fail | Returns best single councillor response prefixed with `(Degraded — master failed, using <name>'s response)` |
+| Councillor gets empty response | Retries up to `councillor_retries` times with fresh sessions |
+
+### Empty Response Detection
+
+Providers sometimes silently drop requests — returning zero tokens with no error. This is detected automatically:
+
+- **Background tasks** (`@explorer`, `@fixer`, etc.): Empty responses trigger the fallback chain (next model in `fallback.chains`). Controlled by `fallback.retry_on_empty` (default `true`). Set to `false` to accept empty responses without retrying.
+- **Council councillors and master**: Empty responses trigger up to `councillor_retries` fresh sessions (default `3`). Only "Empty response from provider" errors are retried — timeouts and other failures return immediately.
+
+To disable empty-response retry globally:
+
+```jsonc
+{
+  "fallback": { "retry_on_empty": false }
+}
+```
 
 ### Master Fallback Chain
 

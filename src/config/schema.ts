@@ -151,6 +151,13 @@ export const FailoverConfigSchema = z.object({
   timeoutMs: z.number().min(0).default(15000),
   retryDelayMs: z.number().min(0).default(500),
   chains: FallbackChainsSchema.default({}),
+  retry_on_empty: z
+    .boolean()
+    .default(true)
+    .describe(
+      'When true (default), empty provider responses are treated as failures, ' +
+        'triggering fallback/retry. Set to false to treat them as successes.',
+    ),
 });
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;

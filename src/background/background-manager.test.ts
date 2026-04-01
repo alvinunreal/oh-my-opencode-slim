@@ -486,6 +486,14 @@ describe('BackgroundTaskManager', () => {
     test('falls back to next model when first model prompt fails', async () => {
       let promptCalls = 0;
       const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
         promptImpl: async (args) => {
           const isTaskPrompt =
             typeof args.path?.id === 'string' &&
@@ -719,6 +727,220 @@ describe('BackgroundTaskManager', () => {
           SLIM_INTERNAL_INITIATOR_MARKER,
         ),
       ).toBe(true);
+    });
+
+    test('retries next fallback model when first model returns empty response', async () => {
+      let messagesCallCount = 0;
+      const ctx = createMockContext({
+        promptImpl: async (args) => {
+          const isTaskPrompt =
+            typeof args.path?.id === 'string' &&
+            args.path.id.startsWith('test-session-');
+          const isParentNotification = !isTaskPrompt;
+          if (isParentNotification) return {};
+          return {};
+        },
+      });
+
+      // Override messages mock to return empty on first call, then real content
+      ctx.client.session.messages = mock(async () => {
+        messagesCallCount++;
+        if (messagesCallCount === 1) {
+          // First model: empty response
+          return {
+            data: [
+              {
+                info: { role: 'assistant' },
+                parts: [{ type: 'text', text: '' }],
+              },
+            ],
+          };
+        }
+        // Second model: real content
+        return {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        };
+      });
+
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        fallback: {
+          enabled: true,
+          timeoutMs: 15000,
+          retryDelayMs: 0,
+          chains: {
+            explorer: ['openai/gpt-5.4', 'opencode/gpt-5-nano'],
+          },
+        },
+      });
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Yield to let the fire-and-forget async chain complete
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(task.status).toBe('running');
+      // Messages should have been called twice (once per fallback attempt)
+      expect(messagesCallCount).toBe(2);
+      // Session abort should have been called between attempts
+      expect(ctx.client.session.abort).toHaveBeenCalled();
+    });
+
+    test('allows empty response when retry_on_empty is false (prompt loop)', async () => {
+      const ctx = createMockContext({
+        promptImpl: async (args) => {
+          const isTaskPrompt =
+            typeof args.path?.id === 'string' &&
+            args.path.id.startsWith('test-session-');
+          const isParentNotification = !isTaskPrompt;
+          if (isParentNotification) return {};
+          return {};
+        },
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: '' }], // empty response
+            },
+          ],
+        },
+      });
+
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        fallback: {
+          enabled: true,
+          timeoutMs: 15000,
+          retryDelayMs: 0,
+          retry_on_empty: false,
+          chains: {
+            explorer: ['openai/gpt-5.4', 'opencode/gpt-5-nano'],
+          },
+        },
+      });
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Yield to let the fire-and-forget async chain complete
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Task should be running (not failed) — empty response accepted
+      expect(task.status).toBe('running');
+      // Only one prompt call (no fallback attempt)
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+        [{ body?: { model?: { providerID?: string; modelID?: string } } }]
+      >;
+      const taskPromptCalls = promptCalls.filter(
+        (c) =>
+          c[0].body?.model?.providerID === 'openai' &&
+          c[0].body?.model?.modelID === 'gpt-5.4',
+      );
+      expect(taskPromptCalls.length).toBe(1);
+    });
+
+    test('completes task with empty text when retry_on_empty is false (extractAndCompleteTask)', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: '' }], // empty response
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        fallback: {
+          enabled: false, // fallback disabled, but retry_on_empty still applies
+          timeoutMs: 15000,
+          retryDelayMs: 0,
+          chains: {},
+          retry_on_empty: false,
+        },
+      } as any);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Simulate session.idle event
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      // Empty response should be treated as completed, not failed
+      expect(task.status).toBe('completed');
+      expect(task.result).toBe(''); // empty text, not error
+    });
+
+    test('fails task on empty response when retry_on_empty is true (extractAndCompleteTask)', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: '' }], // empty response
+            },
+          ],
+        },
+      });
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        fallback: {
+          enabled: false, // fallback disabled, but retry_on_empty still applies
+          timeoutMs: 15000,
+          retryDelayMs: 0,
+          chains: {},
+          retry_on_empty: true,
+        },
+      } as any);
+
+      const task = manager.launch({
+        agent: 'explorer',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      // Wait for task to start
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Simulate session.idle event
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: task.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      // Empty response should be treated as failed
+      expect(task.status).toBe('failed');
+      expect(task.error).toBe('Empty response from provider');
     });
   });
 

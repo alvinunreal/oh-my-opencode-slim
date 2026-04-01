@@ -351,6 +351,8 @@ export class BackgroundTaskManager {
       let succeeded = false;
       const sessionId = session.data.id;
 
+      const retryOnEmpty = this.config?.fallback?.retry_on_empty ?? true;
+
       for (let i = 0; i < attemptModels.length; i++) {
         const model = attemptModels[i];
         const modelLabel = model ?? 'default-model';
@@ -384,6 +386,14 @@ export class BackgroundTaskManager {
             },
             timeoutMs,
           );
+
+          // Detect silent empty responses (e.g. provider rate-limited
+          // without error). When retry_on_empty is enabled (default),
+          // treat as failure so the fallback chain continues.
+          const extraction = await extractSessionResult(this.client, sessionId);
+          if (retryOnEmpty && extraction.empty) {
+            throw new Error('Empty response from provider');
+          }
 
           succeeded = true;
           break;
@@ -503,20 +513,25 @@ export class BackgroundTaskManager {
 
   /**
    * Extract task result and mark complete.
+   * When retry_on_empty is enabled (default), empty responses are
+   * treated as failures so the fallback chain can retry.
+   * When disabled, empty responses succeed with an empty string result.
    */
   private async extractAndCompleteTask(task: BackgroundTask): Promise<void> {
     if (!task.sessionId) return;
 
+    const retryOnEmpty = this.config?.fallback?.retry_on_empty ?? true;
+
     try {
-      const responseText = await extractSessionResult(
+      const extraction = await extractSessionResult(
         this.client,
         task.sessionId,
       );
 
-      if (responseText) {
-        this.completeTask(task, 'completed', responseText);
+      if (extraction.empty && retryOnEmpty) {
+        this.completeTask(task, 'failed', 'Empty response from provider');
       } else {
-        this.completeTask(task, 'completed', '(No output)');
+        this.completeTask(task, 'completed', extraction.text);
       }
     } catch (error) {
       this.completeTask(

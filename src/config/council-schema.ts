@@ -182,6 +182,16 @@ export const CouncilConfigSchema = z.object({
   councillor_execution_mode: CouncillorExecutionModeSchema.describe(
     'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
   ),
+  councillor_retries: z
+    .number()
+    .int()
+    .min(0)
+    .max(5)
+    .default(3)
+    .describe(
+      'Number of retry attempts for councillors and master that return empty responses ' +
+        '(e.g. due to provider rate limiting). Default: 3 retries.',
+    ),
 });
 
 export type CouncilConfig = z.infer<typeof CouncilConfigSchema>;

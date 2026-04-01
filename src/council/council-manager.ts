@@ -124,6 +124,7 @@ export class CouncilManager {
     const councillorsTimeout = councilConfig.councillors_timeout ?? 180000;
     const masterTimeout = councilConfig.master_timeout ?? 300000;
     const executionMode = councilConfig.councillor_execution_mode ?? 'parallel';
+    const maxRetries = councilConfig.councillor_retries ?? 3;
 
     const councillorCount = Object.keys(preset.councillors).length;
 
@@ -147,6 +148,7 @@ export class CouncilManager {
       parentSessionId,
       councillorsTimeout,
       executionMode,
+      maxRetries,
     );
 
     const completedCount = councillorResults.filter(
@@ -304,11 +306,18 @@ export class CouncilManager {
         options.timeout,
       );
 
-      const result = await extractSessionResult(this.client, sessionId, {
+      const extraction = await extractSessionResult(this.client, sessionId, {
         includeReasoning: options.includeReasoning,
       });
 
-      return result || '(No output)';
+      if (extraction.empty) {
+        const retryOnEmpty = this.config?.fallback?.retry_on_empty ?? true;
+        if (retryOnEmpty) {
+          throw new Error('Empty response from provider');
+        }
+      }
+
+      return extraction.text;
     } finally {
       if (sessionId) {
         this.client.session.abort({ path: { id: sessionId } }).catch(() => {});
@@ -329,6 +338,7 @@ export class CouncilManager {
     parentSessionId: string,
     timeout: number,
     executionMode: 'parallel' | 'serial' = 'parallel',
+    maxRetries: number = 1,
   ): Promise<CouncilResult['councillorResults']> {
     const entries = Object.entries(councillors);
     const results: Array<{
@@ -342,41 +352,16 @@ export class CouncilManager {
     if (executionMode === 'serial') {
       // Serial execution: run each councillor one at a time
       for (const [name, config] of entries) {
-        const modelLabel = shortModelLabel(config.model);
-        log(
-          `[council-manager] Running councillor "${name}" (${modelLabel}) serially`,
-        );
-
-        try {
-          const result = await this.runAgentSession({
+        results.push(
+          await this.runCouncillorWithRetry(
+            name,
+            config,
+            prompt,
             parentSessionId,
-            title: `Council ${name} (${modelLabel})`,
-            agent: 'councillor',
-            model: config.model,
-            promptText: formatCouncillorPrompt(prompt, config.prompt),
-            variant: config.variant,
             timeout,
-            includeReasoning: false,
-          });
-
-          results.push({
-            name,
-            model: config.model,
-            status: 'completed' as const,
-            result,
-          });
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-
-          results.push({
-            name,
-            model: config.model,
-            status: msg.includes('timed out')
-              ? ('timed_out' as const)
-              : ('failed' as const),
-            error: `Councillor "${name}": ${msg}`,
-          });
-        }
+            maxRetries,
+          ),
+        );
       }
     } else {
       // Parallel execution (default): run all councillors concurrently
@@ -389,38 +374,14 @@ export class CouncilManager {
             );
           }
 
-          const modelLabel = shortModelLabel(config.model);
-
-          try {
-            const result = await this.runAgentSession({
-              parentSessionId,
-              title: `Council ${name} (${modelLabel})`,
-              agent: 'councillor',
-              model: config.model,
-              promptText: formatCouncillorPrompt(prompt, config.prompt),
-              variant: config.variant,
-              timeout,
-              includeReasoning: false,
-            });
-
-            return {
-              name,
-              model: config.model,
-              status: 'completed' as const,
-              result,
-            };
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-
-            return {
-              name,
-              model: config.model,
-              status: msg.includes('timed out')
-                ? ('timed_out' as const)
-                : ('failed' as const),
-              error: `Councillor "${name}": ${msg}`,
-            };
-          }
+          return this.runCouncillorWithRetry(
+            name,
+            config,
+            prompt,
+            parentSessionId,
+            timeout,
+            maxRetries,
+          );
         })(),
       );
 
@@ -455,9 +416,134 @@ export class CouncilManager {
     return results;
   }
 
+  /**
+   * Run a single councillor with retry logic for empty responses.
+   * Only retries on "Empty response from provider" errors — timeouts
+   * and other failures are returned immediately.
+   */
+  private async runCouncillorWithRetry(
+    name: string,
+    config: CouncillorConfig,
+    prompt: string,
+    parentSessionId: string,
+    timeout: number,
+    maxRetries: number,
+  ): Promise<{
+    name: string;
+    model: string;
+    status: 'completed' | 'failed' | 'timed_out';
+    result?: string;
+    error?: string;
+  }> {
+    const modelLabel = shortModelLabel(config.model);
+    const totalAttempts = 1 + maxRetries;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+      if (attempt > 1) {
+        log(
+          `[council-manager] Retrying councillor "${name}" (${modelLabel}), attempt ${attempt}/${totalAttempts}`,
+        );
+      }
+
+      try {
+        const result = await this.runAgentSession({
+          parentSessionId,
+          title: `Council ${name} (${modelLabel})`,
+          agent: 'councillor',
+          model: config.model,
+          promptText: formatCouncillorPrompt(prompt, config.prompt),
+          variant: config.variant,
+          timeout,
+          includeReasoning: false,
+        });
+
+        return {
+          name,
+          model: config.model,
+          status: 'completed' as const,
+          result,
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+
+        // Only retry on empty responses (provider silently rate-limited)
+        const isEmptyResponse = msg.includes('Empty response from provider');
+        const canRetry = attempt < totalAttempts && isEmptyResponse;
+
+        if (!canRetry) {
+          return {
+            name,
+            model: config.model,
+            status: msg.includes('timed out')
+              ? ('timed_out' as const)
+              : ('failed' as const),
+            error: `Councillor "${name}": ${msg}`,
+          };
+        }
+      }
+    }
+
+    // Unreachable, but satisfies TypeScript
+    return {
+      name,
+      model: config.model,
+      status: 'failed' as const,
+      error: `Councillor "${name}": max retries exhausted`,
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Phase 2: Master Synthesis
   // -------------------------------------------------------------------------
+
+  /**
+   * Run a single master model with retry logic for empty responses.
+   * Only retries on "Empty response from provider" — timeouts and
+   * other failures throw immediately so runMaster can try the next
+   * fallback model.
+   */
+  private async runMasterModelWithRetry(
+    parentSessionId: string,
+    model: string,
+    modelLabel: string,
+    promptText: string,
+    variant: string | undefined,
+    timeout: number,
+    maxRetries: number,
+  ): Promise<string> {
+    const totalAttempts = 1 + maxRetries;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+      if (attempt > 1) {
+        log(
+          `[council-manager] Retrying master (${modelLabel}), attempt ${attempt}/${totalAttempts}`,
+        );
+      }
+
+      try {
+        return await this.runAgentSession({
+          parentSessionId,
+          title: `Council Master (${modelLabel})`,
+          agent: 'council-master',
+          model,
+          promptText,
+          variant,
+          timeout,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const isEmptyResponse = msg.includes('Empty response from provider');
+        const canRetry = attempt < totalAttempts && isEmptyResponse;
+
+        if (!canRetry) {
+          throw error;
+        }
+      }
+    }
+
+    // Unreachable, but satisfies TypeScript
+    throw new Error(`Master model ${modelLabel}: max retries exhausted`);
+  }
 
   private async runMaster(
     prompt: string,
@@ -486,8 +572,7 @@ export class CouncilManager {
       effectivePrompt,
     );
 
-    // Try each model in order — fresh session per attempt prevents
-    // transcript contamination and respects session lifecycle.
+    const maxRetries = councilConfig.councillor_retries ?? 3;
     const errors: string[] = [];
 
     for (let i = 0; i < attemptModels.length; i++) {
@@ -501,15 +586,15 @@ export class CouncilManager {
           );
         }
 
-        const result = await this.runAgentSession({
+        const result = await this.runMasterModelWithRetry(
           parentSessionId,
-          title: `Council Master (${currentLabel})`,
-          agent: 'council-master',
           model,
-          promptText: synthesisPrompt,
-          variant: effectiveVariant,
+          currentLabel,
+          synthesisPrompt,
+          effectiveVariant,
           timeout,
-        });
+          maxRetries,
+        );
 
         return { success: true, result };
       } catch (error) {

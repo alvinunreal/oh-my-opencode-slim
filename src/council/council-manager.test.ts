@@ -82,7 +82,16 @@ describe('CouncilManager', () => {
     });
 
     test('creates manager with plugin config', async () => {
-      const ctx = createMockContext();
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Councillor response' }],
+            },
+          ],
+        },
+      });
       const config = createTestCouncilConfig();
       const manager = new CouncilManager(ctx, config, undefined);
 
@@ -1284,6 +1293,230 @@ describe('CouncilManager', () => {
       // Uses global prompt
       const promptText = masterCall[0]?.body?.parts?.[0]?.text;
       expect(promptText).toContain('Global prompt.');
+    });
+
+    test('retries councillor on empty response', async () => {
+      const ctx = createMockContext({
+        promptImpl: async () => ({}),
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Master synthesis' }],
+            },
+          ],
+        },
+      });
+
+      // Track messages call count and return empty first, then success
+      let councillorMessagesCallCount = 0;
+      const originalMessages = ctx.client.session.messages;
+      ctx.client.session.messages = mock(async (args) => {
+        // First call (first councillor attempt): empty response
+        // Second call (councillor retry): success
+        // Third call (master): master synthesis
+        councillorMessagesCallCount++;
+        if (councillorMessagesCallCount === 1) {
+          return {
+            data: [
+              {
+                info: { role: 'assistant' },
+                parts: [{ type: 'text', text: '' }],
+              },
+            ],
+          };
+        }
+        if (councillorMessagesCallCount === 2) {
+          return {
+            data: [
+              {
+                info: { role: 'assistant' },
+                parts: [{ type: 'text', text: 'Success' }],
+              },
+            ],
+          };
+        }
+        // Master and any other calls: use original
+        return originalMessages(args);
+      });
+
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          councillor_retries: 1,
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      const result = await manager.runCouncil(
+        'test prompt',
+        undefined,
+        'parent-id',
+      );
+
+      expect(result.success).toBe(true);
+      // First two messages calls are for councillor (empty + success)
+      expect(councillorMessagesCallCount).toBeGreaterThanOrEqual(2);
+      expect(result.councillorResults).toHaveLength(1);
+      expect(result.councillorResults[0].status).toBe('completed');
+      expect(result.councillorResults[0].result).toBe('Success');
+    });
+
+    test('does not retry councillor on non-empty failure (timeout)', async () => {
+      let messagesCallCount = 0;
+      const ctx = createMockContext({
+        promptImpl: async () => {
+          // Simulate timeout error
+          throw new Error('Prompt timed out after 180000ms');
+        },
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Response' }],
+            },
+          ],
+        },
+      });
+
+      // Override messages to track calls (won't be reached due to timeout)
+      ctx.client.session.messages = mock(async () => {
+        messagesCallCount++;
+        return {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Success' }],
+            },
+          ],
+        };
+      });
+
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          councillor_retries: 2,
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      const result = await manager.runCouncil(
+        'test prompt',
+        undefined,
+        'parent-id',
+      );
+
+      expect(result.success).toBe(false);
+      // No retry on timeout — messages should not be called
+      expect(messagesCallCount).toBe(0);
+      expect(result.councillorResults).toHaveLength(1);
+      expect(result.councillorResults[0].status).toBe('timed_out');
+      expect(result.councillorResults[0].error).toContain('timed out');
+    });
+
+    test('exhausts councillor retries and returns failure', async () => {
+      const ctx = createMockContext({
+        promptImpl: async () => ({}),
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: '' }],
+            },
+          ],
+        },
+      });
+
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          councillor_retries: 1,
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      const result = await manager.runCouncil(
+        'test prompt',
+        undefined,
+        'parent-id',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('All councillors failed or timed out');
+      expect(result.councillorResults).toHaveLength(1);
+      expect(result.councillorResults[0].status).toBe('failed');
+      expect(result.councillorResults[0].error).toContain(
+        'Empty response from provider',
+      );
+    });
+
+    test('returns empty councillor result when retry_on_empty is false', async () => {
+      const ctx = createMockContext({
+        promptImpl: async () => ({}),
+      });
+
+      // Always return empty response
+      ctx.client.session.messages = mock(async () => ({
+        data: [
+          {
+            info: { role: 'assistant' },
+            parts: [{ type: 'text', text: '' }],
+          },
+        ],
+      }));
+
+      const config: PluginConfig = {
+        council: {
+          master: { model: 'anthropic/claude-opus-4-6' },
+          councillor_retries: 1,
+          presets: {
+            default: {
+              councillors: {
+                alpha: { model: 'openai/gpt-5.4-mini' },
+              },
+            },
+          },
+        },
+        fallback: {
+          retry_on_empty: false,
+        },
+      } as any;
+      const manager = new CouncilManager(ctx, config, undefined);
+
+      const result = await manager.runCouncil(
+        'test prompt',
+        undefined,
+        'parent-id',
+      );
+
+      // With retry_on_empty: false, empty response is accepted
+      expect(result.councillorResults).toHaveLength(1);
+      expect(result.councillorResults[0].status).toBe('completed');
+      expect(result.councillorResults[0].result).toBe('');
+      // Council succeeds because empty is accepted as valid response
+      expect(result.success).toBe(true);
+      expect(result.result).toBe('');
     });
   });
 });

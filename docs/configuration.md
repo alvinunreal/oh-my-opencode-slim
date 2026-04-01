@@ -96,6 +96,7 @@ All config files support **JSONC** (JSON with Comments):
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
 | `fallback.retryDelayMs` | number | `500` | Delay between retry attempts |
 | `fallback.chains.<agent>` | string[] | — | Ordered fallback model IDs for an agent |
+| `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
 | `council.master.model` | string | — | **Required if using council.** Council master model |
 | `council.master.variant` | string | — | Council master variant |
 | `council.master.prompt` | string | — | Optional synthesis guidance for the master |
@@ -110,3 +111,4 @@ All config files support **JSONC** (JSON with Comments):
 | `council.master_timeout` | number | `300000` | Master synthesis timeout (ms) |
 | `council.councillors_timeout` | number | `180000` | Per-councillor timeout (ms) |
 | `council.master_fallback` | string[] | — | Fallback models for the council master |
+| `council.councillor_retries` | number | `3` | Max retries per councillor and master on empty provider response (0–5) |
