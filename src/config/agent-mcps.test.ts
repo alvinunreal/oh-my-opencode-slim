@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseList } from './agent-mcps';
+import { DEFAULT_AGENT_MCPS, parseList } from './agent-mcps';
 
 describe('parseList', () => {
   test('empty list returns empty array', () => {
@@ -12,6 +12,17 @@ describe('parseList', () => {
       'mcp2',
       'mcp3',
     ]);
+  });
+
+  test('orchestrator wildcard includes custom mcps too', () => {
+    expect(
+      parseList(DEFAULT_AGENT_MCPS.orchestrator, [
+        'websearch',
+        'context7',
+        'grep_app',
+        'custom-mcp',
+      ]),
+    ).toEqual(['websearch', 'context7', 'grep_app', 'custom-mcp']);
   });
 
   test('wildcard with exclusions', () => {
