@@ -14,7 +14,7 @@ Launch agents asynchronously and collect results later. This is how the Orchestr
 | `background_output` | Fetch the result of a background task by ID |
 | `background_cancel` | Abort a running background task |
 
-Background tasks integrate with [Tmux Integration](tmux-integration.md) — when tmux is enabled, each background task spawns a pane so you can watch it live.
+Background tasks integrate with [Multiplexer Integration](multiplexer-integration.md) — when multiplexer support is enabled, each background task spawns a pane so you can watch it live.
 
 ---
 

@@ -226,7 +226,7 @@ export OPENCODE_PORT=4096
 opencode --port 4096
 ```
 
-See the [Tmux Integration Guide](tmux-integration.md) for more details.
+See the [Multiplexer Integration Guide](multiplexer-integration.md) for more details.
 
 ---
 

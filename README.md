@@ -26,7 +26,7 @@ The installer generates an OpenAI configuration by default (using `gpt-5.4` and 
 For non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --multiplexer=auto --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --tmux=yes --skills=yes
 ```
 
 To force overwrite of an existing configuration:
