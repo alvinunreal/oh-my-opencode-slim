@@ -155,8 +155,8 @@ export const FailoverConfigSchema = z.object({
     .boolean()
     .default(true)
     .describe(
-      'When true (default), empty provider responses is are treated as failures, ' +
-        'triggering fallback/rechain retry. Set to false to treat them as successes.',
+      'When true (default), empty provider responses are treated as failures, ' +
+        'triggering fallback/retry. Set to false to treat them as successes.',
     ),
 });
 

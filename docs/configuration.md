@@ -111,4 +111,4 @@ All config files support **JSONC** (JSON with Comments):
 | `council.master_timeout` | number | `300000` | Master synthesis timeout (ms) |
 | `council.councillors_timeout` | number | `180000` | Per-councillor timeout (ms) |
 | `council.master_fallback` | string[] | — | Fallback models for the council master |
-| `council.councillor_retries` | number | `1` | Max retries per councillor on empty provider response (0–5) |
+| `council.councillor_retries` | number | `3` | Max retries per councillor and master on empty provider response (0–5) |

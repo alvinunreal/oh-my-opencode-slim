@@ -515,7 +515,7 @@ export class BackgroundTaskManager {
    * Extract task result and mark complete.
    * When retry_on_empty is enabled (default), empty responses are
    * treated as failures so the fallback chain can retry.
-   * When disabled, empty responses succeed with the fallback text.
+   * When disabled, empty responses succeed with an empty string result.
    */
   private async extractAndCompleteTask(task: BackgroundTask): Promise<void> {
     if (!task.sessionId) return;
