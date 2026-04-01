@@ -341,8 +341,9 @@ describe('council agent model resolution', () => {
   });
 
   test('council agent falls back to default without council config', () => {
+  test('council agent falls back to default without council config', () => {
     const agents = createAgents();
     const council = agents.find((a) => a.name === 'council');
-    expect(council?.config.model).toBe('openai/gpt-5.4-mini');
+    expect(council?.config.model).toBe(DEFAULT_MODELS.council);
   });
 });
