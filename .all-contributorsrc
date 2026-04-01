@@ -248,6 +248,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "drindr",
+      "name": "Drin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/34709601?v=4",
+      "profile": "https://github.com/drindr",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
