@@ -12,6 +12,7 @@ import {
   getExistingConfigPath,
   getLiteConfig,
 } from './paths';
+import { pathToFileURL } from 'node:url';
 import { generateLiteConfig } from './providers';
 import type {
   ConfigMergeResult,
@@ -21,6 +22,24 @@ import type {
 } from './types';
 
 const PACKAGE_NAME = 'oh-my-opencode-slim';
+
+function getPluginEntry(): string {
+  const cliEntryPath = process.argv[1];
+
+  if (!cliEntryPath) {
+    return PACKAGE_NAME;
+  }
+
+  try {
+    const pluginEntryPath = cliEntryPath.replace(
+      /[\\/]dist[\\/]cli[\\/]index\.js$/,
+      '/dist/index.js',
+    );
+    return pathToFileURL(pluginEntryPath).href;
+  } catch {
+    return PACKAGE_NAME;
+  }
+}
 
 /**
  * Strip JSON comments (single-line // and multi-line) and trailing commas for JSONC support.
@@ -117,13 +136,18 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     const config = parsedConfig ?? {};
     const plugins = config.plugin ?? [];
 
+    const pluginEntry = getPluginEntry();
+
     // Remove existing oh-my-opencode-slim entries
     const filteredPlugins = plugins.filter(
-      (p) => p !== PACKAGE_NAME && !p.startsWith(`${PACKAGE_NAME}@`),
+      (p) =>
+        p !== PACKAGE_NAME &&
+        !p.startsWith(`${PACKAGE_NAME}@`) &&
+        !(p.startsWith('file://') && p.includes(PACKAGE_NAME)),
     );
 
     // Add fresh entry
-    filteredPlugins.push(PACKAGE_NAME);
+    filteredPlugins.push(pluginEntry);
     config.plugin = filteredPlugins;
 
     writeConfig(configPath, config);
