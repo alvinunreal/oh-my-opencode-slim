@@ -12,6 +12,7 @@ import {
   getExistingConfigPath,
   getLiteConfig,
 } from './paths';
+import { pathToFileURL } from 'node:url';
 import { generateLiteConfig } from './providers';
 import type {
   ConfigMergeResult,
@@ -21,6 +22,38 @@ import type {
 } from './types';
 
 const PACKAGE_NAME = 'oh-my-opencode-slim';
+
+function isPluginEntry(entry: string): boolean {
+  return (
+    entry === PACKAGE_NAME ||
+    entry.startsWith(`${PACKAGE_NAME}@`) ||
+    (entry.startsWith('file://') && entry.includes(PACKAGE_NAME))
+  );
+}
+
+function getPluginEntry(): string {
+  const cliEntryPath = process.argv[1];
+
+  if (!cliEntryPath) {
+    return PACKAGE_NAME;
+  }
+
+  try {
+    const pluginEntryPath = cliEntryPath.match(
+      /[\\/]dist[\\/]cli[\\/]index\.js$/,
+    )
+      ? cliEntryPath.replace(/[\\/]dist[\\/]cli[\\/]index\.js$/, '/dist/index.js')
+      : null;
+
+    if (!pluginEntryPath) {
+      return PACKAGE_NAME;
+    }
+
+    return pathToFileURL(pluginEntryPath).href;
+  } catch {
+    return PACKAGE_NAME;
+  }
+}
 
 /**
  * Strip JSON comments (single-line // and multi-line) and trailing commas for JSONC support.
@@ -117,13 +150,13 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     const config = parsedConfig ?? {};
     const plugins = config.plugin ?? [];
 
+    const pluginEntry = getPluginEntry();
+
     // Remove existing oh-my-opencode-slim entries
-    const filteredPlugins = plugins.filter(
-      (p) => p !== PACKAGE_NAME && !p.startsWith(`${PACKAGE_NAME}@`),
-    );
+    const filteredPlugins = plugins.filter((p) => !isPluginEntry(p));
 
     // Add fresh entry
-    filteredPlugins.push(PACKAGE_NAME);
+    filteredPlugins.push(pluginEntry);
     config.plugin = filteredPlugins;
 
     writeConfig(configPath, config);
@@ -236,7 +269,7 @@ export function detectCurrentConfig(): DetectedConfig {
   if (!config) return result;
 
   const plugins = config.plugin ?? [];
-  result.isInstalled = plugins.some((p) => p.startsWith(PACKAGE_NAME));
+  result.isInstalled = plugins.some((p) => isPluginEntry(p));
   result.hasAntigravity = plugins.some((p) =>
     p.startsWith('opencode-antigravity-auth'),
   );
