@@ -183,17 +183,20 @@ export function createTodoContinuationHook(
             path: { id: sessionID },
           });
           const todos = todosResult.data as TodoItem[];
-          if (todos.length >= autoEnableThreshold) {
+          const incompleteCount = todos.filter(
+            (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
+          ).length;
+          if (incompleteCount >= autoEnableThreshold) {
             state.enabled = true;
             state.consecutiveContinuations = 0;
             state.suppressUntil = 0;
             log(
-              `[${HOOK_NAME}] Auto-enabled: ${todos.length} todos >= threshold ${autoEnableThreshold}`,
+              `[${HOOK_NAME}] Auto-enabled: ${incompleteCount} incomplete todos >= threshold ${autoEnableThreshold}`,
               { sessionID },
             );
           } else {
             log(
-              `[${HOOK_NAME}] Auto-enable skipped: ${todos.length} todos < threshold ${autoEnableThreshold}`,
+              `[${HOOK_NAME}] Auto-enable skipped: ${incompleteCount} incomplete todos < threshold ${autoEnableThreshold}`,
               { sessionID },
             );
           }
@@ -393,18 +396,25 @@ export function createTodoContinuationHook(
       }
     } else if (event.type === 'session.error') {
       const error = properties.error as { name?: string };
+      const sessionID = properties.sessionID as string;
       const errorName = error?.name;
-      if (errorName === 'MessageAbortedError' || errorName === 'AbortError') {
+      const isOrchestrator = sessionID === state.orchestratorSessionId;
+      if (
+        isOrchestrator &&
+        (errorName === 'MessageAbortedError' || errorName === 'AbortError')
+      ) {
         state.suppressUntil = Date.now() + SUPPRESS_AFTER_ABORT_MS;
         log(`[${HOOK_NAME}] Suppressed continuation after abort`, {
-          sessionID: properties.sessionID,
+          sessionID,
           errorName,
         });
       }
-      cancelPendingTimer(state);
-      log(`[${HOOK_NAME}] Cancelled pending timer on error`, {
-        sessionID: properties.sessionID,
-      });
+      if (isOrchestrator) {
+        cancelPendingTimer(state);
+        log(`[${HOOK_NAME}] Cancelled pending timer on error`, {
+          sessionID,
+        });
+      }
     } else if (event.type === 'session.deleted') {
       // OpenCode sends sessionID in two shapes:
       // properties.info.id (from session store) or properties.sessionID (from event)
@@ -437,6 +447,12 @@ export function createTodoContinuationHook(
   ): Promise<void> {
     if (input.command !== COMMAND_NAME) {
       return;
+    }
+
+    // Seed orchestrator session from slash command (more reliable than
+    // first-idle heuristic — slash commands only fire in main chat)
+    if (!state.orchestratorSessionId) {
+      state.orchestratorSessionId = input.sessionID;
     }
 
     // Clear template text — hook handles everything directly
@@ -498,7 +514,6 @@ export function createTodoContinuationHook(
           `${CONTINUATION_PROMPT} [Auto-continue enabled: up to ${maxContinuations} continuations.]`,
         ),
       );
-      state.consecutiveContinuations++;
     } else {
       output.parts.push(
         createInternalAgentTextPart(

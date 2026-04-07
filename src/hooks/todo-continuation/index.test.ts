@@ -339,6 +339,14 @@ describe('createTodoContinuationHook', () => {
       });
       const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
 
+      // Seed orchestrator session
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'session-123' },
+        },
+      });
+
       await hook.tool.auto_continue.execute({ enabled: true });
 
       // Fire session.error with MessageAbortedError
@@ -569,6 +577,14 @@ describe('createTodoContinuationHook', () => {
       });
       const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
 
+      // Seed orchestrator session
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'session-123' },
+        },
+      });
+
       await hook.tool.auto_continue.execute({ enabled: true });
 
       // Fire session.error with MessageAbortedError
@@ -613,6 +629,14 @@ describe('createTodoContinuationHook', () => {
         },
       });
       const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+
+      // Seed orchestrator session (disabled, so no continuation fires)
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'session-123' },
+        },
+      });
 
       await hook.tool.auto_continue.execute({ enabled: true });
 
@@ -1477,8 +1501,16 @@ describe('createTodoContinuationHook', () => {
         ctx.client.session.prompt = mock(async () => {
           throw new Error('API error');
         });
-
         const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+
+        // Seed orchestrator session
+        await hook.handleEvent({
+          event: {
+            type: 'session.idle',
+            properties: { sessionID: 's1' },
+          },
+        });
+
         await hook.tool.auto_continue.execute({ enabled: true });
 
         await hook.handleEvent({
@@ -2039,7 +2071,7 @@ describe('createTodoContinuationHook', () => {
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
     });
 
-    test('auto-enable counts ALL todos, not just incomplete', async () => {
+    test('auto-enable counts incomplete todos only, not completed', async () => {
       const ctx = createAutoEnableCtx([
         { id: '1', content: 't1', status: 'completed', priority: 'high' },
         { id: '2', content: 't2', status: 'completed', priority: 'high' },
@@ -2062,9 +2094,8 @@ describe('createTodoContinuationHook', () => {
 
       await delay(60);
 
-      // 4 total todos >= threshold 4 → auto-enables, but only 2 incomplete
-      // so continuation fires for the 2 remaining
-      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+      // Only 2 incomplete todos < threshold 4 → does NOT auto-enable
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled();
     });
   });
 });
