@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
-import { buildAllowedOrigins, fetchWithRedirects } from './network';
+import {
+  buildAllowedOrigins,
+  buildConditionalHeaders,
+  fetchWithRedirects,
+} from './network';
 
 describe('smartfetch/network', () => {
   const originalFetch = globalThis.fetch;
@@ -143,5 +147,32 @@ describe('smartfetch/network', () => {
     }
 
     expect(result.finalUrl).toBe('https://cdn.example.com/asset');
+  });
+
+  test('builds conditional headers from etag and last-modified without binary branching', () => {
+    expect(buildConditionalHeaders(undefined)).toBeUndefined();
+
+    expect(
+      buildConditionalHeaders({
+        requestedUrl: 'https://example.com/file',
+        finalUrl: 'https://example.com/file',
+        statusCode: 200,
+        contentType: 'application/pdf',
+        charset: undefined,
+        etag: '"abc"',
+        lastModified: 'Wed, 01 Jan 2025 00:00:00 GMT',
+        contentLength: 42,
+        filename: 'file.pdf',
+        canonicalUrl: 'https://example.com/file',
+        redirectChain: [],
+        upgradedToHttps: false,
+        truncated: false,
+        binary: true,
+        binaryKind: 'pdf',
+      }),
+    ).toEqual({
+      'If-None-Match': '"abc"',
+      'If-Modified-Since': 'Wed, 01 Jan 2025 00:00:00 GMT',
+    });
   });
 });

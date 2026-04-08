@@ -117,14 +117,8 @@ export function getBinaryKind(contentType: string): BinaryFetch['binaryKind'] {
   return 'binary';
 }
 
-function acceptHeader(format: 'text' | 'markdown' | 'html') {
-  if (format === 'markdown') {
-    return 'text/markdown;q=1.0, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1';
-  }
-  if (format === 'text') {
-    return 'text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1';
-  }
-  return 'text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, */*;q=0.1';
+function acceptHeader(_format: 'text' | 'markdown' | 'html') {
+  return 'text/html;q=1.0, application/xhtml+xml;q=0.9, text/markdown;q=0.8, text/plain;q=0.8, */*;q=0.1';
 }
 
 function inferCharsetFromHtml(text: string) {
@@ -521,12 +515,7 @@ export function extractHeaderMetadata(headers: Headers, finalUrl: string) {
 }
 
 export function buildConditionalHeaders(cached: FetchResult | undefined) {
-  if (
-    !cached ||
-    ('binary' in cached
-      ? !cached.etag && !cached.lastModified
-      : !cached.etag && !cached.lastModified)
-  ) {
+  if (!cached || (!cached.etag && !cached.lastModified)) {
     return undefined;
   }
   const headers: Record<string, string> = {};

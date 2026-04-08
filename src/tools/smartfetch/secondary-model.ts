@@ -1,7 +1,10 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
+import { stripJsonComments } from '../../cli/config-io';
+import { getConfigSearchDirs } from '../../cli/paths';
+import { loadPluginConfig } from '../../config/loader';
 import { MAX_MODEL_CONTENT_CHARS } from './constants';
 import type { CachedFetch, SecondaryModel } from './types';
 
@@ -15,19 +18,62 @@ function parseModelRef(value: string | undefined) {
   return { providerID, modelID };
 }
 
-export async function readSecondaryModelFromConfig() {
+function pickAgentModelRef(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (typeof entry === 'string') return entry;
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        'id' in entry &&
+        typeof (entry as { id?: unknown }).id === 'string'
+      ) {
+        return (entry as { id: string }).id;
+      }
+    }
+  }
+  return undefined;
+}
+
+function findPreferredOpenCodeConfigPath(baseDir: string) {
+  for (const file of ['opencode.jsonc', 'opencode.json']) {
+    const fullPath = path.join(baseDir, file);
+    if (existsSync(fullPath)) return fullPath;
+  }
+  return undefined;
+}
+
+async function readOpenCodeConfigFile(configPath: string | undefined) {
+  if (!configPath) return undefined;
   try {
-    const configPath = path.join(
-      os.homedir(),
-      '.config',
-      'opencode',
-      'opencode.json',
-    );
     const content = await readFile(configPath, 'utf8');
-    const parsed = JSON.parse(content) as {
+    return JSON.parse(stripJsonComments(content)) as {
       small_model?: unknown;
-      agent?: Record<string, { model?: unknown }>;
     };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readEffectiveOpenCodeConfig(directory: string) {
+  const projectDir = path.join(directory, '.opencode');
+  const userDirs = getConfigSearchDirs();
+  const projectPath = findPreferredOpenCodeConfigPath(projectDir);
+  const userPath = userDirs
+    .map((configDir) => findPreferredOpenCodeConfigPath(configDir))
+    .find(Boolean);
+
+  const userConfig = await readOpenCodeConfigFile(userPath);
+  const projectConfig = await readOpenCodeConfigFile(projectPath);
+
+  return {
+    small_model: projectConfig?.small_model ?? userConfig?.small_model,
+  };
+}
+
+export async function readSecondaryModelFromConfig(directory: string) {
+  try {
     const models: SecondaryModel[] = [];
     const seen = new Set<string>();
     const pushModel = (value: unknown) => {
@@ -40,13 +86,23 @@ export async function readSecondaryModelFromConfig() {
       models.push(parsedModel);
     };
 
-    pushModel(parsed.small_model);
+    const opencodeConfig = await readEffectiveOpenCodeConfig(directory);
+    pushModel(
+      typeof opencodeConfig.small_model === 'string'
+        ? opencodeConfig.small_model
+        : undefined,
+    );
 
-    for (const agentID of ['explorer', 'librarian']) {
-      const agent = parsed.agent?.[agentID];
-      if (!agent) continue;
-      pushModel(agent.model as string | undefined);
-    }
+    const pluginConfig = loadPluginConfig(directory);
+    const explorerModel = pickAgentModelRef(
+      pluginConfig.agents?.explorer?.model,
+    );
+    const librarianModel = pickAgentModelRef(
+      pluginConfig.agents?.librarian?.model,
+    );
+
+    pushModel(explorerModel);
+    pushModel(librarianModel);
 
     return models;
   } catch {

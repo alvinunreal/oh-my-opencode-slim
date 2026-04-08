@@ -22,7 +22,6 @@ export function buildCacheKey(
   url: string,
   extractMain: boolean,
   preferLlmsTxt: 'auto' | 'always' | 'never',
-  format: 'text' | 'markdown' | 'html',
   saveBinary: boolean,
 ) {
   const parsed = new URL(url);
@@ -30,7 +29,6 @@ export function buildCacheKey(
     url: parsed.toString(),
     extractMain,
     preferLlmsTxt,
-    format,
     saveBinary,
   });
 }
@@ -39,7 +37,6 @@ function cacheKeysFor(
   fetchResult: FetchResult,
   extractMain: boolean,
   preferLlmsTxt: 'auto' | 'always' | 'never',
-  format: 'text' | 'markdown' | 'html',
   saveBinary: boolean,
 ) {
   const keys = new Set<string>();
@@ -48,18 +45,11 @@ function cacheKeysFor(
       fetchResult.requestedUrl,
       extractMain,
       preferLlmsTxt,
-      format,
       saveBinary,
     ),
   );
   keys.add(
-    buildCacheKey(
-      fetchResult.finalUrl,
-      extractMain,
-      preferLlmsTxt,
-      format,
-      saveBinary,
-    ),
+    buildCacheKey(fetchResult.finalUrl, extractMain, preferLlmsTxt, saveBinary),
   );
   if (
     fetchResult.canonicalUrl &&
@@ -70,7 +60,6 @@ function cacheKeysFor(
         fetchResult.canonicalUrl,
         extractMain,
         preferLlmsTxt,
-        format,
         saveBinary,
       ),
     );
@@ -82,14 +71,12 @@ export function cacheFetchResult(
   fetchResult: FetchResult,
   extractMain: boolean,
   preferLlmsTxt: 'auto' | 'always' | 'never',
-  format: 'text' | 'markdown' | 'html',
   saveBinary: boolean,
 ) {
   for (const key of cacheKeysFor(
     fetchResult,
     extractMain,
     preferLlmsTxt,
-    format,
     saveBinary,
   )) {
     CACHE.set(key, fetchResult);

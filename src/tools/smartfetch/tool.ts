@@ -69,7 +69,6 @@ export function createWebfetchTool(
   pluginCtx: PluginInput,
   options: SmartfetchOptions = {},
 ): ToolDefinition {
-  const secondaryModelsPromise = readSecondaryModelFromConfig();
   const binaryDir =
     options.binaryDir || path.join(os.tmpdir(), 'opencode-smartfetch');
 
@@ -101,14 +100,15 @@ export function createWebfetchTool(
         ),
     },
     async execute(args, ctx) {
-      const secondaryModels = await secondaryModelsPromise;
+      const secondaryModels = await readSecondaryModelFromConfig(
+        ctx.directory || pluginCtx.directory,
+      );
       const normalized = normalizeUrl(args.url);
       const url = new URL(normalized.url);
       const cacheKey = buildCacheKey(
         args.url,
         args.extract_main,
         args.prefer_llms_txt,
-        args.format,
         args.save_binary,
       );
       const shouldProbeLlmsTxt =
@@ -230,7 +230,6 @@ export function createWebfetchTool(
                 fetchResult,
                 args.extract_main,
                 args.prefer_llms_txt,
-                args.format,
                 args.save_binary,
               );
             } else if (llms?.error) {
@@ -310,7 +309,6 @@ export function createWebfetchTool(
                 fetchResult,
                 args.extract_main,
                 args.prefer_llms_txt,
-                args.format,
                 args.save_binary,
               );
             } else {
@@ -373,7 +371,6 @@ export function createWebfetchTool(
                   fetchResult,
                   args.extract_main,
                   args.prefer_llms_txt,
-                  args.format,
                   args.save_binary,
                 );
               } else {
@@ -442,7 +439,6 @@ export function createWebfetchTool(
                     fetchResult,
                     args.extract_main,
                     args.prefer_llms_txt,
-                    args.format,
                     args.save_binary,
                   );
                 } else {
@@ -515,7 +511,6 @@ export function createWebfetchTool(
                     fetchResult,
                     args.extract_main,
                     args.prefer_llms_txt,
-                    args.format,
                     args.save_binary,
                   );
                 }

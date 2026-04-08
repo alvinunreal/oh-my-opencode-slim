@@ -15,7 +15,7 @@ export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const MAX_TIMEOUT_SECONDS = 120;
 export const MAX_LLMS_PROBE_TIMEOUT_MS = 8000;
 export const MAX_MODEL_CONTENT_CHARS = 100_000;
-export const DEFAULT_ACCEPT_LANGUAGE = 'es-ES,es;q=0.9,en;q=0.8,*;q=0.5';
+export const DEFAULT_ACCEPT_LANGUAGE = 'en;q=0.8,*;q=0.5';
 export const BINARY_PREFIXES = [
   'image/',
   'audio/',
