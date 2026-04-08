@@ -290,6 +290,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "nyanyani",
+      "name": "nyanyani",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11475482?v=4",
+      "profile": "https://github.com/nyanyani",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
