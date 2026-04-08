@@ -23,8 +23,6 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private binaryPath: string | null = null;
   private hasChecked = false;
-  private storedLayout: MultiplexerLayout;
-  private storedMainPaneSize: number;
   private agentTabId: string | null = null;
   private firstPaneId: string | null = null;
   private firstPaneUsed = false;
@@ -33,8 +31,8 @@ export class ZellijMultiplexer implements Multiplexer {
     // Note: Zellij does NOT support layout configuration like tmux.
     // These params are accepted for API consistency but are no-ops.
     // Zellij uses its own native layout algorithm for pane arrangement.
-    this.storedLayout = layout;
-    this.storedMainPaneSize = mainPaneSize;
+    void layout;
+    void mainPaneSize;
   }
 
   async isAvailable(): Promise<boolean> {

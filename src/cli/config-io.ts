@@ -6,13 +6,13 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import {
   ensureConfigDir,
   ensureOpenCodeConfigDir,
   getExistingConfigPath,
   getLiteConfig,
 } from './paths';
-import { pathToFileURL } from 'node:url';
 import { generateLiteConfig } from './providers';
 import type {
   ConfigMergeResult,
@@ -42,7 +42,10 @@ function getPluginEntry(): string {
     const pluginEntryPath = cliEntryPath.match(
       /[\\/]dist[\\/]cli[\\/]index\.js$/,
     )
-      ? cliEntryPath.replace(/[\\/]dist[\\/]cli[\\/]index\.js$/, '/dist/index.js')
+      ? cliEntryPath.replace(
+          /[\\/]dist[\\/]cli[\\/]index\.js$/,
+          '/dist/index.js',
+        )
       : null;
 
     if (!pluginEntryPath) {

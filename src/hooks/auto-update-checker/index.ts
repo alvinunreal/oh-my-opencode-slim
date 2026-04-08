@@ -7,7 +7,6 @@ import {
   getCachedVersion,
   getLatestVersion,
   getLocalDevVersion,
-  updatePinnedVersion,
 } from './checker';
 import { PACKAGE_NAME } from './constants';
 import type { AutoUpdateCheckerOptions } from './types';
