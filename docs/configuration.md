@@ -112,3 +112,7 @@ All config files support **JSONC** (JSON with Comments):
 | `council.councillors_timeout` | number | `180000` | Per-councillor timeout (ms) |
 | `council.master_fallback` | string[] | — | Fallback models for the council master |
 | `council.councillor_retries` | number | `3` | Max retries per councillor and master on empty provider response (0–5) |
+| `todoContinuation.maxContinuations` | integer | `5` | Max consecutive auto-continuations before stopping (1–50) |
+| `todoContinuation.cooldownMs` | integer | `3000` | Delay in ms before auto-continuing — gives user time to abort (0–30000) |
+| `todoContinuation.autoEnable` | boolean | `false` | Automatically enable auto-continue when session has enough todos |
+| `todoContinuation.autoEnableThreshold` | integer | `4` | Number of todos that triggers auto-enable (only used when `autoEnable` is true, 1–50) |

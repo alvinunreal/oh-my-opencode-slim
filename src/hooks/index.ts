@@ -10,3 +10,4 @@ export {
 export { createJsonErrorRecoveryHook } from './json-error-recovery';
 export { createPhaseReminderHook } from './phase-reminder';
 export { createPostFileToolNudgeHook } from './post-file-tool-nudge';
+export { createTodoContinuationHook } from './todo-continuation';

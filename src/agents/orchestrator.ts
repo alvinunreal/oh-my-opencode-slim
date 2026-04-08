@@ -114,6 +114,13 @@ Balance: respect dependencies, avoid parallelizing what must be sequential.
 4. Integrate results
 5. Adjust if needed
 
+### Auto-Continue
+When working through multi-step tasks, consider enabling auto-continue to avoid stopping between batches:
+- **Enable when:** User requests autonomous/batch work, or you create 4+ todos in a session
+- **Don't enable when:** User is in an interactive/conversational flow, or each step needs explicit review
+- Use the \`auto_continue\` tool with \`enabled: true\` to activate. The system will automatically resume you when incomplete todos remain after you stop.
+- The user can toggle this anytime via the \`/auto-continue\` command.
+
 ### Validation routing
 - Validation is a workflow stage owned by the Orchestrator, not a separate specialist
 - Route UI/UX validation and review to @designer

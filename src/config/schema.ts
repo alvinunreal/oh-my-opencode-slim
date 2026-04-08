@@ -164,6 +164,45 @@ export const BackgroundTaskConfigSchema = z.object({
 
 export type BackgroundTaskConfig = z.infer<typeof BackgroundTaskConfigSchema>;
 
+// Todo continuation configuration
+export const TodoContinuationConfigSchema = z.object({
+  maxContinuations: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(5)
+    .describe(
+      'Maximum consecutive auto-continuations before stopping to ask user',
+    ),
+  cooldownMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(30_000)
+    .default(3000)
+    .describe('Delay in ms before auto-continuing (gives user time to abort)'),
+  autoEnable: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Automatically enable auto-continue when the orchestrator session has enough todos',
+    ),
+  autoEnableThreshold: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(4)
+    .describe(
+      'Number of todos that triggers auto-enable (only used when autoEnable is true)',
+    ),
+});
+
+export type TodoContinuationConfig = z.infer<
+  typeof TodoContinuationConfigSchema
+>;
+
 export const FailoverConfigSchema = z.object({
   enabled: z.boolean().default(true),
   timeoutMs: z.number().min(0).default(15000),
@@ -197,6 +236,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   websearch: WebsearchConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
+  todoContinuation: TodoContinuationConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
   council: CouncilConfigSchema.optional(),
 });
