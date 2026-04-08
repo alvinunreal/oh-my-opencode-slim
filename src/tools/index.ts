@@ -10,3 +10,4 @@ export {
   lspManager,
   setUserLspConfig,
 } from './lsp';
+export { createWebfetchTool } from './smartfetch';

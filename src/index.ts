@@ -21,6 +21,7 @@ import {
   ast_grep_search,
   createBackgroundTools,
   createCouncilTool,
+  createWebfetchTool,
   lsp_diagnostics,
   lsp_find_references,
   lsp_goto_definition,
@@ -121,6 +122,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     : {};
 
   const mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
+  const webfetch = createWebfetchTool(ctx);
 
   // Initialize MultiplexerSessionManager to handle OpenCode's built-in Task tool sessions
   const multiplexerSessionManager = new MultiplexerSessionManager(
@@ -169,6 +171,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tool: {
       ...backgroundTools,
       ...councilTools,
+      webfetch,
       lsp_goto_definition,
       lsp_find_references,
       lsp_diagnostics,
