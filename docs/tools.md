@@ -18,6 +18,18 @@ Background tasks integrate with [Multiplexer Integration](multiplexer-integratio
 
 ---
 
+## Web Fetch
+
+Fetch remote pages with content extraction tuned for docs/static sites.
+
+| Tool | Description |
+|------|-------------|
+| `webfetch` | Fetch a URL, optionally prefer `llms.txt`, extract main content from HTML, include metadata, and optionally save binary responses |
+
+`webfetch` blocks cross-origin redirects unless the requested URL or derived permission patterns explicitly allow them, and it can fall back to the raw fetched content when secondary-model summarization is unavailable.
+
+---
+
 ## LSP Tools
 
 Language Server Protocol integration for code intelligence across 30+ languages. OpenCode ships pre-configured LSP servers for TypeScript, Python, Rust, Go, and more.
