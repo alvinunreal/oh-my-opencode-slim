@@ -413,6 +413,37 @@
         }
       }
     },
+    "todoContinuation": {
+      "type": "object",
+      "properties": {
+        "maxContinuations": {
+          "default": 5,
+          "description": "Maximum consecutive auto-continuations before stopping to ask user",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "cooldownMs": {
+          "default": 3000,
+          "description": "Delay in ms before auto-continuing (gives user time to abort)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "autoEnable": {
+          "default": false,
+          "description": "Automatically enable auto-continue when the orchestrator session has enough todos",
+          "type": "boolean"
+        },
+        "autoEnableThreshold": {
+          "default": 4,
+          "description": "Number of todos that triggers auto-enable (only used when autoEnable is true)",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    },
     "fallback": {
       "type": "object",
       "properties": {

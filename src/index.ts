@@ -12,6 +12,7 @@ import {
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
+  createTodoContinuationHook,
   ForegroundFallbackManager,
 } from './hooks';
 import { createBuiltinMcps } from './mcp';
@@ -161,6 +162,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config.fallback?.enabled !== false && Object.keys(runtimeChains).length > 0,
   );
 
+  // Initialize todo-continuation hook (opt-in auto-continue for incomplete todos)
+  const todoContinuationHook = createTodoContinuationHook(ctx, {
+    maxContinuations: config.todoContinuation?.maxContinuations ?? 5,
+    cooldownMs: config.todoContinuation?.cooldownMs ?? 3000,
+    autoEnable: config.todoContinuation?.autoEnable ?? false,
+    autoEnableThreshold: config.todoContinuation?.autoEnableThreshold ?? 4,
+  });
+
   return {
     name: 'oh-my-opencode-slim',
 
@@ -169,6 +178,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tool: {
       ...backgroundTools,
       ...councilTools,
+      ...todoContinuationHook.tool,
       lsp_goto_definition,
       lsp_find_references,
       lsp_diagnostics,
@@ -351,11 +361,31 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // Update agent config with permissions
         agentConfigEntry.permission = agentPermission;
       }
+
+      // Register /auto-continue command so OpenCode recognizes it.
+      // Actual handling is done by command.execute.before hook below
+      // (no LLM round-trip — injected directly into output.parts).
+      const configCommand = opencodeConfig.command as
+        | Record<string, unknown>
+        | undefined;
+      if (!configCommand?.['auto-continue']) {
+        if (!opencodeConfig.command) {
+          opencodeConfig.command = {};
+        }
+        (opencodeConfig.command as Record<string, unknown>)['auto-continue'] = {
+          template: 'Call the auto_continue tool with enabled=true',
+          description:
+            'Enable auto-continuation — orchestrator keeps working through incomplete todos',
+        };
+      }
     },
 
     event: async (input) => {
       // Runtime model fallback for foreground agents (rate-limit detection)
       await foregroundFallback.handleEvent(input.event);
+
+      // Todo-continuation: auto-continue orchestrator on incomplete todos
+      await todoContinuationHook.handleEvent(input);
 
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
@@ -400,6 +430,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           type: string;
           properties?: { sessionID?: string };
         },
+      );
+    },
+
+    // Direct interception of /auto-continue command — bypasses LLM round-trip
+    'command.execute.before': async (input, output) => {
+      await todoContinuationHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
       );
     },
 

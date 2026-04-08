@@ -1,0 +1,538 @@
+import type { PluginInput } from '@opencode-ai/plugin';
+import { tool } from '@opencode-ai/plugin/tool';
+import { createInternalAgentTextPart, log } from '../../utils';
+
+const HOOK_NAME = 'todo-continuation';
+const COMMAND_NAME = 'auto-continue';
+
+const CONTINUATION_PROMPT =
+  '[Auto-continue: enabled - there are incomplete todos remaining. Continue with the next uncompleted item. Press Esc to cancel. If you need user input or review for the next item, ask instead of proceeding.]';
+
+// Suppress window after user abort (Esc/Ctrl+C) to avoid immediately
+// re-continuing something the user explicitly stopped
+const SUPPRESS_AFTER_ABORT_MS = 5_000;
+
+const QUESTION_PHRASES = [
+  'would you like',
+  'should i',
+  'do you want',
+  'please review',
+  'let me know',
+  'what do you think',
+  'can you confirm',
+  'would you prefer',
+  'shall i',
+  'any thoughts',
+];
+
+// Statuses that indicate a todo is terminal (won't be worked on further).
+// Uses denylist approach: any status not listed here is considered incomplete.
+const TERMINAL_TODO_STATUSES = ['completed', 'cancelled'];
+
+interface ContinuationState {
+  enabled: boolean;
+  consecutiveContinuations: number;
+  pendingTimer: ReturnType<typeof setTimeout> | null;
+  suppressUntil: number;
+  orchestratorSessionId: string | null;
+  // True while our auto-injection prompt is in flight — prevents counter reset
+  // on session.status→busy and blocks duplicate injections
+  isAutoInjecting: boolean;
+}
+
+function isQuestion(text: string): boolean {
+  const lowerText = text.toLowerCase().trim();
+  // Match trailing '?' with optional whitespace after it
+  if (/\?\s*$/.test(lowerText)) {
+    return true;
+  }
+  return QUESTION_PHRASES.some((phrase) => lowerText.includes(phrase));
+}
+
+interface TodoItem {
+  id: string;
+  content: string;
+  status: string;
+  priority: string;
+}
+
+interface MessageInfo {
+  role?: string;
+  [key: string]: unknown;
+}
+
+interface MessagePart {
+  type?: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+interface Message {
+  info?: MessageInfo;
+  parts?: MessagePart[];
+}
+
+function cancelPendingTimer(state: ContinuationState): void {
+  if (state.pendingTimer) {
+    clearTimeout(state.pendingTimer);
+    state.pendingTimer = null;
+  }
+}
+
+function resetState(state: ContinuationState): void {
+  cancelPendingTimer(state);
+  state.consecutiveContinuations = 0;
+  state.suppressUntil = 0;
+  state.isAutoInjecting = false;
+}
+
+export function createTodoContinuationHook(
+  ctx: PluginInput,
+  config?: {
+    maxContinuations?: number;
+    cooldownMs?: number;
+    autoEnable?: boolean;
+    autoEnableThreshold?: number;
+  },
+): {
+  tool: Record<string, unknown>;
+  handleEvent: (input: {
+    event: { type: string; properties?: Record<string, unknown> };
+  }) => Promise<void>;
+  handleCommandExecuteBefore: (
+    input: {
+      command: string;
+      sessionID: string;
+      arguments: string;
+    },
+    output: { parts: Array<{ type: string; text?: string }> },
+  ) => Promise<void>;
+} {
+  const maxContinuations = config?.maxContinuations ?? 5;
+  const cooldownMs = config?.cooldownMs ?? 3000;
+  const autoEnable = config?.autoEnable ?? false;
+  const autoEnableThreshold = config?.autoEnableThreshold ?? 4;
+
+  const state: ContinuationState = {
+    enabled: false,
+    consecutiveContinuations: 0,
+    pendingTimer: null,
+    suppressUntil: 0,
+    orchestratorSessionId: null,
+    isAutoInjecting: false,
+  };
+
+  const autoContinue = tool({
+    description:
+      'Toggle auto-continuation for incomplete todos. When enabled, the orchestrator will automatically continue working through its todo list when it stops with incomplete items.',
+    args: { enabled: tool.schema.boolean() },
+    execute: async (args) => {
+      const enabled = args.enabled;
+      state.enabled = enabled;
+      state.consecutiveContinuations = 0;
+
+      if (enabled) {
+        state.suppressUntil = 0;
+        log(`[${HOOK_NAME}] Auto-continue enabled`, { maxContinuations });
+        return `Auto-continue enabled. Will auto-continue for up to ${maxContinuations} consecutive injections.`;
+      }
+
+      // Cancel any pending timer on disable
+      cancelPendingTimer(state);
+      log(`[${HOOK_NAME}] Auto-continue disabled`);
+      return 'Auto-continue disabled.';
+    },
+  });
+
+  async function handleEvent(input: {
+    event: { type: string; properties?: Record<string, unknown> };
+  }): Promise<void> {
+    const { event } = input;
+    const properties = event.properties ?? {};
+
+    if (event.type === 'session.idle') {
+      const sessionID = properties.sessionID as string;
+      if (!sessionID) {
+        return;
+      }
+
+      log(`[${HOOK_NAME}] Session idle`, { sessionID });
+
+      // Track orchestrator session (assumes orchestrator is the first
+      // session to go idle — correct for single-session main chat)
+      if (!state.orchestratorSessionId) {
+        state.orchestratorSessionId = sessionID;
+        log(`[${HOOK_NAME}] Tracked orchestrator session`, {
+          sessionID,
+        });
+      }
+
+      // Gate: session is orchestrator (needed before auto-enable check)
+      if (state.orchestratorSessionId !== sessionID) {
+        log(`[${HOOK_NAME}] Skipped: not orchestrator session`, {
+          sessionID,
+        });
+        return;
+      }
+
+      // Auto-enable check: if configured, not yet enabled, and enough
+      // todos exist, automatically enable auto-continue.
+      if (autoEnable && !state.enabled) {
+        try {
+          const todosResult = await ctx.client.session.todo({
+            path: { id: sessionID },
+          });
+          const todos = todosResult.data as TodoItem[];
+          const incompleteCount = todos.filter(
+            (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
+          ).length;
+          if (incompleteCount >= autoEnableThreshold) {
+            state.enabled = true;
+            state.consecutiveContinuations = 0;
+            state.suppressUntil = 0;
+            log(
+              `[${HOOK_NAME}] Auto-enabled: ${incompleteCount} incomplete todos >= threshold ${autoEnableThreshold}`,
+              { sessionID },
+            );
+          } else {
+            log(
+              `[${HOOK_NAME}] Auto-enable skipped: ${incompleteCount} incomplete todos < threshold ${autoEnableThreshold}`,
+              { sessionID },
+            );
+          }
+        } catch (error) {
+          log(
+            `[${HOOK_NAME}] Warning: failed to fetch todos for auto-enable check`,
+            {
+              sessionID,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+        }
+      }
+
+      // Safety gate 1: enabled
+      if (!state.enabled) {
+        log(`[${HOOK_NAME}] Skipped: auto-continue not enabled`, {
+          sessionID,
+        });
+        return;
+      }
+
+      // Safety gate 2: incomplete todos exist
+      let hasIncompleteTodos = false;
+      let incompleteCount = 0;
+      try {
+        const todosResult = await ctx.client.session.todo({
+          path: { id: sessionID },
+        });
+        const todos = todosResult.data as TodoItem[];
+        incompleteCount = todos.filter(
+          (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
+        ).length;
+        hasIncompleteTodos = incompleteCount > 0;
+        log(`[${HOOK_NAME}] Fetched todos`, {
+          sessionID,
+          hasIncompleteTodos,
+          total: todos.length,
+        });
+      } catch (error) {
+        log(`[${HOOK_NAME}] Warning: failed to fetch todos`, {
+          sessionID,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+
+      if (!hasIncompleteTodos) {
+        log(`[${HOOK_NAME}] Skipped: no incomplete todos`, { sessionID });
+        return;
+      }
+
+      // Safety gate 3: last assistant message is not a question
+      let lastAssistantIsQuestion = false;
+      try {
+        const messagesResult = await ctx.client.session.messages({
+          path: { id: sessionID },
+        });
+        const messages = messagesResult.data as Message[];
+        const lastAssistantMessage = messages
+          .slice()
+          .reverse()
+          .find((m) => m.info?.role === 'assistant');
+        if (lastAssistantMessage?.parts) {
+          const lastText = lastAssistantMessage.parts
+            .map((p) => p.text ?? '')
+            .join(' ');
+          lastAssistantIsQuestion = isQuestion(lastText);
+        }
+        log(`[${HOOK_NAME}] Fetched messages`, {
+          sessionID,
+          lastAssistantIsQuestion,
+        });
+      } catch (error) {
+        log(`[${HOOK_NAME}] Warning: failed to fetch messages`, {
+          sessionID,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+
+      if (lastAssistantIsQuestion) {
+        log(`[${HOOK_NAME}] Skipped: last message is question`, {
+          sessionID,
+        });
+        return;
+      }
+
+      // Safety gate 4: below max continuations
+      if (state.consecutiveContinuations >= maxContinuations) {
+        log(`[${HOOK_NAME}] Skipped: max continuations reached`, {
+          sessionID,
+          consecutive: state.consecutiveContinuations,
+          max: maxContinuations,
+        });
+        return;
+      }
+
+      // Safety gate 5: not in suppress window
+      const now = Date.now();
+      if (now < state.suppressUntil) {
+        log(`[${HOOK_NAME}] Skipped: in suppress window`, {
+          sessionID,
+          suppressUntil: state.suppressUntil,
+        });
+        return;
+      }
+
+      // Safety gate 6: no pending timer AND no injection in flight
+      if (state.pendingTimer !== null || state.isAutoInjecting) {
+        log(`[${HOOK_NAME}] Skipped: timer pending or injection in flight`, {
+          sessionID,
+        });
+        return;
+      }
+
+      // Schedule continuation
+      log(`[${HOOK_NAME}] Scheduling continuation`, {
+        sessionID,
+        delayMs: cooldownMs,
+      });
+
+      // Show countdown notification (noReply = agent doesn't respond)
+      ctx.client.session
+        .prompt({
+          path: { id: sessionID },
+          body: {
+            noReply: true,
+            parts: [
+              {
+                type: 'text',
+                text: [
+                  `⎔ Auto-continue: ${incompleteCount} incomplete todos remaining — resuming in ${cooldownMs / 1000}s — Esc×2 to cancel`,
+                  '',
+                  '[system status: continue without acknowledging this notification]',
+                ].join('\n'),
+              },
+            ],
+          },
+        })
+        .catch(() => {
+          /* best-effort notification */
+        });
+
+      state.pendingTimer = setTimeout(async () => {
+        state.pendingTimer = null;
+
+        // Guard: may have been disabled during cooldown
+        if (!state.enabled) {
+          log(`[${HOOK_NAME}] Cancelled: disabled during cooldown`, {
+            sessionID,
+          });
+          return;
+        }
+
+        state.isAutoInjecting = true;
+        try {
+          await ctx.client.session.prompt({
+            path: { id: sessionID },
+            body: {
+              parts: [createInternalAgentTextPart(CONTINUATION_PROMPT)],
+            },
+          });
+          state.consecutiveContinuations++;
+          log(`[${HOOK_NAME}] Continuation injected`, {
+            sessionID,
+            consecutive: state.consecutiveContinuations,
+          });
+        } catch (error) {
+          log(`[${HOOK_NAME}] Error: failed to inject continuation`, {
+            sessionID,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          state.isAutoInjecting = false;
+        }
+      }, cooldownMs);
+    } else if (event.type === 'session.status') {
+      const status = properties.status as { type: string };
+      const sessionID = properties.sessionID as string;
+      if (status?.type === 'busy') {
+        const isOrchestrator = sessionID === state.orchestratorSessionId;
+
+        // Only cancel timer for orchestrator session — sub-agents going
+        // busy must not silently kill the orchestrator's continuation.
+        if (isOrchestrator) {
+          cancelPendingTimer(state);
+        }
+
+        // Only reset consecutive counter for user-initiated activity,
+        // not for our own auto-injection prompt. Scope to orchestrator only.
+        if (
+          !state.isAutoInjecting &&
+          isOrchestrator &&
+          state.consecutiveContinuations > 0
+        ) {
+          state.consecutiveContinuations = 0;
+          log(`[${HOOK_NAME}] Reset consecutive count on user activity`, {
+            sessionID,
+          });
+        }
+      }
+    } else if (event.type === 'session.error') {
+      const error = properties.error as { name?: string };
+      const sessionID = properties.sessionID as string;
+      const errorName = error?.name;
+      const isOrchestrator = sessionID === state.orchestratorSessionId;
+      if (
+        isOrchestrator &&
+        (errorName === 'MessageAbortedError' || errorName === 'AbortError')
+      ) {
+        state.suppressUntil = Date.now() + SUPPRESS_AFTER_ABORT_MS;
+        log(`[${HOOK_NAME}] Suppressed continuation after abort`, {
+          sessionID,
+          errorName,
+        });
+      }
+      if (isOrchestrator) {
+        cancelPendingTimer(state);
+        log(`[${HOOK_NAME}] Cancelled pending timer on error`, {
+          sessionID,
+        });
+      }
+    } else if (event.type === 'session.deleted') {
+      // OpenCode sends sessionID in two shapes:
+      // properties.info.id (from session store) or properties.sessionID (from event)
+      const deletedSessionId =
+        (properties.info as { id?: string })?.id ??
+        (properties.sessionID as string);
+
+      // Only cancel timer if the orchestrator session itself was deleted.
+      // Background sub-agent deletion must not kill the orchestrator's timer.
+      if (state.orchestratorSessionId === deletedSessionId) {
+        cancelPendingTimer(state);
+        log(`[${HOOK_NAME}] Cancelled pending timer on orchestrator delete`, {
+          sessionID: deletedSessionId,
+        });
+
+        resetState(state);
+        state.orchestratorSessionId = null;
+        log(`[${HOOK_NAME}] Reset orchestrator session on delete`, {
+          sessionID: deletedSessionId,
+        });
+      }
+    }
+  }
+
+  async function handleCommandExecuteBefore(
+    input: {
+      command: string;
+      sessionID: string;
+      arguments: string;
+    },
+    output: { parts: Array<{ type: string; text?: string }> },
+  ): Promise<void> {
+    if (input.command !== COMMAND_NAME) {
+      return;
+    }
+
+    // Seed orchestrator session from slash command (more reliable than
+    // first-idle heuristic — slash commands only fire in main chat)
+    if (!state.orchestratorSessionId) {
+      state.orchestratorSessionId = input.sessionID;
+    }
+
+    // Clear template text — hook handles everything directly
+    output.parts.length = 0;
+
+    // Accept explicit on/off argument, toggle only when no arg
+    const arg = input.arguments.trim().toLowerCase();
+    let newEnabled: boolean;
+    if (arg === 'on') {
+      newEnabled = true;
+    } else if (arg === 'off') {
+      newEnabled = false;
+    } else {
+      newEnabled = !state.enabled;
+    }
+
+    state.enabled = newEnabled;
+    state.consecutiveContinuations = 0;
+
+    if (!newEnabled) {
+      // Cancel any pending timer on disable
+      cancelPendingTimer(state);
+      output.parts.push(
+        createInternalAgentTextPart(
+          '[Auto-continue: disabled by user command.]',
+        ),
+      );
+      log(`[${HOOK_NAME}] Disabled via /${COMMAND_NAME} command`);
+      return;
+    }
+
+    // Clear suppress window on explicit re-enable
+    state.suppressUntil = 0;
+
+    log(`[${HOOK_NAME}] Enabled via /${COMMAND_NAME} command`, {
+      maxContinuations,
+    });
+
+    // Check for incomplete todos to decide on immediate continuation
+    let hasIncompleteTodos = false;
+    try {
+      const todosResult = await ctx.client.session.todo({
+        path: { id: input.sessionID },
+      });
+      const todos = todosResult.data as TodoItem[];
+      hasIncompleteTodos = todos.some(
+        (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
+      );
+    } catch (error) {
+      log(`[${HOOK_NAME}] Warning: failed to fetch todos in command hook`, {
+        sessionID: input.sessionID,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (hasIncompleteTodos) {
+      output.parts.push(
+        createInternalAgentTextPart(
+          `${CONTINUATION_PROMPT} [Auto-continue enabled: up to ${maxContinuations} continuations.]`,
+        ),
+      );
+    } else {
+      output.parts.push(
+        createInternalAgentTextPart(
+          `[Auto-continue: enabled for up to ${maxContinuations} continuations. No incomplete todos right now.]`,
+        ),
+      );
+    }
+  }
+
+  return {
+    tool: { auto_continue: autoContinue },
+    handleEvent,
+    handleCommandExecuteBefore,
+  };
+}
