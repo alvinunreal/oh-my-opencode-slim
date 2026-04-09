@@ -142,7 +142,7 @@ async function runBackgroundUpdateCheck(
 
   invalidatePackage(PACKAGE_NAME);
 
-  const installSuccess = await runBunInstallSafe(ctx);
+  const installSuccess = await runBunInstallSafe();
 
   if (installSuccess) {
     showToast(
@@ -177,7 +177,7 @@ export function getAutoUpdateInstallDir(): string {
  * @param ctx The plugin input context.
  * @returns True if the installation succeeded within the timeout.
  */
-async function runBunInstallSafe(ctx: PluginInput): Promise<boolean> {
+async function runBunInstallSafe(): Promise<boolean> {
   try {
     const installDir = getAutoUpdateInstallDir();
     const proc = Bun.spawn(['bun', 'install'], {
