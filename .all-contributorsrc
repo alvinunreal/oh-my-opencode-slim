@@ -299,6 +299,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "nettee",
+      "name": "nettee",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3953668?v=4",
+      "profile": "https://nettee.io/",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
