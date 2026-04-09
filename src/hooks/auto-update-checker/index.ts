@@ -1,6 +1,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { log } from '../../utils/logger';
 import { invalidatePackage } from './cache';
+import { CACHE_DIR, PACKAGE_NAME } from './constants';
 import {
   extractChannel,
   findPluginEntry,
@@ -8,7 +9,6 @@ import {
   getLatestVersion,
   getLocalDevVersion,
 } from './checker';
-import { PACKAGE_NAME } from './constants';
 import type { AutoUpdateCheckerOptions } from './types';
 
 /**
@@ -142,7 +142,7 @@ async function runBackgroundUpdateCheck(
 
   invalidatePackage(PACKAGE_NAME);
 
-  const installSuccess = await runBunInstallSafe(ctx);
+  const installSuccess = await runBunInstallSafe();
 
   if (installSuccess) {
     showToast(
@@ -167,16 +167,21 @@ async function runBackgroundUpdateCheck(
   }
 }
 
+export function getAutoUpdateInstallDir(): string {
+  return CACHE_DIR;
+}
+
 /**
  * Spawns a background process to run 'bun install'.
  * Includes a 60-second timeout to prevent stalling OpenCode.
  * @param ctx The plugin input context.
  * @returns True if the installation succeeded within the timeout.
  */
-async function runBunInstallSafe(ctx: PluginInput): Promise<boolean> {
+async function runBunInstallSafe(): Promise<boolean> {
   try {
+    const installDir = getAutoUpdateInstallDir();
     const proc = Bun.spawn(['bun', 'install'], {
-      cwd: ctx.directory,
+      cwd: installDir,
       stdout: 'pipe',
       stderr: 'pipe',
     });
