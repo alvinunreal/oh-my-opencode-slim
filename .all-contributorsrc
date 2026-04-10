@@ -308,6 +308,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "atomlink-ye",
+      "name": "Link",
+      "avatar_url": "https://avatars.githubusercontent.com/u/48194045?v=4",
+      "profile": "https://github.com/atomlink-ye",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
