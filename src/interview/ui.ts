@@ -1,10 +1,17 @@
 export function renderInterviewPage(interviewId: string): string {
+  const safeTitle = interviewId
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Interview ${interviewId}</title>
+    <title>Interview ${safeTitle}</title>
     <style>
       :root { color-scheme: dark; }
       body { 
@@ -122,18 +129,6 @@ export function renderInterviewPage(interviewId: string): string {
 
       .hidden-textarea {
         display: none;
-      }
-      
-      .suggested-badge {
-        display: inline-block;
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        background: rgba(255,255,255,0.1);
-        padding: 2px 6px;
-        border-radius: 2px;
-        margin-bottom: 8px;
-        color: rgba(255,255,255,0.7);
       }
       
       button.primary { 
@@ -475,13 +470,6 @@ export function renderInterviewPage(interviewId: string): string {
              state.answers[question.id] = question.suggested;
              state.customMode[question.id] = false;
             }
-
-          if (question.suggested) {
-            const badge = document.createElement('div');
-            badge.className = 'suggested-badge';
-            badge.textContent = 'Suggested Answer Available';
-            wrapper.appendChild(badge);
-          }
 
           const title = document.createElement('h3');
           title.textContent = question.question;

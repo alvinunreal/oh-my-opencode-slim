@@ -180,11 +180,16 @@ export function createInterviewService(ctx: PluginInput): {
     sessionID: string,
     idea: string,
   ): Promise<InterviewRecord> {
+    const normalizedIdea = idea.trim();
     const activeId = activeInterviewIds.get(sessionID);
     if (activeId) {
       const active = interviewsById.get(activeId);
       if (active && active.status === 'active') {
-        return active;
+        if (active.idea === normalizedIdea) {
+          return active;
+        }
+
+        active.status = 'abandoned';
       }
     }
 
@@ -192,7 +197,7 @@ export function createInterviewService(ctx: PluginInput): {
     const record: InterviewRecord = {
       id: `${Date.now()}-${slugify(idea) || 'interview'}`,
       sessionID,
-      idea: idea.trim(),
+      idea: normalizedIdea,
       markdownPath: createInterviewFilePath(ctx.directory, idea),
       createdAt: nowIso(),
       status: 'active',
