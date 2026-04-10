@@ -20,7 +20,7 @@ function formatQuestionContext(questions: InterviewQuestion[]): string {
 
 export function buildKickoffPrompt(idea: string): string {
   return [
-    'You are running a product-spec interview for the user inside their repository.',
+    'You are running an interview q&a session for the user inside their repository.',
     `Initial idea: ${idea}`,
     'Clarify the idea through short rounds of at most 2 questions at a time.',
     'When useful, each question may include 2 to 4 answer options and one suggested option.',
@@ -64,7 +64,7 @@ export function buildAnswerPrompt(
     .join('\n');
 
   return [
-    'Continue the same product interview.',
+    'Continue the same interview.',
     'These were the active questions:',
     formatQuestionContext(questions),
     'The user answered:',
