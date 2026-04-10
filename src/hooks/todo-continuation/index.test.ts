@@ -52,11 +52,15 @@ describe('createTodoContinuationHook', () => {
     ).length;
   }
   function contCall(m: ReturnType<typeof mock>): any[] {
-    return m.mock.calls.find((c: any[]) =>
+    const call = m.mock.calls.find((c: any[]) =>
       (c[0]?.body?.parts as any[])?.some((p: any) =>
         p.text?.includes(SLIM_INTERNAL_INITIATOR_MARKER),
       ),
-    )!;
+    );
+    if (!call) {
+      throw new Error('No continuation call found');
+    }
+    return call;
   }
 
   describe('tool toggle', () => {

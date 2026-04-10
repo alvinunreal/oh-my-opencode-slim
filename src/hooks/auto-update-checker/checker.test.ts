@@ -16,6 +16,7 @@ mock.module('node:fs', () => ({
   readFileSync: mock((_p: string) => ''),
   statSync: mock((_p: string) => ({ isDirectory: () => true })),
   writeFileSync: mock(() => {}),
+  rmSync: mock(() => {}),
 }));
 
 describe('auto-update-checker/checker', () => {
