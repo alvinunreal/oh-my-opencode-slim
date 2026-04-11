@@ -5,6 +5,7 @@ import { loadPluginConfig, type MultiplexerConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import { CouncilManager } from './council';
 import {
+  createApplyPatchHook,
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
   createDelegateTaskRetryHook,
@@ -154,6 +155,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   // Initialize delegate-task retry guidance hook
   const delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
+
+  const applyPatchHook = createApplyPatchHook(ctx);
 
   // Initialize JSON parse error recovery hook
   const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
@@ -446,6 +449,17 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as {
           event: { type: string; properties?: Record<string, unknown> };
         },
+      );
+    },
+
+    // Best-effort rescue only for stale apply_patch input before native execution
+    'tool.execute.before': async (input, output) => {
+      await applyPatchHook['tool.execute.before'](
+        input as {
+          tool: string;
+          directory?: string;
+        },
+        output as { args?: { patchText?: unknown; [key: string]: unknown } },
       );
     },
 

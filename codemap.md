@@ -118,6 +118,7 @@ Return plugin object with:
 
 6. **Hooks** (`src/hooks/`)
    - Auto-update checking
+   - `apply_patch` stale-patch rescue with strict parsing, bounded LCS fallback, stateful same-path helper updates, and safe canonical rewrites only inside root/worktree
    - Phase reminders for workflow compliance
    - Post-read nudges for delegation
 
