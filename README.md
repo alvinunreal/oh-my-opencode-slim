@@ -358,6 +358,7 @@ If any agent fails to respond, check your provider authentication and config fil
 | Feature | Doc | What it does |
 |---------|-----|--------------|
 | **Council** | [council.md](docs/council.md) | Run N models in parallel, synthesize one answer (`@council`) |
+| **Interview** | [interview.md](docs/interview.md) | Browser-based Q&A flow for turning rough ideas into a live markdown spec |
 | **Multiplexer Integration** | [multiplexer-integration.md](docs/multiplexer-integration.md) | Watch agents work in real-time with auto-spawned panes (Tmux/Zellij) |
 | **Cartography Skill** | [cartography.md](docs/cartography.md) | Auto-generate hierarchical codemaps for any codebase |
 

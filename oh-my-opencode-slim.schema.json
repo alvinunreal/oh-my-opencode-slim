@@ -413,6 +413,26 @@
         }
       }
     },
+    "interview": {
+      "type": "object",
+      "properties": {
+        "maxQuestions": {
+          "default": 2,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "outputFolder": {
+          "default": "interview",
+          "type": "string",
+          "minLength": 1
+        },
+        "autoOpenBrowser": {
+          "default": true,
+          "type": "boolean"
+        }
+      }
+    },
     "todoContinuation": {
       "type": "object",
       "properties": {

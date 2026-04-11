@@ -1,7 +1,6 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { log } from '../../utils/logger';
 import { invalidatePackage } from './cache';
-import { CACHE_DIR, PACKAGE_NAME } from './constants';
 import {
   extractChannel,
   findPluginEntry,
@@ -9,6 +8,7 @@ import {
   getLatestVersion,
   getLocalDevVersion,
 } from './checker';
+import { CACHE_DIR, PACKAGE_NAME } from './constants';
 import type { AutoUpdateCheckerOptions } from './types';
 
 /**

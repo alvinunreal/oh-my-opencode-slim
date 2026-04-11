@@ -164,6 +164,14 @@ export const BackgroundTaskConfigSchema = z.object({
 
 export type BackgroundTaskConfig = z.infer<typeof BackgroundTaskConfigSchema>;
 
+export const InterviewConfigSchema = z.object({
+  maxQuestions: z.number().int().min(1).max(10).default(2),
+  outputFolder: z.string().min(1).default('interview'),
+  autoOpenBrowser: z.boolean().default(true),
+});
+
+export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
+
 // Todo continuation configuration
 export const TodoContinuationConfigSchema = z.object({
   maxContinuations: z
@@ -236,6 +244,7 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   websearch: WebsearchConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
+  interview: InterviewConfigSchema.optional(),
   todoContinuation: TodoContinuationConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
   council: CouncilConfigSchema.optional(),

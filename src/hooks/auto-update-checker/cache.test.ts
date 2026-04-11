@@ -1,58 +1,59 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
-import { invalidatePackage } from './cache';
 
-// Mock internal dependencies
-mock.module('./constants', () => ({
-  CACHE_DIR: '/mock/cache',
-  PACKAGE_NAME: 'oh-my-opencode-slim',
-}));
-
-mock.module('../../shared/logger', () => ({
+// Mock logger to avoid noise
+mock.module('../../utils/logger', () => ({
   log: mock(() => {}),
-}));
-
-// Mock fs and path
-mock.module('node:fs', () => ({
-  existsSync: mock(() => false),
-  rmSync: mock(() => {}),
-  readFileSync: mock(() => ''),
-  writeFileSync: mock(() => {}),
 }));
 
 mock.module('../../cli/config-manager', () => ({
   stripJsonComments: (s: string) => s,
+  getOpenCodeConfigPaths: () => [
+    '/mock/config/opencode.json',
+    '/mock/config/opencode.jsonc',
+  ],
 }));
+
+// Cache buster for dynamic imports
+let importCounter = 0;
 
 describe('auto-update-checker/cache', () => {
   describe('invalidatePackage', () => {
-    test('returns false when nothing to invalidate', () => {
-      const existsMock = fs.existsSync as any;
-      existsMock.mockReturnValue(false);
+    test('returns false when nothing to invalidate', async () => {
+      const existsSpy = spyOn(fs, 'existsSync').mockReturnValue(false);
+      const { invalidatePackage } = await import(
+        `./cache?test=${importCounter++}`
+      );
 
       const result = invalidatePackage();
       expect(result).toBe(false);
+
+      existsSpy.mockRestore();
     });
 
-    test('returns true and removes directory if node_modules path exists', () => {
-      const existsMock = fs.existsSync as any;
-      const rmSyncMock = fs.rmSync as any;
-
-      existsMock.mockImplementation((p: string) => p.includes('node_modules'));
+    test('returns true and removes directory if node_modules path exists', async () => {
+      const existsSpy = spyOn(fs, 'existsSync').mockImplementation(
+        (p: string) => p.includes('node_modules'),
+      );
+      const rmSyncSpy = spyOn(fs, 'rmSync').mockReturnValue(undefined);
+      const { invalidatePackage } = await import(
+        `./cache?test=${importCounter++}`
+      );
 
       const result = invalidatePackage();
 
-      expect(rmSyncMock).toHaveBeenCalled();
+      expect(rmSyncSpy).toHaveBeenCalled();
       expect(result).toBe(true);
+
+      existsSpy.mockRestore();
+      rmSyncSpy.mockRestore();
     });
 
-    test('removes dependency from package.json if present', () => {
-      const existsMock = fs.existsSync as any;
-      const readMock = fs.readFileSync as any;
-      const writeMock = fs.writeFileSync as any;
-
-      existsMock.mockImplementation((p: string) => p.includes('package.json'));
-      readMock.mockReturnValue(
+    test('removes dependency from package.json if present', async () => {
+      const existsSpy = spyOn(fs, 'existsSync').mockImplementation(
+        (p: string) => p.includes('package.json'),
+      );
+      const readSpy = spyOn(fs, 'readFileSync').mockReturnValue(
         JSON.stringify({
           dependencies: {
             'oh-my-opencode-slim': '1.0.0',
@@ -60,14 +61,27 @@ describe('auto-update-checker/cache', () => {
           },
         }),
       );
+      const writtenData: string[] = [];
+      const writeSpy = spyOn(fs, 'writeFileSync').mockImplementation(
+        (_path: string, data: string) => {
+          writtenData.push(data);
+        },
+      );
+      const { invalidatePackage } = await import(
+        `./cache?test=${importCounter++}`
+      );
 
       const result = invalidatePackage();
 
       expect(result).toBe(true);
-      const callArgs = writeMock.mock.calls[0];
-      const savedJson = JSON.parse(callArgs[1]);
+      expect(writtenData.length).toBeGreaterThan(0);
+      const savedJson = JSON.parse(writtenData[0]);
       expect(savedJson.dependencies['oh-my-opencode-slim']).toBeUndefined();
       expect(savedJson.dependencies['other-pkg']).toBe('1.0.0');
+
+      existsSpy.mockRestore();
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
     });
   });
 });
