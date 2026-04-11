@@ -164,6 +164,18 @@ async function ensureInterviewFile(record: InterviewRecord): Promise<void> {
 }
 
 async function readInterviewDocument(record: InterviewRecord): Promise<string> {
+  try {
+    return await fs.readFile(record.markdownPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Path may have been updated by concurrent maybeRenameWithTitle
+      try {
+        return await fs.readFile(record.markdownPath, 'utf8');
+      } catch {
+        // Fall through to ensure + create
+      }
+    }
+  }
   await ensureInterviewFile(record);
   return fs.readFile(record.markdownPath, 'utf8');
 }
@@ -221,6 +233,7 @@ function resolveExistingInterviewPath(
 
   const outputDir = createInterviewDirectoryPath(directory, outputFolder);
   const candidates = new Set<string>();
+  const resolvedRoot = path.resolve(directory);
 
   if (path.isAbsolute(trimmed)) {
     candidates.add(trimmed);
@@ -234,6 +247,13 @@ function resolveExistingInterviewPath(
 
   for (const candidate of candidates) {
     if (path.extname(candidate) !== '.md') {
+      continue;
+    }
+    const resolved = path.resolve(candidate);
+    if (
+      !resolved.startsWith(resolvedRoot + path.sep) &&
+      resolved !== resolvedRoot
+    ) {
       continue;
     }
     if (fsSync.existsSync(candidate)) {
@@ -277,6 +297,7 @@ export function createInterviewService(
   const sessionBusy = new Map<string, boolean>();
   const browserOpened = new Set<string>(); // Track interviews that have opened browser
   let resolveBaseUrl: (() => Promise<string>) | null = null;
+  let idCounter = 0;
 
   function setBaseUrlResolver(resolver: () => Promise<string>): void {
     resolveBaseUrl = resolver;
@@ -380,7 +401,7 @@ export function createInterviewService(
 
     const messages = await loadMessages(sessionID);
     const record: InterviewRecord = {
-      id: `${Date.now()}-${slugify(idea) || 'interview'}`,
+      id: `${Date.now()}-${++idCounter}-${slugify(idea) || 'interview'}`,
       sessionID,
       idea: normalizedIdea,
       markdownPath: createInterviewFilePath(ctx.directory, outputFolder, idea),
@@ -415,7 +436,7 @@ export function createInterviewService(
     const messages = await loadMessages(sessionID);
     const title = extractTitle(document);
     const record: InterviewRecord = {
-      id: `${Date.now()}-${slugify(path.basename(markdownPath, '.md')) || 'interview'}`,
+      id: `${Date.now()}-${++idCounter}-${slugify(path.basename(markdownPath, '.md')) || 'interview'}`,
       sessionID,
       idea: title || path.basename(markdownPath, '.md'),
       markdownPath,

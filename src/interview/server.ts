@@ -72,6 +72,7 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
     if (size > 64 * 1024) {
+      request.destroy();
       throw new Error('Request body too large');
     }
     chunks.push(buffer);
@@ -116,7 +117,13 @@ export function createInterviewServer(deps: {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    let url: URL;
+    try {
+      url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    } catch {
+      sendJson(response, 400, { error: 'Invalid request URL' });
+      return;
+    }
     const pathname = url.pathname;
 
     if (request.method === 'GET' && pathname.startsWith('/interview/')) {
@@ -133,9 +140,10 @@ export function createInterviewServer(deps: {
         const state = await deps.getState(stateMatch[1]);
         sendJson(response, 200, state);
       } catch (error) {
-        sendJson(response, 404, {
-          error: error instanceof Error ? error.message : 'Interview not found',
-        });
+        const message =
+          error instanceof Error ? error.message : 'Interview not found';
+        const status = message === 'Interview not found' ? 404 : 500;
+        sendJson(response, status, { error: message });
       }
       return;
     }
@@ -184,6 +192,8 @@ export function createInterviewServer(deps: {
           });
         });
       });
+      server.requestTimeout = 30_000;
+      server.headersTimeout = 10_000;
 
       activeServer = server;
 
@@ -222,6 +232,7 @@ export function createInterviewServer(deps: {
     ensureStarted,
     close: () => {
       if (activeServer) {
+        activeServer.closeAllConnections();
         activeServer.close();
         activeServer = null;
       }

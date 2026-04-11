@@ -309,7 +309,7 @@ export function renderInterviewPage(interviewId: string): string {
     </div>
 
     <script>
-      const interviewId = ${JSON.stringify(interviewId)};
+      const interviewId = ${JSON.stringify(interviewId).replace(/</g, '\\u003c')};
       const state = { data: null, answers: {}, activeQuestionIndex: 0, lastSig: null, customMode: {} };
 
       function updateSubmitButton() {
@@ -666,12 +666,17 @@ export function renderInterviewPage(interviewId: string): string {
         }
       });
 
+      function schedulePoll() {
+        setTimeout(async () => {
+          try { await refresh(); } catch (_) {}
+          if (state.data?.mode !== 'abandoned') schedulePoll();
+        }, 2500);
+      }
+
       refresh().catch((error) => {
         document.getElementById('submitStatus').textContent = error.message || 'Failed to load interview.';
       });
-      setInterval(() => {
-        refresh().catch(() => {});
-      }, 2500);
+      schedulePoll();
     </script>
   </body>
 </html>`;
