@@ -249,11 +249,40 @@ export function renderInterviewPage(interviewId: string): string {
   <body>
     <div class="wrap">
       <div class="brand-header">
-        <img
+        <svg
           class="brand-mark"
-          src="https://ohmyopencodeslim.com/android-chrome-512x512.png"
-          alt="Oh My Opencode Slim"
-        />
+          viewBox="0 0 144 144"
+          role="img"
+          aria-label="Oh My Opencode Slim"
+        >
+          <rect
+            x="12"
+            y="12"
+            width="120"
+            height="120"
+            rx="32"
+            fill="rgba(255,255,255,0.08)"
+            stroke="rgba(255,255,255,0.18)"
+            stroke-width="2"
+          />
+          <path
+            d="M50 48h18c16 0 26 10 26 24s-10 24-26 24H50z"
+            fill="none"
+            stroke="white"
+            stroke-width="8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          <path
+            d="M74 48h20c10 0 18 8 18 18v12c0 10-8 18-18 18H74"
+            fill="none"
+            stroke="white"
+            stroke-width="8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            opacity="0.65"
+          />
+        </svg>
       </div>
       <h1 id="idea">Connecting...</h1>
       <p class="muted" id="summary">Preparing interview session</p>
