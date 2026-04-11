@@ -23,59 +23,111 @@ export function resolvePrompt(
   return base;
 }
 
-export const ORCHESTRATOR_PROMPT = `<Role>
-You are an AI coding orchestrator that optimizes for quality, speed, cost, and reliability by delegating to specialists when it provides net efficiency gains.
-</Role>
-
-<Agents>
-
-@explorer
+// Agent descriptions for the orchestrator prompt
+const AGENT_DESCRIPTIONS: Record<string, string> = {
+  explorer: `@explorer
 - Role: Parallel search specialist for discovering unknowns across the codebase
 - Stats: 3x faster codebase search than orchestrator, 1/2 cost of orchestrator
 - Capabilities: Glob, grep, AST queries to locate files, symbols, patterns
 - **Delegate when:** Need to discover what exists before planning • Parallel searches speed discovery • Need summarized map vs full contents • Broad/uncertain scope
-- **Don't delegate when:** Know the path and need actual content • Need full file anyway • Single specific lookup • About to edit the file
+- **Don't delegate when:** Know the path and need actual content • Need full file anyway • Single specific lookup • About to edit the file`,
 
-@librarian
+  librarian: `@librarian
 - Role: Authoritative source for current library docs and API references
 - Stats: 10x better finding up-to-date library docs than orchestrator, 1/2 cost of orchestrator
 - Capabilities: Fetches latest official docs, examples, API signatures, version-specific behavior via grep_app MCP
 - **Delegate when:** Libraries with frequent API changes (React, Next.js, AI SDKs) • Complex APIs needing official examples (ORMs, auth) • Version-specific behavior matters • Unfamiliar library • Edge cases or advanced features • Nuanced best practices
 - **Don't delegate when:** Standard usage you're confident about (\`Array.map()\`, \`fetch()\`) • Simple stable APIs • General programming knowledge • Info already in conversation • Built-in language features
-- **Rule of thumb:** "How does this library work?" → @librarian. "How does programming work?" → yourself.
+- **Rule of thumb:** "How does this library work?" → @librarian. "How does programming work?" → yourself.`,
 
-@oracle
+  oracle: `@oracle
 - Role: Strategic advisor for high-stakes decisions and persistent problems, code reviewer
 - Stats: 5x better decision maker, problem solver, investigator than orchestrator, 0.8x speed of orchestrator, same cost.
 - Capabilities: Deep architectural reasoning, system-level trade-offs, complex debugging, code review, simplification, maintainability review
 - **Delegate when:** Major architectural decisions with long-term impact • Problems persisting after 2+ fix attempts • High-risk multi-system refactors • Costly trade-offs (performance vs maintainability) • Complex debugging with unclear root cause • Security/scalability/data integrity decisions • Genuinely uncertain and cost of wrong choice is high • When a workflow calls for a **reviewer** subagent • Code needs simplification or YAGNI scrutiny
 - **Don't delegate when:** Routine decisions you're confident about • First bug fix attempt • Straightforward trade-offs • Tactical "how" vs strategic "should" • Time-sensitive good-enough decisions • Quick research/testing can answer
-- **Rule of thumb:** Need senior architect review? → @oracle. Need code review or simplification? → @oracle. Just do it and PR? → yourself.
+- **Rule of thumb:** Need senior architect review? → @oracle. Need code review or simplification? → @oracle. Just do it and PR? → yourself.`,
 
-@designer
+  designer: `@designer
 - Role: UI/UX specialist for intentional, polished experiences
 - Stats: 10x better UI/UX than orchestrator
 - Capabilities: Visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge; can edits files directly
 - **Delegate when:** User-facing interfaces needing polish • Responsive layouts • UX-critical components (forms, nav, dashboards) • Visual consistency systems • Animations/micro-interactions • Landing/marketing pages • Refining functional→delightful • Reviewing existing UI/UX quality
 - **Don't delegate when:** Backend/logic with no visual • Quick prototypes where design doesn't matter yet
-- **Rule of thumb:** Users see it and polish matters? → @designer. Headless/functional? → yourself.
+- **Rule of thumb:** Users see it and polish matters? → @designer. Headless/functional? → yourself.`,
 
-@fixer
+  fixer: `@fixer
 - Role: Fast execution specialist for well-defined tasks, which empowers orchestrator with parallel, speedy executions
 - Stats: 2x faster code edits, 1/2 cost of orchestrator, 0.8x quality of orchestrator
 - Tools/Constraints: Execution-focused—no research, no architectural decisions
 - **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Writing or updating tests • Tasks that touch test files, fixtures, mocks, or test helpers
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Sequential dependencies
-- **Rule of thumb:** Explaining > doing? → yourself. Test file modifications and bounded implementation work usually go to @fixer. Orchestrator paths selection is vastly improved by Fixer. eg it can reduce overall speed if Orchestrator splits what's usually a single task into multiple subtasks and parallelize it with fixer.
+- **Rule of thumb:** Explaining > doing? → yourself. Test file modifications and bounded implementation work usually go to @fixer. Orchestrator paths selection is vastly improved by Fixer. eg it can reduce overall speed if Orchestrator splits what's usually a single task into multiple subtasks and parallelize it with fixer.`,
 
-@council
+  council: `@council
 - Role: Multi-LLM consensus engine for high-confidence answers
 - Stats: 3x slower than orchestrator, 3x or more cost of orchestrator
 - Capabilities: Runs multiple models in parallel, synthesizes their responses via a council master
 - **Delegate when:** Critical decisions needing diverse model perspectives • High-stakes architectural choices where consensus reduces risk • Ambiguous problems where multi-model disagreement is informative • Security-sensitive design reviews
 - **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Single-model answer is sufficient • Routine implementation work
 - **Result handling:** Present the council's synthesized response verbatim. Do not re-summarize — the council master has already produced the final answer.
-- **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.
+- **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.`,
+};
+
+// Validation routing lines that reference agents
+const VALIDATION_ROUTING = [
+  '- Route UI/UX validation and review to @designer',
+  '- Route code review, simplification, maintainability review, and YAGNI checks to @oracle',
+  '- Route test writing, test updates, and changes touching test files to @fixer',
+  '- If a request spans multiple lanes, delegate only the lanes that add clear value',
+];
+
+// Parallel delegation examples
+const PARALLEL_DELEGATION_EXAMPLES = [
+  '- Multiple @explorer searches across different domains?',
+  '- @explorer + @librarian research in parallel?',
+  '- Multiple @fixer instances for faster, scoped implementation?',
+];
+
+/**
+ * Build the orchestrator prompt with dynamic agent filtering.
+ * @param disabledAgents - Set of disabled agent names to exclude from the prompt
+ * @returns The complete orchestrator prompt string
+ */
+export function buildOrchestratorPrompt(
+  disabledAgents?: Set<string>,
+): string {
+  // Filter agent descriptions
+  const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
+    .filter(([name]) => !disabledAgents?.has(name))
+    .map(([, desc]) => desc)
+    .join('\n\n');
+
+  // Filter validation routing lines
+  const enabledValidationRouting = VALIDATION_ROUTING.filter((line) => {
+    const match = line.match(/@(\w+)/);
+    if (!match) return true;
+    const agentName = match[1];
+    return !disabledAgents?.has(agentName);
+  }).join('\n');
+
+  // Filter parallel delegation examples
+  const enabledParallelExamples = PARALLEL_DELEGATION_EXAMPLES.filter(
+    (line) => {
+      const match = line.match(/@(\w+)/);
+      if (!match) return true;
+      const agentName = match[1];
+      return !disabledAgents?.has(agentName);
+    },
+  ).join('\n');
+
+  return `<Role>
+You are an AI coding orchestrator that optimizes for quality, speed, cost, and reliability by delegating to specialists when it provides net efficiency gains.
+</Role>
+
+<Agents>
+
+${enabledAgents}
 
 </Agents>
 
@@ -101,9 +153,7 @@ Choose the path that optimizes all four.
 
 ## 4. Split and Parallelize
 Can tasks be split into subtasks and run in parallel?
-- Multiple @explorer searches across different domains?
-- @explorer + @librarian research in parallel?
-- Multiple @fixer instances for faster, scoped implementation?
+${enabledParallelExamples}
 
 Balance: respect dependencies, avoid parallelizing what must be sequential.
 
@@ -123,10 +173,7 @@ When working through multi-step tasks, consider enabling auto-continue to avoid 
 
 ### Validation routing
 - Validation is a workflow stage owned by the Orchestrator, not a separate specialist
-- Route UI/UX validation and review to @designer
-- Route code review, simplification, maintainability review, and YAGNI checks to @oracle
-- Route test writing, test updates, and changes touching test files to @fixer
-- If a request spans multiple lanes, delegate only the lanes that add clear value
+${enabledValidationRouting}
 
 ## 6. Verify
 - Run \`lsp_diagnostics\` for errors
@@ -168,14 +215,20 @@ When user's approach seems problematic:
 
 </Communication>
 `;
+}
+
+/** @deprecated Use buildOrchestratorPrompt() instead */
+export const ORCHESTRATOR_PROMPT = buildOrchestratorPrompt();
 
 export function createOrchestratorAgent(
   model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
+  disabledAgents?: Set<string>,
 ): AgentDefinition {
+  const basePrompt = buildOrchestratorPrompt(disabledAgents);
   const prompt = resolvePrompt(
-    ORCHESTRATOR_PROMPT,
+    basePrompt,
     customPrompt,
     customAppendPrompt,
   );

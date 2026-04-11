@@ -1,10 +1,12 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
 import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
+  ALL_AGENT_NAMES,
   type AgentOverrideConfig,
   DEFAULT_MODELS,
   getAgentOverride,
   loadAgentPrompt,
+  PROTECTED_AGENTS,
   type PluginConfig,
   SUBAGENT_NAMES,
 } from '../config';
@@ -129,6 +131,14 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
+  // Compute disabled agents, protecting orchestrator and council internals
+  const disabled = new Set<string>();
+  for (const name of config?.disabled_agents ?? []) {
+    if (!PROTECTED_AGENTS.has(name)) {
+      disabled.add(name);
+    }
+  }
+
   // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
   // existing users who don't have fixer in their config yet
   const getModelForAgent = (name: SubagentName): string => {
@@ -161,7 +171,9 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   // 1. Gather all sub-agent definitions with custom prompts
   const protoSubAgents = (
     Object.entries(SUBAGENT_FACTORIES) as [SubagentName, AgentFactory][]
-  ).map(([name, factory]) => {
+  )
+    .filter(([name]) => !disabled.has(name))
+    .map(([name, factory]) => {
     const customPrompts = loadAgentPrompt(name, config?.preset);
     return factory(
       getModelForAgent(name),
@@ -191,6 +203,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     orchestratorModel,
     orchestratorPrompts.prompt,
     orchestratorPrompts.appendPrompt,
+    disabled,
   );
   applyDefaultPermissions(orchestrator, orchestratorOverride?.skills);
   if (orchestratorOverride) {
@@ -237,4 +250,25 @@ export function getAgentConfigs(
       return [a.name, sdkConfig];
     }),
   );
+}
+
+/**
+ * Get the set of disabled agent names from config, applying protection rules.
+ */
+export function getDisabledAgents(config?: PluginConfig): Set<string> {
+  const disabled = new Set<string>();
+  for (const name of config?.disabled_agents ?? []) {
+    if (!PROTECTED_AGENTS.has(name)) {
+      disabled.add(name);
+    }
+  }
+  return disabled;
+}
+
+/**
+ * Get the list of enabled (non-disabled) agent names.
+ */
+export function getEnabledAgentNames(config?: PluginConfig): string[] {
+  const disabled = getDisabledAgents(config);
+  return ALL_AGENT_NAMES.filter((name) => !disabled.has(name));
 }

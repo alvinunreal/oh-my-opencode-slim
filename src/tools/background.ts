@@ -5,7 +5,7 @@ import {
 } from '@opencode-ai/plugin';
 import type { BackgroundTaskManager } from '../background';
 import type { PluginConfig } from '../config';
-import { SUBAGENT_NAMES } from '../config';
+import { PROTECTED_AGENTS, SUBAGENT_NAMES } from '../config';
 import type { MultiplexerConfig } from '../config/schema';
 
 const z = tool.schema;
@@ -24,7 +24,13 @@ export function createBackgroundTools(
   _multiplexerConfig?: MultiplexerConfig,
   _pluginConfig?: PluginConfig,
 ): Record<string, ToolDefinition> {
-  const agentNames = SUBAGENT_NAMES.join(', ');
+  const disabled = new Set<string>();
+  for (const name of _pluginConfig?.disabled_agents ?? []) {
+    if (!PROTECTED_AGENTS.has(name)) {
+      disabled.add(name);
+    }
+  }
+  const agentNames = SUBAGENT_NAMES.filter((n) => !disabled.has(n)).join(', ');
 
   // Tool for launching agent tasks (fire-and-forget)
   const background_task = tool({

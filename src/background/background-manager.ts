@@ -17,6 +17,7 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
 import {
   FALLBACK_FAILOVER_TIMEOUT_MS,
+  PROTECTED_AGENTS,
   SUBAGENT_DELEGATION_RULES,
 } from '../config';
 import type { MultiplexerConfig } from '../config/schema';
@@ -87,6 +88,7 @@ export class BackgroundTaskManager {
   private tmuxEnabled: boolean;
   private config?: PluginConfig;
   private backgroundConfig: BackgroundTaskConfig;
+  private disabledAgents: Set<string>;
 
   // Start queue
   private startQueue: BackgroundTask[] = [];
@@ -118,6 +120,14 @@ export class BackgroundTaskManager {
     };
     this.maxConcurrentStarts = this.backgroundConfig.maxConcurrentStarts;
     this.depthTracker = new SubagentDepthTracker();
+
+    // Compute disabled agents, protecting orchestrator and council internals
+    this.disabledAgents = new Set<string>();
+    for (const name of config?.disabled_agents ?? []) {
+      if (!PROTECTED_AGENTS.has(name)) {
+        this.disabledAgents.add(name);
+      }
+    }
   }
 
   /**
@@ -140,6 +150,11 @@ export class BackgroundTaskManager {
    * @returns true if allowed, false if not
    */
   isAgentAllowed(parentSessionId: string, requestedAgent: string): boolean {
+    // Check if the requested agent is disabled
+    if (this.disabledAgents.has(requestedAgent)) {
+      return false;
+    }
+
     // Untracked sessions are the root orchestrator (created by OpenCode, not by us)
     const parentAgentName =
       this.agentBySessionId.get(parentSessionId) ?? 'orchestrator';
@@ -161,7 +176,10 @@ export class BackgroundTaskManager {
     const parentAgentName =
       this.agentBySessionId.get(parentSessionId) ?? 'orchestrator';
 
-    return this.getSubagentRules(parentAgentName);
+    const allowedSubagents = this.getSubagentRules(parentAgentName);
+
+    // Filter out disabled agents
+    return allowedSubagents.filter((name) => !this.disabledAgents.has(name));
   }
 
   /**

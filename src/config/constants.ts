@@ -39,6 +39,23 @@ export const ORCHESTRATABLE_AGENTS = [
   'council',
 ] as const;
 
+/** Agents that cannot be disabled even if listed in disabled_agents config. */
+export const PROTECTED_AGENTS = new Set([
+  'orchestrator',
+  'councillor',
+  'council-master',
+]);
+
+/**
+ * Get the list of orchestratable agents, excluding any disabled agents.
+ * This is used for delegation validation at runtime.
+ */
+export function getOrchestratableAgents(
+  disabledAgents?: Set<string>,
+): string[] {
+  return ORCHESTRATABLE_AGENTS.filter((name) => !disabledAgents?.has(name));
+}
+
 export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   orchestrator: ORCHESTRATABLE_AGENTS,
   fixer: [],

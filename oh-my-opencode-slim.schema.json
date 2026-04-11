@@ -339,6 +339,13 @@
         }
       }
     },
+    "disabled_agents": {
+      "description": "Agent names to disable completely. Disabled agents are not instantiated and cannot be delegated to. Orchestrator and council internal agents (councillor, council-master) cannot be disabled.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "disabled_mcps": {
       "type": "array",
       "items": {
