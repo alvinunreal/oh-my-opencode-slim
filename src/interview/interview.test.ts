@@ -330,6 +330,64 @@ describe('interview service', () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     });
 
+    test('replaces placeholder history on first answer submission', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+
+      const messagesData: Array<{
+        info?: { role: string };
+        parts?: Array<{ type: string; text?: string }>;
+      }> = [];
+
+      const ctx = createMockContext({
+        directory: tempDir,
+        messagesData,
+      });
+
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-placeholder',
+          arguments: 'Placeholder Test',
+        },
+        output,
+      );
+
+      const interviewId = extractInterviewIdFromLastPrompt(
+        ctx.client.session.prompt,
+      );
+      const requiredInterviewId = requireInterviewId(interviewId);
+
+      messagesData.push({
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'text',
+            text: 'Here are some questions.\n<interview_state>\n{\n  "summary": "Building a test app",\n  "questions": [\n    {\n      "id": "q-1",\n      "question": "What platform?",\n      "options": ["Web", "Mobile"],\n      "suggested": "Web"\n    }\n  ]\n}\n</interview_state>',
+          },
+        ],
+      });
+
+      await service.submitAnswers(requiredInterviewId, [
+        { questionId: 'q-1', answer: 'Web' },
+      ]);
+
+      const interviewDir = path.join(tempDir, 'interview');
+      const files = await fs.readdir(interviewDir);
+      const content = await fs.readFile(
+        path.join(interviewDir, files[0]),
+        'utf8',
+      );
+
+      expect(content).not.toContain('## Q&A history\n\nNo answers yet.\n\nQ:');
+      expect(content).toContain('## Q&A history\n\nQ: What platform?\nA: Web');
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
     test('rejects concurrent submission when first request holds busy lock', async () => {
       const tempDir = await fs.mkdtemp('/tmp/interview-test-');
 
@@ -1440,5 +1498,12 @@ describe('renderInterviewPage', () => {
     expect(html).toContain(
       '<title>Interview &lt;img src=x onerror=alert(1)&gt;</title>',
     );
+  });
+
+  test('renders a self-contained brand mark', () => {
+    const html = renderInterviewPage('brand-test');
+
+    expect(html).toContain('<svg');
+    expect(html).not.toContain('https://ohmyopencodeslim.com');
   });
 });

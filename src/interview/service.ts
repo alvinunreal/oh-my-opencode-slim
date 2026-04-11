@@ -199,7 +199,9 @@ async function appendInterviewAnswers(
     })
     .filter((value): value is string => value !== null)
     .join('\n\n');
-  const nextHistory = [history, appended].filter(Boolean).join('\n\n');
+  const nextHistory = [history === 'No answers yet.' ? '' : history, appended]
+    .filter(Boolean)
+    .join('\n\n');
   await fs.writeFile(
     record.markdownPath,
     buildInterviewDocument(record.idea, summary, nextHistory),
