@@ -546,36 +546,40 @@ export function createInterviewService(
       );
     }
 
-    const state = await getInterviewState(interviewId);
-    if (state.mode === 'error') {
-      throw new Error('Interview is waiting for a valid agent update.');
-    }
-
-    const activeQuestionIds = new Set(
-      state.questions.map((question) => question.id),
-    );
-    if (activeQuestionIds.size === 0) {
-      throw new Error('There are no active interview questions to answer.');
-    }
-    if (answers.length !== activeQuestionIds.size) {
-      throw new Error(
-        'Answer every active interview question before submitting.',
-      );
-    }
-    const invalidAnswer = answers.find(
-      (answer) =>
-        !activeQuestionIds.has(answer.questionId) || !answer.answer.trim(),
-    );
-    if (invalidAnswer) {
-      throw new Error('Answers do not match the current interview questions.');
-    }
-
-    await appendInterviewAnswers(interview, state.questions, answers);
-    const prompt = buildAnswerPrompt(answers, state.questions, maxQuestions);
+    // Acquire busy lock immediately before any async operations to prevent race
     sessionBusy.set(interview.sessionID, true);
-
     let promptSent = false;
+
     try {
+      const state = await getInterviewState(interviewId);
+      if (state.mode === 'error') {
+        throw new Error('Interview is waiting for a valid agent update.');
+      }
+
+      const activeQuestionIds = new Set(
+        state.questions.map((question) => question.id),
+      );
+      if (activeQuestionIds.size === 0) {
+        throw new Error('There are no active interview questions to answer.');
+      }
+      if (answers.length !== activeQuestionIds.size) {
+        throw new Error(
+          'Answer every active interview question before submitting.',
+        );
+      }
+      const invalidAnswer = answers.find(
+        (answer) =>
+          !activeQuestionIds.has(answer.questionId) || !answer.answer.trim(),
+      );
+      if (invalidAnswer) {
+        throw new Error(
+          'Answers do not match the current interview questions.',
+        );
+      }
+
+      await appendInterviewAnswers(interview, state.questions, answers);
+      const prompt = buildAnswerPrompt(answers, state.questions, maxQuestions);
+
       await ctx.client.session.prompt({
         path: { id: interview.sessionID },
         body: {

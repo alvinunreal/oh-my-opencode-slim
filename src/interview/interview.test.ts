@@ -329,6 +329,203 @@ describe('interview service', () => {
       // Cleanup
       await fs.rm(tempDir, { recursive: true, force: true });
     });
+
+    test('rejects concurrent submission when first request holds busy lock', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+
+      // Start with empty messages
+      const messagesData: Array<{
+        info?: { role: string };
+        parts?: Array<{ type: string; text?: string }>;
+      }> = [];
+
+      // Create a prompt that delays to hold the lock
+      let promptStarted = false;
+      const ctx = createMockContext({
+        directory: tempDir,
+        messagesData,
+        promptImpl: async () => {
+          promptStarted = true;
+          // Delay to hold the lock during test
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          return {};
+        },
+      });
+
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+      // Create interview first (baseMessageCount = 0)
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-concurrent',
+          arguments: 'Concurrent Test',
+        },
+        output,
+      );
+
+      const interviewId = extractInterviewIdFromLastPrompt(
+        ctx.client.session.prompt,
+      );
+      const requiredInterviewId = requireInterviewId(interviewId);
+
+      // Now add the agent response with questions
+      messagesData.push({
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'text',
+            text: 'Here are some questions.\n<interview_state>\n{\n  "summary": "Building a test app",\n  "questions": [\n    {\n      "id": "q-1",\n      "question": "What platform?",\n      "options": ["Web", "Mobile"],\n      "suggested": "Web"\n    }\n  ]\n}\n</interview_state>',
+          },
+        ],
+      });
+
+      // Start first submission (will hold lock due to slow prompt)
+      const firstSubmissionPromise = service.submitAnswers(
+        requiredInterviewId,
+        [{ questionId: 'q-1', answer: 'Web' }],
+      );
+
+      // Wait for prompt to start (indicates lock is acquired)
+      while (!promptStarted) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      // Second submission should be rejected immediately (busy lock held)
+      await expect(
+        service.submitAnswers(requiredInterviewId, [
+          { questionId: 'q-1', answer: 'Mobile' },
+        ]),
+      ).rejects.toThrow('Interview session is busy');
+
+      // Wait for first submission to complete (it will succeed after 200ms delay)
+      await firstSubmissionPromise;
+
+      // Cleanup
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    test('busy lock released when validation fails after lock acquired', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+
+      // Start with empty messages
+      const messagesData: Array<{
+        info?: { role: string };
+        parts?: Array<{ type: string; text?: string }>;
+      }> = [];
+
+      const ctx = createMockContext({
+        directory: tempDir,
+        messagesData,
+      });
+
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+      // Create interview first (baseMessageCount = 0)
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-retry',
+          arguments: 'Retry Test',
+        },
+        output,
+      );
+
+      const interviewId = extractInterviewIdFromLastPrompt(
+        ctx.client.session.prompt,
+      );
+      const requiredInterviewId = requireInterviewId(interviewId);
+
+      // Add agent response with questions
+      messagesData.push({
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'text',
+            text: 'Here are some questions.\n<interview_state>\n{\n  "summary": "Building a test app",\n  "questions": [\n    {\n      "id": "q-1",\n      "question": "What platform?",\n      "options": ["Web", "Mobile"],\n      "suggested": "Web"\n    }\n  ]\n}\n</interview_state>',
+          },
+        ],
+      });
+
+      // First submission with invalid answer (wrong question ID)
+      await expect(
+        service.submitAnswers(requiredInterviewId, [
+          { questionId: 'invalid-id', answer: 'Web' },
+        ]),
+      ).rejects.toThrow('Answers do not match the current interview questions');
+
+      // Second submission with correct answer should succeed (lock was released)
+      await expect(
+        service.submitAnswers(requiredInterviewId, [
+          { questionId: 'q-1', answer: 'Web' },
+        ]),
+      ).resolves.toBeUndefined();
+
+      // Cleanup
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    test('busy lock released when no active questions validation fails', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+
+      // Start with empty messages (no questions)
+      const messagesData: Array<{
+        info?: { role: string };
+        parts?: Array<{ type: string; text?: string }>;
+      }> = [
+        {
+          info: { role: 'assistant' },
+          parts: [
+            {
+              type: 'text',
+              text: 'Waiting.\n<interview_state>\n{\n  "summary": "Test",\n  "questions": []\n}\n</interview_state>',
+            },
+          ],
+        },
+      ];
+
+      const ctx = createMockContext({
+        directory: tempDir,
+        messagesData,
+      });
+
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+      // Create interview (baseMessageCount will be 1)
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-no-questions',
+          arguments: 'No Questions Test',
+        },
+        output,
+      );
+
+      const interviewId = extractInterviewIdFromLastPrompt(
+        ctx.client.session.prompt,
+      );
+      const requiredInterviewId = requireInterviewId(interviewId);
+
+      // Submission with no active questions should fail and release lock
+      await expect(
+        service.submitAnswers(requiredInterviewId, [
+          { questionId: 'q-1', answer: 'Web' },
+        ]),
+      ).rejects.toThrow('There are no active interview questions to answer');
+
+      // Verify state is not busy after the failed submission
+      const state = await service.getInterviewState(requiredInterviewId);
+      expect(state.isBusy).toBe(false);
+
+      // Cleanup
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
   });
 
   describe('session interview lifecycle', () => {
