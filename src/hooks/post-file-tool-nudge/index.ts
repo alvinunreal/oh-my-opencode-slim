@@ -5,7 +5,7 @@
 
 import { PHASE_REMINDER_TEXT } from '../../config/constants';
 
-export const POST_FILE_TOOL_NUDGE = PHASE_REMINDER_TEXT;
+const POST_FILE_TOOL_NUDGE = PHASE_REMINDER_TEXT;
 
 interface ToolExecuteAfterInput {
   tool: string;
