@@ -147,8 +147,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config,
   );
 
+  // Track session → agent mapping for serve-mode system prompt injection
+  const sessionAgentMap = new Map<string, string>();
+
   // Initialize post-file-tool nudge hook
-  const postFileToolNudgeHook = createPostFileToolNudgeHook();
+  const postFileToolNudgeHook = createPostFileToolNudgeHook({
+    shouldInject: (sessionID) =>
+      sessionAgentMap.get(sessionID) === 'orchestrator',
+  });
 
   const chatHeadersHook = createChatHeadersHook(ctx);
 
@@ -164,9 +170,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     runtimeChains,
     config.fallback?.enabled !== false && Object.keys(runtimeChains).length > 0,
   );
-
-  // Track session → agent mapping for serve-mode system prompt injection
-  const sessionAgentMap = new Map<string, string>();
 
   // Initialize todo-continuation hook (opt-in auto-continue for incomplete todos)
   const todoContinuationHook = createTodoContinuationHook(ctx, {
@@ -447,6 +450,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           event: { type: string; properties?: Record<string, unknown> };
         },
       );
+
+      await postFileToolNudgeHook.event(
+        input as {
+          event: {
+            type: string;
+            properties?: {
+              info?: { id?: string };
+              sessionID?: string;
+            };
+          };
+        },
+      );
     },
 
     // Direct interception of /auto-continue command — bypasses LLM round-trip
@@ -501,9 +516,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const { ORCHESTRATOR_PROMPT } = await import('./agents/orchestrator');
           output.system[0] =
             ORCHESTRATOR_PROMPT +
-            (output.system[0] ? '\n\n' + output.system[0] : '');
+            (output.system[0] ? `\n\n${output.system[0]}` : '');
         }
       }
+      await postFileToolNudgeHook['experimental.chat.system.transform'](
+        input,
+        output,
+      );
     },
 
     // Inject phase reminder and filter available skills before sending to API (doesn't show in UI)

@@ -27,10 +27,11 @@ Acts as a single entry point that re-exports the factory functions and types for
 
 | Hook Point | Purpose | Hooks |
 |------------|---------|-------|
-| `'tool.execute.after'` | Modify tool output after execution | `post-read-nudge`, `delegate-task-retry`, `json-error-recovery` |
+| `'tool.execute.after'` | React to tool output after execution | `post-file-tool-nudge`, `delegate-task-retry`, `json-error-recovery` |
+| `'experimental.chat.system.transform'` | Transform system prompts before API call | `post-file-tool-nudge` |
 | `'experimental.chat.messages.transform'` | Transform messages before API call | `phase-reminder` |
 | `'chat.headers'` | Add custom headers to API requests | `chat-headers` |
-| Event handlers | React to OpenCode events | `foreground-fallback` |
+| Event handlers | React to OpenCode events | `foreground-fallback`, `post-file-tool-nudge` |
 
 ### Hook Implementations
 
@@ -41,11 +42,11 @@ Acts as a single entry point that re-exports the factory functions and types for
 - **Behavior**: Prepend reminder text to the last user message if agent is 'orchestrator' and message doesn't contain internal initiator marker.
 - **Research**: Based on "LLMs Get Lost In Multi-Turn Conversation" (arXiv:2505.06120) showing ~40% compliance drop after 2-3 turns without reminders.
 
-#### **post-read-nudge**
-- **Location**: `src/hooks/post-read-nudge/index.ts`
-- **Purpose**: Appends delegation reminder after file reads to catch the "read files → implement myself" anti-pattern.
-- **Hook Point**: `'tool.execute.after'`
-- **Behavior**: Appends nudge text to output when tool is 'Read' or 'read'.
+#### **post-file-tool-nudge**
+- **Location**: `src/hooks/post-file-tool-nudge/index.ts`
+- **Purpose**: Queues a delegation reminder after file reads/writes to catch the "inspect/edit files → implement myself" anti-pattern.
+- **Hook Points**: `'tool.execute.after'`, `'experimental.chat.system.transform'`
+- **Behavior**: Records a pending reminder when Read/Write tools run, consumes it once in the next system prompt transform without mutating persisted tool output, and clears stale pending markers on session deletion.
 
 #### **chat-headers**
 - **Location**: `src/hooks/chat-headers.ts`
