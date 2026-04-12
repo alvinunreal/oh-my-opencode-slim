@@ -29,7 +29,13 @@ interface ToolExecuteBeforeOutput {
 
 export function createApplyPatchHook(ctx: PluginInput) {
   function logHookStatus(
-    state: 'rewrite' | 'unchanged' | 'blocked' | 'verification' | 'internal',
+    state:
+      | 'rewrite'
+      | 'unchanged'
+      | 'blocked'
+      | 'validation'
+      | 'verification'
+      | 'internal',
     data?: Record<string, unknown>,
   ) {
     log(`apply-patch hook ${state}`, data);
@@ -86,9 +92,11 @@ export function createApplyPatchHook(ctx: PluginInput) {
         logHookStatus(
           isApplyPatchVerificationError(normalizedError)
             ? 'verification'
-            : normalizedError.kind === 'internal'
-              ? 'internal'
-              : 'blocked',
+            : normalizedError.kind === 'validation'
+              ? 'validation'
+              : normalizedError.kind === 'internal'
+                ? 'internal'
+                : 'blocked',
           {
             kind: details?.kind ?? 'internal',
             code: details?.code ?? 'internal_unexpected',

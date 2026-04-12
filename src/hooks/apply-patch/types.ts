@@ -97,6 +97,7 @@ export type ResolvedChunk = {
   canonical_old_lines: string[];
   canonical_new_lines: string[];
   canonical_change_context?: string;
+  resolved_is_end_of_file: boolean;
   rewritten: boolean;
   strategy?: ApplyPatchRescueStrategy;
   matchComparator?: MatchComparatorName;

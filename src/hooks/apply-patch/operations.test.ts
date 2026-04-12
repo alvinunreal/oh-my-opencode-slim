@@ -164,6 +164,70 @@ PATCH`;
     ).toEqual(['prefix', ' \tverbatim  ""  Ω  ', 'suffix']);
   });
 
+  test('rewritePatchText elimina EOF si un rescate mueve el chunk fuera del final real', async () => {
+    const root = await createTempDir();
+    await writeFixture(
+      root,
+      'sample.txt',
+      'top\nprefix\nstale\nsuffix\nbottom\n',
+    );
+    const patchText = `*** Begin Patch
+*** Update File: sample.txt
+@@ top
+ prefix
+-old
++new
+ suffix
+*** End of File
+*** End Patch`;
+
+    const rewrittenText = await rewritePatchText(
+      root,
+      patchText,
+      DEFAULT_OPTIONS,
+    );
+    const rewritten = parsePatch(rewrittenText).hunks[0];
+
+    expect(rewrittenText.includes('*** End of File')).toBeFalse();
+    expect(rewritten.type).toBe('update');
+    expect(
+      rewritten.type === 'update'
+        ? rewritten.chunks[0]?.is_end_of_file
+        : undefined,
+    ).toBeUndefined();
+  });
+
+  test('rewritePatchText conserva EOF si el chunk resuelto sigue terminando al final real', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'sample.txt', 'alpha\nstale\nomega');
+    const patchText = `*** Begin Patch
+*** Update File: sample.txt
+@@
+-alpha
+-old
+-omega
++alpha
++new
++omega
+*** End of File
+*** End Patch`;
+
+    const rewrittenText = await rewritePatchText(
+      root,
+      patchText,
+      DEFAULT_OPTIONS,
+    );
+    const rewritten = parsePatch(rewrittenText).hunks[0];
+
+    expect(rewrittenText.includes('*** End of File')).toBeTrue();
+    expect(rewritten.type).toBe('update');
+    expect(
+      rewritten.type === 'update'
+        ? rewritten.chunks[0]?.is_end_of_file
+        : undefined,
+    ).toBeTrue();
+  });
+
   test('rewritePatchText canoniza un stale unicode-only', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'const title = “Hola”;\n');

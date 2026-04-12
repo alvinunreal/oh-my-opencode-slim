@@ -244,9 +244,6 @@ async function writeFileAtomically(
       await fs.chmod(tempPath, mode);
     }
     await fs.rename(tempPath, target);
-    if (mode !== undefined) {
-      await fs.chmod(target, mode);
-    }
   } finally {
     await fs.rm(tempPath, { force: true }).catch(() => undefined);
   }

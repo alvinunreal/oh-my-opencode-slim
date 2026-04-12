@@ -137,6 +137,8 @@ export function locateChunk(
       old_lines,
       canonical_old_lines,
       canonical_new_lines: [...chunk.new_lines],
+      resolved_is_end_of_file:
+        match.index + canonical_old_lines.length === lines.length,
       rewritten,
       strategy: undefined,
       matchComparator: match.comparator,
@@ -165,6 +167,7 @@ export function locateChunk(
         old_lines,
         canonical_old_lines: lines.slice(canonicalStart, canonicalEnd),
         canonical_new_lines: [...chunk.new_lines],
+        resolved_is_end_of_file: canonicalEnd === lines.length,
         rewritten: true,
         strategy: 'prefix/suffix',
         matchComparator: 'exact',
@@ -190,6 +193,8 @@ export function locateChunk(
           rescued.hit.start + rescued.hit.del,
         ),
         canonical_new_lines: [...chunk.new_lines],
+        resolved_is_end_of_file:
+          rescued.hit.start + rescued.hit.del === lines.length,
         rewritten: true,
         strategy: 'lcs',
         matchComparator: 'exact',
@@ -252,6 +257,7 @@ function resolveUpdateChunksFromFileLines(
           old_lines: [],
           canonical_old_lines: [],
           canonical_new_lines: [...chunk.new_lines],
+          resolved_is_end_of_file: true,
           rewritten: false,
           strategy,
           matchComparator: 'exact',
@@ -295,6 +301,7 @@ function resolveUpdateChunksFromFileLines(
           canonical_change_context: anchorMatch.exact
             ? undefined
             : anchorMatch.canonicalLine,
+          resolved_is_end_of_file: insertAt === lines.length,
           rewritten: !anchorMatch.exact,
           strategy: anchorMatch.exact ? strategy : 'anchor',
           matchComparator: anchorMatch.comparator,
@@ -315,6 +322,7 @@ function resolveUpdateChunksFromFileLines(
         old_lines: [],
         canonical_old_lines: [anchor],
         canonical_new_lines: [...chunk.new_lines, anchor],
+        resolved_is_end_of_file: insertAt + 1 === lines.length,
         rewritten: true,
         strategy,
         matchComparator: 'exact',

@@ -398,7 +398,10 @@ export async function rewritePatch(
         new_lines: [...chunk.canonical_new_lines],
         change_context:
           chunk.canonical_change_context ?? hunk.chunks[index].change_context,
-        is_end_of_file: hunk.chunks[index].is_end_of_file,
+        is_end_of_file:
+          hunk.chunks[index].is_end_of_file && chunk.resolved_is_end_of_file
+            ? true
+            : undefined,
       }));
 
       for (const chunk of resolved) {
