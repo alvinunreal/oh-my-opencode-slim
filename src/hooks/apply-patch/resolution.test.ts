@@ -13,7 +13,7 @@ import { createTempDir, DEFAULT_OPTIONS, writeFixture } from './test-helpers';
 import type { PatchChunk } from './types';
 
 describe('apply-patch/resolution', () => {
-  test('readFileLines elimina la línea vacía sintética final', async () => {
+  test('readFileLines removes the final synthetic empty line', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
@@ -21,7 +21,7 @@ describe('apply-patch/resolution', () => {
     expect(await readFileLines(file)).toEqual(['alpha', 'beta']);
   });
 
-  test('resolveChunkStart usa change_context como ancla cuando existe', () => {
+  test('resolveChunkStart uses change_context as an anchor when present', () => {
     const chunk: PatchChunk = {
       old_lines: [],
       new_lines: ['middle'],
@@ -31,7 +31,7 @@ describe('apply-patch/resolution', () => {
     expect(resolveChunkStart(['top', 'anchor', 'bottom'], chunk, 0)).toBe(2);
   });
 
-  test('locateChunk rescata prefijo/sufijo y conserva new_lines', () => {
+  test('locateChunk rescues prefix/suffix and preserves new_lines', () => {
     const chunk: PatchChunk = {
       old_lines: [
         'const title = "Hola";',
@@ -62,7 +62,7 @@ describe('apply-patch/resolution', () => {
     expect(resolved.canonical_new_lines).toEqual(chunk.new_lines);
   });
 
-  test('locateChunk canoniza un match unicode tolerante', () => {
+  test('locateChunk canonicalizes a tolerant unicode match', () => {
     const chunk: PatchChunk = {
       old_lines: ['const title = "Hola";'],
       new_lines: ['const title = "Hola mundo";'],
@@ -84,7 +84,7 @@ describe('apply-patch/resolution', () => {
     ]);
   });
 
-  test('locateChunk canoniza un match trim-end tolerante', () => {
+  test('locateChunk canonicalizes a tolerant trim-end match', () => {
     const chunk: PatchChunk = {
       old_lines: ['alpha'],
       new_lines: ['omega'],
@@ -104,7 +104,7 @@ describe('apply-patch/resolution', () => {
     expect(resolved.canonical_new_lines).toEqual(['omega']);
   });
 
-  test('locateChunk ya no rescata un stale trim-only', () => {
+  test('locateChunk no longer rescues a trim-only stale patch', () => {
     const chunk: PatchChunk = {
       old_lines: ['alpha'],
       new_lines: ['omega'],
@@ -115,7 +115,7 @@ describe('apply-patch/resolution', () => {
     ).toThrow('Failed to find expected lines');
   });
 
-  test('locateChunk ya no canoniza un caso indentado peligroso', () => {
+  test('locateChunk no longer canonicalizes a dangerous indented case', () => {
     const chunk: PatchChunk = {
       old_lines: ['enabled: false'],
       new_lines: ['enabled: true'],
@@ -132,7 +132,7 @@ describe('apply-patch/resolution', () => {
     ).toThrow('Failed to find expected lines');
   });
 
-  test('locateChunk conserva una blank line final real cuando existe en el archivo', () => {
+  test('locateChunk preserves a real final blank line when it exists in the file', () => {
     const chunk: PatchChunk = {
       old_lines: ['alpha', ''],
       new_lines: ['omega', ''],
@@ -150,7 +150,7 @@ describe('apply-patch/resolution', () => {
     expect(resolved.canonical_new_lines).toEqual(['omega', '']);
   });
 
-  test('locateChunk falla si el patch agrega una blank line final inexistente', () => {
+  test('locateChunk fails if the patch adds a non-existent final blank line', () => {
     const chunk: PatchChunk = {
       old_lines: ['alpha', ''],
       new_lines: ['omega', ''],
@@ -161,7 +161,7 @@ describe('apply-patch/resolution', () => {
     ).toThrow('Failed to find expected lines');
   });
 
-  test('deriveNewContent resuelve actualizaciones EOF', async () => {
+  test('deriveNewContent resolves EOF updates', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'alpha\nbeta');
@@ -181,7 +181,7 @@ describe('apply-patch/resolution', () => {
     ).toBe('alpha\nomega');
   });
 
-  test('deriveNewContent preserva CRLF al recomponer contenido', async () => {
+  test('deriveNewContent preserves CRLF while rebuilding content', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'alpha\r\nbeta\r\ngamma\r\n');
@@ -200,7 +200,7 @@ describe('apply-patch/resolution', () => {
     ).toBe('alpha\r\nBETA\r\ngamma\r\n');
   });
 
-  test('deriveNewContent inserta bloque anclado sin desplazarlo a EOF', async () => {
+  test('deriveNewContent inserts an anchored block without moving it to EOF', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'top\nanchor\nbottom\n');
@@ -220,7 +220,7 @@ describe('apply-patch/resolution', () => {
     ).toBe('top\nanchor\nmiddle\nbottom\n');
   });
 
-  test('deriveNewContent soporta inserción pura al EOF con anchor único', async () => {
+  test('deriveNewContent supports pure insertion at EOF with a single anchor', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'top\nanchor\n');
@@ -240,7 +240,7 @@ describe('apply-patch/resolution', () => {
     ).toBe('top\nanchor\nmiddle\n');
   });
 
-  test('resolveUpdateChunks canoniza inserción EOF con anchor tolerante', async () => {
+  test('resolveUpdateChunks canonicalizes EOF insertion with a tolerant anchor', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'top\n“anchor”\n');
@@ -265,7 +265,7 @@ describe('apply-patch/resolution', () => {
     });
   });
 
-  test('deriveNewContent falla si una inserción pura no encuentra su anchor', async () => {
+  test('deriveNewContent fails if a pure insertion cannot find its anchor', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'top\nbottom\n');
@@ -285,7 +285,7 @@ describe('apply-patch/resolution', () => {
     ).rejects.toThrow('Failed to find insertion anchor');
   });
 
-  test('deriveNewContent falla si una inserción pura tiene anchor ambiguo', async () => {
+  test('deriveNewContent fails if a pure insertion has an ambiguous anchor', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(
@@ -309,7 +309,7 @@ describe('apply-patch/resolution', () => {
     ).rejects.toThrow('Insertion anchor was ambiguous');
   });
 
-  test('deriveNewContent falla si un chunk posterior queda ambiguo', async () => {
+  test('deriveNewContent fails if a later chunk remains ambiguous', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(
@@ -336,7 +336,7 @@ describe('apply-patch/resolution', () => {
     ).rejects.toThrow('ambiguous');
   });
 
-  test('deriveNewContent rescata un EOF stale y conserva el update final', async () => {
+  test('deriveNewContent rescues a stale EOF and preserves the final update', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'alpha\nstale\nomega');
@@ -356,13 +356,13 @@ describe('apply-patch/resolution', () => {
     ).toBe('alpha\nnew\nomega');
   });
 
-  test('applyHits preserva el salto de línea final', () => {
+  test('applyHits preserves the final newline', () => {
     expect(
       applyHits(['start', 'end'], [{ start: 0, del: 1, add: ['next'] }]),
     ).toBe('next\nend\n');
   });
 
-  test('applyHits puede preservar un archivo sin newline final', () => {
+  test('applyHits can preserve a file without a final newline', () => {
     expect(
       applyHits(
         ['start', 'end'],

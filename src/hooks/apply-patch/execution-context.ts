@@ -207,83 +207,30 @@ function collectPatchTargets(root: string, hunks: PatchHunk[]): string[] {
   return [...targets];
 }
 
-function validatePatchPaths(hunks: PatchHunk[]): void {
-  for (const hunk of hunks) {
-    if (path.isAbsolute(hunk.path)) {
-      throw createApplyPatchValidationError(
-        `absolute patch paths are not allowed: ${hunk.path}`,
-      );
-    }
-
-    if (
-      hunk.type === 'update' &&
-      hunk.move_path &&
-      path.isAbsolute(hunk.move_path)
-    ) {
-      throw createApplyPatchValidationError(
-        `absolute patch paths are not allowed: ${hunk.move_path}`,
-      );
-    }
-  }
-}
-
-function toPortablePatchPath(filePath: string): string {
-  return filePath.split(path.sep).join('/');
-}
-
 function toRelativePatchPath(root: string, target: string): string {
   const relative = path.relative(root, target);
-
-  return toPortablePatchPath(
-    relative.length === 0 ? path.basename(target) : relative,
-  );
+  return (relative.length === 0 ? '.' : relative).replaceAll('\\', '/');
 }
 
-async function normalizeAbsolutePatchPath(
-  root: string,
-  worktree: string | undefined,
-  value: string,
-): Promise<string> {
-  if (!path.isAbsolute(value)) {
-    return value;
-  }
-
-  const guardContext = createPathGuardContext(root, worktree);
-  const target = path.resolve(value);
-
-  await guard(guardContext, target);
-
-  const [rootReal, targetReal] = await Promise.all([
-    guardContext.rootReal,
-    realCached(guardContext, target),
-  ]);
-
-  if (!inside(rootReal, targetReal)) {
-    throw createApplyPatchBlockedError(
-      `patch contains path outside workspace root: ${target}`,
-    );
-  }
-
-  return toRelativePatchPath(root, target);
+function normalizePatchPath(root: string, value: string): string {
+  return path.isAbsolute(value)
+    ? toRelativePatchPath(root, path.resolve(value))
+    : value;
 }
 
-async function normalizeAbsolutePatchPaths(
+function normalizePatchPaths(
   root: string,
-  worktree: string | undefined,
   hunks: PatchHunk[],
-): Promise<{
+): {
   hunks: PatchHunk[];
   changed: boolean;
-}> {
+} {
+  const resolvedRoot = path.resolve(root);
   const normalized: PatchHunk[] = [];
   let changed = false;
 
   for (const hunk of hunks) {
-    const normalizedPath = await normalizeAbsolutePatchPath(
-      root,
-      worktree,
-      hunk.path,
-    );
+    const normalizedPath = normalizePatchPath(resolvedRoot, hunk.path);
 
     if (hunk.type !== 'update') {
       changed ||= normalizedPath !== hunk.path;
@@ -299,7 +246,7 @@ async function normalizeAbsolutePatchPaths(
     }
 
     const normalizedMovePath = hunk.move_path
-      ? await normalizeAbsolutePatchPath(root, worktree, hunk.move_path)
+      ? normalizePatchPath(resolvedRoot, hunk.move_path)
       : undefined;
     changed ||=
       normalizedPath !== hunk.path || normalizedMovePath !== hunk.move_path;
@@ -332,14 +279,7 @@ async function guardPatchTargets(
   return targets.length;
 }
 
-export async function parseValidatedPatch(
-  root: string,
-  patchText: string,
-  worktree?: string,
-): Promise<{
-  hunks: PatchHunk[];
-  pathsNormalized: boolean;
-}> {
+export function parseValidatedPatch(patchText: string): PatchHunk[] {
   let hunks: PatchHunk[];
 
   try {
@@ -357,18 +297,7 @@ export async function parseValidatedPatch(
     throw createApplyPatchValidationError('no hunks found');
   }
 
-  const normalizedPatch = await normalizeAbsolutePatchPaths(
-    root,
-    worktree,
-    hunks,
-  );
-
-  validatePatchPaths(normalizedPatch.hunks);
-
-  return {
-    hunks: normalizedPatch.hunks,
-    pathsNormalized: normalizedPatch.changed,
-  };
+  return hunks;
 }
 
 async function readPreparedFileText(
@@ -396,12 +325,13 @@ export async function createPatchExecutionContext(
   patchText: string,
   worktree?: string,
 ): Promise<PatchExecutionContext> {
-  const { hunks, pathsNormalized } = await parseValidatedPatch(
+  const parsedHunks = parseValidatedPatch(patchText);
+  await guardPatchTargets(
     root,
-    patchText,
     worktree,
+    collectPatchTargets(root, parsedHunks),
   );
-  await guardPatchTargets(root, worktree, collectPatchTargets(root, hunks));
+  const normalized = normalizePatchPaths(root, parsedHunks);
   const files = createFileCacheContext();
   const staged = new Map<string, PreparedFileState>();
 
@@ -463,8 +393,8 @@ export async function createPatchExecutionContext(
   }
 
   return {
-    hunks,
-    pathsNormalized,
+    hunks: normalized.hunks,
+    pathsNormalized: normalized.changed,
     staged,
     getPreparedFileState,
     assertPreparedPathMissing,

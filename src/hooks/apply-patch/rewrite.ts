@@ -335,6 +335,9 @@ export async function rewritePatch(
         count + (hunk.type === 'update' ? hunk.chunks.length : 0),
       0,
     );
+    if (pathsNormalized) {
+      rewriteModes.add('normalize:patch-paths');
+    }
 
     const dependencyGroups = new Map<string, RewriteDependencyGroup>();
 
@@ -496,7 +499,7 @@ export async function rewritePatch(
           changed: true,
           rewrittenChunks: 0,
           totalChunks,
-          rewriteModes: ['normalize:patch-paths'],
+          rewriteModes: [...rewriteModes].sort(),
         };
       }
 

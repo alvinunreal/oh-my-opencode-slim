@@ -10,7 +10,7 @@ import {
 import type { ParsedPatch } from './types';
 
 describe('apply-patch/codec', () => {
-  test('stripHeredoc extrae el contenido real del patch', () => {
+  test('stripHeredoc extracts the real patch content', () => {
     expect(
       stripHeredoc(`cat <<'PATCH'
 *** Begin Patch
@@ -19,7 +19,7 @@ PATCH`),
     ).toBe('*** Begin Patch\n*** End Patch');
   });
 
-  test('parsePatch reconoce add delete update y move', () => {
+  test('parsePatch recognizes add delete update and move', () => {
     const parsed = parsePatch(`*** Begin Patch
 *** Add File: added.txt
 +alpha
@@ -55,7 +55,7 @@ PATCH`),
     });
   });
 
-  test('parsePatch tolera heredoc con CRLF agresivo y conserva EOF', () => {
+  test('parsePatch tolerates heredocs with aggressive CRLF and preserves EOF', () => {
     const parsed = parsePatch(`cat <<'PATCH'\r
 *** Begin Patch\r
 *** Update File: sample.txt\r
@@ -82,7 +82,7 @@ PATCH`);
     ]);
   });
 
-  test('parsePatchStrict falla con basura dentro de @@', () => {
+  test('parsePatchStrict fails on garbage inside @@', () => {
     expect(() =>
       parsePatchStrict(`*** Begin Patch
 *** Update File: sample.txt
@@ -94,7 +94,7 @@ garbage
     ).toThrow('unexpected line in patch chunk');
   });
 
-  test('parsePatchStrict falla con basura dentro de Add File', () => {
+  test('parsePatchStrict fails on garbage inside Add File', () => {
     expect(() =>
       parsePatchStrict(`*** Begin Patch
 *** Add File: sample.txt
@@ -104,7 +104,7 @@ garbage
     ).toThrow('unexpected line in Add File body');
   });
 
-  test('parsePatchStrict falla con Delete File mal formado', () => {
+  test('parsePatchStrict fails on malformed Delete File', () => {
     expect(() =>
       parsePatchStrict(`*** Begin Patch
 *** Delete File: sample.txt
@@ -113,7 +113,7 @@ garbage
     ).toThrow('unexpected line between hunks');
   });
 
-  test('parsePatchStrict falla con basura después de End Patch', () => {
+  test('parsePatchStrict fails on garbage after End Patch', () => {
     expect(() =>
       parsePatchStrict(`*** Begin Patch
 *** Delete File: sample.txt
@@ -122,7 +122,7 @@ garbage`),
     ).toThrow('unexpected line after End Patch');
   });
 
-  test('parsePatchStrict falla si Update File no trae chunks @@', () => {
+  test('parsePatchStrict fails when Update File has no @@ chunks', () => {
     expect(() =>
       parsePatchStrict(`*** Begin Patch
 *** Update File: sample.txt
@@ -130,7 +130,7 @@ garbage`),
     ).toThrow('missing @@ chunk body');
   });
 
-  test('formatPatch permite roundtrip estable parse -> format -> parse', () => {
+  test('formatPatch allows stable parse -> format -> parse roundtrips', () => {
     const parsed: ParsedPatch = {
       hunks: [
         {
@@ -149,11 +149,11 @@ garbage`),
     expect(parsePatch(formatPatch(parsed))).toEqual(parsed);
   });
 
-  test('normalizeUnicode unifica variantes tipográficas esperadas', () => {
+  test('normalizeUnicode unifies expected typographic variants', () => {
     expect(normalizeUnicode('“uno”…\u00A0dos—tres')).toBe('"uno"... dos-tres');
   });
 
-  test('normalizeUnicode cubre variantes tipográficas menos comunes', () => {
+  test('normalizeUnicode covers less common typographic variants', () => {
     expect(normalizeUnicode('‛uno‟―dos')).toBe(`'uno"-dos`);
   });
 });

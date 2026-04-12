@@ -12,19 +12,19 @@ import {
 } from './matching';
 
 describe('apply-patch/matching', () => {
-  test('seek encuentra coincidencias con unicode y trim-end', () => {
+  test('seek finds matches with unicode and trim-end', () => {
     expect(seek(['console.log(“hola”);  '], ['console.log("hola");'], 0)).toBe(
       0,
     );
   });
 
-  test('seek no rescata coincidencias trim-only con indentación distinta', () => {
+  test('seek does not rescue trim-only matches with different indentation', () => {
     expect(seek(['  console.log("hola");'], ['console.log("hola");'], 0)).toBe(
       -1,
     );
   });
 
-  test('prefix y suffix detectan bordes comunes', () => {
+  test('prefix and suffix detect common edges', () => {
     const oldLines = [
       'const title = "Hola";',
       'old-value',
@@ -40,7 +40,7 @@ describe('apply-patch/matching', () => {
     expect(suffix(oldLines, newLines, 1)).toBe(1);
   });
 
-  test('rescueByPrefixSuffix rescata un bloque stale único', () => {
+  test('rescueByPrefixSuffix rescues a single stale block', () => {
     const result = rescueByPrefixSuffix(
       ['top', 'const title = “Hola”;', 'stale-value', 'const footer = “Fin”;'],
       ['const title = "Hola";', 'old-value', 'const footer = "Fin";'],
@@ -58,7 +58,7 @@ describe('apply-patch/matching', () => {
     });
   });
 
-  test('rescueByPrefixSuffix marca ambigüedad cuando hay varias ubicaciones', () => {
+  test('rescueByPrefixSuffix marks ambiguity when multiple locations exist', () => {
     expect(
       rescueByPrefixSuffix(
         ['left', 'stale-one', 'right', 'gap', 'left', 'stale-two', 'right'],
@@ -69,7 +69,7 @@ describe('apply-patch/matching', () => {
     ).toEqual({ kind: 'ambiguous', phase: 'prefix_suffix' });
   });
 
-  test('rescueByLcs respeta el start y encuentra un candidato único', () => {
+  test('rescueByLcs respects the start and finds a single candidate', () => {
     const result = rescueByLcs(
       [
         'head',
@@ -100,7 +100,7 @@ describe('apply-patch/matching', () => {
     });
   });
 
-  test('rescueByLcs marca ambigüedad cuando dos ventanas empatan sin bordes comunes', () => {
+  test('rescueByLcs marks ambiguity when two windows tie without common edges', () => {
     expect(
       rescueByLcs(
         ['head', 'alpha', 'beta', 'mid', 'alpha', 'beta', 'tail'],
@@ -111,7 +111,7 @@ describe('apply-patch/matching', () => {
     ).toEqual({ kind: 'ambiguous', phase: 'lcs' });
   });
 
-  test('rescueByLcs rechaza ventanas con un solo borde coincidente aunque el score sea alto', () => {
+  test('rescueByLcs rejects windows with only one matching edge even when the score is high', () => {
     expect(
       rescueByLcs(
         ['a', 'a', 'a', 'a', 'b', 'c'],
@@ -122,7 +122,7 @@ describe('apply-patch/matching', () => {
     ).toEqual({ kind: 'miss' });
   });
 
-  test('rescueByLcs poda un chunk desproporcionado aunque tenga bordes compatibles', () => {
+  test('rescueByLcs prunes a disproportionate chunk even when it has compatible edges', () => {
     const oldLines = Array.from({ length: 49 }, (_, index) => `line-${index}`);
     const lines = [...oldLines];
     lines[24] = 'line-24-stale';
@@ -137,7 +137,7 @@ describe('apply-patch/matching', () => {
     ).toEqual({ kind: 'miss' });
   });
 
-  test('rescueByLcs descarta una ventana poco plausible antes del scoring caro', () => {
+  test('rescueByLcs discards an implausible window before expensive scoring', () => {
     expect(
       rescueByLcs(
         ['left', 'noise-a', 'keep', 'noise-b', 'right'],
@@ -148,7 +148,7 @@ describe('apply-patch/matching', () => {
     ).toEqual({ kind: 'miss' });
   });
 
-  test('seek empareja comillas curly y straight mezcladas', () => {
+  test('seek matches mixed curly and straight quotes', () => {
     expect(
       seek(
         ['const title = “it’s ready”;'],
@@ -158,7 +158,7 @@ describe('apply-patch/matching', () => {
     ).toBe(0);
   });
 
-  test('seekMatch informa cuando el match solo fue tolerante y seguro', () => {
+  test('seekMatch reports when the match was only tolerant and safe', () => {
     expect(
       seekMatch(['console.log(“hola”);  '], ['console.log("hola");'], 0),
     ).toEqual({
@@ -168,7 +168,7 @@ describe('apply-patch/matching', () => {
     });
   });
 
-  test('separación de comparadores distingue rescate seguro y comparadores permisivos', () => {
+  test('comparator separation distinguishes safe rescue from permissive comparators', () => {
     expect(autoRescueComparators).toHaveLength(4);
     expect(permissiveComparators).toHaveLength(6);
   });

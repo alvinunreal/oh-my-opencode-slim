@@ -23,7 +23,7 @@ import {
 } from './test-helpers';
 
 describe('apply-patch/operations', () => {
-  test('preparePatchChanges y applyPreparedChanges aplican un match exacto', async () => {
+  test('preparePatchChanges and applyPreparedChanges apply an exact match', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\ngamma\n');
     await chmod(path.join(root, 'sample.txt'), 0o750);
@@ -46,7 +46,7 @@ describe('apply-patch/operations', () => {
     );
   });
 
-  test('rewritePatchText deja intacto un patch sano', async () => {
+  test('rewritePatchText leaves a healthy patch intact', async () => {
     const root = await createTempDir();
     const patchText = `*** Begin Patch
 *** Update File: sample.txt
@@ -72,7 +72,7 @@ describe('apply-patch/operations', () => {
     });
   });
 
-  test('rewritePatchText desenrolla un patch exacto envuelto en heredoc', async () => {
+  test('rewritePatchText unwraps an exact patch wrapped in a heredoc', async () => {
     const root = await createTempDir();
     const cleanPatchText = `*** Begin Patch
 *** Update File: sample.txt
@@ -101,7 +101,7 @@ PATCH`;
     });
   });
 
-  test('rewritePatchText normaliza CRLF + heredoc exactos y el patch sigue funcionando', async () => {
+  test('rewritePatchText normalizes exact CRLF + heredoc input and the patch still works', async () => {
     const root = await createTempDir();
     const cleanPatchText = `*** Begin Patch
 *** Update File: sample.txt
@@ -136,7 +136,7 @@ PATCH`;
     );
   });
 
-  test('rewritePatchText reescribe stale patch y preserva new_lines byte a byte', async () => {
+  test('rewritePatchText rewrites a stale patch and preserves new_lines byte-for-byte', async () => {
     const root = await createTempDir();
     await writeFixture(
       root,
@@ -165,7 +165,7 @@ PATCH`;
     ).toEqual(['prefix', ' \tverbatim  ""  Ω  ', 'suffix']);
   });
 
-  test('rewritePatchText elimina EOF si un rescate mueve el chunk fuera del final real', async () => {
+  test('rewritePatchText removes EOF when a rescue moves the chunk away from the real end', async () => {
     const root = await createTempDir();
     await writeFixture(
       root,
@@ -198,7 +198,7 @@ PATCH`;
     ).toBeUndefined();
   });
 
-  test('rewritePatchText conserva EOF si el chunk resuelto sigue terminando al final real', async () => {
+  test('rewritePatchText keeps EOF when the resolved chunk still ends at the real end', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nstale\nomega');
     const patchText = `*** Begin Patch
@@ -229,7 +229,7 @@ PATCH`;
     ).toBeTrue();
   });
 
-  test('rewritePatchText canoniza un stale unicode-only', async () => {
+  test('rewritePatchText canonicalizes a unicode-only stale patch', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'const title = “Hola”;\n');
     const patchText = `*** Begin Patch
@@ -252,7 +252,7 @@ PATCH`;
     ).toEqual(['const title = "Hola mundo";']);
   });
 
-  test('rewritePatchText canoniza un stale trim-end', async () => {
+  test('rewritePatchText canonicalizes a trim-end stale patch', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha  \n');
     const patchText = `*** Begin Patch
@@ -275,7 +275,7 @@ PATCH`;
     ).toEqual(['omega']);
   });
 
-  test('rewritePatchText ya no rescata un stale trim-only', async () => {
+  test('rewritePatchText no longer rescues a trim-only stale patch', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', '  alpha  \n');
     const patchText = `*** Begin Patch
@@ -292,7 +292,7 @@ PATCH`;
     );
   });
 
-  test('rewritePatchText ya no canoniza un caso indentado peligroso', async () => {
+  test('rewritePatchText no longer canonicalizes a dangerous indented case', async () => {
     const root = await createTempDir();
     await writeFixture(
       root,
@@ -313,7 +313,7 @@ PATCH`;
     );
   });
 
-  test('rewritePatchText rechaza un @@ mal formado en vez de sanearlo silenciosamente', async () => {
+  test('rewritePatchText rejects malformed @@ instead of silently sanitizing it', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
 
@@ -335,7 +335,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges rechaza un Add File mal formado', async () => {
+  test('preparePatchChanges rejects a malformed Add File', async () => {
     const root = await createTempDir();
 
     await expect(
@@ -353,7 +353,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges normaliza un Update File con path absoluto dentro del root', async () => {
+  test('preparePatchChanges normalizes an Update File with an absolute path inside root', async () => {
     const root = await createTempDir();
     const absolutePath = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
@@ -396,7 +396,7 @@ garbage
     ]);
   });
 
-  test('preparePatchChanges normaliza un Add File con path absoluto dentro del root', async () => {
+  test('preparePatchChanges normalizes an Add File with an absolute path inside root', async () => {
     const root = await createTempDir();
     const absolutePath = path.join(root, 'added.txt');
 
@@ -434,7 +434,7 @@ garbage
     ]);
   });
 
-  test('preparePatchChanges normaliza un Move to con path absoluto dentro del root', async () => {
+  test('preparePatchChanges normalizes a Move to with an absolute path inside root', async () => {
     const root = await createTempDir();
     const absoluteMovePath = path.join(root, 'nested/after.txt');
 
@@ -483,7 +483,7 @@ garbage
     ]);
   });
 
-  test('preparePatchChanges bloquea un path absoluto fuera del root/worktree', async () => {
+  test('preparePatchChanges blocks an absolute path outside root/worktree', async () => {
     const root = await createTempDir();
     const outsidePath = path.join(path.dirname(root), 'outside.txt');
 
@@ -503,12 +503,13 @@ garbage
     );
   });
 
-  test('preparePatchChanges bloquea un path absoluto dentro del worktree pero fuera del root', async () => {
+  test('preparePatchChanges allows an absolute path inside worktree even when it is outside root', async () => {
     const worktree = await createTempDir();
     const root = path.join(worktree, 'subdir');
+    await mkdir(root, { recursive: true });
     const siblingPath = path.join(worktree, 'shared.txt');
 
-    const error = await preparePatchChanges(
+    const rewritten = await rewritePatch(
       root,
       `*** Begin Patch
 *** Add File: ${siblingPath}
@@ -516,16 +517,52 @@ garbage
 *** End Patch`,
       DEFAULT_OPTIONS,
       worktree,
-    ).catch((caughtError) => caughtError);
+    );
 
-    expect(isApplyPatchBlockedError(error)).toBeTrue();
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(
-      `apply_patch blocked: patch contains path outside workspace root: ${siblingPath}`,
+    expect(rewritten.changed).toBeTrue();
+    expect(parsePatch(rewritten.patchText).hunks[0]).toMatchObject({
+      type: 'add',
+      path: '../shared.txt',
+      contents: 'fresh',
+    });
+
+    await expect(
+      preparePatchChanges(
+        root,
+        `*** Begin Patch
+*** Add File: ${siblingPath}
++fresh
+*** End Patch`,
+        DEFAULT_OPTIONS,
+        worktree,
+      ),
+    ).resolves.toEqual([
+      {
+        type: 'add',
+        file: siblingPath,
+        text: 'fresh\n',
+      },
+    ]);
+  });
+
+  test('preparePatchChanges does not redirect an absolute root target to its basename', async () => {
+    const root = await createTempDir();
+
+    await expect(
+      preparePatchChanges(
+        root,
+        `*** Begin Patch
+*** Add File: ${root}
++fresh
+*** End Patch`,
+        DEFAULT_OPTIONS,
+      ),
+    ).rejects.toThrow(
+      `apply_patch verification failed: Add File target already exists: ${root}`,
     );
   });
 
-  test('preparePatchChanges rechaza Add File sobre un path existente', async () => {
+  test('preparePatchChanges rejects Add File on an existing path', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'added.txt', 'legacy\n');
 
@@ -543,7 +580,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges rechaza Move to sobre un destino existente distinto', async () => {
+  test('preparePatchChanges rejects Move to on a different existing destination', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\n');
     await writeFixture(root, 'nested/after.txt', 'legacy\n');
@@ -566,7 +603,7 @@ garbage
     );
   });
 
-  test('rewritePatchText rechaza Delete File inexistente igual que preparePatchChanges', async () => {
+  test('rewritePatchText rejects a missing Delete File like preparePatchChanges', async () => {
     const root = await createTempDir();
     const patchText = `*** Begin Patch
 *** Delete File: missing.txt
@@ -581,7 +618,7 @@ garbage
     ).rejects.toThrow(expectedMessage);
   });
 
-  test('rewritePatchText rechaza doble Delete File sobre el mismo path', async () => {
+  test('rewritePatchText rejects duplicate Delete File on the same path', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'obsolete.txt', 'legacy\n');
 
@@ -599,7 +636,7 @@ garbage
     );
   });
 
-  test('rewritePatchText rechaza Delete File del origen tras un move previo', async () => {
+  test('rewritePatchText rejects Delete File on the source after a previous move', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\n');
 
@@ -622,7 +659,7 @@ garbage
     );
   });
 
-  test('rewritePatchText mantiene un Delete File válido y el apply sigue funcionando', async () => {
+  test('rewritePatchText keeps a valid Delete File and apply still works', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'obsolete.txt', 'legacy\n');
     const patchText = `*** Begin Patch
@@ -637,7 +674,7 @@ garbage
     await expect(readText(root, 'obsolete.txt')).rejects.toThrow();
   });
 
-  test('applyPreparedChanges rechaza add directo sobre un path existente', async () => {
+  test('applyPreparedChanges rejects direct add on an existing path', async () => {
     const root = await createTempDir();
     const target = path.join(root, 'added.txt');
     await writeFixture(root, 'added.txt', 'legacy\n');
@@ -657,7 +694,7 @@ garbage
     expect(await readText(root, 'added.txt')).toBe('legacy\n');
   });
 
-  test('applyPreparedChanges rechaza move directo sobre un destino existente', async () => {
+  test('applyPreparedChanges rejects direct move on an existing destination', async () => {
     const root = await createTempDir();
     const source = path.join(root, 'before.txt');
     const target = path.join(root, 'nested/after.txt');
@@ -681,7 +718,7 @@ garbage
     expect(await readText(root, 'nested/after.txt')).toBe('legacy\n');
   });
 
-  test('applyPreparedChanges rechaza arrays legacy con paths relativos', async () => {
+  test('applyPreparedChanges rejects legacy arrays with relative paths', async () => {
     const error = await applyPreparedChanges([
       {
         type: 'add',
@@ -697,7 +734,7 @@ garbage
     );
   });
 
-  test('rewritePatchText y preparePatchChanges comparten taxonomía validation/verification', async () => {
+  test('rewritePatchText and preparePatchChanges share the validation/verification taxonomy', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
 
@@ -726,7 +763,7 @@ garbage
     expect(isApplyPatchValidationError(validationError)).toBeTrue();
   });
 
-  test('rewritePatchText canoniza inserción EOF con anchor tolerante', async () => {
+  test('rewritePatchText canonicalizes EOF insertion with a tolerant anchor', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'top\n“anchor”\n');
 
@@ -753,7 +790,7 @@ garbage
     ).toEqual(['middle']);
   });
 
-  test('rewritePatch agrupa dos Update File exactos sobre el mismo path', async () => {
+  test('rewritePatch groups two exact Update File hunks on the same path', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\ngamma\ndelta\n');
 
@@ -800,7 +837,7 @@ garbage
     });
   });
 
-  test('rewritePatch agrupa un segundo update dependiente del primero', async () => {
+  test('rewritePatch groups a second update that depends on the first', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\ngamma\n');
 
@@ -848,7 +885,7 @@ garbage
     expect(await readText(root, 'sample.txt')).toBe('alpha\nBETA!\ngamma\n');
   });
 
-  test('rewritePatch colapsa Add File + Update File exacto a un add autónomo', async () => {
+  test('rewritePatch collapses Add File + exact Update File into a self-contained add', async () => {
     const root = await createTempDir();
 
     const result = await rewritePatch(
@@ -877,7 +914,7 @@ garbage
     ]);
   });
 
-  test('rewritePatch colapsa Add File + Update File + Move to a un add final autónomo', async () => {
+  test('rewritePatch collapses Add File + Update File + Move to into a self-contained final add', async () => {
     const root = await createTempDir();
 
     const result = await rewritePatch(
@@ -907,7 +944,7 @@ garbage
     ]);
   });
 
-  test('rewritePatch colapsa move exacto seguido de update sobre el destino', async () => {
+  test('rewritePatch collapses an exact move followed by an update on the destination', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\ngamma\n');
 
@@ -950,7 +987,7 @@ garbage
     ]);
   });
 
-  test('rewritePatch minimiza el whole-file collapse cuando el fallback sigue siendo verificable', async () => {
+  test('rewritePatch minimizes whole-file collapse when the fallback remains verifiable', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\ngamma\n');
 
@@ -997,7 +1034,7 @@ garbage
     );
   });
 
-  test('rewritePatch mantiene el orden correcto de cambios al agrupar same-file updates', async () => {
+  test('rewritePatch keeps the correct change order when grouping same-file updates', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'one\ntwo\nthree\nfour\nfive\n');
 
@@ -1046,7 +1083,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges falla cuando el rescate es ambiguo', async () => {
+  test('preparePatchChanges fails when rescue is ambiguous', async () => {
     const root = await createTempDir();
     await writeFixture(
       root,
@@ -1070,7 +1107,7 @@ garbage
     ).rejects.toThrow('apply_patch verification failed:');
   });
 
-  test('applyPreparedChanges revierte cambios previos si un apply posterior falla', async () => {
+  test('applyPreparedChanges reverts previous changes when a later apply fails', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'first.txt', 'one\n');
     await writeFixture(root, 'blocker', 'not-a-dir\n');
@@ -1099,7 +1136,7 @@ garbage
     await expect(readText(root, 'blocker/second.txt')).rejects.toThrow();
   });
 
-  test('applyPreparedChanges soporta update con move_path y preserva mode del origen', async () => {
+  test('applyPreparedChanges supports update with move_path and preserves the source mode', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\ngamma\n');
     await chmod(path.join(root, 'before.txt'), 0o755);
@@ -1133,7 +1170,7 @@ garbage
     });
   });
 
-  test('applyPreparedChanges rechaza update directo sobre un source inexistente', async () => {
+  test('applyPreparedChanges rejects direct update on a missing source', async () => {
     const root = await createTempDir();
     const target = path.join(root, 'missing.txt');
 
@@ -1150,7 +1187,7 @@ garbage
     );
   });
 
-  test('applyPreparedChanges rechaza delete directo sobre un source inexistente', async () => {
+  test('applyPreparedChanges rejects direct delete on a missing source', async () => {
     const root = await createTempDir();
     const target = path.join(root, 'missing.txt');
 
@@ -1166,7 +1203,7 @@ garbage
     );
   });
 
-  test('applyPreparedChanges rechaza move directo con source inexistente', async () => {
+  test('applyPreparedChanges rejects direct move with a missing source', async () => {
     const root = await createTempDir();
     const source = path.join(root, 'missing.txt');
     const target = path.join(root, 'nested/after.txt');
@@ -1185,7 +1222,7 @@ garbage
     );
   });
 
-  test('applyPreparedChanges rechaza una transición inválida tras delete previo', async () => {
+  test('applyPreparedChanges rejects an invalid transition after a previous delete', async () => {
     const root = await createTempDir();
     const target = path.join(root, 'sample.txt');
     await writeFixture(root, 'sample.txt', 'alpha\n');
@@ -1209,7 +1246,7 @@ garbage
     expect(await readText(root, 'sample.txt')).toBe('alpha\n');
   });
 
-  test('applyPatch soporta move + update cuando el bloque está stale', async () => {
+  test('applyPatch supports move + update when the block is stale', async () => {
     const root = await createTempDir();
     await writeFixture(
       root,
@@ -1236,7 +1273,7 @@ garbage
     await expect(readText(root, 'before.txt')).rejects.toThrow();
   });
 
-  test('preparePatchChanges y applyPreparedChanges preservan CRLF con rescate stale + chunk exacto', async () => {
+  test('preparePatchChanges and applyPreparedChanges preserve CRLF with stale rescue + exact chunk', async () => {
     const root = await createTempDir();
     await writeFixture(
       root,
@@ -1267,7 +1304,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges y applyPreparedChanges soportan inserción pura al EOF', async () => {
+  test('preparePatchChanges and applyPreparedChanges support pure insertion at EOF', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'top\nanchor\n');
 
@@ -1285,7 +1322,7 @@ garbage
     expect(await readText(root, 'sample.txt')).toBe('top\nanchor\nmiddle\n');
   });
 
-  test('preparePatchChanges y applyPreparedChanges acumulan dos Update File sobre el mismo path', async () => {
+  test('preparePatchChanges and applyPreparedChanges accumulate two Update File hunks on the same path', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\ngamma\n');
 
@@ -1325,7 +1362,7 @@ garbage
     expect(await readText(root, 'sample.txt')).toBe('alpha\nBETA\nGAMMA\n');
   });
 
-  test('preparePatchChanges y applyPreparedChanges preservan archivo sin newline final', async () => {
+  test('preparePatchChanges and applyPreparedChanges preserve a file without a final newline', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta');
 
@@ -1346,7 +1383,7 @@ garbage
     expect(await readText(root, 'sample.txt')).toBe('alpha\nomega');
   });
 
-  test('applyPatch aplica add + update en un mismo patch', async () => {
+  test('applyPatch applies add + update in the same patch', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
 
@@ -1367,7 +1404,7 @@ garbage
     expect(await readText(root, 'sample.txt')).toBe('alpha\nBETA\n');
   });
 
-  test('applyPatch aplica update + delete en un mismo patch', async () => {
+  test('applyPatch applies update + delete in the same patch', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
     await writeFixture(root, 'obsolete.txt', 'legacy\n');
@@ -1388,7 +1425,7 @@ garbage
     await expect(readText(root, 'obsolete.txt')).rejects.toThrow();
   });
 
-  test('applyPatch aplica move + add en un mismo patch', async () => {
+  test('applyPatch applies move + add in the same patch', async () => {
     const root = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\n');
 
@@ -1410,7 +1447,7 @@ garbage
     expect(await readText(root, 'before.txt')).toBe('replacement\n');
   });
 
-  test('rewritePatchText bloquea un patch si la ruta sale por symlink con ancestro faltante', async () => {
+  test('rewritePatchText blocks a patch when the path escapes through a symlink with a missing ancestor', async () => {
     const root = await createTempDir();
     const outside = await createTempDir();
     await writeFixture(root, 'before.txt', 'alpha\nbeta\n');
@@ -1432,7 +1469,7 @@ garbage
     );
   });
 
-  test('rewritePatchText bloquea el patch completo si cualquier add/delete sale de root aunque haya update reescribible', async () => {
+  test('rewritePatchText blocks the whole patch if any add/delete escapes root even when an update is rewritable', async () => {
     const root = await createTempDir();
     const outsideDir = await createTempDir();
     await writeFixture(root, 'sample.txt', 'prefix\nstale-value\nsuffix\n');
@@ -1457,7 +1494,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges mantiene como blocked un relativo que escapa de root', async () => {
+  test('preparePatchChanges keeps an escaping relative path as blocked', async () => {
     const root = await createTempDir();
 
     const error = await preparePatchChanges(
@@ -1478,7 +1515,7 @@ garbage
     );
   });
 
-  test('preparePatchChanges rechaza una ruta que sale por symlink con ancestro faltante', async () => {
+  test('preparePatchChanges rejects a path that escapes through a symlink with a missing ancestor', async () => {
     const root = await createTempDir();
     const outside = await createTempDir();
     await mkdir(path.join(outside, 'real-target'), { recursive: true });
