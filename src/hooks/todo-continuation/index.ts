@@ -11,6 +11,7 @@ const CONTINUATION_PROMPT =
 // Suppress window after user abort (Esc/Ctrl+C) to avoid immediately
 // re-continuing something the user explicitly stopped
 const SUPPRESS_AFTER_ABORT_MS = 5_000;
+const NOTIFICATION_BUSY_GRACE_MS = 250;
 
 const QUESTION_PHRASES = [
   'would you like',
@@ -40,9 +41,11 @@ interface ContinuationState {
   // True while our auto-injection prompt is in flight — prevents counter reset
   // on session.status→busy and blocks duplicate injections
   isAutoInjecting: boolean;
-  // True while our noReply countdown notification is in flight — prevents
-  // that notification's own busy transition from cancelling its timer.
-  isNotifying: boolean;
+  // session IDs with an in-flight noReply countdown notification.
+  notifyingSessionIds: Set<string>;
+  // sessionID → timestamp until which just-completed noReply countdown
+  // notification busy transitions are ignored, covering HTTP/SSE reordering.
+  notificationBusyUntilBySession: Map<string, number>;
 }
 
 function isQuestion(text: string): boolean {
@@ -90,7 +93,8 @@ function resetState(state: ContinuationState): void {
   state.consecutiveContinuations = 0;
   state.suppressUntil = 0;
   state.isAutoInjecting = false;
-  state.isNotifying = false;
+  state.notifyingSessionIds.clear();
+  state.notificationBusyUntilBySession.clear();
 }
 
 export function createTodoContinuationHook(
@@ -130,8 +134,39 @@ export function createTodoContinuationHook(
     orchestratorSessionIds: new Set<string>(),
     sawChatMessage: false,
     isAutoInjecting: false,
-    isNotifying: false,
+    notifyingSessionIds: new Set<string>(),
+    notificationBusyUntilBySession: new Map<string, number>(),
   };
+
+  function markNotificationStarted(sessionID: string): void {
+    state.notifyingSessionIds.add(sessionID);
+  }
+
+  function markNotificationFinished(sessionID: string): void {
+    state.notifyingSessionIds.delete(sessionID);
+    state.notificationBusyUntilBySession.set(
+      sessionID,
+      Date.now() + NOTIFICATION_BUSY_GRACE_MS,
+    );
+  }
+
+  function clearNotificationState(sessionID: string): void {
+    state.notifyingSessionIds.delete(sessionID);
+    state.notificationBusyUntilBySession.delete(sessionID);
+  }
+
+  function isNotificationBusy(sessionID: string): boolean {
+    if (state.notifyingSessionIds.has(sessionID)) {
+      return true;
+    }
+
+    const until = state.notificationBusyUntilBySession.get(sessionID) ?? 0;
+    if (until <= Date.now()) {
+      state.notificationBusyUntilBySession.delete(sessionID);
+      return false;
+    }
+    return true;
+  }
 
   function isOrchestratorSession(sessionID: string): boolean {
     return state.orchestratorSessionIds.has(sessionID);
@@ -357,7 +392,7 @@ export function createTodoContinuationHook(
       });
 
       // Show countdown notification (noReply = agent doesn't respond)
-      state.isNotifying = true;
+      markNotificationStarted(sessionID);
       ctx.client.session
         .prompt({
           path: { id: sessionID },
@@ -379,13 +414,14 @@ export function createTodoContinuationHook(
           /* best-effort notification */
         })
         .finally(() => {
-          state.isNotifying = false;
+          markNotificationFinished(sessionID);
         });
 
       state.pendingTimerSessionId = sessionID;
       state.pendingTimer = setTimeout(async () => {
         state.pendingTimer = null;
         state.pendingTimerSessionId = null;
+        clearNotificationState(sessionID);
 
         // Guard: may have been disabled during cooldown
         if (!state.enabled) {
@@ -422,12 +458,13 @@ export function createTodoContinuationHook(
       const sessionID = properties.sessionID as string;
       if (status?.type === 'busy') {
         const isOrchestrator = isOrchestratorSession(sessionID);
+        const isNotification = isNotificationBusy(sessionID);
 
         // Only cancel timer for orchestrator session — sub-agents going
         // busy must not silently kill the orchestrator's continuation.
         if (
           isOrchestrator &&
-          !state.isNotifying &&
+          !isNotification &&
           state.pendingTimerSessionId === sessionID
         ) {
           cancelPendingTimer(state);
@@ -437,7 +474,7 @@ export function createTodoContinuationHook(
         // not for our own auto-injection prompt. Scope to orchestrator only.
         if (
           !state.isAutoInjecting &&
-          !state.isNotifying &&
+          !isNotification &&
           isOrchestrator &&
           state.consecutiveContinuations > 0
         ) {
@@ -484,6 +521,7 @@ export function createTodoContinuationHook(
         }
 
         state.orchestratorSessionIds.delete(deletedSessionId);
+        clearNotificationState(deletedSessionId);
         if (state.orchestratorSessionIds.size === 0) {
           resetState(state);
           state.sawChatMessage = false;

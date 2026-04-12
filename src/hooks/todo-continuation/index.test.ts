@@ -397,7 +397,7 @@ describe('createTodoContinuationHook', () => {
       });
       const hook = createTodoContinuationHook(ctx, {
         maxContinuations: 5,
-        cooldownMs: 100,
+        cooldownMs: 500,
       });
 
       await hook.tool.auto_continue.execute({ enabled: true });
@@ -410,8 +410,8 @@ describe('createTodoContinuationHook', () => {
         },
       });
 
-      // Before cooldown expires, fire session.status with busy
-      await delay(50);
+      // After the notification grace but before cooldown expires, fire busy.
+      await delay(300);
       await hook.handleEvent({
         event: {
           type: 'session.status',
@@ -423,7 +423,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Verify timer was cancelled and prompt NOT called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(false);
@@ -473,7 +473,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Orchestrator timer should still fire — prompt was called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
@@ -806,7 +806,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Verify timer was cancelled and prompt NOT called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(false);
@@ -855,7 +855,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Orchestrator timer should still fire — prompt was called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
@@ -2115,18 +2115,35 @@ describe('createTodoContinuationHook', () => {
       expect(ctx.client.session.prompt).not.toHaveBeenCalled();
     });
 
+    test('late countdown notification busy status does not cancel continuation timer', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await delay(10);
+      await hook.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'main1', status: { type: 'busy' } },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+    });
+
     test('countdown notification busy status does not cancel continuation timer', async () => {
       const ctx = createPendingCtx();
-      let releaseNotification!: () => void;
       let callCount = 0;
-      ctx.client.session.prompt = mock(async (args: any) => {
+      ctx.client.session.prompt = mock(async () => {
         callCount++;
-        const isNotification = args?.body?.noReply === true;
-        if (isNotification) {
-          await new Promise<void>((resolve) => {
-            releaseNotification = resolve;
-          });
-        }
         return {};
       });
       const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
@@ -2146,8 +2163,6 @@ describe('createTodoContinuationHook', () => {
         },
       });
       await delay(60);
-      releaseNotification();
-      await delay(10);
 
       expect(callCount).toBeGreaterThanOrEqual(2);
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
