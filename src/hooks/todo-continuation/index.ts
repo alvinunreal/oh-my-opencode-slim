@@ -437,6 +437,7 @@ export function createTodoContinuationHook(
         // not for our own auto-injection prompt. Scope to orchestrator only.
         if (
           !state.isAutoInjecting &&
+          !state.isNotifying &&
           isOrchestrator &&
           state.consecutiveContinuations > 0
         ) {

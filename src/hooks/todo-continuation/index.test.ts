@@ -2067,6 +2067,54 @@ describe('createTodoContinuationHook', () => {
       );
     });
 
+    test('countdown notification busy status does not reset max-continuation counter', async () => {
+      const ctx = createPendingCtx();
+      const releaseNotifications: Array<() => void> = [];
+      ctx.client.session.prompt = mock(async (args: any) => {
+        if (args?.body?.noReply === true) {
+          await new Promise<void>((resolve) => {
+            releaseNotifications.push(resolve);
+          });
+        }
+        return {};
+      });
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        maxContinuations: 2,
+      });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+
+      for (let i = 0; i < 2; i++) {
+        await hook.handleEvent({
+          event: {
+            type: 'session.idle',
+            properties: { sessionID: 'main1' },
+          },
+        });
+        await hook.handleEvent({
+          event: {
+            type: 'session.status',
+            properties: { sessionID: 'main1', status: { type: 'busy' } },
+          },
+        });
+        await delay(60);
+        releaseNotifications.shift()?.();
+        await delay(10);
+      }
+
+      ctx.client.session.prompt.mockClear();
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await delay(60);
+
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    });
+
     test('countdown notification busy status does not cancel continuation timer', async () => {
       const ctx = createPendingCtx();
       let releaseNotification!: () => void;
