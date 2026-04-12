@@ -502,10 +502,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'chat.headers': chatHeadersHook['chat.headers'],
 
     // Track which agent each session uses (needed for serve-mode prompt injection)
-    'chat.message': async (input: { sessionID: string; agent?: string }) => {
-      if (input.agent) {
-        sessionAgentMap.set(input.sessionID, input.agent);
+    'chat.message': async (
+      input: { sessionID: string; agent?: string },
+      output?: { message?: { agent?: string } },
+    ) => {
+      const agent = input.agent ?? output?.message?.agent;
+      if (agent) {
+        sessionAgentMap.set(input.sessionID, agent);
       }
+      todoContinuationHook.handleChatMessage({
+        sessionID: input.sessionID,
+        agent,
+      });
     },
 
     // Inject orchestrator system prompt for serve-mode sessions.

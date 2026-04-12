@@ -397,7 +397,7 @@ describe('createTodoContinuationHook', () => {
       });
       const hook = createTodoContinuationHook(ctx, {
         maxContinuations: 5,
-        cooldownMs: 100,
+        cooldownMs: 500,
       });
 
       await hook.tool.auto_continue.execute({ enabled: true });
@@ -410,8 +410,8 @@ describe('createTodoContinuationHook', () => {
         },
       });
 
-      // Before cooldown expires, fire session.status with busy
-      await delay(50);
+      // After the notification grace but before cooldown expires, fire busy.
+      await delay(300);
       await hook.handleEvent({
         event: {
           type: 'session.status',
@@ -423,7 +423,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Verify timer was cancelled and prompt NOT called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(false);
@@ -473,7 +473,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Orchestrator timer should still fire — prompt was called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
@@ -806,7 +806,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Verify timer was cancelled and prompt NOT called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(false);
@@ -855,7 +855,7 @@ describe('createTodoContinuationHook', () => {
       });
 
       // Advance past original cooldown
-      await delay(60);
+      await delay(250);
 
       // Orchestrator timer should still fire — prompt was called
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
@@ -1894,6 +1894,278 @@ describe('createTodoContinuationHook', () => {
         );
         expect(output2.parts[0].text).toContain('disabled');
       });
+    });
+  });
+
+  describe('session routing and notification cancellation', () => {
+    function createPendingCtx() {
+      return createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+        messagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Work in progress' }],
+            },
+          ],
+        },
+      });
+    }
+
+    test('chat.message registers orchestrator sessions without first-idle lockout', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+      });
+      await hook.tool.auto_continue.execute({ enabled: true });
+
+      hook.handleChatMessage({ sessionID: 'sub1', agent: 'fixer' });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      hook.handleChatMessage({ sessionID: 'main2', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'sub1' },
+        },
+      });
+      await delay(60);
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(false);
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main2' },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+      expect(contCall(ctx.client.session.prompt)[0].path.id).toBe('main2');
+    });
+
+    test('chat.message without agent does not block legacy first-idle fallback', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        autoEnable: true,
+        autoEnableThreshold: 1,
+      });
+
+      hook.handleChatMessage({ sessionID: 'main1' });
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+    });
+
+    test('subagent chat.message prevents first-idle fallback registration', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        autoEnable: true,
+        autoEnableThreshold: 1,
+      });
+
+      hook.handleChatMessage({ sessionID: 'sub1', agent: 'fixer' });
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'sub1' },
+        },
+      });
+      await delay(60);
+
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    });
+
+    test('session.status idle triggers continuation like session.idle', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'main1', status: { type: 'idle' } },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+    });
+
+    test('deleting another orchestrator does not cancel the active session timer', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      hook.handleChatMessage({ sessionID: 'main2', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await hook.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: 'main2' },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+      expect(contCall(ctx.client.session.prompt)[0].path.id).toBe('main1');
+    });
+
+    test('deleting all orchestrators restores legacy first-idle fallback', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        autoEnable: true,
+        autoEnableThreshold: 1,
+      });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      hook.handleChatMessage({ sessionID: 'main2', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await hook.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: 'main2' },
+        },
+      });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'legacy-main' },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+      expect(contCall(ctx.client.session.prompt)[0].path.id).toBe(
+        'legacy-main',
+      );
+    });
+
+    test('countdown notification busy status does not reset max-continuation counter', async () => {
+      const ctx = createPendingCtx();
+      const releaseNotifications: Array<() => void> = [];
+      ctx.client.session.prompt = mock(async (args: any) => {
+        if (args?.body?.noReply === true) {
+          await new Promise<void>((resolve) => {
+            releaseNotifications.push(resolve);
+          });
+        }
+        return {};
+      });
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        maxContinuations: 2,
+      });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+
+      for (let i = 0; i < 2; i++) {
+        await hook.handleEvent({
+          event: {
+            type: 'session.idle',
+            properties: { sessionID: 'main1' },
+          },
+        });
+        await hook.handleEvent({
+          event: {
+            type: 'session.status',
+            properties: { sessionID: 'main1', status: { type: 'busy' } },
+          },
+        });
+        await delay(60);
+        releaseNotifications.shift()?.();
+        await delay(10);
+      }
+
+      ctx.client.session.prompt.mockClear();
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await delay(60);
+
+      expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    });
+
+    test('late countdown notification busy status does not cancel continuation timer', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await delay(10);
+      await hook.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'main1', status: { type: 'busy' } },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+    });
+
+    test('countdown notification busy status does not cancel continuation timer', async () => {
+      const ctx = createPendingCtx();
+      let callCount = 0;
+      ctx.client.session.prompt = mock(async () => {
+        callCount++;
+        return {};
+      });
+      const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await hook.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'main1', status: { type: 'busy' } },
+        },
+      });
+      await delay(60);
+
+      expect(callCount).toBeGreaterThanOrEqual(2);
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
     });
   });
 
