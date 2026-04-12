@@ -2005,6 +2005,68 @@ describe('createTodoContinuationHook', () => {
       expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
     });
 
+    test('deleting another orchestrator does not cancel the active session timer', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, { cooldownMs: 50 });
+      await hook.tool.auto_continue.execute({ enabled: true });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      hook.handleChatMessage({ sessionID: 'main2', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await hook.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: 'main2' },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+      expect(contCall(ctx.client.session.prompt)[0].path.id).toBe('main1');
+    });
+
+    test('deleting all orchestrators restores legacy first-idle fallback', async () => {
+      const ctx = createPendingCtx();
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        autoEnable: true,
+        autoEnableThreshold: 1,
+      });
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      hook.handleChatMessage({ sessionID: 'main2', agent: 'orchestrator' });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: 'main1' },
+        },
+      });
+      await hook.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: 'main2' },
+        },
+      });
+
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'legacy-main' },
+        },
+      });
+      await delay(60);
+
+      expect(hasContinuation(ctx.client.session.prompt)).toBe(true);
+      expect(contCall(ctx.client.session.prompt)[0].path.id).toBe(
+        'legacy-main',
+      );
+    });
+
     test('countdown notification busy status does not cancel continuation timer', async () => {
       const ctx = createPendingCtx();
       let releaseNotification!: () => void;

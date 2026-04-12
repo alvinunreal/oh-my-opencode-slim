@@ -33,6 +33,7 @@ interface ContinuationState {
   enabled: boolean;
   consecutiveContinuations: number;
   pendingTimer: ReturnType<typeof setTimeout> | null;
+  pendingTimerSessionId: string | null;
   suppressUntil: number;
   orchestratorSessionIds: Set<string>;
   sawChatMessage: boolean;
@@ -81,6 +82,7 @@ function cancelPendingTimer(state: ContinuationState): void {
     clearTimeout(state.pendingTimer);
     state.pendingTimer = null;
   }
+  state.pendingTimerSessionId = null;
 }
 
 function resetState(state: ContinuationState): void {
@@ -123,6 +125,7 @@ export function createTodoContinuationHook(
     enabled: false,
     consecutiveContinuations: 0,
     pendingTimer: null,
+    pendingTimerSessionId: null,
     suppressUntil: 0,
     orchestratorSessionIds: new Set<string>(),
     sawChatMessage: false,
@@ -379,8 +382,10 @@ export function createTodoContinuationHook(
           state.isNotifying = false;
         });
 
+      state.pendingTimerSessionId = sessionID;
       state.pendingTimer = setTimeout(async () => {
         state.pendingTimer = null;
+        state.pendingTimerSessionId = null;
 
         // Guard: may have been disabled during cooldown
         if (!state.enabled) {
@@ -420,7 +425,11 @@ export function createTodoContinuationHook(
 
         // Only cancel timer for orchestrator session — sub-agents going
         // busy must not silently kill the orchestrator's continuation.
-        if (isOrchestrator && !state.isNotifying) {
+        if (
+          isOrchestrator &&
+          !state.isNotifying &&
+          state.pendingTimerSessionId === sessionID
+        ) {
           cancelPendingTimer(state);
         }
 
@@ -465,16 +474,19 @@ export function createTodoContinuationHook(
         (properties.info as { id?: string })?.id ??
         (properties.sessionID as string);
 
-      // Only cancel timer if the orchestrator session itself was deleted.
-      // Background sub-agent deletion must not kill the orchestrator's timer.
       if (deletedSessionId && isOrchestratorSession(deletedSessionId)) {
-        cancelPendingTimer(state);
-        log(`[${HOOK_NAME}] Cancelled pending timer on orchestrator delete`, {
-          sessionID: deletedSessionId,
-        });
+        if (state.pendingTimerSessionId === deletedSessionId) {
+          cancelPendingTimer(state);
+          log(`[${HOOK_NAME}] Cancelled pending timer on orchestrator delete`, {
+            sessionID: deletedSessionId,
+          });
+        }
 
-        resetState(state);
         state.orchestratorSessionIds.delete(deletedSessionId);
+        if (state.orchestratorSessionIds.size === 0) {
+          resetState(state);
+          state.sawChatMessage = false;
+        }
         log(`[${HOOK_NAME}] Reset orchestrator session on delete`, {
           sessionID: deletedSessionId,
         });
