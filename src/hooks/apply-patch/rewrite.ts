@@ -318,8 +318,13 @@ export async function rewritePatch(
   worktree?: string,
 ): Promise<RewritePatchResult> {
   try {
-    const { hunks, staged, getPreparedFileState, assertPreparedPathMissing } =
-      await createPatchExecutionContext(root, patchText, worktree);
+    const {
+      hunks,
+      pathsNormalized,
+      staged,
+      getPreparedFileState,
+      assertPreparedPathMissing,
+    } = await createPatchExecutionContext(root, patchText, worktree);
     const normalizedPatchText = normalizePatchText(patchText);
     const rewritten: PatchHunk[] = [];
     let changed = false;
@@ -485,6 +490,16 @@ export async function rewritePatch(
     }
 
     if (!changed) {
+      if (pathsNormalized) {
+        return {
+          patchText: formatPatch({ hunks }),
+          changed: true,
+          rewrittenChunks: 0,
+          totalChunks,
+          rewriteModes: ['normalize:patch-paths'],
+        };
+      }
+
       if (normalizedPatchText !== patchText) {
         return {
           patchText: normalizedPatchText,
