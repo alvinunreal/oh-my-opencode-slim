@@ -41,6 +41,7 @@ export type PreparedFileState =
 
 export type PatchExecutionContext = {
   hunks: PatchHunk[];
+  pathsNormalized: boolean;
   staged: Map<string, PreparedFileState>;
   getPreparedFileState: (
     filePath: string,
@@ -226,6 +227,97 @@ function validatePatchPaths(hunks: PatchHunk[]): void {
   }
 }
 
+function toPortablePatchPath(filePath: string): string {
+  return filePath.split(path.sep).join('/');
+}
+
+function toRelativePatchPath(root: string, target: string): string {
+  const relative = path.relative(root, target);
+
+  return toPortablePatchPath(
+    relative.length === 0 ? path.basename(target) : relative,
+  );
+}
+
+async function normalizeAbsolutePatchPath(
+  root: string,
+  worktree: string | undefined,
+  value: string,
+): Promise<string> {
+  if (!path.isAbsolute(value)) {
+    return value;
+  }
+
+  const guardContext = createPathGuardContext(root, worktree);
+  const target = path.resolve(value);
+
+  await guard(guardContext, target);
+
+  const [rootReal, targetReal] = await Promise.all([
+    guardContext.rootReal,
+    realCached(guardContext, target),
+  ]);
+
+  if (!inside(rootReal, targetReal)) {
+    throw createApplyPatchBlockedError(
+      `patch contains path outside workspace root: ${target}`,
+    );
+  }
+
+  return toRelativePatchPath(root, target);
+}
+
+async function normalizeAbsolutePatchPaths(
+  root: string,
+  worktree: string | undefined,
+  hunks: PatchHunk[],
+): Promise<{
+  hunks: PatchHunk[];
+  changed: boolean;
+}> {
+  const normalized: PatchHunk[] = [];
+  let changed = false;
+
+  for (const hunk of hunks) {
+    const normalizedPath = await normalizeAbsolutePatchPath(
+      root,
+      worktree,
+      hunk.path,
+    );
+
+    if (hunk.type !== 'update') {
+      changed ||= normalizedPath !== hunk.path;
+      normalized.push(
+        normalizedPath === hunk.path
+          ? hunk
+          : {
+              ...hunk,
+              path: normalizedPath,
+            },
+      );
+      continue;
+    }
+
+    const normalizedMovePath = hunk.move_path
+      ? await normalizeAbsolutePatchPath(root, worktree, hunk.move_path)
+      : undefined;
+    changed ||=
+      normalizedPath !== hunk.path || normalizedMovePath !== hunk.move_path;
+
+    normalized.push(
+      normalizedPath === hunk.path && normalizedMovePath === hunk.move_path
+        ? hunk
+        : {
+            ...hunk,
+            path: normalizedPath,
+            move_path: normalizedMovePath,
+          },
+    );
+  }
+
+  return { hunks: normalized, changed };
+}
+
 async function guardPatchTargets(
   root: string,
   worktree: string | undefined,
@@ -240,7 +332,14 @@ async function guardPatchTargets(
   return targets.length;
 }
 
-export function parseValidatedPatch(patchText: string): PatchHunk[] {
+export async function parseValidatedPatch(
+  root: string,
+  patchText: string,
+  worktree?: string,
+): Promise<{
+  hunks: PatchHunk[];
+  pathsNormalized: boolean;
+}> {
   let hunks: PatchHunk[];
 
   try {
@@ -258,9 +357,18 @@ export function parseValidatedPatch(patchText: string): PatchHunk[] {
     throw createApplyPatchValidationError('no hunks found');
   }
 
-  validatePatchPaths(hunks);
+  const normalizedPatch = await normalizeAbsolutePatchPaths(
+    root,
+    worktree,
+    hunks,
+  );
 
-  return hunks;
+  validatePatchPaths(normalizedPatch.hunks);
+
+  return {
+    hunks: normalizedPatch.hunks,
+    pathsNormalized: normalizedPatch.changed,
+  };
 }
 
 async function readPreparedFileText(
@@ -288,7 +396,11 @@ export async function createPatchExecutionContext(
   patchText: string,
   worktree?: string,
 ): Promise<PatchExecutionContext> {
-  const hunks = parseValidatedPatch(patchText);
+  const { hunks, pathsNormalized } = await parseValidatedPatch(
+    root,
+    patchText,
+    worktree,
+  );
   await guardPatchTargets(root, worktree, collectPatchTargets(root, hunks));
   const files = createFileCacheContext();
   const staged = new Map<string, PreparedFileState>();
@@ -352,6 +464,7 @@ export async function createPatchExecutionContext(
 
   return {
     hunks,
+    pathsNormalized,
     staged,
     getPreparedFileState,
     assertPreparedPathMissing,

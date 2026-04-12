@@ -91,6 +91,30 @@ PATCH`,
     );
   });
 
+  test('normaliza paths absolutos dentro del root antes del nativo', async () => {
+    const root = await createTempDir('apply-patch-hook-');
+    const absolutePath = path.join(root, 'sample.txt');
+    await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');
+    const hook = createHook();
+    const patchText = `*** Begin Patch
+*** Update File: ${absolutePath}
+@@
+-alpha
++omega
+*** End Patch`;
+    const output = { args: { patchText } };
+
+    await hook['tool.execute.before'](
+      { tool: 'apply_patch', directory: root },
+      output,
+    );
+
+    expect(parsePatch(output.args.patchText as string).hunks[0]).toMatchObject({
+      type: 'update',
+      path: 'sample.txt',
+    });
+  });
+
   test('reescribe stale patch de prefijo y sigue siendo aplicable', async () => {
     const root = await createTempDir('apply-patch-hook-');
     await writeFixture(
@@ -555,6 +579,34 @@ garbage
 
     expect(output.args.patchText).toBe(patchText);
     expect(await readFile(outside, 'utf-8')).toBe('outside\n');
+  });
+
+  test('bloquea un path absoluto dentro del worktree pero fuera del root', async () => {
+    const worktree = await createTempDir('apply-patch-worktree-');
+    const root = path.join(worktree, 'subdir');
+    await mkdir(root, { recursive: true });
+    const siblingPath = path.join(worktree, 'shared.txt');
+    const hook = createApplyPatchHook({
+      client: {} as never,
+      directory: root,
+      worktree,
+    } as never);
+    const patchText = `*** Begin Patch
+*** Add File: ${siblingPath}
++fresh
+*** End Patch`;
+    const output = { args: { patchText } };
+
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'apply_patch', directory: root },
+        output,
+      ),
+    ).rejects.toThrow(
+      `apply_patch blocked: patch contains path outside workspace root: ${siblingPath}`,
+    );
+
+    expect(output.args.patchText).toBe(patchText);
   });
 
   test('aborta temprano y no aplica nada si un patch mixto tiene rutas fuera', async () => {
