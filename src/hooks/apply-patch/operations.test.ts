@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { parsePatch } from './codec';
 import {
+  isApplyPatchBlockedError,
   isApplyPatchValidationError,
   isApplyPatchVerificationError,
 } from './errors';
@@ -349,6 +350,74 @@ garbage
       ),
     ).rejects.toThrow(
       'apply_patch validation failed: Invalid patch format: unexpected line in Add File body: garbage',
+    );
+  });
+
+  test('preparePatchChanges rechaza un Update File con path absoluto como validation', async () => {
+    const root = await createTempDir();
+    const absolutePath = path.join(root, 'sample.txt');
+
+    const error = await preparePatchChanges(
+      root,
+      `*** Begin Patch
+*** Update File: ${absolutePath}
+@@
+-alpha
++omega
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    ).catch((caughtError) => caughtError);
+
+    expect(isApplyPatchValidationError(error)).toBeTrue();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      `apply_patch validation failed: absolute patch paths are not allowed: ${absolutePath}`,
+    );
+  });
+
+  test('preparePatchChanges rechaza un Add File con path absoluto como validation', async () => {
+    const root = await createTempDir();
+    const absolutePath = path.join(root, 'added.txt');
+
+    const error = await preparePatchChanges(
+      root,
+      `*** Begin Patch
+*** Add File: ${absolutePath}
++fresh
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    ).catch((caughtError) => caughtError);
+
+    expect(isApplyPatchValidationError(error)).toBeTrue();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      `apply_patch validation failed: absolute patch paths are not allowed: ${absolutePath}`,
+    );
+  });
+
+  test('preparePatchChanges rechaza un Move to con path absoluto como validation', async () => {
+    const root = await createTempDir();
+    const absoluteMovePath = path.join(root, 'nested/after.txt');
+
+    await writeFixture(root, 'before.txt', 'alpha\nbeta\n');
+
+    const error = await preparePatchChanges(
+      root,
+      `*** Begin Patch
+*** Update File: before.txt
+*** Move to: ${absoluteMovePath}
+@@
+ alpha
+-beta
++BETA
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    ).catch((caughtError) => caughtError);
+
+    expect(isApplyPatchValidationError(error)).toBeTrue();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      `apply_patch validation failed: absolute patch paths are not allowed: ${absoluteMovePath}`,
     );
   });
 
@@ -1280,6 +1349,27 @@ garbage
     await expect(
       rewritePatchText(root, patchText, DEFAULT_OPTIONS, root),
     ).rejects.toThrow(
+      'apply_patch blocked: patch contains path outside workspace root:',
+    );
+  });
+
+  test('preparePatchChanges mantiene como blocked un relativo que escapa de root', async () => {
+    const root = await createTempDir();
+
+    const error = await preparePatchChanges(
+      root,
+      `*** Begin Patch
+*** Add File: ../outside-added.txt
++fresh
+*** End Patch`,
+      DEFAULT_OPTIONS,
+      root,
+    ).catch((caughtError) => caughtError);
+
+    expect(isApplyPatchBlockedError(error)).toBeTrue();
+    expect(isApplyPatchValidationError(error)).toBeFalse();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
       'apply_patch blocked: patch contains path outside workspace root:',
     );
   });

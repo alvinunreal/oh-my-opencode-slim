@@ -206,6 +206,26 @@ function collectPatchTargets(root: string, hunks: PatchHunk[]): string[] {
   return [...targets];
 }
 
+function validatePatchPaths(hunks: PatchHunk[]): void {
+  for (const hunk of hunks) {
+    if (path.isAbsolute(hunk.path)) {
+      throw createApplyPatchValidationError(
+        `absolute patch paths are not allowed: ${hunk.path}`,
+      );
+    }
+
+    if (
+      hunk.type === 'update' &&
+      hunk.move_path &&
+      path.isAbsolute(hunk.move_path)
+    ) {
+      throw createApplyPatchValidationError(
+        `absolute patch paths are not allowed: ${hunk.move_path}`,
+      );
+    }
+  }
+}
+
 async function guardPatchTargets(
   root: string,
   worktree: string | undefined,
@@ -237,6 +257,8 @@ export function parseValidatedPatch(patchText: string): PatchHunk[] {
 
     throw createApplyPatchValidationError('no hunks found');
   }
+
+  validatePatchPaths(hunks);
 
   return hunks;
 }
