@@ -34,10 +34,14 @@ interface ContinuationState {
   consecutiveContinuations: number;
   pendingTimer: ReturnType<typeof setTimeout> | null;
   suppressUntil: number;
-  orchestratorSessionId: string | null;
+  orchestratorSessionIds: Set<string>;
+  sawChatMessage: boolean;
   // True while our auto-injection prompt is in flight — prevents counter reset
   // on session.status→busy and blocks duplicate injections
   isAutoInjecting: boolean;
+  // True while our noReply countdown notification is in flight — prevents
+  // that notification's own busy transition from cancelling its timer.
+  isNotifying: boolean;
 }
 
 function isQuestion(text: string): boolean {
@@ -84,6 +88,7 @@ function resetState(state: ContinuationState): void {
   state.consecutiveContinuations = 0;
   state.suppressUntil = 0;
   state.isAutoInjecting = false;
+  state.isNotifying = false;
 }
 
 export function createTodoContinuationHook(
@@ -99,6 +104,7 @@ export function createTodoContinuationHook(
   handleEvent: (input: {
     event: { type: string; properties?: Record<string, unknown> };
   }) => Promise<void>;
+  handleChatMessage: (input: { sessionID: string; agent?: string }) => void;
   handleCommandExecuteBefore: (
     input: {
       command: string;
@@ -118,9 +124,33 @@ export function createTodoContinuationHook(
     consecutiveContinuations: 0,
     pendingTimer: null,
     suppressUntil: 0,
-    orchestratorSessionId: null,
+    orchestratorSessionIds: new Set<string>(),
+    sawChatMessage: false,
     isAutoInjecting: false,
+    isNotifying: false,
   };
+
+  function isOrchestratorSession(sessionID: string): boolean {
+    return state.orchestratorSessionIds.has(sessionID);
+  }
+
+  function registerOrchestratorSession(sessionID: string): void {
+    state.orchestratorSessionIds.add(sessionID);
+  }
+
+  function handleChatMessage(input: {
+    sessionID: string;
+    agent?: string;
+  }): void {
+    if (!input.agent) {
+      return;
+    }
+
+    state.sawChatMessage = true;
+    if (input.agent === 'orchestrator') {
+      registerOrchestratorSession(input.sessionID);
+    }
+  }
 
   const autoContinue = tool({
     description:
@@ -150,7 +180,11 @@ export function createTodoContinuationHook(
     const { event } = input;
     const properties = event.properties ?? {};
 
-    if (event.type === 'session.idle') {
+    if (
+      event.type === 'session.idle' ||
+      (event.type === 'session.status' &&
+        (properties.status as { type?: string } | undefined)?.type === 'idle')
+    ) {
       const sessionID = properties.sessionID as string;
       if (!sessionID) {
         return;
@@ -158,17 +192,17 @@ export function createTodoContinuationHook(
 
       log(`[${HOOK_NAME}] Session idle`, { sessionID });
 
-      // Track orchestrator session (assumes orchestrator is the first
-      // session to go idle — correct for single-session main chat)
-      if (!state.orchestratorSessionId) {
-        state.orchestratorSessionId = sessionID;
+      // Backward compatibility: if no chat.message has identified the
+      // orchestrator yet, fall back to the first idle session.
+      if (!state.sawChatMessage && state.orchestratorSessionIds.size === 0) {
+        registerOrchestratorSession(sessionID);
         log(`[${HOOK_NAME}] Tracked orchestrator session`, {
           sessionID,
         });
       }
 
       // Gate: session is orchestrator (needed before auto-enable check)
-      if (state.orchestratorSessionId !== sessionID) {
+      if (!isOrchestratorSession(sessionID)) {
         log(`[${HOOK_NAME}] Skipped: not orchestrator session`, {
           sessionID,
         });
@@ -320,6 +354,7 @@ export function createTodoContinuationHook(
       });
 
       // Show countdown notification (noReply = agent doesn't respond)
+      state.isNotifying = true;
       ctx.client.session
         .prompt({
           path: { id: sessionID },
@@ -339,6 +374,9 @@ export function createTodoContinuationHook(
         })
         .catch(() => {
           /* best-effort notification */
+        })
+        .finally(() => {
+          state.isNotifying = false;
         });
 
       state.pendingTimer = setTimeout(async () => {
@@ -378,11 +416,11 @@ export function createTodoContinuationHook(
       const status = properties.status as { type: string };
       const sessionID = properties.sessionID as string;
       if (status?.type === 'busy') {
-        const isOrchestrator = sessionID === state.orchestratorSessionId;
+        const isOrchestrator = isOrchestratorSession(sessionID);
 
         // Only cancel timer for orchestrator session — sub-agents going
         // busy must not silently kill the orchestrator's continuation.
-        if (isOrchestrator) {
+        if (isOrchestrator && !state.isNotifying) {
           cancelPendingTimer(state);
         }
 
@@ -403,7 +441,7 @@ export function createTodoContinuationHook(
       const error = properties.error as { name?: string };
       const sessionID = properties.sessionID as string;
       const errorName = error?.name;
-      const isOrchestrator = sessionID === state.orchestratorSessionId;
+      const isOrchestrator = isOrchestratorSession(sessionID);
       if (
         isOrchestrator &&
         (errorName === 'MessageAbortedError' || errorName === 'AbortError')
@@ -429,14 +467,14 @@ export function createTodoContinuationHook(
 
       // Only cancel timer if the orchestrator session itself was deleted.
       // Background sub-agent deletion must not kill the orchestrator's timer.
-      if (state.orchestratorSessionId === deletedSessionId) {
+      if (deletedSessionId && isOrchestratorSession(deletedSessionId)) {
         cancelPendingTimer(state);
         log(`[${HOOK_NAME}] Cancelled pending timer on orchestrator delete`, {
           sessionID: deletedSessionId,
         });
 
         resetState(state);
-        state.orchestratorSessionId = null;
+        state.orchestratorSessionIds.delete(deletedSessionId);
         log(`[${HOOK_NAME}] Reset orchestrator session on delete`, {
           sessionID: deletedSessionId,
         });
@@ -458,9 +496,7 @@ export function createTodoContinuationHook(
 
     // Seed orchestrator session from slash command (more reliable than
     // first-idle heuristic — slash commands only fire in main chat)
-    if (!state.orchestratorSessionId) {
-      state.orchestratorSessionId = input.sessionID;
-    }
+    registerOrchestratorSession(input.sessionID);
 
     // Clear template text — hook handles everything directly
     output.parts.length = 0;
@@ -533,6 +569,7 @@ export function createTodoContinuationHook(
   return {
     tool: { auto_continue: autoContinue },
     handleEvent,
+    handleChatMessage,
     handleCommandExecuteBefore,
   };
 }
