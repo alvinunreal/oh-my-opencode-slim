@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -25,6 +26,7 @@ import * as paths from './paths';
 describe('config-io', () => {
   let tmpDir: string;
   const originalEnv = { ...process.env };
+  const originalArgv = [...process.argv];
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'opencode-io-test-'));
@@ -34,11 +36,20 @@ describe('config-io', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
+    process.argv = [...originalArgv];
     if (tmpDir && existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
     mock.restore();
   });
+
+  function writePackageJson(dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'oh-my-opencode-slim' }),
+    );
+  }
 
   test('stripJsonComments strips comments and trailing commas', () => {
     const jsonc = `{
@@ -110,6 +121,7 @@ describe('config-io', () => {
       configPath,
       JSON.stringify({ plugin: ['other', 'oh-my-opencode-slim@1.0.0'] }),
     );
+    process.argv[1] = '';
 
     const result = await addPluginToOpenCodeConfig();
     expect(result.success).toBe(true);
@@ -118,6 +130,77 @@ describe('config-io', () => {
     expect(saved.plugin).toContain('oh-my-opencode-slim');
     expect(saved.plugin).not.toContain('oh-my-opencode-slim@1.0.0');
     expect(saved.plugin.length).toBe(2);
+  });
+
+  test('addPluginToOpenCodeConfig stores package name for bunx temp paths', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@latest',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot);
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeConfig stores local repo path for local dev paths', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(tmpDir, 'repo');
+    const localCliPath = join(packageRoot, 'dist', 'cli', 'index.js');
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot);
+    process.argv[1] = localCliPath;
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual([packageRoot]);
+  });
+
+  test('addPluginToOpenCodeConfig stores local repo path for local paths containing bunx-', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(tmpDir, 'repo', 'bunx-tools');
+    const localCliPath = join(packageRoot, 'dist', 'cli', 'index.js');
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot);
+    process.argv[1] = localCliPath;
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual([packageRoot]);
+  });
+
+  test('addPluginToOpenCodeConfig deduplicates existing local repo path entries', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(tmpDir, 'repo');
+    const localCliPath = join(packageRoot, 'dist', 'cli', 'index.js');
+    paths.ensureConfigDir();
+    writePackageJson(packageRoot);
+    writeFileSync(
+      configPath,
+      JSON.stringify({ plugin: ['other', packageRoot] }),
+    );
+    process.argv[1] = localCliPath;
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['other', packageRoot]);
   });
 
   test('writeLiteConfig writes lite config with OpenAI preset', () => {
@@ -191,5 +274,17 @@ describe('config-io', () => {
     expect(detected.hasCopilot).toBe(true);
     expect(detected.hasZaiPlan).toBe(true);
     expect(detected.hasTmux).toBe(true);
+  });
+
+  test('detectCurrentConfig treats local repo path entries as installed', () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(tmpDir, 'repo');
+    paths.ensureConfigDir();
+    writePackageJson(packageRoot);
+    writeFileSync(configPath, JSON.stringify({ plugin: [packageRoot] }));
+
+    const detected = detectCurrentConfig();
+
+    expect(detected.isInstalled).toBe(true);
   });
 });

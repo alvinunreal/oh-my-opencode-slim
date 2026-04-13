@@ -1,6 +1,41 @@
+import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 
 let cachedOpenCodePath: string | null = null;
+
+function resolvePathCommand(command: string): string | null {
+  try {
+    const resolver = process.platform === 'win32' ? 'where' : 'which';
+    const result = spawnSync(resolver, [command], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    if (result.status !== 0) {
+      return null;
+    }
+
+    const resolved = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+
+    return resolved ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function canExecute(command: string, args: string[]): boolean {
+  try {
+    const result = spawnSync(command, args, {
+      stdio: 'ignore',
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
 
 function getOpenCodePaths(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
@@ -53,6 +88,12 @@ export function resolveOpenCodePath(): string {
     return cachedOpenCodePath;
   }
 
+  const pathOpenCodePath = resolvePathCommand('opencode');
+  if (pathOpenCodePath) {
+    cachedOpenCodePath = pathOpenCodePath;
+    return pathOpenCodePath;
+  }
+
   const paths = getOpenCodePaths();
 
   for (const opencodePath of paths) {
@@ -73,50 +114,38 @@ export function resolveOpenCodePath(): string {
 }
 
 export async function isOpenCodeInstalled(): Promise<boolean> {
+  const pathOpenCodePath = resolvePathCommand('opencode');
+
+  if (pathOpenCodePath && canExecute(pathOpenCodePath, ['--version'])) {
+    cachedOpenCodePath = pathOpenCodePath;
+    return true;
+  }
+
   const paths = getOpenCodePaths();
 
   for (const opencodePath of paths) {
-    try {
-      const proc = Bun.spawn([opencodePath, '--version'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-      if (proc.exitCode === 0) {
-        cachedOpenCodePath = opencodePath;
-        return true;
-      }
-    } catch {
-      // Try next path
+    if (opencodePath === 'opencode') continue;
+    if (canExecute(opencodePath, ['--version'])) {
+      cachedOpenCodePath = opencodePath;
+      return true;
     }
   }
   return false;
 }
 
 export async function isTmuxInstalled(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn(['tmux', '-V'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    await proc.exited;
-    return proc.exitCode === 0;
-  } catch {
-    return false;
-  }
+  return canExecute('tmux', ['-V']);
 }
 
 export async function getOpenCodeVersion(): Promise<string | null> {
   const opencodePath = resolveOpenCodePath();
   try {
-    const proc = Bun.spawn([opencodePath, '--version'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const result = spawnSync(opencodePath, ['--version'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const output = await new Response(proc.stdout).text();
-    await proc.exited;
-    if (proc.exitCode === 0) {
-      return output.trim();
+    if (result.status === 0) {
+      return result.stdout.trim();
     }
   } catch {
     // Failed
