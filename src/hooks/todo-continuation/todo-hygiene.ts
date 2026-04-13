@@ -30,6 +30,7 @@ interface EventInput {
 interface Options {
   getTodoState: (sessionID: string) => Promise<{
     hasOpenTodos: boolean;
+    openCount: number;
     inProgressCount: number;
     pendingCount: number;
   }>;
@@ -47,10 +48,15 @@ export function createTodoHygiene(options: Options) {
   }
 
   function isFinalActive(state: {
+    openCount: number;
     inProgressCount: number;
     pendingCount: number;
   }): boolean {
-    return state.inProgressCount === 1 && state.pendingCount === 0;
+    return (
+      state.inProgressCount === 1 &&
+      state.pendingCount === 0 &&
+      state.openCount === 1
+    );
   }
 
   return {
@@ -129,7 +135,8 @@ export function createTodoHygiene(options: Options) {
       }
 
       if (options.shouldInject && !options.shouldInject(input.sessionID)) {
-        clear(input.sessionID);
+        pending.delete(input.sessionID);
+        done.add(input.sessionID);
         return;
       }
 

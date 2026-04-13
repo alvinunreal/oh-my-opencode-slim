@@ -158,6 +158,7 @@ export function createTodoContinuationHook(
       );
       return {
         hasOpenTodos: openTodos.length > 0,
+        openCount: openTodos.length,
         inProgressCount: openTodos.filter(
           (todo) => todo.status === 'in_progress',
         ).length,

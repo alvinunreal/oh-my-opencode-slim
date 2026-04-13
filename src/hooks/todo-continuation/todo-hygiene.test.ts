@@ -10,6 +10,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 0,
         pendingCount: 1,
       }),
@@ -33,6 +34,7 @@ describe('todo hygiene', () => {
         count++;
         return {
           hasOpenTodos: true,
+          openCount: 1,
           inProgressCount: 0,
           pendingCount: 1,
         };
@@ -50,6 +52,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 0,
         pendingCount: 1,
       }),
@@ -70,6 +73,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 0,
         pendingCount: 1,
       }),
@@ -91,6 +95,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 0,
         pendingCount: 1,
       }),
@@ -108,6 +113,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 0,
         pendingCount: 1,
       }),
@@ -129,6 +135,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 0,
         pendingCount: 1,
       }),
@@ -153,6 +160,7 @@ describe('todo hygiene', () => {
         if (calls === 1) {
           return {
             hasOpenTodos: true,
+            openCount: 1,
             inProgressCount: 0,
             pendingCount: 1,
           };
@@ -182,6 +190,7 @@ describe('todo hygiene', () => {
         }
         return {
           hasOpenTodos: true,
+          openCount: 1,
           inProgressCount: 0,
           pendingCount: 1,
         };
@@ -204,6 +213,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 1,
         pendingCount: 0,
       }),
@@ -221,6 +231,7 @@ describe('todo hygiene', () => {
     const hook = createTodoHygiene({
       getTodoState: async () => ({
         hasOpenTodos: true,
+        openCount: 1,
         inProgressCount: 1,
         pendingCount: 0,
       }),
@@ -232,5 +243,23 @@ describe('todo hygiene', () => {
 
     expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
     expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+  });
+
+  test('does not use final-active reminder when another open status exists', async () => {
+    const hook = createTodoHygiene({
+      getTodoState: async () => ({
+        hasOpenTodos: true,
+        openCount: 2,
+        inProgressCount: 1,
+        pendingCount: 0,
+      }),
+    });
+    const system = { system: ['base'] };
+
+    await hook.handleToolExecuteAfter({ tool: 'task', sessionID: 's1' });
+    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
+
+    expect(system.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    expect(system.system.join('\n')).not.toContain(TODO_FINAL_ACTIVE_REMINDER);
   });
 });
