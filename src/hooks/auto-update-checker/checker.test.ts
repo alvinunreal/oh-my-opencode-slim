@@ -73,6 +73,12 @@ describe('auto-update-checker/checker', () => {
           return false;
         },
       );
+      const statSpy = spyOn(fs, 'statSync').mockImplementation(
+        () =>
+          ({
+            isDirectory: () => true,
+          }) as unknown as fs.Stats,
+      );
       const readSpy = spyOn(fs, 'readFileSync').mockImplementation(
         (p: string) => {
           if (p.includes('opencode.json')) {
@@ -97,6 +103,7 @@ describe('auto-update-checker/checker', () => {
       expect(getLocalDevVersion('/test')).toBe('1.2.3-dev');
 
       existsSpy.mockRestore();
+      statSpy.mockRestore();
       readSpy.mockRestore();
     });
   });

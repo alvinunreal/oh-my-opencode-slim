@@ -14,7 +14,8 @@ mock.module('./checker', () => ({
 }));
 
 mock.module('./cache', () => ({
-  invalidatePackage: mock(() => false),
+  preparePackageUpdate: mock(() => '/tmp/opencode'),
+  resolveInstallContext: mock(() => ({ installDir: '/tmp/opencode' })),
 }));
 
 // Cache buster for dynamic imports
