@@ -55,9 +55,9 @@
     "release:major": "npm version major && git push --follow-tags && npm publish"
   },
   "dependencies": {
+    "@ast-grep/cli": "^0.42.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@ast-grep/cli": "^0.40.0",
-    "@modelcontextprotocol/sdk": "^1.26.0",
     "@opencode-ai/plugin": "^1.2.6",
     "@opencode-ai/sdk": "^1.2.6",
     "jsdom": "^26.1.0",
