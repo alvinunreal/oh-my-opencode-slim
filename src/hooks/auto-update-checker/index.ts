@@ -170,8 +170,8 @@ async function runBackgroundUpdateCheck(
     showToast(
       ctx,
       `OMO-Slim ${latestVersion}`,
-      `v${latestVersion} available. Restart to apply.`,
-      'info',
+      `v${latestVersion} available, but auto-update failed to install it. Check logs or retry manually.`,
+      'error',
       8000,
     );
     log('[auto-update-checker] bun install failed; update not installed');
