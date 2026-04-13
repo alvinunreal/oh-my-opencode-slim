@@ -139,6 +139,21 @@ export function getLocalDevVersion(directory: string): string | null {
 }
 
 /**
+ * Resolves the package.json for the currently running plugin bundle.
+ */
+export function getCurrentRuntimePackageJsonPath(
+  currentModuleUrl: string = import.meta.url,
+): string | null {
+  try {
+    const currentDir = path.dirname(fileURLToPath(currentModuleUrl));
+    return findPackageJsonUp(currentDir);
+  } catch (err) {
+    log('[auto-update-checker] Failed to resolve runtime package path:', err);
+    return null;
+  }
+}
+
+/**
  * Searches across all config locations to find the current installation entry for this plugin.
  */
 export function findPluginEntry(directory: string): PluginEntryInfo | null {
@@ -179,8 +194,9 @@ export function getCachedVersion(): string | null {
   if (cachedPackageVersion) return cachedPackageVersion;
 
   try {
-    if (fs.existsSync(INSTALLED_PACKAGE_JSON)) {
-      const content = fs.readFileSync(INSTALLED_PACKAGE_JSON, 'utf-8');
+    const runtimePackageJsonPath = getCurrentRuntimePackageJsonPath();
+    if (runtimePackageJsonPath && fs.existsSync(runtimePackageJsonPath)) {
+      const content = fs.readFileSync(runtimePackageJsonPath, 'utf-8');
       const pkg = JSON.parse(content) as PackageJson;
       if (pkg.version) {
         cachedPackageVersion = pkg.version;
@@ -192,10 +208,8 @@ export function getCachedVersion(): string | null {
   }
 
   try {
-    const currentDir = path.dirname(fileURLToPath(import.meta.url));
-    const pkgPath = findPackageJsonUp(currentDir);
-    if (pkgPath) {
-      const content = fs.readFileSync(pkgPath, 'utf-8');
+    if (fs.existsSync(INSTALLED_PACKAGE_JSON)) {
+      const content = fs.readFileSync(INSTALLED_PACKAGE_JSON, 'utf-8');
       const pkg = JSON.parse(content) as PackageJson;
       if (pkg.version) {
         cachedPackageVersion = pkg.version;

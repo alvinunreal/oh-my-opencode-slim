@@ -1,6 +1,6 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { log } from '../../utils/logger';
-import { invalidatePackage } from './cache';
+import { preparePackageUpdate, resolveInstallContext } from './cache';
 import {
   extractChannel,
   findPluginEntry,
@@ -140,9 +140,20 @@ async function runBackgroundUpdateCheck(
     return;
   }
 
-  invalidatePackage(PACKAGE_NAME);
+  const installDir = preparePackageUpdate(latestVersion, PACKAGE_NAME);
+  if (!installDir) {
+    showToast(
+      ctx,
+      `OMO-Slim ${latestVersion}`,
+      `v${latestVersion} available. Auto-update could not prepare the active install.`,
+      'info',
+      8000,
+    );
+    log('[auto-update-checker] Failed to prepare install root for auto-update');
+    return;
+  }
 
-  const installSuccess = await runBunInstallSafe();
+  const installSuccess = await runBunInstallSafe(installDir);
 
   if (installSuccess) {
     showToast(
@@ -168,18 +179,17 @@ async function runBackgroundUpdateCheck(
 }
 
 export function getAutoUpdateInstallDir(): string {
-  return CACHE_DIR;
+  return resolveInstallContext()?.installDir ?? CACHE_DIR;
 }
 
 /**
  * Spawns a background process to run 'bun install'.
  * Includes a 60-second timeout to prevent stalling OpenCode.
- * @param ctx The plugin input context.
+ * @param installDir The directory whose package manager context should be refreshed.
  * @returns True if the installation succeeded within the timeout.
  */
-async function runBunInstallSafe(): Promise<boolean> {
+async function runBunInstallSafe(installDir: string): Promise<boolean> {
   try {
-    const installDir = getAutoUpdateInstallDir();
     const proc = Bun.spawn(['bun', 'install'], {
       cwd: installDir,
       stdout: 'pipe',

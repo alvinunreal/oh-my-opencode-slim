@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stripJsonComments } from '../../cli/config-manager';
 import { log } from '../../utils/logger';
+import { getCurrentRuntimePackageJsonPath } from './checker';
 import { CACHE_DIR, PACKAGE_NAME } from './constants';
 
 interface BunLockfile {
@@ -13,13 +14,18 @@ interface BunLockfile {
   packages?: Record<string, unknown>;
 }
 
+interface AutoUpdateInstallContext {
+  installDir: string;
+  packageJsonPath: string;
+}
+
 /**
  * Removes a package from the bun.lock file if it's in JSON format.
  * Note: Newer Bun versions (1.1+) use a custom text format for bun.lock.
  * This function handles JSON-based lockfiles gracefully.
  */
-function removeFromBunLock(packageName: string): boolean {
-  const lockPath = path.join(CACHE_DIR, 'bun.lock');
+function removeFromBunLock(installDir: string, packageName: string): boolean {
+  const lockPath = path.join(installDir, 'bun.lock');
   if (!fs.existsSync(lockPath)) return false;
 
   try {
@@ -58,58 +64,125 @@ function removeFromBunLock(packageName: string): boolean {
   }
 }
 
-/**
- * Invalidates the current package by removing its directory and dependency entries.
- * This forces a clean state before running a fresh install.
- * @param packageName The name of the package to invalidate.
- */
-export function invalidatePackage(packageName: string = PACKAGE_NAME): boolean {
+function ensureDependencyVersion(
+  packageJsonPath: string,
+  packageName: string,
+  version: string,
+): boolean {
+  if (!fs.existsSync(packageJsonPath)) return false;
+
   try {
-    const pkgDir = path.join(CACHE_DIR, 'node_modules', packageName);
-    const pkgJsonPath = path.join(CACHE_DIR, 'package.json');
+    const content = fs.readFileSync(packageJsonPath, 'utf-8');
+    const pkgJson = JSON.parse(stripJsonComments(content)) as {
+      dependencies?: Record<string, string>;
+      [key: string]: unknown;
+    };
 
-    let packageRemoved = false;
-    let dependencyRemoved = false;
-    let lockRemoved = false;
-
-    if (fs.existsSync(pkgDir)) {
-      fs.rmSync(pkgDir, { recursive: true, force: true });
-      log(`[auto-update-checker] Package removed: ${pkgDir}`);
-      packageRemoved = true;
+    const dependencies = { ...(pkgJson.dependencies ?? {}) };
+    if (dependencies[packageName] === version) {
+      return true;
     }
 
-    if (fs.existsSync(pkgJsonPath)) {
-      try {
-        const content = fs.readFileSync(pkgJsonPath, 'utf-8');
-        const pkgJson = JSON.parse(stripJsonComments(content));
-        if (pkgJson.dependencies?.[packageName]) {
-          delete pkgJson.dependencies[packageName];
-          fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2));
-          log(
-            `[auto-update-checker] Dependency removed from package.json: ${packageName}`,
-          );
-          dependencyRemoved = true;
-        }
-      } catch (err) {
-        log(
-          `[auto-update-checker] Failed to update package.json for invalidation:`,
-          err,
-        );
+    dependencies[packageName] = version;
+    pkgJson.dependencies = dependencies;
+    fs.writeFileSync(packageJsonPath, JSON.stringify(pkgJson, null, 2));
+    log(
+      `[auto-update-checker] Updated dependency in package.json: ${packageName} → ${version}`,
+    );
+    return true;
+  } catch (err) {
+    log(
+      `[auto-update-checker] Failed to update package.json dependency for auto-update:`,
+      err,
+    );
+    return false;
+  }
+}
+
+function removeInstalledPackage(
+  installDir: string,
+  packageName: string,
+): boolean {
+  const pkgDir = path.join(installDir, 'node_modules', packageName);
+  if (!fs.existsSync(pkgDir)) return false;
+
+  fs.rmSync(pkgDir, { recursive: true, force: true });
+  log(`[auto-update-checker] Package removed: ${pkgDir}`);
+  return true;
+}
+
+export function resolveInstallContext(
+  runtimePackageJsonPath: string | null = getCurrentRuntimePackageJsonPath(),
+): AutoUpdateInstallContext | null {
+  if (runtimePackageJsonPath) {
+    const packageDir = path.dirname(runtimePackageJsonPath);
+    const nodeModulesDir = path.dirname(packageDir);
+
+    if (
+      path.basename(packageDir) === PACKAGE_NAME &&
+      path.basename(nodeModulesDir) === 'node_modules'
+    ) {
+      const installDir = path.dirname(nodeModulesDir);
+      const packageJsonPath = path.join(installDir, 'package.json');
+      if (fs.existsSync(packageJsonPath)) {
+        return { installDir, packageJsonPath };
       }
     }
 
-    lockRemoved = removeFromBunLock(packageName);
+    return null;
+  }
 
-    if (!packageRemoved && !dependencyRemoved && !lockRemoved) {
-      log(
-        `[auto-update-checker] Package not found, nothing to invalidate: ${packageName}`,
-      );
-      return false;
+  const legacyPackageJsonPath = path.join(CACHE_DIR, 'package.json');
+  if (fs.existsSync(legacyPackageJsonPath)) {
+    return { installDir: CACHE_DIR, packageJsonPath: legacyPackageJsonPath };
+  }
+
+  return null;
+}
+
+/**
+ * Prepares the current install root for a clean re-install of the target version.
+ * Returns the install directory to run `bun install` in.
+ */
+export function preparePackageUpdate(
+  version: string,
+  packageName: string = PACKAGE_NAME,
+  runtimePackageJsonPath: string | null = getCurrentRuntimePackageJsonPath(),
+): string | null {
+  try {
+    const installContext = resolveInstallContext(runtimePackageJsonPath);
+    if (!installContext) {
+      log('[auto-update-checker] No install context found for auto-update');
+      return null;
     }
 
-    return true;
+    const dependencyReady = ensureDependencyVersion(
+      installContext.packageJsonPath,
+      packageName,
+      version,
+    );
+    if (!dependencyReady) {
+      return null;
+    }
+
+    const packageRemoved = removeInstalledPackage(
+      installContext.installDir,
+      packageName,
+    );
+    const lockRemoved = removeFromBunLock(
+      installContext.installDir,
+      packageName,
+    );
+
+    if (!packageRemoved && !lockRemoved) {
+      log(
+        `[auto-update-checker] No cached package artifacts removed for ${packageName}; continuing with updated dependency spec`,
+      );
+    }
+
+    return installContext.installDir;
   } catch (err) {
-    log('[auto-update-checker] Failed to invalidate package:', err);
-    return false;
+    log('[auto-update-checker] Failed to prepare package update:', err);
+    return null;
   }
 }
