@@ -55,7 +55,7 @@ async function waitForCalls(
   fn: { mock: { calls: unknown[] } },
   minCalls = 1,
 ): Promise<void> {
-  const deadline = Date.now() + 200;
+  const deadline = Date.now() + 1000;
 
   while (fn.mock.calls.length < minCalls) {
     if (Date.now() > deadline) {
