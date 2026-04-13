@@ -14,6 +14,7 @@ export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
   librarian: ['websearch', 'context7', 'grep_app'],
   explorer: [],
   fixer: [],
+  looker: [],
   council: [],
   councillor: [],
   'council-master': [],

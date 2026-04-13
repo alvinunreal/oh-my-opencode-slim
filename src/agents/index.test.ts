@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import {
   AgentOverrideConfigSchema,
+  DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   SUBAGENT_NAMES,
 } from '../config';
@@ -278,7 +279,8 @@ describe('agent classification', () => {
   });
 
   test('getAgentConfigs applies correct classification visibility and mode', () => {
-    const configs = getAgentConfigs();
+    // Enable all agents (including looker) for classification testing
+    const configs = getAgentConfigs({ disabled_agents: [] });
 
     // Primary agent
     expect(configs.orchestrator.mode).toBe('primary');
@@ -307,7 +309,7 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 9 agents (1 primary + 8 subagents)', () => {
+  test('creates exactly 9 agents by default (looker disabled)', () => {
     const agents = createAgents();
     expect(agents.length).toBe(9);
   });
@@ -596,10 +598,10 @@ describe('disabled_agents', () => {
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(9); // 1 + 8
+    expect(agents.length).toBe(9); // 1 + 8 (looker disabled by default)
 
     const disabledConfig: PluginConfig = {
-      disabled_agents: ['designer'],
+      disabled_agents: ['looker', 'designer'],
     };
     const disabledAgents = createAgents(disabledConfig);
     expect(disabledAgents.length).toBe(8);
@@ -626,11 +628,52 @@ describe('disabled_agents', () => {
     expect(enabled).toContain('explorer');
   });
 
-  test('empty disabled_agents creates all agents', () => {
+  test('empty disabled_agents creates all agents including looker', () => {
     const config: PluginConfig = {
       disabled_agents: [],
     };
     const agents = createAgents(config);
-    expect(agents.length).toBe(9);
+    expect(agents.length).toBe(10);
+    expect(agents.map((a) => a.name)).toContain('looker');
+  });
+});
+
+describe('looker agent', () => {
+  test('looker is disabled by default', () => {
+    const agents = createAgents();
+    const names = agents.map((a) => a.name);
+    expect(names).not.toContain('looker');
+  });
+
+  test('looker is enabled when removed from disabled_agents', () => {
+    const config: PluginConfig = {
+      disabled_agents: [],
+    };
+    const agents = createAgents(config);
+    const names = agents.map((a) => a.name);
+    expect(names).toContain('looker');
+  });
+
+  test('looker is disabled when explicitly listed', () => {
+    const config: PluginConfig = {
+      disabled_agents: ['looker'],
+    };
+    const agents = createAgents(config);
+    const names = agents.map((a) => a.name);
+    expect(names).not.toContain('looker');
+  });
+
+  test('looker can be enabled alongside other disabled agents', () => {
+    const config: PluginConfig = {
+      disabled_agents: ['designer'],
+    };
+    const agents = createAgents(config);
+    const names = agents.map((a) => a.name);
+    expect(names).toContain('looker');
+    expect(names).not.toContain('designer');
+  });
+
+  test('DEFAULT_DISABLED_AGENTS contains looker', () => {
+    expect(DEFAULT_DISABLED_AGENTS).toContain('looker');
   });
 });

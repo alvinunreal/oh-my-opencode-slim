@@ -1,13 +1,14 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
 import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
-  ALL_AGENT_NAMES,
   type AgentOverrideConfig,
+  ALL_AGENT_NAMES,
+  DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   getAgentOverride,
   loadAgentPrompt,
-  PROTECTED_AGENTS,
   type PluginConfig,
+  PROTECTED_AGENTS,
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
@@ -19,6 +20,7 @@ import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
 import { createLibrarianAgent } from './librarian';
+import { createLookerAgent } from './looker';
 import { createOracleAgent } from './oracle';
 import { type AgentDefinition, createOrchestratorAgent } from './orchestrator';
 
@@ -116,6 +118,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   oracle: createOracleAgent,
   designer: createDesignerAgent,
   fixer: createFixerAgent,
+  looker: createLookerAgent,
   council: createCouncilAgent,
   councillor: createCouncillorAgent,
   'council-master': createCouncilMasterAgent,
@@ -131,9 +134,12 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
-  // Compute disabled agents, protecting orchestrator and council internals
+  // Compute disabled agents: user config overrides defaults
+  const userDisabled = config?.disabled_agents;
+  const disabledSource =
+    userDisabled !== undefined ? userDisabled : DEFAULT_DISABLED_AGENTS;
   const disabled = new Set<string>();
-  for (const name of config?.disabled_agents ?? []) {
+  for (const name of disabledSource) {
     if (!PROTECTED_AGENTS.has(name)) {
       disabled.add(name);
     }
@@ -174,13 +180,13 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   )
     .filter(([name]) => !disabled.has(name))
     .map(([name, factory]) => {
-    const customPrompts = loadAgentPrompt(name, config?.preset);
-    return factory(
-      getModelForAgent(name),
-      customPrompts.prompt,
-      customPrompts.appendPrompt,
-    );
-  });
+      const customPrompts = loadAgentPrompt(name, config?.preset);
+      return factory(
+        getModelForAgent(name),
+        customPrompts.prompt,
+        customPrompts.appendPrompt,
+      );
+    });
 
   // 2. Apply overrides and default permissions to each agent
   const allSubAgents = protoSubAgents.map((agent) => {
@@ -256,8 +262,11 @@ export function getAgentConfigs(
  * Get the set of disabled agent names from config, applying protection rules.
  */
 export function getDisabledAgents(config?: PluginConfig): Set<string> {
+  const userDisabled = config?.disabled_agents;
+  const disabledSource =
+    userDisabled !== undefined ? userDisabled : DEFAULT_DISABLED_AGENTS;
   const disabled = new Set<string>();
-  for (const name of config?.disabled_agents ?? []) {
+  for (const name of disabledSource) {
     if (!PROTECTED_AGENTS.has(name)) {
       disabled.add(name);
     }

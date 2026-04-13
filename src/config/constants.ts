@@ -10,6 +10,7 @@ export const SUBAGENT_NAMES = [
   'oracle',
   'designer',
   'fixer',
+  'looker',
   'council',
   'councillor',
   'council-master',
@@ -36,6 +37,7 @@ export const ORCHESTRATABLE_AGENTS = [
   'oracle',
   'designer',
   'fixer',
+  'looker',
   'council',
 ] as const;
 
@@ -63,6 +65,7 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   explorer: [],
   librarian: [],
   oracle: [],
+  looker: [],
   council: [],
   councillor: [],
   'council-master': [],
@@ -77,6 +80,7 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   explorer: 'openai/gpt-5.4-mini',
   designer: 'openai/gpt-5.4-mini',
   fixer: 'openai/gpt-5.4-mini',
+  looker: 'openai/gpt-5.4-mini',
   council: 'openai/gpt-5.4-mini',
   councillor: 'openai/gpt-5.4-mini',
   'council-master': 'openai/gpt-5.4-mini',
@@ -108,3 +112,7 @@ export const COUNCILLOR_STAGGER_MS = 250;
 
 // Polling stability
 export const STABLE_POLLS_THRESHOLD = 3;
+
+/** Agents that are disabled by default. Users must explicitly enable them
+ *  by removing from disabled_agents and configuring an appropriate model. */
+export const DEFAULT_DISABLED_AGENTS: string[] = ['looker'];

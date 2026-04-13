@@ -72,6 +72,14 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Single-model answer is sufficient • Routine implementation work
 - **Result handling:** Present the council's synthesized response verbatim. Do not re-summarize — the council master has already produced the final answer.
 - **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.`,
+
+  looker: `@looker
+- Role: Visual and multimodal analysis specialist for images, PDFs, and diagrams
+- Stats: Saves main context tokens — Looker processes raw files, returns structured observations
+- Capabilities: Interprets images, screenshots, PDFs, and diagrams via native read tool; extracts UI elements, layouts, text, relationships
+- **Delegate when:** Need to analyze a screenshot or image • Extract information from a PDF • Interpret a diagram or architecture drawing • Visual content needs structured description for downstream agents
+- **Don't delegate when:** Plain text files that Read can handle directly • Files that need editing afterward (need literal content from Read)
+- **Rule of thumb:** Need to "see" and describe a visual file? → @looker. Need exact file contents for editing? → Read it yourself.`,
 };
 
 // Validation routing lines that reference agents
@@ -79,6 +87,7 @@ const VALIDATION_ROUTING = [
   '- Route UI/UX validation and review to @designer',
   '- Route code review, simplification, maintainability review, and YAGNI checks to @oracle',
   '- Route test writing, test updates, and changes touching test files to @fixer',
+  '- Route visual/media analysis and interpretation to @looker',
   '- If a request spans multiple lanes, delegate only the lanes that add clear value',
 ];
 
@@ -87,6 +96,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
   '- Multiple @explorer searches across different domains?',
   '- @explorer + @librarian research in parallel?',
   '- Multiple @fixer instances for faster, scoped implementation?',
+  '- @looker + @explorer in parallel (visual analysis + code search)?',
 ];
 
 /**
@@ -94,9 +104,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
  * @param disabledAgents - Set of disabled agent names to exclude from the prompt
  * @returns The complete orchestrator prompt string
  */
-export function buildOrchestratorPrompt(
-  disabledAgents?: Set<string>,
-): string {
+export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
   // Filter agent descriptions
   const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
     .filter(([name]) => !disabledAgents?.has(name))
@@ -227,11 +235,7 @@ export function createOrchestratorAgent(
   disabledAgents?: Set<string>,
 ): AgentDefinition {
   const basePrompt = buildOrchestratorPrompt(disabledAgents);
-  const prompt = resolvePrompt(
-    basePrompt,
-    customPrompt,
-    customAppendPrompt,
-  );
+  const prompt = resolvePrompt(basePrompt, customPrompt, customAppendPrompt);
 
   const definition: AgentDefinition = {
     name: 'orchestrator',
