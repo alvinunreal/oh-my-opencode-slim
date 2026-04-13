@@ -11,6 +11,7 @@ mock.module('./checker', () => ({
   getCachedVersion: mock(() => null),
   getLatestVersion: mock(async () => null),
   getLocalDevVersion: mock(() => null),
+  getCurrentRuntimePackageJsonPath: mock(() => null),
 }));
 
 mock.module('./cache', () => ({
