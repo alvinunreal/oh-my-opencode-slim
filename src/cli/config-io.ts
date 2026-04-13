@@ -31,10 +31,35 @@ function isPluginEntry(entry: string): boolean {
   );
 }
 
+function isRunningFromTempDir(cliEntryPath: string): boolean {
+  // Detect bunx temporary directories (e.g., /tmp/bunx-...)
+  const bunxPatterns = [
+    /[\\/]tmp[\\/]bunx-[^\\/]+[\\/]/,
+    /[\\/]tmp[\\/]\.bunx[\\/]/,
+  ];
+
+  // Detect npx temporary directories
+  const npxPatterns = [
+    /[\\/]\.npm[\\/]_npx[\\/]/,
+    /[\\/]tmp[\\/]npx[\\/]/,
+    /[\\/]npx-cache[\\/]/,
+  ];
+
+  return [...bunxPatterns, ...npxPatterns].some((pattern) =>
+    pattern.test(cliEntryPath),
+  );
+}
+
 function getPluginEntry(): string {
   const cliEntryPath = process.argv[1];
 
   if (!cliEntryPath) {
+    return PACKAGE_NAME;
+  }
+
+  // When running via bunx/npx, the package is in a temp directory that gets cleaned up
+  // Use the package name instead so it resolves from the actual installed location
+  if (isRunningFromTempDir(cliEntryPath)) {
     return PACKAGE_NAME;
   }
 
