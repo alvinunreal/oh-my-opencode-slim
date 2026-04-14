@@ -1,9 +1,9 @@
 // LSP Client - Full implementation with connection pooling
 
+import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import {
   createMessageConnection,
   type MessageConnection,
@@ -20,6 +20,7 @@ import type {
 
 const START_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 5_000;
+const DIAGNOSTICS_TIMEOUT_MS = 15_000;
 const OPEN_FILE_DELAY_MS = 250;
 const INITIALIZE_DELAY_MS = 100;
 const DIAGNOSTIC_SETTLE_DELAY_MS = 250;
@@ -27,6 +28,7 @@ const DIAGNOSTIC_SETTLE_DELAY_MS = 250;
 export const LSP_TIMEOUTS = {
   start: START_TIMEOUT_MS,
   request: REQUEST_TIMEOUT_MS,
+  diagnostics: DIAGNOSTICS_TIMEOUT_MS,
   openFileDelay: OPEN_FILE_DELAY_MS,
   initializeDelay: INITIALIZE_DELAY_MS,
   diagnosticSettleDelay: DIAGNOSTIC_SETTLE_DELAY_MS,
@@ -368,9 +370,14 @@ export class LSPClient {
     this.startStderrReading();
 
     // Create JSON-RPC connection
+    const stdout = this.proc.stdout;
+    const stdin = this.proc.stdin;
+    if (!stdout || !stdin) {
+      throw new Error('LSP server process missing stdio streams');
+    }
     this.connection = createMessageConnection(
-      new StreamMessageReader(this.proc.stdout!),
-      new StreamMessageWriter(this.proc.stdin!),
+      new StreamMessageReader(stdout),
+      new StreamMessageWriter(stdin),
     );
 
     this.connection.onNotification(
@@ -534,7 +541,7 @@ export class LSPClient {
 
   private async waitForPublishedDiagnostics(
     uri: string,
-    timeoutMs = LSP_TIMEOUTS.request,
+    timeoutMs = LSP_TIMEOUTS.diagnostics,
   ): Promise<Diagnostic[] | undefined> {
     const cachedDiagnostics = this.diagnosticsStore.get(uri);
     if (cachedDiagnostics) {
@@ -650,6 +657,7 @@ export class LSPClient {
   async diagnostics(filePath: string): Promise<{ items: Diagnostic[] }> {
     const absPath = resolve(filePath);
     const uri = pathToFileURL(absPath).href;
+    const startedAt = Date.now();
     await this.openFile(absPath);
     await new Promise((r) => setTimeout(r, LSP_TIMEOUTS.diagnosticSettleDelay));
 
@@ -672,7 +680,7 @@ export class LSPClient {
                 textDocument: { uri },
                 previousResultId: this.diagnosticResultIds.get(uri),
               }),
-              LSP_TIMEOUTS.request,
+              LSP_TIMEOUTS.diagnostics,
               `LSP diagnostics (${this.server.id})`,
             )
           : undefined;
@@ -708,7 +716,12 @@ export class LSPClient {
       }
     }
 
-    const cachedDiagnostics = await this.waitForPublishedDiagnostics(uri);
+    const elapsed = Date.now() - startedAt;
+    const remainingTimeout = Math.max(LSP_TIMEOUTS.diagnostics - elapsed, 0);
+    const cachedDiagnostics = await this.waitForPublishedDiagnostics(
+      uri,
+      remainingTimeout,
+    );
     if (cachedDiagnostics) {
       return { items: cachedDiagnostics };
     }

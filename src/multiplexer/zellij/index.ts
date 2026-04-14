@@ -7,8 +7,8 @@
  * - User stays in their original tab
  */
 
-import { crossSpawn } from '../../utils/compat';
 import type { MultiplexerLayout } from '../../config/schema';
+import { crossSpawn } from '../../utils/compat';
 import type { Multiplexer, PaneResult } from '../types';
 
 interface ZellijTabInfo {
@@ -23,8 +23,6 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private binaryPath: string | null = null;
   private hasChecked = false;
-  private storedLayout: MultiplexerLayout;
-  private storedMainPaneSize: number;
   private agentTabId: string | null = null;
   private firstPaneId: string | null = null;
   private firstPaneUsed = false;
@@ -33,8 +31,8 @@ export class ZellijMultiplexer implements Multiplexer {
     // Note: Zellij does NOT support layout configuration like tmux.
     // These params are accepted for API consistency but are no-ops.
     // Zellij uses its own native layout algorithm for pane arrangement.
-    this.storedLayout = layout;
-    this.storedMainPaneSize = mainPaneSize;
+    void layout;
+    void mainPaneSize;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -174,10 +172,13 @@ export class ZellijMultiplexer implements Multiplexer {
 
     // Switch back to original tab
     if (originalTab) {
-      await crossSpawn([zellij, 'action', 'go-to-tab-by-id', String(originalTab)], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'go-to-tab-by-id', String(originalTab)],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
     }
 
     // Accept success if exit code is 0 and we got a valid pane ID
@@ -279,10 +280,13 @@ export class ZellijMultiplexer implements Multiplexer {
 
     // Restore original tab
     if (originalTab) {
-      await crossSpawn([zellij, 'action', 'go-to-tab-by-id', String(originalTab)], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'go-to-tab-by-id', String(originalTab)],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
     }
 
     return panes[0] || null;
@@ -349,10 +353,13 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private async getCurrentTabId(zellij: string): Promise<string | null> {
     try {
-      const proc = crossSpawn([zellij, 'action', 'current-tab-info', '--json'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
+      const proc = crossSpawn(
+        [zellij, 'action', 'current-tab-info', '--json'],
+        {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      );
 
       const exitCode = await proc.exited;
       if (exitCode !== 0) return null;
@@ -398,10 +405,13 @@ export class ZellijMultiplexer implements Multiplexer {
 
     try {
       // Send Ctrl+C for graceful shutdown
-      await crossSpawn([zellij, 'action', 'write', '--pane-id', paneId, '\u0003'], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'write', '--pane-id', paneId, '\u0003'],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
 
       await new Promise((r) => setTimeout(r, 250));
 

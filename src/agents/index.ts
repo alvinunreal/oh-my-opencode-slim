@@ -53,6 +53,12 @@ function applyOverrides(
   if (override.variant) agent.config.variant = override.variant;
   if (override.temperature !== undefined)
     agent.config.temperature = override.temperature;
+  if (override.options) {
+    agent.config.options = {
+      ...agent.config.options,
+      ...override.options,
+    };
+  }
 }
 
 /**
@@ -141,7 +147,9 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     // config.council.master.model so the TUI validates the user's
     // actual model, not the hardcoded default
     if (
-      (name === 'council' || name === 'council-master') &&
+      (name === 'council' ||
+        name === 'council-master' ||
+        name === 'councillor') &&
       config?.council?.master?.model
     ) {
       return config.council.master.model;

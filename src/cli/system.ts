@@ -1,7 +1,42 @@
+import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { crossSpawn } from '../utils/compat';
 
 let cachedOpenCodePath: string | null = null;
+
+function resolvePathCommand(command: string): string | null {
+  try {
+    const resolver = process.platform === 'win32' ? 'where' : 'which';
+    const result = spawnSync(resolver, [command], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    if (result.status !== 0) {
+      return null;
+    }
+
+    const resolved = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+
+    return resolved ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function canExecute(command: string, args: string[]): boolean {
+  try {
+    const result = spawnSync(command, args, {
+      stdio: 'ignore',
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
 
 function getOpenCodePaths(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
@@ -54,6 +89,12 @@ export function resolveOpenCodePath(): string {
     return cachedOpenCodePath;
   }
 
+  const pathOpenCodePath = resolvePathCommand('opencode');
+  if (pathOpenCodePath) {
+    cachedOpenCodePath = pathOpenCodePath;
+    return pathOpenCodePath;
+  }
+
   const paths = getOpenCodePaths();
 
   for (const opencodePath of paths) {
@@ -74,9 +115,17 @@ export function resolveOpenCodePath(): string {
 }
 
 export async function isOpenCodeInstalled(): Promise<boolean> {
+  const pathOpenCodePath = resolvePathCommand('opencode');
+
+  if (pathOpenCodePath && canExecute(pathOpenCodePath, ['--version'])) {
+    cachedOpenCodePath = pathOpenCodePath;
+    return true;
+  }
+
   const paths = getOpenCodePaths();
 
   for (const opencodePath of paths) {
+    if (opencodePath === 'opencode') continue;
     try {
       const proc = crossSpawn([opencodePath, '--version'], {
         stdout: 'pipe',

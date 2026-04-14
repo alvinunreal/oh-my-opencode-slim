@@ -98,6 +98,7 @@ export const AgentOverrideConfigSchema = z.object({
   variant: z.string().optional().catch(undefined),
   skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
   mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
+  options: z.record(z.string(), z.unknown()).optional(), // provider-specific model options (e.g., textVerbosity, thinking budget)
 });
 
 // Multiplexer type options
@@ -164,6 +165,54 @@ export const BackgroundTaskConfigSchema = z.object({
 
 export type BackgroundTaskConfig = z.infer<typeof BackgroundTaskConfigSchema>;
 
+export const InterviewConfigSchema = z.object({
+  maxQuestions: z.number().int().min(1).max(10).default(2),
+  outputFolder: z.string().min(1).default('interview'),
+  autoOpenBrowser: z.boolean().default(true),
+  port: z.number().int().min(0).max(65535).default(0),
+});
+
+export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
+
+// Todo continuation configuration
+export const TodoContinuationConfigSchema = z.object({
+  maxContinuations: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(5)
+    .describe(
+      'Maximum consecutive auto-continuations before stopping to ask user',
+    ),
+  cooldownMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(30_000)
+    .default(3000)
+    .describe('Delay in ms before auto-continuing (gives user time to abort)'),
+  autoEnable: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Automatically enable auto-continue when the orchestrator session has enough todos',
+    ),
+  autoEnableThreshold: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(4)
+    .describe(
+      'Number of todos that triggers auto-enable (only used when autoEnable is true)',
+    ),
+});
+
+export type TodoContinuationConfig = z.infer<
+  typeof TodoContinuationConfigSchema
+>;
+
 export const FailoverConfigSchema = z.object({
   enabled: z.boolean().default(true),
   timeoutMs: z.number().min(0).default(15000),
@@ -197,6 +246,8 @@ export const PluginConfigSchema = z.object({
   tmux: TmuxConfigSchema.optional(),
   websearch: WebsearchConfigSchema.optional(),
   background: BackgroundTaskConfigSchema.optional(),
+  interview: InterviewConfigSchema.optional(),
+  todoContinuation: TodoContinuationConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),
   council: CouncilConfigSchema.optional(),
 });

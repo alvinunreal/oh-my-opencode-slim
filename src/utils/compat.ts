@@ -1,6 +1,6 @@
+import type { ChildProcess } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { writeFile as fsWriteFile } from 'node:fs/promises';
-import type { ChildProcess } from 'node:child_process';
 
 export const isBun = typeof globalThis.Bun !== 'undefined';
 
@@ -18,18 +18,21 @@ export interface CrossSpawnResult {
   get exitCode(): number | null;
 }
 
-function collectStream(stream: NodeJS.ReadableStream | null): () => Promise<string> {
+function collectStream(
+  stream: NodeJS.ReadableStream | null,
+): () => Promise<string> {
   if (!stream) return () => Promise.resolve('');
   const chunks: Buffer[] = [];
   stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-  return () => new Promise<string>((resolve, reject) => {
-    if (!stream.readable) {
-      resolve(Buffer.concat(chunks).toString('utf-8'));
-      return;
-    }
-    stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    stream.on('error', reject);
-  });
+  return () =>
+    new Promise<string>((resolve, reject) => {
+      if (!stream.readable) {
+        resolve(Buffer.concat(chunks).toString('utf-8'));
+        return;
+      }
+      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+      stream.on('error', reject);
+    });
 }
 
 /**
@@ -71,13 +74,18 @@ export function crossSpawn(
     stderr: stderrCollector,
     exited,
     kill: (signal) => proc.kill(signal as NodeJS.Signals),
-    get exitCode() { return proc.exitCode; },
+    get exitCode() {
+      return proc.exitCode;
+    },
   };
 }
 
 /**
  * Cross-runtime file write that works in both Bun and Node.js.
  */
-export async function crossWrite(path: string, data: ArrayBuffer | Buffer | string): Promise<void> {
+export async function crossWrite(
+  path: string,
+  data: ArrayBuffer | Buffer | string,
+): Promise<void> {
   await fsWriteFile(path, Buffer.from(data as ArrayBuffer));
 }

@@ -1,5 +1,5 @@
-import { release } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { release } from 'node:os';
 import { crossSpawn } from './compat';
 
 const WINDOWS_BUILD_WITH_TAR = 17134;

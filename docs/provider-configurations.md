@@ -175,3 +175,73 @@ The plugin can automatically fail over from one model to the next when a prompt 
 - Model IDs must use `provider/model` format
 - Chains are per agent: `orchestrator`, `oracle`, `designer`, `explorer`, `librarian`, `fixer`, `councillor`, `council-master`
 - If an agent has no chain configured, only its primary model is used
+
+---
+
+## Provider-Specific Options
+
+You can pass provider-specific model parameters via the `options` field on any agent config. These are forwarded directly to the AI SDK's `providerOptions` and affect model behavior at the API level.
+
+### OpenAI — Concise Responses
+
+```jsonc
+{
+  "presets": {
+    "openai": {
+      "oracle": {
+        "model": "openai/gpt-5.4",
+        "options": {
+          "textVerbosity": "low"  // "low" | "medium" | "high"
+        }
+      }
+    }
+  }
+}
+```
+
+### Anthropic — Extended Thinking
+
+```jsonc
+{
+  "presets": {
+    "anthropic": {
+      "oracle": {
+        "model": "anthropic/claude-sonnet-4-6",
+        "options": {
+          "thinking": {
+            "type": "enabled",
+            "budgetTokens": 16000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Google — Thinking Budget
+
+```jsonc
+{
+  "presets": {
+    "google": {
+      "oracle": {
+        "model": "google/gemini-3.1-pro",
+        "options": {
+          "thinkingConfig": {
+            "includeThoughts": true,
+            "thinkingBudget": 16000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Notes:**
+- `options` works per-agent and per-preset, just like `model` and `variant`
+- Options are **static** — they don't swap when fallback chains switch providers
+- Provider-specific keys are namespaced by the SDK, so OpenAI options are safely ignored by Anthropic and vice versa
+- Options from presets and root config are deep-merged (root keys override preset keys)
+- Nested objects in options are recursively merged by key — to fully replace a nested object (e.g., disable a preset's `thinking` config), set all subkeys explicitly

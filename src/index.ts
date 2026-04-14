@@ -5,6 +5,7 @@ import { loadPluginConfig, type MultiplexerConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import { CouncilManager } from './council';
 import {
+  createApplyPatchHook,
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
   createDelegateTaskRetryHook,
@@ -12,8 +13,10 @@ import {
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
+  createTodoContinuationHook,
   ForegroundFallbackManager,
 } from './hooks';
+import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
 import { getMultiplexer, startAvailabilityCheck } from './multiplexer';
 import {
@@ -21,6 +24,7 @@ import {
   ast_grep_search,
   createBackgroundTools,
   createCouncilTool,
+  createWebfetchTool,
   lsp_diagnostics,
   lsp_find_references,
   lsp_goto_definition,
@@ -121,6 +125,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     : {};
 
   const mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
+  const webfetch = createWebfetchTool(ctx);
 
   // Initialize MultiplexerSessionManager to handle OpenCode's built-in Task tool sessions
   const multiplexerSessionManager = new MultiplexerSessionManager(
@@ -143,14 +148,21 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config,
   );
 
+  // Track session → agent mapping for serve-mode system prompt injection
+  const sessionAgentMap = new Map<string, string>();
+
   // Initialize post-file-tool nudge hook
-  const postFileToolNudgeHook = createPostFileToolNudgeHook();
+  const postFileToolNudgeHook = createPostFileToolNudgeHook({
+    shouldInject: (sessionID) =>
+      sessionAgentMap.get(sessionID) === 'orchestrator',
+  });
 
   const chatHeadersHook = createChatHeadersHook(ctx);
 
   // Initialize delegate-task retry guidance hook
   const delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
 
+  const applyPatchHook = createApplyPatchHook(ctx);
   // Initialize JSON parse error recovery hook
   const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
 
@@ -161,6 +173,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config.fallback?.enabled !== false && Object.keys(runtimeChains).length > 0,
   );
 
+  // Initialize todo-continuation hook (opt-in auto-continue for incomplete todos)
+  const todoContinuationHook = createTodoContinuationHook(ctx, {
+    maxContinuations: config.todoContinuation?.maxContinuations ?? 5,
+    cooldownMs: config.todoContinuation?.cooldownMs ?? 3000,
+    autoEnable: config.todoContinuation?.autoEnable ?? false,
+    autoEnableThreshold: config.todoContinuation?.autoEnableThreshold ?? 4,
+  });
+  const interviewManager = createInterviewManager(ctx, config);
+
   return {
     name: 'oh-my-opencode-slim',
 
@@ -169,6 +190,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tool: {
       ...backgroundTools,
       ...councilTools,
+      webfetch,
+      ...todoContinuationHook.tool,
       lsp_goto_definition,
       lsp_find_references,
       lsp_diagnostics,
@@ -351,11 +374,33 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // Update agent config with permissions
         agentConfigEntry.permission = agentPermission;
       }
+
+      // Register /auto-continue command so OpenCode recognizes it.
+      // Actual handling is done by command.execute.before hook below
+      // (no LLM round-trip — injected directly into output.parts).
+      const configCommand = opencodeConfig.command as
+        | Record<string, unknown>
+        | undefined;
+      if (!configCommand?.['auto-continue']) {
+        if (!opencodeConfig.command) {
+          opencodeConfig.command = {};
+        }
+        (opencodeConfig.command as Record<string, unknown>)['auto-continue'] = {
+          template: 'Call the auto_continue tool with enabled=true',
+          description:
+            'Enable auto-continuation — orchestrator keeps working through incomplete todos',
+        };
+      }
+
+      interviewManager.registerCommand(opencodeConfig);
     },
 
     event: async (input) => {
       // Runtime model fallback for foreground agents (rate-limit detection)
       await foregroundFallback.handleEvent(input.event);
+
+      // Todo-continuation: auto-continue orchestrator on incomplete todos
+      await todoContinuationHook.handleEvent(input);
 
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
@@ -401,9 +446,117 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           properties?: { sessionID?: string };
         },
       );
+
+      await interviewManager.handleEvent(
+        input as {
+          event: { type: string; properties?: Record<string, unknown> };
+        },
+      );
+
+      await postFileToolNudgeHook.event(
+        input as {
+          event: {
+            type: string;
+            properties?: {
+              info?: { id?: string };
+              sessionID?: string;
+            };
+          };
+        },
+      );
+
+      if (input.event.type === 'session.deleted') {
+        const props = input.event.properties as
+          | { info?: { id?: string }; sessionID?: string }
+          | undefined;
+        const sessionID = props?.info?.id ?? props?.sessionID;
+        if (sessionID) {
+          sessionAgentMap.delete(sessionID);
+        }
+      }
+    },
+
+    // Best-effort rescue only for stale apply_patch input before native execution
+    'tool.execute.before': async (input, output) => {
+      await applyPatchHook['tool.execute.before'](
+        input as {
+          tool: string;
+          directory?: string;
+        },
+        output as { args?: { patchText?: unknown; [key: string]: unknown } },
+      );
+    },
+
+    // Direct interception of /auto-continue command — bypasses LLM round-trip
+    'command.execute.before': async (input, output) => {
+      await todoContinuationHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
+
+      await interviewManager.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
     },
 
     'chat.headers': chatHeadersHook['chat.headers'],
+
+    // Track which agent each session uses (needed for serve-mode prompt injection)
+    'chat.message': async (
+      input: { sessionID: string; agent?: string },
+      output?: { message?: { agent?: string } },
+    ) => {
+      const agent = input.agent ?? output?.message?.agent;
+      if (agent) {
+        sessionAgentMap.set(input.sessionID, agent);
+      }
+      todoContinuationHook.handleChatMessage({
+        sessionID: input.sessionID,
+        agent,
+      });
+    },
+
+    // Inject orchestrator system prompt for serve-mode sessions.
+    // In serve mode, the agent's prompt field may be absent from the agents registry
+    // (built before plugin config hooks run). This hook injects it at LLM call time.
+    'experimental.chat.system.transform': async (
+      input: { sessionID?: string },
+      output: { system: string[] },
+    ): Promise<void> => {
+      const agentName = input.sessionID
+        ? sessionAgentMap.get(input.sessionID)
+        : undefined;
+      if (agentName === 'orchestrator') {
+        const alreadyInjected = output.system.some(
+          (s) =>
+            typeof s === 'string' &&
+            s.includes('<Role>') &&
+            s.includes('orchestrator'),
+        );
+        if (!alreadyInjected) {
+          // Prepend the orchestrator prompt to the system array
+          const { ORCHESTRATOR_PROMPT } = await import('./agents/orchestrator');
+          output.system[0] =
+            ORCHESTRATOR_PROMPT +
+            (output.system[0] ? `\n\n${output.system[0]}` : '');
+        }
+      }
+
+      await todoContinuationHook.handleChatSystemTransform(input, output);
+      await postFileToolNudgeHook['experimental.chat.system.transform'](
+        input,
+        output,
+      );
+    },
 
     // Inject phase reminder and filter available skills before sending to API (doesn't show in UI)
     'experimental.chat.messages.transform': async (
@@ -421,6 +574,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           }>;
         }>;
       };
+      await todoContinuationHook.handleMessagesTransform({
+        messages: typedOutput.messages,
+      });
       await phaseReminderHook['experimental.chat.messages.transform'](
         input,
         typedOutput,
@@ -448,6 +604,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           title: string;
           output: unknown;
           metadata: unknown;
+        },
+      );
+
+      await todoContinuationHook.handleToolExecuteAfter(
+        input as {
+          tool: string;
+          sessionID?: string;
         },
       );
 

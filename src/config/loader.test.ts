@@ -630,6 +630,99 @@ describe('preset resolution', () => {
     const warningMessage = consoleWarnSpy.mock.calls[0][0] as string;
     expect(warningMessage).toContain('Preset "nonexistent" not found');
   });
+
+  test('options from preset are deep-merged with root agents', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'openai',
+        presets: {
+          openai: {
+            oracle: {
+              model: 'openai/gpt-5.4',
+              options: { textVerbosity: 'low' },
+            },
+          },
+        },
+        agents: {
+          oracle: {
+            options: { reasoningEffort: 'medium' },
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.4');
+    // deepMerge should combine both option keys
+    expect(config.agents?.oracle?.options).toEqual({
+      textVerbosity: 'low',
+      reasoningEffort: 'medium',
+    });
+  });
+
+  test('options from preset only work without root agents', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'anthropic-thinking',
+        presets: {
+          'anthropic-thinking': {
+            oracle: {
+              model: 'anthropic/claude-sonnet-4-6',
+              options: {
+                thinking: { type: 'enabled', budgetTokens: 16000 },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('anthropic/claude-sonnet-4-6');
+    expect(config.agents?.oracle?.options).toEqual({
+      thinking: { type: 'enabled', budgetTokens: 16000 },
+    });
+  });
+
+  test('root options override preset options for same key', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'concise',
+        presets: {
+          concise: {
+            oracle: {
+              model: 'openai/gpt-5.4',
+              options: { textVerbosity: 'low' },
+            },
+          },
+        },
+        agents: {
+          oracle: {
+            options: { textVerbosity: 'high' },
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.4');
+    // root wins over preset for same key
+    expect(config.agents?.oracle?.options).toEqual({
+      textVerbosity: 'high',
+    });
+  });
 });
 
 describe('environment variable preset override', () => {

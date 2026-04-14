@@ -2,6 +2,15 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
   fetchLatestVersion,
   getOpenCodeVersion,
   isOpenCodeInstalled,
@@ -9,6 +18,28 @@ import {
 } from './system';
 
 describe('system', () => {
+  test('isOpenCodeInstalled detects opencode in ~/.opencode/bin', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opencode-system-test-'));
+    const originalPath = process.env.PATH;
+    const originalHome = process.env.HOME;
+
+    try {
+      const opencodePath = join(dir, '.opencode', 'bin', 'opencode');
+      mkdirSync(join(dir, '.opencode', 'bin'), { recursive: true });
+      writeFileSync(opencodePath, '#!/bin/sh\necho 1.2.3\n');
+      chmodSync(opencodePath, 0o755);
+      process.env.HOME = dir;
+      process.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+      const system = await import(`./system?test=home-detect-${Date.now()}`);
+      expect(await system.isOpenCodeInstalled()).toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+      process.env.HOME = originalHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('isOpenCodeInstalled returns boolean', async () => {
     // We don't necessarily want to depend on the host system
     // but for a basic test we can just check it returns a boolean

@@ -163,6 +163,7 @@ export function loadPluginConfig(directory: string): PluginConfig {
       agents: deepMerge(config.agents, projectConfig.agents),
       tmux: deepMerge(config.tmux, projectConfig.tmux),
       multiplexer: deepMerge(config.multiplexer, projectConfig.multiplexer),
+      interview: deepMerge(config.interview, projectConfig.interview),
       fallback: deepMerge(config.fallback, projectConfig.fallback),
       council: deepMerge(config.council, projectConfig.council),
     };

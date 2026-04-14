@@ -2,8 +2,8 @@
  * Tmux multiplexer implementation
  */
 
-import { crossSpawn } from '../../utils/compat';
 import type { MultiplexerLayout } from '../../config/schema';
+import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import type { Multiplexer, PaneResult } from '../types';
 

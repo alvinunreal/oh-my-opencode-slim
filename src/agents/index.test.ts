@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
-import { DEFAULT_MODELS, SUBAGENT_NAMES } from '../config';
+import {
+  AgentOverrideConfigSchema,
+  DEFAULT_MODELS,
+  SUBAGENT_NAMES,
+} from '../config';
 import { createAgents, getAgentConfigs, isSubagent } from './index';
 
 describe('agent alias backward compatibility', () => {
@@ -369,5 +373,179 @@ describe('council agent model resolution', () => {
     const agents = createAgents();
     const councilMaster = agents.find((a) => a.name === 'council-master');
     expect(councilMaster?.config.model).toBe(DEFAULT_MODELS['council-master']);
+  });
+
+  test('councillor agent uses config.council.master.model', () => {
+    const config = {
+      council: {
+        master: { model: 'anthropic/claude-sonnet-4-6' },
+        presets: {
+          default: {
+            councillors: {
+              alpha: { model: 'test/alpha-model' },
+            },
+            master: undefined,
+          },
+        },
+      },
+    } as unknown as PluginConfig;
+    const agents = createAgents(config);
+    const councillor = agents.find((a) => a.name === 'councillor');
+    expect(councillor?.config.model).toBe('anthropic/claude-sonnet-4-6');
+  });
+
+  test('councillor agent falls back to default without council config', () => {
+    const agents = createAgents();
+    const councillor = agents.find((a) => a.name === 'councillor');
+    expect(councillor?.config.model).toBe(DEFAULT_MODELS.councillor);
+  });
+});
+
+describe('options passthrough', () => {
+  test('options are applied to agent config via overrides', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: {
+          model: 'openai/gpt-5.4',
+          options: { textVerbosity: 'low' },
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle?.config.options).toEqual({ textVerbosity: 'low' });
+  });
+
+  test('options with nested objects are passed through', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: {
+          model: 'anthropic/claude-sonnet-4-6',
+          options: {
+            thinking: { type: 'enabled', budgetTokens: 16000 },
+          },
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle?.config.options).toEqual({
+      thinking: { type: 'enabled', budgetTokens: 16000 },
+    });
+  });
+
+  test('options work with other overrides', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: {
+          model: 'openai/gpt-5.4',
+          variant: 'high',
+          temperature: 0.7,
+          options: { textVerbosity: 'low', reasoningEffort: 'medium' },
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle?.config.model).toBe('openai/gpt-5.4');
+    expect(oracle?.config.variant).toBe('high');
+    expect(oracle?.config.temperature).toBe(0.7);
+    expect(oracle?.config.options).toEqual({
+      textVerbosity: 'low',
+      reasoningEffort: 'medium',
+    });
+  });
+
+  test('options are absent when not configured', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: { model: 'openai/gpt-5.4' },
+      },
+    };
+    const agents = createAgents(config);
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle?.config.options).toBeUndefined();
+  });
+
+  test('options flow through getAgentConfigs to SDK output', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: {
+          model: 'openai/gpt-5.4',
+          options: { textVerbosity: 'low' },
+        },
+      },
+    };
+    const configs = getAgentConfigs(config);
+    expect(configs.oracle.options).toEqual({ textVerbosity: 'low' });
+  });
+
+  test('options are shallow-merged with existing agent config options', () => {
+    // Simulate an agent factory setting default options
+    const config: PluginConfig = {
+      agents: {
+        oracle: {
+          model: 'openai/gpt-5.4',
+          options: { reasoningEffort: 'medium' },
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const oracle = agents.find((a) => a.name === 'oracle');
+    // Override options should merge with (not replace) any factory defaults
+    expect(oracle?.config.options).toEqual({ reasoningEffort: 'medium' });
+  });
+});
+
+describe('AgentOverrideConfigSchema options validation', () => {
+  test('accepts valid options object', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      options: { textVerbosity: 'low' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts empty options object', () => {
+    const result = AgentOverrideConfigSchema.safeParse({ options: {} });
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts nested values in options', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      options: {
+        thinking: { type: 'enabled', budgetTokens: 16000 },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts options alongside other fields', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.4',
+      variant: 'high',
+      temperature: 0.7,
+      options: { textVerbosity: 'low' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.options).toEqual({ textVerbosity: 'low' });
+    }
+  });
+
+  test('config without options is valid', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.4',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.options).toBeUndefined();
+    }
+  });
+
+  test('rejects non-object options', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      options: 'not-an-object',
+    });
+    expect(result.success).toBe(false);
   });
 });

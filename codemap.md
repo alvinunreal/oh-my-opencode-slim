@@ -49,7 +49,7 @@ The plugin integrates with OpenCode to provide:
 | `src/hooks/` | Lifecycle hooks for message transforms, error recovery, and rate-limit fallbacks. | [View Map](src/hooks/codemap.md) |
 | `src/hooks/auto-update-checker/` | Startup update check hook with cache invalidation and optional auto-install. | [View Map](src/hooks/auto-update-checker/codemap.md) |
 | `src/hooks/phase-reminder/` | Orchestrator message transform hook that injects phase reminders. | [View Map](src/hooks/phase-reminder/codemap.md) |
-| `src/hooks/post-read-nudge/` | Read tool after-hook that appends delegation nudges. | [View Map](src/hooks/post-read-nudge/codemap.md) |
+| `src/hooks/post-file-tool-nudge/` | Read/Write tool after-hook that queues ephemeral delegation nudges. | [View Map](src/hooks/post-file-tool-nudge/codemap.md) |
 | `src/hooks/delegate-task-retry/` | Error detection and retry guidance with pattern matching and assistance. | [View Map](src/hooks/delegate-task-retry/codemap.md) |
 | `src/hooks/foreground-fallback/` | Rate-limit fallback manager for interactive sessions. | [View Map](src/hooks/foreground-fallback/codemap.md) |
 | `src/hooks/json-error-recovery/` | JSON parse error detection and recovery helpers. | [View Map](src/hooks/json-error-recovery/codemap.md) |
@@ -118,6 +118,7 @@ Return plugin object with:
 
 6. **Hooks** (`src/hooks/`)
    - Auto-update checking
+   - `apply_patch` stale-patch rescue with strict parsing, bounded LCS fallback, stateful same-path helper updates, and safe canonical rewrites only inside root/worktree
    - Phase reminders for workflow compliance
    - Post-read nudges for delegation
 

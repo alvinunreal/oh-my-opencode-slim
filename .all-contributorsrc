@@ -281,6 +281,69 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "dhaern",
+      "name": "Raxxoor",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7317522?v=4",
+      "profile": "https://trade.xyz/?ref=BZ1RJRXWO",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "nyanyani",
+      "name": "nyanyani",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11475482?v=4",
+      "profile": "https://github.com/nyanyani",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "nettee",
+      "name": "nettee",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3953668?v=4",
+      "profile": "https://nettee.io/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "atomlink-ye",
+      "name": "Link",
+      "avatar_url": "https://avatars.githubusercontent.com/u/48194045?v=4",
+      "profile": "https://github.com/atomlink-ye",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "blaszewski",
+      "name": "Bartosz Łaszewski",
+      "avatar_url": "https://avatars.githubusercontent.com/u/14119531?v=4",
+      "profile": "https://github.com/blaszewski",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "huilang021x",
+      "name": "huilang021x",
+      "avatar_url": "https://avatars.githubusercontent.com/u/77293911?v=4",
+      "profile": "https://github.com/huilang021x",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "dkovacevic15",
+      "name": "Dusan Kovacevic",
+      "avatar_url": "https://avatars.githubusercontent.com/u/24757821?v=4",
+      "profile": "https://github.com/dkovacevic15",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

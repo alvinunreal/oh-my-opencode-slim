@@ -1,6 +1,6 @@
 ---
 name: cartography
-description: Repository understanding and hierarchical codemap generation
+description: Generate comprehensive hierarchical codemaps for UNFAMILIAR repositories. Expensive operation - only use when explicitly asked for codebase documentation or initial repository mapping
 ---
 
 # Cartography Skill

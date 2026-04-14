@@ -172,8 +172,8 @@ describe('LSPClient diagnostics', () => {
   });
 
   test('diagnostics falls back to cached publishDiagnostics on timeout', async () => {
-    const originalRequestTimeout = LSP_TIMEOUTS.request;
-    LSP_TIMEOUTS.request = 10;
+    const originalDiagnosticsTimeout = LSP_TIMEOUTS.diagnostics;
+    LSP_TIMEOUTS.diagnostics = 10;
 
     const client = new LSPClient(tempDir, {
       id: 'test',
@@ -209,13 +209,13 @@ describe('LSPClient diagnostics', () => {
       expect(result.items).toHaveLength(1);
       expect(result.items[0]?.message).toBe('cached diagnostic');
     } finally {
-      LSP_TIMEOUTS.request = originalRequestTimeout;
+      LSP_TIMEOUTS.diagnostics = originalDiagnosticsTimeout;
     }
   });
 
   test('diagnostics throws after timeout when no cached diagnostics exist', async () => {
-    const originalRequestTimeout = LSP_TIMEOUTS.request;
-    LSP_TIMEOUTS.request = 10;
+    const originalDiagnosticsTimeout = LSP_TIMEOUTS.diagnostics;
+    LSP_TIMEOUTS.diagnostics = 10;
 
     const client = new LSPClient(tempDir, {
       id: 'test',
@@ -240,13 +240,13 @@ describe('LSPClient diagnostics', () => {
         'Unable to retrieve diagnostics',
       );
     } finally {
-      LSP_TIMEOUTS.request = originalRequestTimeout;
+      LSP_TIMEOUTS.diagnostics = originalDiagnosticsTimeout;
     }
   });
 
   test('diagnostics uses cached publishDiagnostics for push-only servers', async () => {
-    const originalRequestTimeout = LSP_TIMEOUTS.request;
-    LSP_TIMEOUTS.request = 200;
+    const originalDiagnosticsTimeout = LSP_TIMEOUTS.diagnostics;
+    LSP_TIMEOUTS.diagnostics = 200;
 
     const client = new LSPClient(tempDir, {
       id: 'test',
@@ -287,7 +287,7 @@ describe('LSPClient diagnostics', () => {
         expect.anything(),
       );
     } finally {
-      LSP_TIMEOUTS.request = originalRequestTimeout;
+      LSP_TIMEOUTS.diagnostics = originalDiagnosticsTimeout;
     }
   });
 

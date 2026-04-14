@@ -8,7 +8,7 @@
 ## Design
 - Agent creation follows explicit factories (`agents/index.ts`, per-agent creators under `agents/`) with override/permission helpers (`config/utils.ts`, `cli/skills.ts`) so defaults live in `config/constants.ts`, prompts can be swapped via `config/loader.ts`, and variant labels propagate through `utils/agent-variant.ts`.
 - Background tooling composes `BackgroundTaskManager`, `TmuxSessionManager`, and `createBackgroundTools` (which uses `tool` with Zod schemas) to provide async/sync task launches plus cancel/output helpers; polling/prompt flow lives in `tools/background.ts` while TMUX lifecycle uses `utils/tmux.ts` to spawn/close panes and reapply layouts.
-- Hooks are isolated (`hooks/auto-update-checker`, `phase-reminder`, `post-read-nudge`) and exported via `hooks/index.ts`, so the plugin simply registers them via the `event`, `experimental.chat.messages.transform`, and `tool.execute.after` hooks defined in `index.ts`.
+- Hooks are isolated (`hooks/auto-update-checker`, `phase-reminder`, `post-file-tool-nudge`) and exported via `hooks/index.ts`, so the plugin simply registers them via the `event`, `experimental.chat.system.transform`, `experimental.chat.messages.transform`, and `tool.execute.after` hooks defined in `index.ts`.
 - Supplemental tools (`tools/grep`, `tools/lsp`, `tools/quota`) bundle ripgrep, LSP helpers, and Antigravity quota calls behind the OpenCode `tool` interface and are mounted in `index.ts` alongside background/task tools.
 
 ## Flow
@@ -20,5 +20,5 @@
 ## Integration
 - Connects directly to the OpenCode plugin API (`@opencode-ai/plugin`): registers agents/tools/mcps, responds to `session.created` and `tool.execute.after` events, injects `experimental.chat.messages.transform`, and makes RPC calls via `ctx.client`/`ctx.client.session` throughout `tools/background` and `background/*`.
 - Integrates with the host environment: `utils/tmux.ts` checks for tmux and server availability, `startTmuxCheck` pre-seeds the binary path, and `TmuxSessionManager`/`BackgroundTaskManager` coordinate via shared configuration and `tools/background` to keep CLI panes synchronized.
-- Hooks and helpers tie into external behavior: `hooks/auto-update-checker` reads `package.json` metadata, runs safe `bun install`, and posts toasts; `hooks/phase-reminder/post-read-nudge` enforce workflow reminders; `utils/logger.ts` centralizes structured logging used across modules.
+- Hooks and helpers tie into external behavior: `hooks/auto-update-checker` reads `package.json` metadata, runs safe `bun install`, and posts toasts; `hooks/phase-reminder/post-file-tool-nudge` enforce workflow reminders without mutating file tool output; `utils/logger.ts` centralizes structured logging used across modules.
 - CLI utilities modify OpenCode CLI/user config files (`cli/config-manager.ts`) and install additional skills/ providers, ensuring the plugin lands with the expected agents, provider auth helpers, and custom skill definitions.
