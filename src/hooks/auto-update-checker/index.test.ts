@@ -1,12 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 const logMock = mock(() => {});
 
@@ -24,6 +16,15 @@ const cacheMocks = {
   resolveInstallContext: mock(() => ({ installDir: '/tmp/opencode' })),
 };
 
+const crossSpawnMock = mock((_command: string[]) => ({
+  exited: Promise.resolve(0),
+  exitCode: 0,
+  kill: mock(() => true),
+  stdout: () => Promise.resolve(''),
+  stderr: () => Promise.resolve(''),
+  proc: {} as never,
+}));
+
 mock.module('../../utils/logger', () => ({
   log: logMock,
 }));
@@ -32,8 +33,13 @@ mock.module('./checker', () => checkerMocks);
 
 mock.module('./cache', () => cacheMocks);
 
+mock.module('../../utils/compat', () => ({
+  crossSpawn: crossSpawnMock,
+  crossWrite: mock(() => Promise.resolve()),
+  isBun: false,
+}));
+
 let importCounter = 0;
-let bunSpawnSpy: ReturnType<typeof spyOn> | undefined;
 
 function createCtx() {
   const showToast = mock(() => Promise.resolve(undefined));
@@ -87,11 +93,20 @@ describe('auto-update-checker/index', () => {
     cacheMocks.resolveInstallContext.mockImplementation(() => ({
       installDir: '/tmp/opencode',
     }));
+
+    crossSpawnMock.mockReset();
+    crossSpawnMock.mockImplementation(() => ({
+      exited: Promise.resolve(0),
+      exitCode: 0,
+      kill: mock(() => true),
+      stdout: () => Promise.resolve(''),
+      stderr: () => Promise.resolve(''),
+      proc: {} as never,
+    }));
   });
 
   afterEach(() => {
-    bunSpawnSpy?.mockRestore();
-    bunSpawnSpy = undefined;
+    // Mocks are automatically cleared by Bun's test runner between tests
   });
 
   test('uses resolved install root for auto-update installs', async () => {
@@ -134,14 +149,14 @@ describe('auto-update-checker/index', () => {
     checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
     checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
 
-    bunSpawnSpy = spyOn(Bun, 'spawn').mockImplementation(
-      () =>
-        ({
-          exited: Promise.resolve(0),
-          exitCode: 0,
-          kill: mock(() => {}),
-        }) as never,
-    );
+    crossSpawnMock.mockImplementation(() => ({
+      exited: Promise.resolve(0),
+      exitCode: 0,
+      kill: mock(() => true),
+      stdout: () => Promise.resolve(''),
+      stderr: () => Promise.resolve(''),
+      proc: {} as never,
+    }));
 
     const { createAutoUpdateCheckerHook } = await import(
       `./index?test=${importCounter++}`
@@ -158,7 +173,7 @@ describe('auto-update-checker/index', () => {
       '0.9.11',
       'oh-my-opencode-slim',
     );
-    expect(bunSpawnSpy).toHaveBeenCalledWith(
+    expect(crossSpawnMock).toHaveBeenCalledWith(
       ['bun', 'install'],
       expect.objectContaining({ cwd: '/tmp/opencode' }),
     );
@@ -181,15 +196,6 @@ describe('auto-update-checker/index', () => {
     checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
     cacheMocks.preparePackageUpdate.mockImplementation(() => null);
 
-    bunSpawnSpy = spyOn(Bun, 'spawn').mockImplementation(
-      () =>
-        ({
-          exited: Promise.resolve(0),
-          exitCode: 0,
-          kill: mock(() => {}),
-        }) as never,
-    );
-
     const { createAutoUpdateCheckerHook } = await import(
       `./index?test=${importCounter++}`
     );
@@ -201,7 +207,7 @@ describe('auto-update-checker/index', () => {
     hook.event({ event: { type: 'session.created', properties: {} } });
     await waitForCalls(showToast);
 
-    expect(bunSpawnSpy).not.toHaveBeenCalled();
+    expect(crossSpawnMock).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({
       body: {
         title: 'OMO-Slim 0.9.11',
@@ -221,14 +227,14 @@ describe('auto-update-checker/index', () => {
     checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
     checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
 
-    bunSpawnSpy = spyOn(Bun, 'spawn').mockImplementation(
-      () =>
-        ({
-          exited: Promise.resolve(1),
-          exitCode: 1,
-          kill: mock(() => {}),
-        }) as never,
-    );
+    crossSpawnMock.mockImplementation(() => ({
+      exited: Promise.resolve(1),
+      exitCode: 1,
+      kill: mock(() => true),
+      stdout: () => Promise.resolve(''),
+      stderr: () => Promise.resolve(''),
+      proc: {} as never,
+    }));
 
     const { createAutoUpdateCheckerHook } = await import(
       `./index?test=${importCounter++}`
@@ -241,7 +247,7 @@ describe('auto-update-checker/index', () => {
     hook.event({ event: { type: 'session.created', properties: {} } });
     await waitForCalls(showToast);
 
-    expect(bunSpawnSpy).toHaveBeenCalledWith(
+    expect(crossSpawnMock).toHaveBeenCalledWith(
       ['bun', 'install'],
       expect.objectContaining({ cwd: '/tmp/opencode' }),
     );

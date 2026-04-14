@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { release } from 'node:os';
-import { spawn, spawnSync } from 'bun';
+import { crossSpawn } from './compat';
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
 
@@ -16,11 +17,10 @@ function getWindowsBuildNumber(): number | null {
 
 function isPwshAvailable(): boolean {
   if (process.platform !== 'win32') return false;
-  const result = spawnSync(['where', 'pwsh'], {
-    stdout: 'pipe',
-    stderr: 'pipe',
+  const result = spawnSync('where', ['pwsh'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  return result.exitCode === 0;
+  return result.status === 0;
 }
 
 function escapePowerShellPath(path: string): string {
@@ -47,20 +47,20 @@ export async function extractZip(
   archivePath: string,
   destDir: string,
 ): Promise<void> {
-  let proc: ReturnType<typeof spawn>;
+  let proc: ReturnType<typeof crossSpawn>;
 
   if (process.platform === 'win32') {
     const extractor = getWindowsZipExtractor();
 
     switch (extractor) {
       case 'tar':
-        proc = spawn(['tar', '-xf', archivePath, '-C', destDir], {
+        proc = crossSpawn(['tar', '-xf', archivePath, '-C', destDir], {
           stdout: 'ignore',
           stderr: 'pipe',
         });
         break;
       case 'pwsh':
-        proc = spawn(
+        proc = crossSpawn(
           [
             'pwsh',
             '-Command',
@@ -73,7 +73,7 @@ export async function extractZip(
         );
         break;
       default:
-        proc = spawn(
+        proc = crossSpawn(
           [
             'powershell',
             '-Command',
@@ -87,7 +87,7 @@ export async function extractZip(
         break;
     }
   } else {
-    proc = spawn(['unzip', '-o', archivePath, '-d', destDir], {
+    proc = crossSpawn(['unzip', '-o', archivePath, '-d', destDir], {
       stdout: 'ignore',
       stderr: 'pipe',
     });
@@ -96,7 +96,7 @@ export async function extractZip(
   const exitCode = await proc.exited;
 
   if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr as ReadableStream).text();
+    const stderr = await proc.stderr();
     throw new Error(`zip extraction failed (exit ${exitCode}): ${stderr}`);
   }
 }

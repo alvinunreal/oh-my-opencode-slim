@@ -168,11 +168,14 @@ export function createTodoHygiene(options: Options) {
           reasons: Array.from(pending.get(input.sessionID) ?? []),
         });
       } catch (error) {
-        options.log?.('Skipped todo hygiene reminder: failed to inspect todos', {
-          sessionID: input.sessionID,
-          tool,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        options.log?.(
+          'Skipped todo hygiene reminder: failed to inspect todos',
+          {
+            sessionID: input.sessionID,
+            tool,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
       }
     },
 
@@ -212,10 +215,13 @@ export function createTodoHygiene(options: Options) {
         });
       } catch (error) {
         pending.delete(input.sessionID);
-        options.log?.('Skipped todo hygiene reminder: failed to inspect todos', {
-          sessionID: input.sessionID,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        options.log?.(
+          'Skipped todo hygiene reminder: failed to inspect todos',
+          {
+            sessionID: input.sessionID,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
       }
     },
 
@@ -224,7 +230,8 @@ export function createTodoHygiene(options: Options) {
         return;
       }
 
-      const sessionID = event.properties?.sessionID ?? event.properties?.info?.id;
+      const sessionID =
+        event.properties?.sessionID ?? event.properties?.info?.id;
       if (!sessionID) {
         return;
       }

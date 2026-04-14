@@ -469,8 +469,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const props = input.event.properties as
           | { info?: { id?: string }; sessionID?: string }
           | undefined;
-        const sessionID =
-          props?.info?.id ?? props?.sessionID;
+        const sessionID = props?.info?.id ?? props?.sessionID;
         if (sessionID) {
           sessionAgentMap.delete(sessionID);
         }

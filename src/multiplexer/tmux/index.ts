@@ -2,8 +2,8 @@
  * Tmux multiplexer implementation
  */
 
-import { spawn } from 'bun';
 import type { MultiplexerLayout } from '../../config/schema';
+import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import type { Multiplexer, PaneResult } from '../types';
 
@@ -62,14 +62,14 @@ export class TmuxMultiplexer implements Multiplexer {
 
       log('[tmux] spawnPane: executing', { tmux, args });
 
-      const proc = spawn([tmux, ...args], {
+      const proc = crossSpawn([tmux, ...args], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
 
       const exitCode = await proc.exited;
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
+      const stdout = await proc.stdout();
+      const stderr = await proc.stderr();
       const paneId = stdout.trim();
 
       log('[tmux] spawnPane: result', {
@@ -80,7 +80,7 @@ export class TmuxMultiplexer implements Multiplexer {
 
       if (exitCode === 0 && paneId) {
         // Rename the pane for visibility
-        const renameProc = spawn(
+        const renameProc = crossSpawn(
           [tmux, 'select-pane', '-t', paneId, '-T', description.slice(0, 30)],
           { stdout: 'ignore', stderr: 'ignore' },
         );
@@ -115,7 +115,7 @@ export class TmuxMultiplexer implements Multiplexer {
     try {
       // Send Ctrl+C for graceful shutdown
       log('[tmux] closePane: sending Ctrl+C', { paneId });
-      const ctrlCProc = spawn([tmux, 'send-keys', '-t', paneId, 'C-c'], {
+      const ctrlCProc = crossSpawn([tmux, 'send-keys', '-t', paneId, 'C-c'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -126,13 +126,13 @@ export class TmuxMultiplexer implements Multiplexer {
 
       // Kill the pane
       log('[tmux] closePane: killing pane', { paneId });
-      const proc = spawn([tmux, 'kill-pane', '-t', paneId], {
+      const proc = crossSpawn([tmux, 'kill-pane', '-t', paneId], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
 
       const exitCode = await proc.exited;
-      const stderr = await new Response(proc.stderr).text();
+      const stderr = await proc.stderr();
 
       log('[tmux] closePane: result', { exitCode, stderr: stderr.trim() });
 
@@ -164,7 +164,7 @@ export class TmuxMultiplexer implements Multiplexer {
 
     try {
       // Apply the layout
-      const layoutProc = spawn([tmux, 'select-layout', layout], {
+      const layoutProc = crossSpawn([tmux, 'select-layout', layout], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -175,7 +175,7 @@ export class TmuxMultiplexer implements Multiplexer {
         const sizeOption =
           layout === 'main-horizontal' ? 'main-pane-height' : 'main-pane-width';
 
-        const sizeProc = spawn(
+        const sizeProc = crossSpawn(
           [tmux, 'set-window-option', sizeOption, `${mainPaneSize}%`],
           {
             stdout: 'pipe',
@@ -185,7 +185,7 @@ export class TmuxMultiplexer implements Multiplexer {
         await sizeProc.exited;
 
         // Reapply layout to use the new size
-        const reapplyProc = spawn([tmux, 'select-layout', layout], {
+        const reapplyProc = crossSpawn([tmux, 'select-layout', layout], {
           stdout: 'pipe',
           stderr: 'pipe',
         });
@@ -208,7 +208,7 @@ export class TmuxMultiplexer implements Multiplexer {
     const cmd = isWindows ? 'where' : 'which';
 
     try {
-      const proc = spawn([cmd, 'tmux'], {
+      const proc = crossSpawn([cmd, 'tmux'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -219,7 +219,7 @@ export class TmuxMultiplexer implements Multiplexer {
         return null;
       }
 
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
       const path = stdout.trim().split('\n')[0];
       if (!path) {
         log('[tmux] findBinary: no path in output');
@@ -227,7 +227,7 @@ export class TmuxMultiplexer implements Multiplexer {
       }
 
       // Verify it works
-      const verifyProc = spawn([path, '-V'], {
+      const verifyProc = crossSpawn([path, '-V'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });

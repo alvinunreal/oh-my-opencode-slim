@@ -1,6 +1,10 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin/tool';
-import { SLIM_INTERNAL_INITIATOR_MARKER, createInternalAgentTextPart, log } from '../../utils';
+import {
+  createInternalAgentTextPart,
+  log,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../../utils';
 import { createTodoHygiene } from './todo-hygiene';
 
 const HOOK_NAME = 'todo-continuation';
@@ -184,7 +188,10 @@ export function createTodoContinuationHook(
     log: (message, meta) => log(`[${HOOK_NAME}] ${message}`, meta),
   });
 
-  function inferSessionID(messages: ChatTransformMessage[], index: number): string | undefined {
+  function inferSessionID(
+    messages: ChatTransformMessage[],
+    index: number,
+  ): string | undefined {
     const direct = messages[index]?.info.sessionID;
     if (direct) {
       return direct;

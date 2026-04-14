@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { spawn } from 'bun';
+import { crossSpawn } from '../../utils/compat';
 import {
   DEFAULT_MAX_MATCHES,
   DEFAULT_MAX_OUTPUT_BYTES,
@@ -107,7 +107,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
 
   const timeout = DEFAULT_TIMEOUT_MS;
 
-  const proc = spawn([cliPath, ...args], {
+  const proc = crossSpawn([cliPath, ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -125,11 +125,8 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
   let exitCode: number;
 
   try {
-    stdout = await Promise.race([
-      new Response(proc.stdout).text(),
-      timeoutPromise,
-    ]);
-    stderr = await new Response(proc.stderr).text();
+    stdout = await Promise.race([proc.stdout(), timeoutPromise]);
+    stderr = await proc.stderr();
     exitCode = await proc.exited;
   } catch (e) {
     const error = e as Error;

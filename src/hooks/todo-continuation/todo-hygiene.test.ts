@@ -1,17 +1,19 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createTodoHygiene,
   TODO_DELEGATION_RESUME_REMINDER,
   TODO_FINAL_ACTIVE_REMINDER,
   TODO_HYGIENE_REMINDER,
-  createTodoHygiene,
 } from './todo-hygiene';
 
-function createState(overrides?: Partial<{
-  hasOpenTodos: boolean;
-  openCount: number;
-  inProgressCount: number;
-  pendingCount: number;
-}>) {
+function createState(
+  overrides?: Partial<{
+    hasOpenTodos: boolean;
+    openCount: number;
+    inProgressCount: number;
+    pendingCount: number;
+  }>,
+) {
   return {
     hasOpenTodos: overrides?.hasOpenTodos ?? true,
     openCount: overrides?.openCount ?? 1,
@@ -83,7 +85,9 @@ describe('todo hygiene', () => {
     await hook.handleToolExecuteAfter({ tool: 'glob', sessionID: 's1' });
     await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(system.system.filter((item) => item === TODO_HYGIENE_REMINDER)).toHaveLength(1);
+    expect(
+      system.system.filter((item) => item === TODO_HYGIENE_REMINDER),
+    ).toHaveLength(1);
   });
 
   test('injects again on a later round after new activity', async () => {
@@ -202,7 +206,10 @@ describe('todo hygiene', () => {
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleToolExecuteAfter({ tool: 'background_output', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({
+      tool: 'background_output',
+      sessionID: 's1',
+    });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
@@ -223,11 +230,16 @@ describe('todo hygiene', () => {
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleToolExecuteAfter({ tool: 'background_output', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({
+      tool: 'background_output',
+      sessionID: 's1',
+    });
     await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
     expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
-    expect(system.system.join('\n')).not.toContain(TODO_DELEGATION_RESUME_REMINDER);
+    expect(system.system.join('\n')).not.toContain(
+      TODO_DELEGATION_RESUME_REMINDER,
+    );
   });
 
   test('transform lookup failures are best-effort and do not drop later reminders', async () => {

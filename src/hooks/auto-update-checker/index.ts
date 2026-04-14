@@ -1,4 +1,5 @@
 import type { PluginInput } from '@opencode-ai/plugin';
+import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import { preparePackageUpdate, resolveInstallContext } from './cache';
 import {
@@ -190,7 +191,7 @@ export function getAutoUpdateInstallDir(): string {
  */
 async function runBunInstallSafe(installDir: string): Promise<boolean> {
   try {
-    const proc = Bun.spawn(['bun', 'install'], {
+    const proc = crossSpawn(['bun', 'install'], {
       cwd: installDir,
       stdout: 'pipe',
       stderr: 'pipe',

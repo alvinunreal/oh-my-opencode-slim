@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { extractZip } from '../../utils';
+import { crossWrite } from '../../utils/compat';
 
 const REPO = 'ast-grep/ast-grep';
 
@@ -96,7 +97,7 @@ export async function downloadAstGrep(
 
     const archivePath = join(cacheDir, assetName);
     const arrayBuffer = await response.arrayBuffer();
-    await Bun.write(archivePath, arrayBuffer);
+    await crossWrite(archivePath, arrayBuffer);
 
     await extractZip(archivePath, cacheDir);
 

@@ -1,10 +1,9 @@
 // LSP Client - Full implementation with connection pooling
 
+import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
-import { Readable, Writable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
-import { type Subprocess, spawn } from 'bun';
 import {
   createMessageConnection,
   type MessageConnection,
@@ -321,7 +320,7 @@ class LSPServerManager {
 export const lspManager = LSPServerManager.getInstance();
 
 export class LSPClient {
-  private proc: Subprocess<'pipe', 'pipe', 'pipe'> | null = null;
+  private proc: ChildProcess | null = null;
   private connection: MessageConnection | null = null;
   private openedFiles = new Set<string>();
   private stderrBuffer: string[] = [];
@@ -356,15 +355,10 @@ export class LSPClient {
       root: this.root,
     });
 
-    this.proc = spawn(command, {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
+    this.proc = nodeSpawn(command[0], command.slice(1), {
+      stdio: ['pipe', 'pipe', 'pipe'],
       cwd: this.root,
-      env: {
-        ...process.env,
-        ...this.server.env,
-      },
+      env: { ...process.env, ...this.server.env },
     });
 
     if (!this.proc) {
@@ -376,45 +370,14 @@ export class LSPClient {
     this.startStderrReading();
 
     // Create JSON-RPC connection
-    const stdoutReader = this.proc.stdout.getReader();
-    const nodeReadable = new Readable({
-      async read() {
-        try {
-          const { done, value } = await stdoutReader.read();
-          if (done) {
-            this.push(null);
-          } else {
-            this.push(value);
-          }
-        } catch (err) {
-          this.destroy(err as Error);
-        }
-      },
-    });
-
+    const stdout = this.proc.stdout;
     const stdin = this.proc.stdin;
-    const nodeWritable = new Writable({
-      write(chunk, _encoding, callback) {
-        try {
-          stdin.write(chunk);
-          callback();
-        } catch (err) {
-          callback(err as Error);
-        }
-      },
-      final(callback) {
-        try {
-          stdin.end();
-          callback();
-        } catch (err) {
-          callback(err as Error);
-        }
-      },
-    });
-
+    if (!stdout || !stdin) {
+      throw new Error('LSP server process missing stdio streams');
+    }
     this.connection = createMessageConnection(
-      new StreamMessageReader(nodeReadable),
-      new StreamMessageWriter(nodeWritable),
+      new StreamMessageReader(stdout),
+      new StreamMessageWriter(stdin),
     );
 
     this.connection.onNotification(
@@ -494,24 +457,13 @@ export class LSPClient {
   }
 
   private startStderrReading(): void {
-    if (!this.proc) return;
-
-    const reader = this.proc.stderr.getReader();
-    const read = async () => {
-      const decoder = new TextDecoder();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const text = decoder.decode(value);
-          this.stderrBuffer.push(text);
-          if (this.stderrBuffer.length > 100) {
-            this.stderrBuffer.shift();
-          }
-        }
-      } catch {}
-    };
-    read();
+    if (!this.proc?.stderr) return;
+    this.proc.stderr.on('data', (chunk: Buffer) => {
+      this.stderrBuffer.push(chunk.toString());
+      if (this.stderrBuffer.length > 100) {
+        this.stderrBuffer.shift();
+      }
+    });
   }
 
   async initialize(): Promise<void> {

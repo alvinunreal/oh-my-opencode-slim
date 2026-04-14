@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
+import { crossSpawn } from '../utils/compat';
 
 let cachedOpenCodePath: string | null = null;
 
@@ -125,27 +126,47 @@ export async function isOpenCodeInstalled(): Promise<boolean> {
 
   for (const opencodePath of paths) {
     if (opencodePath === 'opencode') continue;
-    if (canExecute(opencodePath, ['--version'])) {
-      cachedOpenCodePath = opencodePath;
-      return true;
+    try {
+      const proc = crossSpawn([opencodePath, '--version'], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      await proc.exited;
+      if (proc.exitCode === 0) {
+        cachedOpenCodePath = opencodePath;
+        return true;
+      }
+    } catch {
+      // Try next path
     }
   }
   return false;
 }
 
 export async function isTmuxInstalled(): Promise<boolean> {
-  return canExecute('tmux', ['-V']);
+  try {
+    const proc = crossSpawn(['tmux', '-V'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    await proc.exited;
+    return proc.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function getOpenCodeVersion(): Promise<string | null> {
   const opencodePath = resolveOpenCodePath();
   try {
-    const result = spawnSync(opencodePath, ['--version'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+    const proc = crossSpawn([opencodePath, '--version'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
-    if (result.status === 0) {
-      return result.stdout.trim();
+    const outputPromise = proc.stdout();
+    await proc.exited;
+    if (proc.exitCode === 0) {
+      return (await outputPromise).trim();
     }
   } catch {
     // Failed

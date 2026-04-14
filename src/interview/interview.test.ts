@@ -1564,7 +1564,8 @@ describe('interview server port configuration', () => {
     try {
       const baseUrl = await server.ensureStarted();
       expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-      const port = Number.parseInt(baseUrl.split(':').pop()!, 10);
+      const portStr = baseUrl.split(':').pop();
+      const port = Number.parseInt(portStr ?? '0', 10);
       expect(port).toBeGreaterThan(0);
     } finally {
       server.close();
@@ -1576,7 +1577,8 @@ describe('interview server port configuration', () => {
     const server = createInterviewServer({ ...noopDeps, port: freePort });
     try {
       const baseUrl = await server.ensureStarted();
-      const port = Number.parseInt(baseUrl.split(':').pop()!, 10);
+      const portStr = baseUrl.split(':').pop();
+      const port = Number.parseInt(portStr ?? '0', 10);
       expect(port).toBe(freePort);
     } finally {
       server.close();
@@ -1587,7 +1589,8 @@ describe('interview server port configuration', () => {
     const server = createInterviewServer({ ...noopDeps, port: 0 });
     try {
       const baseUrl = await server.ensureStarted();
-      const port = Number.parseInt(baseUrl.split(':').pop()!, 10);
+      const portStr = baseUrl.split(':').pop();
+      const port = Number.parseInt(portStr ?? '0', 10);
       expect(port).toBeGreaterThanOrEqual(1);
       expect(port).toBeLessThanOrEqual(65535);
     } finally {

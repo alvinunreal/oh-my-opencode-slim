@@ -7,8 +7,8 @@
  * - User stays in their original tab
  */
 
-import { spawn } from 'bun';
 import type { MultiplexerLayout } from '../../config/schema';
+import { crossSpawn } from '../../utils/compat';
 import type { Multiplexer, PaneResult } from '../types';
 
 interface ZellijTabInfo {
@@ -119,13 +119,13 @@ export class ZellijMultiplexer implements Multiplexer {
         opencodeCmd,
       ];
 
-      const proc = spawn([zellij, ...args], {
+      const proc = crossSpawn([zellij, ...args], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
 
       const exitCode = await proc.exited;
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
       const paneId = stdout.trim();
 
       // Accept success if exit code is 0 and we got a valid pane ID
@@ -143,7 +143,7 @@ export class ZellijMultiplexer implements Multiplexer {
     const originalTab = await this.getCurrentTabId(zellij);
 
     // Switch to agent tab
-    await spawn([zellij, 'action', 'go-to-tab-by-id', this.agentTabId], {
+    await crossSpawn([zellij, 'action', 'go-to-tab-by-id', this.agentTabId], {
       stdout: 'ignore',
       stderr: 'ignore',
     }).exited;
@@ -161,21 +161,24 @@ export class ZellijMultiplexer implements Multiplexer {
       opencodeCmd,
     ];
 
-    const proc = spawn([zellij, ...args], {
+    const proc = crossSpawn([zellij, ...args], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
 
     const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).text();
+    const stdout = await proc.stdout();
     const paneId = stdout.trim();
 
     // Switch back to original tab
     if (originalTab) {
-      await spawn([zellij, 'action', 'go-to-tab-by-id', String(originalTab)], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'go-to-tab-by-id', String(originalTab)],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
     }
 
     // Accept success if exit code is 0 and we got a valid pane ID
@@ -195,22 +198,22 @@ export class ZellijMultiplexer implements Multiplexer {
     try {
       const opencodeCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
 
-      await spawn([zellij, 'action', 'focus-pane', '--pane-id', paneId], {
+      await crossSpawn([zellij, 'action', 'focus-pane', '--pane-id', paneId], {
         stdout: 'ignore',
         stderr: 'ignore',
       }).exited;
 
-      await spawn(
+      await crossSpawn(
         [zellij, 'action', 'rename-pane', '--name', description.slice(0, 30)],
         { stdout: 'ignore', stderr: 'ignore' },
       ).exited;
 
-      await spawn([zellij, 'action', 'write-chars', opencodeCmd], {
+      await crossSpawn([zellij, 'action', 'write-chars', opencodeCmd], {
         stdout: 'ignore',
         stderr: 'ignore',
       }).exited;
 
-      await spawn([zellij, 'action', 'write-chars', '\n'], {
+      await crossSpawn([zellij, 'action', 'write-chars', '\n'], {
         stdout: 'ignore',
         stderr: 'ignore',
       }).exited;
@@ -242,7 +245,7 @@ export class ZellijMultiplexer implements Multiplexer {
       const beforePanes = await this.listPanes(zellij);
 
       // Create new tab
-      const createProc = spawn(
+      const createProc = crossSpawn(
         [zellij, 'action', 'new-tab', '--name', 'opencode-agents'],
         { stdout: 'pipe', stderr: 'pipe' },
       );
@@ -268,7 +271,7 @@ export class ZellijMultiplexer implements Multiplexer {
     tabId: string,
   ): Promise<string | null> {
     const originalTab = await this.getCurrentTabId(zellij);
-    await spawn([zellij, 'action', 'go-to-tab-by-id', tabId], {
+    await crossSpawn([zellij, 'action', 'go-to-tab-by-id', tabId], {
       stdout: 'ignore',
       stderr: 'ignore',
     }).exited;
@@ -277,10 +280,13 @@ export class ZellijMultiplexer implements Multiplexer {
 
     // Restore original tab
     if (originalTab) {
-      await spawn([zellij, 'action', 'go-to-tab-by-id', String(originalTab)], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'go-to-tab-by-id', String(originalTab)],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
     }
 
     return panes[0] || null;
@@ -291,7 +297,7 @@ export class ZellijMultiplexer implements Multiplexer {
     name: string,
   ): Promise<{ tabId: string; name: string } | null> {
     try {
-      const proc = spawn([zellij, 'action', 'list-tabs', '--json'], {
+      const proc = crossSpawn([zellij, 'action', 'list-tabs', '--json'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -299,7 +305,7 @@ export class ZellijMultiplexer implements Multiplexer {
       const exitCode = await proc.exited;
       if (exitCode !== 0) return this.findTabByNameText(zellij, name);
 
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
 
       try {
         const tabs: ZellijTabInfo[] = JSON.parse(stdout);
@@ -322,7 +328,7 @@ export class ZellijMultiplexer implements Multiplexer {
     name: string,
   ): Promise<{ tabId: string; name: string } | null> {
     try {
-      const proc = spawn([zellij, 'action', 'list-tabs'], {
+      const proc = crossSpawn([zellij, 'action', 'list-tabs'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -330,7 +336,7 @@ export class ZellijMultiplexer implements Multiplexer {
       const exitCode = await proc.exited;
       if (exitCode !== 0) return null;
 
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
       const lines = stdout.split('\n');
 
       for (const line of lines) {
@@ -347,15 +353,18 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private async getCurrentTabId(zellij: string): Promise<string | null> {
     try {
-      const proc = spawn([zellij, 'action', 'current-tab-info', '--json'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
+      const proc = crossSpawn(
+        [zellij, 'action', 'current-tab-info', '--json'],
+        {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      );
 
       const exitCode = await proc.exited;
       if (exitCode !== 0) return null;
 
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
       try {
         const info = JSON.parse(stdout);
         return String(info.tab_id);
@@ -369,7 +378,7 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private async listPanes(zellij: string): Promise<string[]> {
     try {
-      const proc = spawn([zellij, 'action', 'list-panes'], {
+      const proc = crossSpawn([zellij, 'action', 'list-panes'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -377,7 +386,7 @@ export class ZellijMultiplexer implements Multiplexer {
       const exitCode = await proc.exited;
       if (exitCode !== 0) return [];
 
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
       return stdout
         .split('\n')
         .slice(1)
@@ -396,15 +405,18 @@ export class ZellijMultiplexer implements Multiplexer {
 
     try {
       // Send Ctrl+C for graceful shutdown
-      await spawn([zellij, 'action', 'write', '--pane-id', paneId, '\u0003'], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'write', '--pane-id', paneId, '\u0003'],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
 
       await new Promise((r) => setTimeout(r, 250));
 
       // Close the pane
-      const proc = spawn(
+      const proc = crossSpawn(
         [zellij, 'action', 'close-pane', '--pane-id', paneId],
         { stdout: 'pipe', stderr: 'pipe' },
       );
@@ -432,12 +444,12 @@ export class ZellijMultiplexer implements Multiplexer {
   private async findBinary(): Promise<string | null> {
     const cmd = process.platform === 'win32' ? 'where' : 'which';
     try {
-      const proc = spawn([cmd, 'zellij'], {
+      const proc = crossSpawn([cmd, 'zellij'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
       if ((await proc.exited) !== 0) return null;
-      const stdout = await new Response(proc.stdout).text();
+      const stdout = await proc.stdout();
       return stdout.trim().split('\n')[0] || null;
     } catch {
       return null;
