@@ -312,6 +312,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             if (chosen.variant) {
               entry.variant = chosen.variant;
             }
+          } else {
+            // Agent exists in slim but not in opencodeConfig.agent — create entry
+            (configAgent as Record<string, unknown>)[agentName] = {
+              model: chosen.id,
+              ...(chosen.variant ? { variant: chosen.variant } : {}),
+            };
           }
           log('[plugin] resolved model from array', {
             agent: agentName,
