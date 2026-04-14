@@ -272,7 +272,6 @@ export function createDashboardServer(config: DashboardConfig): {
     const directories = getKnownDirectories();
     const items: InterviewFileItem[] = [];
 
-    const seen = new Set<string>();
     for (const dir of directories) {
       const interviewDir = path.join(dir, config.outputFolder);
       let entries: string[];
@@ -284,9 +283,6 @@ export function createDashboardServer(config: DashboardConfig): {
 
       for (const entry of entries) {
         if (!entry.endsWith('.md')) continue;
-        // Deduplicate by filename — same .md may exist in multiple directories
-        if (seen.has(entry)) continue;
-        seen.add(entry);
 
         let content: string;
         try {
