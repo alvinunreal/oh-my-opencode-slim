@@ -147,7 +147,9 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     // config.council.master.model so the TUI validates the user's
     // actual model, not the hardcoded default
     if (
-      (name === 'council' || name === 'council-master') &&
+      (name === 'council' ||
+        name === 'council-master' ||
+        name === 'councillor') &&
       config?.council?.master?.model
     ) {
       return config.council.master.model;
