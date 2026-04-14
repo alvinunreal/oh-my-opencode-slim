@@ -374,6 +374,31 @@ describe('council agent model resolution', () => {
     const councilMaster = agents.find((a) => a.name === 'council-master');
     expect(councilMaster?.config.model).toBe(DEFAULT_MODELS['council-master']);
   });
+
+  test('councillor agent uses config.council.master.model', () => {
+    const config = {
+      council: {
+        master: { model: 'anthropic/claude-sonnet-4-6' },
+        presets: {
+          default: {
+            councillors: {
+              alpha: { model: 'test/alpha-model' },
+            },
+            master: undefined,
+          },
+        },
+      },
+    } as unknown as PluginConfig;
+    const agents = createAgents(config);
+    const councillor = agents.find((a) => a.name === 'councillor');
+    expect(councillor?.config.model).toBe('anthropic/claude-sonnet-4-6');
+  });
+
+  test('councillor agent falls back to default without council config', () => {
+    const agents = createAgents();
+    const councillor = agents.find((a) => a.name === 'councillor');
+    expect(councillor?.config.model).toBe(DEFAULT_MODELS.councillor);
+  });
 });
 
 describe('options passthrough', () => {
