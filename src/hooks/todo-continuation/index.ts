@@ -1,6 +1,6 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin/tool';
-import { createInternalAgentTextPart, log } from '../../utils';
+import { SLIM_INTERNAL_INITIATOR_MARKER, createInternalAgentTextPart, log } from '../../utils';
 import { createTodoHygiene } from './todo-hygiene';
 
 const HOOK_NAME = 'todo-continuation';
@@ -76,6 +76,16 @@ interface MessagePart {
   [key: string]: unknown;
 }
 
+interface ChatTransformMessage {
+  info: {
+    id?: string;
+    role?: string;
+    agent?: string;
+    sessionID?: string;
+  };
+  parts: MessagePart[];
+}
+
 interface Message {
   info?: MessageInfo;
   parts?: MessagePart[];
@@ -116,6 +126,9 @@ export function createTodoContinuationHook(
     input: { sessionID?: string },
     output: { system: string[] },
   ) => Promise<void>;
+  handleMessagesTransform: (output: {
+    messages: ChatTransformMessage[];
+  }) => Promise<void>;
   handleEvent: (input: {
     event: { type: string; properties?: Record<string, unknown> };
   }) => Promise<void>;
@@ -133,6 +146,7 @@ export function createTodoContinuationHook(
   const cooldownMs = config?.cooldownMs ?? 3000;
   const autoEnable = config?.autoEnable ?? false;
   const autoEnableThreshold = config?.autoEnableThreshold ?? 4;
+  const requestSignatureBySession = new Map<string, string>();
 
   const state: ContinuationState = {
     enabled: false,
@@ -169,6 +183,140 @@ export function createTodoContinuationHook(
     shouldInject: (sessionID) => isOrchestratorSession(sessionID),
     log: (message, meta) => log(`[${HOOK_NAME}] ${message}`, meta),
   });
+
+  function inferSessionID(messages: ChatTransformMessage[], index: number): string | undefined {
+    const direct = messages[index]?.info.sessionID;
+    if (direct) {
+      return direct;
+    }
+
+    for (let i = index - 1; i >= 0; i--) {
+      const sessionID = messages[i]?.info.sessionID;
+      if (sessionID) {
+        return sessionID;
+      }
+    }
+
+    for (let i = index + 1; i < messages.length; i++) {
+      const sessionID = messages[i]?.info.sessionID;
+      if (sessionID) {
+        return sessionID;
+      }
+    }
+
+    if (state.orchestratorSessionIds.size === 1) {
+      return Array.from(state.orchestratorSessionIds)[0];
+    }
+
+    return undefined;
+  }
+
+  function isExternalUserMessage(message: ChatTransformMessage): boolean {
+    if (message.info.role !== 'user') {
+      return false;
+    }
+
+    const visibleText = message.parts
+      .filter(
+        (part) =>
+          part.type === 'text' &&
+          typeof part.text === 'string' &&
+          !part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER),
+      )
+      .map((part) => part.text?.trim() ?? '')
+      .filter(Boolean)
+      .join('\n');
+    const hasNonTextPart = message.parts.some((part) => part.type !== 'text');
+
+    return !(
+      !visibleText &&
+      !hasNonTextPart &&
+      message.parts.some(
+        (part) =>
+          part.type === 'text' &&
+          typeof part.text === 'string' &&
+          part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER),
+      )
+    );
+  }
+
+  function getLastExternalUserMessage(messages: ChatTransformMessage[]): {
+    sessionID?: string;
+    agent?: string;
+    signature: string;
+  } | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (!isExternalUserMessage(message)) {
+        continue;
+      }
+
+      const sessionID = inferSessionID(messages, i);
+
+      const partSignature = message.parts
+        .map((part) => {
+          if (part.type === 'text' && typeof part.text === 'string') {
+            return `${part.type}:${part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER) ? '<internal>' : part.text.trim()}`;
+          }
+          return part.type ?? 'unknown';
+        })
+        .join('|');
+      const ordinal = messages
+        .slice(0, i + 1)
+        .filter((item) => isExternalUserMessage(item)).length;
+
+      return {
+        sessionID,
+        agent: message.info.agent,
+        signature: message.info.id
+          ? `${message.info.id}:${partSignature}`
+          : `${ordinal}:${partSignature}`,
+      };
+    }
+
+    return null;
+  }
+
+  async function handleMessagesTransform(output: {
+    messages: ChatTransformMessage[];
+  }): Promise<void> {
+    const lastUserMessage = getLastExternalUserMessage(output.messages);
+    if (!lastUserMessage) {
+      return;
+    }
+
+    if (lastUserMessage.agent && lastUserMessage.agent !== 'orchestrator') {
+      return;
+    }
+
+    if (!lastUserMessage.sessionID) {
+      for (const sessionID of state.orchestratorSessionIds) {
+        requestSignatureBySession.delete(sessionID);
+        hygiene.handleRequestStart({ sessionID });
+      }
+      return;
+    }
+
+    const knownOrchestrator = isOrchestratorSession(lastUserMessage.sessionID);
+    if (lastUserMessage.agent === 'orchestrator') {
+      registerOrchestratorSession(lastUserMessage.sessionID);
+    } else if (!knownOrchestrator) {
+      return;
+    }
+
+    if (
+      requestSignatureBySession.get(lastUserMessage.sessionID) ===
+      lastUserMessage.signature
+    ) {
+      return;
+    }
+
+    requestSignatureBySession.set(
+      lastUserMessage.sessionID,
+      lastUserMessage.signature,
+    );
+    hygiene.handleRequestStart({ sessionID: lastUserMessage.sessionID });
+  }
 
   function markNotificationStarted(sessionID: string): void {
     state.notifyingSessionIds.add(sessionID);
@@ -553,6 +701,7 @@ export function createTodoContinuationHook(
         (properties.sessionID as string);
 
       if (deletedSessionId && isOrchestratorSession(deletedSessionId)) {
+        requestSignatureBySession.delete(deletedSessionId);
         if (state.pendingTimerSessionId === deletedSessionId) {
           cancelPendingTimer(state);
           log(`[${HOOK_NAME}] Cancelled pending timer on orchestrator delete`, {
@@ -661,6 +810,7 @@ export function createTodoContinuationHook(
     tool: { auto_continue: autoContinue },
     handleToolExecuteAfter: hygiene.handleToolExecuteAfter,
     handleChatSystemTransform: hygiene.handleChatSystemTransform,
+    handleMessagesTransform,
     handleEvent,
     handleChatMessage,
     handleCommandExecuteBefore,

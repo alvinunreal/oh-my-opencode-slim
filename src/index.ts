@@ -163,7 +163,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
 
   const applyPatchHook = createApplyPatchHook(ctx);
-
   // Initialize JSON parse error recovery hook
   const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
 
@@ -576,6 +575,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           }>;
         }>;
       };
+      await todoContinuationHook.handleMessagesTransform({
+        messages: typedOutput.messages,
+      });
       await phaseReminderHook['experimental.chat.messages.transform'](
         input,
         typedOutput,

@@ -67,6 +67,23 @@ describe('createTodoContinuationHook', () => {
     return call;
   }
 
+  function userMessages(
+    text: string,
+    sessionID = 'main1',
+    agent?: string,
+    parts?: Array<{ type: string; text?: string }>,
+    id?: string,
+  ) {
+    return {
+      messages: [
+        {
+          info: { id, role: 'user', agent, sessionID },
+          parts: parts ?? [{ type: 'text', text }],
+        },
+      ],
+    };
+  }
+
   describe('tool toggle', () => {
     test('calling auto_continue execute with { enabled: true } sets state', async () => {
       const ctx = createMockContext();
@@ -100,13 +117,131 @@ describe('createTodoContinuationHook', () => {
       const hook = createTodoContinuationHook(ctx);
       const system = { system: ['base'] };
 
+      await hook.handleMessagesTransform(userMessages('continue previous work', 'sub1', 'explorer'));
       await hook.handleToolExecuteAfter({ tool: 'task', sessionID: 'sub1' });
       await hook.handleChatSystemTransform({ sessionID: 'sub1' }, system);
 
       expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
     });
 
-    test('injects hygiene reminder only for orchestrator session', async () => {
+    test('does not inject anything at request start before todowrite', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            {
+              id: '1',
+              content: 'todo1',
+              status: 'in_progress',
+              priority: 'high',
+            },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const system = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('continue with the unfinished work', 'main1', 'orchestrator'),
+      );
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
+
+      expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(system.system.join('\n')).not.toContain(TODO_FINAL_ACTIVE_REMINDER);
+    });
+
+    test('new requests clear stale pending reminder state', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const blocked = { system: ['base'] };
+      const allowed = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('primera request', 'main1', 'orchestrator'),
+      );
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform(
+        userMessages('segunda request distinta', 'main1', 'orchestrator'),
+      );
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, blocked);
+
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, allowed);
+
+      expect(blocked.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(allowed.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    });
+
+    test('attachment-only requests still reset stale pending reminder state', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const blocked = { system: ['base'] };
+      const allowed = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('primera request', 'main1', 'orchestrator'),
+      );
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform(
+        userMessages('', 'main1', 'orchestrator', [{ type: 'image' }]),
+      );
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, blocked);
+
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, allowed);
+
+      expect(blocked.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(allowed.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    });
+
+    test('falls back to known orchestrator session when transform message lacks sessionID', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            {
+              id: '1',
+              content: 'todo1',
+              status: 'in_progress',
+              priority: 'high',
+            },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const system = { system: ['base'] };
+
+      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      await hook.handleMessagesTransform({
+        messages: [
+          {
+            info: { role: 'user', agent: 'orchestrator' },
+            parts: [{ type: 'text', text: 'new request boundary' }],
+          },
+        ],
+      });
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
+
+      expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
+    });
+
+    test('does not promote sessions with missing agent metadata to orchestrator', async () => {
       const ctx = createMockContext({
         todoResult: {
           data: [
@@ -117,14 +252,151 @@ describe('createTodoContinuationHook', () => {
       const hook = createTodoContinuationHook(ctx);
       const system = { system: ['base'] };
 
+      await hook.handleMessagesTransform(userMessages('continue previous work', 'sub1'));
+      await hook.handleToolExecuteAfter({ tool: 'task', sessionID: 'sub1' });
+      await hook.handleChatSystemTransform({ sessionID: 'sub1' }, system);
+
+      expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(system.system.join('\n')).not.toContain(TODO_FINAL_ACTIVE_REMINDER);
+    });
+
+    test('known orchestrator sessions still process request boundaries when agent metadata is missing', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            {
+              id: '1',
+              content: 'todo1',
+              status: 'in_progress',
+              priority: 'high',
+            },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const system = { system: ['base'] };
+
       hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
-      await hook.handleToolExecuteAfter({ tool: 'task', sessionID: 'main1' });
+      await hook.handleMessagesTransform(userMessages('new request boundary', 'main1'));
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
+
+      expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
+    });
+
+    test('the same user message id does not reset the request when its array index shifts', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const system = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('request boundary', 'main1', 'orchestrator', undefined, 'u1'),
+      );
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform({
+        messages: [
+          {
+            info: { role: 'assistant', sessionID: 'main1' },
+            parts: [{ type: 'text', text: 'intermediate output' }],
+          },
+          {
+            info: {
+              id: 'u1',
+              role: 'user',
+              agent: 'orchestrator',
+              sessionID: 'main1',
+            },
+            parts: [{ type: 'text', text: 'request boundary' }],
+          },
+        ],
+      });
       await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
 
       expect(system.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
     });
 
-    test('normal read-only work can arm hygiene reminder after todowrite reset', async () => {
+    test('a new user message id resets the request even if the text is unchanged', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const blocked = { system: ['base'] };
+      const allowed = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('same text', 'main1', 'orchestrator', undefined, 'u1'),
+      );
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform(
+        userMessages('same text', 'main1', 'orchestrator', undefined, 'u2'),
+      );
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, blocked);
+
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, allowed);
+
+      expect(blocked.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(allowed.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    });
+
+    test('a repeated text without message ids still resets when a later user turn appears', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const blocked = { system: ['base'] };
+      const allowed = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('same text', 'main1', 'orchestrator'),
+      );
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform({
+        messages: [
+          {
+            info: { role: 'user', agent: 'orchestrator', sessionID: 'main1' },
+            parts: [{ type: 'text', text: 'same text' }],
+          },
+          {
+            info: { role: 'assistant', sessionID: 'main1' },
+            parts: [{ type: 'text', text: 'intermediate output' }],
+          },
+          {
+            info: { role: 'user', agent: 'orchestrator', sessionID: 'main1' },
+            parts: [{ type: 'text', text: 'same text' }],
+          },
+        ],
+      });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, blocked);
+
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, allowed);
+
+      expect(blocked.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(allowed.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    });
+
+    test('messages without inferable sessionID clear stale state for known orchestrators', async () => {
       const ctx = createMockContext({
         todoResult: {
           data: [
@@ -136,11 +408,75 @@ describe('createTodoContinuationHook', () => {
       const system = { system: ['base'] };
 
       hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      hook.handleChatMessage({ sessionID: 'main2', agent: 'orchestrator' });
+      await hook.handleMessagesTransform(
+        userMessages('first request', 'main1', 'orchestrator', undefined, 'u1'),
+      );
+      await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform({
+        messages: [
+          {
+            info: { role: 'user', agent: 'orchestrator' },
+            parts: [{ type: 'text', text: 'boundary without session id' }],
+          },
+        ],
+      });
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
+
+      expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(system.system.join('\n')).not.toContain(TODO_FINAL_ACTIVE_REMINDER);
+    });
+
+    test('does not inject from continuation-like wording alone', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            {
+              id: '1',
+              content: 'todo1',
+              status: 'in_progress',
+              priority: 'high',
+            },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const system = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('sigue este formato pero empieza de cero', 'main1', 'orchestrator'),
+      );
+      await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
+
+      expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+      expect(system.system.join('\n')).not.toContain(TODO_FINAL_ACTIVE_REMINDER);
+    });
+
+    test('rearms on activity after todowrite even if request wording is continuation-like', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            {
+              id: '1',
+              content: 'todo1',
+              status: 'in_progress',
+              priority: 'high',
+            },
+          ],
+        },
+      });
+      const hook = createTodoContinuationHook(ctx);
+      const system = { system: ['base'] };
+
+      await hook.handleMessagesTransform(
+        userMessages('finish the previous work', 'main1', 'orchestrator'),
+      );
       await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
       await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
       await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
 
-      expect(system.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+      expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
     });
 
     test('final active todo after todowrite uses the stronger finishing reminder', async () => {
@@ -159,7 +495,9 @@ describe('createTodoContinuationHook', () => {
       const hook = createTodoContinuationHook(ctx);
       const system = { system: ['base'] };
 
-      hook.handleChatMessage({ sessionID: 'main1', agent: 'orchestrator' });
+      await hook.handleMessagesTransform(
+        userMessages('haz esto', 'main1', 'orchestrator'),
+      );
       await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 'main1' });
       await hook.handleChatSystemTransform({ sessionID: 'main1' }, system);
 
