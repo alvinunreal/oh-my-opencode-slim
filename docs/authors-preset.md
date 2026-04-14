@@ -10,8 +10,8 @@ This is the exact configuration the author runs day-to-day. It mixes three provi
 {
   "preset": "best",
   "presets": {
-    "best": { "orchestrator": { "model": "openai/gpt-5.4", "skills": [ "*" ], "mcps": [ "*"] },
-      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": [], "mcps": [] },
+    "best": { "orchestrator": { "model": "openai/gpt-5.4-fast", "skills": [ "*" ], "mcps": [ "*"] },
+      "oracle": { "model": "openai/gpt-5.4-fast", "variant": "high", "skills": [], "mcps": [] },
       "librarian": { "model": "fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo", "variant": "low", "skills": [], "mcps": [ "websearch", "context7", "grep_app" ] },
       "explorer": { "model": "fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo", "variant": "low", "skills": [], "mcps": [] },
       "designer": { "model": "github-copilot/gemini-3.1-pro-preview", "skills": [ "agent-browser" ], "mcps": [] },
