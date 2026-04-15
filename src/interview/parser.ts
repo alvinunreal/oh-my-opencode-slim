@@ -3,22 +3,28 @@ import type {
   InterviewMessage,
   InterviewQuestion,
 } from './types';
+import { RawInterviewStateSchema, RawQuestionSchema } from './types';
 
 const INTERVIEW_BLOCK_REGEX =
   /<interview_state>\s*([\s\S]*?)\s*<\/interview_state>/i;
 
 function normalizeQuestion(
-  value: Record<string, unknown>,
+  value: unknown,
   index: number,
 ): InterviewQuestion | null {
+  // Validate raw question object with Zod
+  const result = RawQuestionSchema.safeParse(value);
+  if (!result.success) {
+    return null;
+  }
   const question =
-    typeof value.question === 'string' ? value.question.trim() : '';
+    typeof result.data.question === 'string' ? result.data.question.trim() : '';
   if (!question) {
     return null;
   }
 
-  const options = Array.isArray(value.options)
-    ? value.options
+  const options = Array.isArray(result.data.options)
+    ? result.data.options
         .filter((option): option is string => typeof option === 'string')
         .map((option) => option.trim())
         .filter(Boolean)
@@ -27,14 +33,15 @@ function normalizeQuestion(
 
   return {
     id:
-      typeof value.id === 'string' && value.id.trim().length > 0
-        ? value.id.trim()
+      typeof result.data.id === 'string' && result.data.id.trim().length > 0
+        ? result.data.id.trim()
         : `q-${index + 1}`,
     question,
     options,
     suggested:
-      typeof value.suggested === 'string' && value.suggested.trim().length > 0
-        ? value.suggested.trim()
+      typeof result.data.suggested === 'string' &&
+      result.data.suggested.trim().length > 0
+        ? result.data.suggested.trim()
         : undefined,
   };
 }
@@ -75,7 +82,12 @@ export function parseAssistantState(
   }
 
   try {
-    const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+    const raw = JSON.parse(match[1]);
+    // Validate raw LLM output with Zod before processing
+    const parsed = RawInterviewStateSchema.parse(raw) as Record<
+      string,
+      unknown
+    >;
     const summary =
       typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
     const title =
@@ -84,10 +96,6 @@ export function parseAssistantState(
         : undefined;
     const questions = Array.isArray(parsed.questions)
       ? parsed.questions
-          .filter(
-            (value): value is Record<string, unknown> =>
-              typeof value === 'object' && value !== null,
-          )
           .map((value, index) => normalizeQuestion(value, index))
           .filter((value): value is InterviewQuestion => value !== null)
           .slice(0, maxQuestions)
@@ -118,6 +126,8 @@ export function findLatestAssistantState(
   state: InterviewAssistantState | null;
   latestAssistantError?: string;
 } {
+  let latestAssistantError: string | undefined;
+
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.info?.role !== 'assistant') {
@@ -128,16 +138,17 @@ export function findLatestAssistantState(
     if (parsed.state) {
       return {
         state: parsed.state,
+        latestAssistantError,
       };
     }
 
-    return {
-      state: null,
-      latestAssistantError: parsed.error ?? 'Missing <interview_state> block',
-    };
+    if (!latestAssistantError) {
+      latestAssistantError = parsed.error ?? 'Missing <interview_state> block';
+    }
   }
 
   return {
     state: null,
+    latestAssistantError,
   };
 }

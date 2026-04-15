@@ -170,6 +170,7 @@ export const InterviewConfigSchema = z.object({
   outputFolder: z.string().min(1).default('interview'),
   autoOpenBrowser: z.boolean().default(true),
   port: z.number().int().min(0).max(65535).default(0),
+  dashboard: z.boolean().default(false),
 });
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;

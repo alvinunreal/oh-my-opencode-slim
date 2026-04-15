@@ -5,8 +5,14 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { URL } from 'node:url';
-import type { InterviewAnswer, InterviewState } from './types';
-import { renderInterviewPage } from './ui';
+import { extractResumeSlug, readJsonBody, sendHtml, sendJson } from './helpers';
+import type {
+  InterviewAnswer,
+  InterviewFileItem,
+  InterviewListItem,
+  InterviewState,
+} from './types';
+import { renderDashboardPage, renderInterviewPage } from './ui';
 
 function getSubmissionStatus(error: unknown): number {
   if (error instanceof SyntaxError) {
@@ -64,46 +70,19 @@ function parseAnswersPayload(value: unknown): { answers: InterviewAnswer[] } {
   };
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > 64 * 1024) {
-      request.destroy();
-      throw new Error('Request body too large');
-    }
-    chunks.push(buffer);
-  }
-
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
-  return raw ? JSON.parse(raw) : {};
-}
-
-function sendJson(
-  response: ServerResponse,
-  status: number,
-  value: unknown,
-): void {
-  response.statusCode = status;
-  response.setHeader('content-type', 'application/json; charset=utf-8');
-  response.end(`${JSON.stringify(value)}\n`);
-}
-
-function sendHtml(response: ServerResponse, html: string): void {
-  response.statusCode = 200;
-  response.setHeader('content-type', 'text/html; charset=utf-8');
-  response.end(html);
-}
-
 export function createInterviewServer(deps: {
   getState: (interviewId: string) => Promise<InterviewState>;
+  listInterviewFiles: () => Promise<InterviewFileItem[]>;
+  listInterviews: () => InterviewListItem[];
   submitAnswers: (
     interviewId: string,
     answers: InterviewAnswer[],
   ) => Promise<void>;
+  handleNudgeAction: (
+    interviewId: string,
+    action: 'more-questions' | 'confirm-complete',
+  ) => Promise<void>;
+  outputFolder: string;
   port: number;
 }): {
   ensureStarted: () => Promise<string>;
@@ -112,6 +91,20 @@ export function createInterviewServer(deps: {
   let baseUrl: string | null = null;
   let startPromise: Promise<string> | null = null;
   let activeServer: Server | null = null;
+
+  async function loadDashboardData() {
+    const interviews = deps.listInterviews().map((item) => {
+      const resumeSlug = extractResumeSlug(item.id);
+      return {
+        ...item,
+        url: `/interview/${item.id}`,
+        mode: 'active',
+        resumeSlug,
+      };
+    });
+    const files = await deps.listInterviewFiles();
+    return { interviews, files };
+  }
 
   async function handle(
     request: IncomingMessage,
@@ -126,18 +119,41 @@ export function createInterviewServer(deps: {
     }
     const pathname = url.pathname;
 
+    // Dashboard: root page listing all interviews
+    if (request.method === 'GET' && pathname === '/') {
+      try {
+        const { interviews, files } = await loadDashboardData();
+        sendHtml(
+          response,
+          renderDashboardPage(interviews, files, deps.outputFolder),
+        );
+      } catch {
+        sendJson(response, 500, { error: 'Failed to load interviews' });
+      }
+      return;
+    }
+
+    // API: list all interviews as JSON
+    if (request.method === 'GET' && pathname === '/api/interviews') {
+      try {
+        const { interviews, files } = await loadDashboardData();
+        sendJson(response, 200, { active: interviews, files });
+      } catch {
+        sendJson(response, 500, { error: 'Failed to load interviews' });
+      }
+      return;
+    }
+
     if (request.method === 'GET' && pathname.startsWith('/interview/')) {
-      sendHtml(
-        response,
-        renderInterviewPage(pathname.split('/').pop() ?? 'unknown'),
-      );
+      const rawId = decodeURIComponent(pathname.split('/').pop() ?? 'unknown');
+      sendHtml(response, renderInterviewPage(rawId, extractResumeSlug(rawId)));
       return;
     }
 
     const stateMatch = pathname.match(/^\/api\/interviews\/([^/]+)\/state$/);
     if (request.method === 'GET' && stateMatch) {
       try {
-        const state = await deps.getState(stateMatch[1]);
+        const state = await deps.getState(decodeURIComponent(stateMatch[1]));
         sendJson(response, 200, state);
       } catch (error) {
         const message =
@@ -148,13 +164,21 @@ export function createInterviewServer(deps: {
       return;
     }
 
+    // CSRF note: This endpoint intentionally sends no CORS headers.
+    // The browser's same-origin policy blocks cross-origin POST with
+    // Content-Type: application/json (it triggers a preflight, which
+    // 404s here). Do NOT add Access-Control-Allow-Origin without also
+    // adding an Origin check or CSRF token.
     const answersMatch = pathname.match(
       /^\/api\/interviews\/([^/]+)\/answers$/,
     );
     if (request.method === 'POST' && answersMatch) {
       try {
         const body = parseAnswersPayload(await readJsonBody(request));
-        await deps.submitAnswers(answersMatch[1], body.answers);
+        await deps.submitAnswers(
+          decodeURIComponent(answersMatch[1]),
+          body.answers,
+        );
         sendJson(response, 200, {
           ok: true,
           message: 'Answers submitted to the OpenCode session.',
@@ -167,6 +191,36 @@ export function createInterviewServer(deps: {
           ok: false,
           message,
         });
+      }
+      return;
+    }
+
+    // Nudge: ask more questions or confirm complete
+    const nudgeMatch = pathname.match(/^\/api\/interviews\/([^/]+)\/nudge$/);
+    if (request.method === 'POST' && nudgeMatch) {
+      try {
+        const body = (await readJsonBody(request)) as {
+          action?: string;
+        };
+        if (
+          body.action !== 'more-questions' &&
+          body.action !== 'confirm-complete'
+        ) {
+          sendJson(response, 400, {
+            error: 'action must be "more-questions" or "confirm-complete"',
+          });
+          return;
+        }
+        await deps.handleNudgeAction(
+          decodeURIComponent(nudgeMatch[1]),
+          body.action,
+        );
+        sendJson(response, 200, { ok: true, message: 'Nudge sent.' });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to nudge.';
+        const status = message === 'Interview not found' ? 404 : 500;
+        sendJson(response, status, { ok: false, message });
       }
       return;
     }
