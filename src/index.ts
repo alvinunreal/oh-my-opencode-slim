@@ -587,6 +587,28 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           }>;
         }>;
       };
+
+      // Strip image parts from orchestrator messages when @multimodal is available.
+      // When the orchestrator's model doesn't support image input, the API call
+      // fails before the LLM can respond. We replace image bytes with a text
+      // nudge so the orchestrator delegates to @multimodal instead.
+      const disabled = getDisabledAgents(config);
+      if (!disabled.has('multimodal')) {
+        for (const msg of typedOutput.messages) {
+          if (msg.info.role !== 'user') continue;
+          const hasImage = msg.parts.some((p) => p.type === 'image');
+          if (!hasImage) continue;
+          msg.parts = msg.parts
+            .filter((p) => p.type !== 'image')
+            .concat([
+              {
+                type: 'text',
+                text: '[Image attachment detected — your model may not support image input. Delegate to @multimodal to analyze this image. Include any known file path in the prompt so @multimodal can read it.]',
+              },
+            ]);
+        }
+      }
+
       await todoContinuationHook.handleMessagesTransform({
         messages: typedOutput.messages,
       });
