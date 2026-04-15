@@ -30,6 +30,12 @@ function createMockContext(overrides?: {
           }
           return {};
         }),
+        promptAsync: mock(async (args: any) => {
+          if (overrides?.promptImpl) {
+            return await overrides.promptImpl(args);
+          }
+          return {};
+        }),
       },
     },
     directory: overrides?.directory ?? '/test/directory',
@@ -1180,16 +1186,16 @@ describe('interview service', () => {
       });
 
       // Clear previous prompt calls to capture the answer prompt
-      ctx.client.session.prompt.mock.calls.length = 0;
+      ctx.client.session.promptAsync.mock.calls.length = 0;
 
       // Submit an answer
       const answers: InterviewAnswer[] = [{ questionId: 'q-1', answer: 'A' }];
       await service.submitAnswers(requiredInterviewId, answers);
 
       // Answer prompt should reference the configured maxQuestions
-      const lastPromptText = getPromptTexts(ctx.client.session.prompt).join(
-        '\n',
-      );
+      const lastPromptText = getPromptTexts(
+        ctx.client.session.promptAsync,
+      ).join('\n');
       expect(lastPromptText).toContain('Return 0 to 4 questions');
 
       // Cleanup
@@ -1448,7 +1454,7 @@ describe('interview service', () => {
 describe('renderInterviewPage', () => {
   test('escapes HTML special characters in interviewId for title', () => {
     const maliciousId = '<script>alert("xss")</script>';
-    const html = renderInterviewPage(maliciousId);
+    const html = renderInterviewPage(maliciousId, maliciousId);
 
     // Should not contain raw script tags in title
     expect(html).not.toContain('<title>Interview <script>');
@@ -1461,7 +1467,7 @@ describe('renderInterviewPage', () => {
 
   test('escapes ampersand in interviewId', () => {
     const idWithAmpersand = 'A&B Test';
-    const html = renderInterviewPage(idWithAmpersand);
+    const html = renderInterviewPage(idWithAmpersand, idWithAmpersand);
 
     expect(html).toContain('<title>Interview A&amp;B Test</title>');
     expect(html).not.toContain('<title>Interview A&B Test</title>');
@@ -1469,21 +1475,21 @@ describe('renderInterviewPage', () => {
 
   test('escapes single quotes in interviewId', () => {
     const idWithQuote = "test'quote";
-    const html = renderInterviewPage(idWithQuote);
+    const html = renderInterviewPage(idWithQuote, idWithQuote);
 
     expect(html).toContain('<title>Interview test&#39;quote</title>');
   });
 
   test('preserves safe interviewId characters', () => {
     const safeId = 'my-interview-123_test';
-    const html = renderInterviewPage(safeId);
+    const html = renderInterviewPage(safeId, safeId);
 
     expect(html).toContain(`<title>Interview ${safeId}</title>`);
   });
 
   test('interviewId in JSON script tag is properly stringified', () => {
     const idWithQuotes = 'test"onclick"evil';
-    const html = renderInterviewPage(idWithQuotes);
+    const html = renderInterviewPage(idWithQuotes, idWithQuotes);
 
     // The interviewId in the JavaScript should be JSON.stringify'd
     // JSON.stringify escapes quotes as \"
@@ -1494,7 +1500,7 @@ describe('renderInterviewPage', () => {
 
   test('does not inject raw interviewId into HTML title', () => {
     const xssAttempt = '<img src=x onerror=alert(1)>';
-    const html = renderInterviewPage(xssAttempt);
+    const html = renderInterviewPage(xssAttempt, xssAttempt);
 
     // Title should be escaped
     expect(html).not.toContain(`<title>Interview ${xssAttempt}</title>`);
@@ -1504,7 +1510,7 @@ describe('renderInterviewPage', () => {
   });
 
   test('renders a self-contained brand mark', () => {
-    const html = renderInterviewPage('brand-test');
+    const html = renderInterviewPage('brand-test', 'brand-test');
 
     expect(html).toContain('<svg');
     expect(html).not.toContain('https://ohmyopencodeslim.com');

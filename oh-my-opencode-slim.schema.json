@@ -450,6 +450,10 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 65535
+        },
+        "dashboard": {
+          "default": false,
+          "type": "boolean"
         }
       }
     },

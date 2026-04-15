@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -9,6 +8,21 @@ import {
   hasInternalInitiatorMarker,
   log,
 } from '../utils';
+import {
+  appendInterviewAnswers,
+  createInterviewDirectoryPath,
+  createInterviewFilePath,
+  DEFAULT_OUTPUT_FOLDER,
+  ensureInterviewFile,
+  extractSummarySection,
+  extractTitle,
+  normalizeOutputFolder,
+  readInterviewDocument,
+  relativeInterviewPath,
+  resolveExistingInterviewPath,
+  rewriteInterviewDocument,
+  slugify,
+} from './document';
 import { buildFallbackState, findLatestAssistantState } from './parser';
 import {
   buildAnswerPrompt,
@@ -17,24 +31,16 @@ import {
 } from './prompts';
 import type {
   InterviewAnswer,
+  InterviewFileItem,
+  InterviewListItem,
   InterviewMessage,
-  InterviewQuestion,
   InterviewRecord,
   InterviewState,
 } from './types';
 
 const COMMAND_NAME = 'interview';
 const DEFAULT_MAX_QUESTIONS = 2;
-const DEFAULT_OUTPUT_FOLDER = 'interview';
 const DEFAULT_AUTO_OPEN_BROWSER = true;
-
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-}
 
 /**
  * Open a URL in the default browser.
@@ -75,195 +81,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function normalizeOutputFolder(outputFolder: string): string {
-  const normalized = outputFolder.trim().replace(/^\/+|\/+$/g, '');
-  return normalized || DEFAULT_OUTPUT_FOLDER;
-}
-
-function createInterviewDirectoryPath(
-  directory: string,
-  outputFolder: string,
-): string {
-  return path.join(directory, normalizeOutputFolder(outputFolder));
-}
-
-function createInterviewFilePath(
-  directory: string,
-  outputFolder: string,
-  idea: string,
-): string {
-  const fileName = `${slugify(idea) || 'interview'}.md`;
-  return path.join(
-    createInterviewDirectoryPath(directory, outputFolder),
-    fileName,
-  );
-}
-
-function relativeInterviewPath(directory: string, filePath: string): string {
-  return path.relative(directory, filePath) || path.basename(filePath);
-}
-
-function extractHistorySection(document: string): string {
-  const marker = '## Q&A history\n\n';
-  const index = document.indexOf(marker);
-  return index >= 0 ? document.slice(index + marker.length).trim() : '';
-}
-
-function extractSummarySection(document: string): string {
-  const marker = '## Current spec\n\n';
-  const historyMarker = '\n\n## Q&A history';
-  const start = document.indexOf(marker);
-  if (start < 0) {
-    return '';
-  }
-  const summaryStart = start + marker.length;
-  const summaryEnd = document.indexOf(historyMarker, summaryStart);
-  return document
-    .slice(summaryStart, summaryEnd >= 0 ? summaryEnd : undefined)
-    .trim();
-}
-
-function extractTitle(document: string): string {
-  const match = document.match(/^#\s+(.+)$/m);
-  return match?.[1]?.trim() ?? '';
-}
-
-function buildInterviewDocument(
-  idea: string,
-  summary: string,
-  history: string,
-): string {
-  const normalizedSummary = summary.trim() || 'Waiting for interview answers.';
-  const normalizedHistory = history.trim() || 'No answers yet.';
-
-  return [
-    `# ${idea}`,
-    '',
-    '## Current spec',
-    '',
-    normalizedSummary,
-    '',
-    '## Q&A history',
-    '',
-    normalizedHistory,
-    '',
-  ].join('\n');
-}
-
-async function ensureInterviewFile(record: InterviewRecord): Promise<void> {
-  await fs.mkdir(path.dirname(record.markdownPath), { recursive: true });
-  try {
-    await fs.access(record.markdownPath);
-  } catch {
-    await fs.writeFile(
-      record.markdownPath,
-      buildInterviewDocument(record.idea, '', ''),
-      'utf8',
-    );
-  }
-}
-
-async function readInterviewDocument(record: InterviewRecord): Promise<string> {
-  try {
-    return await fs.readFile(record.markdownPath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Path may have been updated by concurrent maybeRenameWithTitle
-      try {
-        return await fs.readFile(record.markdownPath, 'utf8');
-      } catch {
-        // Fall through to ensure + create
-      }
-    }
-  }
-  await ensureInterviewFile(record);
-  return fs.readFile(record.markdownPath, 'utf8');
-}
-
-async function rewriteInterviewDocument(
-  record: InterviewRecord,
-  summary: string,
-): Promise<string> {
-  const existing = await readInterviewDocument(record);
-  const history = extractHistorySection(existing);
-  const next = buildInterviewDocument(record.idea, summary, history);
-  await fs.writeFile(record.markdownPath, next, 'utf8');
-  return next;
-}
-
-async function appendInterviewAnswers(
-  record: InterviewRecord,
-  questions: InterviewQuestion[],
-  answers: InterviewAnswer[],
-): Promise<void> {
-  const existing = await readInterviewDocument(record);
-  const summary = extractSummarySection(existing);
-  const history = extractHistorySection(existing);
-  const questionMap = new Map(
-    questions.map((question) => [question.id, question]),
-  );
-  const appended = answers
-    .map((answer) => {
-      const question = questionMap.get(answer.questionId);
-      return question
-        ? `Q: ${question.question}\nA: ${answer.answer.trim()}`
-        : null;
-    })
-    .filter((value): value is string => value !== null)
-    .join('\n\n');
-  const nextHistory = [history === 'No answers yet.' ? '' : history, appended]
-    .filter(Boolean)
-    .join('\n\n');
-  await fs.writeFile(
-    record.markdownPath,
-    buildInterviewDocument(record.idea, summary, nextHistory),
-    'utf8',
-  );
-}
-
-function resolveExistingInterviewPath(
-  directory: string,
-  outputFolder: string,
-  value: string,
-): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const outputDir = createInterviewDirectoryPath(directory, outputFolder);
-  const candidates = new Set<string>();
-  const resolvedRoot = path.resolve(directory);
-
-  if (path.isAbsolute(trimmed)) {
-    candidates.add(trimmed);
-  } else {
-    candidates.add(path.resolve(directory, trimmed));
-    candidates.add(path.join(outputDir, trimmed));
-    if (!trimmed.endsWith('.md')) {
-      candidates.add(path.join(outputDir, `${trimmed}.md`));
-    }
-  }
-
-  for (const candidate of candidates) {
-    if (path.extname(candidate) !== '.md') {
-      continue;
-    }
-    const resolved = path.resolve(candidate);
-    if (
-      !resolved.startsWith(resolvedRoot + path.sep) &&
-      resolved !== resolvedRoot
-    ) {
-      continue;
-    }
-    if (fsSync.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
 export function createInterviewService(
   ctx: PluginInput,
   config?: InterviewConfig,
@@ -272,6 +89,13 @@ export function createInterviewService(
   },
 ): {
   setBaseUrlResolver: (resolver: () => Promise<string>) => void;
+  setStatePushCallback: (
+    callback: (interviewId: string, state: InterviewState) => void,
+  ) => void;
+  setOnInterviewCreated: (
+    callback: (interview: InterviewRecord) => void,
+  ) => void;
+  getActiveInterviewId: (sessionID: string) => string | null;
   registerCommand: (config: Record<string, unknown>) => void;
   handleCommandExecuteBefore: (
     input: { command: string; sessionID: string; arguments: string },
@@ -281,9 +105,15 @@ export function createInterviewService(
     event: { type: string; properties?: Record<string, unknown> };
   }) => Promise<void>;
   getInterviewState: (interviewId: string) => Promise<InterviewState>;
+  listInterviewFiles: () => Promise<InterviewFileItem[]>;
+  listInterviews: () => InterviewListItem[];
   submitAnswers: (
     interviewId: string,
     answers: InterviewAnswer[],
+  ) => Promise<void>;
+  handleNudgeAction: (
+    interviewId: string,
+    action: 'more-questions' | 'confirm-complete',
   ) => Promise<void>;
 } {
   const maxQuestions = config?.maxQuestions ?? DEFAULT_MAX_QUESTIONS;
@@ -297,10 +127,30 @@ export function createInterviewService(
   const sessionBusy = new Map<string, boolean>();
   const browserOpened = new Set<string>(); // Track interviews that have opened browser
   let resolveBaseUrl: (() => Promise<string>) | null = null;
+  let onStateChange:
+    | ((interviewId: string, state: InterviewState) => void)
+    | null = null;
+  let onInterviewCreated: ((interview: InterviewRecord) => void) | null = null;
   let idCounter = 0;
 
   function setBaseUrlResolver(resolver: () => Promise<string>): void {
     resolveBaseUrl = resolver;
+  }
+
+  function setStatePushCallback(
+    callback: (interviewId: string, state: InterviewState) => void,
+  ): void {
+    onStateChange = callback;
+  }
+
+  function setOnInterviewCreated(
+    callback: (interview: InterviewRecord) => void,
+  ): void {
+    onInterviewCreated = callback;
+  }
+
+  function getActiveInterviewId(sessionID: string): string | null {
+    return activeInterviewIds.get(sessionID) ?? null;
   }
 
   async function ensureServer(): Promise<string> {
@@ -413,6 +263,11 @@ export function createInterviewService(
     await ensureInterviewFile(record);
     activeInterviewIds.set(sessionID, record.id);
     interviewsById.set(record.id, record);
+    fileCache = null;
+
+    if (onInterviewCreated) {
+      onInterviewCreated(record);
+    }
     return record;
   }
 
@@ -447,6 +302,11 @@ export function createInterviewService(
 
     activeInterviewIds.set(sessionID, record.id);
     interviewsById.set(record.id, record);
+    fileCache = null;
+
+    if (onInterviewCreated) {
+      onInterviewCreated(record);
+    }
     return record;
   }
 
@@ -470,7 +330,7 @@ export function createInterviewService(
 
     const document = await rewriteInterviewDocument(interview, state.summary);
 
-    return {
+    const interviewState: InterviewState = {
       interview,
       url: `${await ensureServer()}/interview/${interview.id}`,
       markdownPath: relativeInterviewPath(
@@ -480,19 +340,28 @@ export function createInterviewService(
       mode:
         interview.status === 'abandoned'
           ? 'abandoned'
-          : parsed.latestAssistantError
-            ? 'error'
+          : parsed.state && state.questions.length === 0
+            ? 'completed'
             : sessionBusy.get(interview.sessionID) === true
               ? 'awaiting-agent'
               : state.questions.length > 0
                 ? 'awaiting-user'
-                : 'awaiting-agent',
+                : parsed.latestAssistantError
+                  ? 'error'
+                  : 'awaiting-agent',
       lastParseError: parsed.latestAssistantError,
       isBusy: sessionBusy.get(interview.sessionID) === true,
       summary: state.summary,
       questions: state.questions,
       document,
     };
+
+    // Push state to dashboard if callback is set (dashboard mode)
+    if (onStateChange) {
+      onStateChange(interview.id, interviewState);
+    }
+
+    return interviewState;
   }
 
   async function notifyInterviewUrl(
@@ -552,6 +421,23 @@ export function createInterviewService(
     return syncInterview(interview);
   }
 
+  function listInterviews(): InterviewListItem[] {
+    const result: InterviewListItem[] = [];
+    for (const interview of interviewsById.values()) {
+      if (interview.status !== 'active') continue;
+      result.push({
+        id: interview.id,
+        idea: interview.idea,
+        status: interview.status,
+        createdAt: interview.createdAt,
+      });
+    }
+    return result.sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }
+
   async function submitAnswers(
     interviewId: string,
     answers: InterviewAnswer[],
@@ -603,7 +489,9 @@ export function createInterviewService(
       await appendInterviewAnswers(interview, state.questions, answers);
       const prompt = buildAnswerPrompt(answers, state.questions, maxQuestions);
 
-      await ctx.client.session.prompt({
+      // Use promptAsync for non-blocking — returns immediately, LLM
+      // processes in background. State push updates dashboard when done.
+      await ctx.client.session.promptAsync({
         path: { id: interview.sessionID },
         body: {
           parts: [createInternalAgentTextPart(prompt)],
@@ -707,6 +595,7 @@ export function createInterviewService(
       }
 
       interview.status = 'abandoned';
+      fileCache = null;
       activeInterviewIds.delete(deletedSessionId);
       log('[interview] session deleted, interview marked abandoned', {
         sessionID: deletedSessionId,
@@ -715,12 +604,130 @@ export function createInterviewService(
     }
   }
 
+  let fileCache: { items: InterviewFileItem[]; at: number } | null = null;
+  const FILE_CACHE_TTL = 10_000;
+
+  async function listInterviewFiles(): Promise<InterviewFileItem[]> {
+    if (fileCache && Date.now() - fileCache.at < FILE_CACHE_TTL) {
+      return fileCache.items;
+    }
+
+    const outputDir = createInterviewDirectoryPath(ctx.directory, outputFolder);
+    const activePaths = new Set(
+      [...interviewsById.values()]
+        .filter((i) => i.status === 'active')
+        .map((i) => path.resolve(i.markdownPath)),
+    );
+
+    let entries: string[];
+    try {
+      entries = await fs.readdir(outputDir);
+    } catch {
+      return [];
+    }
+
+    const items: InterviewFileItem[] = [];
+    for (const entry of entries) {
+      if (!entry.endsWith('.md')) continue;
+      const fullPath = path.join(outputDir, entry);
+      if (activePaths.has(path.resolve(fullPath))) continue;
+
+      let content: string;
+      try {
+        content = await fs.readFile(fullPath, 'utf8');
+      } catch {
+        continue;
+      }
+
+      const title = extractTitle(content) || entry.replace(/\.md$/, '');
+      const summary = extractSummarySection(content) || '';
+      const baseName = entry.replace(/\.md$/, '');
+
+      items.push({
+        fileName: entry,
+        resumeCommand: `/interview ${baseName}`,
+        title,
+        summary:
+          summary.length > 120 ? `${summary.slice(0, 120)}\u2026` : summary,
+      });
+    }
+
+    const sorted = items.sort((a, b) => a.title.localeCompare(b.title));
+    fileCache = { items: sorted, at: Date.now() };
+    return sorted;
+  }
+
+  async function handleNudgeAction(
+    interviewId: string,
+    action: 'more-questions' | 'confirm-complete',
+  ): Promise<void> {
+    const interview = getInterviewById(interviewId);
+    if (!interview) {
+      throw new Error('Interview not found');
+    }
+    if (interview.status === 'abandoned') {
+      throw new Error('Interview session is no longer active.');
+    }
+    if (sessionBusy.get(interview.sessionID) === true) {
+      throw new Error(
+        'Interview session is busy. Wait for the current response.',
+      );
+    }
+
+    sessionBusy.set(interview.sessionID, true);
+    let promptSent = false;
+
+    try {
+      const state = await getInterviewState(interviewId);
+
+      let prompt: string;
+      if (action === 'more-questions') {
+        prompt = [
+          `The user reviewed the completed interview spec and wants you to continue.`,
+          ``,
+          `Current spec summary: ${state.summary}`,
+          ``,
+          `Ask up to ${maxQuestions} new clarifying questions about aspects that are still unclear or underspecified.`,
+          `Include the structured <interview_state> block with new questions.`,
+        ].join('\n');
+      } else {
+        prompt = [
+          `The user confirmed the interview spec is complete.`,
+          ``,
+          `Current spec summary: ${state.summary}`,
+          ``,
+          `Produce a final, polished version of the full spec document.`,
+          `Do NOT include any <interview_state> block — just output the final spec as clean markdown.`,
+          `The spec should be comprehensive, well-structured, and ready for implementation.`,
+        ].join('\n');
+      }
+
+      await ctx.client.session.promptAsync({
+        path: { id: interview.sessionID },
+        body: {
+          parts: [createInternalAgentTextPart(prompt)],
+        },
+      });
+      promptSent = true;
+    } finally {
+      if (!promptSent) {
+        sessionBusy.set(interview.sessionID, false);
+      }
+    }
+  }
+
   return {
     setBaseUrlResolver,
+    setStatePushCallback,
+    setOnInterviewCreated,
+    getActiveInterviewId,
     registerCommand,
     handleCommandExecuteBefore,
     handleEvent,
     getInterviewState,
+    listInterviewFiles,
+    listInterviews,
     submitAnswers,
+    handleNudgeAction,
   };
 }
