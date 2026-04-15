@@ -1562,6 +1562,7 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'looker',
         'council',
       ]);
 
@@ -1622,6 +1623,7 @@ describe('BackgroundTaskManager', () => {
         'oracle',
         'designer',
         'fixer',
+        'looker',
         'council',
       ]);
     });
