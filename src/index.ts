@@ -1,6 +1,14 @@
-import type { Plugin } from '@opencode-ai/plugin';
-import { writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
+import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { BackgroundTaskManager, MultiplexerSessionManager } from './background';
 import { loadPluginConfig, type MultiplexerConfig } from './config';
@@ -558,8 +566,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             './agents/orchestrator'
           );
           const disabledAgents = getDisabledAgents(config);
-          const orchestratorPrompt =
-            buildOrchestratorPrompt(disabledAgents);
+          const orchestratorPrompt = buildOrchestratorPrompt(disabledAgents);
           output.system[0] =
             orchestratorPrompt +
             (output.system[0] ? `\n\n${output.system[0]}` : '');
@@ -597,14 +604,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const disabled = getDisabledAgents(config);
       const multimodalEnabled = !disabled.has('multimodal');
 
-      // Debug: log all part types in user messages (remove after debugging)
-      for (const msg of typedOutput.messages) {
-        if (msg.info.role === 'user' && msg.parts) {
-          const partTypes = msg.parts.map((p) => p.type).join(', ');
-          log(`[image-hook] user message parts: ${partTypes} (multimodalEnabled=${multimodalEnabled})`);
-        }
-      }
-
       if (multimodalEnabled) {
         const isImagePart = (p: { type: string; [k: string]: unknown }) => {
           if (p.type === 'image') return true;
@@ -614,12 +613,20 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             const filename = p.filename as string | undefined;
             const name = p.name as string | undefined;
             const fileName = filename ?? name;
-            if (fileName && /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|tiff?|heic)$/i.test(fileName)) return true;
+            if (
+              fileName &&
+              /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|tiff?|heic)$/i.test(
+                fileName,
+              )
+            )
+              return true;
           }
           return false;
         };
 
-        const decodeDataUrl = (url: string): { mime: string; data: Buffer } | null => {
+        const decodeDataUrl = (
+          url: string,
+        ): { mime: string; data: Buffer } | null => {
           const match = url.match(/^data:([^;]+);base64,(.+)$/);
           if (!match) return null;
           return { mime: match[1], data: Buffer.from(match[2], 'base64') };
@@ -627,8 +634,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
         const extFromMime = (mime: string): string => {
           const map: Record<string, string> = {
-            'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
-            'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/bmp': '.bmp',
+            'image/png': '.png',
+            'image/jpeg': '.jpg',
+            'image/gif': '.gif',
+            'image/webp': '.webp',
+            'image/svg+xml': '.svg',
+            'image/bmp': '.bmp',
           };
           return map[mime] ?? '.png';
         };
@@ -659,15 +670,22 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const imageParts = msg.parts.filter(isImagePart);
           if (imageParts.length === 0) continue;
 
-          // Save each image to /tmp and collect paths
+          // Save each image to .opencode/images/ and collect paths
           const savedPaths: string[] = [];
           for (const p of imageParts) {
             const url = p.url as string | undefined;
-            const filename = (p.filename as string | undefined) ?? (p.name as string | undefined);
+            const filename =
+              (p.filename as string | undefined) ??
+              (p.name as string | undefined);
             if (url) {
               const decoded = decodeDataUrl(url);
               if (decoded) {
-                const name = filename ?? `image-${Date.now()}${extFromMime(decoded.mime)}`;
+                const hash = createHash('sha1')
+                  .update(decoded.data)
+                  .digest('hex')
+                  .slice(0, 8);
+                const name =
+                  filename ?? `image-${hash}${extFromMime(decoded.mime)}`;
                 const filePath = join(saveDir, name);
                 try {
                   writeFileSync(filePath, decoded.data);
@@ -679,8 +697,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             }
           }
 
-          const pathsText = savedPaths.length > 0 ? ` Saved to: ${savedPaths.join(', ')}` : '';
-          log(`[image-hook] stripping image/file parts, saving to disk${pathsText}`);
+          const pathsText =
+            savedPaths.length > 0 ? ` Saved to: ${savedPaths.join(', ')}` : '';
+          log(
+            `[image-hook] stripping image/file parts, saving to disk${pathsText}`,
+          );
 
           msg.parts = msg.parts
             .filter((p) => !isImagePart(p))

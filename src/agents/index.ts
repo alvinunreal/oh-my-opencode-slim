@@ -134,16 +134,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
 export function createAgents(config?: PluginConfig): AgentDefinition[] {
-  // Compute disabled agents: user config overrides defaults
-  const userDisabled = config?.disabled_agents;
-  const disabledSource =
-    userDisabled !== undefined ? userDisabled : DEFAULT_DISABLED_AGENTS;
-  const disabled = new Set<string>();
-  for (const name of disabledSource) {
-    if (!PROTECTED_AGENTS.has(name)) {
-      disabled.add(name);
-    }
-  }
+  const disabled = getDisabledAgents(config);
 
   // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
   // existing users who don't have fixer in their config yet
