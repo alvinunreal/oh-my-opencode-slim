@@ -844,8 +844,20 @@ export function createDashboardServer(config: DashboardConfig): {
       const { answers } = body as {
         answers?: Array<{ questionId: string; answer: string }>;
       };
-      if (!Array.isArray(answers)) {
-        sendJson(response, 400, { error: 'answers array required' });
+      if (
+        !Array.isArray(answers) ||
+        !answers.every(
+          (a) =>
+            typeof a === 'object' &&
+            a !== null &&
+            typeof a.questionId === 'string' &&
+            typeof a.answer === 'string',
+        )
+      ) {
+        sendJson(response, 400, {
+          error:
+            'answers array required, each item must have string questionId and answer',
+        });
         return;
       }
 
@@ -1057,6 +1069,12 @@ export function createDashboardServer(config: DashboardConfig): {
     },
     removeSession: (sessionID: string) => {
       sessions.delete(sessionID);
+      // Clean up stateCache entries belonging to this session
+      for (const [id, entry] of stateCache) {
+        if (entry.sessionID === sessionID) {
+          stateCache.delete(id);
+        }
+      }
       fileCache = null;
     },
     pushState: (entry: InterviewStateEntry) => {
