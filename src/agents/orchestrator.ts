@@ -79,7 +79,7 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Capabilities: Interprets images, screenshots, PDFs, and diagrams via native read tool; extracts UI elements, layouts, text, relationships
 - **Delegate when:** Need to analyze a screenshot or image • Extract information from a PDF • Interpret a diagram or architecture drawing • Visual content needs structured description for downstream agents
 - **Don't delegate when:** Plain text files that Read can handle directly • Files that need editing afterward (need literal content from Read)
-- **Rule of thumb:** Need to "see" and describe a visual file? → @looker. Need exact file contents for editing? → Read it yourself.`,
+- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @looker — it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for editing? → Read it yourself.`,
 };
 
 // Validation routing lines that reference agents
