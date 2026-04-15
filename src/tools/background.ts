@@ -5,7 +5,11 @@ import {
 } from '@opencode-ai/plugin';
 import type { BackgroundTaskManager } from '../background';
 import type { PluginConfig } from '../config';
-import { PROTECTED_AGENTS, SUBAGENT_NAMES } from '../config';
+import {
+  DEFAULT_DISABLED_AGENTS,
+  PROTECTED_AGENTS,
+  SUBAGENT_NAMES,
+} from '../config';
 import type { MultiplexerConfig } from '../config/schema';
 
 const z = tool.schema;
@@ -25,7 +29,12 @@ export function createBackgroundTools(
   _pluginConfig?: PluginConfig,
 ): Record<string, ToolDefinition> {
   const disabled = new Set<string>();
-  for (const name of _pluginConfig?.disabled_agents ?? []) {
+  // Merge user config with DEFAULT_DISABLED_AGENTS: user config fully overrides defaults
+  const disabledSource =
+    _pluginConfig?.disabled_agents !== undefined
+      ? _pluginConfig.disabled_agents
+      : DEFAULT_DISABLED_AGENTS;
+  for (const name of disabledSource) {
     if (!PROTECTED_AGENTS.has(name)) {
       disabled.add(name);
     }

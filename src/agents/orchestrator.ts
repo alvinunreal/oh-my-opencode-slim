@@ -111,21 +111,19 @@ export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
     .map(([, desc]) => desc)
     .join('\n\n');
 
-  // Filter validation routing lines
+  // Filter validation routing lines — remove lines mentioning any disabled agent
   const enabledValidationRouting = VALIDATION_ROUTING.filter((line) => {
-    const match = line.match(/@(\w+)/);
-    if (!match) return true;
-    const agentName = match[1];
-    return !disabledAgents?.has(agentName);
+    const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
+    if (mentions.length === 0) return true;
+    return mentions.every((name) => !disabledAgents?.has(name));
   }).join('\n');
 
-  // Filter parallel delegation examples
+  // Filter parallel delegation examples — remove lines mentioning any disabled agent
   const enabledParallelExamples = PARALLEL_DELEGATION_EXAMPLES.filter(
     (line) => {
-      const match = line.match(/@(\w+)/);
-      if (!match) return true;
-      const agentName = match[1];
-      return !disabledAgents?.has(agentName);
+      const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
+      if (mentions.length === 0) return true;
+      return mentions.every((name) => !disabledAgents?.has(name));
     },
   ).join('\n');
 

@@ -1556,13 +1556,13 @@ describe('BackgroundTaskManager', () => {
       if (!orchestratorSessionId)
         throw new Error('Expected sessionId to be defined');
 
+      // Default config: DEFAULT_DISABLED_AGENTS includes 'looker', so it's excluded
       expect(manager.getAllowedSubagents(orchestratorSessionId)).toEqual([
         'explorer',
         'librarian',
         'oracle',
         'designer',
         'fixer',
-        'looker',
         'council',
       ]);
 
@@ -1582,7 +1582,7 @@ describe('BackgroundTaskManager', () => {
 
       expect(manager.getAllowedSubagents(fixerSessionId)).toEqual([]);
 
-      // Designer -> only explorer
+      // Designer -> empty
       const designerTask = manager.launch({
         agent: 'designer',
         prompt: 'test',
@@ -1616,8 +1616,36 @@ describe('BackgroundTaskManager', () => {
 
       expect(manager.getAllowedSubagents(explorerSessionId)).toEqual([]);
 
-      // Unknown session -> orchestrator (all subagents)
+      // Unknown session -> orchestrator (all subagents minus disabled)
       expect(manager.getAllowedSubagents('unknown-session')).toEqual([
+        'explorer',
+        'librarian',
+        'oracle',
+        'designer',
+        'fixer',
+        'council',
+      ]);
+    });
+
+    test('disabled_agents: [] enables all agents including looker', async () => {
+      const ctx = createMockContext();
+      const config: PluginConfig = { disabled_agents: [] };
+      const manager = new BackgroundTaskManager(ctx, undefined, config);
+
+      const task = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const sessionId = task.sessionId;
+      if (!sessionId) throw new Error('Expected sessionId to be defined');
+
+      expect(manager.getAllowedSubagents(sessionId)).toEqual([
         'explorer',
         'librarian',
         'oracle',

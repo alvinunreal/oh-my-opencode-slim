@@ -16,6 +16,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
 import {
+  DEFAULT_DISABLED_AGENTS,
   FALLBACK_FAILOVER_TIMEOUT_MS,
   PROTECTED_AGENTS,
   SUBAGENT_DELEGATION_RULES,
@@ -122,8 +123,13 @@ export class BackgroundTaskManager {
     this.depthTracker = new SubagentDepthTracker();
 
     // Compute disabled agents, protecting orchestrator and council internals
+    // Merge user config with DEFAULT_DISABLED_AGENTS: user config fully overrides defaults
     this.disabledAgents = new Set<string>();
-    for (const name of config?.disabled_agents ?? []) {
+    const disabledSource =
+      config?.disabled_agents !== undefined
+        ? config.disabled_agents
+        : DEFAULT_DISABLED_AGENTS;
+    for (const name of disabledSource) {
       if (!PROTECTED_AGENTS.has(name)) {
         this.disabledAgents.add(name);
       }

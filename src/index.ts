@@ -1,5 +1,5 @@
 import type { Plugin } from '@opencode-ai/plugin';
-import { createAgents, getAgentConfigs } from './agents';
+import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { BackgroundTaskManager, MultiplexerSessionManager } from './background';
 import { loadPluginConfig, type MultiplexerConfig } from './config';
 import { parseList } from './config/agent-mcps';
@@ -550,9 +550,16 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
         if (!alreadyInjected) {
           // Prepend the orchestrator prompt to the system array
-          const { ORCHESTRATOR_PROMPT } = await import('./agents/orchestrator');
+          // Use buildOrchestratorPrompt with disabledAgents so the
+          // serve-mode prompt matches the interactive-mode prompt
+          const { buildOrchestratorPrompt } = await import(
+            './agents/orchestrator'
+          );
+          const disabledAgents = getDisabledAgents(config);
+          const orchestratorPrompt =
+            buildOrchestratorPrompt(disabledAgents);
           output.system[0] =
-            ORCHESTRATOR_PROMPT +
+            orchestratorPrompt +
             (output.system[0] ? `\n\n${output.system[0]}` : '');
         }
       }
