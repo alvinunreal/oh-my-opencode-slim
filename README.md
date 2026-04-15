@@ -342,6 +342,39 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
 </table>
 
+### 07. Multimodal: The Silent Witness
+
+> [!NOTE]
+> **Why a separate agent?** Not all models support vision. Your strongest coding model (e.g. for design decisions) may not be able to read images, while a vision-capable model may not be the best for reasoning. Multimodal solves this by having its **own model** — configure a vision-capable model for it while keeping Designer on your strongest reasoning model. Disabled by default; enable via `disabled_agents: []` in config.
+
+<table>
+  <tr>
+    <td width="240" valign="top">
+      <b>Multimodal</b><br>
+      <i>Visual & binary analysis</i>
+    </td>
+    <td>
+
+**Read-only visual analysis** — interprets images, screenshots, PDFs, and diagrams. Returns structured observations to the orchestrator without loading raw file bytes into the main context window.
+
+- Images, screenshots, diagrams → `read` tool (native image support)
+- PDFs and binary documents → `read` tool (text + structure extraction)
+- **Disabled by default** — enable with `"disabled_agents": []` and configure a vision-capable model
+
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Prompt:</b> <a href="src/agents/multimodal.ts"><code>multimodal.ts</code></a>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> — <i>configure a vision-capable model to enable</i>
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## 📚 Documentation

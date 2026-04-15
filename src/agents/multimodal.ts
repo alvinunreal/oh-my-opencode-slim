@@ -1,6 +1,6 @@
 import type { AgentDefinition } from './orchestrator';
 
-const LOOKER_PROMPT = `You are Looker — a visual and multimodal analysis specialist.
+const MULTIMODAL_PROMPT = `You are Multimodal — a visual and multimodal analysis specialist.
 
 **Role**: Interpret images, screenshots, PDFs, and diagrams that require understanding beyond raw text. Extract structured observations for the Orchestrator to act on.
 
@@ -32,23 +32,23 @@ Concise answer to the specific question asked
 - Match the language of the request
 - If info not found, state clearly what's missing`;
 
-export function createLookerAgent(
+export function createMultimodalAgent(
   model: string,
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
-  let prompt = LOOKER_PROMPT;
+  let prompt = MULTIMODAL_PROMPT;
 
   if (customPrompt) {
     prompt = customPrompt;
   } else if (customAppendPrompt) {
-    prompt = `${LOOKER_PROMPT}\n\n${customAppendPrompt}`;
+    prompt = `${MULTIMODAL_PROMPT}\n\n${customAppendPrompt}`;
   }
 
   return {
-    name: 'looker',
+    name: 'multimodal',
     description:
-      'Visual and multimodal analysis. Use for interpreting images, screenshots, PDFs, and diagrams — extracts structured observations without loading raw files into main context.',
+      'Visual and multimodal analysis. Use for interpreting images, screenshots, PDFs, and diagrams — extracts structured observations without loading raw files into main context. Requires a vision-capable model.',
     config: {
       model,
       temperature: 0.1,

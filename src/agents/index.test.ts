@@ -279,7 +279,7 @@ describe('agent classification', () => {
   });
 
   test('getAgentConfigs applies correct classification visibility and mode', () => {
-    // Enable all agents (including looker) for classification testing
+    // Enable all agents (including multimodal) for classification testing
     const configs = getAgentConfigs({ disabled_agents: [] });
 
     // Primary agent
@@ -309,7 +309,7 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 9 agents by default (looker disabled)', () => {
+  test('creates exactly 9 agents by default (1 orchestrator + 8 subagents, multimodal disabled)', () => {
     const agents = createAgents();
     expect(agents.length).toBe(9);
   });
@@ -598,10 +598,10 @@ describe('disabled_agents', () => {
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(9); // 1 + 8 (looker disabled by default)
+    expect(agents.length).toBe(9); // 1 + 8 (multimodal disabled by default)
 
     const disabledConfig: PluginConfig = {
-      disabled_agents: ['looker', 'designer'],
+      disabled_agents: ['multimodal', 'designer'],
     };
     const disabledAgents = createAgents(disabledConfig);
     expect(disabledAgents.length).toBe(8);
@@ -628,52 +628,52 @@ describe('disabled_agents', () => {
     expect(enabled).toContain('explorer');
   });
 
-  test('empty disabled_agents creates all agents including looker', () => {
+  test('empty disabled_agents creates all agents including multimodal', () => {
     const config: PluginConfig = {
       disabled_agents: [],
     };
     const agents = createAgents(config);
     expect(agents.length).toBe(10);
-    expect(agents.map((a) => a.name)).toContain('looker');
+    expect(agents.map((a) => a.name)).toContain('multimodal');
   });
 });
 
-describe('looker agent', () => {
-  test('looker is disabled by default', () => {
+describe('multimodal agent', () => {
+  test('multimodal is disabled by default', () => {
     const agents = createAgents();
     const names = agents.map((a) => a.name);
-    expect(names).not.toContain('looker');
+    expect(names).not.toContain('multimodal');
   });
 
-  test('looker is enabled when removed from disabled_agents', () => {
+  test('multimodal is enabled when removed from disabled_agents', () => {
     const config: PluginConfig = {
       disabled_agents: [],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(names).toContain('looker');
+    expect(names).toContain('multimodal');
   });
 
-  test('looker is disabled when explicitly listed', () => {
+  test('multimodal is disabled when explicitly listed', () => {
     const config: PluginConfig = {
-      disabled_agents: ['looker'],
+      disabled_agents: ['multimodal'],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(names).not.toContain('looker');
+    expect(names).not.toContain('multimodal');
   });
 
-  test('looker can be enabled alongside other disabled agents', () => {
+  test('multimodal can be enabled alongside other disabled agents', () => {
     const config: PluginConfig = {
       disabled_agents: ['designer'],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(names).toContain('looker');
+    expect(names).toContain('multimodal');
     expect(names).not.toContain('designer');
   });
 
-  test('DEFAULT_DISABLED_AGENTS contains looker', () => {
-    expect(DEFAULT_DISABLED_AGENTS).toContain('looker');
+  test('DEFAULT_DISABLED_AGENTS contains multimodal', () => {
+    expect(DEFAULT_DISABLED_AGENTS).toContain('multimodal');
   });
 });
