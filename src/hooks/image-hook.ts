@@ -98,7 +98,8 @@ function writeUniqueFile(
   let candidate = join(dir, name);
   let counter = 0;
 
-  while (true) {
+  const MAX_ATTEMPTS = 1000;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       writeFileSync(candidate, data, { flag: 'wx' });
       return candidate;
@@ -116,6 +117,11 @@ function writeUniqueFile(
       return null;
     }
   }
+
+  log(
+    `[image-hook] failed to save image: max attempts (${MAX_ATTEMPTS}) reached`,
+  );
+  return null;
 }
 
 export function processImageAttachments(args: {
