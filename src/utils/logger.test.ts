@@ -104,6 +104,7 @@ describe('logger', () => {
     fs.utimesSync(oldPath, new Date(eightDaysAgo), new Date(eightDaysAgo));
 
     initLogger('current');
+    log('init');
 
     const files = fs.readdirSync(tmpDir);
     expect(files).not.toContain(oldFileName);
@@ -133,6 +134,7 @@ describe('logger', () => {
     fs.writeFileSync(recentPath, 'recent log\n');
 
     initLogger('current');
+    log('init');
 
     const files = fs.readdirSync(tmpDir);
     expect(files).not.toContain(oldFileName);
@@ -142,6 +144,7 @@ describe('logger', () => {
 
   test('cleanup with no existing files does not crash', () => {
     expect(() => initLogger('fresh')).not.toThrow();
+    log('init');
     const files = fs.readdirSync(tmpDir);
     expect(files.find((f) => f.includes('fresh'))).toBeDefined();
   });
