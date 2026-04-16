@@ -279,7 +279,7 @@ describe('agent classification', () => {
   });
 
   test('getAgentConfigs applies correct classification visibility and mode', () => {
-    // Enable all agents (including multimodal) for classification testing
+    // Enable all agents (including observer) for classification testing
     const configs = getAgentConfigs({ disabled_agents: [] });
 
     // Primary agent
@@ -309,7 +309,7 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 9 agents by default (1 orchestrator + 8 subagents, multimodal disabled)', () => {
+  test('creates exactly 9 agents by default (1 orchestrator + 8 subagents, observer disabled)', () => {
     const agents = createAgents();
     expect(agents.length).toBe(9);
   });
@@ -598,10 +598,10 @@ describe('disabled_agents', () => {
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(9); // 1 + 8 (multimodal disabled by default)
+    expect(agents.length).toBe(9); // 1 + 8 (observer disabled by default)
 
     const disabledConfig: PluginConfig = {
-      disabled_agents: ['multimodal', 'designer'],
+      disabled_agents: ['observer', 'designer'],
     };
     const disabledAgents = createAgents(disabledConfig);
     expect(disabledAgents.length).toBe(8);
@@ -628,52 +628,52 @@ describe('disabled_agents', () => {
     expect(enabled).toContain('explorer');
   });
 
-  test('empty disabled_agents creates all agents including multimodal', () => {
+  test('empty disabled_agents creates all agents including observer', () => {
     const config: PluginConfig = {
       disabled_agents: [],
     };
     const agents = createAgents(config);
     expect(agents.length).toBe(10);
-    expect(agents.map((a) => a.name)).toContain('multimodal');
+    expect(agents.map((a) => a.name)).toContain('observer');
   });
 });
 
-describe('multimodal agent', () => {
-  test('multimodal is disabled by default', () => {
+describe('observer agent', () => {
+  test('observer is disabled by default', () => {
     const agents = createAgents();
     const names = agents.map((a) => a.name);
-    expect(names).not.toContain('multimodal');
+    expect(names).not.toContain('observer');
   });
 
-  test('multimodal is enabled when removed from disabled_agents', () => {
+  test('observer is enabled when removed from disabled_agents', () => {
     const config: PluginConfig = {
       disabled_agents: [],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(names).toContain('multimodal');
+    expect(names).toContain('observer');
   });
 
-  test('multimodal is disabled when explicitly listed', () => {
+  test('observer is disabled when explicitly listed', () => {
     const config: PluginConfig = {
-      disabled_agents: ['multimodal'],
+      disabled_agents: ['observer'],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(names).not.toContain('multimodal');
+    expect(names).not.toContain('observer');
   });
 
-  test('multimodal can be enabled alongside other disabled agents', () => {
+  test('observer can be enabled alongside other disabled agents', () => {
     const config: PluginConfig = {
       disabled_agents: ['designer'],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(names).toContain('multimodal');
+    expect(names).toContain('observer');
     expect(names).not.toContain('designer');
   });
 
-  test('DEFAULT_DISABLED_AGENTS contains multimodal', () => {
-    expect(DEFAULT_DISABLED_AGENTS).toContain('multimodal');
+  test('DEFAULT_DISABLED_AGENTS contains observer', () => {
+    expect(DEFAULT_DISABLED_AGENTS).toContain('observer');
   });
 });

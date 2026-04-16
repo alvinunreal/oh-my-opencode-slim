@@ -342,15 +342,15 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
 </table>
 
-### 07. Multimodal: The Silent Witness
+### 07. Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** Not all models support vision. Your strongest coding model (e.g. for design decisions) may not be able to read images, while a vision-capable model may not be the best for reasoning. Multimodal solves this by having its **own model** — configure a vision-capable model for it while keeping Designer on your strongest reasoning model. Disabled by default; enable via `disabled_agents: []` in config.
+> **Why a separate agent?** Not all models support vision. Your strongest coding model (e.g. for design decisions) may not be able to read images, while a vision-capable model may not be the best for reasoning. Observer solves this by having its **own model** — configure a vision-capable model for it while keeping Designer on your strongest reasoning model. Disabled by default; enable via `disabled_agents: []` in config.
 
 <table>
   <tr>
     <td width="240" valign="top">
-      <b>Multimodal</b><br>
+      <b>Observer</b><br>
       <i>Visual & binary analysis</i>
     </td>
     <td>
@@ -365,7 +365,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Prompt:</b> <a href="src/agents/multimodal.ts"><code>multimodal.ts</code></a>
+      <b>Prompt:</b> <a href="src/agents/observer.ts"><code>observer.ts</code></a>
     </td>
   </tr>
   <tr>

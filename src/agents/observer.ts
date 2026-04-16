@@ -1,6 +1,6 @@
 import type { AgentDefinition } from './orchestrator';
 
-const MULTIMODAL_PROMPT = `You are Multimodal — a visual and multimodal analysis specialist.
+const OBSERVER_PROMPT = `You are Observer — a visual analysis specialist.
 
 **Role**: Interpret images, screenshots, PDFs, and diagrams. Extract structured observations for the Orchestrator to act on.
 
@@ -18,23 +18,23 @@ const MULTIMODAL_PROMPT = `You are Multimodal — a visual and multimodal analys
 - Match the language of the request
 - If info not found, state clearly what's missing`;
 
-export function createMultimodalAgent(
+export function createObserverAgent(
   model: string,
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
-  let prompt = MULTIMODAL_PROMPT;
+  let prompt = OBSERVER_PROMPT;
 
   if (customPrompt) {
     prompt = customPrompt;
   } else if (customAppendPrompt) {
-    prompt = `${MULTIMODAL_PROMPT}\n\n${customAppendPrompt}`;
+    prompt = `${OBSERVER_PROMPT}\n\n${customAppendPrompt}`;
   }
 
   return {
-    name: 'multimodal',
+    name: 'observer',
     description:
-      'Visual and multimodal analysis. Use for interpreting images, screenshots, PDFs, and diagrams — extracts structured observations without loading raw files into main context. Requires a vision-capable model.',
+      'Visual analysis. Use for interpreting images, screenshots, PDFs, and diagrams — extracts structured observations without loading raw files into main context. Requires a vision-capable model.',
     config: {
       model,
       temperature: 0.1,

@@ -1,13 +1,3 @@
-import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { join } from 'node:path';
 import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { BackgroundTaskManager, MultiplexerSessionManager } from './background';
@@ -26,6 +16,7 @@ import {
   createTodoContinuationHook,
   ForegroundFallbackManager,
 } from './hooks';
+import { processImageAttachments } from './hooks/image-hook';
 import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
 import { getMultiplexer, startAvailabilityCheck } from './multiplexer';
@@ -597,122 +588,16 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }>;
       };
 
-      // Strip image parts from orchestrator messages when @multimodal is available.
+      // Strip image parts from orchestrator messages when @observer is available.
       // When the orchestrator's model doesn't support image input, the API call
       // fails before the LLM can respond. We replace image bytes with a text
-      // nudge so the orchestrator delegates to @multimodal instead.
-      const disabled = getDisabledAgents(config);
-      const multimodalEnabled = !disabled.has('multimodal');
-
-      if (multimodalEnabled) {
-        const isImagePart = (p: { type: string; [k: string]: unknown }) => {
-          if (p.type === 'image') return true;
-          if (p.type === 'file') {
-            const mime = p.mime as string | undefined;
-            if (mime?.startsWith('image/')) return true;
-            const filename = p.filename as string | undefined;
-            const name = p.name as string | undefined;
-            const fileName = filename ?? name;
-            if (
-              fileName &&
-              /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|tiff?|heic)$/i.test(
-                fileName,
-              )
-            )
-              return true;
-          }
-          return false;
-        };
-
-        const decodeDataUrl = (
-          url: string,
-        ): { mime: string; data: Buffer } | null => {
-          const match = url.match(/^data:([^;]+);base64,(.+)$/);
-          if (!match) return null;
-          return { mime: match[1], data: Buffer.from(match[2], 'base64') };
-        };
-
-        const extFromMime = (mime: string): string => {
-          const map: Record<string, string> = {
-            'image/png': '.png',
-            'image/jpeg': '.jpg',
-            'image/gif': '.gif',
-            'image/webp': '.webp',
-            'image/svg+xml': '.svg',
-            'image/bmp': '.bmp',
-          };
-          return map[mime] ?? '.png';
-        };
-
-        // Save images inside the project's .opencode/images/ directory.
-        // This is within the workspace so the read tool won't require extra permissions.
-        const saveDir = join(ctx.directory, '.opencode', 'images');
-        const gitignorePath = join(ctx.directory, '.opencode', '.gitignore');
-        try {
-          mkdirSync(saveDir, { recursive: true });
-          if (!existsSync(gitignorePath)) writeFileSync(gitignorePath, '*\n');
-        } catch {}
-
-        // Clean up images older than 1 hour
-        try {
-          const maxAge = 60 * 60 * 1000;
-          const now = Date.now();
-          for (const f of readdirSync(saveDir)) {
-            const fp = join(saveDir, f);
-            try {
-              if (now - statSync(fp).mtimeMs > maxAge) unlinkSync(fp);
-            } catch {}
-          }
-        } catch {}
-
-        for (const msg of typedOutput.messages) {
-          if (msg.info.role !== 'user') continue;
-          const imageParts = msg.parts.filter(isImagePart);
-          if (imageParts.length === 0) continue;
-
-          // Save each image to .opencode/images/ and collect paths
-          const savedPaths: string[] = [];
-          for (const p of imageParts) {
-            const url = p.url as string | undefined;
-            const filename =
-              (p.filename as string | undefined) ??
-              (p.name as string | undefined);
-            if (url) {
-              const decoded = decodeDataUrl(url);
-              if (decoded) {
-                const hash = createHash('sha1')
-                  .update(decoded.data)
-                  .digest('hex')
-                  .slice(0, 8);
-                const name =
-                  filename ?? `image-${hash}${extFromMime(decoded.mime)}`;
-                const filePath = join(saveDir, name);
-                try {
-                  writeFileSync(filePath, decoded.data);
-                  savedPaths.push(filePath);
-                } catch (e) {
-                  log(`[image-hook] failed to save image: ${e}`);
-                }
-              }
-            }
-          }
-
-          const pathsText =
-            savedPaths.length > 0 ? ` Saved to: ${savedPaths.join(', ')}` : '';
-          log(
-            `[image-hook] stripping image/file parts, saving to disk${pathsText}`,
-          );
-
-          msg.parts = msg.parts
-            .filter((p) => !isImagePart(p))
-            .concat([
-              {
-                type: 'text',
-                text: `[Image attachment detected.${pathsText} Your model may not support image input. Delegate to @multimodal with the file path(s) above so it can read the file with its read tool.]`,
-              },
-            ]);
-        }
-      }
+      // nudge so the orchestrator delegates to @observer instead.
+      processImageAttachments({
+        messages: typedOutput.messages,
+        workDir: ctx.directory,
+        disabledAgents: getDisabledAgents(config),
+        log,
+      });
 
       await todoContinuationHook.handleMessagesTransform({
         messages: typedOutput.messages,

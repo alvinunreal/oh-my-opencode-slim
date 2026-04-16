@@ -73,14 +73,14 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Result handling:** Present the council's synthesized response verbatim. Do not re-summarize — the council master has already produced the final answer.
 - **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.`,
 
-  multimodal: `@multimodal
-- Role: Visual and multimodal analysis specialist for images, PDFs, and diagrams
-- Stats: Saves main context tokens — Multimodal processes raw files, returns structured observations
+  observer: `@observer
+- Role: Visual analysis specialist for images, PDFs, and diagrams
+- Stats: Saves main context tokens — Observer processes raw files, returns structured observations
 - Capabilities: Interprets images, screenshots, PDFs, and diagrams via native read tool; extracts UI elements, layouts, text, relationships
 - **Delegate when:** Need to analyze a screenshot or image • Extract information from a PDF • Interpret a diagram or architecture drawing • Visual content needs structured description for downstream agents
 - **Don't delegate when:** Plain text files that Read can handle directly • Files that need editing afterward (need literal content from Read)
-- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @multimodal — it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for editing? → Read it yourself.
-- **IMPORTANT:** When delegating to @multimodal, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png — describe the UI elements and error messages."`,
+- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer — it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for editing? → Read it yourself.
+- **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png — describe the UI elements and error messages."`,
 };
 
 // Validation routing lines that reference agents
@@ -88,7 +88,7 @@ const VALIDATION_ROUTING = [
   '- Route UI/UX validation and review to @designer',
   '- Route code review, simplification, maintainability review, and YAGNI checks to @oracle',
   '- Route test writing, test updates, and changes touching test files to @fixer',
-  '- Route visual/media analysis and interpretation to @multimodal',
+  '- Route visual/media analysis and interpretation to @observer',
   '- If a request spans multiple lanes, delegate only the lanes that add clear value',
 ];
 
@@ -97,7 +97,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
   '- Multiple @explorer searches across different domains?',
   '- @explorer + @librarian research in parallel?',
   '- Multiple @fixer instances for faster, scoped implementation?',
-  '- @multimodal + @explorer in parallel (visual analysis + code search)?',
+  '- @observer + @explorer in parallel (visual analysis + code search)?',
 ];
 
 /**
