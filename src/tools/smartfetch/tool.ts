@@ -448,7 +448,11 @@ export function createWebfetchTool(
                     decodeBody(body.data, headerMetadata.charset, contentType);
                   const rawText = decoded.text;
                   const extracted = isHtmlLikeContentType(contentType)
-                    ? extractFromHtml(rawText, finalUrl, args.extract_main)
+                    ? await extractFromHtml(
+                        rawText,
+                        finalUrl,
+                        args.extract_main,
+                      )
                     : {
                         title: undefined,
                         rawContent: cleanFetchedText(rawText),

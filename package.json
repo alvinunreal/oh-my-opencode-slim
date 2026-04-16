@@ -36,8 +36,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:plugin": "bun build src/index.ts --outdir dist --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/sdk",
-    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/sdk",
+    "build:plugin": "bun build src/index.ts --outdir dist --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/sdk --external jsdom",
+    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/sdk --external jsdom",
     "build": "bun run build:plugin && bun run build:cli && tsc --emitDeclarationOnly && bun run generate-schema",
     "prepare": "bun run build",
     "contributors:add": "all-contributors add",

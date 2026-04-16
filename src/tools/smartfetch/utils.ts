@@ -1,7 +1,14 @@
 import { Readability } from '@mozilla/readability';
-import { JSDOM } from 'jsdom';
 import TurndownService from 'turndown';
 import type { CachedFetch, ExtractedContent } from './types';
+
+let jsdomPromise: Promise<typeof import('jsdom')> | undefined;
+
+async function getJSDOM() {
+  jsdomPromise ??= import('jsdom');
+  const { JSDOM } = await jsdomPromise;
+  return JSDOM;
+}
 
 export function wordCount(text: string) {
   const trimmed = text.trim();
@@ -276,11 +283,12 @@ turndown.addRule('fenced-pre-code', {
   },
 });
 
-export function extractFromHtml(
+export async function extractFromHtml(
   html: string,
   finalUrl: string,
   extractMain: boolean,
-): ExtractedContent {
+): Promise<ExtractedContent> {
+  const JSDOM = await getJSDOM();
   const dom = new JSDOM(html, { url: finalUrl });
   const document = dom.window.document;
   const title = document.title || undefined;
