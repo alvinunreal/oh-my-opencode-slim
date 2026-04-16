@@ -31,9 +31,11 @@ import {
   lsp_rename,
   setUserLspConfig,
 } from './tools';
-import { log } from './utils/logger';
+import { initLogger, log } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
+  const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+  initLogger(sessionId);
   const config = loadPluginConfig(ctx.directory);
   const agentDefs = createAgents(config);
   const agents = getAgentConfigs(config);
