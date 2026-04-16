@@ -10,8 +10,8 @@ let logFile: string | null = null;
 
 function getLogDir(): string {
   return (
-    process.env.OPENCODE_LOG_DIR
-    ?? path.join(os.homedir(), '.local/share/opencode')
+    process.env.OPENCODE_LOG_DIR ??
+    path.join(os.homedir(), '.local/share/opencode')
   );
 }
 

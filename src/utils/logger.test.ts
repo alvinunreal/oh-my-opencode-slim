@@ -37,14 +37,9 @@ describe('logger', () => {
     initLogger('session1');
     log('timestamped message');
 
-    const logPath = path.join(
-      tmpDir,
-      'oh-my-opencode-slim.session1.log',
-    );
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
-    expect(content).toMatch(
-      /\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/,
-    );
+    expect(content).toMatch(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/);
     expect(content).toContain('timestamped message');
   });
 
@@ -52,10 +47,7 @@ describe('logger', () => {
     initLogger('session1');
     log('message with data', { key: 'value', number: 42 });
 
-    const logPath = path.join(
-      tmpDir,
-      'oh-my-opencode-slim.session1.log',
-    );
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content).toContain('"key":"value"');
     expect(content).toContain('"number":42');
@@ -65,10 +57,7 @@ describe('logger', () => {
     initLogger('session1');
     log('message without data');
 
-    const logPath = path.join(
-      tmpDir,
-      'oh-my-opencode-slim.session1.log',
-    );
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content.trim()).toMatch(/message without data\s*$/);
   });
@@ -79,14 +68,8 @@ describe('logger', () => {
     log('second');
     log('third');
 
-    const logPath = path.join(
-      tmpDir,
-      'oh-my-opencode-slim.session1.log',
-    );
-    const lines = fs
-      .readFileSync(logPath, 'utf-8')
-      .trim()
-      .split('\n');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n');
     expect(lines.length).toBe(3);
     expect(lines[0]).toContain('first');
     expect(lines[1]).toContain('second');
@@ -105,14 +88,8 @@ describe('logger', () => {
       'oh-my-opencode-slim.session2.log',
     ]);
 
-    const content1 = fs.readFileSync(
-      path.join(tmpDir, files[0]),
-      'utf-8',
-    );
-    const content2 = fs.readFileSync(
-      path.join(tmpDir, files[1]),
-      'utf-8',
-    );
+    const content1 = fs.readFileSync(path.join(tmpDir, files[0]), 'utf-8');
+    const content2 = fs.readFileSync(path.join(tmpDir, files[1]), 'utf-8');
     expect(content1).toContain('from session1');
     expect(content1).not.toContain('from session2');
     expect(content2).toContain('from session2');
@@ -124,11 +101,7 @@ describe('logger', () => {
     fs.writeFileSync(oldPath, 'old log\n');
 
     const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
-    fs.utimesSync(
-      oldPath,
-      new Date(eightDaysAgo),
-      new Date(eightDaysAgo),
-    );
+    fs.utimesSync(oldPath, new Date(eightDaysAgo), new Date(eightDaysAgo));
 
     initLogger('current');
 
@@ -153,11 +126,7 @@ describe('logger', () => {
     const oldPath = path.join(tmpDir, oldFileName);
     fs.writeFileSync(oldPath, 'old log\n');
     const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
-    fs.utimesSync(
-      oldPath,
-      new Date(eightDaysAgo),
-      new Date(eightDaysAgo),
-    );
+    fs.utimesSync(oldPath, new Date(eightDaysAgo), new Date(eightDaysAgo));
 
     const recentFileName = 'oh-my-opencode-slim.recent.log';
     const recentPath = path.join(tmpDir, recentFileName);
@@ -209,10 +178,7 @@ describe('logger', () => {
       null: null,
     });
 
-    const logPath = path.join(
-      tmpDir,
-      'oh-my-opencode-slim.session1.log',
-    );
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content).toContain('"nested":');
     expect(content).toContain('"array":[1,2,3]');

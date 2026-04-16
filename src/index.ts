@@ -34,10 +34,7 @@ import {
 import { initLogger, log } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
-  const sessionId = new Date()
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .slice(0, 15);
+  const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   initLogger(sessionId);
   const config = loadPluginConfig(ctx.directory);
   const agentDefs = createAgents(config);
