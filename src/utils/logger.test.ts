@@ -16,7 +16,11 @@ describe('logger', () => {
   });
 
   afterEach(() => {
-    process.env.OPENCODE_LOG_DIR = origLogDir;
+    if (origLogDir === undefined) {
+      delete process.env.OPENCODE_LOG_DIR;
+    } else {
+      process.env.OPENCODE_LOG_DIR = origLogDir;
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -173,7 +177,11 @@ describe('logger', () => {
         path.join(os.homedir(), '.local/share/opencode'),
       );
     } finally {
-      process.env.OPENCODE_LOG_DIR = origLogDir;
+      if (origLogDir === undefined) {
+        delete process.env.OPENCODE_LOG_DIR;
+      } else {
+        process.env.OPENCODE_LOG_DIR = origLogDir;
+      }
     }
   });
 
