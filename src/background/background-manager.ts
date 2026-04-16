@@ -13,6 +13,8 @@
  * - Supports task cancellation and result retrieval
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import { getDisabledAgents } from '../agents';
 import type { BackgroundTaskConfig, PluginConfig } from '../config';
@@ -27,7 +29,7 @@ import {
   createInternalAgentTextPart,
   resolveAgentVariant,
 } from '../utils';
-import { log } from '../utils/logger';
+import { getLogDir, log } from '../utils/logger';
 import {
   extractSessionResult,
   type PromptBody,
@@ -35,6 +37,66 @@ import {
   promptWithTimeout,
 } from '../utils/session';
 import { SubagentDepthTracker } from './subagent-depth';
+
+/** Persisted shape — only serializable fields, no methods or Map references. */
+interface PersistedTask {
+  id: string;
+  sessionId?: string;
+  parentSessionId: string;
+  description: string;
+  agent: string;
+  status: BackgroundTask['status'];
+  result?: string;
+  error?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+function persistTask(task: BackgroundTask): void {
+  try {
+    const dir = path.join(getLogDir(), 'bg-tasks');
+    fs.mkdirSync(dir, { recursive: true });
+    const data: PersistedTask = {
+      id: task.id,
+      sessionId: task.sessionId,
+      parentSessionId: task.parentSessionId,
+      description: task.description,
+      agent: task.agent,
+      status: task.status,
+      result: task.result,
+      error: task.error,
+      startedAt: task.startedAt.toISOString(),
+      completedAt: task.completedAt?.toISOString(),
+    };
+    fs.writeFileSync(path.join(dir, `${task.id}.json`), JSON.stringify(data), 'utf-8');
+  } catch (e) {
+    log(`[background-manager] failed to persist task ${task.id}: ${e}`);
+  }
+}
+
+function loadPersistedTask(taskId: string): BackgroundTask | null {
+  try {
+    const file = path.join(getLogDir(), 'bg-tasks', `${taskId}.json`);
+    const data: PersistedTask = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    return {
+      id: data.id,
+      sessionId: data.sessionId,
+      parentSessionId: data.parentSessionId,
+      description: data.description,
+      agent: data.agent,
+      status: data.status,
+      result: data.result,
+      error: data.error,
+      startedAt: new Date(data.startedAt),
+      completedAt: data.completedAt ? new Date(data.completedAt) : undefined,
+      // Not persisted; callers use status/result only
+      prompt: '',
+      config: { maxConcurrentStarts: 10 },
+    };
+  } catch {
+    return null;
+  }
+}
 
 type OpencodeClient = PluginInput['client'];
 
@@ -614,6 +676,10 @@ export class BackgroundTaskManager {
     log(`[background-manager] task ${status}: ${task.id}`, {
       description: task.description,
     });
+
+    // Persist to disk so getResult() survives plugin reinitialization
+    // (e.g. after context compaction causes BackgroundTaskManager to be recreated)
+    persistTask(task);
   }
 
   /**
@@ -638,11 +704,24 @@ export class BackgroundTaskManager {
   /**
    * Retrieve the current state of a background task.
    *
+   * Checks in-memory first. If not found (e.g. after plugin reinitialization
+   * caused by context compaction), falls back to the persisted state on disk.
+   *
    * @param taskId - The task ID to retrieve
-   * @returns The task object, or null if not found
+   * @returns The task object, or null if not found in memory or on disk
    */
   getResult(taskId: string): BackgroundTask | null {
-    return this.tasks.get(taskId) ?? null;
+    const inMemory = this.tasks.get(taskId);
+    if (inMemory) return inMemory;
+
+    // Fallback: task completed before this manager instance was created
+    const fromDisk = loadPersistedTask(taskId);
+    if (fromDisk) {
+      // Re-register in memory so subsequent calls are fast
+      this.tasks.set(taskId, fromDisk);
+      log(`[background-manager] restored task from disk: ${taskId}`);
+    }
+    return fromDisk;
   }
 
   /**
