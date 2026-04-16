@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  rmdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -70,7 +71,7 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-function cleanupOldImages(dir: string): void {
+function cleanupOldImages(dir: string, saveDir: string): void {
   const now = Date.now();
   const lastCleanup = lastCleanupByDir.get(dir) ?? 0;
   if (now - lastCleanup < CLEANUP_INTERVAL) return;
@@ -82,6 +83,13 @@ function cleanupOldImages(dir: string): void {
       const fp = join(dir, f);
       try {
         if (now - statSync(fp).mtimeMs > maxAge) unlinkSync(fp);
+      } catch {}
+    }
+    // Remove empty session subdirectory and prune its debounce entry
+    if (dir !== saveDir) {
+      try {
+        rmdirSync(dir);
+        lastCleanupByDir.delete(dir);
       } catch {}
     }
   } catch {}
@@ -161,7 +169,7 @@ export function processImageAttachments(args: {
       log(`[image-hook] failed to create target image directory: ${e}`);
     }
 
-    cleanupOldImages(targetDir);
+    cleanupOldImages(targetDir, saveDir);
 
     // Save each image to .opencode/images/ and collect paths
     const savedPaths: string[] = [];
@@ -180,7 +188,7 @@ export function processImageAttachments(args: {
             ? sanitizeFilename(filename)
             : undefined;
           const baseName = sanitizedFilename
-            ? sanitizedFilename.replace(/\.[^.]+$/, '')
+            ? sanitizedFilename.replace(/\.[^.]+$/, '') || 'image'
             : 'image';
           const ext = sanitizedFilename
             ? extname(sanitizedFilename) || extFromMime(decoded.mime)
