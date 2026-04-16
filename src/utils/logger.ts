@@ -48,7 +48,7 @@ export function initLogger(sessionId: string): void {
   cleanupOldLogs(dir);
 }
 
-/** Reset logger state — test-only */
+/** @internal Reset logger state for testing */
 export function resetLogger(): void {
   logFile = null;
 }
@@ -59,7 +59,15 @@ export function log(message: string, data?: unknown): void {
   if (!logFile) return; // Uninitialized — silently no-op
   try {
     const timestamp = new Date().toISOString();
-    const logEntry = `[${timestamp}] ${message} ${data ? JSON.stringify(data) : ''}\n`;
+    let dataStr = '';
+    if (data !== undefined) {
+      try {
+        dataStr = JSON.stringify(data);
+      } catch {
+        dataStr = '[unserializable]';
+      }
+    }
+    const logEntry = `[${timestamp}] ${message} ${dataStr}\n`;
     fs.appendFileSync(logFile, logEntry);
   } catch {
     // Silently ignore logging errors

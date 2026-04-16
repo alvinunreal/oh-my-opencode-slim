@@ -155,6 +155,11 @@ describe('logger', () => {
     circular.self = circular;
 
     expect(() => log('circular data', circular)).not.toThrow();
+
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const content = fs.readFileSync(logPath, 'utf-8');
+    expect(content).toContain('circular data');
+    expect(content).toContain('[unserializable]');
   });
 
   test('getLogDir returns OPENCODE_LOG_DIR when set', () => {
