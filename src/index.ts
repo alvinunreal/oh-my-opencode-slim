@@ -32,6 +32,7 @@ import {
   lsp_rename,
   setUserLspConfig,
 } from './tools';
+import { resolveRuntimeAgentName, rewriteDisplayNameMentions } from './utils';
 import { initLogger, log } from './utils/logger';
 
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
@@ -524,7 +525,19 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       input: { sessionID: string; agent?: string },
       output?: { message?: { agent?: string } },
     ) => {
-      const agent = input.agent ?? output?.message?.agent;
+      const rawAgent = input.agent ?? output?.message?.agent;
+      const agent = rawAgent
+        ? resolveRuntimeAgentName(config, rawAgent)
+        : undefined;
+
+      if (
+        agent &&
+        output?.message &&
+        typeof output.message.agent === 'string'
+      ) {
+        output.message.agent = agent;
+      }
+
       if (agent) {
         sessionAgentMap.set(input.sessionID, agent);
       }
@@ -589,6 +602,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           }>;
         }>;
       };
+
+      for (const message of typedOutput.messages) {
+        if (message.info.role !== 'user') {
+          continue;
+        }
+        for (const part of message.parts) {
+          if (part.type !== 'text' || typeof part.text !== 'string') {
+            continue;
+          }
+          part.text = rewriteDisplayNameMentions(config, part.text);
+        }
+      }
 
       // Strip image parts from orchestrator messages when @observer is available.
       // When the orchestrator's model doesn't support image input, the API call

@@ -32,6 +32,11 @@ type AgentFactory = (
   customAppendPrompt?: string,
 ) => AgentDefinition;
 
+function normalizeDisplayName(displayName: string): string {
+  const trimmed = displayName.trim();
+  return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+}
+
 // Agent Configuration Helpers
 
 /**
@@ -63,6 +68,27 @@ function applyOverrides(
       ...override.options,
     };
   }
+  if (override.displayName) {
+    agent.displayName = override.displayName;
+  }
+}
+
+function injectDisplayNames(
+  orchestrator: AgentDefinition,
+  nameMap: Map<string, string>,
+): void {
+  if (nameMap.size === 0) return;
+  let prompt = orchestrator.config.prompt;
+  if (!prompt) return;
+
+  for (const [internalName, displayName] of nameMap) {
+    prompt = prompt.replace(
+      new RegExp(`@${internalName}\\b`, 'g'),
+      `@${normalizeDisplayName(displayName)}`,
+    );
+  }
+
+  orchestrator.config.prompt = prompt;
 }
 
 /**
@@ -207,6 +233,39 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     applyOverrides(orchestrator, orchestratorOverride);
   }
 
+  // Collect all display names from orchestrator and all subagents
+  const displayNameMap = new Map<string, string>();
+  if (orchestrator.displayName) {
+    displayNameMap.set('orchestrator', orchestrator.displayName);
+  }
+  for (const agent of allSubAgents) {
+    if (agent.displayName) {
+      displayNameMap.set(agent.name, agent.displayName);
+    }
+  }
+
+  // Validate display names
+  const usedDisplayNames = new Set<string>();
+  for (const [, displayName] of displayNameMap) {
+    const normalizedDisplayName = normalizeDisplayName(displayName);
+    if (usedDisplayNames.has(normalizedDisplayName)) {
+      throw new Error(
+        `Duplicate displayName '${normalizedDisplayName}' assigned to multiple agents`,
+      );
+    }
+    usedDisplayNames.add(normalizedDisplayName);
+  }
+  for (const displayName of usedDisplayNames) {
+    if ((ALL_AGENT_NAMES as readonly string[]).includes(displayName)) {
+      throw new Error(
+        `displayName '${displayName}' conflicts with internal agent name`,
+      );
+    }
+  }
+
+  // Inject display names into orchestrator prompt (complete map)
+  injectDisplayNames(orchestrator, displayNameMap);
+
   return [orchestrator, ...allSubAgents];
 }
 
@@ -221,32 +280,66 @@ export function getAgentConfigs(
   config?: PluginConfig,
 ): Record<string, SDKAgentConfig> {
   const agents = createAgents(config);
-  return Object.fromEntries(
-    agents.map((a) => {
-      const sdkConfig: SDKAgentConfig & { mcps?: string[] } = {
-        ...a.config,
-        description: a.description,
-        mcps: getAgentMcpList(a.name, config),
-      };
 
-      // Apply classification-based visibility and mode
-      if (a.name === 'council') {
-        // Council is callable both as a primary agent (user-facing)
-        // and as a subagent (orchestrator can delegate to it)
-        sdkConfig.mode = 'all';
-      } else if (a.name === 'councillor' || a.name === 'council-master') {
-        // Internal agents — subagent mode, hidden from @ autocomplete
-        sdkConfig.mode = 'subagent';
-        sdkConfig.hidden = true;
-      } else if (isSubagent(a.name)) {
-        sdkConfig.mode = 'subagent';
-      } else if (a.name === 'orchestrator') {
-        sdkConfig.mode = 'primary';
-      }
+  const applyClassification = (
+    name: string,
+    sdkConfig: SDKAgentConfig & {
+      mcps?: string[];
+      displayName?: string;
+      hidden?: boolean;
+    },
+  ): void => {
+    if (name === 'council') {
+      // Council is callable both as a primary agent (user-facing)
+      // and as a subagent (orchestrator can delegate to it)
+      sdkConfig.mode = 'all';
+    } else if (name === 'councillor' || name === 'council-master') {
+      // Internal agents — subagent mode, hidden from @ autocomplete
+      sdkConfig.mode = 'subagent';
+      sdkConfig.hidden = true;
+    } else if (isSubagent(name)) {
+      sdkConfig.mode = 'subagent';
+    } else if (name === 'orchestrator') {
+      sdkConfig.mode = 'primary';
+    }
+  };
 
-      return [a.name, sdkConfig];
-    }),
-  );
+  const isInternalOnly = (name: string): boolean =>
+    name === 'councillor' || name === 'council-master';
+
+  const entries: Array<[string, SDKAgentConfig]> = [];
+
+  for (const a of agents) {
+    const sdkConfig: SDKAgentConfig & {
+      mcps?: string[];
+      displayName?: string;
+      hidden?: boolean;
+    } = {
+      ...a.config,
+      description: a.description,
+      mcps: getAgentMcpList(a.name, config),
+    };
+
+    if (a.displayName) {
+      sdkConfig.displayName = a.displayName;
+    }
+
+    applyClassification(a.name, sdkConfig);
+
+    const normalizedDisplayName = a.displayName
+      ? normalizeDisplayName(a.displayName)
+      : undefined;
+
+    if (normalizedDisplayName && !isInternalOnly(a.name)) {
+      entries.push([normalizedDisplayName, sdkConfig]);
+      entries.push([a.name, { ...sdkConfig, hidden: true }]);
+      continue;
+    }
+
+    entries.push([a.name, sdkConfig]);
+  }
+
+  return Object.fromEntries(entries);
 }
 
 /**

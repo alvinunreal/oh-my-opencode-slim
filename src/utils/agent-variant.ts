@@ -1,4 +1,8 @@
-import type { PluginConfig } from '../config';
+import {
+  ALL_AGENT_NAMES,
+  getAgentOverride,
+  type PluginConfig,
+} from '../config';
 import { log } from './logger';
 
 /**
@@ -36,8 +40,8 @@ export function resolveAgentVariant(
   config: PluginConfig | undefined,
   agentName: string,
 ): string | undefined {
-  const normalized = normalizeAgentName(agentName);
-  const rawVariant = config?.agents?.[normalized]?.variant;
+  const normalized = resolveRuntimeAgentName(config, agentName);
+  const rawVariant = getAgentOverride(config, normalized)?.variant;
 
   if (typeof rawVariant !== 'string') {
     return undefined;
@@ -50,6 +54,79 @@ export function resolveAgentVariant(
 
   log(`[variant] resolved variant="${trimmed}" for agent "${normalized}"`);
   return trimmed;
+}
+
+/**
+ * Resolve a runtime-provided agent name to an internal agent name.
+ *
+ * Supports:
+ * - internal names (e.g. "oracle")
+ * - @-prefixed names (e.g. "@oracle")
+ * - displayName aliases (e.g. "advisor" -> "oracle")
+ */
+export function resolveRuntimeAgentName(
+  config: PluginConfig | undefined,
+  agentName: string,
+): string {
+  const normalized = normalizeAgentName(agentName);
+  if (!normalized) {
+    return normalized;
+  }
+
+  if ((ALL_AGENT_NAMES as readonly string[]).includes(normalized)) {
+    return normalized;
+  }
+
+  for (const internalName of ALL_AGENT_NAMES) {
+    const displayName = getAgentOverride(config, internalName)?.displayName;
+    if (!displayName) {
+      continue;
+    }
+
+    if (normalizeAgentName(displayName) === normalized) {
+      return internalName;
+    }
+  }
+
+  return normalized;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Rewrites user-facing display-name mentions (e.g. @advisor) into internal
+ * agent mentions (e.g. @oracle) for runtime routing.
+ */
+export function rewriteDisplayNameMentions(
+  config: PluginConfig | undefined,
+  text: string,
+): string {
+  if (!text.includes('@')) {
+    return text;
+  }
+
+  let rewritten = text;
+
+  for (const internalName of ALL_AGENT_NAMES) {
+    const displayName = getAgentOverride(config, internalName)?.displayName;
+    if (!displayName) {
+      continue;
+    }
+
+    const normalizedDisplayName = normalizeAgentName(displayName);
+    if (!normalizedDisplayName || normalizedDisplayName === internalName) {
+      continue;
+    }
+
+    rewritten = rewritten.replace(
+      new RegExp(`(^|[^\\w.])@${escapeRegExp(normalizedDisplayName)}\\b`, 'g'),
+      `$1@${internalName}`,
+    );
+  }
+
+  return rewritten;
 }
 
 /**

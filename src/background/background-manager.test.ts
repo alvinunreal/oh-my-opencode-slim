@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import type { PluginConfig } from '../config';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../utils';
 import { BackgroundTaskManager } from './background-manager';
 
@@ -165,6 +166,24 @@ describe('BackgroundTaskManager', () => {
       expect(['pending', 'starting']).toContain(task1.status);
       expect(['pending', 'starting']).toContain(task2.status);
       expect(['pending', 'starting']).toContain(task3.status);
+    });
+
+    test('resolves displayName alias to internal agent name on launch', () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        agents: {
+          oracle: { displayName: 'advisor' },
+        },
+      });
+
+      const task = manager.launch({
+        agent: 'advisor',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      expect(task.agent).toBe('oracle');
     });
   });
 
