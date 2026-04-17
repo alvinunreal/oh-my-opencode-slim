@@ -152,6 +152,7 @@ export async function extractZip(
 
   signal?.addEventListener('abort', onAbort, { once: true });
 
+  const stderrPromise = proc.stderr();
   const exitCode = await proc.exited;
   signal?.removeEventListener('abort', onAbort);
 
@@ -159,8 +160,8 @@ export async function extractZip(
     throw createAbortError();
   }
 
+  const stderr = await stderrPromise;
   if (exitCode !== 0) {
-    const stderr = await proc.stderr();
     throw new Error(`zip extraction failed (exit ${exitCode}): ${stderr}`);
   }
 }

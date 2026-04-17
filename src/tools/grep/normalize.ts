@@ -137,7 +137,14 @@ export function normalizeGrepInput(
   const caseSensitive = args.case_sensitive !== false;
   const smartCase = caseSensitive && args.smart_case === true;
 
-  if (!searchStat.isFile() && !searchStat.isDirectory()) {
+  const isFile =
+    typeof searchStat.isFile === 'function' ? searchStat.isFile() : undefined;
+  const isDirectory =
+    typeof searchStat.isDirectory === 'function'
+      ? searchStat.isDirectory()
+      : undefined;
+
+  if (isFile === false && isDirectory === false) {
     throw new Error(
       `Search path must be a file or directory: ${requestedPath}`,
     );
