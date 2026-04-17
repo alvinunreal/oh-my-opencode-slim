@@ -27,6 +27,8 @@ import {
   createFriendlySpawnError,
   type GrepProcess,
   getAbortKind,
+  isTransientFailure,
+  isTransientStderr,
   killProcess,
   spawnRipgrep,
   toErrorMessage,
@@ -55,7 +57,46 @@ function isSimpleBasenameGlob(glob: string): boolean {
   return !glob.includes('/') && !glob.includes('\\') && !glob.includes('**');
 }
 
-const GNU_GREP_CACHE = new Map<string, Promise<string | undefined>>();
+interface GnuGrepCheckResult {
+  error?: string;
+  cacheable: boolean;
+}
+
+const GNU_GREP_CACHE = new Map<string, Promise<GnuGrepCheckResult>>();
+
+function isAbortLikeFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    error.name === 'AbortError' ||
+    message.includes('aborted') ||
+    message.includes('cancelled') ||
+    message.includes('canceled')
+  );
+}
+
+function shouldCacheGnuGrepFailure(
+  error: unknown,
+  stderr?: string,
+  firstLine?: string,
+): boolean {
+  if (isTransientFailure(error) || isAbortLikeFailure(error)) {
+    return false;
+  }
+
+  if (stderr && isTransientStderr(stderr)) {
+    return false;
+  }
+
+  if (firstLine !== undefined && firstLine.length === 0) {
+    return false;
+  }
+
+  return true;
+}
 
 function toWebReadableStream(
   stream: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
@@ -591,42 +632,90 @@ function finalizeFiles(
   };
 }
 
+async function checkGnuGrep(
+  binaryPath: string,
+): Promise<GnuGrepCheckResult> {
+  let proc: GrepProcess;
+  try {
+    proc = spawnRipgrep([binaryPath, '--version'], process.cwd());
+  } catch (error) {
+    return {
+      error: toErrorMessage(error),
+      cacheable: shouldCacheGnuGrepFailure(error),
+    };
+  }
+
+  const stdoutPromise = readTextStream(proc.proc.stdout ?? undefined);
+  const stderrPromise = readTextStream(proc.proc.stderr ?? undefined);
+  const [stdoutResult, exitResult] = await Promise.allSettled([
+    stdoutPromise,
+    waitForExitAndStderr(proc, stderrPromise),
+  ]);
+
+  if (stdoutResult.status === 'rejected') {
+    return {
+      error: toErrorMessage(stdoutResult.reason),
+      cacheable: shouldCacheGnuGrepFailure(stdoutResult.reason),
+    };
+  }
+
+  if (exitResult.status === 'rejected') {
+    return {
+      error: toErrorMessage(exitResult.reason),
+      cacheable: shouldCacheGnuGrepFailure(exitResult.reason),
+    };
+  }
+
+  const stdout = stdoutResult.value.trim();
+  const { exitCode, stderr } = exitResult.value;
+
+  if (exitCode !== 0) {
+    const error = stderr || `grep --version exited with code ${String(exitCode)}`;
+    return {
+      error,
+      cacheable: shouldCacheGnuGrepFailure(undefined, stderr),
+    };
+  }
+
+  const firstLine = stdout.split(/\r?\n/, 1)[0] ?? '';
+  if (!firstLine.includes('GNU grep')) {
+    return {
+      error:
+        firstLine.length > 0
+          ? 'System grep fallback requires GNU grep; the detected grep is not GNU grep.'
+          : 'System grep fallback could not validate GNU grep version output.',
+      cacheable: shouldCacheGnuGrepFailure(undefined, undefined, firstLine),
+    };
+  }
+
+  return {
+    cacheable: true,
+  };
+}
+
 async function ensureGnuGrep(binaryPath: string): Promise<string | undefined> {
   const cached = GNU_GREP_CACHE.get(binaryPath);
   if (cached) {
-    return cached;
+    return (await cached).error;
   }
 
-  const check = (async () => {
-    let proc: GrepProcess;
-    try {
-      proc = spawnRipgrep([binaryPath, '--version'], process.cwd());
-    } catch (error) {
-      return toErrorMessage(error);
-    }
-
-    const stdoutPromise = readTextStream(proc.proc.stdout ?? undefined);
-    const stderrPromise = readTextStream(proc.proc.stderr ?? undefined);
-    const { exitCode, stderr } = await waitForExitAndStderr(
-      proc,
-      stderrPromise,
-    );
-    const stdout = (await stdoutPromise).trim();
-
-    if (exitCode !== 0) {
-      return stderr || `grep --version exited with code ${String(exitCode)}`;
-    }
-
-    const firstLine = stdout.split(/\r?\n/, 1)[0] ?? '';
-    if (!firstLine.includes('GNU grep')) {
-      return 'System grep fallback requires GNU grep; the detected grep is not GNU grep.';
-    }
-
-    return undefined;
-  })();
+  const check = checkGnuGrep(binaryPath);
 
   GNU_GREP_CACHE.set(binaryPath, check);
-  return check;
+  void check.then(
+    (result) => {
+      if (!result.cacheable && GNU_GREP_CACHE.get(binaryPath) === check) {
+        GNU_GREP_CACHE.delete(binaryPath);
+      }
+    },
+    () => {
+      if (GNU_GREP_CACHE.get(binaryPath) === check) {
+        GNU_GREP_CACHE.delete(binaryPath);
+      }
+    },
+  );
+
+  return (await check).error;
 }
 
 export async function executeGrepFallback(

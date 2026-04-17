@@ -3,7 +3,9 @@ import { describe, expect, test } from 'bun:test';
 import { GrepAggregator } from './aggregate';
 import {
   consumeNullCountPairs,
+  consumeNullCountPairsBytes,
   consumeNullItems,
+  consumeNullItemsBytes,
   consumeRgJsonStream,
 } from './json-stream';
 import { createTempTracker, createTextStream } from './test-helpers';
@@ -219,6 +221,45 @@ describe('tools/grep/aggregate', () => {
           },
         );
         expect(pairs).toEqual([['alpha\r', '12']]);
+      },
+    },
+  ])('$name', async ({ run }) => {
+    await run();
+  });
+
+  test.each([
+    {
+      name: 'consumeNullItemsBytes stitches chunked filenames and drops trailing partial bytes',
+      run: async () => {
+        const decoder = new TextDecoder();
+        const items: string[] = [];
+
+        await consumeNullItemsBytes(
+          createTextStream(['al', 'pha\0be', 'ta\0gam']),
+          (item) => {
+            items.push(decoder.decode(item));
+            return true;
+          },
+        );
+
+        expect(items).toEqual(['alpha', 'beta']);
+      },
+    },
+    {
+      name: 'consumeNullCountPairsBytes stitches chunked pairs without copying each chunk into a new buffer',
+      run: async () => {
+        const decoder = new TextDecoder();
+        const pairs: Array<[string, string]> = [];
+
+        await consumeNullCountPairsBytes(
+          createTextStream(['al', 'pha\x001', '2\nbe', 'ta\x003oops']),
+          (filePath, countText) => {
+            pairs.push([decoder.decode(filePath), countText]);
+            return true;
+          },
+        );
+
+        expect(pairs).toEqual([['alpha', '12']]);
       },
     },
   ])('$name', async ({ run }) => {

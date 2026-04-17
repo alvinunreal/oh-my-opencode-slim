@@ -52,6 +52,94 @@ function toWebReadableStream(
   ) as unknown as ReadableStream<Uint8Array>;
 }
 
+class GrowableByteBuffer {
+  private buffer = new Uint8Array(0);
+  private start = 0;
+  private end = 0;
+  private searchStart = 0;
+
+  append(chunk?: Uint8Array): void {
+    if (!chunk || chunk.length === 0) {
+      return;
+    }
+
+    this.ensureCapacity(chunk.length);
+    this.buffer.set(chunk, this.end);
+    this.end += chunk.length;
+  }
+
+  takeUntil(delimiter: number): Uint8Array | undefined {
+    const scanStart = Math.max(this.start, this.searchStart);
+    const relativeIndex = this.buffer
+      .subarray(scanStart, this.end)
+      .indexOf(delimiter);
+    if (relativeIndex < 0) {
+      this.searchStart = this.end;
+      return undefined;
+    }
+
+    const absoluteIndex = scanStart + relativeIndex;
+    const item = this.buffer.slice(this.start, absoluteIndex);
+    this.start = absoluteIndex + 1;
+    this.searchStart = this.start;
+    this.compactIfNeeded();
+    return item;
+  }
+
+  private ensureCapacity(additional: number): void {
+    const currentLength = this.end - this.start;
+    const requiredLength = currentLength + additional;
+
+    if (this.buffer.length === 0) {
+      this.buffer = new Uint8Array(Math.max(64, requiredLength));
+      return;
+    }
+
+    if (requiredLength <= this.buffer.length) {
+      if (this.end + additional <= this.buffer.length) {
+        return;
+      }
+
+      const previousStart = this.start;
+      this.buffer.copyWithin(0, this.start, this.end);
+      this.start = 0;
+      this.end = currentLength;
+      this.searchStart = Math.max(0, this.searchStart - previousStart);
+      return;
+    }
+
+    const next = new Uint8Array(
+      Math.max(this.buffer.length * 2, requiredLength),
+    );
+    next.set(this.buffer.subarray(this.start, this.end), 0);
+    this.searchStart = Math.max(0, this.searchStart - this.start);
+    this.buffer = next;
+    this.start = 0;
+    this.end = currentLength;
+  }
+
+  private compactIfNeeded(): void {
+    const currentLength = this.end - this.start;
+
+    if (currentLength === 0) {
+      this.start = 0;
+      this.end = 0;
+      this.searchStart = 0;
+      return;
+    }
+
+    if (this.start < this.buffer.length / 2) {
+      return;
+    }
+
+    const previousStart = this.start;
+    this.buffer.copyWithin(0, this.start, this.end);
+    this.start = 0;
+    this.end = currentLength;
+    this.searchStart = Math.max(0, this.searchStart - previousStart);
+  }
+}
+
 async function consumeDelimitedText(
   stream: BinaryReadableStream,
   delimiter: string,
@@ -128,28 +216,20 @@ export async function consumeNullItemsBytes(
   }
 
   const reader = readable.getReader();
-  let buffer = new Uint8Array();
+  const buffer = new GrowableByteBuffer();
 
   while (true) {
     const { done, value } = await reader.read();
-    if (value) {
-      const next = new Uint8Array(buffer.length + value.length);
-      next.set(buffer);
-      next.set(value, buffer.length);
-      buffer = next;
-    }
+    buffer.append(value);
 
-    let index = buffer.indexOf(0);
-    while (index >= 0) {
-      const item = buffer.slice(0, index);
-      buffer = buffer.slice(index + 1);
-
+    let item = buffer.takeUntil(0);
+    while (item !== undefined) {
       if (onItem(item) === false) {
         await reader.cancel();
         return;
       }
 
-      index = buffer.indexOf(0);
+      item = buffer.takeUntil(0);
     }
 
     if (done) {
@@ -223,37 +303,29 @@ export async function consumeNullCountPairsBytes(
 
   const reader = readable.getReader();
   const decoder = new TextDecoder();
-  let buffer = new Uint8Array();
+  const buffer = new GrowableByteBuffer();
   let currentPath: Uint8Array | undefined;
 
   while (true) {
     const { done, value } = await reader.read();
-    if (value) {
-      const next = new Uint8Array(buffer.length + value.length);
-      next.set(buffer);
-      next.set(value, buffer.length);
-      buffer = next;
-    }
+    buffer.append(value);
 
     while (true) {
       if (currentPath === undefined) {
-        const nullIndex = buffer.indexOf(0);
-        if (nullIndex < 0) {
+        const pathBytes = buffer.takeUntil(0);
+        if (pathBytes === undefined) {
           break;
         }
 
-        currentPath = buffer.slice(0, nullIndex);
-        buffer = buffer.slice(nullIndex + 1);
+        currentPath = pathBytes;
         continue;
       }
 
-      const newlineIndex = buffer.indexOf(0x0a);
-      if (newlineIndex < 0) {
+      const countBytes = buffer.takeUntil(0x0a);
+      if (countBytes === undefined) {
         break;
       }
 
-      const countBytes = buffer.slice(0, newlineIndex);
-      buffer = buffer.slice(newlineIndex + 1);
       const pathBytes = currentPath;
       currentPath = undefined;
       const countText = decoder.decode(countBytes).replace(/\r$/, '');
