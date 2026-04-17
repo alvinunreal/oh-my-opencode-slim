@@ -131,6 +131,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>anthropic/claude-opus-4.6</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose your default, strongest all-around coding model. Orchestrator is both the main coding agent and the delegator, so it needs strong implementation ability, good judgment, and reliable instruction-following.
+    </td>
+  </tr>
 </table>
 
 ---
@@ -167,6 +172,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a fast, low-cost model. Explorer handles broad scouting work, so speed and efficiency usually matter more than using your strongest reasoning model.
+    </td>
+  </tr>
 </table>
 
 ---
@@ -201,6 +211,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Recommended Models:</b> <code>openai/gpt-5.4 (high)</code> <code>google/gemini-3.1-pro-preview (high)</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose your strongest high-reasoning model for architecture, hard debugging, trade-offs, and code review.
     </td>
   </tr>
 </table>
@@ -244,6 +259,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Setup:</b> <code>Strong master</code> + <code>diverse councillors</code> across providers
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Use a strong synthesis model as the master and diverse models as councillors. The value of Council comes from comparing different model perspectives, not just picking the single strongest model everywhere.
+    </td>
+  </tr>
 </table>
 
 ---
@@ -278,6 +298,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a fast, low-cost model. Librarian handles research and documentation lookups, so speed and efficiency usually matter more than using your strongest reasoning model.
     </td>
   </tr>
 </table>
@@ -316,6 +341,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>kimi-for-coding/k2p5</code> 
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a model that is strong at UI/UX judgment, frontend implementation, and visual polish.
+    </td>
+  </tr>
 </table>
 
 ---
@@ -352,6 +382,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a fast, reliable coding model for routine, scoped implementation work. Fixer usually receives a concrete plan or bounded instructions from Orchestrator, making it a good place for efficient execution tasks such as tests, test updates, and straightforward code changes.
+    </td>
+  </tr>
 </table>
 
 ### 07. Observer: The Silent Witness
@@ -383,6 +418,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> — <i>configure a vision-capable model to enable</i>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a vision-capable model if you want the agent to read screenshots, images, PDFs, and other visual files.
     </td>
   </tr>
 </table>
