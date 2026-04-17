@@ -10,6 +10,7 @@ import {
   createChatHeadersHook,
   createDelegateTaskRetryHook,
   createFilterAvailableSkillsHook,
+  createGrepRenderMetadataHook,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
@@ -170,6 +171,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const applyPatchHook = createApplyPatchHook(ctx);
   // Initialize JSON parse error recovery hook
   const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
+  const grepRenderMetadataHook = createGrepRenderMetadataHook();
 
   // Initialize foreground fallback manager for runtime model switching
   const foregroundFallback = new ForegroundFallbackManager(
@@ -619,6 +621,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Post-tool hooks: retry guidance for delegation errors + file-tool nudge
     'tool.execute.after': async (input, output) => {
+      await grepRenderMetadataHook['tool.execute.after'](
+        input as {
+          tool: string;
+          args?: { pattern?: unknown };
+        },
+        output as {
+          title?: unknown;
+          output: unknown;
+          metadata?: unknown;
+        },
+      );
+
       await delegateTaskRetryHook['tool.execute.after'](
         input as { tool: string },
         output as { output: unknown },

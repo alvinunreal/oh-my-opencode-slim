@@ -4,6 +4,7 @@ export { createAutoUpdateCheckerHook } from './auto-update-checker';
 export { createChatHeadersHook } from './chat-headers';
 export { createDelegateTaskRetryHook } from './delegate-task-retry';
 export { createFilterAvailableSkillsHook } from './filter-available-skills';
+export { createGrepRenderMetadataHook } from './grep-render-metadata';
 export {
   ForegroundFallbackManager,
   isRateLimitError,
