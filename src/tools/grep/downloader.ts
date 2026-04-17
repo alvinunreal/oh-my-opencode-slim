@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { sync as whichSync } from 'which';
 import { extractZip, getZipExtractionSupportError } from '../../utils';
-import { crossSpawn } from '../../utils/compat';
+import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
 
 interface RipgrepReleaseAsset {
   name?: string;
@@ -41,6 +41,21 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw createAbortError();
   }
+}
+
+async function waitForExitAndStderr(
+  proc: CrossSpawnResult,
+  stderrPromise: Promise<string>,
+): Promise<{ exitCode: number; stderr: string }> {
+  const [exitResult, stderrResult] = await Promise.allSettled([
+    proc.exited,
+    stderrPromise,
+  ]);
+
+  return {
+    exitCode: exitResult.status === 'fulfilled' ? exitResult.value : 1,
+    stderr: stderrResult.status === 'fulfilled' ? stderrResult.value : '',
+  };
 }
 
 function hasExecutable(name: string): boolean {
@@ -289,7 +304,8 @@ async function extractTarGz(
 
   signal?.addEventListener('abort', onAbort, { once: true });
 
-  const exitCode = await proc.exited;
+  const stderrPromise = proc.stderr();
+  const { exitCode, stderr } = await waitForExitAndStderr(proc, stderrPromise);
   signal?.removeEventListener('abort', onAbort);
 
   if (signal?.aborted) {
@@ -297,7 +313,6 @@ async function extractTarGz(
   }
 
   if (exitCode !== 0) {
-    const stderr = await proc.stderr();
     throw new Error(`ripgrep extraction failed (exit ${exitCode}): ${stderr}`);
   }
 }

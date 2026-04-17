@@ -23,7 +23,14 @@ interface GrepResolverDependencies {
   logger?: (message: string, data?: unknown) => void;
 }
 
-let autoInstallPromise: Promise<ResolvedGrepCli> | null = null;
+interface SharedAutoInstallState {
+  promise: Promise<ResolvedGrepCli>;
+  controller: AbortController;
+  waiters: number;
+  settled: boolean;
+}
+
+let autoInstallState: SharedAutoInstallState | null = null;
 
 function defaultFindExecutable(name: string): string | null {
   try {
@@ -152,36 +159,66 @@ function raceWithAbort<T>(
   });
 }
 
-export async function resolveGrepCliWithAutoInstall(
-  deps: GrepResolverDependencies = {},
+function releaseAutoInstallWaiter(state: SharedAutoInstallState): void {
+  state.waiters = Math.max(0, state.waiters - 1);
+
+  if (state.waiters > 0 || state.settled) {
+    return;
+  }
+
+  if (autoInstallState === state) {
+    autoInstallState = null;
+  }
+
+  state.controller.abort();
+}
+
+function waitForSharedAutoInstall(
+  state: SharedAutoInstallState,
   signal?: AbortSignal,
 ): Promise<ResolvedGrepCli> {
-  if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
-  }
+  state.waiters += 1;
 
-  const current = resolveSync(deps);
-  if (isResolvedRipgrep(current)) {
-    return current;
-  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
 
-  if (autoInstallPromise) {
-    return raceWithAbort(autoInstallPromise, signal);
-  }
+    released = true;
+    releaseAutoInstallWaiter(state);
+  };
 
-  autoInstallPromise = (async () => {
-    const installManagedRipgrep =
-      deps.installLatestStableRipgrep ?? installLatestStableRipgrep;
+  return raceWithAbort(state.promise, signal).finally(release);
+}
 
+function createSharedAutoInstall(
+  deps: GrepResolverDependencies,
+): SharedAutoInstallState {
+  const installManagedRipgrep =
+    deps.installLatestStableRipgrep ?? installLatestStableRipgrep;
+  const controller = new AbortController();
+  const state: SharedAutoInstallState = {
+    controller,
+    waiters: 0,
+    settled: false,
+    promise: Promise.resolve({
+      path: RG_BINARY,
+      backend: 'rg' as const,
+      source: 'missing-rg' as const,
+    }),
+  };
+
+  state.promise = (async () => {
     try {
-      const installedPath = await installManagedRipgrep(signal);
+      const installedPath = await installManagedRipgrep(controller.signal);
       return {
         path: installedPath,
         backend: 'rg' as const,
         source: 'managed-rg' as const,
       };
     } catch (error) {
-      if (isAbortLikeError(error) || signal?.aborted) {
+      if (isAbortLikeError(error) || controller.signal.aborted) {
         throw new AbortWaitError(
           'Search was cancelled before execution started.',
         );
@@ -203,13 +240,39 @@ export async function resolveGrepCliWithAutoInstall(
       });
       throw new Error(buildUnavailableBackendMessage(error));
     } finally {
-      autoInstallPromise = null;
+      state.settled = true;
+
+      if (autoInstallState === state) {
+        autoInstallState = null;
+      }
     }
   })();
 
-  return raceWithAbort(autoInstallPromise, signal);
+  return state;
+}
+
+export async function resolveGrepCliWithAutoInstall(
+  deps: GrepResolverDependencies = {},
+  signal?: AbortSignal,
+): Promise<ResolvedGrepCli> {
+  if (signal?.aborted) {
+    throw new AbortWaitError('Search was cancelled before execution started.');
+  }
+
+  const current = resolveSync(deps);
+  if (isResolvedRipgrep(current)) {
+    return current;
+  }
+
+  if (autoInstallState) {
+    return waitForSharedAutoInstall(autoInstallState, signal);
+  }
+
+  autoInstallState = createSharedAutoInstall(deps);
+
+  return waitForSharedAutoInstall(autoInstallState, signal);
 }
 
 export function resetGrepCliResolverForTests(): void {
-  autoInstallPromise = null;
+  autoInstallState = null;
 }
