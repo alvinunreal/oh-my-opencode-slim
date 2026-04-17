@@ -19,6 +19,10 @@ Complete guide for using terminal multiplexer integration (Tmux or Zellij) with 
 
 **Watch your agents work in real-time.** When the Orchestrator launches sub-agents or initiates background tasks, new panes automatically spawn in a dedicated tab showing each agent's live progress. No more waiting in the dark.
 
+![Tmux multiplexer view](../img/tmux.png)
+
+*OpenCode running in tmux with live subagent panes.*
+
 ### Key Benefits
 
 - **Real-time visibility** into agent activities

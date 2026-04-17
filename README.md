@@ -19,6 +19,8 @@ oh-my-opencode-slim is an agent orchestration plugin for OpenCode. It includes a
 
 The main idea is simple: instead of forcing one model to do everything, the plugin routes each part of the job to the agent best suited for it, balancing **quality, speed and cost**.
 
+To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
+
 ### Quick Start
 
 ```bash
@@ -92,6 +94,8 @@ ping all agents
 If any agent fails to respond, check your provider authentication and config file.
 
 ---
+
+<a id="meet-the-pantheon"></a>
 
 ## 🏛️ Meet the Pantheon
 
@@ -353,7 +357,7 @@ If any agent fails to respond, check your provider authentication and config fil
 ### 07. Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** If your Orchestrator model is not multimodal, you can enable this agent. Observer which is diabled by default, can be used by Orchestrator for multimodal file reading. Enable via setting `disabled_agents: []` in your config.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, PDFs, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration.
 
 <table>
   <tr>
@@ -395,6 +399,8 @@ Use this section as a map: start with installation, then jump to features, confi
 |-----|----------------|
 | **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
 | **[Provider Configurations](docs/provider-configurations.md)** | Configure OpenAI, Kimi, GitHub Copilot, ZAI, Fireworks AI, or mixed-provider presets |
+
+<a id="features-and-workflows"></a>
 
 ### ✨ Features & Workflows
 
