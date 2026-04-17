@@ -47,6 +47,9 @@ Then:
 
 4. **Update the models you want for each agent**
 
+> [!TIP]
+> Want to understand how automatic delegation works in practice? Review the **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** — it contains the delegation rules, specialist routing logic, and the thresholds for when the main agent should hand work off to subagents.
+
 The default generated configuration looks like this:
 
 ```jsonc
