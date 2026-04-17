@@ -4,4 +4,4 @@ export * from './internal-initiator';
 export { getLogDir, initLogger, log, resetLogger } from './logger';
 export * from './polling';
 export * from './session';
-export { extractZip } from './zip-extractor';
+export { extractZip, getZipExtractionSupportError } from './zip-extractor';

@@ -29,6 +29,17 @@ function escapePowerShellPath(path: string): string {
 
 type WindowsZipExtractor = 'tar' | 'pwsh' | 'powershell';
 
+function hasCommand(command: string, args: string[] = ['--version']): boolean {
+  try {
+    const result = spawnSync(command, args, {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 function getWindowsZipExtractor(): WindowsZipExtractor {
   const buildNumber = getWindowsBuildNumber();
 
@@ -43,10 +54,48 @@ function getWindowsZipExtractor(): WindowsZipExtractor {
   return 'powershell';
 }
 
+export function getZipExtractionSupportError(): string | undefined {
+  if (process.platform === 'win32') {
+    const extractor = getWindowsZipExtractor();
+
+    if (extractor === 'tar' && !hasCommand('tar')) {
+      return 'ripgrep auto-install requires tar on this Windows host to extract zip archives.';
+    }
+
+    if (extractor === 'pwsh' && !hasCommand('pwsh', ['-v'])) {
+      return 'ripgrep auto-install requires pwsh to extract zip archives on this Windows host.';
+    }
+
+    if (
+      extractor === 'powershell' &&
+      !hasCommand('powershell', ['-Command', '$PSVersionTable.PSVersion.ToString()'])
+    ) {
+      return 'ripgrep auto-install requires PowerShell to extract zip archives on this Windows host.';
+    }
+
+    return undefined;
+  }
+
+  return hasCommand('unzip')
+    ? undefined
+    : 'ripgrep auto-install requires unzip to extract zip archives.';
+}
+
+function createAbortError(): Error {
+  const error = new Error('ripgrep auto-install was aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
 export async function extractZip(
   archivePath: string,
   destDir: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+
   let proc: ReturnType<typeof crossSpawn>;
 
   if (process.platform === 'win32') {
@@ -93,7 +142,22 @@ export async function extractZip(
     });
   }
 
+  const onAbort = () => {
+    try {
+      proc.kill();
+    } catch {
+      // Process may have already exited.
+    }
+  };
+
+  signal?.addEventListener('abort', onAbort, { once: true });
+
   const exitCode = await proc.exited;
+  signal?.removeEventListener('abort', onAbort);
+
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
 
   if (exitCode !== 0) {
     const stderr = await proc.stderr();

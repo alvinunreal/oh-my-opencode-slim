@@ -2,110 +2,210 @@
 
 ## Project Responsibility
 
-`oh-my-opencode-slim` is an OpenCode plugin that adds a specialist-agent operating model on top of the host runtime. Its core job is to:
+**oh-my-opencode-slim** is a lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode. It provides a multi-agent system that enables specialized AI agents to work together under an orchestrator to optimize coding tasks for quality, speed, cost, and reliability.
 
-- define orchestrator and specialist agents,
-- load layered plugin configuration and per-agent permissions,
-- expose additional tools and MCP integrations,
-- manage delegated session orchestration and terminal multiplexer visualization,
-- inject workflow-enforcement hooks,
-- ship install-time skills and a bootstrap CLI.
-
-This codemap intentionally covers the plugin repository itself and excludes the nested `opencode/` upstream checkout.
+The plugin integrates with OpenCode to provide:
+- **Multi-agent orchestration** with specialized roles (Orchestrator, Explorer, Librarian, Oracle, Designer, Fixer)
+- **Background task management** for long-running async operations
+- **MCP (Model Context Protocol) integration** for external tools and services
+- **LSP (Language Server Protocol) tools** for code intelligence
+- **Code search capabilities** via grep and AST-grep
+- **Tmux integration** for visual task tracking
+- **Configuration system** with agent overrides and skill management
+- **CLI installer** for interactive setup and configuration
 
 ## System Entry Points
 
-| Path | Role |
-|---|---|
-| `package.json` | Package manifest, dependency graph, release scripts, published file list. |
-| `src/index.ts` | Main plugin bootstrap: wires agents, tools, MCPs, hooks, council/session managers, multiplexer session mirroring, interview manager, and config merge behavior. |
-| `src/cli/index.ts` | CLI entrypoint for installation/bootstrap workflows. |
-| `src/config/schema.ts` | Source-of-truth runtime config schema used by validation and schema generation. |
-| `scripts/generate-schema.ts` | Generates `oh-my-opencode-slim.schema.json` from the Zod config schema. |
+| File | Purpose | Key Exports |
+|------|---------|-------------|
+| `package.json` | Project manifest, dependencies, and build scripts | `oh-my-opencode-slim` CLI, `dist/index.js` main entry |
+| `src/index.ts` | Main plugin entry point | `OhMyOpenCodeLite` plugin, agent configs, tools, MCPs |
+| `src/cli/index.ts` | CLI installer entry point | `install` command, configuration management |
+| `tsconfig.json` | TypeScript compiler configuration | Build settings, type checking, declaration generation |
+
+### Build Artifacts
+
+- `dist/index.js` - Main plugin bundle (ESM)
+- `dist/index.d.ts` - TypeScript declarations
+- `dist/cli/index.js` - CLI bundle
+- `dist/cli/index.d.ts` - CLI TypeScript declarations
+
+### Published Files
+
+- `dist/` - Built JavaScript and declarations
+- `src/skills/` - Skill definitions (included in npm package)
+- `README.md` - Documentation
+- `LICENSE` - MIT license
 
 ## Repository Directory Map
 
 | Directory | Responsibility Summary | Detailed Map |
-|---|---|---|
-| `src/` | Main application surface that composes plugin bootstrap, runtime modules, and installer-facing code. | [View Map](src/codemap.md) |
-| `src/agents/` | Agent factory layer for orchestrator and specialists, including MCP assignment and permission shaping. | [View Map](src/agents/codemap.md) |
-| `src/cli/` | Installer, config editing, provider preset generation, and built-in skill installation. | [View Map](src/cli/codemap.md) |
-| `src/config/` | Configuration schema, loaders, constant tables, and agent/MCP policy helpers. | [View Map](src/config/codemap.md) |
-| `src/council/` | Multi-model council orchestration and synthesis fallback flow. | [View Map](src/council/codemap.md) |
-| `src/hooks/` | Aggregated runtime hook surface for prompt transforms, recovery logic, nudges, and lifecycle policies. | [View Map](src/hooks/codemap.md) |
-| `src/hooks/apply-patch/` | Structured `apply_patch` parsing, matching, recovery, and rewrite pipeline. | [View Map](src/hooks/apply-patch/codemap.md) |
-| `src/hooks/auto-update-checker/` | Startup update detection, cache handling, and optional install prompt flow. | [View Map](src/hooks/auto-update-checker/codemap.md) |
-| `src/hooks/delegate-task-retry/` | Post-tool retry guidance for failed delegation attempts. | [View Map](src/hooks/delegate-task-retry/codemap.md) |
-| `src/hooks/filter-available-skills/` | Skill-visibility filtering based on agent permission policy. | [View Map](src/hooks/filter-available-skills/codemap.md) |
-| `src/hooks/foreground-fallback/` | Interactive-session fallback control path for rate-limit or degraded foreground execution. | [View Map](src/hooks/foreground-fallback/codemap.md) |
-| `src/hooks/json-error-recovery/` | JSON/tool-output recovery helpers for malformed model responses. | [View Map](src/hooks/json-error-recovery/codemap.md) |
-| `src/hooks/phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases. | [View Map](src/hooks/phase-reminder/codemap.md) |
-| `src/hooks/post-file-tool-nudge/` | Post-read/write reminder path that nudges delegation-aware next steps. | [View Map](src/hooks/post-file-tool-nudge/codemap.md) |
-| `src/hooks/todo-continuation/` | Auto-continue behavior for outstanding todo execution. | [View Map](src/hooks/todo-continuation/codemap.md) |
-| `src/interview/` | `/interview` feature: prompt/state orchestration, persistence, local UI, and dashboard mode. | [View Map](src/interview/codemap.md) |
-| `src/mcp/` | Built-in MCP registry and per-provider MCP definitions. | [View Map](src/mcp/codemap.md) |
-| `src/multiplexer/` | Terminal multiplexer abstraction layer with backend selection, session mirroring, and shutdown lifecycle orchestration. | [View Map](src/multiplexer/codemap.md) |
-| `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
-| `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
-| `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
-| `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
-| `src/skills/simplify/` | Behavior-preserving simplification skill package. | [View Map](src/skills/simplify/codemap.md) |
-| `src/tools/` | Tool export surface for AST-grep, smartfetch, and council orchestration with strict schema-based execution paths. | [View Map](src/tools/codemap.md) |
-| `src/tools/ast-grep/` | AST-grep binary management and AST-aware search/replace tool flow. | [View Map](src/tools/ast-grep/codemap.md) |
-| `src/tools/smartfetch/` | Fetch/extract/cache pipeline for web content and secondary-model summarization. | [View Map](src/tools/smartfetch/codemap.md) |
-| `src/utils/` | Cross-cutting helpers for logging, session metadata, subagent depth tracking, environment, and runtime operations. | [View Map](src/utils/codemap.md) |
-| `scripts/` | Build/release validation and generated-artifact maintenance scripts. | [View Map](scripts/codemap.md) |
+|-----------|------------------------|--------------|
+| `src/` | Main plugin entrypoint plus all feature modules that compose agents, tools, hooks, background managers, and utils. | [View Map](src/codemap.md) |
+| `src/agents/` | Defines specialist agents and the orchestrator, with factories and override/permission helpers. | [View Map](src/agents/codemap.md) |
+| `src/background/` | Background task/session managers and tmux pane orchestration for off-thread agent runs. | [View Map](src/background/codemap.md) |
+| `src/cli/` | Installer CLI flow, config edits, provider setup, and skill installation helpers. | [View Map](src/cli/codemap.md) |
+| `src/config/` | Plugin configuration schemas, defaults, loaders, and MCP/agent override helpers. | [View Map](src/config/codemap.md) |
+| `src/hooks/` | Lifecycle hooks for message transforms, error recovery, and rate-limit fallbacks. | [View Map](src/hooks/codemap.md) |
+| `src/hooks/auto-update-checker/` | Startup update check hook with cache invalidation and optional auto-install. | [View Map](src/hooks/auto-update-checker/codemap.md) |
+| `src/hooks/phase-reminder/` | Orchestrator message transform hook that injects phase reminders. | [View Map](src/hooks/phase-reminder/codemap.md) |
+| `src/hooks/post-file-tool-nudge/` | Read/Write tool after-hook that queues ephemeral delegation nudges. | [View Map](src/hooks/post-file-tool-nudge/codemap.md) |
+| `src/hooks/delegate-task-retry/` | Error detection and retry guidance with pattern matching and assistance. | [View Map](src/hooks/delegate-task-retry/codemap.md) |
+| `src/hooks/foreground-fallback/` | Rate-limit fallback manager for interactive sessions. | [View Map](src/hooks/foreground-fallback/codemap.md) |
+| `src/hooks/json-error-recovery/` | JSON parse error detection and recovery helpers. | [View Map](src/hooks/json-error-recovery/codemap.md) |
+| `src/mcp/` | Built-in MCP registry and config types for remote connectors. | [View Map](src/mcp/codemap.md) |
+| `src/tools/` | Tool registry plus local grep, LSP, AST-grep, and background task implementations. | [View Map](src/tools/codemap.md) |
+| `src/tools/grep/` | ripgrep-first local grep override with managed backend resolution, hybrid mtime strategy, and GNU grep fallback. | [View Map](src/tools/grep/codemap.md) |
+| `src/tools/ast-grep/` | AST-grep CLI discovery, execution, and tool definitions. | [View Map](src/tools/ast-grep/codemap.md) |
+| `src/tools/lsp/` | LSP client stack and tool surface for definitions, diagnostics, and rename. | [View Map](src/tools/lsp/codemap.md) |
+| `src/utils/` | Shared helpers for tmux, environment variables, internal initiation, and config. | [View Map](src/utils/codemap.md) |
 
-## Runtime Control Flow
+## Architecture Overview
 
-1. **Plugin startup**
-   - OpenCode loads `src/index.ts`.
-   - Config is loaded and normalized through `src/config/`.
-   - Agent definitions are produced by `src/agents/`.
-   - Tool factories from `src/tools/` and MCP definitions from `src/mcp/` are registered.
-   - Hooks from `src/hooks/` are attached.
-   - Delegation/council orchestration, multiplexer session mirroring, and interview support are initialized.
+### Plugin Initialization Flow
 
-2. **Interactive request handling**
-   - The orchestrator prompt drives routing decisions.
-   - Tool calls resolve through `src/tools/` or built-in OpenCode tools.
-   - Hooks can transform prompts/messages or repair tool failures before/after execution.
+```
+OpenCode loads plugin
+    ↓
+src/index.ts: OhMyOpenCodeLite(ctx)
+    ↓
+Load plugin config (src/config)
+    ↓
+Initialize agent configs (src/agents)
+    ↓
+Initialize background manager (src/background)
+    ↓
+Initialize MCPs (src/mcp)
+    ↓
+Initialize hooks (src/hooks)
+    ↓
+Register tools (src/tools)
+    ↓
+Return plugin object with:
+    - agent: Agent configurations
+    - tool: Tool implementations
+    - mcp: MCP configurations
+    - config: Config merger
+    - event: Event handlers
+    - hooks: Message transforms
+```
 
-3. **Delegated execution**
-   - OpenCode child sessions are created by delegation/council flows and tracked by plugin utilities.
-   - `src/multiplexer/` optionally mirrors those sessions into tmux/zellij panes.
-   - Results flow back into the parent session through notifications/output polling.
+### Key Integrations
 
-4. **Install/release path**
-   - `src/cli/` configures host OpenCode instances.
-   - `src/skills/` is copied into the user skill directory.
-   - `scripts/` validates generated schema, package completeness, and host-load behavior.
+1. **Agent System** (`src/agents/`)
+   - Orchestrator delegates to specialized subagents
+   - Each agent has specific tools, permissions, and temperature settings
+   - MCP tools configured per agent based on role
 
-## Key Cross-Module Integration Points
+2. **Background Tasks** (`src/background/`)
+   - Fire-and-forget task execution
+   - Session lifecycle management
+   - Optional tmux pane integration for visual tracking
 
-- `src/index.ts` is the central composition root for nearly every runtime subsystem.
-- `src/config/` feeds `src/agents/`, session/delegation utilities, and MCP registration.
-- `src/cli/skills.ts` and `src/cli/custom-skills.ts` bridge install-time skill packaging with runtime permission policy.
-- Session/delegation utilities depend on `src/multiplexer/` and cooperate with helpers in `src/utils/`.
-- `src/tools/council.ts` delegates into `src/council/`.
-- `src/hooks/filter-available-skills/` and agent permission logic rely on shared skill names from the CLI/config layer.
-- `src/interview/` hooks into plugin command/event surfaces exposed by `src/index.ts`.
+3. **Configuration** (`src/config/`)
+   - User, project, and preset config layers
+   - Agent overrides and custom prompts
+   - MCP availability and permissions
 
-## Root Assets
+4. **Tools** (`src/tools/`)
+   - Code search via local `grep` override (ripgrep-first with managed install/fallback) and AST-grep
+   - LSP integration (diagnostics, references, rename)
+   - Background task orchestration
 
-- `README.md`: user-facing product overview, install docs, and agent descriptions.
-- `AGENTS.md`: agent operating conventions for this repository.
-- `biome.json`: formatting/lint policy.
-- `tsconfig.json`: TypeScript compiler settings.
-- `.slim/codemap.json`: codemap change-detection state for this repository.
+5. **MCP Integration** (`src/mcp/`)
+   - Built-in remote MCPs (websearch, context7, grep.app)
+   - Type-safe configuration
+   - Disabled MCP filtering
 
-## Recommended Reading Order
+6. **Hooks** (`src/hooks/`)
+   - Auto-update checking
+   - `apply_patch` stale-patch rescue with strict parsing, bounded LCS fallback, stateful same-path helper updates, and safe canonical rewrites only inside root/worktree
+   - Phase reminders for workflow compliance
+   - Post-read nudges for delegation
 
-1. `codemap.md`
-2. `src/codemap.md`
-3. One of:
-   - `src/agents/codemap.md`
-   - `src/multiplexer/codemap.md`
-   - `src/tools/codemap.md`
-   - `src/hooks/codemap.md`
-4. Relevant subsystem sub-map for the task at hand
+## Development Workflow
+
+```bash
+# Build the project
+bun run build
+
+# Type checking
+bun run typecheck
+
+# Run tests
+bun test
+
+# Linting
+bun run lint
+
+# Format code
+bun run format
+
+# Run all checks (lint + format + organize imports)
+bun run check
+
+# CI mode checks (no auto-fix)
+bun run check:ci
+
+# Build and run with OpenCode
+bun run dev
+```
+
+## Key Dependencies
+
+| Dependency | Purpose |
+|------------|---------|
+| `@opencode-ai/plugin` | OpenCode plugin SDK |
+| `@opencode-ai/sdk` | OpenCode AI SDK |
+| `@modelcontextprotocol/sdk` | MCP protocol implementation |
+| `@ast-grep/cli` | AST-aware code search |
+| `vscode-jsonrpc` | JSON-RPC protocol |
+| `vscode-languageserver-protocol` | LSP protocol |
+| `zod` | Runtime validation |
+
+## Extension Points
+
+### Adding New Agents
+
+1. Create agent definition in `src/agents/`
+2. Add to agent factory registry
+3. Configure default model in `src/config/constants.ts`
+4. Add MCP configuration in `src/config/agent-mcps.ts`
+5. Add skill permissions in `src/cli/skills/`
+
+### Adding New Tools
+
+1. Implement tool in `src/tools/`
+2. Export from `src/tools/index.ts`
+3. Register in main plugin (`src/index.ts`)
+4. Configure agent permissions
+
+### Adding New MCPs
+
+1. Define MCP config in `src/mcp/`
+2. Add to `createBuiltinMcps` registry
+3. Configure agent access in `src/config/agent-mcps.ts`
+
+### Adding New Hooks
+
+1. Implement hook in `src/hooks/`
+2. Export factory function from `src/hooks/index.ts`
+3. Register in main plugin (`src/index.ts`)
+
+## Configuration Structure
+
+```typescript
+interface PluginConfig {
+  agents?: {
+    [agentName: string]: AgentOverrideConfig;
+  };
+  tmux?: TmuxConfig;
+  disabled_mcps?: McpName[];
+  background?: BackgroundTaskConfig;
+  presets?: Record<string, Partial<PluginConfig>>;
+}
+```
+
+## License
+
+MIT License - See [LICENSE](LICENSE) for details.
