@@ -2,7 +2,7 @@
   <img src="img/team.png" alt="Pantheon agents" style="border-radius: 10px;" width="620">
   <p><i>Seven divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.</i></p>
   <p><b>Open Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
-  <p><a href="https://moltfounders.com/jobs/09d1c6e7-9e0e-4683-8d78-e2376aaa2333"><img src="https://moltfounders.com/badges/4.png" alt="MoltFounders" height="30"></a></p>
+
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
@@ -13,7 +13,11 @@
 
 ---
 
-## 📦 Installation
+## What's This Plugin
+
+oh-my-opencode-slim is an agent orchestration plugin for OpenCode. It includes a built-in team of specialized agents that can scout a codebase, look up fresh documentation, review architecture, handle UI work, and execute well-scoped implementation tasks under one orchestrator.
+
+The main idea is simple: instead of forcing one model to do everything, the plugin routes each part of the job to the agent best suited for it, balancing **quality, speed and cost**.
 
 ### Quick Start
 
@@ -21,49 +25,50 @@
 bunx oh-my-opencode-slim@latest install
 ```
 
-The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5.4-mini`). No provider questions asked.
+### Getting Started
 
-For non-interactive mode:
+The installer generates an OpenAI preset by default, using `openai/gpt-5.4` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents.
 
-```bash
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=yes --skills=yes
-```
+Then:
 
-To force overwrite of an existing configuration:
-```bash
-bunx oh-my-opencode-slim@latest install --reset
-```
+1. **Log in to the providers you want to use if you haven't already**:
 
-### For Alternative Providers
+   ```bash
+   opencode auth login
+   ```
+2. **Refresh and list the models OpenCode can see**:
 
-The default configuration uses OpenAI. To use Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step instructions and config examples.
+   ```bash
+   opencode models --refresh
+   ```
+3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
 
-> [!TIP]
-> Want to see the latest models OpenCode knows about? Run `opencode models --refresh` to refresh the cache and list currently available models.
+4. **Update the models you want for each agent**
 
-### JSON Schema
-
-An official JSON Schema is included in the package for editor validation and autocomplete. Add a `$schema` reference to your config file:
+The default generated configuration looks like this:
 
 ```jsonc
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
-  // your config...
+  "preset": "openai",
+  "presets": {
+    "openai": {
+      "orchestrator": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["*"], "mcps": ["*"] },
+      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": [], "mcps": [] },
+      "librarian": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "openai/gpt-5.4-mini", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
+      "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
+    }
+  }
 }
 ```
 
-This enables autocomplete and inline validation in VS Code, Neovim, and other editors that support JSON Schema.
+### For Alternative Providers
 
-### For LLM Agents
+To use Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step config examples. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
 
-Paste this into any coding agent:
-
-```
-Install and configure by following the instructions here:
-https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
-```
-
-**Detailed installation guide:** [docs/installation.md](docs/installation.md)
+You can also mix and match any models per agent. For model suggestions, see the **Recommended Models** listed under each agent below.
 
 ### ✅ Verify Your Setup
 
@@ -348,7 +353,7 @@ If any agent fails to respond, check your provider authentication and config fil
 ### 07. Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** Not all models support vision. Your strongest coding model (e.g. for design decisions) may not be able to read images, while a vision-capable model may not be the best for reasoning. Observer solves this by having its **own model** — configure a vision-capable model for it while keeping Designer on your strongest reasoning model. Disabled by default; enable via `disabled_agents: []` in config.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, you can enable this agent. Observer which is diabled by default, can be used by Orchestrator for multimodal file reading. Enable via setting `disabled_agents: []` in your config.
 
 <table>
   <tr>
@@ -382,39 +387,40 @@ If any agent fails to respond, check your provider authentication and config fil
 
 ## 📚 Documentation
 
-### 🚀 Getting Started
+Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.
 
-| Doc | Contents |
-|-----|----------|
-| **[Installation Guide](docs/installation.md)** | CLI flags, `--reset`, auth, troubleshooting |
-| **[Provider Configurations](docs/provider-configurations.md)** | OpenAI, Kimi, Copilot, ZAI, Fireworks AI — mixing providers, fallback chains |
+### 🚀 Start Here
 
-### ✨ Features
+| Doc | What it covers |
+|-----|----------------|
+| **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
+| **[Provider Configurations](docs/provider-configurations.md)** | Configure OpenAI, Kimi, GitHub Copilot, ZAI, Fireworks AI, or mixed-provider presets |
 
-| Feature | Doc | What it does |
-|---------|-----|--------------|
-| **Council** | [council.md](docs/council.md) | Run N models in parallel, synthesize one answer (`@council`) |
-| **Interview** | [interview.md](docs/interview.md) | Browser-based Q&A flow for turning rough ideas into a live markdown spec |
-| **Multiplexer Integration** | [multiplexer-integration.md](docs/multiplexer-integration.md) | Watch agents work in real-time with auto-spawned panes (Tmux/Zellij) |
-| **Cartography Skill** | [cartography.md](docs/cartography.md) | Auto-generate hierarchical codemaps for any codebase |
+### ✨ Features & Workflows
+
+| Doc | What it covers |
+|-----|----------------|
+| **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer with `@council` |
+| **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow |
+| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
+| **[Todo Continuation](docs/todo-continuation.md)** | Auto-continue orchestrator sessions with cooldowns and safety checks |
+| **[Cartography](docs/cartography.md)** | Generate hierarchical codemaps to understand large codebases faster |
 
 ### ⚙️ Config & Reference
 
-| Doc | Contents |
-|-----|----------|
-| **[Skills](docs/skills.md)** | `simplify`, `agent-browser`, `cartography` — assignment syntax |
-| **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app` — permissions per agent |
-| **[Tools](docs/tools.md)** | Background tasks, LSP, code search, formatters |
-| **[Configuration](docs/configuration.md)** | Config files, prompt overriding, JSONC, full option reference |
+| Doc | What it covers |
+|-----|----------------|
+| **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
+| **[Skills](docs/skills.md)** | Built-in and recommended skills such as `simplify`, `agent-browser`, and `cartography` |
+| **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app`, and how MCP permissions work per agent |
+| **[Tools](docs/tools.md)** | Built-in tool capabilities like background tasks, `webfetch`, LSP tools, code search, and formatters |
 
-Slim only intercepts `apply_patch` before native execution. It rewrites recoverable stale patches, canonizes safe tolerant matches against the real file when unicode/trim drift is the only mismatch, keeps the authored `new_lines` bytes intact, preserves existing file EOL/final-newline state for updates, validates malformed patches strictly before helper execution, uses a conservative bounded LCS fallback, supports sequential `Update File` hunks on the same path through accumulated helper state, and blocks `apply_patch` before the native tool runs if any patch path falls outside the allowed root/worktree. This rescue does not extend to `edit` or `write`.
+### 💡 Example Presets
 
-### 💡 Presets
-
-| Doc | Contents |
-|-----|----------|
-| **[Author's Preset](docs/authors-preset.md)** | The exact config the author runs daily — OpenAI Pro + GitHub Copilot |
-| **[$30 Preset](docs/thirty-dollars-preset.md)** | A mixed setup using Codex Plus ($20) + GitHub Copilot Pro ($10) for about $30/month total |
+| Doc | What it covers |
+|-----|----------------|
+| **[Author's Preset](docs/authors-preset.md)** | The author's daily mixed-provider setup |
+| **[$30 Preset](docs/thirty-dollars-preset.md)** | A budget mixed-provider setup for around $30/month |
 
 ---
 

@@ -75,40 +75,6 @@ Includes Prettier, Biome, `gofmt`, `rustfmt`, `ruff`, and 20+ others.
 
 ## Todo Continuation
 
-Auto-continue the orchestrator when it stops with incomplete todos. Opt-in — no automatic behavior unless enabled.
+Auto-continue has its own guide now:
 
-| Tool / Command | Description |
-|----------------|-------------|
-| `auto_continue` | Toggle auto-continuation. Call with `{ enabled: true }` to activate, `{ enabled: false }` to disable |
-| `/auto-continue` | Slash command shortcut. Accepts `on`, `off`, or toggles with no argument |
-
-**How it works:**
-
-1. When the orchestrator goes idle with incomplete todos, a countdown notification appears
-2. After the cooldown (default 3s), a continuation prompt is injected — the orchestrator resumes work
-3. Press Esc×2 during cooldown or after injection to stop
-
-**Safety gates** (all must pass before continuation):
-
-- Auto-continue is enabled
-- Session is the orchestrator
-- Incomplete todos exist
-- Last assistant message is not a question
-- Consecutive continuation count is under the limit
-- Not in post-abort suppress window (5s)
-- No pending injection already in flight
-
-**Configuration** in `oh-my-opencode-slim.json`:
-
-```jsonc
-{
-  "todoContinuation": {
-    "maxContinuations": 5,      // Max consecutive auto-continuations (1–50)
-    "cooldownMs": 3000,         // Delay before each continuation (0–30000)
-    "autoEnable": false,        // Auto-enable when session has enough todos
-    "autoEnableThreshold": 4    // Number of todos to trigger auto-enable
-  }
-}
-```
-
-> See [Configuration](configuration.md) for the full option reference.
+- [Todo Continuation](todo-continuation.md) — controls, safety gates, behavior, and config

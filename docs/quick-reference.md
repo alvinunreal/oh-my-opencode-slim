@@ -16,6 +16,7 @@
 | [Council Agent](council.md) | Multi-LLM consensus, presets, role prompts, timeouts |
 | [Interview](interview.md) | `/interview` command, browser UI, dashboard mode, multi-session coordination |
 | [Multiplexer Integration](multiplexer-integration.md) | Real-time pane monitoring, layouts, troubleshooting |
+| [Todo Continuation](todo-continuation.md) | `auto_continue`, `/auto-continue`, cooldowns, safety gates |
 | [Cartography Skill](cartography.md) | Hierarchical codemap generation |
 
 ## ⚙️ Config & Reference

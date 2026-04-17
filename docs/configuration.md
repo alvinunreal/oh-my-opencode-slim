@@ -86,9 +86,11 @@ All config files support **JSONC** (JSON with Comments):
 | `presets.<name>.<agent>.model` | string | — | Model ID in `provider/model` format |
 | `presets.<name>.<agent>.temperature` | number | — | Temperature (0–2) |
 | `presets.<name>.<agent>.variant` | string | — | Reasoning effort: `"low"`, `"medium"`, `"high"` |
+| `presets.<name>.<agent>.displayName` | string | — | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
 | `presets.<name>.<agent>.skills` | string[] | — | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.mcps` | string[] | — | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.options` | object | — | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
+| `agents.<agent>.displayName` | string | — | Custom user-facing alias for the agent in the active config |
 | `tmux.enabled` | boolean | `false` | Enable tmux pane spawning |
 | `tmux.layout` | string | `"main-vertical"` | Layout: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20–80) |
@@ -122,3 +124,31 @@ All config files support **JSONC** (JSON with Comments):
 | `interview.autoOpenBrowser` | boolean | `true` | Automatically open the interview UI in your default browser |
 | `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) |
 | `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence |
+
+### Agent Display Names
+
+Use `displayName` to give an agent a user-facing alias while keeping the
+internal agent name unchanged.
+
+```jsonc
+{
+  "agents": {
+    "oracle": {
+      "displayName": "advisor"
+    },
+    "explorer": {
+      "displayName": "researcher"
+    }
+  }
+}
+```
+
+With this config, users can refer to `@advisor` and `@researcher`, while the
+plugin still routes them to `oracle` and `explorer` internally.
+
+Notes:
+
+- `displayName` works in both top-level `agents` overrides and inside `presets`
+- `@` prefixes and surrounding whitespace are normalized automatically
+- Display names must be unique
+- Display names cannot conflict with internal agent names like `oracle` or `explorer`

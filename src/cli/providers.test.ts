@@ -14,8 +14,12 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
+    expect(config.$schema).toBe(
+      'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json',
+    );
     expect(config.preset).toBe('openai');
     const agents = (config.presets as any).openai;
     expect(agents).toBeDefined();
@@ -30,6 +34,7 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
@@ -51,6 +56,7 @@ describe('providers', () => {
       hasTmux: true,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     expect(config.tmux).toBeDefined();
@@ -63,6 +69,7 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: true,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
@@ -81,6 +88,7 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
@@ -95,6 +103,7 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
