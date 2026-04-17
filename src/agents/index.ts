@@ -84,7 +84,7 @@ function injectDisplayNames(
   for (const [internalName, displayName] of nameMap) {
     prompt = prompt.replace(
       new RegExp(`@${internalName}\\b`, 'g'),
-      `@${displayName}`,
+      `@${normalizeDisplayName(displayName)}`,
     );
   }
 

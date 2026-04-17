@@ -35,6 +35,38 @@ describe('displayName', () => {
     expect(prompt).not.toMatch(/@explorer\b/);
   });
 
+  test('normalizes @-prefixed displayName in prompt injection', () => {
+    const config: PluginConfig = {
+      agents: {
+        explorer: { displayName: '@researcher' },
+      },
+    };
+
+    const agents = createAgents(config);
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    const prompt = orchestrator?.config.prompt ?? '';
+
+    expect(prompt).toContain('@researcher');
+    expect(prompt).not.toContain('@@researcher');
+    expect(prompt).not.toMatch(/@explorer\b/);
+  });
+
+  test('normalizes whitespace-padded displayName in prompt injection', () => {
+    const config: PluginConfig = {
+      agents: {
+        explorer: { displayName: '  researcher  ' },
+      },
+    };
+
+    const agents = createAgents(config);
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    const prompt = orchestrator?.config.prompt ?? '';
+
+    expect(prompt).toContain('@researcher');
+    expect(prompt).not.toContain('@ researcher ');
+    expect(prompt).not.toMatch(/@explorer\b/);
+  });
+
   test('throws when duplicate displayName is assigned', () => {
     const config: PluginConfig = {
       agents: {
