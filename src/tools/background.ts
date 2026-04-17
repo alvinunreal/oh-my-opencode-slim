@@ -8,6 +8,7 @@ import type { BackgroundTaskManager } from '../background';
 import type { PluginConfig } from '../config';
 import { SUBAGENT_NAMES } from '../config';
 import type { MultiplexerConfig } from '../config/schema';
+import { resolveRuntimeAgentName } from '../utils';
 
 const z = tool.schema;
 
@@ -55,7 +56,7 @@ Key behaviors:
         throw new Error('Invalid toolContext: missing sessionID');
       }
 
-      const agent = String(args.agent);
+      const agent = resolveRuntimeAgentName(_pluginConfig, String(args.agent));
       const prompt = String(args.prompt);
       const description = String(args.description);
       const parentSessionId = (toolContext as { sessionID: string }).sessionID;

@@ -26,6 +26,7 @@ import {
   applyAgentVariant,
   createInternalAgentTextPart,
   resolveAgentVariant,
+  resolveRuntimeAgentName,
 } from '../utils';
 import { log } from '../utils/logger';
 import {
@@ -185,11 +186,13 @@ export class BackgroundTaskManager {
    * @returns The created background task with pending status
    */
   launch(opts: LaunchOptions): BackgroundTask {
+    const resolvedAgent = resolveRuntimeAgentName(this.config, opts.agent);
+
     const task: BackgroundTask = {
       id: generateTaskId(),
       sessionId: undefined,
       description: opts.description,
-      agent: opts.agent,
+      agent: resolvedAgent,
       status: 'pending',
       startedAt: new Date(),
       config: {
@@ -205,7 +208,7 @@ export class BackgroundTaskManager {
     this.enqueueStart(task);
 
     log(`[background-manager] task launched: ${task.id}`, {
-      agent: opts.agent,
+      agent: resolvedAgent,
       description: opts.description,
     });
 

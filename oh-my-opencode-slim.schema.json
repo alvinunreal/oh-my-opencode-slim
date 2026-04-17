@@ -265,6 +265,10 @@
                 "type": "string"
               },
               "additionalProperties": {}
+            },
+            "displayName": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }
@@ -335,6 +339,10 @@
               "type": "string"
             },
             "additionalProperties": {}
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
