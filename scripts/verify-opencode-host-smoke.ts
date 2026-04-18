@@ -104,6 +104,14 @@ async function waitForHealth(url: string, timeoutMs: number) {
   fail(`OpenCode server did not become healthy: ${lastError}`);
 }
 
+function formatCapturedLogs(stdout: string, stderr: string): string {
+  const combined = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
+  if (!combined) return 'No stdout/stderr captured.';
+
+  const lines = combined.split(/\r?\n/);
+  return lines.slice(-200).join('\n');
+}
+
 async function stopProcess(child: ReturnType<typeof spawn>) {
   if (child.exitCode !== null) return;
 
@@ -152,6 +160,7 @@ async function verifyHostSmoke(tarballPath: string) {
   const workspaceDir = path.join(tempRoot, 'workspace');
   const tarballTarget = path.join(tempRoot, path.basename(tarballPath));
   const port = await getFreePort();
+  const healthTimeoutMs = process.platform === 'darwin' ? 60_000 : 30_000;
 
   try {
     console.log('Packing plugin tarball into isolated test root...');
@@ -267,10 +276,17 @@ async function verifyHostSmoke(tarballPath: string) {
       });
     });
 
-    await Promise.race([
-      waitForHealth(`http://127.0.0.1:${port}/health`, 30000),
-      exitPromise,
-    ]);
+    try {
+      await Promise.race([
+        waitForHealth(`http://127.0.0.1:${port}/health`, healthTimeoutMs),
+        exitPromise,
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      fail(
+        `${message}\nCaptured OpenCode logs:\n${formatCapturedLogs(stdout, stderr)}`,
+      );
+    }
 
     await new Promise((resolve) => setTimeout(resolve, 1500));
     assertNoPluginLoadErrors(`${stdout}\n${stderr}`);
