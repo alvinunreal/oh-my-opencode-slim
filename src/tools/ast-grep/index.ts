@@ -6,7 +6,6 @@ export const builtinTools: Record<string, ToolDefinition> = {
   ast_grep_replace,
 };
 
-export { ast_grep_search, ast_grep_replace };
 export {
   ensureCliAvailable,
   getAstGrepPath,
@@ -22,3 +21,4 @@ export {
 } from './downloader';
 export type { CliLanguage, CliMatch, SgResult } from './types';
 export { CLI_LANGUAGES } from './types';
+export { ast_grep_replace, ast_grep_search };
