@@ -91,6 +91,7 @@ All config files support **JSONC** (JSON with Comments):
 | `presets.<name>.<agent>.mcps` | string[] | — | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.options` | object | — | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
 | `agents.<agent>.displayName` | string | — | Custom user-facing alias for the agent in the active config |
+| `showStartupToast` | boolean | `true` | Show the startup activation toast (`oh-my-opencode-slim is active`) when OpenCode starts |
 | `tmux.enabled` | boolean | `false` | Enable tmux pane spawning |
 | `tmux.layout` | string | `"main-vertical"` | Layout: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20–80) |
@@ -124,6 +125,17 @@ All config files support **JSONC** (JSON with Comments):
 | `interview.autoOpenBrowser` | boolean | `true` | Automatically open the interview UI in your default browser |
 | `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) |
 | `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence |
+
+### Startup Toast
+
+Set `showStartupToast` to `false` if you want to disable the startup toast that
+appears when the plugin activates.
+
+```jsonc
+{
+  "showStartupToast": false
+}
+```
 
 ### Agent Display Names
 

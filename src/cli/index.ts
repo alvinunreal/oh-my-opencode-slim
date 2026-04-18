@@ -5,13 +5,12 @@ import type { BooleanArg, InstallArgs } from './types';
 function parseArgs(args: string[]): InstallArgs {
   const result: InstallArgs = {
     tui: true,
+    skills: 'yes',
   };
 
   for (const arg of args) {
     if (arg === '--no-tui') {
       result.tui = false;
-    } else if (arg.startsWith('--tmux=')) {
-      result.tmux = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--skills=')) {
       result.skills = arg.split('=')[1] as BooleanArg;
     } else if (arg === '--dry-run') {
@@ -34,8 +33,7 @@ oh-my-opencode-slim installer
 Usage: bunx oh-my-opencode-slim install [OPTIONS]
 
 Options:
-  --tmux=yes|no          Enable tmux integration (yes/no)
-  --skills=yes|no        Install recommended skills (yes/no)
+  --skills=yes|no        Install recommended and bundled skills (default: yes)
   --no-tui               Non-interactive mode
   --dry-run              Simulate install without writing files
   --reset                Force overwrite of existing configuration
@@ -46,7 +44,7 @@ For alternative providers, see docs/provider-configurations.md.
 
 Examples:
   bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --tmux=no --skills=yes
+  bunx oh-my-opencode-slim install --no-tui --skills=yes
   bunx oh-my-opencode-slim install --reset
 `);
 }

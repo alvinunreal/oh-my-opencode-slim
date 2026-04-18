@@ -92,10 +92,14 @@ oh-my-opencode-slim/
 ## Development Workflow
 
 1. Make code changes
-2. Run `bun run check:ci` to verify linting and formatting
-3. Run `bun run typecheck` to verify types
-4. Run `bun test` to verify tests pass
-5. Commit changes
+2. Update docs when behavior, commands, configuration, workflows, or user-facing output changes
+   - Check `README.md` plus relevant files in `docs/`
+   - Keep examples, command snippets, and feature lists in sync with the code
+   - If no doc update is needed, explicitly confirm that in your final summary
+3. Run `bun run check:ci` to verify linting and formatting
+4. Run `bun run typecheck` to verify types
+5. Run `bun test` to verify tests pass
+6. Commit changes
 
 ## Tmux Session Lifecycle Management
 

@@ -17,7 +17,7 @@ describe('skills permissions', () => {
     const designerPerms = getSkillPermissionsForAgent('designer');
     expect(designerPerms['agent-browser']).toBe('allow');
 
-    // Oracle should have simplify allowed by recommendation
+    // Oracle should have simplify allowed by default
     const oraclePerms = getSkillPermissionsForAgent('oracle');
     expect(oraclePerms.simplify).toBe('allow');
   });

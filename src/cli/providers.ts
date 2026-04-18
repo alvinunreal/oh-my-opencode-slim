@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
+import { CUSTOM_SKILLS } from './custom-skills';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
 
@@ -61,11 +62,18 @@ export function generateLiteConfig(
 
     const skills = isOrchestrator
       ? ['*']
-      : RECOMMENDED_SKILLS.filter(
-          (s) =>
-            s.allowedAgents.includes('*') ||
-            s.allowedAgents.includes(agentName),
-        ).map((s) => s.skillName);
+      : [
+          ...RECOMMENDED_SKILLS.filter(
+            (s) =>
+              s.allowedAgents.includes('*') ||
+              s.allowedAgents.includes(agentName),
+          ).map((s) => s.skillName),
+          ...CUSTOM_SKILLS.filter(
+            (s) =>
+              s.allowedAgents.includes('*') ||
+              s.allowedAgents.includes(agentName),
+          ).map((s) => s.name),
+        ];
 
     if (agentName === 'designer' && !skills.includes('agent-browser')) {
       skills.push('agent-browser');

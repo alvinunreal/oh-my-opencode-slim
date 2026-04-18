@@ -12,24 +12,26 @@ Skills are installed via the `oh-my-opencode-slim` installer or manually with `n
 
 | Skill | Description | Assigned to by default |
 |-------|-------------|----------------------|
-| [`simplify`](#simplify) | YAGNI code simplification expert | `oracle` |
 | [`agent-browser`](#agent-browser) | High-performance browser automation | `designer` |
 
 ### Bundled in repo
 
 | Skill | Description | Assigned to by default |
 |-------|-------------|----------------------|
-| [`cartography`](#cartography) | Repository codemap generation | `orchestrator` |
+| [`simplify`](#simplify) | Behavior-preserving code simplification | `oracle` |
+| [`cartography`](#cartography) | Repository codemap generation | `orchestrator`, `explorer` |
 
 ---
 
 ## simplify
 
-**The Minimalist's sacred truth: every line of code is a liability.**
+**Behavior-preserving simplification for readability and maintainability.**
 
-`simplify` is a specialized skill for complexity analysis and YAGNI enforcement. It identifies unnecessary abstractions, over-engineered patterns, and redundant code — and suggests minimal, direct implementations instead.
+`simplify` is a bundled skill for clarity-focused refactoring without behavior changes. It helps `oracle` reduce unnecessary complexity, improve naming and structure, and keep simplification work scoped and reviewable.
 
 By default, this skill is assigned to `oracle`, which owns code review, maintainability review, and simplification guidance. The `orchestrator` should route simplification requests to `oracle` instead of handling them as a top-level specialty itself.
+
+Source: adapted from Addy Osmani's `code-simplification` skill and bundled locally as `simplify`.
 
 ---
 

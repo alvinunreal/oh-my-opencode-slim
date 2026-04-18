@@ -138,6 +138,14 @@ export class BackgroundTaskManager {
   }
 
   /**
+   * Resolve the agent associated with a session.
+   * Untracked sessions are treated as orchestrator sessions by default.
+   */
+  private getSessionAgent(sessionId: string): string {
+    return this.agentBySessionId.get(sessionId) ?? 'orchestrator';
+  }
+
+  /**
    * Check if a parent session is allowed to delegate to a specific agent type.
    * @param parentSessionId - The session ID of the parent
    * @param requestedAgent - The agent type being requested
@@ -625,6 +633,7 @@ export class BackgroundTaskManager {
   private async sendCompletionNotification(
     task: BackgroundTask,
   ): Promise<void> {
+    const parentAgent = this.getSessionAgent(task.parentSessionId);
     const message =
       task.status === 'completed'
         ? `[Background task "${task.description}" completed]`
@@ -633,6 +642,7 @@ export class BackgroundTaskManager {
     await this.client.session.prompt({
       path: { id: task.parentSessionId },
       body: {
+        agent: parentAgent,
         parts: [createInternalAgentTextPart(message)],
       },
     });
