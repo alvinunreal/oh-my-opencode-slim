@@ -8,22 +8,18 @@ import { TmuxMultiplexer } from './tmux';
 import type { Multiplexer } from './types';
 import { ZellijMultiplexer } from './zellij';
 
-const multiplexerCache = new Map<MultiplexerType | 'auto', Multiplexer>();
-
 /**
- * Create or retrieve a multiplexer instance based on config
+ * Create a multiplexer instance based on config.
+ *
+ * Do not cache instances: tmux/zellij integrations may depend on
+ * per-process environment like TMUX_PANE/ZELLIJ, which should be captured
+ * fresh for each plugin context.
  */
 export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
   const { type } = config;
 
   if (type === 'none') {
     return null;
-  }
-
-  // Return cached instance if available
-  const cached = multiplexerCache.get(type);
-  if (cached) {
-    return cached;
   }
 
   // Create new instance
@@ -63,8 +59,6 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       return null;
   }
 
-  // Cache the instance under the actual type (not 'auto')
-  multiplexerCache.set(actualType, multiplexer);
   log(`[multiplexer] Created ${actualType} instance`);
 
   return multiplexer;
@@ -74,7 +68,7 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
  * Clear the multiplexer cache (useful for testing)
  */
 export function clearMultiplexerCache(): void {
-  multiplexerCache.clear();
+  // No-op: multiplexers are no longer cached.
 }
 
 /**

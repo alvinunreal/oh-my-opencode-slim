@@ -14,8 +14,12 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
+    expect(config.$schema).toBe(
+      'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json',
+    );
     expect(config.preset).toBe('openai');
     const agents = (config.presets as any).openai;
     expect(agents).toBeDefined();
@@ -30,6 +34,7 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
@@ -51,6 +56,7 @@ describe('providers', () => {
       hasTmux: true,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     expect(config.tmux).toBeDefined();
@@ -63,11 +69,18 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: true,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
     // Orchestrator should always have '*'
     expect(agents.orchestrator.skills).toEqual(['*']);
+
+    // Oracle should have bundled simplify
+    expect(agents.oracle.skills).toContain('simplify');
+
+    // Explorer should have bundled cartography
+    expect(agents.explorer.skills).toContain('cartography');
 
     // Designer should have 'agent-browser'
     expect(agents.designer.skills).toContain('agent-browser');
@@ -81,6 +94,7 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
@@ -95,10 +109,11 @@ describe('providers', () => {
       hasTmux: false,
       installSkills: false,
       installCustomSkills: false,
+      reset: false,
     });
 
     const agents = (config.presets as any).openai;
-    expect(agents.orchestrator.mcps).toContain('*');
+    expect(agents.orchestrator.mcps).toEqual(['*', '!context7']);
     expect(agents.librarian.mcps).toContain('websearch');
     expect(agents.librarian.mcps).toContain('context7');
     expect(agents.librarian.mcps).toContain('grep_app');

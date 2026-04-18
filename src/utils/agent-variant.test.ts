@@ -4,6 +4,8 @@ import {
   applyAgentVariant,
   normalizeAgentName,
   resolveAgentVariant,
+  resolveRuntimeAgentName,
+  rewriteDisplayNameMentions,
 } from './agent-variant';
 
 describe('normalizeAgentName', () => {
@@ -99,6 +101,108 @@ describe('resolveAgentVariant', () => {
       },
     } as PluginConfig;
     expect(resolveAgentVariant(config, 'oracle')).toBeUndefined();
+  });
+
+  test('resolves displayName alias to internal agent for variant lookup', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor', variant: 'high' },
+      },
+    } as PluginConfig;
+    expect(resolveAgentVariant(config, '@advisor')).toBe('high');
+  });
+});
+
+describe('resolveRuntimeAgentName', () => {
+  test('keeps internal agent names unchanged', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(resolveRuntimeAgentName(config, 'oracle')).toBe('oracle');
+  });
+
+  test('resolves displayName to internal name', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(resolveRuntimeAgentName(config, 'advisor')).toBe('oracle');
+  });
+
+  test('resolves displayName with @ prefix and whitespace', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(resolveRuntimeAgentName(config, '  @advisor  ')).toBe('oracle');
+  });
+
+  test('resolves displayName configured via legacy alias key', () => {
+    const config = {
+      agents: {
+        explore: { displayName: 'researcher' },
+      },
+    } as PluginConfig;
+
+    expect(resolveRuntimeAgentName(config, 'researcher')).toBe('explorer');
+  });
+
+  test('returns normalized name when no displayName match exists', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(resolveRuntimeAgentName(config, '  @unknown  ')).toBe('unknown');
+  });
+});
+
+describe('rewriteDisplayNameMentions', () => {
+  test('rewrites displayName mentions to internal names for direct invocation', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(rewriteDisplayNameMentions(config, 'ask @advisor about this')).toBe(
+      'ask @oracle about this',
+    );
+  });
+
+  test('keeps internal mentions working while rewriting aliases', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(
+      rewriteDisplayNameMentions(config, 'compare @advisor with @oracle'),
+    ).toBe('compare @oracle with @oracle');
+  });
+
+  test('does not rewrite embedded text such as email addresses', () => {
+    const config = {
+      agents: {
+        oracle: { displayName: 'advisor' },
+      },
+    } as PluginConfig;
+
+    expect(
+      rewriteDisplayNameMentions(
+        config,
+        'email foo@advisor.com and ask @advisor directly',
+      ),
+    ).toBe('email foo@advisor.com and ask @oracle directly');
   });
 });
 

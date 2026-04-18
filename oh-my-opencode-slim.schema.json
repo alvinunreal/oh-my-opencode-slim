@@ -19,6 +19,10 @@
     "balanceProviderUsage": {
       "type": "boolean"
     },
+    "showStartupToast": {
+      "description": "Show the startup activation toast when OpenCode starts. Defaults to true.",
+      "type": "boolean"
+    },
     "manualPlan": {
       "type": "object",
       "properties": {
@@ -265,6 +269,10 @@
                 "type": "string"
               },
               "additionalProperties": {}
+            },
+            "displayName": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }
@@ -335,6 +343,10 @@
               "type": "string"
             },
             "additionalProperties": {}
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

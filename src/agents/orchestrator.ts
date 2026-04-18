@@ -1,7 +1,8 @@
-import type { AgentConfig } from '@opencode-ai/sdk/v2';
+import type { AgentConfig } from "@opencode-ai/sdk/v2";
 
 export interface AgentDefinition {
   name: string;
+  displayName?: string;
   description?: string;
   config: AgentConfig;
   /** Priority-ordered model entries for runtime fallback resolution. */
@@ -16,7 +17,7 @@ export interface AgentDefinition {
 export function resolvePrompt(
   base: string,
   customPrompt?: string,
-  customAppendPrompt?: string,
+  customAppendPrompt?: string
 ): string {
   if (customPrompt) return customPrompt;
   if (customAppendPrompt) return `${base}\n\n${customAppendPrompt}`;
@@ -60,9 +61,9 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Role: Fast execution specialist for well-defined tasks, which empowers orchestrator with parallel, speedy executions
 - Stats: 2x faster code edits, 1/2 cost of orchestrator, 0.8x quality of orchestrator
 - Tools/Constraints: Execution-focused—no research, no architectural decisions
-- **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Writing or updating tests • Tasks that touch test files, fixtures, mocks, or test helpers
+- **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Writing or updating tests • Tasks that touch test files, fixtures, mocks, or test helpers. Parallelization benefits: Task involves multiple folders and multiple files modificaiton, scoping work per folder and spawning parallel @fixers for each folder.
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Sequential dependencies
-- **Rule of thumb:** Explaining > doing? → yourself. Test file modifications and bounded implementation work usually go to @fixer. Orchestrator paths selection is vastly improved by Fixer. eg it can reduce overall speed if Orchestrator splits what's usually a single task into multiple subtasks and parallelize it with fixer.`,
+- **Rule of thumb:** Explaining > doing? → yourself. Test file modifications and bounded implementation work usually go to @fixer. Bigger or lots of edits, splitting makes sense, parallelized by spawning @fixers per certain scope.`,
 
   council: `@council
 - Role: Multi-LLM consensus engine for high-confidence answers
@@ -85,19 +86,19 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 
 // Validation routing lines that reference agents
 const VALIDATION_ROUTING = [
-  '- Route UI/UX validation and review to @designer',
-  '- Route code review, simplification, maintainability review, and YAGNI checks to @oracle',
-  '- Route test writing, test updates, and changes touching test files to @fixer',
-  '- Route visual/media analysis and interpretation to @observer',
-  '- If a request spans multiple lanes, delegate only the lanes that add clear value',
+  "- Route UI/UX validation and review to @designer",
+  "- Route code review, simplification, maintainability review, and YAGNI checks to @oracle",
+  "- Route test writing, test updates, and changes touching test files to @fixer",
+  "- Route visual/media analysis and interpretation to @observer",
+  "- If a request spans multiple lanes, delegate only the lanes that add clear value",
 ];
 
 // Parallel delegation examples
 const PARALLEL_DELEGATION_EXAMPLES = [
-  '- Multiple @explorer searches across different domains?',
-  '- @explorer + @librarian research in parallel?',
-  '- Multiple @fixer instances for faster, scoped implementation?',
-  '- @observer + @explorer in parallel (visual analysis + code search)?',
+  "- Multiple @explorer searches across different domains?",
+  "- @explorer + @librarian research in parallel?",
+  "- Multiple @fixer instances for faster, scoped implementation?",
+  "- @observer + @explorer in parallel (visual analysis + code search)?",
 ];
 
 /**
@@ -110,14 +111,14 @@ export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
   const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
     .filter(([name]) => !disabledAgents?.has(name))
     .map(([, desc]) => desc)
-    .join('\n\n');
+    .join("\n\n");
 
   // Filter validation routing lines — remove lines mentioning any disabled agent
   const enabledValidationRouting = VALIDATION_ROUTING.filter((line) => {
     const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
     if (mentions.length === 0) return true;
     return mentions.every((name) => !disabledAgents?.has(name));
-  }).join('\n');
+  }).join("\n");
 
   // Filter parallel delegation examples — remove lines mentioning any disabled agent
   const enabledParallelExamples = PARALLEL_DELEGATION_EXAMPLES.filter(
@@ -125,8 +126,8 @@ export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
       const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
       if (mentions.length === 0) return true;
       return mentions.every((name) => !disabledAgents?.has(name));
-    },
-  ).join('\n');
+    }
+  ).join("\n");
 
   return `<Role>
 You are an AI coding orchestrator that optimizes for quality, speed, cost, and reliability by delegating to specialists when it provides net efficiency gains.
@@ -231,15 +232,15 @@ export function createOrchestratorAgent(
   model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
-  disabledAgents?: Set<string>,
+  disabledAgents?: Set<string>
 ): AgentDefinition {
   const basePrompt = buildOrchestratorPrompt(disabledAgents);
   const prompt = resolvePrompt(basePrompt, customPrompt, customAppendPrompt);
 
   const definition: AgentDefinition = {
-    name: 'orchestrator',
+    name: "orchestrator",
     description:
-      'AI coding orchestrator that delegates tasks to specialist agents for optimal quality, speed, and cost',
+      "AI coding orchestrator that delegates tasks to specialist agents for optimal quality, speed, and cost",
     config: {
       temperature: 0.1,
       prompt,
@@ -248,9 +249,9 @@ export function createOrchestratorAgent(
 
   if (Array.isArray(model)) {
     definition._modelArray = model.map((m) =>
-      typeof m === 'string' ? { id: m } : m,
+      typeof m === "string" ? { id: m } : m
     );
-  } else if (typeof model === 'string' && model) {
+  } else if (typeof model === "string" && model) {
     definition.config.model = model;
   }
 

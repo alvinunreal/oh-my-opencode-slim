@@ -26,7 +26,12 @@ interface TrackedSession {
 interface SessionEvent {
   type: string;
   properties?: {
-    info?: { id?: string; parentID?: string; title?: string };
+    info?: {
+      id?: string;
+      parentID?: string;
+      title?: string;
+      directory?: string;
+    };
     sessionID?: string;
     status?: { type: string };
   };
@@ -44,6 +49,7 @@ const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
 export class MultiplexerSessionManager {
   private client: OpencodeClient;
   private serverUrl: string;
+  private directory: string;
   private multiplexer: Multiplexer | null = null;
   private sessions = new Map<string, TrackedSession>();
   private pollInterval?: ReturnType<typeof setInterval>;
@@ -51,6 +57,7 @@ export class MultiplexerSessionManager {
 
   constructor(ctx: PluginInput, config: MultiplexerConfig) {
     this.client = ctx.client;
+    this.directory = ctx.directory;
     const defaultPort = process.env.OPENCODE_PORT ?? '4096';
     this.serverUrl =
       ctx.serverUrl?.toString() ?? `http://localhost:${defaultPort}`;
@@ -88,6 +95,7 @@ export class MultiplexerSessionManager {
     const sessionId = info.id;
     const parentId = info.parentID;
     const title = info.title ?? 'Subagent';
+    const directory = info.directory ?? this.directory;
 
     // Skip if we're already tracking this session
     if (this.sessions.has(sessionId)) {
@@ -113,7 +121,7 @@ export class MultiplexerSessionManager {
     });
 
     const paneResult = await this.multiplexer
-      .spawnPane(sessionId, title, this.serverUrl)
+      .spawnPane(sessionId, title, this.serverUrl, directory)
       .catch((err) => {
         log('[multiplexer-session-manager] failed to spawn pane', {
           error: String(err),

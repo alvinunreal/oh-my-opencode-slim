@@ -3,14 +3,15 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  rmdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 
-// Debounce: only run cleanup every 10 minutes
-let lastCleanup = 0;
+// Debounce: only run cleanup every 10 minutes per directory
+const lastCleanupByDir = new Map<string, number>();
 const CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
 interface ImagePart {
@@ -66,6 +67,71 @@ function extFromMime(mime: string): string {
   return map[mime] ?? '.png';
 }
 
+function sanitizeFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function cleanupOldImages(dir: string, saveDir: string): void {
+  const now = Date.now();
+  const lastCleanup = lastCleanupByDir.get(dir) ?? 0;
+  if (now - lastCleanup < CLEANUP_INTERVAL) return;
+  lastCleanupByDir.set(dir, now);
+
+  try {
+    const maxAge = 60 * 60 * 1000;
+    for (const f of readdirSync(dir)) {
+      const fp = join(dir, f);
+      try {
+        if (now - statSync(fp).mtimeMs > maxAge) unlinkSync(fp);
+      } catch {}
+    }
+    // Remove empty session subdirectory and prune its debounce entry
+    if (dir !== saveDir) {
+      try {
+        rmdirSync(dir);
+        lastCleanupByDir.delete(dir);
+      } catch {}
+    }
+  } catch {}
+}
+
+function writeUniqueFile(
+  dir: string,
+  name: string,
+  data: Buffer,
+  log: (msg: string) => void,
+): string | null {
+  const ext = extname(name);
+  const base = basename(name, ext) || name;
+  let candidate = join(dir, name);
+  let counter = 0;
+
+  const MAX_ATTEMPTS = 1000;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      writeFileSync(candidate, data, { flag: 'wx' });
+      return candidate;
+    } catch (e) {
+      if (
+        e instanceof Error &&
+        (e as NodeJS.ErrnoException).code === 'EEXIST'
+      ) {
+        counter += 1;
+        candidate = join(dir, `${base}-${counter}${ext}`);
+        continue;
+      }
+
+      log(`[image-hook] failed to save image: ${e}`);
+      return null;
+    }
+  }
+
+  log(
+    `[image-hook] failed to save image: max attempts (${MAX_ATTEMPTS}) reached`,
+  );
+  return null;
+}
+
 export function processImageAttachments(args: {
   messages: MessageWithParts[];
   workDir: string;
@@ -88,25 +154,22 @@ export function processImageAttachments(args: {
     log(`[image-hook] failed to create image directory: ${e}`);
   }
 
-  // Clean up images older than 1 hour (debounced: only check every 10 minutes)
-  const now = Date.now();
-  if (now - lastCleanup > CLEANUP_INTERVAL) {
-    lastCleanup = now;
-    try {
-      const maxAge = 60 * 60 * 1000;
-      for (const f of readdirSync(saveDir)) {
-        const fp = join(saveDir, f);
-        try {
-          if (now - statSync(fp).mtimeMs > maxAge) unlinkSync(fp);
-        } catch {}
-      }
-    } catch {}
-  }
-
   for (const msg of messages) {
     if (msg.info.role !== 'user') continue;
     const imageParts = msg.parts.filter(isImagePart);
     if (imageParts.length === 0) continue;
+
+    const sessionSubdir = msg.info.sessionID
+      ? sanitizeFilename(msg.info.sessionID)
+      : undefined;
+    const targetDir = sessionSubdir ? join(saveDir, sessionSubdir) : saveDir;
+    try {
+      mkdirSync(targetDir, { recursive: true });
+    } catch (e) {
+      log(`[image-hook] failed to create target image directory: ${e}`);
+    }
+
+    cleanupOldImages(targetDir, saveDir);
 
     // Save each image to .opencode/images/ and collect paths
     const savedPaths: string[] = [];
@@ -121,14 +184,18 @@ export function processImageAttachments(args: {
             .update(decoded.data)
             .digest('hex')
             .slice(0, 8);
-          const name = filename ?? `image-${hash}${extFromMime(decoded.mime)}`;
-          const filePath = join(saveDir, name);
-          try {
-            writeFileSync(filePath, decoded.data);
-            savedPaths.push(filePath);
-          } catch (e) {
-            log(`[image-hook] failed to save image: ${e}`);
-          }
+          const sanitizedFilename = filename
+            ? sanitizeFilename(filename)
+            : undefined;
+          const baseName = sanitizedFilename
+            ? sanitizedFilename.replace(/\.[^.]+$/, '') || 'image'
+            : 'image';
+          const ext = sanitizedFilename
+            ? extname(sanitizedFilename) || extFromMime(decoded.mime)
+            : extFromMime(decoded.mime);
+          const name = `${baseName}-${hash}${ext}`;
+          const filePath = writeUniqueFile(targetDir, name, decoded.data, log);
+          if (filePath) savedPaths.push(filePath);
         }
       }
     }

@@ -14,7 +14,7 @@ describe('parseList', () => {
     ]);
   });
 
-  test('orchestrator wildcard includes custom mcps too', () => {
+  test('orchestrator wildcard excludes context7 but includes custom mcps', () => {
     expect(
       parseList(DEFAULT_AGENT_MCPS.orchestrator, [
         'websearch',
@@ -22,7 +22,7 @@ describe('parseList', () => {
         'grep_app',
         'custom-mcp',
       ]),
-    ).toEqual(['websearch', 'context7', 'grep_app', 'custom-mcp']);
+    ).toEqual(['websearch', 'grep_app', 'custom-mcp']);
   });
 
   test('wildcard with exclusions', () => {

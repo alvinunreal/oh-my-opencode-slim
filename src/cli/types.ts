@@ -2,7 +2,6 @@ export type BooleanArg = 'yes' | 'no';
 
 export interface InstallArgs {
   tui: boolean;
-  tmux?: BooleanArg;
   skills?: BooleanArg;
   dryRun?: boolean;
   reset?: boolean;

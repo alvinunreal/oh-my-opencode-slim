@@ -1,7 +1,7 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../utils';
 import { BackgroundTaskManager } from './background-manager';
@@ -169,6 +169,24 @@ describe('BackgroundTaskManager', () => {
       expect(['pending', 'starting']).toContain(task1.status);
       expect(['pending', 'starting']).toContain(task2.status);
       expect(['pending', 'starting']).toContain(task3.status);
+    });
+
+    test('resolves displayName alias to internal agent name on launch', () => {
+      const ctx = createMockContext();
+      const manager = new BackgroundTaskManager(ctx, undefined, {
+        agents: {
+          oracle: { displayName: 'advisor' },
+        },
+      });
+
+      const task = manager.launch({
+        agent: 'advisor',
+        prompt: 'test',
+        description: 'test',
+        parentSessionId: 'parent-123',
+      });
+
+      expect(task.agent).toBe('oracle');
     });
   });
 
@@ -831,6 +849,112 @@ describe('BackgroundTaskManager', () => {
           SLIM_INTERNAL_INITIATOR_MARKER,
         ),
       ).toBe(true);
+    });
+
+    test('sends completion notification to parent with parent agent', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'done' }],
+            },
+          ],
+        },
+      });
+
+      const manager = new BackgroundTaskManager(ctx);
+
+      // Create a tracked orchestrator parent session
+      const parentTask = manager.launch({
+        agent: 'orchestrator',
+        prompt: 'orchestrate',
+        description: 'parent orchestration',
+        parentSessionId: 'root-session',
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const parentSessionId = parentTask.sessionId;
+      if (!parentSessionId) throw new Error('Expected parent session id');
+
+      // Launch nested subagent under orchestrator
+      const childTask = manager.launch({
+        agent: 'explorer',
+        prompt: 'collect tests',
+        description: 'nested subagent',
+        parentSessionId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: childTask.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<{
+        path: { id: string };
+        body: { agent?: string; parts: Array<{ text?: string }> };
+      }>;
+
+      const notificationCall = promptCalls.find(
+        (c) => c[0].path.id === parentSessionId,
+      );
+
+      expect(notificationCall).toBeDefined();
+      expect(notificationCall?.[0].body.agent).toBe('orchestrator');
+    });
+
+    test('sends completion notification using orchestrator for untracked parent', async () => {
+      const ctx = createMockContext({
+        sessionMessagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'done' }],
+            },
+          ],
+        },
+      });
+
+      const manager = new BackgroundTaskManager(ctx);
+      const untrackedParentId = 'unknown-root';
+
+      const childTask = manager.launch({
+        agent: 'explorer',
+        prompt: 'collect tests',
+        description: 'orphan child',
+        parentSessionId: untrackedParentId,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await manager.handleSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: childTask.sessionId,
+          status: { type: 'idle' },
+        },
+      });
+
+      const promptCalls = ctx.client.session.prompt.mock.calls as Array<{
+        path: { id: string };
+        body: { agent?: string };
+      }>;
+
+      const notificationCall = promptCalls.find(
+        (c) => c[0].path.id === untrackedParentId,
+      );
+
+      expect(notificationCall).toBeDefined();
+      expect(notificationCall?.[0].body.agent).toBe('orchestrator');
     });
 
     test('retries next fallback model when first model returns empty response', async () => {

@@ -52,6 +52,7 @@ export class ZellijMultiplexer implements Multiplexer {
     sessionId: string,
     description: string,
     serverUrl: string,
+    directory: string,
   ): Promise<PaneResult> {
     const zellij = await this.getBinary();
     if (!zellij) return { success: false };
@@ -72,6 +73,7 @@ export class ZellijMultiplexer implements Multiplexer {
           this.firstPaneId,
           sessionId,
           serverUrl,
+          directory,
           description,
         );
         if (success) {
@@ -86,6 +88,7 @@ export class ZellijMultiplexer implements Multiplexer {
         zellij,
         sessionId,
         serverUrl,
+        directory,
         description,
       );
     } catch {
@@ -97,9 +100,14 @@ export class ZellijMultiplexer implements Multiplexer {
     zellij: string,
     sessionId: string,
     serverUrl: string,
+    directory: string,
     description: string,
   ): Promise<PaneResult> {
-    const opencodeCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
+    const opencodeCmd = buildOpencodeAttachCommand(
+      sessionId,
+      serverUrl,
+      directory,
+    );
     const paneName = description.slice(0, 30).replace(/"/g, '\\"');
 
     const currentTabId = await this.getCurrentTabId(zellij);
@@ -115,7 +123,7 @@ export class ZellijMultiplexer implements Multiplexer {
         '--close-on-exit',
         '--',
         'sh',
-        '-c',
+        '-lc',
         opencodeCmd,
       ];
 
@@ -157,7 +165,7 @@ export class ZellijMultiplexer implements Multiplexer {
       '--close-on-exit',
       '--',
       'sh',
-      '-c',
+      '-lc',
       opencodeCmd,
     ];
 
@@ -193,10 +201,15 @@ export class ZellijMultiplexer implements Multiplexer {
     paneId: string,
     sessionId: string,
     serverUrl: string,
+    directory: string,
     description: string,
   ): Promise<boolean> {
     try {
-      const opencodeCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
+      const opencodeCmd = buildOpencodeAttachCommand(
+        sessionId,
+        serverUrl,
+        directory,
+      );
 
       await crossSpawn([zellij, 'action', 'focus-pane', '--pane-id', paneId], {
         stdout: 'ignore',
@@ -208,10 +221,13 @@ export class ZellijMultiplexer implements Multiplexer {
         { stdout: 'ignore', stderr: 'ignore' },
       ).exited;
 
-      await crossSpawn([zellij, 'action', 'write-chars', opencodeCmd], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      }).exited;
+      await crossSpawn(
+        [zellij, 'action', 'write-chars', buildShellLaunchCommand(opencodeCmd)],
+        {
+          stdout: 'ignore',
+          stderr: 'ignore',
+        },
+      ).exited;
 
       await crossSpawn([zellij, 'action', 'write-chars', '\n'], {
         stdout: 'ignore',
@@ -455,4 +471,28 @@ export class ZellijMultiplexer implements Multiplexer {
       return null;
     }
   }
+}
+
+function buildOpencodeAttachCommand(
+  sessionId: string,
+  serverUrl: string,
+  directory: string,
+): string {
+  return [
+    'opencode',
+    'attach',
+    quoteShellArg(serverUrl),
+    '--session',
+    quoteShellArg(sessionId),
+    '--dir',
+    quoteShellArg(directory),
+  ].join(' ');
+}
+
+function buildShellLaunchCommand(command: string): string {
+  return ['sh', '-lc', quoteShellArg(command)].join(' ');
+}
+
+function quoteShellArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

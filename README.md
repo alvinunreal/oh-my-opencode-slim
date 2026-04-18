@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="img/team.png" alt="Pantheon agents" style="border-radius: 10px;" width="620">
+  <img src="img/team.jpeg" alt="Pantheon agents" style="border-radius: 10px;">
   <p><i>Seven divine beings emerged from the dawn of code, each an immortal master of their craft await your command to forge order from chaos and build what was once thought impossible.</i></p>
   <p><b>Open Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
-  <p><a href="https://moltfounders.com/jobs/09d1c6e7-9e0e-4683-8d78-e2376aaa2333"><img src="https://moltfounders.com/badges/4.png" alt="MoltFounders" height="30"></a></p>
+
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
@@ -13,7 +13,13 @@
 
 ---
 
-## 📦 Installation
+## What's This Plugin
+
+oh-my-opencode-slim is an agent orchestration plugin for OpenCode. It includes a built-in team of specialized agents that can scout a codebase, look up fresh documentation, review architecture, handle UI work, and execute well-scoped implementation tasks under one orchestrator.
+
+The main idea is simple: instead of forcing one model to do everything, the plugin routes each part of the job to the agent best suited for it, balancing **quality, speed and cost**.
+
+To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
 
 ### Quick Start
 
@@ -21,49 +27,53 @@
 bunx oh-my-opencode-slim@latest install
 ```
 
-The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5.4-mini`). No provider questions asked.
+### Getting Started
 
-For non-interactive mode:
+The installer generates an OpenAI preset by default, using `openai/gpt-5.4` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents.
 
-```bash
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=yes --skills=yes
-```
+Then:
 
-To force overwrite of an existing configuration:
-```bash
-bunx oh-my-opencode-slim@latest install --reset
-```
+1. **Log in to the providers you want to use if you haven't already**:
 
-### For Alternative Providers
+   ```bash
+   opencode auth login
+   ```
+2. **Refresh and list the models OpenCode can see**:
 
-The default configuration uses OpenAI. To use Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step instructions and config examples.
+   ```bash
+   opencode models --refresh
+   ```
+3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
+
+4. **Update the models you want for each agent**
 
 > [!TIP]
-> Want to see the latest models OpenCode knows about? Run `opencode models --refresh` to refresh the cache and list currently available models.
+> Want to understand how automatic delegation works in practice? Review the **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** — it contains the delegation rules, specialist routing logic, and the thresholds for when the main agent should hand work off to subagents.
 
-### JSON Schema
-
-An official JSON Schema is included in the package for editor validation and autocomplete. Add a `$schema` reference to your config file:
+The default generated configuration looks like this:
 
 ```jsonc
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
-  // your config...
+  "preset": "openai",
+  "presets": {
+    "openai": {
+      "orchestrator": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["*"], "mcps": ["*", "!context7"] },
+      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["simplify"], "mcps": [] },
+      "librarian": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": ["cartography"], "mcps": [] },
+      "designer": { "model": "openai/gpt-5.4-mini", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
+      "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
+    }
+  }
 }
 ```
 
-This enables autocomplete and inline validation in VS Code, Neovim, and other editors that support JSON Schema.
+### For Alternative Providers
 
-### For LLM Agents
+To use Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step config examples. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
 
-Paste this into any coding agent:
-
-```
-Install and configure by following the instructions here:
-https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
-```
-
-**Detailed installation guide:** [docs/installation.md](docs/installation.md)
+You can also mix and match any models per agent. For model suggestions, see the **Recommended Models** listed under each agent below.
 
 ### ✅ Verify Your Setup
 
@@ -87,6 +97,8 @@ ping all agents
 If any agent fails to respond, check your provider authentication and config file.
 
 ---
+
+<a id="meet-the-pantheon"></a>
 
 ## 🏛️ Meet the Pantheon
 
@@ -120,6 +132,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Recommended Models:</b> <code>openai/gpt-5.4</code> <code>anthropic/claude-opus-4.6</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose your default, strongest all-around coding model. Orchestrator is both the main coding agent and the delegator, so it needs strong implementation ability, good judgment, and reliable instruction-following.
     </td>
   </tr>
 </table>
@@ -158,6 +175,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a fast, low-cost model. Explorer handles broad scouting work, so speed and efficiency usually matter more than using your strongest reasoning model.
+    </td>
+  </tr>
 </table>
 
 ---
@@ -194,11 +216,19 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>openai/gpt-5.4 (high)</code> <code>google/gemini-3.1-pro-preview (high)</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose your strongest high-reasoning model for architecture, hard debugging, trade-offs, and code review.
+    </td>
+  </tr>
 </table>
 
 ---
 
 ### Council: The Chorus of Minds
+
+> [!NOTE]
+> **Why doesn't Orchestrator auto-call Council more often?** This is intentional. Council runs multiple models at once, so automatic delegation is kept strict because it is usually the highest-cost path in the system. In practice, Council is meant to be used manually when you want it, for example: <code>@council compare these two architectures</code>.
 
 <table>
   <tr>
@@ -233,6 +263,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Recommended Setup:</b> <code>Strong master</code> + <code>diverse councillors</code> across providers
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Use a strong synthesis model as the master and diverse models as councillors. The value of Council comes from comparing different model perspectives, not just picking the single strongest model everywhere.
     </td>
   </tr>
 </table>
@@ -271,6 +306,11 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a fast, low-cost model. Librarian handles research and documentation lookups, so speed and efficiency usually matter more than using your strongest reasoning model.
+    </td>
+  </tr>
 </table>
 
 ---
@@ -305,6 +345,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>kimi-for-coding/k2p5</code> 
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a model that is strong at UI/UX judgment, frontend implementation, and visual polish.
     </td>
   </tr>
 </table>
@@ -343,12 +388,17 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a fast, reliable coding model for routine, scoped implementation work. Fixer usually receives a concrete plan or bounded instructions from Orchestrator, making it a good place for efficient execution tasks such as tests, test updates, and straightforward code changes.
+    </td>
+  </tr>
 </table>
 
 ### 07. Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** Not all models support vision. Your strongest coding model (e.g. for design decisions) may not be able to read images, while a vision-capable model may not be the best for reasoning. Observer solves this by having its **own model** — configure a vision-capable model for it while keeping Designer on your strongest reasoning model. Disabled by default; enable via `disabled_agents: []` in config.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, PDFs, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration.
 
 <table>
   <tr>
@@ -376,45 +426,53 @@ If any agent fails to respond, check your provider authentication and config fil
       <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> — <i>configure a vision-capable model to enable</i>
     </td>
   </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a vision-capable model if you want the agent to read screenshots, images, PDFs, and other visual files.
+    </td>
+  </tr>
 </table>
 
 ---
 
 ## 📚 Documentation
 
-### 🚀 Getting Started
+Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.
 
-| Doc | Contents |
-|-----|----------|
-| **[Installation Guide](docs/installation.md)** | CLI flags, `--reset`, auth, troubleshooting |
-| **[Provider Configurations](docs/provider-configurations.md)** | OpenAI, Kimi, Copilot, ZAI, Fireworks AI — mixing providers, fallback chains |
+### 🚀 Start Here
 
-### ✨ Features
+| Doc | What it covers |
+|-----|----------------|
+| **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
+| **[Provider Configurations](docs/provider-configurations.md)** | Configure OpenAI, Kimi, GitHub Copilot, ZAI, Fireworks AI, or mixed-provider presets |
 
-| Feature | Doc | What it does |
-|---------|-----|--------------|
-| **Council** | [council.md](docs/council.md) | Run N models in parallel, synthesize one answer (`@council`) |
-| **Interview** | [interview.md](docs/interview.md) | Browser-based Q&A flow for turning rough ideas into a live markdown spec |
-| **Multiplexer Integration** | [multiplexer-integration.md](docs/multiplexer-integration.md) | Watch agents work in real-time with auto-spawned panes (Tmux/Zellij) |
-| **Cartography Skill** | [cartography.md](docs/cartography.md) | Auto-generate hierarchical codemaps for any codebase |
+<a id="features-and-workflows"></a>
+
+### ✨ Features & Workflows
+
+| Doc | What it covers |
+|-----|----------------|
+| **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer with `@council` |
+| **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow |
+| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
+| **[Todo Continuation](docs/todo-continuation.md)** | Auto-continue orchestrator sessions with cooldowns and safety checks |
+| **[Cartography](docs/cartography.md)** | Generate hierarchical codemaps to understand large codebases faster |
 
 ### ⚙️ Config & Reference
 
-| Doc | Contents |
-|-----|----------|
-| **[Skills](docs/skills.md)** | `simplify`, `agent-browser`, `cartography` — assignment syntax |
-| **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app` — permissions per agent |
-| **[Tools](docs/tools.md)** | Background tasks, LSP, code search, formatters |
-| **[Configuration](docs/configuration.md)** | Config files, prompt overriding, JSONC, full option reference |
+| Doc | What it covers |
+|-----|----------------|
+| **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
+| **[Skills](docs/skills.md)** | Built-in and recommended skills such as `simplify`, `agent-browser`, and `cartography` |
+| **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app`, and how MCP permissions work per agent |
+| **[Tools](docs/tools.md)** | Built-in tool capabilities like background tasks, `webfetch`, LSP tools, code search, and formatters |
 
-Slim only intercepts `apply_patch` before native execution. It rewrites recoverable stale patches, canonizes safe tolerant matches against the real file when unicode/trim drift is the only mismatch, keeps the authored `new_lines` bytes intact, preserves existing file EOL/final-newline state for updates, validates malformed patches strictly before helper execution, uses a conservative bounded LCS fallback, supports sequential `Update File` hunks on the same path through accumulated helper state, and blocks `apply_patch` before the native tool runs if any patch path falls outside the allowed root/worktree. This rescue does not extend to `edit` or `write`.
+### 💡 Example Presets
 
-### 💡 Presets
-
-| Doc | Contents |
-|-----|----------|
-| **[Author's Preset](docs/authors-preset.md)** | The exact config the author runs daily — OpenAI Pro + GitHub Copilot |
-| **[$30 Preset](docs/thirty-dollars-preset.md)** | A mixed setup using Codex Plus ($20) + GitHub Copilot Pro ($10) for about $30/month total |
+| Doc | What it covers |
+|-----|----------------|
+| **[Author's Preset](docs/authors-preset.md)** | The author's daily mixed-provider setup |
+| **[$30 Preset](docs/thirty-dollars-preset.md)** | A budget mixed-provider setup for around $30/month |
 
 ---
 
@@ -425,7 +483,7 @@ Slim only intercepts `apply_patch` before native execution. It rewrites recovera
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-38-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-39-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -487,6 +545,7 @@ Slim only intercepts `apply_patch` before native execution. It rewrites recovera
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/dkovacevic15"><img src="https://avatars.githubusercontent.com/u/24757821?v=4?s=100" width="100px;" alt="Dusan Kovacevic"/><br /><sub><b>Dusan Kovacevic</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=dkovacevic15" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/jwcrystal"><img src="https://avatars.githubusercontent.com/u/121911854?v=4?s=100" width="100px;" alt="jwcrystal"/><br /><sub><b>jwcrystal</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=jwcrystal" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://zenstudio.cv/"><img src="https://avatars.githubusercontent.com/u/10528635?v=4?s=100" width="100px;" alt="Nguyen Canh Toan"/><br /><sub><b>Nguyen Canh Toan</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=ZenStudioLab" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

@@ -34,12 +34,13 @@ export interface Multiplexer {
    * @param sessionId - The OpenCode session ID to attach to
    * @param description - Human-readable description for the pane
    * @param serverUrl - The OpenCode server URL to attach to
-   * @returns PaneResult with pane ID for later cleanup
+   * @param directory - The project directory to attach from
    */
   spawnPane(
     sessionId: string,
     description: string,
     serverUrl: string,
+    directory: string,
   ): Promise<PaneResult>;
 
   /**

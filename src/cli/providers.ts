@@ -1,6 +1,10 @@
 import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps';
+import { CUSTOM_SKILLS } from './custom-skills';
 import { RECOMMENDED_SKILLS } from './skills';
 import type { InstallConfig } from './types';
+
+const SCHEMA_URL =
+  'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json';
 
 // Model mappings by provider - only 4 supported providers
 export const MODEL_MAPPINGS = {
@@ -45,6 +49,7 @@ export function generateLiteConfig(
   installConfig: InstallConfig,
 ): Record<string, unknown> {
   const config: Record<string, unknown> = {
+    $schema: SCHEMA_URL,
     preset: 'openai',
     presets: {},
   };
@@ -57,11 +62,18 @@ export function generateLiteConfig(
 
     const skills = isOrchestrator
       ? ['*']
-      : RECOMMENDED_SKILLS.filter(
-          (s) =>
-            s.allowedAgents.includes('*') ||
-            s.allowedAgents.includes(agentName),
-        ).map((s) => s.skillName);
+      : [
+          ...RECOMMENDED_SKILLS.filter(
+            (s) =>
+              s.allowedAgents.includes('*') ||
+              s.allowedAgents.includes(agentName),
+          ).map((s) => s.skillName),
+          ...CUSTOM_SKILLS.filter(
+            (s) =>
+              s.allowedAgents.includes('*') ||
+              s.allowedAgents.includes(agentName),
+          ).map((s) => s.name),
+        ];
 
     if (agentName === 'designer' && !skills.includes('agent-browser')) {
       skills.push('agent-browser');

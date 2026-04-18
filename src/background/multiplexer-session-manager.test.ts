@@ -24,6 +24,7 @@ mock.module('../multiplexer', () => ({
 // Mock the plugin context
 function createMockContext(overrides?: {
   sessionStatusResult?: { data?: Record<string, { type: string }> };
+  directory?: string;
 }) {
   const defaultPort = process.env.OPENCODE_PORT ?? '4096';
   return {
@@ -34,6 +35,7 @@ function createMockContext(overrides?: {
         ),
       },
     },
+    directory: overrides?.directory ?? '/test/directory',
     serverUrl: new URL(`http://localhost:${defaultPort}`),
   } as any;
 }
@@ -83,6 +85,12 @@ describe('MultiplexerSessionManager', () => {
       });
 
       expect(mockMultiplexer.spawnPane).toHaveBeenCalled();
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledWith(
+        'child-123',
+        'Test Worker',
+        `http://localhost:${process.env.OPENCODE_PORT ?? '4096'}/`,
+        '/test/directory',
+      );
     });
 
     test('ignores sessions without parentID', async () => {
@@ -103,6 +111,33 @@ describe('MultiplexerSessionManager', () => {
       });
 
       expect(mockMultiplexer.spawnPane).not.toHaveBeenCalled();
+    });
+
+    test('prefers child session directory when present', async () => {
+      const ctx = createMockContext({ directory: '/parent/directory' });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-456',
+            parentID: 'parent-456',
+            title: 'Nested Worker',
+            directory: '/child/directory',
+          },
+        },
+      });
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledWith(
+        'child-456',
+        'Nested Worker',
+        `http://localhost:${process.env.OPENCODE_PORT ?? '4096'}/`,
+        '/child/directory',
+      );
     });
 
     test('ignores if disabled in config', async () => {

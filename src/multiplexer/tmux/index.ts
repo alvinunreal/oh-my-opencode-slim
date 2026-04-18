@@ -14,6 +14,7 @@ export class TmuxMultiplexer implements Multiplexer {
   private hasChecked = false;
   private storedLayout: MultiplexerLayout;
   private storedMainPaneSize: number;
+  private targetPane = process.env.TMUX_PANE;
 
   constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
     this.storedLayout = layout;
@@ -38,6 +39,7 @@ export class TmuxMultiplexer implements Multiplexer {
     sessionId: string,
     description: string,
     serverUrl: string,
+    directory: string,
   ): Promise<PaneResult> {
     const tmux = await this.getBinary();
     if (!tmux) {
@@ -47,7 +49,19 @@ export class TmuxMultiplexer implements Multiplexer {
 
     try {
       // Build the attach command
-      const opencodeCmd = `opencode attach ${serverUrl} --session ${sessionId}`;
+      const quotedDirectory = quoteShellArg(directory);
+      const quotedUrl = quoteShellArg(serverUrl);
+      const quotedSessionId = quoteShellArg(sessionId);
+
+      const opencodeCmd = [
+        'opencode',
+        'attach',
+        quotedUrl,
+        '--session',
+        quotedSessionId,
+        '--dir',
+        quotedDirectory,
+      ].join(' ');
 
       // tmux split-window -h -d -P -F '#{pane_id}' <cmd>
       const args = [
@@ -57,6 +71,7 @@ export class TmuxMultiplexer implements Multiplexer {
         '-P', // Print pane info
         '-F',
         '#{pane_id}', // Format: just the pane ID
+        ...this.targetArgs(),
         opencodeCmd,
       ];
 
@@ -164,10 +179,13 @@ export class TmuxMultiplexer implements Multiplexer {
 
     try {
       // Apply the layout
-      const layoutProc = crossSpawn([tmux, 'select-layout', layout], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
+      const layoutProc = crossSpawn(
+        [tmux, 'select-layout', ...this.targetArgs(), layout],
+        {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      );
       await layoutProc.exited;
 
       // For main-* layouts, set the main pane size
@@ -176,7 +194,13 @@ export class TmuxMultiplexer implements Multiplexer {
           layout === 'main-horizontal' ? 'main-pane-height' : 'main-pane-width';
 
         const sizeProc = crossSpawn(
-          [tmux, 'set-window-option', sizeOption, `${mainPaneSize}%`],
+          [
+            tmux,
+            'set-window-option',
+            ...this.targetArgs(),
+            sizeOption,
+            `${mainPaneSize}%`,
+          ],
           {
             stdout: 'pipe',
             stderr: 'pipe',
@@ -185,10 +209,13 @@ export class TmuxMultiplexer implements Multiplexer {
         await sizeProc.exited;
 
         // Reapply layout to use the new size
-        const reapplyProc = crossSpawn([tmux, 'select-layout', layout], {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
+        const reapplyProc = crossSpawn(
+          [tmux, 'select-layout', ...this.targetArgs(), layout],
+          {
+            stdout: 'pipe',
+            stderr: 'pipe',
+          },
+        );
         await reapplyProc.exited;
       }
 
@@ -201,6 +228,10 @@ export class TmuxMultiplexer implements Multiplexer {
   private async getBinary(): Promise<string | null> {
     await this.isAvailable();
     return this.binaryPath;
+  }
+
+  private targetArgs(): string[] {
+    return this.targetPane ? ['-t', this.targetPane] : [];
   }
 
   private async findBinary(): Promise<string | null> {
@@ -244,4 +275,8 @@ export class TmuxMultiplexer implements Multiplexer {
       return null;
     }
   }
+}
+
+function quoteShellArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

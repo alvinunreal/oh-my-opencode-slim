@@ -18,7 +18,7 @@ Built-in Model Context Protocol (MCP) servers ship with oh-my-opencode-slim and 
 
 | Agent | Default MCPs |
 |-------|-------------|
-| `orchestrator` | `*` |
+| `orchestrator` | `*`, `!context7` |
 | `librarian` | `websearch`, `context7`, `grep_app` |
 | `designer` | none |
 | `oracle` | none |
@@ -53,7 +53,7 @@ Control which MCPs each agent can use via the `mcps` array in your preset config
   "presets": {
     "my-preset": {
       "orchestrator": {
-        "mcps": ["*"]
+        "mcps": ["*", "!context7"]
       },
       "librarian": {
         "mcps": ["websearch", "context7", "grep_app"]
