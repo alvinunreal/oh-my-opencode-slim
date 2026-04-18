@@ -53,6 +53,7 @@ interface PersistedTask {
   error?: string;
   startedAt: string;
   completedAt?: string;
+  questions?: string[];
 }
 
 function persistTask(task: BackgroundTask): void {
@@ -72,6 +73,7 @@ function persistTask(task: BackgroundTask): void {
       error: task.error,
       startedAt: task.startedAt.toISOString(),
       completedAt: task.completedAt?.toISOString(),
+      questions: task.questions,
     };
     fs.writeFileSync(
       path.join(dir, `${task.id}.json`),
@@ -100,6 +102,7 @@ function loadPersistedTask(taskId: string): BackgroundTask | null {
       completedAt: data.completedAt ? new Date(data.completedAt) : undefined,
       prompt: data.prompt,
       config: data.config,
+      questions: data.questions ?? [],
     };
   } catch {
     return null;
@@ -131,6 +134,7 @@ export interface BackgroundTask {
   startedAt: Date; // Task creation timestamp
   completedAt?: Date; // Task completion/failure timestamp
   prompt: string; // Initial prompt
+  questions: string[]; // Questions relayed via ask_orchestrator
 }
 
 /**
@@ -277,6 +281,7 @@ export class BackgroundTaskManager {
       },
       parentSessionId: opts.parentSessionId,
       prompt: opts.prompt,
+      questions: [],
     };
 
     this.tasks.set(task.id, task);
@@ -743,6 +748,22 @@ export class BackgroundTaskManager {
       log(`[background-manager] restored task from disk: ${taskId}`);
     }
     return fromDisk;
+  }
+
+  /**
+   * Add a question relayed from a background subagent via ask_orchestrator.
+   * Resolves the task from the session ID in toolContext.
+   * Returns true if the question was recorded, false if the task wasn't found.
+   */
+  addQuestion(sessionId: string, question: string): boolean {
+    const taskId = this.tasksBySessionId.get(sessionId);
+    if (!taskId) return false;
+
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+
+    task.questions.push(question);
+    return true;
   }
 
   /**

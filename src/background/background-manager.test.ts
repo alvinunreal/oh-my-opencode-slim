@@ -1965,5 +1965,68 @@ describe('BackgroundTaskManager', () => {
         });
       });
     });
+
+    describe('addQuestion', () => {
+      test('records question on the correct task via session ID', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'test',
+          parentSessionId: 'root-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        const result = manager.addQuestion(
+          sessionId,
+          'Should I search tests too?',
+        );
+
+        expect(result).toBe(true);
+        expect(task.questions).toEqual(['Should I search tests too?']);
+      });
+
+      test('returns false for unknown session', () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const result = manager.addQuestion(
+          'nonexistent-session',
+          'Anybody there?',
+        );
+
+        expect(result).toBe(false);
+      });
+
+      test('accumulates multiple questions', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const task = manager.launch({
+          agent: 'oracle',
+          prompt: 'review',
+          description: 'test',
+          parentSessionId: 'root-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        manager.addQuestion(sessionId, 'First question?');
+        manager.addQuestion(sessionId, 'Second question?');
+
+        expect(task.questions).toEqual(['First question?', 'Second question?']);
+      });
+    });
   });
 });

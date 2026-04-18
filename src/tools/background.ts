@@ -148,6 +148,14 @@ Returns: results if completed, error if failed, status if running.`,
         output += '(Task still running)';
       }
 
+      // Surface relayed questions if any
+      if (task.questions.length > 0) {
+        output += '\n\n---\n\n**Questions relayed from subagent:**\n';
+        for (const q of task.questions) {
+          output += `- ${q}\n`;
+        }
+      }
+
       return output;
     },
   });
@@ -183,5 +191,47 @@ Only cancels pending/starting/running tasks.`,
     },
   });
 
-  return { background_task, background_output, background_cancel };
+  // Non-blocking question relay for background subagents
+  const ask_orchestrator = tool({
+    description: `Record a question for the orchestrator. NON-BLOCKING — you will NOT receive an answer.
+
+Use this when you need clarification but can proceed with a reasonable assumption.
+State your assumption explicitly using [ASSUMED: ...] markers before continuing.
+
+Example: "Should I use REST or GraphQL for this endpoint?" → pick one, mark [ASSUMED: using REST], keep working.`,
+    args: {
+      question: z
+        .string()
+        .describe(
+          'The question you need answered. Be specific so the orchestrator can evaluate your assumption.',
+        ),
+    },
+    async execute(args, toolContext) {
+      const sessionId =
+        toolContext &&
+        typeof toolContext === 'object' &&
+        'sessionID' in toolContext
+          ? (toolContext as { sessionID: string }).sessionID
+          : undefined;
+
+      if (!sessionId) {
+        return 'Question recorded (no session context). Continue with your assumption.';
+      }
+
+      const recorded = manager.addQuestion(sessionId, String(args.question));
+      if (!recorded) {
+        // Task already completed/cleaned up — still non-blocking
+        return 'Question recorded. Continue with your assumption.';
+      }
+
+      return 'Question recorded for orchestrator review. Continue with your best judgment using [ASSUMED: ...] markers.';
+    },
+  });
+
+  return {
+    background_task,
+    background_output,
+    background_cancel,
+    ask_orchestrator,
+  };
 }
