@@ -44,7 +44,7 @@ The installer supports the following options:
 By default, the installer is non-destructive. If an `oh-my-opencode-slim.json` configuration file already exists, the installer will **not** overwrite it. Instead, it will display a message:
 
 ```
-ℹ Configuration already exists at ~/.config/opencode/oh-my-opencode-slim.json. Use --reset to overwrite.
+[i] Configuration already exists at ~/.config/opencode/oh-my-opencode-slim.json. Use --reset to overwrite.
 ```
 
 To force overwrite of your existing configuration, use the `--reset` flag:
@@ -57,16 +57,27 @@ bunx oh-my-opencode-slim@latest install --reset
 
 ### After Installation
 
-The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5-codex` models). To use alternative providers like Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](provider-configurations.md)** for step-by-step instructions.
+The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5.4-mini` models). To use alternative providers like Kimi, GitHub Copilot, or ZAI Coding Plan, see **[Provider Configurations](provider-configurations.md)** for step-by-step instructions.
 
-Authenticate with your provider:
+Then:
 
 ```bash
 opencode auth login
-# Select your provider → Complete OAuth flow
+# Select your provider and complete OAuth flow
 ```
 
-Once authenticated, run OpenCode and `ping all agents` to verify all agents respond.
+```bash
+opencode models --refresh
+```
+
+Open your generated config at `~/.config/opencode/oh-my-opencode-slim.json`
+and adjust models if needed.
+
+Then run OpenCode and verify the agents:
+
+```text
+ping all agents
+```
 
 > **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely.
 
@@ -134,8 +145,10 @@ opencode auth login
 
 Ask the user to:
 
-1. Start OpenCode: `opencode`
-2. Run: `ping all agents`
+1. Authenticate: `opencode auth login`
+2. Refresh models: `opencode models --refresh`
+3. Start OpenCode: `opencode`
+4. Run: `ping all agents`
 
 Verify all agents respond successfully.
 

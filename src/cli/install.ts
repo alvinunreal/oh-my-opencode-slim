@@ -24,13 +24,13 @@ const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
 const SYMBOLS = {
-  check: `${GREEN}✓${RESET}`,
-  cross: `${RED}✗${RESET}`,
-  arrow: `${BLUE}→${RESET}`,
-  bullet: `${DIM}•${RESET}`,
-  info: `${BLUE}ℹ${RESET}`,
-  warn: `${YELLOW}⚠${RESET}`,
-  star: `${YELLOW}★${RESET}`,
+  check: `${GREEN}[ok]${RESET}`,
+  cross: `${RED}[x]${RESET}`,
+  arrow: `${BLUE}->${RESET}`,
+  bullet: `${DIM}-${RESET}`,
+  info: `${BLUE}[i]${RESET}`,
+  warn: `${YELLOW}[!]${RESET}`,
+  star: `${YELLOW}*${RESET}`,
 };
 
 function printHeader(isUpdate: boolean): void {
@@ -103,11 +103,12 @@ function formatConfigSummary(): string {
   lines.push(`${BOLD}Configuration Summary${RESET}`);
   lines.push('');
   lines.push(`  ${BOLD}Preset:${RESET} ${BLUE}openai${RESET}`);
+  lines.push(`  ${BOLD}Providers:${RESET}`);
   lines.push(`  ${SYMBOLS.check} OpenAI (default)`);
   const seeDocs = 'see docs/provider-configurations.md';
-  lines.push(`  ${DIM}○ Kimi — ${seeDocs}${RESET}`);
-  lines.push(`  ${DIM}○ GitHub Copilot — ${seeDocs}${RESET}`);
-  lines.push(`  ${DIM}○ ZAI Coding Plan — ${seeDocs}${RESET}`);
+  lines.push(`  ${SYMBOLS.bullet} Kimi - ${seeDocs}`);
+  lines.push(`  ${SYMBOLS.bullet} GitHub Copilot - ${seeDocs}`);
+  lines.push(`  ${SYMBOLS.bullet} ZAI Coding Plan - ${seeDocs}`);
   return lines.join('\n');
 }
 
@@ -238,15 +239,30 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`${BOLD}Next steps:${RESET}`);
   console.log();
 
-  console.log(`  1. Start OpenCode:`);
+  const configPath = getExistingLiteConfigPath();
+
+  console.log('  1. Log in to the provider(s) you want to use:');
+  console.log(`     ${BLUE}$ opencode auth login${RESET}`);
+  console.log();
+  console.log('  2. Refresh the models OpenCode can see:');
+  console.log(`     ${BLUE}$ opencode models --refresh${RESET}`);
+  console.log();
+  console.log('  3. Review your generated config:');
+  console.log(`     ${BLUE}${configPath}${RESET}`);
+  console.log();
+  console.log('  4. Start OpenCode:');
   console.log(`     ${BLUE}$ opencode${RESET}`);
   console.log();
+  console.log('  5. Verify the agents are responding:');
+  console.log(`     ${BLUE}> ping all agents${RESET}`);
+  console.log();
+
   const modelsInfo =
     'Default configuration uses OpenAI models (gpt-5.4 / gpt-5.4-mini).';
-  console.log(`${BOLD}${modelsInfo}${RESET}`);
+  console.log(`${modelsInfo}`);
   const altProviders =
     'For alternative providers (Kimi, GitHub Copilot, ZAI Coding Plan)';
-  console.log(`${BOLD}${altProviders}, see:${RESET}`);
+  console.log(`${altProviders}, see:`);
   const docsUrl =
     'https://github.com/alvinunreal/oh-my-opencode-slim/' +
     'blob/master/docs/provider-configurations.md';
