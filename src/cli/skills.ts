@@ -38,13 +38,6 @@ export interface PermissionOnlySkill {
  */
 export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
   {
-    name: 'simplify',
-    repo: 'https://github.com/brianlovin/claude-config',
-    skillName: 'simplify',
-    allowedAgents: ['oracle'],
-    description: 'YAGNI code simplification expert',
-  },
-  {
     name: 'agent-browser',
     repo: 'https://github.com/vercel-labs/agent-browser',
     skillName: 'agent-browser',

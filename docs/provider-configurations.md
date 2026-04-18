@@ -16,9 +16,9 @@ The installer generates this configuration automatically:
   "presets": {
     "openai": {
       "orchestrator": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["*"], "mcps": ["*"] },
-      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": [], "mcps": [] },
+      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] },
+      "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": ["cartography"], "mcps": [] },
       "designer": { "model": "openai/gpt-5.4-mini", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
       "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
     }
@@ -36,9 +36,9 @@ To use Kimi, add a `kimi` preset and set it as active:
   "presets": {
     "kimi": {
       "orchestrator": { "model": "kimi-for-coding/k2p5", "variant": "high", "skills": ["*"], "mcps": ["*"] },
-      "oracle": { "model": "kimi-for-coding/k2p5", "variant": "high", "skills": [], "mcps": [] },
+      "oracle": { "model": "kimi-for-coding/k2p5", "variant": "high", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "kimi-for-coding/k2p5", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "kimi-for-coding/k2p5", "variant": "low", "skills": [], "mcps": [] },
+      "explorer": { "model": "kimi-for-coding/k2p5", "variant": "low", "skills": ["cartography"], "mcps": [] },
       "designer": { "model": "kimi-for-coding/k2p5", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
       "fixer": { "model": "kimi-for-coding/k2p5", "variant": "low", "skills": [], "mcps": [] }
     }
@@ -62,9 +62,9 @@ To use GitHub Copilot with Grok Code Fast:
   "presets": {
     "copilot": {
       "orchestrator": { "model": "github-copilot/claude-opus-4.6", "variant": "high", "skills": ["*"], "mcps": ["*"] },
-      "oracle": { "model": "github-copilot/claude-opus-4.6", "variant": "high", "skills": [], "mcps": [] },
+      "oracle": { "model": "github-copilot/claude-opus-4.6", "variant": "high", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": [], "mcps": [] },
+      "explorer": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": ["cartography"], "mcps": [] },
       "designer": { "model": "github-copilot/gemini-3.1-pro-preview", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
       "fixer": { "model": "github-copilot/claude-sonnet-4.6", "variant": "low", "skills": [], "mcps": [] }
     }
@@ -88,9 +88,9 @@ To use ZAI Coding Plan with GLM 5:
   "presets": {
     "zai-plan": {
       "orchestrator": { "model": "zai-coding-plan/glm-5", "variant": "high", "skills": ["*"], "mcps": ["*"] },
-      "oracle": { "model": "zai-coding-plan/glm-5", "variant": "high", "skills": [], "mcps": [] },
+      "oracle": { "model": "zai-coding-plan/glm-5", "variant": "high", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "zai-coding-plan/glm-5", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "zai-coding-plan/glm-5", "variant": "low", "skills": [], "mcps": [] },
+      "explorer": { "model": "zai-coding-plan/glm-5", "variant": "low", "skills": ["cartography"], "mcps": [] },
       "designer": { "model": "zai-coding-plan/glm-5", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
       "fixer": { "model": "zai-coding-plan/glm-5", "variant": "low", "skills": [], "mcps": [] }
     }
@@ -114,9 +114,9 @@ You can mix models from different providers across agents. Create a custom prese
   "presets": {
     "my-mix": {
       "orchestrator": { "model": "openai/gpt-5.4", "skills": ["*"], "mcps": ["*"] },
-      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": [], "mcps": [] },
+      "oracle": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "kimi-for-coding/k2p5", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
-      "explorer": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": [], "mcps": [] },
+      "explorer": { "model": "github-copilot/grok-code-fast-1", "variant": "low", "skills": ["cartography"], "mcps": [] },
       "designer": { "model": "kimi-for-coding/k2p5", "variant": "medium", "skills": ["agent-browser"], "mcps": [] },
       "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
     }

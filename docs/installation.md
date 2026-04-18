@@ -24,7 +24,7 @@ bunx oh-my-opencode-slim@latest install
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
 ```
 
 ### Configuration Options
@@ -33,8 +33,7 @@ The installer supports the following options:
 
 | Option | Description |
 |--------|-------------|
-| `--tmux=yes|no` | Enable tmux integration (yes/no) |
-| `--skills=yes|no` | Install recommended skills (yes/no) |
+| `--skills=yes|no` | Install recommended and bundled skills (default: yes) |
 | `--no-tui` | Non-interactive mode |
 | `--dry-run` | Simulate install without writing files |
 | `--reset` | Force overwrite of existing configuration |
@@ -109,7 +108,7 @@ If not installed, direct the user to https://opencode.ai/docs first.
 The installer generates an OpenAI configuration by default:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
 ```
 
 **Examples:**
@@ -117,11 +116,11 @@ bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=yes
 # Interactive install (asks about tmux and skills)
 bunx oh-my-opencode-slim@latest install
 
-# Non-interactive with tmux and skills
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=yes --skills=yes
+# Non-interactive with default skills
+bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
 
-# Non-interactive without tmux or skills
-bunx oh-my-opencode-slim@latest install --no-tui --tmux=no --skills=no
+# Non-interactive without skills
+bunx oh-my-opencode-slim@latest install --no-tui --skills=no
 
 # Force overwrite existing configuration
 bunx oh-my-opencode-slim@latest install --reset
@@ -257,6 +256,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 3. **Remove skills (optional)**:
    ```bash
-   npx skills remove simplify
    npx skills remove agent-browser
+   rm -rf ~/.config/opencode/skills/simplify
+   rm -rf ~/.config/opencode/skills/cartography
    ```

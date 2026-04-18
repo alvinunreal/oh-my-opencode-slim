@@ -98,20 +98,6 @@ function handleStepResult(
   return true;
 }
 
-function formatConfigSummary(): string {
-  const lines: string[] = [];
-  lines.push(`${BOLD}Configuration Summary${RESET}`);
-  lines.push('');
-  lines.push(`  ${BOLD}Preset:${RESET} ${BLUE}openai${RESET}`);
-  lines.push(`  ${BOLD}Providers:${RESET}`);
-  lines.push(`  ${SYMBOLS.check} OpenAI (default)`);
-  const seeDocs = 'see docs/provider-configurations.md';
-  lines.push(`  ${SYMBOLS.bullet} Kimi - ${seeDocs}`);
-  lines.push(`  ${SYMBOLS.bullet} GitHub Copilot - ${seeDocs}`);
-  lines.push(`  ${SYMBOLS.bullet} ZAI Coding Plan - ${seeDocs}`);
-  return lines.join('\n');
-}
-
 async function runInstall(config: InstallConfig): Promise<number> {
   const detected = detectCurrentConfig();
   const isUpdate = detected.isInstalled;
@@ -226,11 +212,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
     }
   }
 
-  // Summary
-  console.log();
-  console.log(formatConfigSummary());
-  console.log();
-
   const statusMsg = isUpdate
     ? 'Configuration updated!'
     : 'Installation complete!';
@@ -274,7 +255,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
 export async function install(args: InstallArgs): Promise<number> {
   const config: InstallConfig = {
-    hasTmux: args.tmux === 'yes',
+    hasTmux: false,
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes',
     dryRun: args.dryRun,

@@ -249,6 +249,15 @@ describe('skill permissions', () => {
       ?.skill as Record<string, string>;
     expect(skillPerm?.['requesting-code-review']).toBe('allow');
   });
+
+  test('oracle gets simplify skill allowed by default', () => {
+    const agents = createAgents();
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle).toBeDefined();
+    const skillPerm = (oracle?.config.permission as Record<string, unknown>)
+      ?.skill as Record<string, string>;
+    expect(skillPerm?.simplify).toBe('allow');
+  });
 });
 
 describe('isSubagent type guard', () => {

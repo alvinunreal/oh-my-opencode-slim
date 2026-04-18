@@ -29,6 +29,12 @@ export interface CustomSkill {
  */
 export const CUSTOM_SKILLS: CustomSkill[] = [
   {
+    name: 'simplify',
+    description: 'Code simplification and readability-focused refactoring',
+    allowedAgents: ['oracle'],
+    sourcePath: 'src/skills/simplify',
+  },
+  {
     name: 'cartography',
     description: 'Repository understanding and hierarchical codemap generation',
     allowedAgents: ['orchestrator', 'explorer'],

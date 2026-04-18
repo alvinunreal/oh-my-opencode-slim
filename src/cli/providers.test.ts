@@ -76,6 +76,12 @@ describe('providers', () => {
     // Orchestrator should always have '*'
     expect(agents.orchestrator.skills).toEqual(['*']);
 
+    // Oracle should have bundled simplify
+    expect(agents.oracle.skills).toContain('simplify');
+
+    // Explorer should have bundled cartography
+    expect(agents.explorer.skills).toContain('cartography');
+
     // Designer should have 'agent-browser'
     expect(agents.designer.skills).toContain('agent-browser');
 
