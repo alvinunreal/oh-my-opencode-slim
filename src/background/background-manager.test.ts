@@ -1212,6 +1212,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1253,6 +1254,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1293,6 +1295,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1333,6 +1336,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1372,6 +1376,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1398,6 +1403,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1566,8 +1572,8 @@ describe('BackgroundTaskManager', () => {
 
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
 
-      // Explorer is a leaf agent — tools disabled regardless of parent
       const promptCalls = ctx.client.session.prompt.mock.calls as Array<
         [{ body: { tools?: Record<string, boolean> } }]
       >;
@@ -1575,6 +1581,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1620,6 +1627,7 @@ describe('BackgroundTaskManager', () => {
       expect(designerPromptCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
 
       // Designer is a leaf node and cannot spawn subagents
@@ -1647,6 +1655,7 @@ describe('BackgroundTaskManager', () => {
       expect(explorerPromptCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
 
       // Explorer is a dead end
@@ -1747,6 +1756,7 @@ describe('BackgroundTaskManager', () => {
       expect(explorerPromptCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
 
       // Now complete the designer (cleans up designer's agentBySessionId entry)
@@ -1882,6 +1892,78 @@ describe('BackgroundTaskManager', () => {
         'observer',
         'council',
       ]);
+    });
+
+    describe('question tool permission', () => {
+      test('question: false is passed to prompt for delegating agents', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        // Launch a task with orchestrator (has delegation rules)
+        const task = manager.launch({
+          agent: 'orchestrator',
+          prompt: 'coordinate work',
+          description: 'orchestrator test',
+          parentSessionId: 'root-session',
+        });
+
+        // Yield to allow async startTask to execute
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId to be defined');
+
+        // Find the prompt call for this session
+        const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+          [{ path: { id: string }; body: { tools?: Record<string, boolean> } }]
+        >;
+        const taskPromptCall = promptCalls.find(
+          (call) => call[0].path.id === sessionId,
+        );
+
+        expect(taskPromptCall).toBeDefined();
+        expect(taskPromptCall?.[0].body.tools).toEqual({
+          background_task: true,
+          task: true,
+          question: false,
+        });
+      });
+
+      test('question: false is passed to prompt for leaf agents', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        // Launch a task with explorer (leaf agent, no delegation rules)
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'explorer test',
+          parentSessionId: 'root-session',
+        });
+
+        // Yield to allow async startTask to execute
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId to be defined');
+
+        // Find the prompt call for this session
+        const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+          [{ path: { id: string }; body: { tools?: Record<string, boolean> } }]
+        >;
+        const taskPromptCall = promptCalls.find(
+          (call) => call[0].path.id === sessionId,
+        );
+
+        expect(taskPromptCall).toBeDefined();
+        expect(taskPromptCall?.[0].body.tools).toEqual({
+          background_task: false,
+          task: false,
+          question: false,
+        });
+      });
     });
   });
 });

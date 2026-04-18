@@ -354,18 +354,19 @@ export class BackgroundTaskManager {
   private calculateToolPermissions(agentName: string): {
     background_task: boolean;
     task: boolean;
+    question: false;
   } {
     const allowedSubagents = this.getSubagentRules(agentName);
 
     // Leaf agents (no delegation rules) get tools hidden entirely
     if (allowedSubagents.length === 0) {
-      return { background_task: false, task: false };
+      return { background_task: false, task: false, question: false };
     }
 
     // Agent can delegate - enable the delegation tools
     // The restriction of WHICH specific subagents are allowed is enforced
     // by the background_task tool via isAgentAllowed()
-    return { background_task: true, task: true };
+    return { background_task: true, task: true, question: false };
   }
 
   /**
