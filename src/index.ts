@@ -1,5 +1,6 @@
 import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
+import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { BackgroundTaskManager, MultiplexerSessionManager } from './background';
 import { loadPluginConfig, type MultiplexerConfig } from './config';
 import { parseList } from './config/agent-mcps';
@@ -550,6 +551,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Inject orchestrator system prompt for serve-mode sessions.
     // In serve mode, the agent's prompt field may be absent from the agents registry
     // (built before plugin config hooks run). This hook injects it at LLM call time.
+    // Uses the already-resolved prompt from agentDefs (which has custom replacement
+    // or append prompts applied) instead of rebuilding the default.
     'experimental.chat.system.transform': async (
       input: { sessionID?: string },
       output: { system: string[] },
@@ -565,14 +568,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             s.includes('orchestrator'),
         );
         if (!alreadyInjected) {
-          // Prepend the orchestrator prompt to the system array
-          // Use buildOrchestratorPrompt with disabledAgents so the
-          // serve-mode prompt matches the interactive-mode prompt
-          const { buildOrchestratorPrompt } = await import(
-            './agents/orchestrator'
-          );
-          const disabledAgents = getDisabledAgents(config);
-          const orchestratorPrompt = buildOrchestratorPrompt(disabledAgents);
+          // Prepend the orchestrator prompt to the system array.
+          // agentDefs[0] is always the orchestrator — use its resolved prompt
+          // (which includes any custom replacement or append from orchestrator.md / orchestrator_append.md)
+          // Fall back to buildOrchestratorPrompt only if the resolved prompt is missing.
+          const orchestratorDef = agentDefs[0];
+          const orchestratorPrompt =
+            typeof orchestratorDef?.config?.prompt === 'string'
+              ? orchestratorDef.config.prompt
+              : buildOrchestratorPrompt(getDisabledAgents(config));
           output.system[0] =
             orchestratorPrompt +
             (output.system[0] ? `\n\n${output.system[0]}` : '');
