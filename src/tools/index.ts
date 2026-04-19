@@ -2,6 +2,7 @@
 export { ast_grep_replace, ast_grep_search } from './ast-grep';
 export { createBackgroundTools } from './background';
 export { createCouncilTool } from './council';
+export { createGrepTool } from './grep';
 export {
   lsp_diagnostics,
   lsp_find_references,

@@ -11,6 +11,7 @@ import {
   createChatHeadersHook,
   createDelegateTaskRetryHook,
   createFilterAvailableSkillsHook,
+  createGrepRenderMetadataHook,
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
@@ -26,6 +27,7 @@ import {
   ast_grep_search,
   createBackgroundTools,
   createCouncilTool,
+  createGrepTool,
   createWebfetchTool,
   lsp_diagnostics,
   lsp_find_references,
@@ -130,6 +132,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     : {};
 
   const mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
+  const grep = createGrepTool(ctx);
   const webfetch = createWebfetchTool(ctx);
 
   // Initialize MultiplexerSessionManager to handle OpenCode's built-in Task tool sessions
@@ -170,6 +173,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const applyPatchHook = createApplyPatchHook(ctx);
   // Initialize JSON parse error recovery hook
   const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
+  const grepRenderMetadataHook = createGrepRenderMetadataHook();
 
   // Initialize foreground fallback manager for runtime model switching
   const foregroundFallback = new ForegroundFallbackManager(
@@ -195,6 +199,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tool: {
       ...backgroundTools,
       ...councilTools,
+      grep,
       webfetch,
       ...todoContinuationHook.tool,
       lsp_goto_definition,
@@ -654,6 +659,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Post-tool hooks: retry guidance for delegation errors + file-tool nudge
     'tool.execute.after': async (input, output) => {
+      await grepRenderMetadataHook['tool.execute.after'](
+        input as {
+          tool: string;
+          args?: { pattern?: unknown };
+        },
+        output as {
+          title?: unknown;
+          output: unknown;
+          metadata?: unknown;
+        },
+      );
+
       await delegateTaskRetryHook['tool.execute.after'](
         input as { tool: string },
         output as { output: unknown },

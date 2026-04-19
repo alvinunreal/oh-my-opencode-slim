@@ -1,32 +1,25 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import { join } from 'node:path';
+import whichModule from 'which';
 
-// Mock fs and os BEFORE importing the modules that use them
-mock.module('fs', () => ({
-  existsSync: mock(() => false),
-}));
+let existsSyncSpy: ReturnType<typeof spyOn> | undefined;
+let whichSyncSpy: ReturnType<typeof spyOn> | undefined;
 
-mock.module('os', () => ({
-  homedir: () => '/home/user',
-}));
-
-// Create a mock for which.sync
-const whichSyncMock = mock(() => null);
-mock.module('which', () => ({
-  sync: whichSyncMock,
-  default: { sync: whichSyncMock },
-}));
-
-import { existsSync } from 'node:fs';
 // Now import the code to test
 import { findServerForExtension, isServerInstalled } from './config';
 
 describe('config', () => {
   beforeEach(() => {
-    (existsSync as any).mockClear();
-    (existsSync as any).mockImplementation(() => false);
-    whichSyncMock.mockClear();
-    whichSyncMock.mockReturnValue(null);
+    existsSyncSpy = spyOn(fs, 'existsSync').mockImplementation(() => false);
+    whichSyncSpy = spyOn(whichModule, 'sync').mockReturnValue(null as any);
+  });
+
+  afterEach(() => {
+    whichSyncSpy?.mockRestore();
+    whichSyncSpy = undefined;
+    existsSyncSpy?.mockRestore();
+    existsSyncSpy = undefined;
   });
 
   describe('isServerInstalled', () => {
@@ -35,7 +28,7 @@ describe('config', () => {
     });
 
     test('should detect absolute paths', () => {
-      (existsSync as any).mockImplementation(
+      (fs.existsSync as any).mockImplementation(
         (path: string) => path === '/usr/bin/lsp-server',
       );
       expect(isServerInstalled(['/usr/bin/lsp-server'])).toBe(true);
@@ -47,7 +40,7 @@ describe('config', () => {
       process.env.PATH = '/usr/local/bin:/usr/bin';
 
       // Mock whichSync to return a path (simulating the command is found)
-      whichSyncMock.mockReturnValue(
+      whichSyncSpy?.mockReturnValue(
         join('/usr/bin', 'typescript-language-server'),
       );
 
@@ -65,7 +58,7 @@ describe('config', () => {
         'typescript-language-server',
       );
 
-      (existsSync as any).mockImplementation(
+      (fs.existsSync as any).mockImplementation(
         (path: string) => path === localBin,
       );
 
@@ -82,7 +75,7 @@ describe('config', () => {
       );
 
       // Mock whichSync to return the global bin path
-      whichSyncMock.mockReturnValue(globalBin);
+      whichSyncSpy?.mockReturnValue(globalBin);
 
       expect(isServerInstalled(['typescript-language-server'])).toBe(true);
     });
@@ -90,12 +83,12 @@ describe('config', () => {
 
   describe('findServerForExtension', () => {
     test('should skip deno for .ts when project is not a deno workspace', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncSpy?.mockImplementation((cmd: string) =>
         cmd === 'typescript-language-server'
           ? join('/usr/bin', 'typescript-language-server')
           : null,
       );
-      (existsSync as any).mockImplementation((path: string) =>
+      (fs.existsSync as any).mockImplementation((path: string) =>
         path.includes('bun.lock'),
       );
       const result = findServerForExtension(
@@ -109,10 +102,10 @@ describe('config', () => {
     });
 
     test('should prefer deno for .ts in a deno workspace', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncSpy?.mockImplementation((cmd: string) =>
         cmd === 'deno' ? join('/usr/bin', 'deno') : null,
       );
-      (existsSync as any).mockImplementation((path: string) =>
+      (fs.existsSync as any).mockImplementation((path: string) =>
         path.includes('deno.json'),
       );
       const result = findServerForExtension('.ts', '/workspace/app/src/mod.ts');
@@ -123,7 +116,7 @@ describe('config', () => {
     });
 
     test('should return found for .py extension if installed (prefers ty)', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncSpy?.mockImplementation((cmd: string) =>
         cmd === 'ty' ? join('/usr/bin', 'ty') : null,
       );
       const result = findServerForExtension('.py');
@@ -139,12 +132,12 @@ describe('config', () => {
     });
 
     test('should continue to later matching servers when earlier ones are unavailable', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncSpy?.mockImplementation((cmd: string) =>
         cmd === 'typescript-language-server'
           ? join('/usr/bin', 'typescript-language-server')
           : null,
       );
-      (existsSync as any).mockImplementation((path: string) =>
+      (fs.existsSync as any).mockImplementation((path: string) =>
         path.includes('bun.lock'),
       );
 
@@ -160,7 +153,7 @@ describe('config', () => {
     });
 
     test('should return first applicable not_installed server if no match is launchable', () => {
-      (existsSync as any).mockImplementation((path: string) =>
+      (fs.existsSync as any).mockImplementation((path: string) =>
         path.includes('bun.lock'),
       );
       const result = findServerForExtension(

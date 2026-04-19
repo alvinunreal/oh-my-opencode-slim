@@ -60,7 +60,7 @@ All agents follow a consistent factory pattern:
 
 | Agent | Primary Focus | Tools | Constraints | Temperature |
 |-------|--------------|-------|-------------|-------------|
-| Explorer | Codebase navigation | grep, glob, ast_grep_search | Read-only, parallel | 0.1 |
+| Explorer | Codebase navigation | grep, glob, ast_grep_search | `grep` is the local ripgrep-based override with extended filters/context/sorting; read-only, parallel | 0.1 |
 | Librarian | External docs | context7, grep_app, websearch | Evidence-based, citations required | 0.1 |
 | Oracle | Architecture guidance | Analysis tools, code review | Read-only, advisory | 0.1 |
 | Designer | UI/UX implementation | Tailwind, CSS, animations | Visual excellence priority | 0.7 |

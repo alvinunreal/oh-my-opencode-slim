@@ -465,7 +465,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Skills](docs/skills.md)** | Built-in and recommended skills such as `simplify`, `agent-browser`, and `cartography` |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app`, and how MCP permissions work per agent |
-| **[Tools](docs/tools.md)** | Built-in tool capabilities like background tasks, `webfetch`, LSP tools, code search, and formatters |
+| **[Tools](docs/tools.md)** | Built-in tool capabilities like background tasks, `webfetch`, local `grep`, AST-grep, LSP tools, code search, and formatters |
 
 ### 💡 Example Presets
 

@@ -2,11 +2,12 @@
 
 ## Responsibility
 
-The `src/tools/` directory provides the core tool implementations for the oh-my-opencode-slim plugin. It exposes three main categories of tools:
+The `src/tools/` directory provides the core tool implementations for the oh-my-opencode-slim plugin. It exposes four main categories of tools:
 
 1. **AST-grep** - AST-aware structural code search and replacement across 25+ languages
-2. **LSP** - Language Server Protocol integration for code intelligence (definition, references, diagnostics, rename)
-3. **Background Tasks** - Fire-and-forget agent task management with automatic notification
+2. **grep** - ripgrep-first local search with managed binary resolution, hybrid `mtime` ordering, and GNU grep fallback
+3. **LSP** - Language Server Protocol integration for code intelligence (definition, references, diagnostics, rename)
+4. **Background Tasks** - Fire-and-forget agent task management with automatic notification
 
 These tools are consumed by the OpenCode plugin system and exposed to AI agents for code navigation, analysis, and modification tasks.
 
@@ -20,6 +21,21 @@ These tools are consumed by the OpenCode plugin system and exposed to AI agents 
 src/tools/
 ├── index.ts              # Central export point
 ├── background.ts         # Background task tools (3 tools)
+├── grep/
+│   ├── tool.ts           # Tool wrapper: normalize -> ask -> run -> format -> metadata
+│   ├── runtime.ts        # Process lifecycle, timeout/cancel, retries, semaphore
+│   ├── direct.ts         # Streaming rg executors for hot path modes
+│   ├── mtime.ts          # Hybrid discovery/sort/replay for sort_by=mtime
+│   ├── resolver.ts       # system rg -> managed rg -> install-on-miss -> GNU grep
+│   ├── fallback.ts       # Final GNU grep fallback backend
+│   ├── downloader.ts     # Managed ripgrep installer in user cache
+│   ├── normalize.ts      # Input normalization and permission-safe path resolution
+│   ├── rg-args.ts        # ripgrep argv builder
+│   ├── json-stream.ts    # Incremental JSON/NUL stream parsers
+│   ├── aggregate.ts      # Content collector with context drain
+│   ├── format.ts         # Human-readable output rendering
+│   ├── path-utils.ts     # Display paths and non-UTF8-safe byte identities
+│   └── codemap.md        # Detailed grep module map
 ├── ast-grep/
 │   ├── cli.ts            # CLI execution, path resolution, binary download
 │   ├── index.ts          # Module re-exports
@@ -57,20 +73,29 @@ The ast-grep module uses a CLI execution pattern:
 - **downloader.ts**: Binary auto-download for missing dependencies
 - **utils.ts**: Output formatting and truncation handling
 
-#### 3. Connection Pooling (LSP)
+#### 3. ripgrep-first Search Layer (grep)
+The grep module isolates execution policy into dedicated phases:
+- **normalize.ts**: canonical path normalization, realpath scope, permission patterns
+- **resolver.ts**: backend selection (`system rg -> managed rg -> install latest stable rg on miss -> GNU grep`)
+- **direct.ts**: streaming rg hot path with early-stop by visible results
+- **mtime.ts**: hybrid `mtime` discovery/sort/replay strategy
+- **fallback.ts**: explicit GNU grep-only degraded backend
+- **format.ts/path-utils.ts**: stable display for ripgrep-native paths/content, including non-UTF8-safe rendering via `bytes:base64:...`; GNU grep fallback remains degraded and may decode or skip non-UTF8 data instead of preserving byte-stable identities
+
+#### 4. Connection Pooling (LSP)
 The LSP module implements a singleton `LSPServerManager` with:
 - **Connection pooling**: Reuse LSP clients per workspace root (key: `root::serverId`)
 - **Reference counting**: Track active usage via `refCount`, increment on acquire, decrement on release
 - **Idle cleanup**: Auto-shutdown after 5 minutes of inactivity (check every 60s)
 - **Initialization tracking**: Prevent concurrent initialization races via `initPromise`
 
-#### 4. Safety Limits
+#### 5. Safety Limits
 All tools enforce strict safety limits:
-- **Timeout**: 300s (ast-grep, LSP initialization)
+- **Timeout**: tool-specific guardrails (grep defaults to 80s/max 140s; ast-grep/LSP keep their own limits)
 - **Output size**: 1MB (ast-grep)
 - **Match limits**: 500 matches (ast-grep), 200 diagnostics (LSP), 200 references (LSP)
 
-#### 5. Error Handling
+#### 6. Error Handling
 - Clear error messages with installation hints for missing binaries
 - Timeout handling with process cleanup
 - Truncation detection and reporting with reason codes
@@ -82,6 +107,32 @@ All tools enforce strict safety limits:
 
 ### AST-grep Tool Flow
 
+```
+
+### grep Tool Flow
+
+```text
+User Request (grep)
+    ↓
+tool.ts
+    ↓
+normalizeGrepInput()
+    ↓
+ctx.ask(permissionPatterns)
+    ↓
+runRipgrep()
+    ├─→ resolveGrepCliWithAutoInstall()
+    │   ├─→ system rg
+    │   ├─→ managed rg
+    │   ├─→ latest stable rg install-on-miss
+    │   └─→ GNU grep fallback
+    ├─→ direct.ts for normal path
+    ├─→ mtime.ts for sort_by=mtime
+    └─→ fallback.ts for GNU grep
+    ↓
+formatGrepResult()
+    ↓
+Return text output + structured metadata
 ```
 User Request (ast_grep_search or ast_grep_replace)
     ↓
@@ -229,6 +280,7 @@ All tools are exported from `src/tools/index.ts`:
 ```typescript
 export { ast_grep_replace, ast_grep_search } from './ast-grep';
 export { createBackgroundTools } from './background';
+export { createGrepTool } from './grep';
 export {
   lsp_diagnostics,
   lsp_find_references,
@@ -258,6 +310,12 @@ export {
 
 ### Binary Management
 
+#### grep (grep/downloader.ts + grep/resolver.ts)
+- **Backend policy**: system rg → managed cached rg → latest stable rg install-on-miss → GNU grep
+- **Managed install location**: user cache under `oh-my-opencode-slim/grep/bin`
+- **Validation**: downloaded `rg` is validated with `--version` before final rename
+- **Fallback policy**: GNU grep is explicit and degraded, not treated as ripgrep-equivalent
+
 #### AST-grep (ast-grep/downloader.ts)
 - **Version**: 0.40.0 (synced with @ast-grep/cli package)
 - **Platforms**: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, win32-arm64, win32-ia32
@@ -271,6 +329,7 @@ export {
 - **Output truncation**: Prevent memory issues with large outputs
 - **Timeout enforcement**: All subprocess operations have timeouts
 - **Caching**: CLI paths cached to avoid repeated filesystem checks
+- **Streaming search**: grep hot path parses rg output incrementally and kills the process early when enough visible results have been collected
 - **Background tasks**: Fire-and-forget pattern for long-running operations
 
 ---
@@ -280,6 +339,22 @@ export {
 ### Root Level
 - **index.ts**: Central export point for all tools
 - **background.ts**: Background task management (3 tools: background_task, background_output, background_cancel)
+
+### grep/
+- **codemap.md**: Detailed grep architecture map
+- **tool.ts**: Tool wrapper and metadata emission
+- **runtime.ts**: Process lifecycle helpers
+- **direct.ts**: rg hot path executors
+- **mtime.ts**: hybrid `sort_by=mtime` strategy
+- **resolver.ts**: backend discovery and install-on-miss routing
+- **downloader.ts**: latest-stable ripgrep installer
+- **fallback.ts**: GNU grep degraded backend
+- **normalize.ts**: canonical input normalization
+- **rg-args.ts**: ripgrep argument builder
+- **json-stream.ts**: JSON/NUL stream parsers
+- **aggregate.ts**: content collector with context drain
+- **format.ts**: final human rendering
+- **path-utils.ts**: path display and byte-identity helpers
 
 ### ast-grep/
 - **index.ts**: Re-exports ast-grep module and types

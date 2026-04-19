@@ -58,9 +58,28 @@ Fast, structural code search and refactoring — more powerful than plain text g
 
 | Tool | Description |
 |------|-------------|
-| `grep` | Fast content search using ripgrep |
+| `grep` | ripgrep-first local search with streaming results, context, globs, file-type filters, `sort_by=mtime`, managed `rg` install-on-miss, and GNU grep fallback |
 | `ast_grep_search` | AST-aware code pattern matching across 25 languages |
 | `ast_grep_replace` | AST-aware code refactoring with dry-run support |
+
+### `grep`
+
+The local `grep` override is the default text/code search tool exposed by slim.
+
+Key behavior:
+
+- Uses **system `rg` first** when available
+- Falls back to **managed ripgrep** from user cache
+- Can **install latest stable ripgrep on miss**
+- Uses **GNU grep** only as a last degraded fallback
+- Supports `content`, `files_with_matches`, and `count`
+- Supports advanced options such as smart case, fixed strings, invert match, asymmetric context, file globs, file types, hidden-file control, and `sort_by=mtime`
+
+Notes:
+
+- `sort_by=mtime` uses a hybrid strategy internally, not a single direct `rg` call.
+- Non-UTF8 paths are rendered with a stable visible discriminator like `[bytes:base64:...]`.
+- GNU grep fallback is warning-driven and intentionally degraded rather than pretending to match ripgrep perfectly.
 
 `ast_grep` understands code structure, so it can find patterns like "all arrow functions that return a JSX element" rather than relying on exact text matching.
 
