@@ -165,7 +165,7 @@ Returns: results if completed, error if failed, status if running.`,
         output += '\n\n---\n\n**Questions relayed from subagent:**\n';
         for (const q of task.questions) {
           // Sanitize newlines to prevent markdown injection, truncate for safety
-          const sanitized = q.replace(/\n/g, ' ');
+          const sanitized = q.replace(/[\r\n]/g, ' ');
           const truncated =
             sanitized.length > 2000
               ? `${sanitized.substring(0, 2000)}... (truncated)`
