@@ -2,6 +2,7 @@ export {
   type BackgroundTask,
   BackgroundTaskManager,
   type LaunchOptions,
+  loadPersistedTask,
 } from './background-manager';
 export {
   MultiplexerSessionManager,

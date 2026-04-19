@@ -287,7 +287,10 @@ async function verifyHostSmoke(tarballPath: string) {
 
     try {
       await Promise.race([
-        waitForHealth(`http://127.0.0.1:${port}/global/health`, healthTimeoutMs),
+        waitForHealth(
+          `http://127.0.0.1:${port}/global/health`,
+          healthTimeoutMs,
+        ),
         exitPromise,
       ]);
     } catch (error) {

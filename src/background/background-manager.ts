@@ -39,6 +39,9 @@ import {
 } from '../utils/session';
 import { SubagentDepthTracker } from './subagent-depth';
 
+/** Maximum number of questions that can be recorded per task. */
+const MAX_QUESTIONS_PER_TASK = 50;
+
 /** Persisted shape — only serializable fields, no methods or Map references. */
 interface PersistedTask {
   id: string;
@@ -53,6 +56,7 @@ interface PersistedTask {
   error?: string;
   startedAt: string;
   completedAt?: string;
+  questions?: string[];
 }
 
 function persistTask(task: BackgroundTask): void {
@@ -72,6 +76,7 @@ function persistTask(task: BackgroundTask): void {
       error: task.error,
       startedAt: task.startedAt.toISOString(),
       completedAt: task.completedAt?.toISOString(),
+      questions: task.questions,
     };
     fs.writeFileSync(
       path.join(dir, `${task.id}.json`),
@@ -83,7 +88,7 @@ function persistTask(task: BackgroundTask): void {
   }
 }
 
-function loadPersistedTask(taskId: string): BackgroundTask | null {
+export function loadPersistedTask(taskId: string): BackgroundTask | null {
   try {
     const file = path.join(getLogDir(), 'bg-tasks', `${taskId}.json`);
     const data: PersistedTask = JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -100,6 +105,7 @@ function loadPersistedTask(taskId: string): BackgroundTask | null {
       completedAt: data.completedAt ? new Date(data.completedAt) : undefined,
       prompt: data.prompt,
       config: data.config,
+      questions: data.questions ?? [],
     };
   } catch {
     return null;
@@ -131,6 +137,7 @@ export interface BackgroundTask {
   startedAt: Date; // Task creation timestamp
   completedAt?: Date; // Task completion/failure timestamp
   prompt: string; // Initial prompt
+  questions: string[]; // Questions relayed via ask_orchestrator
 }
 
 /**
@@ -277,6 +284,7 @@ export class BackgroundTaskManager {
       },
       parentSessionId: opts.parentSessionId,
       prompt: opts.prompt,
+      questions: [],
     };
 
     this.tasks.set(task.id, task);
@@ -354,18 +362,19 @@ export class BackgroundTaskManager {
   private calculateToolPermissions(agentName: string): {
     background_task: boolean;
     task: boolean;
+    question: false; // Literal type — question is always denied for background tasks
   } {
     const allowedSubagents = this.getSubagentRules(agentName);
 
     // Leaf agents (no delegation rules) get tools hidden entirely
     if (allowedSubagents.length === 0) {
-      return { background_task: false, task: false };
+      return { background_task: false, task: false, question: false };
     }
 
     // Agent can delegate - enable the delegation tools
     // The restriction of WHICH specific subagents are allowed is enforced
     // by the background_task tool via isAgentAllowed()
-    return { background_task: true, task: true };
+    return { background_task: true, task: true, question: false };
   }
 
   /**
@@ -707,10 +716,14 @@ export class BackgroundTaskManager {
     task: BackgroundTask,
   ): Promise<void> {
     const parentAgent = this.getSessionAgent(task.parentSessionId);
+    const questionHint =
+      task.questions.length > 0
+        ? ` (${task.questions.length} question${task.questions.length > 1 ? 's' : ''} relayed from subagent)`
+        : '';
     const message =
       task.status === 'completed'
-        ? `[Background task "${task.description}" completed]`
-        : `[Background task "${task.description}" failed: ${task.error}]`;
+        ? `[Background task "${task.description}" completed${questionHint}]`
+        : `[Background task "${task.description}" failed: ${task.error}${questionHint}]`;
 
     await this.client.session.prompt({
       path: { id: task.parentSessionId },
@@ -742,6 +755,50 @@ export class BackgroundTaskManager {
       log(`[background-manager] restored task from disk: ${taskId}`);
     }
     return fromDisk;
+  }
+
+  /**
+   * Add a question relayed from a background subagent via ask_orchestrator.
+   * Resolves the task from the session ID in toolContext.
+   * Returns true if the question was recorded, false if the task wasn't found
+   * or is no longer active (completed/failed/cancelled).
+   *
+   * Questions are persisted to disk immediately for crash safety.
+   */
+  addQuestion(
+    sessionId: string,
+    question: string,
+  ): 'recorded' | 'not-found' | 'terminal' | 'cap-reached' {
+    const taskId = this.tasksBySessionId.get(sessionId);
+    if (!taskId) return 'not-found';
+
+    const task = this.tasks.get(taskId);
+    if (!task) return 'not-found';
+
+    // Don't record questions on terminal tasks (race guard).
+    // Two-layer defense: this status check catches the case where
+    // completeTask has set terminal status but hasn't deleted
+    // tasksBySessionId yet. The map lookup above catches the case
+    // where the map entry has already been removed.
+    if (
+      task.status === 'completed' ||
+      task.status === 'failed' ||
+      task.status === 'cancelled'
+    ) {
+      return 'terminal';
+    }
+
+    // Cap questions to prevent unbounded accumulation (DoS guard)
+    if (task.questions.length >= MAX_QUESTIONS_PER_TASK) {
+      return 'cap-reached';
+    }
+
+    task.questions.push(question);
+
+    // Persist immediately for crash safety (questions survive plugin restart)
+    persistTask(task);
+
+    return 'recorded';
   }
 
   /**

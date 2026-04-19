@@ -47,21 +47,21 @@ export type ServerLookupResult =
   | { status: 'not_installed'; server: ResolvedServer; installHint: string };
 
 export type {
-  Position,
-  Range,
+  CreateFile,
+  DeleteFile,
+  Diagnostic,
+  DocumentSymbol,
   Location,
   LocationLink,
-  Diagnostic,
-  TextDocumentIdentifier,
-  VersionedTextDocumentIdentifier,
-  TextEdit,
-  TextDocumentEdit,
-  CreateFile,
+  Position,
+  Range,
   RenameFile,
-  DeleteFile,
-  WorkspaceEdit,
   SymbolInfo,
-  DocumentSymbol,
+  TextDocumentEdit,
+  TextDocumentIdentifier,
+  TextEdit,
+  VersionedTextDocumentIdentifier,
+  WorkspaceEdit,
 };
 
 export interface DocumentDiagnosticReportFull {

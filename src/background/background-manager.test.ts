@@ -4,7 +4,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PluginConfig } from '../config';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../utils';
-import { BackgroundTaskManager } from './background-manager';
+import {
+  type BackgroundTask,
+  BackgroundTaskManager,
+  loadPersistedTask,
+} from './background-manager';
 
 // Mock the plugin context
 function createMockContext(overrides?: {
@@ -1212,6 +1216,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1253,6 +1258,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1293,6 +1299,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1333,6 +1340,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1372,6 +1380,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1398,6 +1407,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1566,8 +1576,8 @@ describe('BackgroundTaskManager', () => {
 
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
 
-      // Explorer is a leaf agent — tools disabled regardless of parent
       const promptCalls = ctx.client.session.prompt.mock.calls as Array<
         [{ body: { tools?: Record<string, boolean> } }]
       >;
@@ -1575,6 +1585,7 @@ describe('BackgroundTaskManager', () => {
       expect(lastCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
     });
 
@@ -1620,6 +1631,7 @@ describe('BackgroundTaskManager', () => {
       expect(designerPromptCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
 
       // Designer is a leaf node and cannot spawn subagents
@@ -1647,6 +1659,7 @@ describe('BackgroundTaskManager', () => {
       expect(explorerPromptCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
 
       // Explorer is a dead end
@@ -1747,6 +1760,7 @@ describe('BackgroundTaskManager', () => {
       expect(explorerPromptCall[0].body.tools).toEqual({
         background_task: false,
         task: false,
+        question: false,
       });
 
       // Now complete the designer (cleans up designer's agentBySessionId entry)
@@ -1882,6 +1896,297 @@ describe('BackgroundTaskManager', () => {
         'observer',
         'council',
       ]);
+    });
+
+    describe('question tool permission', () => {
+      test('question: false is passed to prompt for delegating agents', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        // Launch a task with orchestrator (has delegation rules)
+        const task = manager.launch({
+          agent: 'orchestrator',
+          prompt: 'coordinate work',
+          description: 'orchestrator test',
+          parentSessionId: 'root-session',
+        });
+
+        // Yield to allow async startTask to execute
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId to be defined');
+
+        // Find the prompt call for this session
+        const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+          [{ path: { id: string }; body: { tools?: Record<string, boolean> } }]
+        >;
+        const taskPromptCall = promptCalls.find(
+          (call) => call[0].path.id === sessionId,
+        );
+
+        expect(taskPromptCall).toBeDefined();
+        expect(taskPromptCall?.[0].body.tools).toEqual({
+          background_task: true,
+          task: true,
+          question: false,
+        });
+      });
+
+      test('question: false is passed to prompt for leaf agents', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        // Launch a task with explorer (leaf agent, no delegation rules)
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'explorer test',
+          parentSessionId: 'root-session',
+        });
+
+        // Yield to allow async startTask to execute
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId to be defined');
+
+        // Find the prompt call for this session
+        const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+          [{ path: { id: string }; body: { tools?: Record<string, boolean> } }]
+        >;
+        const taskPromptCall = promptCalls.find(
+          (call) => call[0].path.id === sessionId,
+        );
+
+        expect(taskPromptCall).toBeDefined();
+        expect(taskPromptCall?.[0].body.tools).toEqual({
+          background_task: false,
+          task: false,
+          question: false,
+        });
+      });
+    });
+
+    describe('addQuestion', () => {
+      test('records question on the correct task via session ID', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'test',
+          parentSessionId: 'root-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        const result = manager.addQuestion(
+          sessionId,
+          'Should I search tests too?',
+        );
+
+        expect(result).toBe('recorded');
+        expect(task.questions).toEqual(['Should I search tests too?']);
+      });
+
+      test('returns not-found for unknown session', () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const result = manager.addQuestion(
+          'nonexistent-session',
+          'Anybody there?',
+        );
+
+        expect(result).toBe('not-found');
+      });
+
+      test('accumulates multiple questions', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const task = manager.launch({
+          agent: 'oracle',
+          prompt: 'review',
+          description: 'test',
+          parentSessionId: 'root-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        manager.addQuestion(sessionId, 'First question?');
+        manager.addQuestion(sessionId, 'Second question?');
+
+        expect(task.questions).toEqual(['First question?', 'Second question?']);
+      });
+
+      test('returns terminal for completed task (race window guard)', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'test',
+          parentSessionId: 'root-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        // Simulate task completion
+        (task as BackgroundTask & { status: string }).status = 'completed';
+        task.completedAt = new Date();
+        task.result = 'Done.';
+
+        const result = manager.addQuestion(sessionId, 'Too late question?');
+
+        expect(result).toBe('terminal');
+        expect(task.questions).toEqual([]); // No question recorded
+      });
+
+      describe('question disk persistence (temp-dir isolated)', () => {
+        let testDir: string;
+        const origEnv = process.env.OPENCODE_LOG_DIR;
+
+        beforeEach(() => {
+          testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omo-bg-question-'));
+          process.env.OPENCODE_LOG_DIR = testDir;
+        });
+
+        afterEach(() => {
+          fs.rmSync(testDir, { recursive: true, force: true });
+          if (origEnv === undefined) {
+            delete process.env.OPENCODE_LOG_DIR;
+          } else {
+            process.env.OPENCODE_LOG_DIR = origEnv;
+          }
+        });
+
+        test('persists questions to disk on each addQuestion call', async () => {
+          const ctx = createMockContext();
+          const manager = new BackgroundTaskManager(ctx);
+
+          const task = manager.launch({
+            agent: 'explorer',
+            prompt: 'find patterns',
+            description: 'test',
+            parentSessionId: 'root-session',
+          });
+
+          await Promise.resolve();
+          await Promise.resolve();
+
+          const sessionId = task.sessionId;
+          if (!sessionId) throw new Error('Expected sessionId');
+
+          manager.addQuestion(sessionId, 'Should I search tests too?');
+
+          // Load from disk — question should be persisted even though task is still running
+          const fromDisk = loadPersistedTask(task.id);
+          expect(fromDisk).not.toBeNull();
+          expect(fromDisk?.questions).toEqual(['Should I search tests too?']);
+        });
+      });
+
+      test('rejects questions beyond cap (50 questions max)', async () => {
+        const ctx = createMockContext();
+        const manager = new BackgroundTaskManager(ctx);
+
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'test',
+          parentSessionId: 'root-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        // Fill to cap
+        for (let i = 0; i < 50; i++) {
+          manager.addQuestion(sessionId, `Question ${i}`);
+        }
+
+        expect(task.questions.length).toBe(50);
+
+        // 51st should be rejected
+        const result = manager.addQuestion(sessionId, 'One too many');
+        expect(result).toBe('cap-reached');
+        expect(task.questions.length).toBe(50);
+        expect(task.questions).not.toContain('One too many');
+      });
+
+      test('completion notification includes question count', async () => {
+        const ctx = createMockContext({
+          sessionMessagesResult: {
+            data: [
+              {
+                info: { role: 'assistant' },
+                parts: [{ type: 'text', text: 'done' }],
+              },
+            ],
+          },
+        });
+        const manager = new BackgroundTaskManager(ctx, undefined, {
+          background: { maxConcurrentStarts: 10 },
+        });
+
+        const task = manager.launch({
+          agent: 'explorer',
+          prompt: 'find patterns',
+          description: 'search task',
+          parentSessionId: 'parent-session',
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const sessionId = task.sessionId;
+        if (!sessionId) throw new Error('Expected sessionId');
+
+        // Add questions before completion
+        manager.addQuestion(sessionId, 'Should I check tests too?');
+        manager.addQuestion(sessionId, 'What about config files?');
+
+        // Trigger completion
+        await manager.handleSessionStatus({
+          type: 'session.status',
+          properties: {
+            sessionID: sessionId,
+            status: { type: 'idle' },
+          },
+        });
+
+        // Find the notification call
+        const promptCalls = ctx.client.session.prompt.mock.calls as Array<
+          [{ body?: { parts?: Array<{ text?: string }> } }]
+        >;
+        const notificationCall = promptCalls[promptCalls.length - 1];
+        const notificationText =
+          notificationCall[0].body?.parts?.[0]?.text ?? '';
+
+        expect(notificationText).toContain('search task');
+        expect(notificationText).toContain('2 questions relayed');
+      });
     });
   });
 });

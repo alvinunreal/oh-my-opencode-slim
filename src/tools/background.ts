@@ -13,12 +13,28 @@ import { resolveRuntimeAgentName } from '../utils';
 const z = tool.schema;
 
 /**
+ * Extract session ID from a tool execution context.
+ * Returns undefined if context is missing, malformed, or sessionID is not a string.
+ */
+function getSessionId(toolContext: unknown): string | undefined {
+  if (
+    !toolContext ||
+    typeof toolContext !== 'object' ||
+    !('sessionID' in toolContext)
+  ) {
+    return undefined;
+  }
+  const id = (toolContext as { sessionID: unknown }).sessionID;
+  return typeof id === 'string' ? id : undefined;
+}
+
+/**
  * Creates background task management tools for the plugin.
  * @param _ctx - Plugin input context
  * @param manager - Background task manager for launching and tracking tasks
  * @param _multiplexerConfig - Optional multiplexer configuration for session management
  * @param _pluginConfig - Optional plugin configuration for agent variants
- * @returns Object containing background_task, background_output, and background_cancel tools
+ * @returns Object containing background_task, background_output, background_cancel, and ask_orchestrator tools
  */
 export function createBackgroundTools(
   _ctx: PluginInput,
@@ -48,18 +64,14 @@ Key behaviors:
       agent: z.string().describe(`Agent to use: ${agentNames}`),
     },
     async execute(args, toolContext) {
-      if (
-        !toolContext ||
-        typeof toolContext !== 'object' ||
-        !('sessionID' in toolContext)
-      ) {
+      const parentSessionId = getSessionId(toolContext);
+      if (!parentSessionId) {
         throw new Error('Invalid toolContext: missing sessionID');
       }
 
       const agent = resolveRuntimeAgentName(_pluginConfig, String(args.agent));
       const prompt = String(args.prompt);
       const description = String(args.description);
-      const parentSessionId = (toolContext as { sessionID: string }).sessionID;
 
       // Validate agent against delegation rules
       if (!manager.isAgentAllowed(parentSessionId, agent)) {
@@ -148,6 +160,20 @@ Returns: results if completed, error if failed, status if running.`,
         output += '(Task still running)';
       }
 
+      // Surface relayed questions if any (capped at MAX_QUESTIONS_PER_TASK)
+      if (task.questions.length > 0) {
+        output += '\n\n---\n\n**Questions relayed from subagent:**\n';
+        for (const q of task.questions) {
+          // Sanitize newlines to prevent markdown injection, truncate for safety
+          const sanitized = q.replace(/[\r\n]/g, ' ');
+          const truncated =
+            sanitized.length > 2000
+              ? `${sanitized.substring(0, 2000)}... (truncated)`
+              : sanitized;
+          output += `- ${truncated}\n`;
+        }
+      }
+
       return output;
     },
   });
@@ -183,5 +209,60 @@ Only cancels pending/starting/running tasks.`,
     },
   });
 
-  return { background_task, background_output, background_cancel };
+  // Non-blocking question relay for background subagents
+  const ask_orchestrator = tool({
+    description: `Record a question for the orchestrator. NON-BLOCKING — you will NOT receive an answer.
+
+Use this when you need clarification but can proceed with a reasonable assumption.
+State your assumption explicitly using [ASSUMED: ...] markers before continuing.
+
+Example: "Should I use REST or GraphQL for this endpoint?" → pick one, mark [ASSUMED: using REST], keep working.`,
+    args: {
+      question: z
+        .string()
+        .max(2000)
+        .describe(
+          'The question you need answered. Be specific so the orchestrator can evaluate your assumption.',
+        ),
+    },
+    async execute(args, toolContext) {
+      const sessionId = getSessionId(toolContext);
+      const question = args.question;
+
+      // Runtime length guard — Zod schema is descriptive for the LLM's tool-use
+      // input generation, but the plugin tool framework does NOT enforce Zod
+      // validation at execute time. This runtime check is the actual enforcement.
+      if (
+        typeof question !== 'string' ||
+        question.trim().length === 0 ||
+        question.length > 2000
+      ) {
+        return 'Question must be 1\u20132000 characters. Continue with your best judgment using [ASSUMED: ...] markers.';
+      }
+
+      if (!sessionId) {
+        return 'Could not record question (no session context). Continue with your best judgment using [ASSUMED: ...] markers.';
+      }
+
+      const result = manager.addQuestion(sessionId, question);
+      if (result === 'not-found') {
+        return 'This tool is only available in active background tasks. Continue with your best judgment using [ASSUMED: ...] markers.';
+      }
+      if (result === 'terminal') {
+        return 'Task has already completed. Continue with your best judgment using [ASSUMED: ...] markers.';
+      }
+      if (result === 'cap-reached') {
+        return 'Question limit reached for this task. Continue with your best judgment using [ASSUMED: ...] markers.';
+      }
+
+      return 'Question recorded for orchestrator review. Continue with your best judgment using [ASSUMED: ...] markers.';
+    },
+  });
+
+  return {
+    background_task,
+    background_output,
+    background_cancel,
+    ask_orchestrator,
+  };
 }
