@@ -73,6 +73,9 @@ function sanitizeFilename(name: string): string {
 
 function cleanupOldImages(dir: string, saveDir: string): void {
   const now = Date.now();
+  if (!lastCleanupByDir.has(dir) && existsSync(dir)) {
+    lastCleanupByDir.set(dir, now);
+  }
   const lastCleanup = lastCleanupByDir.get(dir) ?? 0;
   if (now - lastCleanup < CLEANUP_INTERVAL) return;
   lastCleanupByDir.set(dir, now);
