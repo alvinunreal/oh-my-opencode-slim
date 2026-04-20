@@ -9,18 +9,13 @@ body:
       value: |
         Thanks for filing a bug. Keep it short, but include enough detail for us to reproduce it.
   - type: textarea
-    id: happened
+    id: summary
     attributes:
-      label: What happened?
-      description: Describe the bug clearly.
-      placeholder: The plugin crashes when I run...
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: What did you expect to happen?
-      placeholder: It should...
+      label: What happened, and what did you expect?
+      description: Describe the bug and the expected behavior.
+      placeholder: |
+        What happened: The plugin crashes when I run...
+        Expected: It should...
     validations:
       required: true
   - type: textarea
@@ -33,36 +28,36 @@ body:
         2. Open...
         3. See...
     validations:
-      required: true
+      required: false
   - type: textarea
     id: config
     attributes:
-      label: Relevant config
-      description: Paste the relevant part of your OpenCode or plugin config. Remove secrets first.
+      label: oh-my-opencode.json
+      description: Paste your oh-my-opencode.json config.
       render: jsonc
     validations:
-      required: true
+      required: false
   - type: input
     id: opencode-version
     attributes:
       label: OpenCode version
       placeholder: 0.4.12
     validations:
-      required: true
+      required: false
   - type: input
     id: plugin-version
     attributes:
       label: oh-my-opencode-slim version
       placeholder: 0.0.0
     validations:
-      required: true
+      required: false
   - type: input
     id: os
     attributes:
       label: Operating system
       placeholder: macOS 15.4 / Ubuntu 24.04 / Windows 11
     validations:
-      required: true
+      required: false
   - type: textarea
     id: logs
     attributes:
