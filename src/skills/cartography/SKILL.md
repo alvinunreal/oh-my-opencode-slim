@@ -144,7 +144,7 @@ Example **Root Codemap (Atlas)**:
 # Repository Atlas: oh-my-opencode-slim
 
 ## Project Responsibility
-A high-performance, low-latency agent orchestration plugin for OpenCode, focusing on specialized sub-agent delegation and background task management.
+A high-performance, low-latency agent orchestration plugin for OpenCode, focusing on specialized sub-agent delegation and multiplexer-assisted child sessions.
 
 ## System Entry Points
 - `src/index.ts`: Plugin initialization and OpenCode integration.
@@ -155,6 +155,6 @@ A high-performance, low-latency agent orchestration plugin for OpenCode, focusin
 | Directory | Responsibility Summary | Detailed Map |
 |-----------|------------------------|--------------|
 | `src/agents/` | Defines agent personalities (Orchestrator, Explorer) and manages model routing. | [View Map](src/agents/codemap.md) |
-| `src/features/` | Core logic for tmux integration, background task spawning, and session state. | [View Map](src/features/codemap.md) |
+| `src/features/` | Core logic for tmux integration and session state. | [View Map](src/features/codemap.md) |
 | `src/config/` | Implements the configuration loading pipeline and environment variable injection. | [View Map](src/config/codemap.md) |
 ```

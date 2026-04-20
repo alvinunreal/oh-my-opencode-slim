@@ -468,7 +468,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
 | **[Skills](docs/skills.md)** | Built-in and recommended skills such as `simplify`, `agent-browser`, and `cartography` |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `grep_app`, and how MCP permissions work per agent |
-| **[Tools](docs/tools.md)** | Built-in tool capabilities like background tasks, `webfetch`, LSP tools, code search, and formatters |
+| **[Tools](docs/tools.md)** | Built-in tool capabilities like `webfetch`, LSP tools, code search, and formatters |
 
 ### 💡 Example Presets
 

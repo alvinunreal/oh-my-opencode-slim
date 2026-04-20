@@ -41,11 +41,11 @@ The plugin integrates with OpenCode to provide:
 
 | Directory | Responsibility Summary | Detailed Map |
 |-----------|------------------------|--------------|
-| `src/` | Main plugin entrypoint plus all feature modules that compose agents, tools, hooks, background managers, and utils. | [View Map](src/codemap.md) |
+| `src/` | Main plugin entrypoint plus all feature modules that compose agents, tools, hooks, multiplexer support, and utils. | [View Map](src/codemap.md) |
 | `src/agents/` | Defines specialist agents and the orchestrator, with factories and override/permission helpers. | [View Map](src/agents/codemap.md) |
-| `src/background/` | Background task/session managers and tmux pane orchestration for off-thread agent runs. | [View Map](src/background/codemap.md) |
 | `src/cli/` | Installer CLI flow, config edits, provider setup, and skill installation helpers. | [View Map](src/cli/codemap.md) |
 | `src/config/` | Plugin configuration schemas, defaults, loaders, and MCP/agent override helpers. | [View Map](src/config/codemap.md) |
+| `src/multiplexer/` | Tmux/Zellij pane orchestration for child sessions. | [View Map](src/multiplexer/codemap.md) |
 | `src/hooks/` | Lifecycle hooks for message transforms, error recovery, and rate-limit fallbacks. | [View Map](src/hooks/codemap.md) |
 | `src/hooks/auto-update-checker/` | Startup update check hook with cache invalidation and optional auto-install. | [View Map](src/hooks/auto-update-checker/codemap.md) |
 | `src/hooks/phase-reminder/` | Orchestrator message transform hook that injects phase reminders. | [View Map](src/hooks/phase-reminder/codemap.md) |
@@ -54,7 +54,7 @@ The plugin integrates with OpenCode to provide:
 | `src/hooks/foreground-fallback/` | Rate-limit fallback manager for interactive sessions. | [View Map](src/hooks/foreground-fallback/codemap.md) |
 | `src/hooks/json-error-recovery/` | JSON parse error detection and recovery helpers. | [View Map](src/hooks/json-error-recovery/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and config types for remote connectors. | [View Map](src/mcp/codemap.md) |
-| `src/tools/` | Tool registry plus LSP, AST-grep, and background task implementations. | [View Map](src/tools/codemap.md) |
+| `src/tools/` | Tool registry plus LSP, AST-grep, council, and webfetch implementations. | [View Map](src/tools/codemap.md) |
 | `src/tools/ast-grep/` | AST-grep CLI discovery, execution, and tool definitions. | [View Map](src/tools/ast-grep/codemap.md) |
 | `src/tools/lsp/` | LSP client stack and tool surface for definitions, diagnostics, and rename. | [View Map](src/tools/lsp/codemap.md) |
 | `src/utils/` | Shared helpers for tmux, environment variables, internal initiation, and config. | [View Map](src/utils/codemap.md) |
@@ -72,7 +72,7 @@ Load plugin config (src/config)
     ↓
 Initialize agent configs (src/agents)
     ↓
-Initialize background manager (src/background)
+Initialize multiplexer/session helpers (src/multiplexer + src/utils)
     ↓
 Initialize MCPs (src/mcp)
     ↓
@@ -96,10 +96,10 @@ Return plugin object with:
    - Each agent has specific tools, permissions, and temperature settings
    - MCP tools configured per agent based on role
 
-2. **Background Tasks** (`src/background/`)
-   - Fire-and-forget task execution
-   - Session lifecycle management
-   - Optional tmux pane integration for visual tracking
+2. **Multiplexer Integration** (`src/multiplexer/`)
+   - Child-session pane management
+   - Session lifecycle monitoring
+   - Optional tmux/zellij visual tracking
 
 3. **Configuration** (`src/config/`)
    - User, project, and preset config layers

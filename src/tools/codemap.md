@@ -170,38 +170,6 @@ stop()
   └─→ kill process
 ```
 
-### Background Task Flow
-
-```
-User Request (background_task)
-    ↓
-Tool definition (background.ts)
-    ↓
-manager.launch()
-    ├─→ Validate agent against delegation rules
-    ├─→ Create task with unique ID
-    ├─→ Store in BackgroundTaskManager
-    └─→ Return task_id immediately (~1ms)
-    ↓
-[Background execution]
-    ├─→ Agent runs independently
-    ├─→ Completes with result/error
-    └─→ Auto-notify parent session
-    ↓
-User Request (background_output)
-    ↓
-manager.getResult(task_id)
-    ├─→ If timeout > 0: waitForCompletion()
-    └─→ Return status/result/error/duration
-    ↓
-User Request (background_cancel)
-    ↓
-manager.cancel(task_id) or manager.cancel(all)
-    └─→ Cancel pending/starting/running tasks only
-```
-
----
-
 ## Integration
 
 ### Dependencies
@@ -214,8 +182,7 @@ manager.cancel(task_id) or manager.cancel(all)
 - **which**: PATH resolution for CLI binaries
 
 #### Internal Dependencies
-- **src/background**: `BackgroundTaskManager` for background task tools
-- **src/config**: `SUBAGENT_NAMES`, `PluginConfig`, `TmuxConfig`
+- **src/config**: tool/config constants and schemas
 - **src/utils**: `extractZip` for binary extraction
 - **src/utils/logger**: Logging utilities
 
@@ -271,7 +238,7 @@ export {
 - **Output truncation**: Prevent memory issues with large outputs
 - **Timeout enforcement**: All subprocess operations have timeouts
 - **Caching**: CLI paths cached to avoid repeated filesystem checks
-- **Background tasks**: Fire-and-forget pattern for long-running operations
+- **Delegation helpers**: Retry guidance and council/webfetch tools complement OpenCode's built-in task flow
 
 ---
 
@@ -279,7 +246,6 @@ export {
 
 ### Root Level
 - **index.ts**: Central export point for all tools
-- **background.ts**: Background task management (3 tools: background_task, background_output, background_cancel)
 
 ### ast-grep/
 - **index.ts**: Re-exports ast-grep module and types

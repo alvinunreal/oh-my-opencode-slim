@@ -66,14 +66,14 @@ bun test -t "test-name-pattern"
 oh-my-opencode-slim/
 ├── src/
 │   ├── agents/       # Agent factories (orchestrator, explorer, oracle, etc.)
-│   ├── background/   # Background task management
 │   ├── cli/          # CLI entry point
 │   ├── config/       # Constants, schemas, MCP defaults
 │   ├── council/      # Council manager (multi-LLM session orchestration)
 │   ├── hooks/        # OpenCode lifecycle hooks
 │   ├── mcp/          # MCP server definitions
+│   ├── multiplexer/  # Tmux/Zellij pane integration for child sessions
 │   ├── skills/       # Skill definitions (included in package publish)
-│   ├── tools/        # Tool definitions (background tasks, council, etc.)
+│   ├── tools/        # Tool definitions (council, webfetch, LSP, etc.)
 │   └── utils/        # Shared utilities (tmux, session helpers)
 ├── dist/             # Built JavaScript and declarations
 ├── docs/             # User-facing documentation
@@ -133,15 +133,14 @@ await delay(250)
 spawn([tmux, "kill-pane", "-t", paneId])
 ```
 
-**2. Session Abort Timing (src/background/background-manager.ts)**
+**2. Session Abort Timing (src/council/council-manager.ts)**
 - Call `session.abort()` AFTER extracting task results
 - This ensures content is preserved before session termination
 - Triggers `session.deleted` event for cleanup
 
 **3. Event Handlers (src/index.ts)**
-Both handlers must be wired up:
-- `backgroundManager.handleSessionDeleted()` - cleans up task state
-- `tmuxSessionManager.onSessionDeleted()` - closes tmux pane
+The multiplexer session handler must stay wired up:
+- `multiplexerSessionManager.onSessionDeleted()` - closes tmux/zellij panes
 
 ### Testing Tmux Integration
 
@@ -246,7 +245,7 @@ OpenCode has a built-in `/review` command that automatically performs comprehens
 - The main plugin export is `src/index.ts`
 - Agent factories are in `src/agents/` — each agent has its own file + optional `.test.ts`
 - Skills are located in `src/skills/` (included in package publish)
-- Background task management is in `src/background/`
+- Multiplexer session management is in `src/multiplexer/`
 - Council manager (multi-LLM orchestration) is in `src/council/`
 - Tmux utilities are in `src/utils/tmux.ts`
 - 468 tests across 35 files — run `bun test` to verify

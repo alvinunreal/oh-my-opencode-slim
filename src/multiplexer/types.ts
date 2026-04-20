@@ -2,7 +2,7 @@
  * Multiplexer abstraction layer
  *
  * Provides a unified interface for terminal multiplexers (tmux, zellij, etc.)
- * to spawn and manage panes for background task visualization.
+ * to spawn and manage panes for child agent sessions.
  */
 
 import type { MultiplexerConfig, MultiplexerLayout } from '../config/schema';
