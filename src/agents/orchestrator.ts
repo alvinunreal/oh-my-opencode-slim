@@ -74,10 +74,10 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Role: Multi-LLM consensus engine for high-confidence answers
 - Permissions: Read files
 - Stats: 3x slower than orchestrator, 3x or more cost of orchestrator
-- Capabilities: Runs multiple models in parallel, synthesizes their responses via a council master
+- Capabilities: Runs multiple models in parallel, synthesizes their responses into a consensus answer
 - **Delegate when:** Critical decisions needing diverse model perspectives • High-stakes architectural choices where consensus reduces risk • Ambiguous problems where multi-model disagreement is informative • Security-sensitive design reviews
 - **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Single-model answer is sufficient • Routine implementation work
-- **Result handling:** Present the council's synthesized response verbatim. Do not re-summarize — the council master has already produced the final answer.
+- **Result handling:** Present the council's synthesized response verbatim. Do not re-summarize or condense.
 - **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.`,
 
   observer: `@observer

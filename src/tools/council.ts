@@ -17,7 +17,7 @@ function formatModelComposition(
 ): string {
   return councillorResults
     .map((cr) => {
-      const shortModel = shortModelLabel(cr.model ?? '');
+      const shortModel = shortModelLabel(cr.model);
       return `${cr.name}: ${shortModel}`;
     })
     .join(', ');
@@ -27,7 +27,8 @@ function formatModelComposition(
  * Creates the council_session tool for multi-LLM orchestration.
  *
  * This tool triggers a full council session: parallel councillors →
- * master synthesis. Available to the council agent.
+ * formatted results returned to the council agent for synthesis.
+ * Available to the council agent.
  */
 export function createCouncilTool(
   _ctx: PluginInput,
@@ -36,9 +37,9 @@ export function createCouncilTool(
   const council_session = tool({
     description: `Launch a multi-LLM council session for consensus-based analysis.
 
-Sends the prompt to multiple models (councillors) in parallel, then a council master synthesizes the best response.
+Sends the prompt to multiple models (councillors) in parallel and returns their formatted responses for you to synthesize.
 
-Returns the synthesized result with councillor summary.`,
+Returns the councillor responses with a summary footer.`,
     args: {
       prompt: z.string().describe('The prompt to send to all councillors'),
       preset: z
@@ -78,16 +79,6 @@ Returns the synthesized result with councillor summary.`,
       );
 
       if (!result.success) {
-        if (result.result) {
-          // Graceful degradation — master failed, return best councillor
-          const completed = result.councillorResults.filter(
-            (cr) => cr.status === 'completed',
-          ).length;
-          const total = result.councillorResults.length;
-          const composition = formatModelComposition(result.councillorResults);
-
-          return `${result.result}\n\n---\n*Council: ${completed}/${total} councillors responded (${composition}) — degraded*`;
-        }
         return `Council session failed: ${result.error}`;
       }
 
@@ -101,6 +92,12 @@ Returns the synthesized result with councillor summary.`,
       const composition = formatModelComposition(result.councillorResults);
 
       output += `\n\n---\n*Council: ${completed}/${total} councillors responded (${composition})*`;
+
+      // Warn about deprecated config fields if detected
+      const deprecated = councilManager.getDeprecatedFields();
+      if (deprecated && deprecated.length > 0) {
+        output += `\n⚠ Config warning: ${deprecated.map((f) => `\`council.${f}\``).join(', ')} ${deprecated.length === 1 ? 'is' : 'are'} deprecated and ignored. The council agent synthesizes directly — remove ${deprecated.length === 1 ? 'it' : 'them'} from your config.`;
+      }
 
       return output;
     },

@@ -245,7 +245,7 @@ export const PluginConfigSchema = z.object({
     .describe(
       'Agent names to disable completely. ' +
         'Disabled agents are not instantiated and cannot be delegated to. ' +
-        'Orchestrator and council internal agents (councillor, council-master) cannot be disabled. ' +
+        'Orchestrator and council internal agents (councillor) cannot be disabled. ' +
         "By default, 'observer' is disabled. Remove it from this list and configure a vision-capable model to enable.",
     ),
   disabled_mcps: z.array(z.string()).optional(),

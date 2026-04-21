@@ -318,9 +318,9 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 9 agents by default (1 orchestrator + 8 subagents, observer disabled)', () => {
+  test('creates exactly 8 agents by default (1 orchestrator + 7 subagents, observer disabled)', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(9);
+    expect(agents.length).toBe(8);
   });
 });
 
@@ -342,76 +342,13 @@ describe('getAgentConfigs', () => {
 });
 
 describe('council agent model resolution', () => {
-  test('council agent uses config.council.master.model', () => {
-    const config = {
-      council: {
-        master: { model: 'anthropic/claude-sonnet-4-6' },
-        presets: {
-          default: {
-            councillors: {
-              alpha: { model: 'test/alpha-model' },
-            },
-            master: undefined,
-          },
-        },
-      },
-    } as unknown as PluginConfig;
-    const agents = createAgents(config);
-    const council = agents.find((a) => a.name === 'council');
-    expect(council?.config.model).toBe('anthropic/claude-sonnet-4-6');
-  });
-
-  test('council agent falls back to default without council config', () => {
+  test('council agent uses default model', () => {
     const agents = createAgents();
     const council = agents.find((a) => a.name === 'council');
     expect(council?.config.model).toBe(DEFAULT_MODELS.council);
   });
 
-  test('council-master agent uses config.council.master.model', () => {
-    const config = {
-      council: {
-        master: { model: 'anthropic/claude-sonnet-4-6' },
-        presets: {
-          default: {
-            councillors: {
-              alpha: { model: 'test/alpha-model' },
-            },
-            master: undefined,
-          },
-        },
-      },
-    } as unknown as PluginConfig;
-    const agents = createAgents(config);
-    const councilMaster = agents.find((a) => a.name === 'council-master');
-    expect(councilMaster?.config.model).toBe('anthropic/claude-sonnet-4-6');
-  });
-
-  test('council-master agent falls back to default without council config', () => {
-    const agents = createAgents();
-    const councilMaster = agents.find((a) => a.name === 'council-master');
-    expect(councilMaster?.config.model).toBe(DEFAULT_MODELS['council-master']);
-  });
-
-  test('councillor agent uses config.council.master.model', () => {
-    const config = {
-      council: {
-        master: { model: 'anthropic/claude-sonnet-4-6' },
-        presets: {
-          default: {
-            councillors: {
-              alpha: { model: 'test/alpha-model' },
-            },
-            master: undefined,
-          },
-        },
-      },
-    } as unknown as PluginConfig;
-    const agents = createAgents(config);
-    const councillor = agents.find((a) => a.name === 'councillor');
-    expect(councillor?.config.model).toBe('anthropic/claude-sonnet-4-6');
-  });
-
-  test('councillor agent falls back to default without council config', () => {
+  test('councillor agent uses default model', () => {
     const agents = createAgents();
     const councillor = agents.find((a) => a.name === 'councillor');
     expect(councillor?.config.model).toBe(DEFAULT_MODELS.councillor);
@@ -584,36 +521,34 @@ describe('disabled_agents', () => {
 
   test('protected agents cannot be disabled', () => {
     const config: PluginConfig = {
-      disabled_agents: ['orchestrator', 'councillor', 'council-master'],
+      disabled_agents: ['orchestrator', 'councillor'],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
     expect(names).toContain('orchestrator');
     expect(names).toContain('councillor');
-    expect(names).toContain('council-master');
   });
 
-  test('disabling council disables all council agents', () => {
+  test('disabling council disables council agent', () => {
     const config: PluginConfig = {
       disabled_agents: ['council'],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
     expect(names).not.toContain('council');
-    // councillor and council-master are protected, they stay
+    // councillor is protected, it stays
     expect(names).toContain('councillor');
-    expect(names).toContain('council-master');
   });
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(9); // 1 + 8 (observer disabled by default)
+    expect(agents.length).toBe(8); // 1 + 7 (observer disabled by default)
 
     const disabledConfig: PluginConfig = {
       disabled_agents: ['observer', 'designer'],
     };
     const disabledAgents = createAgents(disabledConfig);
-    expect(disabledAgents.length).toBe(8);
+    expect(disabledAgents.length).toBe(7);
   });
 
   test('getDisabledAgents respects protection rules', () => {
@@ -642,7 +577,7 @@ describe('disabled_agents', () => {
       disabled_agents: [],
     };
     const agents = createAgents(config);
-    expect(agents.length).toBe(10);
+    expect(agents.length).toBe(9);
     expect(agents.map((a) => a.name)).toContain('observer');
   });
 });

@@ -35,91 +35,59 @@ export const CouncillorConfigSchema = z.object({
 export type CouncillorConfig = z.infer<typeof CouncillorConfigSchema>;
 
 /**
- * Per-preset master override. All fields are optional — any field
- * provided here overrides the global `council.master` for this preset.
- * Fields not provided fall back to the global master config.
- */
-export const PresetMasterOverrideSchema = z.object({
-  model: ModelIdSchema.optional().describe(
-    'Override the master model for this preset',
-  ),
-  variant: z
-    .string()
-    .optional()
-    .describe('Override the master variant for this preset'),
-  prompt: z
-    .string()
-    .optional()
-    .describe('Override the master synthesis guidance for this preset'),
-});
-
-export type PresetMasterOverride = z.infer<typeof PresetMasterOverrideSchema>;
-
-/**
- * A named preset grouping several councillors with an optional master override.
+ * A named preset grouping several councillors.
  *
- * The reserved key `"master"` provides per-preset overrides for the council
- * master (model, variant, prompt). All other keys are treated as councillor
- * names mapping to councillor configs.
- *
- * After parsing, the preset resolves to:
- * `{ councillors: Record<string, CouncillorConfig>, master?: PresetMasterOverride }`
+ * All keys are treated as councillor names mapping to councillor configs.
+ * The reserved key `"master"` is silently ignored (legacy from when
+ * council-master was a separate agent).
  */
 export const CouncilPresetSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .transform((entries, ctx) => {
     const councillors: Record<string, CouncillorConfig> = {};
-    let masterOverride: PresetMasterOverride | undefined;
 
     for (const [key, raw] of Object.entries(entries)) {
-      if (key === 'master') {
-        const parsed = PresetMasterOverrideSchema.safeParse(raw);
-        if (!parsed.success) {
-          ctx.addIssue(
-            `Invalid master override in preset: ${parsed.error.issues.map((i) => i.message).join(', ')}`,
-          );
-          return z.NEVER;
+      // Silently skip the legacy "master" key — no longer parsed as a
+      // councillor. Old configs with per-preset master overrides won't
+      // error, but the override has no effect.
+      if (key === 'master') continue;
+
+      // Legacy nested format: old configs wrapped councillors in a
+      // "councillors" key inside each preset. Unwrap them into the
+      // parent so the config still works without migration.
+      if (key === 'councillors' && typeof raw === 'object' && raw !== null) {
+        for (const [innerKey, innerRaw] of Object.entries(
+          raw as Record<string, unknown>,
+        )) {
+          const innerParsed =
+            CouncillorConfigSchema.safeParse(innerRaw);
+          if (!innerParsed.success) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Invalid councillor "${innerKey}" (nested under legacy "councillors" key): ${innerParsed.error.issues.map((i) => i.message).join(', ')}`,
+            });
+            return z.NEVER;
+          }
+          councillors[innerKey] = innerParsed.data;
         }
-        masterOverride = parsed.data;
-      } else {
-        const parsed = CouncillorConfigSchema.safeParse(raw);
-        if (!parsed.success) {
-          ctx.addIssue(
-            `Invalid councillor "${key}": ${parsed.error.issues.map((i) => i.message).join(', ')}`,
-          );
-          return z.NEVER;
-        }
-        councillors[key] = parsed.data;
+        continue;
       }
+
+      const parsed = CouncillorConfigSchema.safeParse(raw);
+      if (!parsed.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Invalid councillor "${key}": ${parsed.error.issues.map((i) => i.message).join(', ')}`,
+        });
+        return z.NEVER;
+      }
+      councillors[key] = parsed.data;
     }
 
-    return { councillors, master: masterOverride };
+    return councillors;
   });
 
 export type CouncilPreset = z.infer<typeof CouncilPresetSchema>;
-
-/**
- * Council Master configuration.
- * The master receives all councillor responses and produces the final synthesis.
- *
- * Note: The master runs as a council-master agent session with zero
- * permissions (deny all). Synthesis is a text-in/text-out operation —
- * no tools or MCPs are needed.
- */
-export const CouncilMasterConfigSchema = z.object({
-  model: ModelIdSchema.describe(
-    'Model ID for the council master (e.g. "anthropic/claude-opus-4-6")',
-  ),
-  variant: z.string().optional(),
-  prompt: z
-    .string()
-    .optional()
-    .describe(
-      'Optional role/guidance injected into the master synthesis prompt',
-    ),
-});
-
-export type CouncilMasterConfig = z.infer<typeof CouncilMasterConfigSchema>;
 
 /**
  * Execution mode for councillors.
@@ -141,7 +109,6 @@ export const CouncillorExecutionModeSchema = z
  * ```jsonc
  * {
  *   "council": {
- *     "master": { "model": "anthropic/claude-opus-4-6" },
  *     "presets": {
  *       "default": {
  *         "alpha": { "model": "openai/gpt-5.4-mini" },
@@ -149,50 +116,63 @@ export const CouncillorExecutionModeSchema = z
  *         "gamma": { "model": "google/gemini-3-pro" }
  *       }
  *     },
- *     "master_timeout": 300000,
- *     "councillors_timeout": 180000,
+ *     "timeout": 180000,
  *     "councillor_execution_mode": "serial"
  *   }
  * }
  * ```
  */
-export const CouncilConfigSchema = z.object({
-  master: CouncilMasterConfigSchema,
-  presets: z.record(z.string(), CouncilPresetSchema),
-  master_timeout: z.number().min(0).default(300000),
-  councillors_timeout: z.number().min(0).default(180000),
-  default_preset: z.string().default('default'),
-  master_fallback: z
-    .array(ModelIdSchema)
-    .optional()
-    .transform((val) => {
-      if (!val) return val;
-      const unique = [...new Set(val)];
-      if (unique.length !== val.length) {
-        // Silently deduplicate — no validation error is raised for
-        // duplicate entries; duplicates are removed transparently.
-        return unique;
-      }
-      return val;
-    })
-    .describe(
-      'Fallback models for the council master. Tried in order if the primary model fails. ' +
-        'Example: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]',
+export const CouncilConfigSchema = z
+  .object({
+    presets: z.record(z.string(), CouncilPresetSchema),
+    timeout: z.number().min(0).default(180000),
+    default_preset: z.string().default('default'),
+    councillor_execution_mode: CouncillorExecutionModeSchema.describe(
+      'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
     ),
-  councillor_execution_mode: CouncillorExecutionModeSchema.describe(
-    'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
-  ),
-  councillor_retries: z
-    .number()
-    .int()
-    .min(0)
-    .max(5)
-    .default(3)
-    .describe(
-      'Number of retry attempts for councillors and master that return empty responses ' +
-        '(e.g. due to provider rate limiting). Default: 3 retries.',
-    ),
-});
+    councillor_retries: z
+      .number()
+      .int()
+      .min(0)
+      .max(5)
+      .default(3)
+      .describe(
+        'Number of retry attempts for councillors that return empty responses ' +
+          '(e.g. due to provider rate limiting). Default: 3 retries.',
+      ),
+    // Deprecated fields — accepted for backward compatibility but ignored.
+    // The council agent now synthesizes directly; no separate master session.
+    // Uses permissive schemas since the values are discarded — strict
+    // validation would break old configs with non-standard model IDs.
+    master: z
+      .unknown()
+      .optional()
+      .describe('DEPRECATED — ignored. Council agent synthesizes directly.'),
+    master_timeout: z
+      .unknown()
+      .optional()
+      .describe('DEPRECATED — ignored. Use "timeout" instead.'),
+    master_fallback: z
+      .unknown()
+      .optional()
+      .describe('DEPRECATED — ignored. No separate master session.'),
+  })
+  .transform((data) => {
+    // Detect deprecated fields and attach warning for consumers
+    const deprecated: string[] = [];
+    if (data.master !== undefined) deprecated.push('master');
+    if (data.master_timeout !== undefined) deprecated.push('master_timeout');
+    if (data.master_fallback !== undefined) deprecated.push('master_fallback');
+
+    return {
+      presets: data.presets,
+      timeout: data.timeout,
+      default_preset: data.default_preset,
+      councillor_execution_mode: data.councillor_execution_mode,
+      councillor_retries: data.councillor_retries,
+      _deprecated: deprecated.length > 0 ? deprecated : undefined,
+    };
+  });
 
 export type CouncilConfig = z.infer<typeof CouncilConfigSchema>;
 export type CouncillorExecutionMode = z.infer<
@@ -210,7 +190,6 @@ export type CouncillorExecutionMode = z.infer<
  * ```
  */
 export const DEFAULT_COUNCIL_CONFIG: z.input<typeof CouncilConfigSchema> = {
-  master: { model: 'anthropic/claude-opus-4-6' },
   presets: {
     default: {
       alpha: { model: 'openai/gpt-5.4-mini' },

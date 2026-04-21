@@ -13,7 +13,6 @@ export const SUBAGENT_NAMES = [
   'observer',
   'council',
   'councillor',
-  'council-master',
 ] as const;
 
 export const ORCHESTRATOR_NAME = 'orchestrator' as const;
@@ -30,7 +29,7 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 // explorer/librarian/oracle: cannot spawn any subagents (leaf nodes)
 // Unknown agent types not listed here default to explorer-only access
 // Which agents each agent type can spawn via delegation.
-// councillor and council-master are internal — only CouncilManager spawns them.
+// councillor is internal — only CouncilManager spawns it.
 export const ORCHESTRATABLE_AGENTS = [
   'explorer',
   'librarian',
@@ -42,11 +41,7 @@ export const ORCHESTRATABLE_AGENTS = [
 ] as const;
 
 /** Agents that cannot be disabled even if listed in disabled_agents config. */
-export const PROTECTED_AGENTS = new Set([
-  'orchestrator',
-  'councillor',
-  'council-master',
-]);
+export const PROTECTED_AGENTS = new Set(['orchestrator', 'councillor']);
 
 /**
  * Get the list of orchestratable agents, excluding any disabled agents.
@@ -68,7 +63,6 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   observer: [],
   council: [],
   councillor: [],
-  'council-master': [],
 };
 
 // Default models for each agent
@@ -83,7 +77,6 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   observer: 'openai/gpt-5.4-mini',
   council: 'openai/gpt-5.4-mini',
   councillor: 'openai/gpt-5.4-mini',
-  'council-master': 'openai/gpt-5.4-mini',
 };
 
 // Polling configuration

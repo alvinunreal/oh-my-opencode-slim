@@ -14,7 +14,6 @@ import {
 import { getAgentMcpList } from '../config/agent-mcps';
 
 import { createCouncilAgent } from './council';
-import { createCouncilMasterAgent } from './council-master';
 import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
@@ -97,7 +96,7 @@ function injectDisplayNames(
  * If configuredSkills is provided, it honors that list instead of defaults.
  *
  * Note: If the agent already explicitly sets question to 'deny', that is
- * respected (e.g. councillor and council-master should not ask questions).
+ * respected (e.g. councillor should not ask questions).
  */
 function applyDefaultPermissions(
   agent: AgentDefinition,
@@ -114,7 +113,7 @@ function applyDefaultPermissions(
     configuredSkills,
   );
 
-  // Respect explicit deny on question (councillor, council-master)
+  // Respect explicit deny on question (councillor)
   const questionPerm = existing.question === 'deny' ? 'deny' : 'allow';
 
   agent.config.permission = {
@@ -147,7 +146,6 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   observer: createObserverAgent,
   council: createCouncilAgent,
   councillor: createCouncillorAgent,
-  'council-master': createCouncilMasterAgent,
 };
 
 // Public API
@@ -175,17 +173,6 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
         librarianModel = librarianOverride;
       }
       return librarianModel ?? (DEFAULT_MODELS.librarian as string);
-    }
-    // Council and council-master agents' model comes from
-    // config.council.master.model so the TUI validates the user's
-    // actual model, not the hardcoded default
-    if (
-      (name === 'council' ||
-        name === 'council-master' ||
-        name === 'councillor') &&
-      config?.council?.master?.model
-    ) {
-      return config.council.master.model;
     }
     // Subagents always have a defined default model; cast is safe here
     return DEFAULT_MODELS[name] as string;
@@ -293,8 +280,8 @@ export function getAgentConfigs(
       // Council is callable both as a primary agent (user-facing)
       // and as a subagent (orchestrator can delegate to it)
       sdkConfig.mode = 'all';
-    } else if (name === 'councillor' || name === 'council-master') {
-      // Internal agents — subagent mode, hidden from @ autocomplete
+    } else if (name === 'councillor') {
+      // Internal agent — subagent mode, hidden from @ autocomplete
       sdkConfig.mode = 'subagent';
       sdkConfig.hidden = true;
     } else if (isSubagent(name)) {
@@ -304,8 +291,7 @@ export function getAgentConfigs(
     }
   };
 
-  const isInternalOnly = (name: string): boolean =>
-    name === 'councillor' || name === 'council-master';
+  const isInternalOnly = (name: string): boolean => name === 'councillor';
 
   const entries: Array<[string, SDKAgentConfig]> = [];
 

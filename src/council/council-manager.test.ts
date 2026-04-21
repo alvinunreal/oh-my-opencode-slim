@@ -51,14 +51,11 @@ function createMockContext(overrides?: {
 }
 
 function createTestCouncilConfig(overrides?: {
-  master?: { model?: string; variant?: string };
   presets?: Record<string, Record<string, { model: string; variant?: string }>>;
   default_preset?: string;
-  master_timeout?: number;
-  councillors_timeout?: number;
+  timeout?: number;
 }): PluginConfig {
   const councilConfig = CouncilConfigSchema.parse({
-    master: overrides?.master ?? { model: 'anthropic/claude-opus-4-6' },
     presets: overrides?.presets ?? {
       default: {
         alpha: { model: 'openai/gpt-5.4-mini' },
@@ -66,8 +63,7 @@ function createTestCouncilConfig(overrides?: {
       },
     },
     default_preset: overrides?.default_preset,
-    master_timeout: overrides?.master_timeout,
-    councillors_timeout: overrides?.councillors_timeout,
+    timeout: overrides?.timeout,
   });
 
   return { council: councilConfig } as any;
@@ -192,13 +188,10 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                councillor1: { model: 'openai/gpt-5.4-mini' },
-                councillor2: { model: 'openai/gpt-5.3-codex' },
-              },
+              councillor1: { model: 'openai/gpt-5.4-mini' },
+              councillor2: { model: 'openai/gpt-5.3-codex' },
             },
           },
         },
@@ -239,17 +232,12 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
             custom: {
-              councillors: {
-                beta: { model: 'openai/gpt-5.3-codex' },
-              },
+              beta: { model: 'openai/gpt-5.3-codex' },
             },
           },
           default_preset: 'custom',
@@ -293,13 +281,10 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                timeout: { model: 'openai/gpt-5.4-mini' },
-                success: { model: 'openai/gpt-5.3-codex' },
-              },
+              timeout: { model: 'openai/gpt-5.4-mini' },
+              success: { model: 'openai/gpt-5.3-codex' },
             },
           },
         },
@@ -327,58 +312,6 @@ describe('CouncilManager', () => {
       expect(successResult?.status).toBe('completed');
     });
 
-    test('returns degraded result when master fails but councillors succeed', async () => {
-      let createCallCount = 0;
-      const ctx = createMockContext({
-        sessionCreateResult: () => {
-          createCallCount++;
-          return { data: { id: `session-${createCallCount}` } };
-        },
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Councillor result' }],
-            },
-          ],
-        },
-        promptImpl: async (args: any) => {
-          // Master is third session (after 2 councillors), fail it
-          const sessionId = args.path?.id;
-          if (sessionId === 'session-3') {
-            throw new Error('Master synthesis failed');
-          }
-          return {};
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-                beta: { model: 'openai/gpt-5.3-codex' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      const result = await manager.runCouncil(
-        'test prompt',
-        undefined,
-        'parent-session-id',
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('synthesis failed');
-      expect(result.result).toBeDefined();
-      expect(result.result).toContain('Degraded');
-      expect(result.councillorResults).toHaveLength(2);
-    });
-
     test('passes variant to councillor sessions', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {
@@ -392,12 +325,9 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini', variant: 'low' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini', variant: 'low' },
             },
           },
         },
@@ -417,41 +347,6 @@ describe('CouncilManager', () => {
       expect(councillorCall?.[0].body?.variant).toBe('low');
     });
 
-    test('passes variant to master session', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: { model: 'anthropic/claude-opus-4-6', variant: 'high' },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-session-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [{ body?: { variant?: string } }]
-      >;
-      // Last prompt call is for master (after councillor)
-      const masterCall = promptCalls[promptCalls.length - 1];
-      expect(masterCall[0].body?.variant).toBe('high');
-    });
-
     test('always aborts councillor sessions after completion', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {
@@ -465,13 +360,10 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-                beta: { model: 'openai/gpt-5.3-codex' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
+              beta: { model: 'openai/gpt-5.3-codex' },
             },
           },
         },
@@ -480,20 +372,17 @@ describe('CouncilManager', () => {
 
       await manager.runCouncil('test prompt', undefined, 'parent-session-id');
 
-      // Should abort 2 councillors + 1 master = 3 total
-      expect(ctx.client.session.abort).toHaveBeenCalledTimes(3);
+      // Should abort 2 councillors
+      expect(ctx.client.session.abort).toHaveBeenCalledTimes(2);
     });
 
     test('handles councillor with invalid model format', async () => {
       const ctx = createMockContext();
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                badmodel: { model: 'invalid-model-no-slash' },
-              },
+              badmodel: { model: 'invalid-model-no-slash' },
             },
           },
         },
@@ -515,58 +404,6 @@ describe('CouncilManager', () => {
       );
     });
 
-    test('handles master with invalid model format', async () => {
-      let createCallCount = 0;
-      const ctx = createMockContext({
-        sessionCreateResult: () => {
-          createCallCount++;
-          return { data: { id: `session-${createCallCount}` } };
-        },
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Councillor response' }],
-            },
-          ],
-        },
-        promptImpl: async (args: any) => {
-          // Master is second session (after 1 councillor), fail it due to invalid model
-          const sessionId = args.path?.id;
-          if (sessionId === 'session-2') {
-            throw new Error(
-              'Invalid master model format: invalid-model-no-slash',
-            );
-          }
-          return {};
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: { model: 'invalid-model-no-slash' },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      const result = await manager.runCouncil(
-        'test prompt',
-        undefined,
-        'parent-session-id',
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Invalid model format');
-      expect(result.error).toContain('All master models failed');
-      expect(result.result).toBeDefined(); // Degraded result
-    });
-
     test('extracts text and reasoning content from councillor responses', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {
@@ -583,12 +420,9 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -602,7 +436,7 @@ describe('CouncilManager', () => {
       );
 
       expect(result.success).toBe(true);
-      // Councillors filter out reasoning parts to avoid bloating master synthesis
+      // Councillors filter out reasoning parts to avoid bloating the synthesis
       expect(result.councillorResults[0].result).not.toContain(
         'I am thinking...',
       );
@@ -661,7 +495,9 @@ describe('CouncilManager', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Preset "empty" has no councillors configured');
+      expect(result.error).toContain(
+        'Preset "empty" has no councillors configured',
+      );
       expect(result.councillorResults).toHaveLength(0);
     });
 
@@ -741,81 +577,6 @@ describe('CouncilManager', () => {
       expect(councillorCall).toBeDefined();
     });
 
-    test('passes agent field in master prompt body', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config = createTestCouncilConfig();
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [{ body?: { agent?: string } }]
-      >;
-      // Last prompt call is for master
-      const masterCall = promptCalls[promptCalls.length - 1];
-      expect(masterCall[0].body?.agent).toBe('council-master');
-    });
-
-    test('disables delegation tools in councillor prompt body', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config = createTestCouncilConfig();
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [{ body?: { tools?: Record<string, boolean>; agent?: string } }]
-      >;
-      // Find councillor call by agent field (notification may interleave)
-      const councillorCall = promptCalls.find(
-        (c) => c[0].body?.agent === 'councillor',
-      );
-      // Councillor tools: delegation disabled (leaf node)
-      expect(councillorCall?.[0].body?.tools).toEqual({ task: false });
-    });
-
-    test('disables delegation tools in master prompt body', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config = createTestCouncilConfig();
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [{ body?: { tools?: Record<string, boolean> } }]
-      >;
-      // Master tools: everything disabled
-      const masterCall = promptCalls[promptCalls.length - 1];
-      expect(masterCall[0].body?.tools).toEqual({ task: false });
-    });
-
     test('creates session with model label in title', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {
@@ -829,12 +590,9 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -850,115 +608,6 @@ describe('CouncilManager', () => {
       expect(createCalls[0][0].body?.title).toBe(
         'Council alpha (gpt-5.4-mini)',
       );
-      // Master title: "Council Master (claude-opus-4-6)"
-      const masterCreate = createCalls[createCalls.length - 1];
-      expect(masterCreate[0].body?.title).toBe(
-        'Council Master (claude-opus-4-6)',
-      );
-    });
-
-    test('tries master_fallback models on primary failure', async () => {
-      let promptCallCount = 0;
-      const ctx = createMockContext({
-        sessionCreateResult: () => ({ data: { id: 'session-1' } }),
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-        promptImpl: async (args: any) => {
-          // Only count agent prompt calls (skip start notification)
-          if (args.body?.agent) {
-            promptCallCount++;
-            // Councillor succeeds, master primary fails, fallback succeeds
-            if (promptCallCount === 2) {
-              throw new Error('Primary model timeout');
-            }
-          }
-          return {};
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: { model: 'openai/primary-model' },
-          master_fallback: ['anthropic/fallback-model'],
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      const result = await manager.runCouncil(
-        'test prompt',
-        'default',
-        'parent-id',
-      );
-
-      expect(result.success).toBe(true);
-      // 1 councillor + 1 primary master (fail) + 1 fallback master (succeed) = 3
-      expect(promptCallCount).toBe(3);
-    });
-
-    test('returns error when all master_fallback models fail', async () => {
-      let agentPromptCount = 0;
-      const ctx = createMockContext({
-        sessionCreateResult: () => ({ data: { id: 'session-1' } }),
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Councillor response' }],
-            },
-          ],
-        },
-        promptImpl: async (args: any) => {
-          // Only count agent prompt calls (skip start notification)
-          if (args.body?.agent) {
-            agentPromptCount++;
-            // Councillor succeeds, all master attempts fail
-            if (agentPromptCount > 1) {
-              throw new Error('Model unavailable');
-            }
-          }
-          return {};
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: { model: 'openai/primary-model' },
-          master_fallback: ['anthropic/fallback-one', 'google/fallback-two'],
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      const result = await manager.runCouncil(
-        'test prompt',
-        'default',
-        'parent-id',
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('All master models failed');
-      // Should try primary + 2 fallbacks = 3 master attempts
-      // 1 councillor + 3 master = 4 total agent prompts
-      expect(agentPromptCount).toBe(4);
-      // Degraded result from councillor
-      expect(result.result).toBeDefined();
     });
 
     test('passes councillor prompt to councillor session', async () => {
@@ -974,15 +623,11 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: {
-                  model: 'openai/gpt-5.4-mini',
-                  prompt:
-                    'You are a meticulous reviewer focused on edge cases.',
-                },
+              alpha: {
+                model: 'openai/gpt-5.4-mini',
+                prompt: 'You are a meticulous reviewer focused on edge cases.',
               },
             },
           },
@@ -1013,53 +658,6 @@ describe('CouncilManager', () => {
       );
     });
 
-    test('passes master prompt to master session', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Synthesized response' }],
-            },
-          ],
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: {
-            model: 'anthropic/claude-opus-4-6',
-            prompt: 'Prioritize correctness over creativity.',
-          },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [
-          {
-            body?: {
-              parts?: Array<{ type: string; text?: string }>;
-              agent?: string;
-            };
-          },
-        ]
-      >;
-      // Last call is master
-      const masterCall = promptCalls[promptCalls.length - 1];
-      expect(masterCall[0].body?.agent).toBe('council-master');
-      const promptText = masterCall[0]?.body?.parts?.[0]?.text;
-      expect(promptText).toContain('Prioritize correctness over creativity.');
-    });
-
     test('works without any prompt overrides (backward compatible)', async () => {
       const ctx = createMockContext({
         sessionMessagesResult: {
@@ -1073,12 +671,9 @@ describe('CouncilManager', () => {
       });
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -1110,196 +705,9 @@ describe('CouncilManager', () => {
       expect(councillorCall?.[0]?.body?.parts?.[0]?.text).toBe('test prompt');
     });
 
-    test('per-preset master model override replaces global master model', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-              master: { model: 'google/gemini-3-pro' },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const createCalls = ctx.client.session.create.mock.calls as Array<
-        [{ body?: { title?: string } }]
-      >;
-      // Master title should use the override model, not global
-      const masterCreate = createCalls[createCalls.length - 1];
-      expect(masterCreate[0].body?.title).toBe('Council Master (gemini-3-pro)');
-    });
-
-    test('per-preset master prompt override replaces global master prompt', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: {
-            model: 'anthropic/claude-opus-4-6',
-            prompt: 'Global master prompt.',
-          },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-              master: { prompt: 'Preset-specific master prompt.' },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [
-          {
-            body?: {
-              parts?: Array<{ type: string; text?: string }>;
-              agent?: string;
-            };
-          },
-        ]
-      >;
-      const masterCall = promptCalls[promptCalls.length - 1];
-      const promptText = masterCall[0]?.body?.parts?.[0]?.text;
-      expect(promptText).toContain('Preset-specific master prompt.');
-      expect(promptText).not.toContain('Global master prompt.');
-    });
-
-    test('per-preset master variant override replaces global variant', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: {
-            model: 'anthropic/claude-opus-4-6',
-            variant: 'low',
-          },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-              master: { variant: 'high' },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [{ body?: { variant?: string } }]
-      >;
-      const masterCall = promptCalls[promptCalls.length - 1];
-      expect(masterCall[0].body?.variant).toBe('high');
-    });
-
-    test('no per-preset master override falls back to global master config', async () => {
-      const ctx = createMockContext({
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
-      });
-      const config: PluginConfig = {
-        council: {
-          master: {
-            model: 'anthropic/claude-opus-4-6',
-            variant: 'high',
-            prompt: 'Global prompt.',
-          },
-          presets: {
-            default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
-            },
-          },
-        },
-      } as any;
-      const manager = new CouncilManager(ctx, config, undefined);
-
-      await manager.runCouncil('test prompt', undefined, 'parent-id');
-
-      const promptCalls = ctx.client.session.prompt.mock.calls as Array<
-        [
-          {
-            body?: {
-              parts?: Array<{ type: string; text?: string }>;
-              variant?: string;
-              agent?: string;
-            };
-          },
-        ]
-      >;
-      const masterCall = promptCalls[promptCalls.length - 1];
-      // Uses global model (in title)
-      const createCalls = ctx.client.session.create.mock.calls as Array<
-        [{ body?: { title?: string } }]
-      >;
-      const masterCreate = createCalls[createCalls.length - 1];
-      expect(masterCreate[0].body?.title).toBe(
-        'Council Master (claude-opus-4-6)',
-      );
-      // Uses global variant
-      expect(masterCall[0].body?.variant).toBe('high');
-      // Uses global prompt
-      const promptText = masterCall[0]?.body?.parts?.[0]?.text;
-      expect(promptText).toContain('Global prompt.');
-    });
-
     test('retries councillor on empty response', async () => {
       const ctx = createMockContext({
         promptImpl: async () => ({}),
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Master synthesis' }],
-            },
-          ],
-        },
       });
 
       // Track messages call count and return empty first, then success
@@ -1308,7 +716,6 @@ describe('CouncilManager', () => {
       ctx.client.session.messages = mock(async (args) => {
         // First call (first councillor attempt): empty response
         // Second call (councillor retry): success
-        // Third call (master): master synthesis
         councillorMessagesCallCount++;
         if (councillorMessagesCallCount === 1) {
           return {
@@ -1330,19 +737,16 @@ describe('CouncilManager', () => {
             ],
           };
         }
-        // Master and any other calls: use original
+        // Any other calls: use original
         return originalMessages(args);
       });
 
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           councillor_retries: 1,
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -1370,14 +774,6 @@ describe('CouncilManager', () => {
           // Simulate timeout error
           throw new Error('Prompt timed out after 180000ms');
         },
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: 'Response' }],
-            },
-          ],
-        },
       });
 
       // Override messages to track calls (won't be reached due to timeout)
@@ -1395,13 +791,10 @@ describe('CouncilManager', () => {
 
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           councillor_retries: 2,
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -1425,25 +818,14 @@ describe('CouncilManager', () => {
     test('exhausts councillor retries and returns failure', async () => {
       const ctx = createMockContext({
         promptImpl: async () => ({}),
-        sessionMessagesResult: {
-          data: [
-            {
-              info: { role: 'assistant' },
-              parts: [{ type: 'text', text: '' }],
-            },
-          ],
-        },
       });
 
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           councillor_retries: 1,
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -1482,13 +864,10 @@ describe('CouncilManager', () => {
 
       const config: PluginConfig = {
         council: {
-          master: { model: 'anthropic/claude-opus-4-6' },
           councillor_retries: 1,
           presets: {
             default: {
-              councillors: {
-                alpha: { model: 'openai/gpt-5.4-mini' },
-              },
+              alpha: { model: 'openai/gpt-5.4-mini' },
             },
           },
         },
@@ -1504,13 +883,17 @@ describe('CouncilManager', () => {
         'parent-id',
       );
 
-      // With retry_on_empty: false, empty response is accepted
+      // With retry_on_empty: false, empty response is accepted as completed
       expect(result.councillorResults).toHaveLength(1);
       expect(result.councillorResults[0].status).toBe('completed');
       expect(result.councillorResults[0].result).toBe('');
       // Council succeeds because empty is accepted as valid response
+      // The formatted result contains the message about all councillors failing
       expect(result.success).toBe(true);
-      expect(result.result).toBe('');
+      expect(result.result).toContain(
+        'All councillors failed to produce output',
+      );
+      expect(result.result).toContain('test prompt');
     });
   });
 });

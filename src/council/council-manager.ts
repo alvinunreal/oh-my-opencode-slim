@@ -2,25 +2,20 @@
  * Council Manager
  *
  * Orchestrates multi-LLM council sessions: launches councillors in
- * parallel, collects results, then runs the council master for synthesis.
+ * parallel and collects their results for the council agent to synthesize.
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   formatCouncillorPrompt,
-  formatMasterSynthesisPrompt,
+  formatCouncillorResults,
 } from '../agents/council';
 import type { PluginConfig } from '../config';
 import {
   COUNCILLOR_STAGGER_MS,
   TMUX_SPAWN_DELAY_MS,
 } from '../config/constants';
-import type {
-  CouncilConfig,
-  CouncillorConfig,
-  CouncilResult,
-  PresetMasterOverride,
-} from '../config/council-schema';
+import type { CouncillorConfig, CouncilResult } from '../config/council-schema';
 import { log } from '../utils/logger';
 import {
   extractSessionResult,
@@ -43,6 +38,7 @@ export class CouncilManager {
   private config?: PluginConfig;
   private depthTracker?: SubagentDepthTracker;
   private tmuxEnabled: boolean;
+  private deprecatedFields?: string[];
 
   constructor(
     ctx: PluginInput,
@@ -53,8 +49,14 @@ export class CouncilManager {
     this.client = ctx.client;
     this.directory = ctx.directory;
     this.config = config;
+    this.deprecatedFields = config?.council?._deprecated;
     this.depthTracker = depthTracker;
     this.tmuxEnabled = tmuxEnabled;
+  }
+
+  /** Return deprecated config fields detected during parsing (for tool warnings). */
+  getDeprecatedFields(): string[] | undefined {
+    return this.deprecatedFields;
   }
 
   /**
@@ -63,8 +65,7 @@ export class CouncilManager {
    * 1. Look up the preset
    * 2. Launch all councillors in parallel
    * 3. Collect results (respecting timeout)
-   * 4. Run master synthesis
-   * 5. Return combined result
+   * 4. Return formatted councillor results for synthesis
    */
   async runCouncil(
     prompt: string,
@@ -112,24 +113,23 @@ export class CouncilManager {
       };
     }
 
-    if (Object.keys(preset.councillors).length === 0) {
+    if (Object.keys(preset).length === 0) {
       log(`[council-manager] Preset "${resolvedPreset}" has no councillors`);
       return {
         success: false,
-        error: `Preset "${resolvedPreset}" has no councillors configured`,
+        error: `Preset "${resolvedPreset}" has no councillors configured. Note: the reserved key "master" is ignored — use councillor names as keys`,
         councillorResults: [],
       };
     }
 
-    const councillorsTimeout = councilConfig.councillors_timeout ?? 180000;
-    const masterTimeout = councilConfig.master_timeout ?? 300000;
+    const timeout = councilConfig.timeout ?? 180000;
     const executionMode = councilConfig.councillor_execution_mode ?? 'parallel';
     const maxRetries = councilConfig.councillor_retries ?? 3;
 
-    const councillorCount = Object.keys(preset.councillors).length;
+    const councillorCount = Object.keys(preset).length;
 
     log(`[council-manager] Starting council with preset "${resolvedPreset}"`, {
-      councillors: Object.keys(preset.councillors),
+      councillors: Object.keys(preset),
     });
 
     // Notify parent session that council is starting
@@ -141,12 +141,12 @@ export class CouncilManager {
       },
     );
 
-    // Phase 1: Run councillors (parallel or serial based on config)
+    // Run councillors (parallel or serial based on config)
     const councillorResults = await this.runCouncillors(
       prompt,
-      preset.councillors,
+      preset,
       parentSessionId,
-      councillorsTimeout,
+      timeout,
       executionMode,
       maxRetries,
     );
@@ -167,40 +167,17 @@ export class CouncilManager {
       };
     }
 
-    // Phase 2: Master synthesis
-    const masterResult = await this.runMaster(
+    // Format councillor results for the council agent to synthesize
+    const formattedCouncillorResults = formatCouncillorResults(
       prompt,
       councillorResults,
-      councilConfig,
-      parentSessionId,
-      masterTimeout,
-      preset.master,
     );
-
-    if (!masterResult.success) {
-      log('[council-manager] Master failed', {
-        error: masterResult.error,
-      });
-
-      // Graceful degradation: return best single councillor result
-      const bestResult = councillorResults.find(
-        (r) => r.status === 'completed' && r.result,
-      );
-      return {
-        success: false,
-        error: masterResult.error ?? 'Council master failed',
-        result: bestResult?.result
-          ? `(Degraded — master failed, using ${bestResult.name}'s response)\n\n${bestResult.result}`
-          : undefined,
-        councillorResults,
-      };
-    }
 
     log('[council-manager] Council completed successfully');
 
     return {
       success: true,
-      result: masterResult.result,
+      result: formattedCouncillorResults,
       councillorResults,
     };
   }
@@ -232,12 +209,11 @@ export class CouncilManager {
   }
 
   // -------------------------------------------------------------------------
-  // Shared session lifecycle (councillors + master both use this)
+  // Shared session lifecycle
   // -------------------------------------------------------------------------
 
   /**
    * Run a single agent session: create → register → prompt → extract → cleanup.
-   * Both councillors and the master follow this identical lifecycle.
    */
   private async runAgentSession(options: {
     parentSessionId: string;
@@ -338,7 +314,7 @@ export class CouncilManager {
     parentSessionId: string,
     timeout: number,
     executionMode: 'parallel' | 'serial' = 'parallel',
-    maxRetries: number = 1,
+    maxRetries: number,
   ): Promise<CouncilResult['councillorResults']> {
     const entries = Object.entries(councillors);
     const results: Array<{
@@ -392,13 +368,7 @@ export class CouncilManager {
         const [name, cfg] = entries[index];
 
         if (result.status === 'fulfilled') {
-          results.push({
-            name,
-            model: cfg.model,
-            status: result.value.status,
-            result: result.value.result,
-            error: result.value.error,
-          });
+          results.push(result.value);
         } else {
           results.push({
             name,
@@ -489,126 +459,6 @@ export class CouncilManager {
       model: config.model,
       status: 'failed' as const,
       error: `Councillor "${name}": max retries exhausted`,
-    };
-  }
-
-  // -------------------------------------------------------------------------
-  // Phase 2: Master Synthesis
-  // -------------------------------------------------------------------------
-
-  /**
-   * Run a single master model with retry logic for empty responses.
-   * Only retries on "Empty response from provider" — timeouts and
-   * other failures throw immediately so runMaster can try the next
-   * fallback model.
-   */
-  private async runMasterModelWithRetry(
-    parentSessionId: string,
-    model: string,
-    modelLabel: string,
-    promptText: string,
-    variant: string | undefined,
-    timeout: number,
-    maxRetries: number,
-  ): Promise<string> {
-    const totalAttempts = 1 + maxRetries;
-
-    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
-      if (attempt > 1) {
-        log(
-          `[council-manager] Retrying master (${modelLabel}), attempt ${attempt}/${totalAttempts}`,
-        );
-      }
-
-      try {
-        return await this.runAgentSession({
-          parentSessionId,
-          title: `Council Master (${modelLabel})`,
-          agent: 'council-master',
-          model,
-          promptText,
-          variant,
-          timeout,
-        });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        const isEmptyResponse = msg.includes('Empty response from provider');
-        const canRetry = attempt < totalAttempts && isEmptyResponse;
-
-        if (!canRetry) {
-          throw error;
-        }
-      }
-    }
-
-    // Unreachable, but satisfies TypeScript
-    throw new Error(`Master model ${modelLabel}: max retries exhausted`);
-  }
-
-  private async runMaster(
-    prompt: string,
-    councillorResults: CouncilResult['councillorResults'],
-    councilConfig: CouncilConfig,
-    parentSessionId: string,
-    timeout: number,
-    presetMasterOverride?: PresetMasterOverride,
-  ): Promise<{ success: boolean; result?: string; error?: string }> {
-    const masterConfig = councilConfig.master;
-    const fallbackModels = councilConfig.master_fallback ?? [];
-
-    // Merge per-preset master override with global config
-    const effectiveModel = presetMasterOverride?.model ?? masterConfig.model;
-    const effectiveVariant =
-      presetMasterOverride?.variant ?? masterConfig.variant;
-    const effectivePrompt = presetMasterOverride?.prompt ?? masterConfig.prompt;
-
-    // Build ordered list of models to try (primary first, then fallbacks)
-    const attemptModels = [effectiveModel, ...fallbackModels];
-
-    // Build synthesis prompt (data only — agent factory provides system prompt)
-    const synthesisPrompt = formatMasterSynthesisPrompt(
-      prompt,
-      councillorResults,
-      effectivePrompt,
-    );
-
-    const maxRetries = councilConfig.councillor_retries ?? 3;
-    const errors: string[] = [];
-
-    for (let i = 0; i < attemptModels.length; i++) {
-      const model = attemptModels[i];
-      const currentLabel = shortModelLabel(model);
-
-      try {
-        if (i > 0) {
-          log(
-            `[council-manager] master fallback ${i}/${attemptModels.length - 1}: ${currentLabel}`,
-          );
-        }
-
-        const result = await this.runMasterModelWithRetry(
-          parentSessionId,
-          model,
-          currentLabel,
-          synthesisPrompt,
-          effectiveVariant,
-          timeout,
-          maxRetries,
-        );
-
-        return { success: true, result };
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        errors.push(`${currentLabel}: ${msg}`);
-
-        log(`[council-manager] master model failed: ${currentLabel} — ${msg}`);
-      }
-    }
-
-    // All models failed
-    return {
-      success: false,
-      error: `All master models failed. ${errors.join(' | ')}`,
     };
   }
 }

@@ -53,6 +53,7 @@ function createMockCouncilManager(
         councillorResults,
       };
     }),
+    getDeprecatedFields: mock(() => undefined),
   } as unknown as CouncilManager;
 
   return mockManager;
@@ -233,29 +234,6 @@ describe('council_session tool', () => {
       expect(result).toContain('All councillors failed');
     });
 
-    test('handles council master failure with degraded result', async () => {
-      const ctx = createMockPluginContext();
-      const councilManager = createMockCouncilManager({
-        success: false,
-        error: 'Master synthesis failed',
-        result:
-          "(Degraded — master failed, using alpha's response)\n\nBest answer",
-        councillorResults: [
-          { name: 'alpha', status: 'completed', result: 'Best answer' },
-        ],
-      });
-      const tools = createCouncilTool(ctx, councilManager);
-
-      const result = await tools.council_session.execute({ prompt: 'Test' }, {
-        sessionID: 'test',
-      } as any);
-
-      expect(result).toContain('Degraded');
-      expect(result).toContain('Best answer');
-      expect(result).toContain('1/1 councillors responded');
-      expect(result).toContain('degraded');
-    });
-
     test('handles case when result is undefined', async () => {
       const ctx = createMockPluginContext();
       const councilManager = createMockCouncilManager({
@@ -348,6 +326,7 @@ describe('council_session tool', () => {
         runCouncil: mock(async () => {
           throw new Error('Council manager crashed');
         }),
+        getDeprecatedFields: mock(() => undefined),
       } as unknown as CouncilManager;
       const tools = createCouncilTool(ctx, councilManager);
 
@@ -514,6 +493,35 @@ describe('council_session tool', () => {
       } as any);
 
       expect(result).toContain('Council: 10/10 councillors responded');
+    });
+
+    test('includes deprecation warning when deprecated config fields detected', async () => {
+      const ctx = createMockPluginContext();
+      const councilManager = {
+        runCouncil: mock(async () => ({
+          success: true,
+          result: 'Synthesized response',
+          councillorResults: [
+            {
+              name: 'alpha',
+              model: 'test/model',
+              status: 'completed',
+              result: 'Response',
+            },
+          ],
+        })),
+        getDeprecatedFields: mock(() => ['master', 'master_timeout']),
+      } as unknown as CouncilManager;
+      const tools = createCouncilTool(ctx, councilManager);
+
+      const result = await tools.council_session.execute({ prompt: 'Test' }, {
+        sessionID: 'test',
+      } as any);
+
+      expect(result).toContain('Config warning');
+      expect(result).toContain('`council.master`');
+      expect(result).toContain('`council.master_timeout`');
+      expect(result).toContain('deprecated and ignored');
     });
   });
 });

@@ -189,15 +189,12 @@ describe('displayName', () => {
       disabled_agents: [],
       agents: {
         councillor: { displayName: 'reviewer' },
-        'council-master': { displayName: 'arbiter' },
       },
     };
 
     const sdkConfigs = getAgentConfigs(config);
 
     expect(sdkConfigs.reviewer).toBeUndefined();
-    expect(sdkConfigs.arbiter).toBeUndefined();
     expect(sdkConfigs.councillor?.hidden).toBe(true);
-    expect(sdkConfigs['council-master']?.hidden).toBe(true);
   });
 });
