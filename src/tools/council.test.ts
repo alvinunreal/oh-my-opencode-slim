@@ -359,23 +359,20 @@ describe('council_session tool', () => {
       expect(councilManager.runCouncil).toHaveBeenCalledTimes(1);
     });
 
-    test('allows orchestrator agent to invoke council session', async () => {
+    test('blocks orchestrator agent from invoking council session', async () => {
       const ctx = createMockPluginContext();
-      const councilManager = createMockCouncilManager({
-        success: true,
-        result: 'Synthesised answer',
-        councillorResults: [
-          { name: 'alpha', status: 'completed', result: 'A' },
-        ],
-      });
+      const councilManager = createMockCouncilManager();
       const tools = createCouncilTool(ctx, councilManager);
 
-      const result = await tools.council_session.execute({ prompt: 'Test' }, {
-        sessionID: 'test',
-        agent: 'orchestrator',
-      } as any);
-
-      expect(result).toContain('Synthesised answer');
+      expect(
+        tools.council_session.execute({ prompt: 'Test' }, {
+          sessionID: 'test',
+          agent: 'orchestrator',
+        } as any),
+      ).rejects.toThrow(
+        'Council sessions can only be invoked by the council agent',
+      );
+      expect(councilManager.runCouncil).not.toHaveBeenCalled();
     });
 
     test('blocks disallowed agents from invoking council session', async () => {
@@ -389,7 +386,7 @@ describe('council_session tool', () => {
           agent: 'explorer',
         } as any),
       ).rejects.toThrow(
-        'Council sessions can only be invoked by council or orchestrator agents',
+        'Council sessions can only be invoked by the council agent',
       );
       expect(councilManager.runCouncil).not.toHaveBeenCalled();
     });

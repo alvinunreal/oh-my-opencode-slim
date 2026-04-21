@@ -58,13 +58,13 @@ Returns the councillor responses with a summary footer.`,
         throw new Error('Invalid toolContext: missing sessionID');
       }
 
-      // Guard: Only council and orchestrator agents can invoke council sessions.
+      // Guard: Only the council agent can invoke council sessions.
       // If agent is missing from context, allow through (backward compatible).
-      const allowedAgents = ['council', 'orchestrator'];
+      const allowedAgents = ['council'];
       const callingAgent = (toolContext as { agent?: string }).agent;
       if (callingAgent && !allowedAgents.includes(callingAgent)) {
         throw new Error(
-          `Council sessions can only be invoked by council or orchestrator agents. Current agent: ${callingAgent}`,
+          `Council sessions can only be invoked by the council agent. Current agent: ${callingAgent}`,
         );
       }
 

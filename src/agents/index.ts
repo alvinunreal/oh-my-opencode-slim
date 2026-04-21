@@ -31,6 +31,8 @@ type AgentFactory = (
   customAppendPrompt?: string,
 ) => AgentDefinition;
 
+const COUNCIL_TOOL_ALLOWED_AGENTS = new Set(['council']);
+
 function normalizeDisplayName(displayName: string): string {
   const trimmed = displayName.trim();
   return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
@@ -115,10 +117,14 @@ function applyDefaultPermissions(
 
   // Respect explicit deny on question (councillor)
   const questionPerm = existing.question === 'deny' ? 'deny' : 'allow';
+  const councilSessionPerm = COUNCIL_TOOL_ALLOWED_AGENTS.has(agent.name)
+    ? (existing.council_session ?? 'allow')
+    : 'deny';
 
   agent.config.permission = {
     ...existing,
     question: questionPerm,
+    council_session: councilSessionPerm,
     // Apply skill permissions as nested object under 'skill' key
     skill: {
       ...(typeof existing.skill === 'object' ? existing.skill : {}),
