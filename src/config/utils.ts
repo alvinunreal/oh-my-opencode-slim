@@ -1,4 +1,4 @@
-import { AGENT_ALIASES } from './constants';
+import { AGENT_ALIASES, ALL_AGENT_NAMES } from './constants';
 import type { AgentOverrideConfig, PluginConfig } from './schema';
 
 /**
@@ -19,5 +19,24 @@ export function getAgentOverride(
     overrides[
       Object.keys(AGENT_ALIASES).find((k) => AGENT_ALIASES[k] === name) ?? ''
     ]
+  );
+}
+
+/**
+ * Get the names of custom agents defined in config.
+ * Custom agents are entries in config.agents whose name is NOT
+ * a built-in agent name and NOT a legacy alias.
+ *
+ * @param config - The plugin configuration
+ * @returns Array of custom agent names (may be empty)
+ */
+export function getCustomAgentNames(
+  config: PluginConfig | undefined,
+): string[] {
+  if (!config?.agents) return [];
+  const builtIn = new Set<string>(ALL_AGENT_NAMES as readonly string[]);
+  const aliases = new Set(Object.keys(AGENT_ALIASES));
+  return Object.keys(config.agents).filter(
+    (name) => !builtIn.has(name) && !aliases.has(name),
   );
 }

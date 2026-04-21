@@ -84,14 +84,15 @@ export const AgentOverrideConfigSchema = z.object({
     .union([
       z.string(),
       z.array(
-        z.union([
-          z.string(),
-          z.object({
-            id: z.string(),
-            variant: z.string().optional(),
-          }),
-        ]),
-      ),
+          z.union([
+            z.string(),
+            z.object({
+              id: z.string(),
+              variant: z.string().optional(),
+            }),
+          ]),
+        )
+        .min(1),
     ])
     .optional(),
   temperature: z.number().min(0).max(2).optional(),
@@ -100,6 +101,8 @@ export const AgentOverrideConfigSchema = z.object({
   mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
   options: z.record(z.string(), z.unknown()).optional(), // provider-specific model options (e.g., textVerbosity, thinking budget)
   displayName: z.string().min(1).optional(),
+  prompt: z.string().min(1).optional(), // inline system prompt (base prompt for custom agents, ignored for built-in)
+  description: z.string().min(1).optional(), // agent description injected into orchestrator prompt (custom agents only)
 });
 
 // Multiplexer type options

@@ -101,7 +101,7 @@ describe('displayName', () => {
     };
 
     expect(() => createAgents(config)).toThrow(
-      "displayName 'oracle' conflicts with internal agent name",
+      "displayName 'oracle' conflicts with an agent name",
     );
   });
 
@@ -113,7 +113,7 @@ describe('displayName', () => {
     };
 
     expect(() => createAgents(config)).toThrow(
-      "displayName 'oracle' conflicts with internal agent name",
+      "displayName 'oracle' conflicts with an agent name",
     );
   });
 
@@ -125,7 +125,7 @@ describe('displayName', () => {
     };
 
     expect(() => createAgents(config)).toThrow(
-      /displayName.*conflicts with internal agent name/,
+      /displayName.*conflicts with an agent name/,
     );
   });
 

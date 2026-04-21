@@ -104,14 +104,27 @@ const PARALLEL_DELEGATION_EXAMPLES = [
 /**
  * Build the orchestrator prompt with dynamic agent filtering.
  * @param disabledAgents - Set of disabled agent names to exclude from the prompt
+ * @param customAgentDescriptions - Descriptions for user-defined custom agents
  * @returns The complete orchestrator prompt string
  */
-export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
-  // Filter agent descriptions
-  const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
+export function buildOrchestratorPrompt(
+  disabledAgents?: Set<string>,
+  customAgentDescriptions?: Record<string, string>,
+): string {
+  // Filter built-in agent descriptions
+  const builtInDescriptions = Object.entries(AGENT_DESCRIPTIONS)
     .filter(([name]) => !disabledAgents?.has(name))
-    .map(([, desc]) => desc)
-    .join('\n\n');
+    .map(([, desc]) => desc);
+
+  // Append custom agent descriptions
+  const customDescriptions = Object.entries(customAgentDescriptions ?? {}).map(
+    ([name, desc]) =>
+      `@${name}\n- Role: ${desc}\n- Capabilities: Custom agent defined by user configuration\n- **Delegate when:** Tasks matching this agent's specialty\n- **Don't delegate when:** Tasks better suited for built-in specialists`,
+  );
+
+  const enabledAgents = [...builtInDescriptions, ...customDescriptions].join(
+    '\n\n',
+  );
 
   // Filter validation routing lines — remove lines mentioning any disabled agent
   const enabledValidationRouting = VALIDATION_ROUTING.filter((line) => {
@@ -233,8 +246,12 @@ export function createOrchestratorAgent(
   customPrompt?: string,
   customAppendPrompt?: string,
   disabledAgents?: Set<string>,
+  customAgentDescriptions?: Record<string, string>,
 ): AgentDefinition {
-  const basePrompt = buildOrchestratorPrompt(disabledAgents);
+  const basePrompt = buildOrchestratorPrompt(
+    disabledAgents,
+    customAgentDescriptions,
+  );
   const prompt = resolvePrompt(basePrompt, customPrompt, customAppendPrompt);
 
   const definition: AgentDefinition = {

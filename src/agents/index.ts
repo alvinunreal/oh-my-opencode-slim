@@ -6,6 +6,7 @@ import {
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   getAgentOverride,
+  getCustomAgentNames,
   loadAgentPrompt,
   type PluginConfig,
   PROTECTED_AGENTS,
@@ -16,6 +17,7 @@ import { getAgentMcpList } from '../config/agent-mcps';
 import { createCouncilAgent } from './council';
 import { createCouncilMasterAgent } from './council-master';
 import { createCouncillorAgent } from './councillor';
+import { createCustomAgent } from './custom';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
@@ -215,7 +217,54 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     return agent;
   });
 
-  // 3. Create Orchestrator (with its own overrides and custom prompts)
+  // 3. Create custom agents from config
+  const customAgentNames = getCustomAgentNames(config);
+  const customAgents: AgentDefinition[] = [];
+  const customAgentDescriptions: Record<string, string> = {};
+
+  for (const name of customAgentNames) {
+    const override = getAgentOverride(config, name);
+    if (!override?.model ||
+      (Array.isArray(override.model) && override.model.length === 0)
+    ) {
+      console.warn(
+        `[oh-my-opencode] Custom agent '${name}' skipped: 'model' is required`,
+      );
+      continue;
+    }
+
+    // Resolve model string from override (may be string or array)
+    let model: string;
+    if (Array.isArray(override.model)) {
+      const first = override.model[0];
+      model = typeof first === 'string' ? first : first?.id;
+    } else {
+      model = override.model;
+    }
+
+    const filePrompts = loadAgentPrompt(name, config?.preset);
+    const agent = createCustomAgent(
+      name,
+      model,
+      override.prompt,
+      override.description,
+      filePrompts.prompt,
+      filePrompts.appendPrompt,
+    );
+
+    // Apply remaining overrides (temperature, variant, options, displayName, model array)
+    applyOverrides(agent, override);
+    applyDefaultPermissions(agent, override.skills);
+
+    customAgents.push(agent);
+
+    // Collect description for orchestrator prompt
+    if (agent.description) {
+      customAgentDescriptions[name] = agent.description;
+    }
+  }
+
+  // 4. Create Orchestrator (with its own overrides, custom prompts, and custom agent descriptions)
   // DEFAULT_MODELS.orchestrator is undefined; model is resolved via override or
   // left unset so the runtime chat.message hook can pick it from _modelArray.
   const orchestratorOverride = getAgentOverride(config, 'orchestrator');
@@ -227,18 +276,20 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     orchestratorPrompts.prompt,
     orchestratorPrompts.appendPrompt,
     disabled,
+    customAgentDescriptions,
   );
   applyDefaultPermissions(orchestrator, orchestratorOverride?.skills);
   if (orchestratorOverride) {
     applyOverrides(orchestrator, orchestratorOverride);
   }
 
-  // Collect all display names from orchestrator and all subagents
+  // Collect all display names from orchestrator, subagents, and custom agents
+  const allAgents = [...allSubAgents, ...customAgents];
   const displayNameMap = new Map<string, string>();
   if (orchestrator.displayName) {
     displayNameMap.set('orchestrator', orchestrator.displayName);
   }
-  for (const agent of allSubAgents) {
+  for (const agent of allAgents) {
     if (agent.displayName) {
       displayNameMap.set(agent.name, agent.displayName);
     }
@@ -255,10 +306,15 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     }
     usedDisplayNames.add(normalizedDisplayName);
   }
+  // Check conflicts with both built-in names and custom agent names
+  const allKnownNames = new Set<string>([
+    ...(ALL_AGENT_NAMES as readonly string[]),
+    ...customAgentNames,
+  ]);
   for (const displayName of usedDisplayNames) {
-    if ((ALL_AGENT_NAMES as readonly string[]).includes(displayName)) {
+    if (allKnownNames.has(displayName)) {
       throw new Error(
-        `displayName '${displayName}' conflicts with internal agent name`,
+        `displayName '${displayName}' conflicts with an agent name`,
       );
     }
   }
@@ -266,7 +322,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   // Inject display names into orchestrator prompt (complete map)
   injectDisplayNames(orchestrator, displayNameMap);
 
-  return [orchestrator, ...allSubAgents];
+  return [orchestrator, ...allAgents];
 }
 
 /**
@@ -280,6 +336,7 @@ export function getAgentConfigs(
   config?: PluginConfig,
 ): Record<string, SDKAgentConfig> {
   const agents = createAgents(config);
+  const customNames = new Set(getCustomAgentNames(config));
 
   const applyClassification = (
     name: string,
@@ -297,7 +354,8 @@ export function getAgentConfigs(
       // Internal agents — subagent mode, hidden from @ autocomplete
       sdkConfig.mode = 'subagent';
       sdkConfig.hidden = true;
-    } else if (isSubagent(name)) {
+    } else if (isSubagent(name) || customNames.has(name)) {
+      // Built-in subagents and custom agents are both subagents
       sdkConfig.mode = 'subagent';
     } else if (name === 'orchestrator') {
       sdkConfig.mode = 'primary';
