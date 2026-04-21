@@ -1,11 +1,13 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import {
   AgentOverrideConfigSchema,
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
+  getCustomAgentNames,
   SUBAGENT_NAMES,
 } from '../config';
+import * as loader from '../config/loader';
 import {
   createAgents,
   getAgentConfigs,
@@ -684,5 +686,229 @@ describe('observer agent', () => {
 
   test('DEFAULT_DISABLED_AGENTS contains observer', () => {
     expect(DEFAULT_DISABLED_AGENTS).toContain('observer');
+  });
+});
+
+describe('custom agents', () => {
+  test('custom agent is created when config defines non-built-in name with model', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'anthropic/claude-sonnet-4-20250514',
+          prompt: 'You clean up code.',
+          description: 'Code cleanup specialist',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const janitor = agents.find((a) => a.name === 'janitor');
+    expect(janitor).toBeDefined();
+  });
+
+  test('custom agent is skipped with console.warn when no model provided', () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          prompt: 'You clean up code.',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const janitor = agents.find((a) => a.name === 'janitor');
+    expect(janitor).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Custom agent 'janitor' skipped"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  test('custom agent appears in agents array after built-in subagents', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: { model: 'test/janitor-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const janitorIndex = agents.findIndex((a) => a.name === 'janitor');
+    const orchestratorIndex = agents.findIndex(
+      (a) => a.name === 'orchestrator',
+    );
+    // Orchestrator is first; custom agents come after built-ins
+    expect(janitorIndex).toBeGreaterThan(orchestratorIndex);
+    expect(janitorIndex).toBeGreaterThan(0);
+  });
+
+  test('custom agent gets inline prompt from config', () => {
+    const spy = spyOn(loader, 'loadAgentPrompt').mockReturnValue({});
+    try {
+      const config: PluginConfig = {
+        agents: {
+          janitor: {
+            model: 'test/janitor-model',
+            prompt: 'You clean up code.',
+          },
+        },
+      };
+      const agents = createAgents(config);
+      const janitor = agents.find((a) => a.name === 'janitor');
+      expect(janitor?.config.prompt).toBe('You clean up code.');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('custom agent gets description from config', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'test/janitor-model',
+          description: 'Code cleanup specialist',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const janitor = agents.find((a) => a.name === 'janitor');
+    expect(janitor?.description).toBe('Code cleanup specialist');
+  });
+
+  test('custom agent uses default description when not provided', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: { model: 'test/janitor-model' },
+      },
+    };
+    const agents = createAgents(config);
+    const janitor = agents.find((a) => a.name === 'janitor');
+    expect(janitor?.description).toBe('Custom agent: janitor');
+  });
+
+  test('custom agent is classified as mode subagent in getAgentConfigs', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'test/janitor-model',
+          description: 'Code cleanup specialist',
+        },
+      },
+    };
+    const configs = getAgentConfigs(config);
+    expect(configs.janitor).toBeDefined();
+    expect(configs.janitor.mode).toBe('subagent');
+  });
+
+  test('custom agent description appears in orchestrator prompt', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'test/janitor-model',
+          description: 'Code cleanup specialist',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    expect(orchestrator?.config.prompt).toContain('Code cleanup specialist');
+  });
+
+  test('multiple custom agents can be created', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: { model: 'test/janitor-model' },
+        reviewer: {
+          model: 'test/reviewer-model',
+          description: 'Code reviewer',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    expect(agents.find((a) => a.name === 'janitor')).toBeDefined();
+    expect(agents.find((a) => a.name === 'reviewer')).toBeDefined();
+  });
+
+  test('custom agents do not interfere with built-in agents', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: { model: 'test/janitor-model' },
+        reviewer: { model: 'test/reviewer-model' },
+      },
+    };
+    const agents = createAgents(config);
+    // 9 default (observer disabled) + 2 custom
+    expect(agents.length).toBe(11);
+    expect(agents.find((a) => a.name === 'explorer')).toBeDefined();
+    expect(agents.find((a) => a.name === 'fixer')).toBeDefined();
+  });
+
+  test('legacy aliases are NOT treated as custom agents', () => {
+    const config: PluginConfig = {
+      agents: {
+        explore: { model: 'test/model' },
+      },
+    };
+    const customNames = getCustomAgentNames(config);
+    expect(customNames).not.toContain('explore');
+    // Should map to explorer, not create a new custom agent
+    const agents = createAgents(config);
+    expect(agents.find((a) => a.name === 'explore')).toBeUndefined();
+    expect(agents.find((a) => a.name === 'explorer')).toBeDefined();
+  });
+
+  test('built-in agent names in config are NOT treated as custom agents', () => {
+    const config: PluginConfig = {
+      agents: {
+        explorer: { model: 'test/model' },
+      },
+    };
+    const customNames = getCustomAgentNames(config);
+    expect(customNames).not.toContain('explorer');
+    const agents = createAgents(config);
+    // Count should still be 9 (no extra custom agents)
+    expect(agents.length).toBe(9);
+  });
+
+  test('displayName conflict throws when conflicting with built-in agent name', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'test/janitor-model',
+          displayName: 'explorer',
+        },
+      },
+    };
+    expect(() => createAgents(config)).toThrow(/conflicts with an agent name/);
+  });
+
+  test('displayName conflict throws when conflicting with another custom agent name', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'test/janitor-model',
+          displayName: 'reviewer',
+        },
+        reviewer: {
+          model: 'test/reviewer-model',
+        },
+      },
+    };
+    expect(() => createAgents(config)).toThrow(/conflicts with an agent name/);
+  });
+
+  test('custom agent displayName works and appears in getAgentConfigs', () => {
+    const config: PluginConfig = {
+      agents: {
+        janitor: {
+          model: 'test/janitor-model',
+          displayName: 'cleaner',
+        },
+      },
+    };
+    const configs = getAgentConfigs(config);
+    // When displayName is set, agent is keyed by displayName
+    expect(configs.cleaner).toBeDefined();
+    expect(configs.cleaner.mode).toBe('subagent');
+    // Original name still exists but is hidden
+    expect(configs.janitor).toBeDefined();
+    expect(configs.janitor.hidden).toBe(true);
   });
 });
