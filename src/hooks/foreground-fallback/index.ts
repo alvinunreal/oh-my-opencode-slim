@@ -9,7 +9,7 @@
  *      with the new model — promptAsync returns immediately so we never
  *      block the event handler waiting for a full LLM response.
  *
- * This mirrors the BackgroundTaskManager's fallback loop but operates
+ * This mirrors the same fallback loop used for delegated sessions, but operates
  * reactively through the event system instead of wrapping prompt() in a
  * try/catch, which is not possible for interactive (foreground) sessions.
  */
@@ -187,7 +187,7 @@ export class ForegroundFallbackManager {
         // OpenCode emits two shapes depending on context:
         //   { properties: { sessionID } }   — subagent / task sessions
         //   { properties: { info: { id } } } — top-level session deletion
-        // Mirror the same dual-shape lookup used by BackgroundTaskManager.
+        // Mirror the same dual-shape lookup used elsewhere in the plugin.
         const props = event.properties as
           | { sessionID?: string; info?: { id?: string } }
           | undefined;

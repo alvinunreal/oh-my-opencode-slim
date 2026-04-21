@@ -1,8 +1,8 @@
 // Simplified LSP config - uses OpenCode's lsp config from opencode.json
 // Falls back to BUILTIN_SERVERS if no user config exists
 
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import whichSync from 'which';
 import { log } from '../../utils';
@@ -215,13 +215,13 @@ export function resolveServerCommand(
   const [cmd, ...args] = command;
 
   if (cmd.includes('/') || cmd.includes('\\')) {
-    return existsSync(cmd) ? command : null;
+    return fs.existsSync(cmd) ? command : null;
   }
 
   const isWindows = process.platform === 'win32';
   const ext = isWindows ? '.exe' : '';
 
-  const opencodeBin = join(homedir(), '.config', 'opencode', 'bin');
+  const opencodeBin = join(os.homedir(), '.config', 'opencode', 'bin');
   const searchPath =
     (process.env.PATH ?? '') + (isWindows ? ';' : ':') + opencodeBin;
 
@@ -237,10 +237,10 @@ export function resolveServerCommand(
 
   const localBinRoot = cwd ?? process.cwd();
   const localBin = join(localBinRoot, 'node_modules', '.bin', cmd);
-  if (existsSync(localBin)) {
+  if (fs.existsSync(localBin)) {
     return [localBin, ...args];
   }
-  if (existsSync(localBin + ext)) {
+  if (fs.existsSync(localBin + ext)) {
     return [localBin + ext, ...args];
   }
 

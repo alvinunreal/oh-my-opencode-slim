@@ -12,14 +12,14 @@
   - `detectDelegateTaskError(output: string): DetectedError | null`
 - `guidance.ts` implements `buildRetryGuidance(errorInfo)` and `extractAvailableList` to render fix text with optional `Available:` details from tool output.
 - `hook.ts` implements `createDelegateTaskRetryHook`:
-  - targets only `task` and `background_task`.
+  - targets only the built-in `task` tool.
   - only mutates when `output.output` is string.
   - detects errors via `detectDelegateTaskError` and appends guidance once.
 - `index.ts` is a strict re-export boundary.
 
 ## Flow
 
-1. At `tool.execute.after`, confirm tool is `task` or `background_task`.
+1. At `tool.execute.after`, confirm tool is `task`.
 2. Verify output payload type is string.
 3. Quick-scan for generic error indicators (`[ERROR]`, `Invalid arguments`, `is not allowed...`).
 4. Match each configured `DELEGATE_TASK_ERROR_PATTERNS` substring in output.

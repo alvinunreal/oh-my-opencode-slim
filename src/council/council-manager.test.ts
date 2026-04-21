@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { SubagentDepthTracker } from '../background/subagent-depth';
 import type { PluginConfig } from '../config';
 import { CouncilConfigSchema } from '../config/council-schema';
+import { SubagentDepthTracker } from '../utils/subagent-depth';
 import { CouncilManager } from './council-manager';
 
 function createMockContext(overrides?: {
@@ -789,10 +789,7 @@ describe('CouncilManager', () => {
         (c) => c[0].body?.agent === 'councillor',
       );
       // Councillor tools: delegation disabled (leaf node)
-      expect(councillorCall?.[0].body?.tools).toEqual({
-        background_task: false,
-        task: false,
-      });
+      expect(councillorCall?.[0].body?.tools).toEqual({ task: false });
     });
 
     test('disables delegation tools in master prompt body', async () => {
@@ -816,10 +813,7 @@ describe('CouncilManager', () => {
       >;
       // Master tools: everything disabled
       const masterCall = promptCalls[promptCalls.length - 1];
-      expect(masterCall[0].body?.tools).toEqual({
-        background_task: false,
-        task: false,
-      });
+      expect(masterCall[0].body?.tools).toEqual({ task: false });
     });
 
     test('creates session with model label in title', async () => {

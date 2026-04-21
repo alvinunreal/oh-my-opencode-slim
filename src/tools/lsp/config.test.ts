@@ -1,32 +1,34 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { join } from 'node:path';
 
-// Mock fs and os BEFORE importing the modules that use them
-mock.module('fs', () => ({
-  existsSync: mock(() => false),
-}));
-
-mock.module('os', () => ({
-  homedir: () => '/home/user',
-}));
-
-// Create a mock for which.sync
-const whichSyncMock = mock(() => null);
+const whichSyncMock = mock((..._args: unknown[]) => null as string | null);
 mock.module('which', () => ({
   sync: whichSyncMock,
   default: { sync: whichSyncMock },
 }));
 
-import { existsSync } from 'node:fs';
-// Now import the code to test
 import { findServerForExtension, isServerInstalled } from './config';
 
 describe('config', () => {
   beforeEach(() => {
-    (existsSync as any).mockClear();
-    (existsSync as any).mockImplementation(() => false);
+    spyOn(fs, 'existsSync').mockImplementation(() => false);
+    spyOn(os, 'homedir').mockReturnValue('/home/user');
     whichSyncMock.mockClear();
     whichSyncMock.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    mock.restore();
   });
 
   describe('isServerInstalled', () => {
@@ -35,8 +37,8 @@ describe('config', () => {
     });
 
     test('should detect absolute paths', () => {
-      (existsSync as any).mockImplementation(
-        (path: string) => path === '/usr/bin/lsp-server',
+      spyOn(fs, 'existsSync').mockImplementation(
+        (path: fs.PathLike) => path === '/usr/bin/lsp-server',
       );
       expect(isServerInstalled(['/usr/bin/lsp-server'])).toBe(true);
       expect(isServerInstalled(['/usr/bin/missing'])).toBe(false);
@@ -46,7 +48,6 @@ describe('config', () => {
       const originalPath = process.env.PATH;
       process.env.PATH = '/usr/local/bin:/usr/bin';
 
-      // Mock whichSync to return a path (simulating the command is found)
       whichSyncMock.mockReturnValue(
         join('/usr/bin', 'typescript-language-server'),
       );
@@ -65,8 +66,8 @@ describe('config', () => {
         'typescript-language-server',
       );
 
-      (existsSync as any).mockImplementation(
-        (path: string) => path === localBin,
+      spyOn(fs, 'existsSync').mockImplementation(
+        (path: fs.PathLike) => path === localBin,
       );
 
       expect(isServerInstalled(['typescript-language-server'])).toBe(true);
@@ -81,7 +82,6 @@ describe('config', () => {
         'typescript-language-server',
       );
 
-      // Mock whichSync to return the global bin path
       whichSyncMock.mockReturnValue(globalBin);
 
       expect(isServerInstalled(['typescript-language-server'])).toBe(true);
@@ -90,18 +90,20 @@ describe('config', () => {
 
   describe('findServerForExtension', () => {
     test('should skip deno for .ts when project is not a deno workspace', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncMock.mockImplementation((cmd: unknown) =>
         cmd === 'typescript-language-server'
           ? join('/usr/bin', 'typescript-language-server')
           : null,
       );
-      (existsSync as any).mockImplementation((path: string) =>
-        path.includes('bun.lock'),
+      spyOn(fs, 'existsSync').mockImplementation((path: fs.PathLike) =>
+        path.toString().includes('bun.lock'),
       );
+
       const result = findServerForExtension(
         '.ts',
         '/workspace/project/src/index.ts',
       );
+
       expect(result.status).toBe('found');
       if (result.status === 'found') {
         expect(result.server.id).toBe('typescript');
@@ -109,13 +111,15 @@ describe('config', () => {
     });
 
     test('should prefer deno for .ts in a deno workspace', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncMock.mockImplementation((cmd: unknown) =>
         cmd === 'deno' ? join('/usr/bin', 'deno') : null,
       );
-      (existsSync as any).mockImplementation((path: string) =>
-        path.includes('deno.json'),
+      spyOn(fs, 'existsSync').mockImplementation((path: fs.PathLike) =>
+        path.toString().includes('deno.json'),
       );
+
       const result = findServerForExtension('.ts', '/workspace/app/src/mod.ts');
+
       expect(result.status).toBe('found');
       if (result.status === 'found') {
         expect(result.server.id).toBe('deno');
@@ -123,10 +127,12 @@ describe('config', () => {
     });
 
     test('should return found for .py extension if installed (prefers ty)', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncMock.mockImplementation((cmd: unknown) =>
         cmd === 'ty' ? join('/usr/bin', 'ty') : null,
       );
+
       const result = findServerForExtension('.py');
+
       expect(result.status).toBe('found');
       if (result.status === 'found') {
         expect(result.server.id).toBe('ty');
@@ -139,13 +145,13 @@ describe('config', () => {
     });
 
     test('should continue to later matching servers when earlier ones are unavailable', () => {
-      whichSyncMock.mockImplementation((cmd: string) =>
+      whichSyncMock.mockImplementation((cmd: unknown) =>
         cmd === 'typescript-language-server'
           ? join('/usr/bin', 'typescript-language-server')
           : null,
       );
-      (existsSync as any).mockImplementation((path: string) =>
-        path.includes('bun.lock'),
+      spyOn(fs, 'existsSync').mockImplementation((path: fs.PathLike) =>
+        path.toString().includes('bun.lock'),
       );
 
       const result = findServerForExtension(
@@ -160,13 +166,15 @@ describe('config', () => {
     });
 
     test('should return first applicable not_installed server if no match is launchable', () => {
-      (existsSync as any).mockImplementation((path: string) =>
-        path.includes('bun.lock'),
+      spyOn(fs, 'existsSync').mockImplementation((path: fs.PathLike) =>
+        path.toString().includes('bun.lock'),
       );
+
       const result = findServerForExtension(
         '.ts',
         '/workspace/project/src/index.ts',
       );
+
       expect(result.status).toBe('not_installed');
       if (result.status === 'not_installed') {
         expect(result.server.id).toBe('typescript');

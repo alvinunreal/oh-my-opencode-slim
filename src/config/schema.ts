@@ -159,13 +159,6 @@ export type WebsearchConfig = z.infer<typeof WebsearchConfigSchema>;
 export const McpNameSchema = z.enum(['websearch', 'context7', 'grep_app']);
 export type McpName = z.infer<typeof McpNameSchema>;
 
-// Background task configuration
-export const BackgroundTaskConfigSchema = z.object({
-  maxConcurrentStarts: z.number().min(1).max(50).default(10),
-});
-
-export type BackgroundTaskConfig = z.infer<typeof BackgroundTaskConfigSchema>;
-
 export const InterviewConfigSchema = z.object({
   maxQuestions: z.number().int().min(1).max(10).default(2),
   outputFolder: z.string().min(1).default('interview'),
@@ -262,7 +255,6 @@ export const PluginConfigSchema = z.object({
   // When tmux.enabled is true, it's equivalent to multiplexer.type = 'tmux'
   tmux: TmuxConfigSchema.optional(),
   websearch: WebsearchConfigSchema.optional(),
-  background: BackgroundTaskConfigSchema.optional(),
   interview: InterviewConfigSchema.optional(),
   todoContinuation: TodoContinuationConfigSchema.optional(),
   fallback: FailoverConfigSchema.optional(),

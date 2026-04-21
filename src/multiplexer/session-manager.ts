@@ -20,9 +20,6 @@ interface TrackedSession {
   missingSince?: number;
 }
 
-/**
- * Event shape for session events
- */
 interface SessionEvent {
   type: string;
   properties?: {
@@ -37,14 +34,14 @@ interface SessionEvent {
   };
 }
 
-const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const SESSION_TIMEOUT_MS = 10 * 60 * 1000;
 const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
 
 /**
- * MultiplexerSessionManager tracks child sessions and spawns/closes multiplexer panes for them.
+ * Tracks child sessions and spawns/closes multiplexer panes for them.
  *
- * Uses session.status events for completion detection instead of polling.
- * Supports both tmux and zellij multiplexers.
+ * Uses session.status events for completion detection instead of polling,
+ * with polling kept as a fallback for reliability.
  */
 export class MultiplexerSessionManager {
   private client: OpencodeClient;
@@ -62,10 +59,7 @@ export class MultiplexerSessionManager {
     this.serverUrl =
       ctx.serverUrl?.toString() ?? `http://localhost:${defaultPort}`;
 
-    // Get the multiplexer instance
     this.multiplexer = getMultiplexer(config);
-
-    // Enable only if a multiplexer is configured and we're inside a session
     this.enabled =
       config.type !== 'none' &&
       this.multiplexer !== null &&
@@ -78,17 +72,12 @@ export class MultiplexerSessionManager {
     });
   }
 
-  /**
-   * Handle session.created events.
-   * Spawns a multiplexer pane for child sessions (those with parentID).
-   */
   async onSessionCreated(event: SessionEvent): Promise<void> {
     if (!this.enabled || !this.multiplexer) return;
     if (event.type !== 'session.created') return;
 
     const info = event.properties?.info;
     if (!info?.id || !info?.parentID) {
-      // Not a child session, skip
       return;
     }
 
@@ -97,7 +86,6 @@ export class MultiplexerSessionManager {
     const title = info.title ?? 'Subagent';
     const directory = info.directory ?? this.directory;
 
-    // Skip if we're already tracking this session
     if (this.sessions.has(sessionId)) {
       log('[multiplexer-session-manager] session already tracked', {
         sessionId,
@@ -105,7 +93,6 @@ export class MultiplexerSessionManager {
       return;
     }
 
-    // Check server is running before spawning
     const serverRunning = await isServerRunning(this.serverUrl);
     if (!serverRunning) {
       log('[multiplexer-session-manager] server not running, skipping', {
@@ -145,17 +132,10 @@ export class MultiplexerSessionManager {
         paneId: paneResult.paneId,
       });
 
-      // Start polling for fallback reliability
       this.startPolling();
     }
   }
 
-  /**
-   * Handle session.status events for completion detection.
-   * Uses session.status instead of deprecated session.idle.
-   *
-   * When a session becomes idle (completed), close its pane.
-   */
   async onSessionStatus(event: SessionEvent): Promise<void> {
     if (!this.enabled) return;
     if (event.type !== 'session.status') return;
@@ -163,16 +143,11 @@ export class MultiplexerSessionManager {
     const sessionId = event.properties?.sessionID;
     if (!sessionId) return;
 
-    // Check if session is idle (completed)
     if (event.properties?.status?.type === 'idle') {
       await this.closeSession(sessionId);
     }
   }
 
-  /**
-   * Handle session.deleted events.
-   * When a session is deleted, close its multiplexer pane immediately.
-   */
   async onSessionDeleted(event: SessionEvent): Promise<void> {
     if (!this.enabled) return;
     if (event.type !== 'session.deleted') return;
@@ -205,10 +180,6 @@ export class MultiplexerSessionManager {
     }
   }
 
-  /**
-   * Poll sessions for status updates (fallback for reliability).
-   * Also handles timeout and missing session detection.
-   */
   private async pollSessions(): Promise<void> {
     if (this.sessions.size === 0) {
       this.stopPolling();
@@ -227,8 +198,6 @@ export class MultiplexerSessionManager {
 
       for (const [sessionId, tracked] of this.sessions.entries()) {
         const status = allStatuses[sessionId];
-
-        // Session is idle (completed).
         const isIdle = status?.type === 'idle';
 
         if (status) {
@@ -241,8 +210,6 @@ export class MultiplexerSessionManager {
         const missingTooLong =
           !!tracked.missingSince &&
           now - tracked.missingSince >= SESSION_MISSING_GRACE_MS;
-
-        // Check for timeout as a safety fallback
         const isTimedOut = now - tracked.createdAt > SESSION_TIMEOUT_MS;
 
         if (isIdle || missingTooLong || isTimedOut) {
@@ -275,9 +242,6 @@ export class MultiplexerSessionManager {
     }
   }
 
-  /**
-   * Clean up all tracked sessions.
-   */
   async cleanup(): Promise<void> {
     this.stopPolling();
 

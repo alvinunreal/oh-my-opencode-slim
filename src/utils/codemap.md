@@ -4,7 +4,7 @@ Shared utility modules providing low-level services: TMUX orchestration, environ
 
 ## Responsibility
 
-- **tmux.ts**: Terminal multiplexer pane lifecycle management—spawning, closing, layout rebalancing, and server health probing for background task sessions
+- **tmux.ts**: Terminal multiplexer pane lifecycle management—spawning, closing, layout rebalancing, and server health probing for child agent sessions
 - **env.ts**: Cross-platform environment variable access supporting Bun and Node.js runtime with empty string filtering
 - **internal-initiator.ts**: Marker-based identification for internal agent text parts in MCP protocol communication
 - **polling.ts**: Generic polling utility with stability detection and abort signal support for asynchronous condition waiting
@@ -56,6 +56,6 @@ Shared utility modules providing low-level services: TMUX orchestration, environ
 
 ## Integration
 
-- **Consumers**: Background task manager spawns/closes tmux panes, MCP protocol layer checks for internal initiator markers, polling used by background task status monitoring, ZIP extraction for plugin updates, agent variant applied in request pipeline
+- **Consumers**: Multiplexer/session helpers spawn and close tmux panes, MCP protocol layer checks for internal initiator markers, polling is reused across runtime status checks, ZIP extraction supports plugin updates, and agent variant helpers are applied in the request pipeline
 - **Dependencies**: Imports `TmuxConfig`, `TmuxLayout` from `../config/schema`, constants from `../config` (POLL_INTERVAL_MS, MAX_POLL_TIME_MS, STABLE_POLLS_THRESHOLD), logging from `./logger`, `PluginConfig` type from `../config`
 - **Exports**: All modules re-exported via `src/utils/index.ts` barrel file

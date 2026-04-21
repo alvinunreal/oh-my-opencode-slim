@@ -1,5 +1,5 @@
 import { DEFAULT_MAX_SUBAGENT_DEPTH } from '../config';
-import { log } from '../utils/logger';
+import { log } from './logger';
 
 /**
  * Tracks subagent spawn depth to prevent excessive nesting.

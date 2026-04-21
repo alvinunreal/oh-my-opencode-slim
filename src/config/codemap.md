@@ -188,8 +188,8 @@ src/config/
 
 ### Polling Configuration
 - `POLL_INTERVAL_MS` (500ms): Standard polling interval
-- `POLL_INTERVAL_SLOW_MS` (1000ms): Slower polling for background tasks
-- `POLL_INTERVAL_BACKGROUND_MS` (2000ms): Background task polling
+- `POLL_INTERVAL_SLOW_MS` (1000ms): Slower polling interval for less latency-sensitive checks
+- `POLL_INTERVAL_BACKGROUND_MS` (2000ms): Multiplexer child-session polling
 
 ### Timeouts
 - `DEFAULT_TIMEOUT_MS` (2 minutes): Default operation timeout

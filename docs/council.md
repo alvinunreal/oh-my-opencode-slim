@@ -452,7 +452,7 @@ To disable empty-response retry globally:
 
 ### Master Fallback Chain
 
-The council master can be configured with fallback models. If the primary master model fails (timeout, API error, rate limit), the system tries each fallback in order before degrading to the best councillor response. This uses the same abort-retry pattern as the background task manager.
+The council master can be configured with fallback models. If the primary master model fails (timeout, API error, rate limit), the system tries each fallback in order before degrading to the best councillor response. This uses the same abort-retry pattern as the foreground failover system.
 
 ```jsonc
 {

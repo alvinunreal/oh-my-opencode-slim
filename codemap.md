@@ -29,7 +29,6 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 |---|---|---|
 | `src/` | Main application surface that composes plugin bootstrap, runtime modules, and installer-facing code. | [View Map](src/codemap.md) |
 | `src/agents/` | Agent factory layer for orchestrator, specialists, council agents, and config/permission shaping. | [View Map](src/agents/codemap.md) |
-| `src/background/` | Async task lifecycle management plus session-to-pane coordination for delegated work. | [View Map](src/background/codemap.md) |
 | `src/cli/` | Installer, config editing, provider preset generation, and built-in skill installation. | [View Map](src/cli/codemap.md) |
 | `src/config/` | Configuration schema, defaults, loaders, constant tables, and agent/MCP policy helpers. | [View Map](src/config/codemap.md) |
 | `src/council/` | Multi-model council orchestration and synthesis fallback flow. | [View Map](src/council/codemap.md) |
@@ -73,8 +72,8 @@ This codemap intentionally covers the plugin repository itself and excludes the 
    - Tool calls resolve through `src/tools/` or built-in OpenCode tools.
    - Hooks can transform prompts/messages or repair tool failures before/after execution.
 
-3. **Delegated/background execution**
-   - `src/background/` creates child sessions and tracks task state.
+3. **Delegated execution**
+   - OpenCode child sessions are created by task/council flows and tracked by plugin utilities.
    - `src/multiplexer/` optionally mirrors those sessions into tmux/zellij panes.
    - Results flow back into the parent session through notifications/output polling.
 
@@ -86,9 +85,9 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 ## Key Cross-Module Integration Points
 
 - `src/index.ts` is the central composition root for nearly every runtime subsystem.
-- `src/config/` feeds `src/agents/`, `src/tools/lsp/`, `src/background/`, and MCP registration.
+- `src/config/` feeds `src/agents/`, `src/tools/lsp/`, session/delegation utilities, and MCP registration.
 - `src/cli/skills.ts` and `src/cli/custom-skills.ts` bridge install-time skill packaging with runtime permission policy.
-- `src/background/` depends on `src/multiplexer/` and cooperates with session formatting helpers in `src/utils/`.
+- Session/delegation utilities depend on `src/multiplexer/` and cooperate with helpers in `src/utils/`.
 - `src/tools/council.ts` delegates into `src/council/`.
 - `src/hooks/filter-available-skills/` and agent permission logic rely on shared skill names from the CLI/config layer.
 - `src/interview/` hooks into plugin command/event surfaces exposed by `src/index.ts`.
@@ -107,7 +106,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 2. `src/codemap.md`
 3. One of:
    - `src/agents/codemap.md`
-   - `src/background/codemap.md`
+   - `src/multiplexer/codemap.md`
    - `src/tools/codemap.md`
    - `src/hooks/codemap.md`
 4. Relevant subsystem sub-map for the task at hand

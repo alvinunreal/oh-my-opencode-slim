@@ -1,12 +1,6 @@
 // LSP Utilities - Essential formatters and helpers
 
-import {
-  existsSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../../utils/logger';
@@ -51,7 +45,7 @@ export function findWorkspaceRoot(filePath: string): string {
   let dir = resolve(filePath);
 
   try {
-    if (!statSync(dir).isDirectory()) {
+    if (!fs.statSync(dir).isDirectory()) {
       dir = dirname(dir);
     }
   } catch {
@@ -69,7 +63,7 @@ export function findWorkspaceRoot(filePath: string): string {
   let prevDir = '';
   while (dir !== prevDir) {
     for (const marker of markers) {
-      if (existsSync(join(dir, marker))) {
+      if (fs.existsSync(join(dir, marker))) {
         return dir;
       }
     }
@@ -221,7 +215,7 @@ function applyTextEditsToFile(
   edits: TextEdit[],
 ): { success: boolean; editCount: number; error?: string } {
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
 
     const sortedEdits = [...edits].sort((a, b) => {
@@ -256,7 +250,7 @@ function applyTextEditsToFile(
       }
     }
 
-    writeFileSync(filePath, lines.join('\n'), 'utf-8');
+    fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
     return { success: true, editCount: edits.length };
   } catch (err) {
     return {
@@ -318,7 +312,7 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
         if (change.kind === 'create') {
           try {
             const filePath = uriToPath(change.uri);
-            writeFileSync(filePath, '', 'utf-8');
+            fs.writeFileSync(filePath, '', 'utf-8');
             result.filesModified.push(filePath);
           } catch (err) {
             result.success = false;
@@ -328,9 +322,9 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
           try {
             const oldPath = uriToPath(change.oldUri);
             const newPath = uriToPath(change.newUri);
-            const content = readFileSync(oldPath, 'utf-8');
-            writeFileSync(newPath, content, 'utf-8');
-            unlinkSync(oldPath);
+            const content = fs.readFileSync(oldPath, 'utf-8');
+            fs.writeFileSync(newPath, content, 'utf-8');
+            fs.unlinkSync(oldPath);
             result.filesModified.push(newPath);
           } catch (err) {
             result.success = false;
@@ -339,7 +333,7 @@ export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
         } else if (change.kind === 'delete') {
           try {
             const filePath = uriToPath(change.uri);
-            unlinkSync(filePath);
+            fs.unlinkSync(filePath);
             result.filesModified.push(filePath);
           } catch (err) {
             result.success = false;

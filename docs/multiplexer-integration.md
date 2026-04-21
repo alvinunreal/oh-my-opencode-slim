@@ -15,7 +15,7 @@ Use tmux or Zellij to watch subagents work in live panes while OpenCode keeps ru
 
 ## Overview
 
-When the Orchestrator launches subagents or background tasks, oh-my-opencode-slim can open panes for those sessions automatically.
+When OpenCode launches child agent sessions, oh-my-opencode-slim can open panes for those sessions automatically.
 
 - **Real-time visibility** into agent activity
 - **Automatic pane management** while tasks run

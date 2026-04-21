@@ -190,12 +190,6 @@ ${enabledValidationRouting}
 - Confirm specialists completed successfully
 - Verify solution meets requirements
 
-### Handling relayed questions
-When a background task notification mentions relayed questions, call \`background_output\` and review them:
-- Check each question and the subagent's [ASSUMED: ...] marker in the result
-- If the assumption is reasonable → accept it, proceed
-- If the assumption could be wrong → ask the user, then decide whether to re-launch the task
-
 </Workflow>
 
 <Communication>

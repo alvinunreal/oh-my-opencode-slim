@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { MultiplexerSessionManager } from './multiplexer-session-manager';
+import { MultiplexerSessionManager } from './session-manager';
 
 // Define the mock multiplexer
 const mockMultiplexer = {
@@ -239,9 +239,7 @@ describe('MultiplexerSessionManager', () => {
 // Backward compatibility test
 describe('TmuxSessionManager (backward compatibility)', () => {
   test('TmuxSessionManager is alias for MultiplexerSessionManager', async () => {
-    const { TmuxSessionManager } = await import(
-      './multiplexer-session-manager'
-    );
+    const { TmuxSessionManager } = await import('./session-manager');
     expect(TmuxSessionManager).toBe(MultiplexerSessionManager);
   });
 });

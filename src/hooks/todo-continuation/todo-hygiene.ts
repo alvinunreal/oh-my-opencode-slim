@@ -2,14 +2,11 @@ export const TODO_HYGIENE_REMINDER =
   'If the active task changed or finished, update the todo list to match the current work state.';
 export const TODO_FINAL_ACTIVE_REMINDER =
   'If you are finishing now, do not leave the active todo in_progress. Mark it completed, or move unfinished work back to pending.';
-export const TODO_DELEGATION_RESUME_REMINDER =
-  'A delegated result just returned. Reconcile the todo list before continuing or delegating again.';
 
 const RESET = new Set(['todowrite']);
 const IGNORE = new Set(['auto_continue']);
-const DELEGATION = new Set(['background_output']);
 
-type Reason = 'general' | 'delegation_resume' | 'final_active';
+type Reason = 'general' | 'final_active';
 
 interface ToolInput {
   tool: string;
@@ -83,10 +80,6 @@ export function createTodoHygiene(options: Options) {
       return TODO_FINAL_ACTIVE_REMINDER;
     }
 
-    if (reasons.has('delegation_resume')) {
-      return TODO_DELEGATION_RESUME_REMINDER;
-    }
-
     return TODO_HYGIENE_REMINDER;
   }
 
@@ -156,8 +149,6 @@ export function createTodoHygiene(options: Options) {
 
         if (isFinalActive(state)) {
           mark(input.sessionID, 'final_active');
-        } else if (DELEGATION.has(tool)) {
-          mark(input.sessionID, 'delegation_resume');
         } else {
           mark(input.sessionID, 'general');
         }

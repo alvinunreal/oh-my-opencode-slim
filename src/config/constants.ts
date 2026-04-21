@@ -29,7 +29,7 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 // designer: can spawn explorer (for research during design)
 // explorer/librarian/oracle: cannot spawn any subagents (leaf nodes)
 // Unknown agent types not listed here default to explorer-only access
-// Which agents each agent type can spawn via background_task tool.
+// Which agents each agent type can spawn via delegation.
 // councillor and council-master are internal — only CouncilManager spawns them.
 export const ORCHESTRATABLE_AGENTS = [
   'explorer',

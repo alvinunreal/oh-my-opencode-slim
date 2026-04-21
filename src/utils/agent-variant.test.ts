@@ -233,12 +233,12 @@ describe('applyAgentVariant', () => {
     const body = {
       agent: 'oracle',
       parts: [{ type: 'text' as const, text: 'hello' }],
-      tools: { background_task: false },
+      tools: { task: false },
     };
     const result = applyAgentVariant('low', body);
     expect(result.agent).toBe('oracle');
     expect(result.parts).toEqual([{ type: 'text', text: 'hello' }]);
-    expect(result.tools).toEqual({ background_task: false });
+    expect(result.tools).toEqual({ task: false });
     expect(result.variant).toBe('low');
   });
 });
