@@ -129,6 +129,14 @@ describe('orchestrator agent', () => {
     expect((orchestrator?.config.permission as any).question).toBe('allow');
   });
 
+  test('orchestrator is allowed to invoke council_session', () => {
+    const agents = createAgents();
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    expect((orchestrator?.config.permission as any).council_session).toBe(
+      'allow',
+    );
+  });
+
   test('orchestrator accepts overrides', () => {
     const config: PluginConfig = {
       agents: {
@@ -257,6 +265,26 @@ describe('skill permissions', () => {
     const skillPerm = (oracle?.config.permission as Record<string, unknown>)
       ?.skill as Record<string, string>;
     expect(skillPerm?.simplify).toBe('allow');
+  });
+});
+
+describe('tool permissions', () => {
+  test('council agent is allowed to invoke council_session', () => {
+    const agents = createAgents();
+    const council = agents.find((a) => a.name === 'council');
+    expect((council?.config.permission as any).council_session).toBe('allow');
+  });
+
+  test('oracle is denied access to council_session', () => {
+    const agents = createAgents();
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect((oracle?.config.permission as any).council_session).toBe('deny');
+  });
+
+  test('explorer is denied access to council_session', () => {
+    const agents = createAgents();
+    const explorer = agents.find((a) => a.name === 'explorer');
+    expect((explorer?.config.permission as any).council_session).toBe('deny');
   });
 });
 
