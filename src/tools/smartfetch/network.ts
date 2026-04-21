@@ -469,7 +469,7 @@ function inferFilenameFromUrl(url: string) {
   try {
     const parsed = new URL(url);
     const last = parsed.pathname.split('/').filter(Boolean).pop();
-    if (!last || !last.includes('.')) return undefined;
+    if (!last?.includes('.')) return undefined;
     return decodeURIComponent(last);
   } catch {
     return undefined;

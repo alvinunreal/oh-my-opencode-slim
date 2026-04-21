@@ -83,13 +83,14 @@ describe('councillor permissions', () => {
     expect(permission.read).toBe('allow');
     expect(permission.glob).toBe('allow');
     expect(permission.grep).toBe('allow');
+    expect(permission.lsp).toBe('allow');
   });
 
-  test('allows lsp and list tools', () => {
+  test('allows list and codesearch tools', () => {
     const agent = createCouncillorAgent('test-model');
     const permission = agent.config.permission as Record<string, string>;
-    expect(permission.lsp).toBe('allow');
     expect(permission.list).toBe('allow');
+    expect(permission.codesearch).toBe('allow');
   });
 
   test('has exactly 8 permission entries', () => {

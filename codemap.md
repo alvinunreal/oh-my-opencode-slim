@@ -50,9 +50,8 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 | `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
 | `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
 | `src/skills/simplify/` | Behavior-preserving simplification skill package. | [View Map](src/skills/simplify/codemap.md) |
-| `src/tools/` | Tool export surface and orchestration helpers for AST-grep, LSP, smartfetch, council, and background tools. | [View Map](src/tools/codemap.md) |
+| `src/tools/` | Tool export surface and orchestration helpers for AST-grep, smartfetch, council, and background tools. | [View Map](src/tools/codemap.md) |
 | `src/tools/ast-grep/` | AST-grep binary management and AST-aware search/replace tool flow. | [View Map](src/tools/ast-grep/codemap.md) |
-| `src/tools/lsp/` | LSP client pool, transport, formatting, and workspace-edit application. | [View Map](src/tools/lsp/codemap.md) |
 | `src/tools/smartfetch/` | Fetch/extract/cache pipeline for web content and secondary-model summarization. | [View Map](src/tools/smartfetch/codemap.md) |
 | `src/utils/` | Cross-cutting helpers for logging, sessions, compatibility, zip extraction, and runtime metadata. | [View Map](src/utils/codemap.md) |
 | `scripts/` | Build/release validation and generated-artifact maintenance scripts. | [View Map](scripts/codemap.md) |
@@ -85,7 +84,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 ## Key Cross-Module Integration Points
 
 - `src/index.ts` is the central composition root for nearly every runtime subsystem.
-- `src/config/` feeds `src/agents/`, `src/tools/lsp/`, session/delegation utilities, and MCP registration.
+- `src/config/` feeds `src/agents/`, session/delegation utilities, and MCP registration.
 - `src/cli/skills.ts` and `src/cli/custom-skills.ts` bridge install-time skill packaging with runtime permission policy.
 - Session/delegation utilities depend on `src/multiplexer/` and cooperate with helpers in `src/utils/`.
 - `src/tools/council.ts` delegates into `src/council/`.

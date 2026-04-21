@@ -191,7 +191,7 @@ When working through multi-step tasks, consider enabling auto-continue to avoid 
 ${enabledValidationRouting}
 
 ## 6. Verify
-- Run \`lsp_diagnostics\` for errors
+- Run relevant checks/diagnostics for the change
 - Use validation routing when applicable instead of doing all review work yourself
 - If test files are involved, prefer @fixer for bounded test changes and @oracle only for test strategy or quality review
 - Confirm specialists completed successfully

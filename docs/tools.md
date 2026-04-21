@@ -20,21 +20,6 @@ Fetch remote pages with content extraction tuned for docs/static sites.
 
 ---
 
-## LSP Tools
-
-Language Server Protocol integration for code intelligence across 30+ languages. OpenCode ships pre-configured LSP servers for TypeScript, Python, Rust, Go, and more.
-
-| Tool | Description |
-|------|-------------|
-| `lsp_goto_definition` | Jump to a symbol's definition |
-| `lsp_find_references` | Find all usages of a symbol across the workspace |
-| `lsp_diagnostics` | Get errors and warnings from the language server |
-| `lsp_rename` | Rename a symbol across all files atomically |
-
-> See the [official OpenCode docs](https://opencode.ai/docs/lsp/#built-in) for the full list of built-in LSP servers and their requirements.
-
----
-
 ## Code Search Tools
 
 Fast, structural code search and refactoring — more powerful than plain text grep.

@@ -23,8 +23,8 @@ problem.
 - Read files (read)
 - Search by name patterns (glob)
 - Search by content (grep)
-- Query language server (lsp_diagnostics, lsp_goto_definition, lsp_find_references)
 - Search code patterns (ast_grep_search)
+- Use OpenCode's built-in \`lsp\` tool when available
 - Search external docs (if MCPs are configured for this agent)
 
 You CANNOT edit files, write files, run shell commands, or delegate to \

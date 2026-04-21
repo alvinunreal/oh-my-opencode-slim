@@ -135,14 +135,6 @@
     "src/tools/background.ts": "1b979e158a1ca515fae2755729d449aa",
     "src/tools/council.ts": "4edec9c98d6e6d4082e5ee4eba0aa9c7",
     "src/tools/index.ts": "f31e1c25b9af8375dba09a4b16766566",
-    "src/tools/lsp/client.ts": "c8821a8c2cc21c51c26ffb50759e7411",
-    "src/tools/lsp/config-store.ts": "e10072482fbb91b9214fa3bf333aa033",
-    "src/tools/lsp/config.ts": "13aeb4cab14b73db792f6411cc775f8a",
-    "src/tools/lsp/constants.ts": "06f4618b3937e6aaa6ec4076c2e9ed51",
-    "src/tools/lsp/index.ts": "913a5e5cb7f366a05e618905e65b4900",
-    "src/tools/lsp/tools.ts": "023d712c7a06ab9e43851826114309a0",
-    "src/tools/lsp/types.ts": "e11904f9c738f10670abbfbaa185004d",
-    "src/tools/lsp/utils.ts": "c64858938255ab3c964195106af9bff9",
     "src/tools/smartfetch/binary.ts": "a65d816f46ebef11c39bda1764f82bb7",
     "src/tools/smartfetch/cache.ts": "9a4e272b897b6914f0925919357bfce1",
     "src/tools/smartfetch/constants.ts": "1ba20e00a4d3f4717eba62f381f9cd4c",
@@ -192,7 +184,6 @@
     "src/skills/simplify": "9c745d8113135e3103af5f1a49d67dfe",
     "src/tools": "2383d46a3f3878c98702e0470aca0ebb",
     "src/tools/ast-grep": "2d4ad34fd02c6d068766dd38e826f2a8",
-    "src/tools/lsp": "952fb176aeb025f24ad127b8ca43e3eb",
     "src/tools/smartfetch": "2b137fd3f65e105b005650b862b14fd7",
     "src/utils": "7280f2365b7cbed95d7553dfb79dd238"
   }

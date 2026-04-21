@@ -29,11 +29,6 @@ import {
   ast_grep_search,
   createCouncilTool,
   createWebfetchTool,
-  lsp_diagnostics,
-  lsp_find_references,
-  lsp_goto_definition,
-  lsp_rename,
-  setUserLspConfig,
 } from './tools';
 import { resolveRuntimeAgentName, rewriteDisplayNameMentions } from './utils';
 import { initLogger, log } from './utils/logger';
@@ -259,7 +254,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       Object.keys(councilTools).length +
       Object.keys(todoContinuationHook.tool).length +
       1 + // webfetch
-      4 + // lsp_goto_definition, lsp_find_references, lsp_diagnostics, lsp_rename
       2; // ast_grep_search, ast_grep_replace
   } catch (err) {
     // Plugin init failed: log visibly before re-throwing so the user
@@ -326,10 +320,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...councilTools,
       webfetch,
       ...todoContinuationHook.tool,
-      lsp_goto_definition,
-      lsp_find_references,
-      lsp_diagnostics,
-      lsp_rename,
       ast_grep_search,
       ast_grep_replace,
     },
@@ -337,12 +327,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcp: mcps,
 
     config: async (opencodeConfig: Record<string, unknown>) => {
-      // Set user's lsp config from opencode.json for LSP tools
-      const lspConfig = opencodeConfig.lsp as
-        | Record<string, unknown>
-        | undefined;
-      setUserLspConfig(lspConfig);
-
       // Only set default_agent if not already configured by the user
       // and the plugin config doesn't explicitly disable this behavior
       if (

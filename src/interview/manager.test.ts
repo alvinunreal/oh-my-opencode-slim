@@ -53,6 +53,17 @@ function createMockContext(overrides?: {
   } as any;
 }
 
+function createTestConfig(
+  overrides: Partial<NonNullable<PluginConfig['interview']>> = {},
+): PluginConfig {
+  return {
+    interview: {
+      autoOpenBrowser: false,
+      ...overrides,
+    },
+  } as PluginConfig;
+}
+
 // Helper to extract text from output parts
 function _extractOutputText(output: {
   parts: Array<{ type: string; text?: string }>;
@@ -65,7 +76,7 @@ describe('interview manager - per-session mode', () => {
   describe('basic functionality', () => {
     test('returns correct interface when port is 0 (default)', () => {
       const ctx = createMockContext();
-      const config = { interview: { port: 0 } } as PluginConfig;
+      const config = createTestConfig({ port: 0 });
 
       const manager = createInterviewManager(ctx, config);
 
@@ -80,7 +91,7 @@ describe('interview manager - per-session mode', () => {
     test('creates interview with /interview command', async () => {
       const tempDir = await fs.mkdtemp('/tmp/manager-test-');
       const ctx = createMockContext({ directory: tempDir });
-      const config = { interview: { port: 0 } } as PluginConfig;
+      const config = createTestConfig({ port: 0 });
 
       const manager = createInterviewManager(ctx, config);
       const output = { parts: [] as Array<{ type: string; text?: string }> };
@@ -107,7 +118,7 @@ describe('interview manager - per-session mode', () => {
     test('marks interview as abandoned on session.deleted event', async () => {
       const tempDir = await fs.mkdtemp('/tmp/manager-test-');
       const ctx = createMockContext({ directory: tempDir });
-      const config = { interview: { port: 0 } } as PluginConfig;
+      const config = createTestConfig({ port: 0 });
 
       const manager = createInterviewManager(ctx, config);
 
@@ -146,12 +157,10 @@ describe('interview manager - per-session mode', () => {
       const ctx = createMockContext({ directory: tempDir });
 
       const freePort = await findFreePort();
-      const config = {
-        interview: {
-          port: freePort,
-          dashboard: true,
-        },
-      } as PluginConfig;
+      const config = createTestConfig({
+        port: freePort,
+        dashboard: true,
+      });
 
       const manager = createInterviewManager(ctx, config);
 
@@ -203,12 +212,10 @@ describe('interview manager - per-session mode', () => {
       const tempDir = await fs.mkdtemp('/tmp/manager-test-');
       const ctx = createMockContext({ directory: tempDir });
 
-      const config = {
-        interview: {
-          port: freePort,
-          dashboard: true,
-        },
-      } as PluginConfig;
+      const config = createTestConfig({
+        port: freePort,
+        dashboard: true,
+      });
 
       const manager = createInterviewManager(ctx, config);
 
@@ -241,12 +248,10 @@ describe('interview manager - state push callback wiring', () => {
     const ctx = createMockContext({ directory: tempDir });
 
     const freePort = await findFreePort();
-    const config = {
-      interview: {
-        port: freePort,
-        dashboard: true,
-      },
-    } as PluginConfig;
+    const config = createTestConfig({
+      port: freePort,
+      dashboard: true,
+    });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -300,7 +305,7 @@ describe('interview manager - state push callback wiring', () => {
   test('in per-session mode, setBaseUrlResolver is called', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const config = { interview: { port: 0 } } as PluginConfig;
+    const config = createTestConfig({ port: 0 });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -332,12 +337,10 @@ describe('interview manager - session registration', () => {
     const ctx = createMockContext({ directory: tempDir });
 
     const freePort = await findFreePort();
-    const config = {
-      interview: {
-        port: freePort,
-        dashboard: true,
-      },
-    } as PluginConfig;
+    const config = createTestConfig({
+      port: freePort,
+      dashboard: true,
+    });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -387,12 +390,10 @@ describe('interview manager - session registration', () => {
     const ctx = createMockContext({ directory: tempDir });
 
     const freePort = await findFreePort();
-    const config = {
-      interview: {
-        port: freePort,
-        dashboard: true,
-      },
-    } as PluginConfig;
+    const config = createTestConfig({
+      port: freePort,
+      dashboard: true,
+    });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -449,7 +450,7 @@ describe('interview manager - edge cases', () => {
   test('handles session.status event with idle status', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const config = { interview: { port: 0 } } as PluginConfig;
+    const config = createTestConfig({ port: 0 });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -486,7 +487,7 @@ describe('interview manager - edge cases', () => {
   test('handles session.status event without sessionID in properties', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const config = { interview: { port: 0 } } as PluginConfig;
+    const config = createTestConfig({ port: 0 });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -511,7 +512,7 @@ describe('interview manager - edge cases', () => {
   test('handles unknown event types', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const config = { interview: { port: 0 } } as PluginConfig;
+    const config = createTestConfig({ port: 0 });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -534,7 +535,7 @@ describe('interview manager - edge cases', () => {
   test('handles handleCommandExecuteBefore without sessionID', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const config = { interview: { port: 0 } } as PluginConfig;
+    const config = createTestConfig({ port: 0 });
 
     const manager = createInterviewManager(ctx, config);
 
@@ -566,12 +567,10 @@ describe('interview manager - integration with real dashboard', () => {
     const ctx2 = createMockContext({ directory: tempDir2 });
 
     const freePort = await findFreePort();
-    const config = {
-      interview: {
-        port: freePort,
-        dashboard: true,
-      },
-    } as PluginConfig;
+    const config = createTestConfig({
+      port: freePort,
+      dashboard: true,
+    });
 
     const manager1 = createInterviewManager(ctx1, config);
 

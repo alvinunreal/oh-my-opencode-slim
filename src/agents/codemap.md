@@ -64,7 +64,7 @@ All agents follow a consistent factory pattern:
 | Librarian | External docs | context7, grep_app, websearch | Evidence-based, citations required | 0.1 |
 | Oracle | Architecture guidance | Analysis tools, code review | Read-only, advisory | 0.1 |
 | Designer | UI/UX implementation | Tailwind, CSS, animations | Visual excellence priority | 0.7 |
-| Fixer | Implementation | Edit/write, lsp_diagnostics | No research/delegation, structured output | 0.2 |
+| Fixer | Implementation | Edit/write, grep, glob, read | No research/delegation, structured output | 0.2 |
 
 ## Flow
 
@@ -141,7 +141,7 @@ Parallelize (if applicable)
 Execute & Integrate
     │
     ↓
-Verify (lsp_diagnostics, tests)
+Verify (relevant checks, tests)
 ```
 
 ### Agent Interaction Patterns

@@ -73,7 +73,7 @@ oh-my-opencode-slim/
 │   ├── mcp/          # MCP server definitions
 │   ├── multiplexer/  # Tmux/Zellij pane integration for child sessions
 │   ├── skills/       # Skill definitions (included in package publish)
-│   ├── tools/        # Tool definitions (council, webfetch, LSP, etc.)
+│   ├── tools/        # Tool definitions (council, webfetch, AST-grep, etc.)
 │   └── utils/        # Shared utilities (tmux, session helpers)
 ├── dist/             # Built JavaScript and declarations
 ├── docs/             # User-facing documentation
@@ -87,7 +87,6 @@ oh-my-opencode-slim/
 - `@modelcontextprotocol/sdk` - MCP protocol implementation
 - `@opencode-ai/sdk` - OpenCode AI SDK
 - `zod` - Runtime validation
-- `vscode-jsonrpc` / `vscode-languageserver-protocol` - LSP support
 
 ## Development Workflow
 

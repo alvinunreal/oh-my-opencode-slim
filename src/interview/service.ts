@@ -40,7 +40,7 @@ import type {
 
 const COMMAND_NAME = 'interview';
 const DEFAULT_MAX_QUESTIONS = 2;
-const DEFAULT_AUTO_OPEN_BROWSER = true;
+const DEFAULT_AUTO_OPEN_BROWSER = process.env.NODE_ENV !== 'test';
 
 /**
  * Open a URL in the default browser.
