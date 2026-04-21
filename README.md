@@ -23,11 +23,19 @@ To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)*
 
 ### Quick Start
 
+Copy and paste this prompt to your LLM agent (Claude Code, AmpCode, Cursor, etc.):
+
+
+```
+Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
+```
+
+
+### Manual Installation
+
 ```bash
 bunx oh-my-opencode-slim@latest install
 ```
-
-For bug reports and feature requests, use GitHub Issues. For setup questions, troubleshooting, or general support, use the Telegram channel linked above.
 
 ### Getting Started
 
@@ -73,7 +81,7 @@ The default generated configuration looks like this:
 
 ### For Alternative Providers
 
-To use Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, see **[Provider Configurations](docs/provider-configurations.md)** for step-by-step config examples. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
+To use Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
 
 You can also mix and match any models per agent. For model suggestions, see the **Recommended Models** listed under each agent below.
 
@@ -446,7 +454,6 @@ Use this section as a map: start with installation, then jump to features, confi
 | Doc | What it covers |
 |-----|----------------|
 | **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
-| **[Provider Configurations](docs/provider-configurations.md)** | Configure OpenAI, Kimi, GitHub Copilot, ZAI, Fireworks AI, or mixed-provider presets |
 
 <a id="features-and-workflows"></a>
 

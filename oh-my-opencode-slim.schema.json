@@ -435,17 +435,6 @@
         }
       }
     },
-    "background": {
-      "type": "object",
-      "properties": {
-        "maxConcurrentStarts": {
-          "default": 10,
-          "type": "number",
-          "minimum": 1,
-          "maximum": 50
-        }
-      }
-    },
     "interview": {
       "type": "object",
       "properties": {

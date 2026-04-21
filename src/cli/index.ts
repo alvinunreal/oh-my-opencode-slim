@@ -40,7 +40,7 @@ Options:
   -h, --help             Show this help message
 
 The installer generates an OpenAI configuration by default.
-For alternative providers, see docs/provider-configurations.md.
+For the full config reference, see docs/configuration.md.
 
 Examples:
   bunx oh-my-opencode-slim install

@@ -241,12 +241,11 @@ async function runInstall(config: InstallConfig): Promise<number> {
   const modelsInfo =
     'Default configuration uses OpenAI models (gpt-5.4 / gpt-5.4-mini).';
   console.log(`${modelsInfo}`);
-  const altProviders =
-    'For alternative providers (Kimi, GitHub Copilot, ZAI Coding Plan)';
-  console.log(`${altProviders}, see:`);
+  const altProviders = 'For the full configuration reference, see:';
+  console.log(altProviders);
   const docsUrl =
     'https://github.com/alvinunreal/oh-my-opencode-slim/' +
-    'blob/master/docs/provider-configurations.md';
+    'blob/master/docs/configuration.md';
   console.log(`  ${BLUE}${docsUrl}${RESET}`);
   console.log();
 

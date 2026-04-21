@@ -7,7 +7,6 @@
 | Doc | Contents |
 |-----|----------|
 | [Installation Guide](installation.md) | CLI flags, `--reset`, auth, troubleshooting |
-| [Provider Configurations](provider-configurations.md) | OpenAI, Kimi, Copilot, ZAI, Fireworks AI, mixing providers, fallback chains |
 
 ## ✨ Features
 
