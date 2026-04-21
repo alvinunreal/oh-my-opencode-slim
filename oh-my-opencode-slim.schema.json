@@ -218,6 +218,7 @@
                   "type": "string"
                 },
                 {
+                  "minItems": 1,
                   "type": "array",
                   "items": {
                     "anyOf": [
@@ -273,6 +274,14 @@
             "displayName": {
               "type": "string",
               "minLength": 1
+            },
+            "prompt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }
@@ -292,6 +301,7 @@
                 "type": "string"
               },
               {
+                "minItems": 1,
                 "type": "array",
                 "items": {
                   "anyOf": [
@@ -345,6 +355,14 @@
             "additionalProperties": {}
           },
           "displayName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
             "type": "string",
             "minLength": 1
           }
