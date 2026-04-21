@@ -9,7 +9,7 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 | File | Purpose |
 |------|---------|
 | `~/.config/opencode/opencode.json` | OpenCode core settings (plugin registration, providers) |
-| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings — agents, tmux, MCPs, council |
+| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings — agents, multiplexer, MCPs, council |
 | `~/.config/opencode/oh-my-opencode-slim.jsonc` | Same, but with JSONC (comments + trailing commas). Takes precedence over `.json` if both exist |
 | `.opencode/oh-my-opencode-slim.json` | Project-local overrides (optional, checked first) |
 
@@ -68,8 +68,8 @@ All config files support **JSONC** (JSON with Comments):
     },
   },
 
-  "tmux": {
-    "enabled": true,  // Enable pane monitoring
+  "multiplexer": {
+    "type": "tmux",
     "layout": "main-vertical",
   },
 }
@@ -92,9 +92,12 @@ All config files support **JSONC** (JSON with Comments):
 | `presets.<name>.<agent>.options` | object | — | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
 | `agents.<agent>.displayName` | string | — | Custom user-facing alias for the agent in the active config |
 | `showStartupToast` | boolean | `true` | Show the startup activation toast (`oh-my-opencode-slim is active`) when OpenCode starts |
-| `tmux.enabled` | boolean | `false` | Enable tmux pane spawning |
-| `tmux.layout` | string | `"main-vertical"` | Layout: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
-| `tmux.main_pane_size` | number | `60` | Main pane size as percentage (20–80) |
+| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, or `none` |
+| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
+| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) |
+| `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` |
+| `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` |
+| `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `false` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |

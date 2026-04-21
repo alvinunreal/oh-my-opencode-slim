@@ -20,7 +20,7 @@ const LIBRARIAN_PROMPT = `You are Librarian - a research specialist for codebase
 - Quote relevant code snippets
 - Link to official docs when available
 - Distinguish between official and community patterns
-- If you need clarification, use \`ask_orchestrator\` (non-blocking). State your assumption with [ASSUMED: ...] and continue working`;
+`;
 
 export function createLibrarianAgent(
   model: string,

@@ -17,7 +17,7 @@ const OBSERVER_PROMPT = `You are Observer — a visual analysis specialist.
 - Save context tokens — the Orchestrator never processes the raw file
 - Match the language of the request
 - If info not found, state clearly what's missing
-- If you need clarification, use \`ask_orchestrator\` (non-blocking). State your assumption with [ASSUMED: ...] and continue working`;
+`;
 
 export function createObserverAgent(
   model: string,

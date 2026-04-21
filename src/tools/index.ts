@@ -1,6 +1,5 @@
 // AST-grep tools
 export { ast_grep_replace, ast_grep_search } from './ast-grep';
-export { createBackgroundTools } from './background';
 export { createCouncilTool } from './council';
 export {
   lsp_diagnostics,

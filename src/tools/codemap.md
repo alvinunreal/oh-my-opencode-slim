@@ -7,7 +7,7 @@
   - Language server tooling via `lsp/`.
   - URL fetch/transform with optional secondary model via `smartfetch/`.
 - Provide runtime factories for orchestration helpers:
-  - `createBackgroundTools` (`background.ts`) and `createCouncilTool` (`council.ts`).
+  - `createCouncilTool` (`council.ts`).
 - Expose runtime entry contracts (`lspManager`, `setUserLspConfig`, utility
   constants/types) for plugin bootstrap and config hooks.
 
@@ -15,7 +15,6 @@
 
 - `src/tools/index.ts` is the canonical export surface. It re-exports:
   - `ast_grep_search`, `ast_grep_replace`.
-  - `createBackgroundTools`.
   - `lsp_diagnostics`, `lsp_find_references`, `lsp_goto_definition`,
     `lsp_rename`, `lspManager`, `setUserLspConfig`.
   - `createWebfetchTool`.
@@ -51,7 +50,8 @@
   - `utils.ts` normalizes and renders downloaded content (`extractFromHtml`,
     `cleanFetchedMarkdown`, `joinRenderedContent`).
   - `binary.ts` persists payloads with `saveBinary`.
-  - `secondary-model.ts` runs `readSecondaryModelFromConfig`/`runSecondaryModelWithFallback`.
+  - `secondary-model.ts` runs
+    `readSecondaryModelFromConfig`/`runSecondaryModelWithFallback`.
 
 ## Flow
 
@@ -80,9 +80,7 @@
     optionally passed to secondary model (`runSecondaryModelWithFallback`).
   - For binary, metadata-only or saved-result branches are selected based on
     `save_binary`, size, and MIME type.
-- **Background/council**:
-  - `createBackgroundTools` maps task lifecycle calls onto
-    `BackgroundTaskManager` operations.
+- **Council**:
   - `createCouncilTool` enforces caller guard (`council` / `orchestrator`) before
     invoking `CouncilManager.runCouncil`.
 
@@ -96,5 +94,5 @@
   - `vscode-jsonrpc` + `vscode-languageserver-protocol`.
   - `which`, `lru-cache`, `bun` runtime APIs, network stack.
   - DOM extraction libs in smartfetch.
-- Consumers include orchestrator/background agents, `@opencode` task runners, and
+- Consumers include orchestrator/council agents, `@opencode` task runners, and
   any extension tests that import tools/types from the `src/tools` modules.

@@ -10,7 +10,6 @@ import {
   formatCouncillorPrompt,
   formatMasterSynthesisPrompt,
 } from '../agents/council';
-import type { SubagentDepthTracker } from '../background/subagent-depth';
 import type { PluginConfig } from '../config';
 import {
   COUNCILLOR_STAGGER_MS,
@@ -30,6 +29,7 @@ import {
   promptWithTimeout,
   shortModelLabel,
 } from '../utils/session';
+import type { SubagentDepthTracker } from '../utils/subagent-depth';
 
 type OpencodeClient = PluginInput['client'];
 
@@ -288,7 +288,7 @@ export class CouncilManager {
       const body: PromptBody = {
         agent: options.agent,
         model: modelRef,
-        tools: { background_task: false, task: false },
+        tools: { task: false },
         parts: [{ type: 'text', text: options.promptText }],
       };
 

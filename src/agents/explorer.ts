@@ -28,7 +28,7 @@ Concise answer to the question
 - READ-ONLY: Search and report, don't modify
 - Be exhaustive but concise
 - Include line numbers when relevant
-- If you need clarification, use \`ask_orchestrator\` (non-blocking). State your assumption with [ASSUMED: ...] and continue working`;
+`;
 
 export function createExplorerAgent(
   model: string,

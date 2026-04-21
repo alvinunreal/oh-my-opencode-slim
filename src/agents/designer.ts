@@ -47,7 +47,6 @@ const DESIGNER_PROMPT = `You are a Designer - a frontend UI/UX specialist who cr
 - Respect existing design systems when present
 - Leverage component libraries where available
 - Prioritize visual excellence—code perfection comes second
-- If you need clarification, use \`ask_orchestrator\` (non-blocking). State your assumption with [ASSUMED: ...] and continue working
 
 ## Review Responsibilities
 - Review existing UI for usability, responsiveness, visual consistency, and polish when asked

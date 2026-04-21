@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import {
   existsSync,
   mkdirSync,
@@ -10,13 +10,15 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 
-import {
+mock.restore();
+
+const {
   computeFileHash,
   computeFolderHash,
   loadState,
   PatternMatcher,
   selectFiles,
-} from './codemap.mjs';
+} = await import('./codemap.mjs');
 
 const tempDirs: string[] = [];
 
@@ -99,7 +101,7 @@ describe('selectFiles', () => {
       [],
       [],
     ).map((filePath) =>
-      path.relative(root, filePath).replaceAll(path.sep, '/'),
+      path.relative(root, filePath).split(path.sep).join('/'),
     );
 
     expect(selected).toEqual(['package.json', 'src/index.ts']);

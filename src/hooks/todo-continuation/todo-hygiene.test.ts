@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createTodoHygiene,
-  TODO_DELEGATION_RESUME_REMINDER,
   TODO_FINAL_ACTIVE_REMINDER,
   TODO_HYGIENE_REMINDER,
 } from './todo-hygiene';
@@ -198,26 +197,7 @@ describe('todo hygiene', () => {
     expect(second.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
   });
 
-  test('background_output gets the delegation reminder once for that round', async () => {
-    const hook = createTodoHygiene({
-      getTodoState: async () => createState(),
-    });
-    const system = { system: ['base'] };
-
-    hook.handleRequestStart({ sessionID: 's1' });
-    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleToolExecuteAfter({
-      tool: 'background_output',
-      sessionID: 's1',
-    });
-    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
-
-    expect(system.system.join('\n')).toContain(TODO_DELEGATION_RESUME_REMINDER);
-    expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
-  });
-
-  test('final-active overrides delegation reminder in the same round', async () => {
+  test('final-active reminder wins when only one active todo remains', async () => {
     const hook = createTodoHygiene({
       getTodoState: async () =>
         createState({
@@ -230,16 +210,9 @@ describe('todo hygiene', () => {
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleToolExecuteAfter({
-      tool: 'background_output',
-      sessionID: 's1',
-    });
     await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
     expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
-    expect(system.system.join('\n')).not.toContain(
-      TODO_DELEGATION_RESUME_REMINDER,
-    );
   });
 
   test('transform lookup failures are best-effort and do not drop later reminders', async () => {
