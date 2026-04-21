@@ -80,26 +80,43 @@ function requireInterviewId(value: string | null): string {
 
 function createInterviewService(
   ctx: ReturnType<typeof createMockContext>,
-  config?: Parameters<typeof createRealInterviewService>[1],
+  config?: Partial<Parameters<typeof createRealInterviewService>[1]>,
+  deps?: Parameters<typeof createRealInterviewService>[2],
 ) {
-  return createRealInterviewService(ctx, config, {
+  const resolvedConfig = config
+    ? InterviewConfigSchema.parse(config)
+    : undefined;
+
+  return createRealInterviewService(ctx, resolvedConfig, {
     openBrowser: mock((_url: string) => {}),
+    ...deps,
   });
 }
 
 function createTestService(
   ctx: ReturnType<typeof createMockContext>,
-  config?: Parameters<typeof createRealInterviewService>[1],
+  config?: Partial<Parameters<typeof createRealInterviewService>[1]>,
+  deps?: Parameters<typeof createRealInterviewService>[2],
 ) {
   const openBrowserMock = mock((_url: string) => {});
-  const service = createRealInterviewService(ctx, config, {
+  const resolvedConfig = config
+    ? InterviewConfigSchema.parse(config)
+    : undefined;
+  const service = createRealInterviewService(ctx, resolvedConfig, {
     openBrowser: openBrowserMock,
+    ...deps,
   });
 
   return {
     service,
     openBrowserMock,
   };
+}
+
+function createRuntimeEnv(
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return { ...overrides };
 }
 
 describe('interview service', () => {
@@ -1393,15 +1410,93 @@ describe('interview service', () => {
   });
 
   describe('autoOpenBrowser config', () => {
+    test('does not open a browser during automated test runtimes', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+      const ctx = createMockContext({ directory: tempDir });
+
+      const { service, openBrowserMock } = createTestService(
+        ctx,
+        {
+          maxQuestions: 2,
+          outputFolder: 'interview',
+          autoOpenBrowser: true,
+        },
+        {
+          env: createRuntimeEnv({
+            NODE_ENV: 'test',
+            CI: '0',
+          }),
+        },
+      );
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-browser-test-env',
+          arguments: 'Browser Test Env',
+        },
+        output,
+      );
+
+      expect(openBrowserMock).not.toHaveBeenCalled();
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    test('does not open a browser in CI even when auto-open is enabled', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+      const ctx = createMockContext({ directory: tempDir });
+
+      const { service, openBrowserMock } = createTestService(
+        ctx,
+        {
+          maxQuestions: 2,
+          outputFolder: 'interview',
+          autoOpenBrowser: true,
+        },
+        {
+          env: createRuntimeEnv({
+            CI: 'true',
+          }),
+        },
+      );
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-browser-ci-env',
+          arguments: 'Browser CI Env',
+        },
+        output,
+      );
+
+      expect(openBrowserMock).not.toHaveBeenCalled();
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
     test('uses injected browser opener instead of opening a real browser in tests', async () => {
       const tempDir = await fs.mkdtemp('/tmp/interview-test-');
       const ctx = createMockContext({ directory: tempDir });
 
-      const { service, openBrowserMock } = createTestService(ctx, {
-        maxQuestions: 2,
-        outputFolder: 'interview',
-        autoOpenBrowser: true,
-      });
+      const { service, openBrowserMock } = createTestService(
+        ctx,
+        {
+          maxQuestions: 2,
+          outputFolder: 'interview',
+          autoOpenBrowser: true,
+        },
+        {
+          env: createRuntimeEnv({
+            NODE_ENV: 'development',
+            CI: '0',
+          }),
+        },
+      );
       service.setBaseUrlResolver(async () => 'http://localhost:9999');
       const output = { parts: [] as Array<{ type: string; text?: string }> };
 

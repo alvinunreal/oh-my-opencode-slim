@@ -231,7 +231,7 @@ The dashboard page includes a settings panel for:
 
 - `maxQuestions` — max questions per round, `1-10`, default `2`
 - `outputFolder` — where markdown files are written, default `interview`
-- `autoOpenBrowser` — open the localhost UI in your default browser, default `true`
+- `autoOpenBrowser` — open the localhost UI in your default browser during interactive runs, default `true` (suppressed automatically in tests and CI)
 - `port` — port for the interview server, `0-65535`, default `0` (OS-assigned in per-session mode). Set a fixed port to enable dashboard mode. Note: ports 1-1023 require elevated privileges on most systems.
 - `dashboard` — enable dashboard mode on the default port (`43211`), default `false`. Setting `port` to a value greater than `0` also enables dashboard mode. If both are set, `port` takes precedence.
 

@@ -40,7 +40,32 @@ import type {
 
 const COMMAND_NAME = 'interview';
 const DEFAULT_MAX_QUESTIONS = 2;
-const DEFAULT_AUTO_OPEN_BROWSER = process.env.NODE_ENV !== 'test';
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return value !== '0' && value.toLowerCase() !== 'false';
+}
+
+function isAutomatedRuntime(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.NODE_ENV === 'test' ||
+    isTruthyEnvFlag(env.CI) ||
+    isTruthyEnvFlag(env.BUN_TEST) ||
+    isTruthyEnvFlag(env.VITEST) ||
+    env.JEST_WORKER_ID !== undefined
+  );
+}
+
+function shouldAutoOpenBrowser(
+  config: InterviewConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const requested = config?.autoOpenBrowser ?? true;
+  return requested && !isAutomatedRuntime(env);
+}
 
 /**
  * Open a URL in the default browser.
@@ -86,6 +111,7 @@ export function createInterviewService(
   config?: InterviewConfig,
   deps?: {
     openBrowser?: (url: string) => void;
+    env?: NodeJS.ProcessEnv;
   },
 ): {
   setBaseUrlResolver: (resolver: () => Promise<string>) => void;
@@ -120,7 +146,10 @@ export function createInterviewService(
   const outputFolder = normalizeOutputFolder(
     config?.outputFolder ?? DEFAULT_OUTPUT_FOLDER,
   );
-  const autoOpenBrowser = config?.autoOpenBrowser ?? DEFAULT_AUTO_OPEN_BROWSER;
+  const autoOpenBrowser = shouldAutoOpenBrowser(
+    config,
+    deps?.env ?? process.env,
+  );
   const browserOpener = deps?.openBrowser ?? openBrowser;
   const activeInterviewIds = new Map<string, string>();
   const interviewsById = new Map<string, InterviewRecord>();

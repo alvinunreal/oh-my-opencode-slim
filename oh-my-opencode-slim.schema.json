@@ -451,6 +451,7 @@
         },
         "autoOpenBrowser": {
           "default": true,
+          "description": "Automatically open the interview UI in your default browser during interactive runs. Disabled automatically in tests and CI.",
           "type": "boolean"
         },
         "port": {

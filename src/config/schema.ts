@@ -162,7 +162,12 @@ export type McpName = z.infer<typeof McpNameSchema>;
 export const InterviewConfigSchema = z.object({
   maxQuestions: z.number().int().min(1).max(10).default(2),
   outputFolder: z.string().min(1).default('interview'),
-  autoOpenBrowser: z.boolean().default(true),
+  autoOpenBrowser: z
+    .boolean()
+    .default(true)
+    .describe(
+      'Automatically open the interview UI in your default browser during interactive runs. Disabled automatically in tests and CI.',
+    ),
   port: z.number().int().min(0).max(65535).default(0),
   dashboard: z.boolean().default(false),
 });
