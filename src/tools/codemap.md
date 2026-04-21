@@ -1,68 +1,58 @@
+# src/tools/
+
 ## Responsibility
 
 - Expose plugin tool definitions for code intelligence and workflow tooling from
   `src/tools/index.ts`.
-- Publish and compose two primary operational domains:
+- Publish three operational domains:
   - AST pattern search/replace via `ast-grep/`.
-  - URL fetch/transform with optional secondary model via `smartfetch/`.
-- Provide runtime factories for orchestration helpers:
-  - `createCouncilTool` (`council.ts`).
+  - URL fetch/transform via `smartfetch/` with optional secondary-model pass.
+  - Council orchestration via `createCouncilTool` (`council.ts`).
 
 ## Design
 
-- `src/tools/index.ts` is the canonical export surface. It re-exports:
+- `src/tools/index.ts` is the export surface and re-exports:
   - `ast_grep_search`, `ast_grep_replace`.
   - `createWebfetchTool`.
   - `createCouncilTool`.
-- **Common tool schema pattern**: all tool files use `@opencode-ai/plugin/tool` or
-  `@opencode-ai/plugin` `tool` with typed schemas and `ToolDefinition` objects.
-- **AST-grep stack (`ast-grep/`)**:
-  - `cli.ts` handles invocation flow via `runSg`, `getAstGrepPath`,
-    `startBackgroundInit`.
-  - `types.ts` defines `CliLanguage`, `CliMatch`, `SgResult`.
-  - `constants.ts` owns binary resolution (`getSgCliPath`, `findSgCliPathSync`),
-    limits (`DEFAULT_MAX_MATCHES`, `DEFAULT_MAX_OUTPUT_BYTES`, `DEFAULT_TIMEOUT_MS`).
-  - `downloader.ts` implements `ensureAstGrepBinary` and release-specific
-    fallback download.
-  - `utils.ts` centralizes user-facing renderers.
-- **Smartfetch stack (`smartfetch/`)**:
-  - `tool.ts` defines `createWebfetchTool` and the complete execution path.
-  - `network.ts` enforces redirect policy, read limits, HTML/binary detection,
-    and `fetchWithRedirects`.
-  - `cache.ts` uses `CACHE` (`LRUCache`) and `buildCacheKey` for memoization.
-  - `utils.ts` normalizes and renders downloaded content (`extractFromHtml`,
-    `cleanFetchedMarkdown`, `joinRenderedContent`).
-  - `binary.ts` persists payloads with `saveBinary`.
-  - `secondary-model.ts` runs
-    `readSecondaryModelFromConfig`/`runSecondaryModelWithFallback`.
+- Shared schema contract: tool definitions are typed with `@opencode-ai/plugin`/`@opencode-ai/plugin/tool` and return `ToolDefinition` objects.
+
+### AST-grep stack (`ast-grep/`)
+
+- `cli.ts` owns execution path (`runSg`, `getAstGrepPath`, background init).
+- `constants.ts` centralizes binary resolution, execution limits, and formatting helpers.
+- `downloader.ts` handles release metadata lookup, download, and extraction for missing CLI.
+- `utils.ts` formats matches/replacements for user-facing output.
+
+### Smartfetch stack (`smartfetch/`)
+
+- `tool.ts` owns permission prompts, cache check, fetch orchestration, binary/content branching.
+- `network.ts` enforces redirect policy, response size caps, and binary/content detection.
+- `cache.ts` memoizes by normalized URL + behavior-affecting options (`CACHE`).
+- `utils.ts` performs extraction/normalization of text/markdown/html payloads.
+- `binary.ts` stores binary payloads and returns deterministic metadata.
+- `secondary-model.ts` drives optional post-fetch summarization with fallback.
 
 ## Flow
 
-- **AST-grep path**:
-  - Tool executes (`ast_grep_search`/`ast_grep_replace`) and calls `runSg`.
-  - `runSg` builds CLI args, resolves `sg` via sync cache/path checks,
-    fallback download if missing, and executes with timeout.
-  - JSON output is parsed into `SgResult`, respecting truncation/error states.
-  - `formatSearchResult` / `formatReplaceResult` produce output.
-- **Smartfetch path**:
-  - `createWebfetchTool` validates permissions (`ctx.ask`) and timeout, reads
-    secondary model candidates, then checks cache (`CACHE`).
-  - If permitted, it probes llms docs, else performs fetch with redirect
-    fallback and capped read size.
-  - Response is decoded, content-type normalized, converted by format mode, and
-    optionally passed to secondary model (`runSecondaryModelWithFallback`).
-  - For binary, metadata-only or saved-result branches are selected based on
-    `save_binary`, size, and MIME type.
-- **Council**:
-  - `createCouncilTool` enforces caller guard (`council` / `orchestrator`) before
-    invoking `CouncilManager.runCouncil`.
+- **AST-grep path**
+  - Tool call resolves schema input and invokes `runSg`.
+  - `runSg` resolves CLI binary, executes with timeout, parses JSON results,
+    then renders search/replace output.
+
+- **Smartfetch path**
+  - Permission + timeout + cache checks in `createWebfetchTool`.
+  - Respect preferred `llms.txt` probing and redirect constraints.
+  - Apply content-type branching and optional secondary-model summarization.
+  - Emit text markdown/html, metadata message, or binary metadata handle.
+
+- **Council tool path**
+  - `createCouncilTool` checks caller context (`orchestrator`/`council`) and
+    invokes `CouncilManager.runCouncil` with parent session context.
 
 ## Integration
 
-- `src/index.ts` imports these exports and injects them into plugin tool surfaces.
-- OpenCode-facing dependencies used directly in these modules:
-  - `@opencode-ai/plugin` / `@opencode-ai/plugin/tool` (`tool`, schemas).
-  - `lru-cache`, `bun` runtime APIs, network stack.
-  - DOM extraction libs in smartfetch.
-- Consumers include orchestrator/council agents, `@opencode` task runners, and
-  any extension tests that import tools/types from the `src/tools` modules.
+- `src/index.ts` registers these tools into the plugin tool surface.
+- `src/council/council-manager.ts` consumes `createCouncilTool` output for
+  explicit consensus runs.
+- Tests and agents import from `src/tools/*` for type-safe contracts and fixture-driven execution.

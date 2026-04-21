@@ -36,5 +36,5 @@
 ## Integration
 
 - Selected when `multiplexerConfig.type === 'tmux'` or auto mode resolves to tmux (`process.env.TMUX`).
-- Consumed by `MultiplexerSessionManager` in `background/multiplexer-session-manager.ts` for `session.created` spawn and completion cleanup.
+- Consumed by `MultiplexerSessionManager` for `session.created` spawn and completion cleanup.
 - Uses `ctx.directory` as working directory, OpenCode API URL as `serverUrl`, and session id as `opencode attach --session` target.

@@ -1,29 +1,58 @@
-# src/council/
+# Council Module Codemap
 
 ## Responsibility
 
-- Orchestrate multi-agent council sessions by running configured councillors and synthesizing outputs with a master model.
-- Provide a configurable, defensive decision path for model-based consensus, including depth guarding and graceful degradation when partial failures occur.
+`src/council/` executes multi-LLM consensus sessions.
 
-## Design
+It owns council orchestration and result normalization, while the actual `council` agent remains in `agents/council.ts`.
 
-- `src/council/index.ts` is a barrel export; implementation is in `council-manager.ts`.
-- `CouncilManager` is injected with `PluginInput`, optional `PluginConfig`, optional `SubagentDepthTracker`, and multiplexer settings.
-- Presets and schema are defined in `config/council-schema.ts` (`default_preset`, councillor/master timeout, retry rules, execution mode).
-- Uses shared formatting/parsing helpers from `utils/session.ts` so councillor/master prompting stays consistent with other session tools.
+## Architecture
 
-## Flow
+- `council.ts` is a barrel that exports `CouncilManager`.
+- `council-manager.ts` is the engine:
+  - validates preset selection and depth constraints
+  - launches councillor sessions
+  - retries on empty provider responses
+  - formats outputs for synthesis by caller tool
 
-- `runCouncil(prompt, presetName, parentSessionId)`:
-  - Validate depth limit and resolve preset.
-  - Abort early for missing config, unknown preset, or empty councillor set.
-  - Send a lightweight start notification into the parent session.
-  - Run councillors in configured mode (`parallel`/`serial`) with per-councillor timeout and retries.
-  - Aggregate completed responses; if none succeed, return failure.
-  - Run master synthesis on success; if master fails, fallback to a single completed councillor response with context.
+## Runtime flow
+
+```text
+runCouncil(prompt, preset, parentSessionId)
+  ├─> enforce depth via SubagentDepthTracker
+  ├─> load council config
+  ├─> resolve preset (default if absent)
+  ├─> run all councillors in parallel or serial mode
+  │     - each councillor session: create -> prompt -> extract -> abort
+  │     - tmux delay + stagger delay for launch collisions
+  │     - retry on empty response up to configured retry count
+  ├─> if none completed -> error
+  └─> formatCouncillorResults(prompt, completed responses)
+```
+
+Execution characteristics:
+
+- Uses `councillor` agent internally (`agent: 'councillor'`), `tools.task: false`.
+- Timeout is passed per session.
+- Empty results are treated as failures unless global fallback policy disables empty-retry behavior.
+- Failed/timed out results are still returned as structured metadata (`name`, `model`, `status`, `error`).
+- On start, writes a non-blocking session note to parent session via `session.prompt`.
+
+### Configuration semantics
+
+- Preset schema in `config/council-schema.ts`:
+  - per-preset named councillors
+  - `default_preset`
+  - `timeout`
+  - `councillor_execution_mode` (`parallel`/`serial`)
+  - `councillor_retries`
+- Deprecated master fields are accepted in schema, ignored, and surfaced as runtime warnings through `getDeprecatedFields()`.
 
 ## Integration
 
-- Used by `createCouncilTool` in the tools layer for explicit user-triggered council sessions.
-- Depends on `SubagentDepthTracker` to prevent runaway nested delegation.
-- Reuses the same OpenCode session API contract (`client.session`) as background tasks and other agent orchestration modules.
+- `tools/council.ts` defines `council_session` and is the only caller that invokes `CouncilManager.runCouncil(...)`.
+- Integrates with:
+  - `config` (for preset/timeouts/retry policy)
+  - `SubagentDepthTracker` (to prevent nested delegation explosions)
+  - session client (`client.session.*`) for sub-session lifecycle
+  - `multiplexer` settings (tmux launch delay behavior)

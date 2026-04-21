@@ -2,33 +2,40 @@
 
 ## Responsibility
 
-- Abstract terminal multiplexer integration behind a unified interface for background session visualization.
-- Select the correct implementation based on configuration (`tmux`, `zellij`, `auto`, `none`) and runtime environment.
-- Expose shared utilities required by task orchestration and health-gating logic.
+- Abstract terminal multiplexer integration for delegated session visualization.
+- Resolve backend by configuration and environment (`auto`, `tmux`, `zellij`, `none`).
+- Coordinate pane lifecycle and fallback cleanup for spawned child sessions.
 
 ## Design
 
-- `types.ts` is the boundary contract:
+- `types.ts` defines the boundary contract:
   - `Multiplexer` (`spawnPane`, `closePane`, `applyLayout`, `isAvailable`, `isInsideSession`).
   - `PaneResult` and `MultiplexerFactory`.
-  - `isServerRunning(serverUrl, timeoutMs, maxAttempts)` for shared health checks.
-- `factory.ts` implements mode selection and instance creation in `getMultiplexer`:
-  - direct construction for explicit `tmux`/`zellij`
-  - environment-based fallback in `auto` (`TMUX` vs `ZELLIJ`, else disabled)
-  - no caching: each call creates a fresh object to capture live environment (`TMUX_PANE` / `ZELLIJ`).
-- `index.ts` re-exports factories and contracts and both concrete implementations.
-- `startAvailabilityCheck` is a fire-and-forget availability preflight by calling `multiplexer.isAvailable()` asynchronously.
-- `getAutoMultiplexerType` is a pure helper used by tests/diagnostics to determine current effective backend.
+  - `isServerRunning(serverUrl, timeoutMs?, maxAttempts?)` and `getAutoMultiplexerType` helpers.
+- `factory.ts` selects concrete implementation in `getMultiplexer(config)`:
+  - explicit `tmux`/`zellij` backends
+  - `auto` mode using `TMUX` / `ZELLIJ` env detection
+  - per-call construction for live environment fidelity
+- `session-manager.ts` implements `MultiplexerSessionManager`, with `TmuxSessionManager` as alias for compatibility.
+- `index.ts` re-exports manager/factory contracts and concrete `TmuxMultiplexer` / `ZellijMultiplexer` implementations.
+
+### `session-manager.ts`
+
+- Listens to OpenCode events through `src/index.ts` wiring:
+  - `session.created`: validate server availability and call `spawnPane`.
+  - `session.status`: close child pane when status becomes `idle`.
+  - `session.deleted`: close child pane proactively.
+- Maintains an in-memory tracked-session map with stale-status timeout fallback.
+- Runs optional polling (`POLL_INTERVAL_BACKGROUND_MS`) as a resilience path when status streaming is incomplete.
 
 ## Flow
 
-- `src/index.ts` computes `multiplexerConfig`, creates a one-shot probe instance in init, and starts `startAvailabilityCheck` for telemetry/log warming.
-- Consumers request concrete objects via `getMultiplexer(config)` and must handle `null` when disabled.
-- `MultiplexerSessionManager` consumes `spawnPane`, `closePane`, and `isServerRunning` in a unified lifecycle.
-- Concrete implementations apply their own platform-specific pane semantics while sharing the same abstractions.
+- `src/index.ts` reads multiplexer config, instantiates `MultiplexerSessionManager`, and starts optional startup availability checks.
+- Runtime handlers call `onSessionCreated`, `onSessionStatus`, and `onSessionDeleted` on delegated-session events.
+- Backend adapters execute pane operations while preserving session mapping and graceful shutdown semantics.
 
 ## Integration
 
-- Used by `background/background-manager.ts` for feature-gating background pane support and by `background/multiplexer-session-manager.ts` for session lifecycle hooks.
-- Implementations live in `src/multiplexer/tmux` and `src/multiplexer/zellij`; callers must pass `(sessionId, description, serverUrl, directory)`.
-- Unit tests in `src/multiplexer/factory.test.ts` validate mode selection, `none` behavior, and `auto` environment precedence.
+- Used by `src/index.ts` for delegated session visualization and cleanup.
+- Implementations live in `src/multiplexer/tmux` and `src/multiplexer/zellij`; callers pass `(sessionId, description, serverUrl, directory)` to spawn panes.
+- Unit tests in `src/multiplexer/factory.test.ts` and `src/multiplexer/session-manager.test.ts` validate mode selection and lifecycle behavior.

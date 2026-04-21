@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-- Implement zellij-backed pane orchestration for background/sub-agent tasks as an alternative to tmux.
+- Implement zellij-backed pane orchestration for delegated sessions as an alternative to tmux.
 - Maintain a dedicated `opencode-agents` tab and route all spawned attach sessions into it.
 - Keep process cleanup and first-run reuse behavior to avoid repeated pane inflation.
 
@@ -41,4 +41,4 @@
 
 - Selected by `getMultiplexer` in explicit `zellij` mode or env-driven `auto` when `process.env.ZELLIJ` is present.
 - Consumed by `MultiplexerSessionManager` as the pane backend in zellij environments.
-- UI attach command semantics are identical to tmux in argument shape: `opencode attach <url> --session <sessionId> --dir <directory>`, so background tasks remain config-agnostic across backends.
+- UI attach command semantics are identical to tmux in argument shape: `opencode attach <url> --session <sessionId> --dir <directory>`, so delegated sessions remain config-agnostic across backends.

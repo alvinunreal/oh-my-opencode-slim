@@ -2,32 +2,43 @@
 
 ## Responsibility
 
-- Detect delegate tool argument failures after execution and append structured, actionable retry guidance directly into string outputs so the model can recover in-place.
+Adds targeted recovery guidance for failed delegation (`task`) calls by analyzing
+tool output and appending a concise retry hint that preserves the existing model
+conversation context.
 
 ## Design
 
-- `patterns.ts` defines the declarative error contract:
-  - `DelegateTaskErrorPattern` (`pattern`, `errorType`, `fixHint`)
-  - `DELEGATE_TASK_ERROR_PATTERNS`
-  - `detectDelegateTaskError(output: string): DetectedError | null`
-- `guidance.ts` implements `buildRetryGuidance(errorInfo)` and `extractAvailableList` to render fix text with optional `Available:` details from tool output.
-- `hook.ts` implements `createDelegateTaskRetryHook`:
-  - targets only the built-in `task` tool.
-  - only mutates when `output.output` is string.
-  - detects errors via `detectDelegateTaskError` and appends guidance once.
-- `index.ts` is a strict re-export boundary.
+- `index.ts` re-exports:
+  - `createDelegateTaskRetryHook`
+  - `buildRetryGuidance`
+  - pattern types/helpers
+- `patterns.ts` defines the typed `DelegateTaskErrorPattern` contract and ordered
+  detection catalog (`DELEGATE_TASK_ERROR_PATTERNS`).
+- `detectDelegateTaskError(output)`:
+  1. ensures string output,
+  2. requires one of generic error indicators,
+  3. returns the first matching configured error pattern.
+- `buildRetryGuidance(errorInfo)` maps each match to user-facing fix text,
+  optionally appending `Available:` suggestions parsed from tool output.
+- `hook.ts` returns a `tool.execute.after` handler and mutates only string
+  outputs.
 
 ## Flow
 
-1. At `tool.execute.after`, confirm tool is `task`.
-2. Verify output payload type is string.
-3. Quick-scan for generic error indicators (`[ERROR]`, `Invalid arguments`, `is not allowed...`).
-4. Match each configured `DELEGATE_TASK_ERROR_PATTERNS` substring in output.
-5. Resolve `DetectedError` and append `\n` + `buildRetryGuidance(...)`.
+1. OpenCode invokes the handler with `{ tool, output }` after `task` execution.
+2. The hook ignores non-`task` tools and non-string outputs.
+3. If output passes generic error signal checks, `detectDelegateTaskError` scans
+   configured patterns.
+4. On match, inline guidance is appended to `output.output` with correction
+   guidance and example `task(...)` usage.
+5. No additional API calls are made; behavior is synchronous string-level
+   recovery.
 
 ## Integration
 
-- Registered via `src/hooks/index.ts` as a `tool.execute.after` hook for tool-call outputs.
-- No dependencies on scheduling/backends (`task` execution itself is delegated to OpenCode core), limiting blast radius.
-- Input/output compatibility is limited to OpenCode hook payload shape (`{ tool, output }`) and string-based error diagnostics.
-- Primarily consumed by `src/index.ts` where delegation robustness is needed for orchestrator tool usage.
+- Registered in `src/index.ts` under `tool.execute.after`.
+- Input payload expectations are minimal (`{ tool: string }` + `{ output: unknown }`)
+  to stay aligned with tool-callback shape and avoid side-effecting unrelated
+  callbacks.
+- This hook remains independent of orchestration engines and multiplexer/session
+  managers.

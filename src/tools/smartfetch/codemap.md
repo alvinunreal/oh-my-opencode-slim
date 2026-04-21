@@ -22,7 +22,7 @@
 
 ## Integration Points
 
-- `src/index.ts` registers the tool under the public name `webfetch`, so agents can call it alongside background, LSP, and AST-grep tools.
+- `src/index.ts` registers the tool under the public name `webfetch`, so agents can call it alongside council and AST-grep tools.
 - `src/tools/smartfetch/index.ts` re-exports the tool factory, description, and shared types for other modules or docs to import without reaching into implementation files.
 - `secondary-model.ts` depends on the OpenCode plugin client (`PluginInput['client']`) to spawn an isolated helper session, resolve `small_model` from the effective OpenCode config, and resolve `explorer` / `librarian` fallbacks from slim's own plugin config loader.
 - `cache.ts`, `network.ts`, and `utils.ts` are intentionally reusable seams for tests: cache behavior, redirect policy, llms probing, heading extraction, and render/metadata helpers can be verified without hitting the full tool entrypoint.
