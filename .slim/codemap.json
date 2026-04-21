@@ -34,7 +34,6 @@
     "scripts/generate-schema.ts": "007f340e39adf6c3fd76feda72b71df1",
     "scripts/verify-opencode-host-smoke.ts": "a87fdb08b123501edf81618a49bc421d",
     "scripts/verify-release-artifact.ts": "83259be1926459412809013ce16e6fbb",
-    "src/agents/council-master.ts": "f013987f32d30178efb3bfa3030b3ce8",
     "src/agents/council.ts": "afa3ed4c40b2f91bdc907b850a7e68d3",
     "src/agents/councillor.ts": "e12284c5f632ba071e97924608375f9c",
     "src/agents/designer.ts": "6b5786ea6de1fb41b367103824762c9d",

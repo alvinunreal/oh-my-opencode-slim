@@ -103,22 +103,14 @@ All config files support **JSONC** (JSON with Comments):
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
 | `fallback.retryDelayMs` | number | `500` | Delay between retry attempts |
 | `fallback.chains.<agent>` | string[] | — | Ordered fallback model IDs for an agent |
-| `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
-| `council.master.model` | string | — | **Required if using council.** Council master model |
-| `council.master.variant` | string | — | Council master variant |
-| `council.master.prompt` | string | — | Optional synthesis guidance for the master |
-| `council.presets` | object | — | **Required if using council.** Named councillor presets |
-| `council.presets.<name>.<councillor>.model` | string | — | Councillor model |
-| `council.presets.<name>.<councillor>.variant` | string | — | Councillor variant |
-| `council.presets.<name>.<councillor>.prompt` | string | — | Optional role guidance for the councillor |
-| `council.presets.<name>.master.model` | string | — | Override global master model for this preset |
-| `council.presets.<name>.master.variant` | string | — | Override global master variant for this preset |
-| `council.presets.<name>.master.prompt` | string | — | Override global master prompt for this preset |
-| `council.default_preset` | string | `"default"` | Default preset when none is specified |
-| `council.master_timeout` | number | `300000` | Master synthesis timeout (ms) |
-| `council.councillors_timeout` | number | `180000` | Per-councillor timeout (ms) |
-| `council.master_fallback` | string[] | — | Fallback models for the council master |
-| `council.councillor_retries` | number | `3` | Max retries per councillor and master on empty provider response (0–5) |
+ | `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
+ | `council.presets` | object | — | **Required if using council.** Named councillor presets |
+ | `council.presets.<name>.<councillor>.model` | string | — | Councillor model |
+ | `council.presets.<name>.<councillor>.variant` | string | — | Councillor variant |
+ | `council.presets.<name>.<councillor>.prompt` | string | — | Optional role guidance for the councillor |
+ | `council.default_preset` | string | `"default"` | Default preset when none is specified |
+ | `council.timeout` | number | `180000` | Councillor timeout (ms) |
+ | `council.councillor_retries` | number | `3` | Max retries per councillor on empty provider response (0–5) |
 | `todoContinuation.maxContinuations` | integer | `5` | Max consecutive auto-continuations before stopping (1–50) |
 | `todoContinuation.cooldownMs` | integer | `3000` | Delay in ms before auto-continuing — gives user time to abort (0–30000) |
 | `todoContinuation.autoEnable` | boolean | `false` | Automatically enable auto-continue when session has enough todos |

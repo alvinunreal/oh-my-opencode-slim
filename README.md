@@ -267,7 +267,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Setup:</b> <code>Config-driven</code> — council master + councillors are chosen from your configured preset
+      <b>Default Setup:</b> <code>Config-driven</code> — councillors are chosen from your configured preset and the council agent synthesizes their responses
     </td>
   </tr>
   <tr>
