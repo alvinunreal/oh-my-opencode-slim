@@ -82,6 +82,10 @@ All config files support **JSONC** (JSON with Comments):
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preset` | string | — | Active preset name (e.g. `"openai"`, `"best"`) |
+
+### Runtime Preset Switching
+
+Presets can also be switched at runtime without restarting using the `/preset` command. See [Preset Switching](preset-switching.md) for details.
 | `presets` | object | — | Named preset configurations |
 | `presets.<name>.<agent>.model` | string | — | Model ID in `provider/model` format |
 | `presets.<name>.<agent>.temperature` | number | — | Temperature (0–2) |

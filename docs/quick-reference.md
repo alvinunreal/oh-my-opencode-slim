@@ -16,6 +16,7 @@
 | [Interview](interview.md) | `/interview` command, browser UI, dashboard mode, multi-session coordination |
 | [Multiplexer Integration](multiplexer-integration.md) | Real-time pane monitoring, layouts, troubleshooting |
 | [Todo Continuation](todo-continuation.md) | `auto_continue`, `/auto-continue`, cooldowns, safety gates |
+| [Preset Switching](preset-switching.md) | `/preset` command for runtime agent model switching |
 | [Codemap Skill](codemap.md) | Hierarchical codemap generation |
 
 ## ⚙️ Config & Reference
