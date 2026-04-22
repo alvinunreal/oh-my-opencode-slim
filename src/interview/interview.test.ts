@@ -1610,6 +1610,17 @@ describe('renderInterviewPage', () => {
     expect(html).toContain('<svg');
     expect(html).not.toContain('https://ohmyopencodeslim.com');
   });
+
+  test('includes smooth scroll-to-top behavior in the submit handler', () => {
+    const html = renderInterviewPage('scroll-test', 'scroll-test');
+
+    expect(html).toContain('function scrollToTop()');
+    expect(html).toContain(
+      "window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });",
+    );
+    expect(html).toContain('overlayText.textContent = "Submitting Answers...";');
+    expect(html).toContain('scrollToTop();');
+  });
 });
 
 /** Discover a free port by briefly binding to port 0, then closing. */

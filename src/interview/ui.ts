@@ -1390,6 +1390,10 @@ export function renderInterviewPage(
         render(data);
       }
 
+      function scrollToTop() {
+        window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+      }
+
       document.getElementById('submitButton').addEventListener('click', async () => {
         if (!state.data) return;
         const answers = (state.data.questions || []).map((question) => {
@@ -1403,6 +1407,7 @@ export function renderInterviewPage(
         const overlayText = document.getElementById('loadingText');
         overlay.classList.add('active');
         overlayText.textContent = "Submitting Answers...";
+        scrollToTop();
 
         try {
           const response = await fetch('/api/interviews/' + encodeURIComponent(interviewId) + '/answers', {
