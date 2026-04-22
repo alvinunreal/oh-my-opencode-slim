@@ -20,6 +20,11 @@ import { processImageAttachments } from './hooks/image-hook';
 import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
 import {
+  createCheckpointCommands,
+  createCheckpointManager,
+  createCheckpointTools,
+} from './checkpoints';
+import {
   getMultiplexer,
   MultiplexerSessionManager,
   startAvailabilityCheck,
@@ -30,6 +35,7 @@ import {
   createCouncilTool,
   createWebfetchTool,
 } from './tools';
+import type { CheckpointManager } from './checkpoints';
 import { resolveRuntimeAgentName, rewriteDisplayNameMentions } from './utils';
 import { initLogger, log } from './utils/logger';
 import { SubagentDepthTracker } from './utils/subagent-depth';
@@ -250,9 +256,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     interviewManager = createInterviewManager(ctx, config);
 
+    // Initialize checkpoint manager for session rollback
+    const checkpointManager = createCheckpointManager(ctx);
+    const checkpointCommands = createCheckpointCommands(checkpointManager);
+
+    // Get current session ID for tools
+    let currentSessionID: string | undefined;
+    const checkpointTools = createCheckpointTools(ctx, checkpointManager, () => currentSessionID);
+
     toolCount =
       Object.keys(councilTools).length +
       Object.keys(todoContinuationHook.tool).length +
+      Object.keys(checkpointTools).length +
       1 + // webfetch
       2; // ast_grep_search, ast_grep_replace
   } catch (err) {
@@ -320,6 +335,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...councilTools,
       webfetch,
       ...todoContinuationHook.tool,
+      ...checkpointTools,
       ast_grep_search,
       ast_grep_replace,
     },
@@ -520,6 +536,30 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       interviewManager.registerCommand(opencodeConfig);
+
+      // Register checkpoint commands
+      const configCommand = opencodeConfig.command as
+        | Record<string, unknown>
+        | undefined;
+      if (!configCommand?.['checkpoint']) {
+        if (!opencodeConfig.command) {
+          opencodeConfig.command = {};
+        }
+        (opencodeConfig.command as Record<string, unknown>)['checkpoint'] = {
+          template: 'checkpoint <subcommand> [args]',
+          description:
+            'Save and restore session checkpoints — /checkpoint save <name>, /checkpoint list, /checkpoint delete <name>',
+        };
+      }
+      if (!configCommand?.['rollback']) {
+        if (!opencodeConfig.command) {
+          opencodeConfig.command = {};
+        }
+        (opencodeConfig.command as Record<string, unknown>)['rollback'] = {
+          template: 'rollback <name>',
+          description: 'Rollback to a saved checkpoint',
+        };
+      }
     },
 
     event: async (input) => {
@@ -588,6 +628,19 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (sessionID) {
           sessionAgentMap.delete(sessionID);
         }
+
+        // Cleanup checkpoints for deleted session
+        if (sessionID && checkpointManager) {
+          await checkpointManager.cleanupSession(sessionID);
+        }
+      }
+
+      // Track current session ID for checkpoint tools
+      if (event.type === 'session.status' || event.type === 'session.created') {
+        const sid = event.properties?.sessionID ?? event.properties?.info?.id;
+        if (sid) {
+          currentSessionID = sid;
+        }
       }
     },
 
@@ -608,23 +661,65 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Direct interception of /auto-continue command — bypasses LLM
     // round-trip
     'command.execute.before': async (input, output) => {
-      await todoContinuationHook.handleCommandExecuteBefore(
-        input as {
-          command: string;
-          sessionID: string;
-          arguments: string;
-        },
-        output as { parts: Array<{ type: string; text?: string }> },
-      );
+      const cmdInput = input as {
+        command: string;
+        sessionID: string;
+        arguments: string;
+      };
+      const cmdOutput = output as { parts: Array<{ type: string; text?: string }> };
 
-      await interviewManager.handleCommandExecuteBefore(
-        input as {
-          command: string;
-          sessionID: string;
-          arguments: string;
-        },
-        output as { parts: Array<{ type: string; text?: string }> },
-      );
+      await todoContinuationHook.handleCommandExecuteBefore(cmdInput, cmdOutput);
+
+      await interviewManager.handleCommandExecuteBefore(cmdInput, cmdOutput);
+
+      // Handle checkpoint commands
+      if (cmdInput.command === 'checkpoint') {
+        const args = cmdInput.arguments.trim();
+        const subcommandMatch = args.match(/^(\S+)(?:\s+(.*))?$/);
+        if (subcommandMatch) {
+          const [, subcommand, rest] = subcommandMatch;
+          switch (subcommand) {
+            case 'save': {
+              const result = await checkpointCommands.handleCheckpointSave({
+                sessionID: cmdInput.sessionID,
+                arguments: rest || '',
+              });
+              cmdOutput.parts.push(...result.parts);
+              break;
+            }
+            case 'list': {
+              const result = await checkpointCommands.handleCheckpointList({
+                sessionID: cmdInput.sessionID,
+                arguments: '',
+              });
+              cmdOutput.parts.push(...result.parts);
+              break;
+            }
+            case 'delete': {
+              const result = await checkpointCommands.handleCheckpointDelete({
+                sessionID: cmdInput.sessionID,
+                arguments: rest || '',
+              });
+              cmdOutput.parts.push(...result.parts);
+              break;
+            }
+            default: {
+              cmdOutput.parts.push({
+                type: 'text',
+                text: 'Unknown checkpoint subcommand. Use: save, list, or delete',
+              });
+            }
+          }
+        }
+      }
+
+      if (cmdInput.command === 'rollback') {
+        const result = await checkpointCommands.handleRollback({
+          sessionID: cmdInput.sessionID,
+          arguments: cmdInput.arguments,
+        });
+        cmdOutput.parts.push(...result.parts);
+      }
     },
 
     'chat.headers': chatHeadersHook['chat.headers'],
