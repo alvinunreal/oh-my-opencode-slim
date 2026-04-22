@@ -2,6 +2,7 @@ import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { loadPluginConfig, type MultiplexerConfig } from './config';
+import { collapseSystemInPlace } from './system-collapse';
 import { parseList } from './config/agent-mcps';
 import { CouncilManager } from './council';
 import {
@@ -721,15 +722,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // system messages. Sub-hooks above may push additional entries; join
       // them back into one element so OpenCode emits a single system
       // message.
-      // IMPORTANT: mutate the array in-place rather than replacing it.
-      // OpenCode core holds a reference to the original array and reads
-      // from it after the hook returns. Reassigning output.system creates
-      // a new array that the core never sees (JS reference semantics).
-      const joined = output.system.join('\n\n');
-      output.system.length = 0;
-      if (joined) {
-        output.system.push(joined);
-      }
+      collapseSystemInPlace(output.system);
     },
 
     // Inject phase reminder and filter available skills before sending to

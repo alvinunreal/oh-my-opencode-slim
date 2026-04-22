@@ -1,31 +1,23 @@
-import { test, expect, describe } from 'bun:test';
+import { expect, describe, test } from 'bun:test';
+import { collapseSystemInPlace } from './system-collapse';
 
 /**
- * Regression tests for the system message collapse in the
- * experimental.chat.system.transform hook.
+ * Regression tests for the system message collapse logic.
  *
  * PR #336's collapse was a silent no-op because it reassigned
  * output.system to a new array, but OpenCode core reads from the
  * original array reference. The fix mutates in-place.
  *
- * These tests validate the in-place mutation contract directly,
- * without needing the full plugin machinery.
+ * These tests import the actual shared function used by the hook,
+ * so any regression in the implementation is caught immediately.
  */
 
-describe('system array in-place collapse', () => {
-  function collapse(output: { system: string[] }): void {
-    const joined = output.system.join('\n\n');
-    output.system.length = 0;
-    if (joined) {
-      output.system.push(joined);
-    }
-  }
-
+describe('collapseSystemInPlace', () => {
   test('mutates multi-element array in-place', () => {
     const system = ['part one', 'part two'];
     const output = { system };
 
-    collapse(output);
+    collapseSystemInPlace(output.system);
 
     // Same reference — callers holding the original array see the change
     expect(output.system).toBe(system);
@@ -37,7 +29,7 @@ describe('system array in-place collapse', () => {
     const system = ['header', 'todo reminder', 'file nudge'];
     const output = { system };
 
-    collapse(output);
+    collapseSystemInPlace(output.system);
 
     expect(output.system).toBe(system);
     expect(system).toHaveLength(1);
@@ -48,7 +40,7 @@ describe('system array in-place collapse', () => {
     const system = ['only element'];
     const output = { system };
 
-    collapse(output);
+    collapseSystemInPlace(output.system);
 
     expect(output.system).toBe(system);
     expect(system).toHaveLength(1);
@@ -59,7 +51,7 @@ describe('system array in-place collapse', () => {
     const system: string[] = [];
     const output = { system };
 
-    collapse(output);
+    collapseSystemInPlace(output.system);
 
     expect(output.system).toBe(system);
     expect(system).toHaveLength(0);
