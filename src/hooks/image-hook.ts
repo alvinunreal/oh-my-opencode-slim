@@ -96,8 +96,10 @@ function cleanupAllSessions(saveDir: string): void {
 
   for (const dir of dirsToScan) {
     try {
+      let isEmpty = true;
       let allRemoved = true;
       for (const f of readdirSync(dir)) {
+        isEmpty = false;
         const fp = join(dir, f);
         try {
           if (now - statSync(fp).mtimeMs > maxAge) {
@@ -109,8 +111,8 @@ function cleanupAllSessions(saveDir: string): void {
           allRemoved = false;
         }
       }
-      // Remove empty session subdirectory
-      if (allRemoved) {
+      // Remove session subdirectory only if it had files and all were expired
+      if (!isEmpty && allRemoved) {
         try {
           rmdirSync(dir);
         } catch {}
