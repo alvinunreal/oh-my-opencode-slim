@@ -54,7 +54,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
     }
 
     // Guard against multi-word arguments
-    if (arg.includes(' ')) {
+    if (/\s/.test(arg)) {
       const suggestion = arg.split(/\s+/)[0];
       output.parts.push(
         createInternalAgentTextPart(
@@ -150,8 +150,10 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
         .map(([name, cfg]) => {
           const parts: string[] = [name];
           if (cfg.model) parts.push(`model: ${cfg.model}`);
+          if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
           if (cfg.temperature !== undefined)
             parts.push(`temp: ${cfg.temperature}`);
+          if (cfg.options) parts.push('options: yes');
           return parts.join(' → ');
         })
         .join('\n');

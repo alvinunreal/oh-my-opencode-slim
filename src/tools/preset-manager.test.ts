@@ -355,6 +355,26 @@ describe('createPresetManager', () => {
       expect(ctx.client.config.update).not.toHaveBeenCalled();
     });
 
+    test('catches tab-separated arguments', async () => {
+      const ctx = createMockContext();
+      const config: PluginConfig = {
+        presets: {
+          cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        },
+      };
+      const manager = createPresetManager(ctx, config);
+      const output = createOutput();
+
+      await manager.handleCommandExecuteBefore(
+        { command: 'preset', sessionID: 's1', arguments: 'cheap\tpowerful' },
+        output,
+      );
+
+      const text = getOutputText(output);
+      expect(text).toContain('cannot contain spaces');
+      expect(ctx.client.config.update).not.toHaveBeenCalled();
+    });
+
     test('skips agents with empty overrides in mixed preset', async () => {
       const ctx = createMockContext();
       const config: PluginConfig = {
@@ -449,6 +469,32 @@ describe('createPresetManager', () => {
           },
         },
       });
+    });
+
+    test('shows variant and options in switch summary', async () => {
+      const ctx = createMockContext();
+      const config: PluginConfig = {
+        presets: {
+          thinker: {
+            oracle: {
+              model: 'anthropic/claude-sonnet-4-6',
+              variant: 'thinking',
+              options: { thinking: { type: 'enabled', budgetTokens: 10000 } },
+            },
+          },
+        },
+      };
+      const manager = createPresetManager(ctx, config);
+      const output = createOutput();
+
+      await manager.handleCommandExecuteBefore(
+        { command: 'preset', sessionID: 's1', arguments: 'thinker' },
+        output,
+      );
+
+      const text = getOutputText(output);
+      expect(text).toContain('variant: thinking');
+      expect(text).toContain('options: yes');
     });
 
     test('tracks active preset after switch', async () => {
