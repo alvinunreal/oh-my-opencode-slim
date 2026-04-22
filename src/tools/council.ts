@@ -96,7 +96,24 @@ Returns the councillor responses with a summary footer.`,
       // Warn about deprecated config fields if detected
       const deprecated = councilManager.getDeprecatedFields();
       if (deprecated && deprecated.length > 0) {
-        output += `\n⚠ Config warning: ${deprecated.map((f) => `\`council.${f}\``).join(', ')} ${deprecated.length === 1 ? 'is' : 'are'} deprecated and ignored. The council agent synthesizes directly — remove ${deprecated.length === 1 ? 'it' : 'them'} from your config.`;
+        const legacyMasterModel = councilManager.getLegacyMasterModel();
+        const hasMaster = deprecated.includes('master');
+        const trulyIgnored =
+          hasMaster && !legacyMasterModel
+            ? deprecated // master has no model → treat as ignored too
+            : deprecated.filter((f) => f !== 'master');
+        const parts: string[] = [];
+        if (hasMaster && legacyMasterModel) {
+          parts.push(
+            `\`council.master\` is deprecated and will be removed in a future version. Its \`model\` is currently used as a fallback for the council agent — add a \`council\` entry to your preset to make this explicit.`,
+          );
+        }
+        if (trulyIgnored.length > 0) {
+          parts.push(
+            `${trulyIgnored.map((f) => `\`council.${f}\``).join(', ')} ${trulyIgnored.length === 1 ? 'is' : 'are'} deprecated and ignored — remove ${trulyIgnored.length === 1 ? 'it' : 'them'} from your config.`,
+          );
+        }
+        output += `\n⚠ Config warning: ${parts.join(' ')}`;
       }
 
       return output;

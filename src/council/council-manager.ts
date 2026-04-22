@@ -39,6 +39,7 @@ export class CouncilManager {
   private depthTracker?: SubagentDepthTracker;
   private tmuxEnabled: boolean;
   private deprecatedFields?: string[];
+  private legacyMasterModel?: string;
 
   constructor(
     ctx: PluginInput,
@@ -50,6 +51,7 @@ export class CouncilManager {
     this.directory = ctx.directory;
     this.config = config;
     this.deprecatedFields = config?.council?._deprecated;
+    this.legacyMasterModel = config?.council?._legacyMasterModel;
     this.depthTracker = depthTracker;
     this.tmuxEnabled = tmuxEnabled;
   }
@@ -57,6 +59,11 @@ export class CouncilManager {
   /** Return deprecated config fields detected during parsing (for tool warnings). */
   getDeprecatedFields(): string[] | undefined {
     return this.deprecatedFields;
+  }
+
+  /** Return the legacy master.model if it was used as fallback. */
+  getLegacyMasterModel(): string | undefined {
+    return this.legacyMasterModel;
   }
 
   /**

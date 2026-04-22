@@ -508,6 +508,7 @@ describe('council_session tool', () => {
           ],
         })),
         getDeprecatedFields: mock(() => ['master', 'master_timeout']),
+        getLegacyMasterModel: mock(() => undefined),
       } as unknown as CouncilManager;
       const tools = createCouncilTool(ctx, councilManager);
 
@@ -518,6 +519,39 @@ describe('council_session tool', () => {
       expect(result).toContain('Config warning');
       expect(result).toContain('`council.master`');
       expect(result).toContain('`council.master_timeout`');
+      // master with no legacy model → both treated as ignored
+      expect(result).toContain('deprecated and ignored');
+    });
+
+    test('includes fallback warning when legacy master.model is used', async () => {
+      const ctx = createMockPluginContext();
+      const councilManager = {
+        runCouncil: mock(async () => ({
+          success: true,
+          result: 'Synthesized response',
+          councillorResults: [
+            {
+              name: 'alpha',
+              model: 'test/model',
+              status: 'completed',
+              result: 'Response',
+            },
+          ],
+        })),
+        getDeprecatedFields: mock(() => ['master', 'master_timeout']),
+        getLegacyMasterModel: mock(() => 'anthropic/claude-opus-4-6'),
+      } as unknown as CouncilManager;
+      const tools = createCouncilTool(ctx, councilManager);
+
+      const result = await tools.council_session.execute({ prompt: 'Test' }, {
+        sessionID: 'test',
+      } as any);
+
+      expect(result).toContain('Config warning');
+      expect(result).toContain('`council.master`');
+      // master with legacy model → fallback warning
+      expect(result).toContain('fallback for the council agent');
+      // master_timeout is still "ignored"
       expect(result).toContain('deprecated and ignored');
     });
   });

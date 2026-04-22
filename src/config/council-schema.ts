@@ -163,6 +163,17 @@ export const CouncilConfigSchema = z
     if (data.master_timeout !== undefined) deprecated.push('master_timeout');
     if (data.master_fallback !== undefined) deprecated.push('master_fallback');
 
+    // Backward compat: extract master.model so the council agent can use it
+    // as a fallback when no explicit council entry exists in the active preset.
+    // See https://github.com/alvinunreal/oh-my-opencode-slim/issues/369
+    const legacyMasterModel: string | undefined =
+      typeof data.master === 'object' &&
+      data.master !== null &&
+      'model' in data.master &&
+      typeof (data.master as { model: unknown }).model === 'string'
+        ? (data.master as { model: string }).model
+        : undefined;
+
     return {
       presets: data.presets,
       timeout: data.timeout,
@@ -170,6 +181,7 @@ export const CouncilConfigSchema = z
       councillor_execution_mode: data.councillor_execution_mode,
       councillor_retries: data.councillor_retries,
       _deprecated: deprecated.length > 0 ? deprecated : undefined,
+      _legacyMasterModel: legacyMasterModel,
     };
   });
 

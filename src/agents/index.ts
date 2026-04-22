@@ -297,6 +297,21 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     return agent;
   });
 
+  // 2b. Backward compat: if council has no preset override and still uses the
+  // hardcoded default model, fall back to the deprecated council.master.model.
+  // See https://github.com/alvinunreal/oh-my-opencode-slim/issues/369
+  const legacyMasterModel = config?.council?._legacyMasterModel;
+  if (legacyMasterModel) {
+    const councilAgent = builtInSubAgents.find((a) => a.name === 'council');
+    if (
+      councilAgent &&
+      !getAgentOverride(config, 'council')?.model &&
+      councilAgent.config.model === DEFAULT_MODELS.council
+    ) {
+      councilAgent.config.model = legacyMasterModel;
+    }
+  }
+
   const customSubAgents = protoCustomAgents.map((agent) => {
     const override = getAgentOverride(config, agent.name);
     if (override) {

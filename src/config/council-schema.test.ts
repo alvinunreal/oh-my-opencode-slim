@@ -45,6 +45,8 @@ describe('CouncillorConfigSchema', () => {
       // Core fields still work normally
       expect(result.data.timeout).toBe(180000);
       expect(Object.keys(result.data.presets.default)).toEqual(['alpha']);
+      // Legacy master.model is extracted for backward-compat fallback
+      expect(result.data._legacyMasterModel).toBe('anthropic/claude-opus-4-6');
     }
   });
 
@@ -62,6 +64,7 @@ describe('CouncillorConfigSchema', () => {
 
     if (result.success) {
       expect(result.data._deprecated).toBeUndefined();
+      expect(result.data._legacyMasterModel).toBeUndefined();
     }
   });
 });
@@ -149,6 +152,44 @@ test('deprecated master with non-standard model ID still parses', () => {
       'master_timeout',
       'master_fallback',
     ]);
+    // Even non-standard model IDs are extracted as-is for backward compat
+    expect(result.data._legacyMasterModel).toBe('claude-opus-4-6');
+  }
+});
+
+test('legacyMasterModel undefined when master.model is not a string', () => {
+  const config = {
+    master: { model: 42 }, // not a string
+    presets: {
+      default: {
+        alpha: { model: 'openai/gpt-5.4-mini' },
+      },
+    },
+  };
+
+  const result = CouncilConfigSchema.safeParse(config);
+  expect(result.success).toBe(true);
+
+  if (result.success) {
+    expect(result.data._legacyMasterModel).toBeUndefined();
+  }
+});
+
+test('legacyMasterModel undefined when master is not an object', () => {
+  const config = {
+    master: 'oops', // not an object
+    presets: {
+      default: {
+        alpha: { model: 'openai/gpt-5.4-mini' },
+      },
+    },
+  };
+
+  const result = CouncilConfigSchema.safeParse(config);
+  expect(result.success).toBe(true);
+
+  if (result.success) {
+    expect(result.data._legacyMasterModel).toBeUndefined();
   }
 });
 
