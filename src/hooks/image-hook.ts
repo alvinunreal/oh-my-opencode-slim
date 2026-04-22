@@ -71,31 +71,52 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-function cleanupOldImages(dir: string, saveDir: string): void {
+function cleanupAllSessions(saveDir: string): void {
   const now = Date.now();
-  if (!lastCleanupByDir.has(dir) && existsSync(dir)) {
-    lastCleanupByDir.set(dir, now);
-  }
-  const lastCleanup = lastCleanupByDir.get(dir) ?? 0;
+  const lastCleanup = lastCleanupByDir.get(saveDir) ?? 0;
   if (now - lastCleanup < CLEANUP_INTERVAL) return;
-  lastCleanupByDir.set(dir, now);
+  lastCleanupByDir.set(saveDir, now);
 
+  const maxAge = 60 * 60 * 1000;
+  const dirsToScan: string[] = [];
+
+  // Collect saveDir itself (for non-session images) + all session subdirs
   try {
-    const maxAge = 60 * 60 * 1000;
-    for (const f of readdirSync(dir)) {
-      const fp = join(dir, f);
-      try {
-        if (now - statSync(fp).mtimeMs > maxAge) unlinkSync(fp);
-      } catch {}
-    }
-    // Remove empty session subdirectory and prune its debounce entry
-    if (dir !== saveDir) {
-      try {
-        rmdirSync(dir);
-        lastCleanupByDir.delete(dir);
-      } catch {}
+    for (const entry of readdirSync(saveDir, { withFileTypes: true })) {
+      const fp = join(saveDir, entry.name);
+      if (entry.isDirectory()) {
+        dirsToScan.push(fp);
+      } else {
+        try {
+          if (now - statSync(fp).mtimeMs > maxAge) unlinkSync(fp);
+        } catch {}
+      }
     }
   } catch {}
+
+  for (const dir of dirsToScan) {
+    try {
+      let allRemoved = true;
+      for (const f of readdirSync(dir)) {
+        const fp = join(dir, f);
+        try {
+          if (now - statSync(fp).mtimeMs > maxAge) {
+            unlinkSync(fp);
+          } else {
+            allRemoved = false;
+          }
+        } catch {
+          allRemoved = false;
+        }
+      }
+      // Remove empty session subdirectory
+      if (allRemoved) {
+        try {
+          rmdirSync(dir);
+        } catch {}
+      }
+    } catch {}
+  }
 }
 
 function writeUniqueFile(
@@ -160,6 +181,8 @@ export function processImageAttachments(args: {
     log(`[image-hook] failed to create image directory: ${e}`);
   }
 
+  cleanupAllSessions(saveDir);
+
   for (const msg of messages) {
     if (msg.info.role !== 'user') continue;
     const imageParts = msg.parts.filter(isImagePart);
@@ -174,8 +197,6 @@ export function processImageAttachments(args: {
     } catch (e) {
       log(`[image-hook] failed to create target image directory: ${e}`);
     }
-
-    cleanupOldImages(targetDir, saveDir);
 
     // Save each image to .opencode/images/ and collect paths
     const savedPaths: string[] = [];
