@@ -2,7 +2,7 @@ import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { loadPluginConfig, type MultiplexerConfig } from './config';
-import { collapseSystemInPlace } from './system-collapse';
+import { collapseSystemInPlace } from './utils/system-collapse';
 import { parseList } from './config/agent-mcps';
 import { CouncilManager } from './council';
 import {
