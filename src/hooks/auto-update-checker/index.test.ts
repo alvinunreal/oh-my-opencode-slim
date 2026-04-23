@@ -187,6 +187,38 @@ describe('auto-update-checker/index', () => {
     });
   });
 
+  test('shows notification-only toast when auto-update is disabled', async () => {
+    checkerMocks.findPluginEntry.mockImplementation(() => ({
+      pinnedVersion: null,
+      isPinned: false,
+    }));
+    checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
+    checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
+
+    const { createAutoUpdateCheckerHook } = await import(
+      `./index?test=${importCounter++}`
+    );
+    const { ctx, showToast } = createCtx();
+
+    const hook = createAutoUpdateCheckerHook(ctx as never, {
+      showStartupToast: false,
+      autoUpdate: false,
+    });
+    hook.event({ event: { type: 'session.created', properties: {} } });
+    await waitForCalls(showToast);
+
+    expect(showToast).toHaveBeenCalledWith({
+      body: {
+        title: 'OMO-Slim 0.9.11',
+        message: 'v0.9.11 available. Auto-update is disabled.',
+        variant: 'info',
+        duration: 8000,
+      },
+    });
+    expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
+    expect(crossSpawnMock).not.toHaveBeenCalled();
+  });
+
   test('shows prepare failure toast and skips installation when active install cannot be resolved', async () => {
     checkerMocks.findPluginEntry.mockImplementation(() => ({
       pinnedVersion: null,

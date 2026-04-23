@@ -101,6 +101,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `agents.<customAgent>.orchestratorPrompt` | string | — | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
 | `agents.<agent>.displayName` | string | — | Custom user-facing alias for the agent in the active config |
 | `showStartupToast` | boolean | `true` | Show the startup activation toast (`oh-my-opencode-slim is active`) when OpenCode starts |
+| `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, or `none` |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) |
@@ -140,6 +141,25 @@ appears when the plugin activates.
   "showStartupToast": false
 }
 ```
+
+### Manual Update Mode
+
+Set `autoUpdate` to `false` if you want update notifications without automatic
+`bun install` runs.
+
+```jsonc
+{
+  "autoUpdate": false
+}
+```
+
+With `autoUpdate` set to `false`, this becomes notification-only mode: you'll
+see that a new version is available, but the plugin won't install it
+automatically.
+
+> Pinned plugin entries in `opencode.json` (for example
+> `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
+> regardless of `autoUpdate`.
 
 ### Agent Display Names
 

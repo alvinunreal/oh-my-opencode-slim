@@ -95,6 +95,21 @@ describe('loadPluginConfig', () => {
     expect(config.showStartupToast).toBe(false);
   });
 
+  test('loads autoUpdate flag when configured', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        autoUpdate: false,
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.autoUpdate).toBe(false);
+  });
+
   test('loads manual plan structure when configured', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');

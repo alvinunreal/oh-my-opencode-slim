@@ -280,6 +280,12 @@ export const PluginConfigSchema = z
       .describe(
         'Show the startup activation toast when OpenCode starts. Defaults to true.',
       ),
+    autoUpdate: z
+      .boolean()
+      .optional()
+      .describe(
+        'Disable automatic installation of plugin updates when false. Defaults to true.',
+      ),
     manualPlan: ManualPlanSchema.optional(),
     presets: z.record(z.string(), PresetSchema).optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),

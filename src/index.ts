@@ -2,7 +2,6 @@ import type { Plugin } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { loadPluginConfig, type MultiplexerConfig } from './config';
-import { collapseSystemInPlace } from './utils/system-collapse';
 import { parseList } from './config/agent-mcps';
 import { CouncilManager } from './council';
 import {
@@ -35,6 +34,7 @@ import {
 import { resolveRuntimeAgentName, rewriteDisplayNameMentions } from './utils';
 import { initLogger, log } from './utils/logger';
 import { SubagentDepthTracker } from './utils/subagent-depth';
+import { collapseSystemInPlace } from './utils/system-collapse';
 
 /**
  * Best-effort log to opencode's app logger.
@@ -208,7 +208,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Initialize auto-update checker hook
     autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
       showStartupToast: config.showStartupToast ?? true,
-      autoUpdate: true,
+      autoUpdate: config.autoUpdate ?? true,
     });
 
     // Initialize phase reminder hook for workflow compliance
