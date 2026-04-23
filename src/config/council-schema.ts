@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 /**
  * Validates model IDs in "provider/model" format.
@@ -8,7 +8,7 @@ const ModelIdSchema = z
   .string()
   .regex(
     /^[^/\s]+\/[^\s]+$/,
-    'Expected provider/model format (e.g. "openai/gpt-5.4-mini")',
+    'Expected provider/model format (e.g. "openai/gpt-5.4-mini")'
   );
 
 /**
@@ -21,14 +21,14 @@ const ModelIdSchema = z
  */
 export const CouncillorConfigSchema = z.object({
   model: ModelIdSchema.describe(
-    'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini")',
+    'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini")'
   ),
   variant: z.string().optional(),
   prompt: z
     .string()
     .optional()
     .describe(
-      'Optional role/guidance injected into the councillor user prompt',
+      "Optional role/guidance injected into the councillor user prompt"
     ),
 });
 
@@ -50,20 +50,22 @@ export const CouncilPresetSchema = z
       // Silently skip the legacy "master" key — no longer parsed as a
       // councillor. Old configs with per-preset master overrides won't
       // error, but the override has no effect.
-      if (key === 'master') continue;
+      if (key === "master") continue;
 
       // Legacy nested format: old configs wrapped councillors in a
       // "councillors" key inside each preset. Unwrap them into the
       // parent so the config still works without migration.
-      if (key === 'councillors' && typeof raw === 'object' && raw !== null) {
+      if (key === "councillors" && typeof raw === "object" && raw !== null) {
         for (const [innerKey, innerRaw] of Object.entries(
-          raw as Record<string, unknown>,
+          raw as Record<string, unknown>
         )) {
           const innerParsed = CouncillorConfigSchema.safeParse(innerRaw);
           if (!innerParsed.success) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
-              message: `Invalid councillor "${innerKey}" (nested under legacy "councillors" key): ${innerParsed.error.issues.map((i) => i.message).join(', ')}`,
+              message: `Invalid councillor "${innerKey}" (nested under legacy "councillors" key): ${innerParsed.error.issues
+                .map((i) => i.message)
+                .join(", ")}`,
             });
             return z.NEVER;
           }
@@ -76,7 +78,9 @@ export const CouncilPresetSchema = z
       if (!parsed.success) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Invalid councillor "${key}": ${parsed.error.issues.map((i) => i.message).join(', ')}`,
+          message: `Invalid councillor "${key}": ${parsed.error.issues
+            .map((i) => i.message)
+            .join(", ")}`,
         });
         return z.NEVER;
       }
@@ -94,11 +98,11 @@ export type CouncilPreset = z.infer<typeof CouncilPresetSchema>;
  * - serial: Run councillors one at a time (required for single-model systems to avoid conflicts)
  */
 export const CouncillorExecutionModeSchema = z
-  .enum(['parallel', 'serial'])
-  .default('parallel')
+  .enum(["parallel", "serial"])
+  .default("parallel")
   .describe(
     'Execution mode for councillors. Use "serial" for single-model systems to avoid conflicts. ' +
-      'Use "parallel" for multi-model systems for faster execution.',
+      'Use "parallel" for multi-model systems for faster execution.'
   );
 
 /**
@@ -125,9 +129,9 @@ export const CouncilConfigSchema = z
   .object({
     presets: z.record(z.string(), CouncilPresetSchema),
     timeout: z.number().min(0).default(180000),
-    default_preset: z.string().default('default'),
+    default_preset: z.string().default("default"),
     councillor_execution_mode: CouncillorExecutionModeSchema.describe(
-      'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
+      'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).'
     ),
     councillor_retries: z
       .number()
@@ -136,8 +140,8 @@ export const CouncilConfigSchema = z
       .max(5)
       .default(3)
       .describe(
-        'Number of retry attempts for councillors that return empty responses ' +
-          '(e.g. due to provider rate limiting). Default: 3 retries.',
+        "Number of retry attempts for councillors that return empty responses " +
+          "(e.g. due to provider rate limiting). Default: 3 retries."
       ),
     // Deprecated fields — accepted for backward compatibility but ignored.
     // The council agent now synthesizes directly; no separate master session.
@@ -146,7 +150,7 @@ export const CouncilConfigSchema = z
     master: z
       .unknown()
       .optional()
-      .describe('DEPRECATED — ignored. Council agent synthesizes directly.'),
+      .describe("DEPRECATED — ignored. Council agent synthesizes directly."),
     master_timeout: z
       .unknown()
       .optional()
@@ -154,23 +158,23 @@ export const CouncilConfigSchema = z
     master_fallback: z
       .unknown()
       .optional()
-      .describe('DEPRECATED — ignored. No separate master session.'),
+      .describe("DEPRECATED — ignored. No separate master session."),
   })
   .transform((data) => {
     // Detect deprecated fields and attach warning for consumers
     const deprecated: string[] = [];
-    if (data.master !== undefined) deprecated.push('master');
-    if (data.master_timeout !== undefined) deprecated.push('master_timeout');
-    if (data.master_fallback !== undefined) deprecated.push('master_fallback');
+    if (data.master !== undefined) deprecated.push("master");
+    if (data.master_timeout !== undefined) deprecated.push("master_timeout");
+    if (data.master_fallback !== undefined) deprecated.push("master_fallback");
 
     // Backward compat: extract master.model so the council agent can use it
     // as a fallback when no explicit council entry exists in the active preset.
     // See https://github.com/alvinunreal/oh-my-opencode-slim/issues/369
     const legacyMasterModel: string | undefined =
-      typeof data.master === 'object' &&
+      typeof data.master === "object" &&
       data.master !== null &&
-      'model' in data.master &&
-      typeof (data.master as { model: unknown }).model === 'string'
+      "model" in data.master &&
+      typeof (data.master as { model: unknown }).model === "string"
         ? (data.master as { model: string }).model
         : undefined;
 
@@ -203,9 +207,9 @@ export type CouncillorExecutionMode = z.infer<
 export const DEFAULT_COUNCIL_CONFIG: z.input<typeof CouncilConfigSchema> = {
   presets: {
     default: {
-      alpha: { model: 'openai/gpt-5.4-mini' },
-      beta: { model: 'openai/gpt-5.3-codex' },
-      gamma: { model: 'google/gemini-3-pro' },
+      alpha: { model: "openai/gpt-5.4-mini" },
+      beta: { model: "openai/gpt-5.3-codex" },
+      gamma: { model: "google/gemini-3-pro" },
     },
   },
 };
@@ -220,7 +224,7 @@ export interface CouncilResult {
   councillorResults: Array<{
     name: string;
     model: string;
-    status: 'completed' | 'failed' | 'timed_out';
+    status: "completed" | "failed" | "timed_out";
     result?: string;
     error?: string;
   }>;

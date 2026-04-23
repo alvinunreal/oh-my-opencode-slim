@@ -63,7 +63,7 @@ All config files support **JSONC** (JSON with Comments):
   /* Agent model mappings */
   "presets": {
     "openai": {
-      "oracle": { "model": "openai/gpt-5.4" },
+      "oracle": { "model": "openai/gpt-5.5" },
       "explorer": { "model": "openai/gpt-5.4-mini" },
     },
   },
@@ -216,7 +216,7 @@ teaches the orchestrator exactly when to delegate to it.
 {
   "agents": {
     "janitor": {
-      "model": "github-copilot/gpt-5.4",
+      "model": "github-copilot/gpt-5.5",
       "prompt": "You are Janitor. Audit codebase entropy, dead code, docs drift, naming inconsistencies, and unnecessary complexity. Prefer analysis and plans over direct edits.",
       "orchestratorPrompt": "@janitor\n- Role: Maintenance specialist for codebase cleanup and entropy reduction\n- **Delegate when:** after large refactors • cleanup/technical-debt review • dead code or docs drift is suspected\n- **Don't delegate when:** feature implementation • urgent debugging • UI/UX work"
     }

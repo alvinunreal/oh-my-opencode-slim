@@ -83,7 +83,7 @@ Add a council model and at least one council preset to your plugin config:
   "preset": "openai",
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   },
   "council": {
@@ -154,7 +154,7 @@ Configure it using the normal agent system:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4", "variant": "high" }
+      "council": { "model": "openai/gpt-5.5", "variant": "high" }
     }
   }
 }
@@ -206,7 +206,7 @@ Councillor models always come from:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   },
   "council": {
@@ -225,7 +225,7 @@ Councillor models always come from:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   },
   "council": {
@@ -377,7 +377,7 @@ Prefer this instead:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   }
 }

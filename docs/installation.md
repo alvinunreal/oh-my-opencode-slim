@@ -56,7 +56,7 @@ bunx oh-my-opencode-slim@latest install --reset
 
 ### After Installation
 
-The installer generates an OpenAI configuration by default (using `gpt-5.4` and `gpt-5.4-mini` models). To switch providers or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
+The installer generates an OpenAI configuration by default (using `gpt-5.5` and `gpt-5.4-mini` models). To switch providers or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
 
 Then:
 

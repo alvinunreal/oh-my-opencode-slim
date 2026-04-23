@@ -76,7 +76,7 @@ That means the generated starter config can stay clean:
   "preset": "openai",
   "presets": {
     "openai": {
-      "orchestrator": { "model": "openai/gpt-5.4" },
+      "orchestrator": { "model": "openai/gpt-5.5" },
       "explorer": { "model": "openai/gpt-5.4-mini" },
       "fixer": { "model": "openai/gpt-5.4-mini" }
     }
