@@ -34,12 +34,29 @@ const PARAMETER_ERROR_SIGNALS = [
 
 /**
  * Extract the task_id from a task tool output string.
- * The output format is: <task_id>ses_xxx</task_id><task_result>...</task_result>
+ *
+ * Supports two formats:
+ * 1. Line-based (OpenCode's actual format):
+ *      task_id: ses_xxx (for resuming to continue this task if needed)
+ * 2. XML-style (fallback):
+ *      <task_id>ses_xxx</task_id>
+ *
  * Returns undefined if the task_id cannot be found.
  */
 export function parseTaskId(output: string): string | undefined {
-  const match = output.match(/<task_id>([^<]+)<\/task_id>/);
-  return match ? match[1] : undefined;
+  // Format 1: Line-based "task_id: ses_xxx" (the real OpenCode format)
+  const lines = output.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const match = /^task_id:\s*([^\s()]+)(?:\s*\(.*\)?)?$/.exec(trimmed);
+    if (match) return match[1];
+  }
+
+  // Format 2: XML-style <task_id>ses_xxx</task_id>
+  const xmlMatch = output.match(/<task_id>([^<]+)<\/task_id>/);
+  if (xmlMatch) return xmlMatch[1];
+
+  return undefined;
 }
 
 /**

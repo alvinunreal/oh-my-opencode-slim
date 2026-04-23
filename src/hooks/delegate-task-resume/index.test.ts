@@ -117,7 +117,27 @@ describe('buildResumeGuidance', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseTaskId', () => {
-  test('extracts task_id from task output', () => {
+  // --- Real OpenCode format (line-based) ---
+
+  test('extracts task_id from real OpenCode line-based format', () => {
+    expect(
+      parseTaskId(
+        'task_id: ses_child1 (for resuming to continue this task if needed)\n\n<task_result>\n</task_result>',
+      ),
+    ).toBe('ses_child1');
+  });
+
+  test('extracts task_id from line-based format without parenthetical', () => {
+    expect(parseTaskId('task_id: ses_abc123')).toBe('ses_abc123');
+  });
+
+  test('extracts task_id from line-based format with extra whitespace', () => {
+    expect(parseTaskId('  task_id:   ses_xyz789  ')).toBe('ses_xyz789');
+  });
+
+  // --- XML-style format (fallback) ---
+
+  test('extracts task_id from XML-style task output', () => {
     expect(
       parseTaskId(
         '<task_id>ses_abc123</task_id><task_result>done</task_result>',
@@ -125,16 +145,26 @@ describe('parseTaskId', () => {
     ).toBe('ses_abc123');
   });
 
-  test('extracts task_id when task_result is empty', () => {
+  test('extracts task_id from XML when task_result is empty', () => {
     expect(
       parseTaskId('<task_id>ses_abc123</task_id><task_result></task_result>'),
     ).toBe('ses_abc123');
   });
 
+  // --- Negative cases ---
+
   test('returns undefined when task_id not present', () => {
     expect(parseTaskId('')).toBeUndefined();
     expect(parseTaskId('<task_result>content</task_result>')).toBeUndefined();
     expect(parseTaskId('some plain text output')).toBeUndefined();
+  });
+
+  // --- Integration: real interrupted-task scenario ---
+
+  test('extracts task_id from real interrupted-task output (line-based + empty result)', () => {
+    const realOutput =
+      'task_id: ses_child1 (for resuming to continue this task if needed)\n\n<task_result>\n</task_result>';
+    expect(parseTaskId(realOutput)).toBe('ses_child1');
   });
 });
 
@@ -149,15 +179,19 @@ describe('createDelegateTaskResumeHook', () => {
     return { tracker, hook };
   }
 
-  /** Task output with empty result but parseable task_id. */
-  const emptyWithTaskId = (id: string) =>
+  /** Task output with empty result but parseable task_id (XML format). */
+  const emptyWithTaskIdXml = (id: string) =>
     `<task_id>${id}</task_id><task_result></task_result>`;
 
-  test('appends recovery note for empty task result with task_id', async () => {
+  /** Task output in real OpenCode format (line-based task_id + empty result). */
+  const emptyWithTaskIdReal = (id: string) =>
+    `task_id: ${id} (for resuming to continue this task if needed)\n\n<task_result>\n</task_result>`;
+
+  test('appends recovery note for empty task result with task_id (XML format)', async () => {
     const { tracker, hook } = createHook();
     tracker.register('ses_child1', 'ses_parent', 'fixer');
 
-    const output = { output: emptyWithTaskId('ses_child1') };
+    const output = { output: emptyWithTaskIdXml('ses_child1') };
     await hook['tool.execute.after']({ tool: 'task' }, output);
 
     expect(output.output).toContain('[task partial state available]');
@@ -165,12 +199,25 @@ describe('createDelegateTaskResumeHook', () => {
     expect(output.output).toContain('@fixer');
   });
 
-  test('appends recovery note for provider error with task_id', async () => {
+  test('appends recovery note for empty task result with task_id (real OpenCode format)', async () => {
+    const { tracker, hook } = createHook();
+    tracker.register('ses_child1', 'ses_parent', 'fixer');
+
+    const output = { output: emptyWithTaskIdReal('ses_child1') };
+    await hook['tool.execute.after']({ tool: 'task' }, output);
+
+    expect(output.output).toContain('[task partial state available]');
+    expect(output.output).toContain('task_id: ses_child1');
+    expect(output.output).toContain('@fixer');
+  });
+
+  test('appends recovery note for provider error with task_id (real format)', async () => {
     const { tracker, hook } = createHook();
     tracker.register('ses_child1', 'ses_parent', 'explorer');
 
     const output = {
-      output: `<task_id>ses_child1</task_id><task_result></task_result>\nError: 429 rate limit exceeded`,
+      output:
+        'task_id: ses_child1 (for resuming to continue this task if needed)\n\n<task_result>\n</task_result>\nError: 429 rate limit exceeded',
     };
     await hook['tool.execute.after']({ tool: 'task' }, output);
 
@@ -182,7 +229,7 @@ describe('createDelegateTaskResumeHook', () => {
   test('appends recovery note even for untracked task_id (OpenCode manages it)', async () => {
     const { hook } = createHook();
     // Tracker has no entry for this task_id — OpenCode still knows it
-    const output = { output: emptyWithTaskId('ses_external') };
+    const output = { output: emptyWithTaskIdReal('ses_external') };
     await hook['tool.execute.after']({ tool: 'task' }, output);
 
     expect(output.output).toContain('[task partial state available]');
@@ -204,7 +251,7 @@ describe('createDelegateTaskResumeHook', () => {
 
     const output = {
       output:
-        '<task_id>ses_child1</task_id>[ERROR] Invalid arguments: Must provide either category or subagent_type',
+        'task_id: ses_child1 (for resuming to continue this task if needed)\n\n[ERROR] Invalid arguments: Must provide either category or subagent_type',
     };
     await hook['tool.execute.after']({ tool: 'task' }, output);
 
@@ -216,7 +263,8 @@ describe('createDelegateTaskResumeHook', () => {
     tracker.register('ses_child1', 'ses_parent', 'fixer');
 
     const output = {
-      output: '<task_id>ses_child1</task_id><task_result>Done.</task_result>',
+      output:
+        'task_id: ses_child1 (for resuming to continue this task if needed)\n\n<task_result>\nDone.\n</task_result>',
     };
     await hook['tool.execute.after']({ tool: 'task' }, output);
 
