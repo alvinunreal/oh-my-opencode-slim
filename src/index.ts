@@ -13,6 +13,7 @@ import {
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
+  createTaskSessionManagerHook,
   createTodoContinuationHook,
   ForegroundFallbackManager,
 } from './hooks';
@@ -110,6 +111,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let jsonErrorRecoveryHook: ReturnType<typeof createJsonErrorRecoveryHook>;
   let foregroundFallback: ForegroundFallbackManager;
   let todoContinuationHook: ReturnType<typeof createTodoContinuationHook>;
+  let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
   let councilTools: Record<string, unknown>;
@@ -250,6 +252,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       cooldownMs: config.todoContinuation?.cooldownMs ?? 3000,
       autoEnable: config.todoContinuation?.autoEnable ?? false,
       autoEnableThreshold: config.todoContinuation?.autoEnableThreshold ?? 4,
+    });
+    taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
+      maxSessionsPerAgent: config.sessionManager?.maxSessionsPerAgent ?? 2,
+      shouldManageSession: (sessionID) =>
+        sessionAgentMap.get(sessionID) === 'orchestrator',
     });
     interviewManager = createInterviewManager(ctx, config);
     presetManager = createPresetManager(ctx, config);
@@ -581,6 +588,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
       );
 
+      await taskSessionManagerHook.event(
+        input as {
+          event: {
+            type: string;
+            properties?: { info?: { id?: string }; sessionID?: string };
+          };
+        },
+      );
+
       if (input.event.type === 'session.deleted') {
         const props = input.event.properties as
           | { info?: { id?: string }; sessionID?: string }
@@ -607,6 +623,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         output as {
           args?: { patchText?: unknown; [key: string]: unknown };
         },
+      );
+
+      await taskSessionManagerHook['tool.execute.before'](
+        input as {
+          tool: string;
+          sessionID?: string;
+          callID?: string;
+        },
+        output as { args?: unknown },
       );
     },
 
@@ -717,6 +742,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         output,
       );
 
+      await taskSessionManagerHook['experimental.chat.system.transform'](
+        input,
+        output,
+      );
+
       // Collapse to single system message for provider compatibility.
       // Some providers (e.g. Qwen via VLLM/DashScope) reject multiple
       // system messages. Sub-hooks above may push additional entries; join
@@ -820,6 +850,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           output: string;
           metadata: Record<string, unknown>;
         },
+      );
+
+      await taskSessionManagerHook['tool.execute.after'](
+        input as {
+          tool: string;
+          sessionID?: string;
+          callID?: string;
+        },
+        output as { output: unknown },
       );
     },
   };

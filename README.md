@@ -67,6 +67,9 @@ The default generated configuration looks like this:
 {
   "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
   "preset": "openai",
+  "sessionManager": {
+    "maxSessionsPerAgent": 2
+  },
   "presets": {
     "openai": {
       "orchestrator": { "model": "openai/gpt-5.4", "variant": "high", "skills": ["*"], "mcps": ["*", "!context7"] },
@@ -79,6 +82,10 @@ The default generated configuration looks like this:
   }
 }
 ```
+
+`sessionManager.maxSessionsPerAgent` controls how many resumable child sessions
+the orchestrator remembers per specialist type inside the current parent
+session.
 
 ### For Alternative Providers
 
