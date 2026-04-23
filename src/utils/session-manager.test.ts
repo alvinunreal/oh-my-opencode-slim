@@ -61,6 +61,23 @@ describe('SessionManager', () => {
       'ora-1 architecture — Reviewed session lifecycle and cleanup behavior.',
     );
   });
+
+  test('normalizes and truncates session summaries', () => {
+    const manager = new SessionManager(2);
+
+    manager.remember({
+      parentSessionId: 'parent-1',
+      taskId: 'task-1',
+      agentType: 'oracle',
+      label: 'architecture',
+      contextSummary: ` ${'a'.repeat(320)} `,
+    });
+
+    const prompt = manager.formatForPrompt('parent-1');
+
+    expect(prompt).toContain(`ora-1 architecture — ${'a'.repeat(280)}`);
+    expect(prompt).not.toContain('a'.repeat(281));
+  });
 });
 
 describe('deriveTaskSessionLabel', () => {

@@ -19,7 +19,13 @@ export function parseTaskIdFromTaskOutput(output: string): string | undefined {
   return undefined;
 }
 
-const MAX_CONTEXT_SUMMARY_LENGTH = 600;
+const MAX_CONTEXT_SUMMARY_LENGTH = 280;
+
+const FINAL_CONTEXT_SUMMARY_PATTERN =
+  /(?:^|\n)\s*<context_summary>((?:(?!<context_summary>)[\s\S])*?)<\/context_summary>\s*$/i;
+
+const FINAL_MALFORMED_CONTEXT_SUMMARY_PATTERN =
+  /(?:^|\n)\s*<context_summary>((?:(?!<context_summary>|<\/context_summary>)[\s\S])*?)\s*$/i;
 
 function normalizeContextSummary(value: string): string | undefined {
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -29,34 +35,27 @@ function normalizeContextSummary(value: string): string | undefined {
 }
 
 /**
- * Parse the last context summary metadata block from Task tool output.
+ * Parse the final standalone context summary metadata block from Task output.
  */
 export function parseContextSummaryFromTaskOutput(
   output: string,
 ): string | undefined {
-  const matches = [
-    ...output.matchAll(/<context_summary>([\s\S]*?)<\/context_summary>/gi),
-  ];
-  const lastMatch = matches.at(-1);
-  if (!lastMatch) {
-    const fallbackMatch =
-      /<context_summary>([\s\S]*?)(?:<\/task_result>|$)/i.exec(output);
+  const match = FINAL_CONTEXT_SUMMARY_PATTERN.exec(output);
+  if (match) return normalizeContextSummary(match[1]);
 
-    return fallbackMatch
-      ? normalizeContextSummary(fallbackMatch[1])
-      : undefined;
-  }
+  const fallbackMatch = FINAL_MALFORMED_CONTEXT_SUMMARY_PATTERN.exec(output);
 
-  return normalizeContextSummary(lastMatch[1]);
+  return fallbackMatch ? normalizeContextSummary(fallbackMatch[1]) : undefined;
 }
 
 /**
- * Remove context summary metadata blocks before the parent model sees output.
+ * Remove the final standalone context summary metadata block before the parent
+ * model sees output.
  */
 export function stripContextSummaryFromTaskOutput(output: string): string {
   return output
-    .replace(/\n?\s*<context_summary>[\s\S]*?<\/context_summary>\s*/gi, '\n')
-    .replace(/\n?\s*<context_summary>[\s\S]*?(?:<\/task_result>|$)/i, '\n')
+    .replace(FINAL_CONTEXT_SUMMARY_PATTERN, '')
+    .replace(FINAL_MALFORMED_CONTEXT_SUMMARY_PATTERN, '')
     .replace(/\n{3,}/g, '\n\n')
     .trimEnd();
 }

@@ -12,6 +12,15 @@ export interface RememberedTaskSession {
 
 type SessionGroupMap = Map<AgentName, RememberedTaskSession[]>;
 
+const MAX_CONTEXT_SUMMARY_LENGTH = 280;
+
+function normalizeContextSummary(value?: string): string | undefined {
+  const normalized = normalizeWhitespace(value ?? '');
+  if (!normalized) return undefined;
+
+  return normalized.slice(0, MAX_CONTEXT_SUMMARY_LENGTH);
+}
+
 function aliasPrefix(agentType: AgentName): string {
   switch (agentType) {
     case 'explorer':
@@ -82,6 +91,7 @@ export class SessionManager {
     contextSummary?: string;
   }): RememberedTaskSession {
     const now = this.nextOrder();
+    const contextSummary = normalizeContextSummary(input.contextSummary);
     const group = this.getAgentGroup(
       input.parentSessionId,
       input.agentType,
@@ -94,8 +104,8 @@ export class SessionManager {
 
     if (existing) {
       existing.label = input.label;
-      if (input.contextSummary) {
-        existing.contextSummary = input.contextSummary;
+      if (contextSummary) {
+        existing.contextSummary = contextSummary;
       }
       existing.lastUsedAt = this.nextOrder();
       return existing;
@@ -106,7 +116,7 @@ export class SessionManager {
       taskId: input.taskId,
       agentType: input.agentType,
       label: input.label,
-      contextSummary: input.contextSummary,
+      contextSummary,
       createdAt: now,
       lastUsedAt: now,
     };

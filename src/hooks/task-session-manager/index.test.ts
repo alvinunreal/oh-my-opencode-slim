@@ -80,9 +80,9 @@ describe('task-session-manager hook', () => {
     );
 
     expect(beforeOutput.args.prompt).toContain('<context_summary>');
-    expect(beforeOutput.args.prompt).toContain('short paragraph');
+    expect(beforeOutput.args.prompt).toContain('under 280 characters');
     expect(beforeOutput.args.prompt).toContain(
-      'final child inside your <results> block',
+      'outside any other XML/result tags',
     );
     expect(beforeOutput.args.prompt).toContain(
       'Do not omit the closing </context_summary> tag',
@@ -139,11 +139,9 @@ describe('task-session-manager hook', () => {
       beforeOutput,
     );
 
+    expect(beforeOutput.args.prompt).toContain('After your final answer');
     expect(beforeOutput.args.prompt).toContain(
-      'At the end of your final answer',
-    );
-    expect(beforeOutput.args.prompt).toContain(
-      '<context_summary>List the specific files',
+      '<context_summary>Briefly list the specific reusable context',
     );
   });
 

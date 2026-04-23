@@ -43,8 +43,8 @@ const CONTEXT_SUMMARY_INSTRUCTION_MARKER =
 const CONTEXT_SUMMARY_INSTRUCTION = [
   '',
   CONTEXT_SUMMARY_INSTRUCTION_MARKER,
-  'At the end of your final answer, include a brief metadata block for future session reuse. Include it as the final child inside your <results> block when you return structured results. Focus on the concrete context/knowledge now present in this child session, not a generic description of the task. A short paragraph is fine if needed. Do not omit the closing </context_summary> tag:',
-  '<context_summary>List the specific files, decisions, findings, and state this child session can recall if resumed.</context_summary>',
+  'After your final answer, append exactly one standalone metadata block for future session reuse. It must be the very last thing in your response, outside any other XML/result tags. Keep it concise: 1-2 sentences, under 280 characters, focused on concrete files, decisions, findings, and state this child session can recall if resumed. Do not omit the closing </context_summary> tag:',
+  '<context_summary>Briefly list the specific reusable context this child session can recall if resumed.</context_summary>',
 ].join('\n');
 
 function isAgentName(value: unknown): value is AgentName {
