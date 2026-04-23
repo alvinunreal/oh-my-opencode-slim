@@ -28,6 +28,7 @@ const RATE_LIMIT_PATTERNS = [
   /rate.?limit/i,
   /too many requests/i,
   /quota.?exceeded/i,
+  /ExceededBudget/i,  
   /usage.?exceeded/i,
   /usage limit/i,
   /overloaded/i,
