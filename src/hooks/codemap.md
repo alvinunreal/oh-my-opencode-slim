@@ -10,17 +10,20 @@ and managers for all hook-based runtime behaviors used by
   without depending on subfolder internals.
 - Describe lifecycle boundaries between OpenCode hook surfaces and internal state
   machines that coordinate retries, timers, and session tracking.
+- Centralize all hook feature entry points used by orchestrator tooling,
+  delegation/task workflows, and session lifecycle handlers.
 
 ## Design
 
 - `src/hooks/index.ts` re-exports per-feature factories and managers.
 - Most features implement the `create*Hook(ctx, config?)` factory pattern and
-  return one or more lifecycle callbacks.
+  return lifecycle callbacks.
 - Foreground fallback is provided as a manager class (`ForegroundFallbackManager`)
   with an explicit `handleEvent` method.
-- Each module keeps side effects behind narrow public boundaries:
-  `createDelegateTaskRetryHook`, `createJsonErrorRecoveryHook`,
-  `createTodoContinuationHook`, etc.
+- `task-session-manager` persists resumable task sessions per parent session and
+  per agent, with bounded history and aliasing.
+- Side effects are limited to exported handlers and dedicated utility functions
+  to keep hook behavior deterministic.
 - Runtime integration depends on `PluginInput.client` for session APIs and shared
   utilities (`log`, marker constants, prompt helpers).
 
@@ -45,14 +48,14 @@ and managers for all hook-based runtime behaviors used by
 
 | Hook Point | Purpose | Implementations |
 |---|---|---|
-| `tool.execute.before` | Pre-process tool inputs | `apply-patch` |
-| `tool.execute.after` | Post-process tool outputs | `delegate-task-retry`, `json-error-recovery`, `post-file-tool-nudge` |
+| `tool.execute.before` | Pre-process tool inputs | `apply-patch`, `task-session-manager` |
+| `tool.execute.after` | Post-process tool outputs | `delegate-task-retry`, `json-error-recovery`, `post-file-tool-nudge`, `task-session-manager` |
 | `experimental.chat.messages.transform` | Rewrite outbound user content | `filter-available-skills`, `phase-reminder` |
-| `experimental.chat.system.transform` | Inject system-level directives | `todo-continuation`, `post-file-tool-nudge` |
+| `experimental.chat.system.transform` | Inject system-level directives | `todo-continuation`, `post-file-tool-nudge`, `task-session-manager` |
 | `chat.headers` | Mutate request headers | `chat-headers` |
 | `chat.message` | Track runtime session/agent mapping | `todo-continuation` |
 | `command.execute.before` | Handle slash-command UX | `todo-continuation` (`auto-continue`) |
-| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `todo-continuation`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers |
+| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `todo-continuation`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers, `task-session-manager` |
 
 ## Implementation Notes
 
@@ -65,10 +68,16 @@ and managers for all hook-based runtime behaviors used by
   system transform, command interception, tool-after, and events. It owns
   auto-injection state, cooldown, suppress windows, and orchestration session
   tracking.
+- `createTaskSessionManagerHook` tracks task sessions for resumability: generates
+  user-facing aliases, resolves alias/task IDs before delegation, remembers fresh
+  task IDs after completion, and drops stale entries on missing-session failure,
+  renamed task IDs, or session deletion.
 
 ## Integration
 
 - `src/index.ts` is the sole runtime consumer and determines final registration
   order so composed transforms (system joins, reminder insertion, hygiene) stay
   deterministic.
+- `taskSessionManager` is registered in `tool.execute.before`, `tool.execute.after`,
+  `experimental.chat.system.transform`, and `event`, with parent/child cleanup.
 - The `src/hooks/*/codemap.md` files document each feature internals.
