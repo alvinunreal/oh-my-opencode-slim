@@ -2,57 +2,100 @@
 
 ## Responsibility
 
-`src/council/` executes multi-LLM consensus sessions.
+`src/council/` orchestrates parallel/serial multi-LLM council sessions and produces
+normalized councillor results for the `council` agent to synthesize.
 
-It owns council orchestration and result normalization, while the actual `council` agent remains in `agents/council.ts`.
+It is intentionally execution-focused:
+
+- validate council configuration + preset selection,
+- launch and monitor councillor sub-sessions,
+- normalize outputs + retry behavior,
+- return a structured result object to the caller tool.
+
+Prompt templates and tool schemas are defined in `agents/` and `tools/`.
 
 ## Architecture
 
-- `council.ts` is a barrel that exports `CouncilManager`.
-- `council-manager.ts` is the engine:
-  - validates preset selection and depth constraints
-  - launches councillor sessions
-  - retries on empty provider responses
-  - formats outputs for synthesis by caller tool
+- `council-manager.ts` is the core engine.
+- `index.ts` is the module barrel.
+
+### council-manager responsibilities
+
+- Reads injected plugin context (`PluginInput`) and optional:
+  - config (`PluginConfig`),
+  - `SubagentDepthTracker`,
+  - `tmuxEnabled` flag for pane launch pacing.
+- Owns runtime helpers:
+  - `runCouncil()` orchestration entry,
+  - `runCouncillors()` fan-out strategy,
+  - `runCouncillorWithRetry()` and `runAgentSession()` for per-councillor lifecycle.
+- Uses shared session utilities from `utils/session.ts`:
+  - `parseModelReference` for model string validation,
+  - `promptWithTimeout` for bounded prompt calls,
+  - `extractSessionResult` to collect assistant text,
+  - `shortModelLabel` for UI-friendly model names.
+- Delegates prompt/result shaping to `formatCouncillorPrompt` and
+  `formatCouncillorResults` in `agents/council.ts`.
 
 ## Runtime flow
 
 ```text
-runCouncil(prompt, preset, parentSessionId)
-  ├─> enforce depth via SubagentDepthTracker
-  ├─> load council config
-  ├─> resolve preset (default if absent)
-  ├─> run all councillors in parallel or serial mode
-  │     - each councillor session: create -> prompt -> extract -> abort
-  │     - tmux delay + stagger delay for launch collisions
-  │     - retry on empty response up to configured retry count
-  ├─> if none completed -> error
-  └─> formatCouncillorResults(prompt, completed responses)
+runCouncil(prompt, presetName?, parentSessionId)
+  ├─> enforce max depth with SubagentDepthTracker
+  ├─> load council config from plugin config
+  ├─> resolve preset (fallback: default_preset -> "default")
+  ├─> fail fast when preset missing or empty
+  ├─> emit start notification to parent session (best-effort, non-blocking)
+  ├─> resolve runtime policy
+  │     timeout, execution mode, retry budget
+  ├─> run councillors in selected mode
+  │     - runAgentSession: create -> register depth -> optional tmux delay
+  │       -> prompt -> extract text -> session abort in finally
+  │     - runCouncillorWithRetry: retries only "Empty response from provider"
+  │       up to `councillor_retries`
+  │     - parallel mode uses indexed staggering to reduce pane launch collisions
+  ├─> aggregate results with per-councillor status
+  ├─> if no completed councillors: return failure result
+  └─> format and return results for caller synthesis
 ```
 
-Execution characteristics:
+## Error and result model
 
-- Uses `councillor` agent internally (`agent: 'councillor'`), `tools.task: false`.
-- Timeout is passed per session.
-- Empty results are treated as failures unless global fallback policy disables empty-retry behavior.
-- Failed/timed out results are still returned as structured metadata (`name`, `model`, `status`, `error`).
-- On start, writes a non-blocking session note to parent session via `session.prompt`.
+- Each councillor returns status:
+  - `completed` with `result` text,
+  - `failed` with `error`,
+  - `timed_out` with timeout message.
+- Empty provider responses are treated as failures unless failover retry-on-empty is disabled
+  via `fallback.retry_on_empty`.
+- A single councillor's malformed model string is surfaced as failure for that councillor; the
+  session still proceeds with the remaining councillors.
+- Depth limit violations return a hard failure (`Subagent depth exceeded`) without starting
+  any councillor session.
 
-### Configuration semantics
+## Configuration semantics (delegated to schema)
 
-- Preset schema in `config/council-schema.ts`:
-  - per-preset named councillors
-  - `default_preset`
-  - `timeout`
-  - `councillor_execution_mode` (`parallel`/`serial`)
-  - `councillor_retries`
-- Deprecated master fields are accepted in schema, ignored, and surfaced as runtime warnings through `getDeprecatedFields()`.
+Validated in `config/council-schema.ts` and consumed in `runCouncil`:
 
-## Integration
+- `presets` with per-preset councillor definitions,
+- `default_preset`,
+- `timeout`,
+- `councillor_execution_mode` (`parallel`/`serial`),
+- `councillor_retries`.
 
-- `tools/council.ts` defines `council_session` and is the only caller that invokes `CouncilManager.runCouncil(...)`.
-- Integrates with:
-  - `config` (for preset/timeouts/retry policy)
-  - `SubagentDepthTracker` (to prevent nested delegation explosions)
-  - session client (`client.session.*`) for sub-session lifecycle
-  - `multiplexer` settings (tmux launch delay behavior)
+Legacy schema behavior:
+
+- nested legacy `councillors` keys are unwrapped,
+- top-level `master` key is ignored at preset level,
+- deprecated `master` fields are recorded (via `_deprecated`) and surfaced to the caller
+  as warnings, while `_legacyMasterModel` is kept for fallback messaging.
+
+## Integration points
+
+- **Tool caller:** `tools/council.ts` creates `council_session` and calls
+  `runCouncil(prompt, preset, parentSessionId)`.
+- **Plugin init:** `src/index.ts` constructs `CouncilManager` with runtime config,
+  `SubagentDepthTracker`, and multiplexer capability before exposing `council_session`.
+- **Depth lifecycle:** `SubagentDepthTracker` is also used in plugin event hooks to register/
+  cleanup child sessions as they are created/deleted.
+- **Runtime constants:** `config/constants.ts` provides launch delays (`TMUX_SPAWN_DELAY_MS`,
+  `COUNCILLOR_STAGGER_MS`) used to avoid multiplexer collision.

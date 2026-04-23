@@ -2,57 +2,90 @@
 
 ## Responsibility
 
-- Expose plugin tool definitions for code intelligence and workflow tooling from
-  `src/tools/index.ts`.
-- Publish three operational domains:
-  - AST pattern search/replace via `ast-grep/`.
-  - URL fetch/transform via `smartfetch/` with optional secondary-model pass.
-  - Council orchestration via `createCouncilTool` (`council.ts`).
+`src/tools/` exposes plugin tooling and runtime command hooks used by OpenCode.
 
-## Design
+- AST-aware search/replace via `ast-grep` stack.
+- Remote fetch/transform utility via `smartfetch` (`webfetch` tool).
+- Council orchestration via `createCouncilTool` (`council.ts`).
+- Runtime preset switching via `/preset` hook via `createPresetManager` (`preset-manager.ts`).
 
-- `src/tools/index.ts` is the export surface and re-exports:
-  - `ast_grep_search`, `ast_grep_replace`.
-  - `createWebfetchTool`.
-  - `createCouncilTool`.
-- Shared schema contract: tool definitions are typed with `@opencode-ai/plugin`/`@opencode-ai/plugin/tool` and return `ToolDefinition` objects.
+It is the bridge between plugin runtime integration (`src/index.ts`) and the lower-level
+implementations in feature folders.
 
-### AST-grep stack (`ast-grep/`)
+## Export surface (`src/tools/index.ts`)
 
-- `cli.ts` owns execution path (`runSg`, `getAstGrepPath`, background init).
-- `constants.ts` centralizes binary resolution, execution limits, and formatting helpers.
-- `downloader.ts` handles release metadata lookup, download, and extraction for missing CLI.
-- `utils.ts` formats matches/replacements for user-facing output.
+- `ast_grep_search`, `ast_grep_replace` from `./ast-grep`
+- `createWebfetchTool`, `WEBFETCH_DESCRIPTION`, and related types from `./smartfetch`
+- `createCouncilTool`
+- `createPresetManager` and `PresetManager` type
 
-### Smartfetch stack (`smartfetch/`)
+## Design patterns
 
-- `tool.ts` owns permission prompts, cache check, fetch orchestration, binary/content branching.
-- `network.ts` enforces redirect policy, response size caps, and binary/content detection.
-- `cache.ts` memoizes by normalized URL + behavior-affecting options (`CACHE`).
-- `utils.ts` performs extraction/normalization of text/markdown/html payloads.
-- `binary.ts` stores binary payloads and returns deterministic metadata.
-- `secondary-model.ts` drives optional post-fetch summarization with fallback.
+- **Factory-based registration:** each feature exposes a factory that returns an
+  executable/tool or handler object bound to plugin context.
+- **Clear boundaries:** all plugin lifecycle hooks are emitted from factory methods
+  (`handleCommandExecuteBefore`, `handleEvent`, `registerCommand`) rather than in tool
+  modules.
+- **Metadata-first output:** tool calls return text plus internal metadata writes when
+  possible (for richer UI surfaces).
 
-## Flow
+## Subsystems and data flow
 
-- **AST-grep path**
-  - Tool call resolves schema input and invokes `runSg`.
-  - `runSg` resolves CLI binary, executes with timeout, parses JSON results,
-    then renders search/replace output.
+### Council tool path
 
-- **Smartfetch path**
-  - Permission + timeout + cache checks in `createWebfetchTool`.
-  - Respect preferred `llms.txt` probing and redirect constraints.
-  - Apply content-type branching and optional secondary-model summarization.
-  - Emit text markdown/html, metadata message, or binary metadata handle.
+- `createCouncilTool` defines `council_session`.
+- `execute` performs guarded invocation:
+  - validates `toolContext` and `sessionID`,
+  - only allows direct use by `agent: 'council'` (or missing agent for backward compatibility),
+  - calls `CouncilManager.runCouncil(prompt, preset, parentSessionId)`.
+- On success, appends a councillor response summary and normalized model list to output.
+- On failure, returns a concise error string.
+- Shows config deprecation warnings when `CouncilManager` exposes deprecated field metadata.
 
-- **Council tool path**
-  - `createCouncilTool` checks caller context (`orchestrator`/`council`) and
-    invokes `CouncilManager.runCouncil` with parent session context.
+### Preset-manager command path
 
-## Integration
+- `createPresetManager(ctx, config)` returns:
+  - `registerCommand(opencodeConfig)`: injects `/preset` command definition if absent,
+  - `handleCommandExecuteBefore(input, output)`: intercepts `/preset` command handling.
+- Command behavior:
+  - no args → clear output and list available presets (`active` marker supported),
+  - single token arg → switch preset through `client.config.update(...)` with mapped agent overrides,
+  - multi-word arg → suggestion + no update.
+- Mapping logic converts plugin preset override format (`AgentOverrideConfig`) into runtime
+  SDK `agent` config (`model`, `temperature`, `variant`, `options`) and skips fields not
+  supported in runtime updates (`prompt`, `orchestratorPrompt`, `skills`, `mcps`,
+  `displayName`).
+- In-memory `activePreset` supports immediate status display and updates after successful switches.
 
-- `src/index.ts` registers these tools into the plugin tool surface.
-- `src/council/council-manager.ts` consumes `createCouncilTool` output for
-  explicit consensus runs.
-- Tests and agents import from `src/tools/*` for type-safe contracts and fixture-driven execution.
+### Smartfetch path
+
+- `createWebfetchTool` owns fetch orchestration, permission prompts, cache checks,
+  llms.txt probing, binary/text branching, and optional secondary-model post-processing.
+- `smartfetch` modules split work into:
+  - transport/policy (`network.ts`),
+  - cache + TTL semantics (`cache.ts`),
+  - output shaping (`utils.ts`),
+  - file-backed binaries (`binary.ts`),
+  - secondary-model summarization (`secondary-model.ts`),
+  - constants and types.
+- `webfetch` is always registered from `src/index.ts` as a public tool.
+
+### AST-grep path
+
+- `ast-grep` is split into CLI/CLI-discovery and tool-definition concerns.
+- `ast_grep_search`/`ast_grep_replace` execution calls into `runSg`, which handles
+  argument normalization, binary availability, timeout/error handling, and output truncation.
+- `src/tools/ast-grep/index.ts` re-exports tool definitions and utility helpers for
+  discoverability (`ensureCliAvailable`, `getAstGrepPath`, downloader/runtime checks).
+
+## Integration points in `src/index.ts`
+
+- Tool registration:
+  - `council` tools (only when `config.council` exists),
+  - `webfetch`,
+  - AST tools.
+- `presetManager` is initialized in plugin init and:
+  - calls `registerCommand` during config hook,
+  - handles command interception in `command.execute.before`.
+- `/preset` handling is explicitly user-facing (command hook), while webfetch and
+  council are tool-facing.
