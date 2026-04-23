@@ -558,7 +558,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // Only register child sessions (parentID set) since those are
         // subagent sessions created by the task tool.
         if (taskSessionTracker && childSessionId && parentSessionId) {
-          taskSessionTracker.register(childSessionId, parentSessionId);
+          const agent = sessionAgentMap.get(childSessionId);
+          taskSessionTracker.register(childSessionId, parentSessionId, agent);
+          // Evict abandoned sessions as a safety net
+          taskSessionTracker.sweepStale();
         }
       }
 
@@ -684,6 +687,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       if (agent) {
         sessionAgentMap.set(input.sessionID, agent);
+        // Update the task session tracker with the resolved agent name
+        if (taskSessionTracker) {
+          taskSessionTracker.updateAgent(input.sessionID, agent);
+        }
       }
       todoContinuationHook.handleChatMessage({
         sessionID: input.sessionID,

@@ -108,7 +108,7 @@ describe('buildResumeGuidance', () => {
       status: 'interrupted',
     });
 
-    expect(guidance).not.toContain('Agent:');
+    expect(guidance).not.toContain('agent:');
   });
 });
 

@@ -24,14 +24,15 @@ export function buildResumeGuidance(options: ResumeGuidanceOptions): string {
     return '';
   }
 
-  const agentLine = agent ? `\nAgent: @${agent}` : '';
+  const agentInfoLine = agent ? [`  agent: @${agent}`] : [];
 
   return [
     '',
     '[task partial state available]',
     'This task returned no final result, but its subagent session may contain partial state.',
-    `If the user asks to continue/recover this work, reuse this task_id to reconnect:${agentLine}`,
+    'If the user asks to continue/recover this work, reuse this task_id to reconnect.',
     `  task_id: ${sessionId}`,
+    ...agentInfoLine,
     '',
     'The subagent can see its prior messages, tool calls, reads, patches, and interrupted/error state.',
     'This is recovery context, not an instruction to resume automatically.',

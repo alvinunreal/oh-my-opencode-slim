@@ -59,6 +59,21 @@ describe('TaskSessionTracker', () => {
     expect(() => tracker.markCompleted('ses_unknown')).not.toThrow();
   });
 
+  test('updateAgent sets the agent name after registration', () => {
+    const tracker = new TaskSessionTracker();
+    tracker.register('ses_child1', 'ses_parent');
+
+    expect(tracker.get('ses_child1')?.agent).toBeUndefined();
+
+    tracker.updateAgent('ses_child1', 'fixer');
+    expect(tracker.get('ses_child1')?.agent).toBe('fixer');
+  });
+
+  test('updateAgent on unknown session is a no-op', () => {
+    const tracker = new TaskSessionTracker();
+    expect(() => tracker.updateAgent('ses_unknown', 'fixer')).not.toThrow();
+  });
+
   test('cleanup removes a session', () => {
     const tracker = new TaskSessionTracker();
     tracker.register('ses_child1', 'ses_parent', 'fixer');

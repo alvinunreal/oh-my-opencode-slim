@@ -6,9 +6,11 @@
  * rather than spawn a fresh subagent.
  *
  * Lifecycle:
- *   register()   — called when the `task` tool fires via tool.execute.after
+ *   register()   — called from the session.created event handler
+ *   updateAgent() — called from the chat.message handler once agent name is known
  *   markInterrupted() / markCompleted() — update session status
  *   cleanup()    — called on session.deleted event
+ *   sweepStale() — called periodically to evict abandoned sessions
  */
 
 import { log } from './logger';
@@ -34,7 +36,8 @@ export class TaskSessionTracker {
 
   /**
    * Register a task session for potential resumption.
-   * Called from `tool.execute.after` when the `task` tool fires.
+   * Called from the `session.created` event handler when a child session is
+   * created. Agent name may not be known yet — use updateAgent() later.
    */
   register(sessionId: string, parentSessionId: string, agent?: string): void {
     if (this.sessions.has(sessionId)) return;
@@ -52,6 +55,17 @@ export class TaskSessionTracker {
       parentSessionId,
       agent,
     });
+  }
+
+  /**
+   * Update the agent name for a tracked session.
+   * Called from `chat.message` once the agent name is resolved.
+   */
+  updateAgent(sessionId: string, agent: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+
+    entry.agent = agent;
   }
 
   /**
