@@ -2,8 +2,10 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import type { AgentName } from '../../config';
 import {
   deriveTaskSessionLabel,
+  parseContextSummaryFromTaskOutput,
   parseTaskIdFromTaskOutput,
   SessionManager,
+  stripContextSummaryFromTaskOutput,
 } from '../../utils';
 
 interface TaskArgs {
@@ -35,12 +37,30 @@ const AGENT_NAME_SET = new Set<AgentName>([
 
 const MAX_PENDING_TASK_CALLS = 100;
 
+const CONTEXT_SUMMARY_INSTRUCTION_MARKER =
+  '<!-- oh-my-opencode-slim-context-summary-instruction -->';
+
+const CONTEXT_SUMMARY_INSTRUCTION = [
+  '',
+  CONTEXT_SUMMARY_INSTRUCTION_MARKER,
+  'At the end of your final answer, include a brief metadata block for future session reuse. Include it as the final child inside your <results> block when you return structured results. Focus on the concrete context/knowledge now present in this child session, not a generic description of the task. A short paragraph is fine if needed. Do not omit the closing </context_summary> tag:',
+  '<context_summary>List the specific files, decisions, findings, and state this child session can recall if resumed.</context_summary>',
+].join('\n');
+
 function isAgentName(value: unknown): value is AgentName {
   return typeof value === 'string' && AGENT_NAME_SET.has(value as AgentName);
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function appendContextSummaryInstruction(prompt: string): string {
+  if (prompt.includes(CONTEXT_SUMMARY_INSTRUCTION_MARKER)) {
+    return prompt;
+  }
+
+  return `${prompt.trimEnd()}${CONTEXT_SUMMARY_INSTRUCTION}`;
 }
 
 export function createTaskSessionManagerHook(
@@ -115,6 +135,10 @@ export function createTaskSessionManagerHook(
         agentType: args.subagent_type,
       });
 
+      if (typeof args.prompt === 'string') {
+        args.prompt = appendContextSummaryInstruction(args.prompt);
+      }
+
       if (input.callID) {
         rememberPendingCall({
           callId: input.callID,
@@ -166,11 +190,16 @@ export function createTaskSessionManagerHook(
       const pending = takePendingCall(input.callID);
 
       if (!pending || typeof output.output !== 'string') return;
-      const taskId = parseTaskIdFromTaskOutput(output.output);
+
+      const rawOutput = output.output;
+      const contextSummary = parseContextSummaryFromTaskOutput(rawOutput);
+      const strippedOutput = stripContextSummaryFromTaskOutput(rawOutput);
+      output.output = strippedOutput;
+      const taskId = parseTaskIdFromTaskOutput(strippedOutput);
       if (!taskId) {
         if (
           pending.resumedTaskId &&
-          isMissingRememberedSessionError(output.output)
+          isMissingRememberedSessionError(strippedOutput)
         ) {
           sessionManager.drop(
             pending.parentSessionId,
@@ -194,6 +223,7 @@ export function createTaskSessionManagerHook(
         taskId,
         agentType: pending.agentType,
         label: pending.label,
+        contextSummary,
       });
     },
 

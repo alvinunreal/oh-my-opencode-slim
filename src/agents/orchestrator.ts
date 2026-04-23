@@ -187,6 +187,7 @@ Balance: respect dependencies, avoid parallelizing what must be sequential.
 
 ### Session Reuse
 - Reuse an available specialist session only for clear follow-up work on the same thread.
+- Prefer sessions whose summaries match the intended follow-up context.
 - Prefer a fresh session for unrelated work, even with the same specialist.
 - If multiple remembered sessions fit, prefer the most recently used matching session.
 - If reuse is unclear, start a fresh session.

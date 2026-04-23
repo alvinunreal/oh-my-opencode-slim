@@ -5,6 +5,7 @@ export interface RememberedTaskSession {
   taskId: string;
   agentType: AgentName;
   label: string;
+  contextSummary?: string;
   createdAt: number;
   lastUsedAt: number;
 }
@@ -78,6 +79,7 @@ export class SessionManager {
     taskId: string;
     agentType: AgentName;
     label: string;
+    contextSummary?: string;
   }): RememberedTaskSession {
     const now = this.nextOrder();
     const group = this.getAgentGroup(
@@ -92,6 +94,9 @@ export class SessionManager {
 
     if (existing) {
       existing.label = input.label;
+      if (input.contextSummary) {
+        existing.contextSummary = input.contextSummary;
+      }
       existing.lastUsedAt = this.nextOrder();
       return existing;
     }
@@ -101,6 +106,7 @@ export class SessionManager {
       taskId: input.taskId,
       agentType: input.agentType,
       label: input.label,
+      contextSummary: input.contextSummary,
       createdAt: now,
       lastUsedAt: now,
     };
@@ -167,7 +173,12 @@ export class SessionManager {
       .map(
         ([agentType, entries]) =>
           `- ${agentType}: ${entries
-            .map((entry) => `${entry.alias} ${entry.label}`)
+            .map((entry) => {
+              const base = `${entry.alias} ${entry.label}`;
+              return entry.contextSummary
+                ? `${base} — ${entry.contextSummary}`
+                : base;
+            })
             .join('; ')}`,
       );
 

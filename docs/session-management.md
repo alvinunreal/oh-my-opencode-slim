@@ -39,13 +39,21 @@ The orchestrator sees a compact reminder in its system context, for example:
 
 ```text
 ### Resumable Sessions
-explorer: exp-1 Search routing files
-oracle: ora-1 Review auth architecture
+- explorer: exp-1 Search routing files — Found route handlers and middleware entry points.
+- oracle: ora-1 Review auth architecture — Reviewed auth flow and token refresh trade-offs.
 ```
 
 On a related follow-up, the orchestrator can reuse that session instead of
 launching a fresh one. If the remembered child session no longer exists, the
 plugin drops the stale entry and falls back to a new session automatically.
+
+Child agents are asked to return a short `<context_summary>` metadata block at
+the end of delegated task results. The context summary should capture the
+concrete context now present in that child session, such as files inspected,
+findings, decisions, or state it can recall if resumed. It can be a short
+paragraph when one sentence would lose useful context. The plugin stores that
+summary when present, strips the metadata from the visible result, and falls
+back to the original task label if the agent omits it.
 
 ---
 

@@ -45,6 +45,22 @@ describe('SessionManager', () => {
 
     expect(manager.formatForPrompt('parent-1')).toBeUndefined();
   });
+
+  test('renders session summaries when available', () => {
+    const manager = new SessionManager(2);
+
+    manager.remember({
+      parentSessionId: 'parent-1',
+      taskId: 'task-1',
+      agentType: 'oracle',
+      label: 'architecture',
+      contextSummary: 'Reviewed session lifecycle and cleanup behavior.',
+    });
+
+    expect(manager.formatForPrompt('parent-1')).toContain(
+      'ora-1 architecture — Reviewed session lifecycle and cleanup behavior.',
+    );
+  });
 });
 
 describe('deriveTaskSessionLabel', () => {

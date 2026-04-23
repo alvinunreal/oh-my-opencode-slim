@@ -60,6 +60,93 @@ describe('task-session-manager hook', () => {
     expect(system.system.join('\n')).toContain('explorer: exp-1 config schema');
   });
 
+  test('appends context instructions and stores returned summaries', async () => {
+    const { hook } = createHook();
+    const beforeOutput = {
+      args: {
+        subagent_type: 'oracle',
+        description: 'session lifecycle review',
+        prompt: 'review session lifecycle',
+      },
+    };
+
+    await hook['tool.execute.before'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'call-1',
+      },
+      beforeOutput,
+    );
+
+    expect(beforeOutput.args.prompt).toContain('<context_summary>');
+    expect(beforeOutput.args.prompt).toContain('short paragraph');
+    expect(beforeOutput.args.prompt).toContain(
+      'final child inside your <results> block',
+    );
+    expect(beforeOutput.args.prompt).toContain(
+      'Do not omit the closing </context_summary> tag',
+    );
+
+    const afterOutput = {
+      output: [
+        'task_id: child-1 (for resuming to continue this task if needed)',
+        '<task_result>',
+        'Reviewed cleanup behavior.',
+        '</task_result>',
+        '<context_summary>Contains index.ts hook wiring, task.ts parser behavior, and session-manager rendering details.</context_summary>',
+      ].join('\n'),
+    };
+
+    await hook['tool.execute.after'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'call-1',
+      },
+      afterOutput,
+    );
+
+    expect(afterOutput.output).not.toContain('<context_summary>');
+
+    const system = { system: ['base'] };
+    await hook['experimental.chat.system.transform'](
+      { sessionID: 'parent-1' },
+      system,
+    );
+
+    expect(system.system.join('\n')).toContain(
+      'oracle: ora-1 session lifecycle review — Contains index.ts hook wiring, task.ts parser behavior, and session-manager rendering details.',
+    );
+  });
+
+  test('still appends instructions when prompt mentions context summary tags', async () => {
+    const { hook } = createHook();
+    const beforeOutput = {
+      args: {
+        subagent_type: 'explorer',
+        description: 'inspect parser',
+        prompt: 'Find code that parses <context_summary> blocks.',
+      },
+    };
+
+    await hook['tool.execute.before'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'call-1',
+      },
+      beforeOutput,
+    );
+
+    expect(beforeOutput.args.prompt).toContain(
+      'At the end of your final answer',
+    );
+    expect(beforeOutput.args.prompt).toContain(
+      '<context_summary>List the specific files',
+    );
+  });
+
   test('resolves remembered aliases to real task ids before execution', async () => {
     const { hook } = createHook();
 
