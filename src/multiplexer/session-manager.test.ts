@@ -444,6 +444,40 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p1');
       expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p2');
     });
+
+    test('clears spawning sessions during cleanup', async () => {
+      const ctx = createMockContext();
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      const deferred = createDeferred<{ success: true; paneId: string }>();
+      mockMultiplexer.spawnPane.mockImplementationOnce(() => deferred.promise);
+      const event = {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'cleanup-spawn',
+            parentID: 'parent-cleanup',
+            title: 'Cleanup Worker',
+          },
+        },
+      };
+
+      const createPromise = manager.onSessionCreated(event);
+
+      await Promise.resolve();
+
+      await manager.cleanup();
+
+      await manager.onSessionCreated(event);
+
+      deferred.resolve({ success: true, paneId: 'p-cleanup' });
+      await createPromise;
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

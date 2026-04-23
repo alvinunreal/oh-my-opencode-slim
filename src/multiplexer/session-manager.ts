@@ -368,6 +368,7 @@ export class MultiplexerSessionManager {
     }
 
     this.knownSessions.clear();
+    this.spawningSessions.clear();
 
     log('[multiplexer-session-manager] cleanup complete');
   }
