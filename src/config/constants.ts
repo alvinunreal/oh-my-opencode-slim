@@ -94,7 +94,7 @@ export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 
 // Workflow reminders
 export const PHASE_REMINDER_TEXT = `!IMPORTANT! Recall the workflow rules:
-Understand → choose the best parallelized path based on your agents delegation rules → don't prefer solo → execute → verify.
+Understand → choose the best parallelized path based on your capabilities and agents delegation rules → execute → verify.
 If delegating, launch the specialist in the same turn you mention it !END!`;
 
 // Tmux pane spawn delay (ms) — gives TmuxSessionManager time to create pane

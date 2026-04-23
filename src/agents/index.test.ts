@@ -725,6 +725,16 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
 
     expect(result.success).toBe(true);
   });
+
+  test('accepts sessionManager config', () => {
+    const result = PluginConfigSchema.safeParse({
+      sessionManager: {
+        maxSessionsPerAgent: 2,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('disabled_agents', () => {

@@ -108,6 +108,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` |
 | `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` |
 | `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` |
+| `sessionManager.maxSessionsPerAgent` | integer | `2` | Maximum remembered resumable child sessions per specialist type in the current orchestrator session (1–10) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `false` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
@@ -160,6 +161,27 @@ automatically.
 > Pinned plugin entries in `opencode.json` (for example
 > `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
 > regardless of `autoUpdate`.
+
+### Session Manager
+
+The session manager is enabled by default. It keeps a small in-memory working
+set of resumable child sessions for orchestrator-managed delegations, scoped to
+the current parent orchestrator session.
+
+```jsonc
+{
+  "sessionManager": {
+    "maxSessionsPerAgent": 2
+  }
+}
+```
+
+Notes:
+
+- Only orchestrator-managed `task` delegations participate
+- Manual `@agent` calls do not reuse this registry
+- Sessions are kept in memory only and disappear on restart
+- When a remembered session is missing, the next delegation falls back to a fresh child session
 
 ### Agent Display Names
 

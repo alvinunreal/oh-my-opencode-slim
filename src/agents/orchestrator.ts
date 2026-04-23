@@ -172,12 +172,24 @@ ${enabledParallelExamples}
 
 Balance: respect dependencies, avoid parallelizing what must be sequential.
 
+### OpenCode subagent execution model
+- A delegated specialist runs in a separate child session.
+- Delegation is blocking for the parent at that point: send work out, then continue that line after results return.
+- Parallel delegation means launching multiple independent child-session branches.
+- Only parallelize branches that are truly independent; reconcile dependent steps after delegated results come back.
+
 ## 5. Execute
 1. Break complex tasks into todos
 2. Fire parallel research/implementation
 3. Delegate to specialists or do it yourself based on step 3
 4. Integrate results
 5. Adjust if needed
+
+### Session Reuse
+- Reuse an available specialist session only for clear follow-up work on the same thread.
+- Prefer a fresh session for unrelated work, even with the same specialist.
+- If multiple remembered sessions fit, prefer the most recently used matching session.
+- If reuse is unclear, start a fresh session.
 
 ### Auto-Continue
 When working through multi-step tasks, consider enabling auto-continue to avoid stopping between batches:

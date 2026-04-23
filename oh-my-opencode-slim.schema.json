@@ -490,6 +490,17 @@
         }
       }
     },
+    "sessionManager": {
+      "type": "object",
+      "properties": {
+        "maxSessionsPerAgent": {
+          "default": 2,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
+    },
     "todoContinuation": {
       "type": "object",
       "properties": {
