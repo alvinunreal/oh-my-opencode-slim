@@ -389,6 +389,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "gustavocaiano",
+      "name": "Gustavo Caiano",
+      "avatar_url": "https://avatars.githubusercontent.com/u/104129313?v=4",
+      "profile": "https://github.com/gustavocaiano",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
