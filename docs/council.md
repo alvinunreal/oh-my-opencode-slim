@@ -83,15 +83,15 @@ Add a council model and at least one council preset to your plugin config:
   "preset": "openai",
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   },
   "council": {
     "presets": {
       "default": {
-        "alpha": { "model": "openai/gpt-5.4-mini" },
+        "alpha": { "model": "openai/gpt-5.5-fast" },
         "beta": { "model": "google/gemini-3-pro" },
-        "gamma": { "model": "openai/gpt-5.3-codex" }
+        "gamma": { "model": "openai/gpt-5.5-fast" }
       }
     }
   }
@@ -119,7 +119,7 @@ Then use it directly:
     "councillor_retries": 3,
     "presets": {
       "default": {
-        "alpha": { "model": "openai/gpt-5.4-mini" }
+        "alpha": { "model": "openai/gpt-5.5-fast" }
       }
     }
   }
@@ -154,7 +154,7 @@ Configure it using the normal agent system:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4", "variant": "high" }
+      "council": { "model": "openai/gpt-5.5", "variant": "high" }
     }
   }
 }
@@ -206,13 +206,13 @@ Councillor models always come from:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   },
   "council": {
     "presets": {
       "second-opinion": {
-        "reviewer": { "model": "openai/gpt-5.4-mini" }
+        "reviewer": { "model": "openai/gpt-5.5-fast" }
       }
     }
   }
@@ -225,14 +225,14 @@ Councillor models always come from:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   },
   "council": {
     "default_preset": "balanced",
     "presets": {
       "balanced": {
-        "alpha": { "model": "openai/gpt-5.4-mini" },
+        "alpha": { "model": "openai/gpt-5.5-fast" },
         "beta": { "model": "google/gemini-3-pro" },
         "gamma": { "model": "anthropic/claude-opus-4-6" }
       }
@@ -249,8 +249,8 @@ Councillor models always come from:
     "councillor_execution_mode": "serial",
     "presets": {
       "default": {
-        "alpha": { "model": "openai/gpt-5.4-mini" },
-        "beta": { "model": "openai/gpt-5.4-mini" }
+        "alpha": { "model": "openai/gpt-5.5-fast" },
+        "beta": { "model": "openai/gpt-5.5-fast" }
       }
     }
   }
@@ -272,7 +272,7 @@ Each councillor can receive its own steering prompt:
     "presets": {
       "review-board": {
         "reviewer": {
-          "model": "openai/gpt-5.4-mini",
+          "model": "openai/gpt-5.5-fast",
           "prompt": "Focus on bugs, edge cases, and failure modes."
         },
         "architect": {
@@ -280,7 +280,7 @@ Each councillor can receive its own steering prompt:
           "prompt": "Focus on maintainability, boundaries, and long-term design."
         },
         "optimizer": {
-          "model": "openai/gpt-5.3-codex",
+          "model": "openai/gpt-5.5-fast",
           "prompt": "Focus on performance, latency, and resource usage."
         }
       }
@@ -319,7 +319,7 @@ Council responses include a footer like:
 
 ```text
 ---
-*Council: 2/3 councillors responded (alpha: gpt-5.4-mini, beta: gemini-3-pro)*
+*Council: 2/3 councillors responded (alpha: gpt-5.5-fast, beta: gemini-3-pro)*
 ```
 
 ---
@@ -377,7 +377,7 @@ Prefer this instead:
 {
   "presets": {
     "openai": {
-      "council": { "model": "openai/gpt-5.4" }
+      "council": { "model": "openai/gpt-5.5" }
     }
   }
 }

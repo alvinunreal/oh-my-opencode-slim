@@ -119,37 +119,37 @@ describe('loadPluginConfig', () => {
       JSON.stringify({
         manualPlan: {
           orchestrator: {
-            primary: 'openai/gpt-5.4',
+            primary: 'openai/gpt-5.5',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           oracle: {
-            primary: 'openai/gpt-5.4',
+            primary: 'openai/gpt-5.5',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE',
             fallback3: 'opencode/gpt-5-nano',
           },
           designer: {
-            primary: 'openai/gpt-5.4',
+            primary: 'openai/gpt-5.5',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           explorer: {
-            primary: 'openai/gpt-5.4',
+            primary: 'openai/gpt-5.5',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           librarian: {
-            primary: 'openai/gpt-5.4',
+            primary: 'openai/gpt-5.5',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
           },
           fixer: {
-            primary: 'openai/gpt-5.4',
+            primary: 'openai/gpt-5.5',
             fallback1: 'anthropic/claude-opus-4-6',
             fallback2: 'chutes/kimi-k2.5',
             fallback3: 'opencode/gpt-5-nano',
@@ -194,7 +194,7 @@ describe('loadPluginConfig', () => {
       JSON.stringify({
         agents: {
           oracle: {
-            model: 'openai/gpt-5.4',
+            model: 'openai/gpt-5.5',
             prompt: 'This should be rejected for built-in agents.',
           },
         },
@@ -451,7 +451,7 @@ describe('deepMerge behavior', () => {
         fallback: {
           timeoutMs: 15000,
           chains: {
-            oracle: ['openai/gpt-5.4', 'opencode/glm-4.7-free'],
+            oracle: ['openai/gpt-5.5', 'opencode/glm-4.7-free'],
           },
         },
       }),
@@ -474,7 +474,7 @@ describe('deepMerge behavior', () => {
     const config = loadPluginConfig(projectDir);
     expect(config.fallback?.timeoutMs).toBe(15000);
     expect(config.fallback?.chains.oracle).toEqual([
-      'openai/gpt-5.4',
+      'openai/gpt-5.5',
       'opencode/glm-4.7-free',
     ]);
     expect(config.fallback?.chains.explorer).toEqual([
@@ -491,14 +491,14 @@ describe('deepMerge behavior', () => {
       JSON.stringify({
         fallback: {
           chains: {
-            writing: ['openai/gpt-5.4'],
+            writing: ['openai/gpt-5.5'],
           },
         },
       }),
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.fallback?.chains.writing).toEqual(['openai/gpt-5.4']);
+    expect(config.fallback?.chains.writing).toEqual(['openai/gpt-5.5']);
   });
 });
 
@@ -692,7 +692,7 @@ describe('preset resolution', () => {
         presets: {
           openai: {
             oracle: {
-              model: 'openai/gpt-5.4',
+              model: 'openai/gpt-5.5',
               options: { textVerbosity: 'low' },
             },
           },
@@ -706,7 +706,7 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.4');
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.5');
     // deepMerge should combine both option keys
     expect(config.agents?.oracle?.options).toEqual({
       textVerbosity: 'low',
@@ -753,7 +753,7 @@ describe('preset resolution', () => {
         presets: {
           concise: {
             oracle: {
-              model: 'openai/gpt-5.4',
+              model: 'openai/gpt-5.5',
               options: { textVerbosity: 'low' },
             },
           },
@@ -767,7 +767,7 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.4');
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.5');
     // root wins over preset for same key
     expect(config.agents?.oracle?.options).toEqual({
       textVerbosity: 'high',

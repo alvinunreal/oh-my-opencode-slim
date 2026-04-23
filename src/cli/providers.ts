@@ -9,12 +9,12 @@ const SCHEMA_URL =
 // Model mappings by provider - only 4 supported providers
 export const MODEL_MAPPINGS = {
   openai: {
-    orchestrator: { model: 'openai/gpt-5.4' },
-    oracle: { model: 'openai/gpt-5.4', variant: 'high' },
-    librarian: { model: 'openai/gpt-5.4-mini', variant: 'low' },
-    explorer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
-    designer: { model: 'openai/gpt-5.4-mini', variant: 'medium' },
-    fixer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+    orchestrator: { model: 'openai/gpt-5.5' },
+    oracle: { model: 'openai/gpt-5.5', variant: 'high' },
+    librarian: { model: 'openai/gpt-5.5-fast', variant: 'low' },
+    explorer: { model: 'openai/gpt-5.5-fast', variant: 'low' },
+    designer: { model: 'openai/gpt-5.5-fast', variant: 'medium' },
+    fixer: { model: 'openai/gpt-5.5-fast', variant: 'low' },
   },
   kimi: {
     orchestrator: { model: 'kimi-for-coding/k2p5' },

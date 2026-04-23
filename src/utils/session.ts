@@ -8,7 +8,7 @@ type OpencodeClient = PluginInput['client'];
 
 /**
  * Extract the short model label from a "provider/model" string.
- * E.g. "openai/gpt-5.4-mini" → "gpt-5.4-mini"
+ * E.g. "openai/gpt-5.5-fast" → "gpt-5.5-fast"
  */
 export function shortModelLabel(model: string): string {
   return model.split('/').pop() ?? model;

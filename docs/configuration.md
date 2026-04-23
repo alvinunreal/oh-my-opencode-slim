@@ -63,8 +63,8 @@ All config files support **JSONC** (JSON with Comments):
   /* Agent model mappings */
   "presets": {
     "openai": {
-      "oracle": { "model": "openai/gpt-5.4" },
-      "explorer": { "model": "openai/gpt-5.4-mini" },
+      "oracle": { "model": "openai/gpt-5.5" },
+      "explorer": { "model": "openai/gpt-5.5-fast" },
     },
   },
 

@@ -10,7 +10,7 @@ const z = tool.schema;
 
 /**
  * Formats the model composition string for the council footer.
- * Shows short model labels per councillor: "α: gpt-5.4-mini, β: gemini-3-pro"
+ * Shows short model labels per councillor: "α: gpt-5.5-fast, β: gemini-3-pro"
  */
 function formatModelComposition(
   councillorResults: Array<{ name: string; model: string }>,

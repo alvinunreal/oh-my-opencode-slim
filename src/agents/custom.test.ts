@@ -6,9 +6,9 @@ describe('custom-agent creation', () => {
   test('infers custom agents from unknown keys', () => {
     const config: PluginConfig = {
       agents: {
-        explorer: { model: 'openai/gpt-5.4-mini' },
+        explorer: { model: 'openai/gpt-5.5-fast' },
         reviewer: {
-          model: 'openai/gpt-5.4',
+          model: 'openai/gpt-5.5',
           prompt: 'You are the custom reviewer agent.',
         },
       },
@@ -21,7 +21,7 @@ describe('custom-agent creation', () => {
 
     const customAgent = agents.find((agent) => agent.name === 'reviewer');
     expect(customAgent).toBeDefined();
-    expect(customAgent?.config.model).toBe('openai/gpt-5.4');
+    expect(customAgent?.config.model).toBe('openai/gpt-5.5');
     expect(customAgent?.config.prompt).toBe(
       'You are the custom reviewer agent.',
     );
@@ -31,7 +31,7 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         'test-auditor': {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.5-fast',
           prompt: 'You are a custom subagent for auditing.',
           orchestratorPrompt:
             '@test-auditor\n- Role: Compliance audit specialist',
@@ -83,7 +83,7 @@ describe('custom-agent creation', () => {
       disabled_agents: ['test-auditor', 'designer'],
       agents: {
         'test-auditor': {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.5-fast',
           prompt: 'You are a disabled custom agent.',
         },
       },
@@ -101,7 +101,7 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         'unsafe/name': {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.5-fast',
         },
       },
     };
@@ -113,7 +113,7 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         janitor: {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.5-fast',
           orchestratorPrompt: '@cleanup\n- Role: Cleanup specialist',
         },
       },

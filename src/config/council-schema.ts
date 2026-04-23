@@ -8,7 +8,7 @@ const ModelIdSchema = z
   .string()
   .regex(
     /^[^/\s]+\/[^\s]+$/,
-    'Expected provider/model format (e.g. "openai/gpt-5.4-mini")',
+    'Expected provider/model format (e.g. "openai/gpt-5.5-fast")',
   );
 
 /**
@@ -21,7 +21,7 @@ const ModelIdSchema = z
  */
 export const CouncillorConfigSchema = z.object({
   model: ModelIdSchema.describe(
-    'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini")',
+    'Model ID in provider/model format (e.g. "openai/gpt-5.5-fast")',
   ),
   variant: z.string().optional(),
   prompt: z
@@ -110,8 +110,8 @@ export const CouncillorExecutionModeSchema = z
  *   "council": {
  *     "presets": {
  *       "default": {
- *         "alpha": { "model": "openai/gpt-5.4-mini" },
- *         "beta":  { "model": "openai/gpt-5.3-codex" },
+ *         "alpha": { "model": "openai/gpt-5.5-fast" },
+ *         "beta":  { "model": "openai/gpt-5.5-fast" },
  *         "gamma": { "model": "google/gemini-3-pro" }
  *       }
  *     },
@@ -203,8 +203,8 @@ export type CouncillorExecutionMode = z.infer<
 export const DEFAULT_COUNCIL_CONFIG: z.input<typeof CouncilConfigSchema> = {
   presets: {
     default: {
-      alpha: { model: 'openai/gpt-5.4-mini' },
-      beta: { model: 'openai/gpt-5.3-codex' },
+      alpha: { model: 'openai/gpt-5.5-fast' },
+      beta: { model: 'openai/gpt-5.5-fast' },
       gamma: { model: 'google/gemini-3-pro' },
     },
   },

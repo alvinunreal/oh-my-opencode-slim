@@ -211,7 +211,7 @@ describe('rewriteDisplayNameMentions', () => {
         'custom-reviewer': {
           displayName: 'reviewer',
           variant: 'high',
-          model: 'openai/gpt-5.4',
+          model: 'openai/gpt-5.5',
         },
       },
     } as PluginConfig;

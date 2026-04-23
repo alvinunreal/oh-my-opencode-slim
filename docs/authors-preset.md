@@ -10,13 +10,13 @@ This is the exact configuration the author runs day-to-day. It mixes three provi
 {
   "preset": "openai",
   "presets": {
-    "openai": { "orchestrator": { "model": "openai/gpt-5.4-fast", "skills": [ "*" ], "mcps": [ "*", "websearch"] },
-        "oracle": { "model": "openai/gpt-5.4-fast", "variant": "high", "skills": [], "mcps": [] },
-        "council": { "model": "openai/gpt-5.4" },
-        "librarian": { "model": "openai/gpt-5.3-codex-spark", "variant": "low", "skills": [], "mcps": [ "websearch", "context7", "grep_app" ] },
-        "explorer": { "model": "openai/gpt-5.3-codex-spark", "variant": "low", "skills": [], "mcps": [] },
+    "openai": { "orchestrator": { "model": "openai/gpt-5.5-fast", "skills": [ "*" ], "mcps": [ "*", "websearch"] },
+        "oracle": { "model": "openai/gpt-5.5-fast", "variant": "high", "skills": [], "mcps": [] },
+        "council": { "model": "openai/gpt-5.5" },
+        "librarian": { "model": "openai/gpt-5.5-fast", "variant": "low", "skills": [], "mcps": [ "websearch", "context7", "grep_app" ] },
+        "explorer": { "model": "openai/gpt-5.5-fast", "variant": "low", "skills": [], "mcps": [] },
         "designer": { "model": "github-copilot/gemini-3.1-pro-preview", "skills": [ "agent-browser" ], "mcps": [] },
-        "fixer": { "model": "openai/gpt-5.3-codex-spark", "variant": "low", "skills": [], "mcps": [] }
+        "fixer": { "model": "openai/gpt-5.5-fast", "variant": "low", "skills": [], "mcps": [] }
     }
   },
   "multiplexer": {

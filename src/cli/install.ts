@@ -239,7 +239,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log();
 
   const modelsInfo =
-    'Default configuration uses OpenAI models (gpt-5.4 / gpt-5.4-mini).';
+    'Default configuration uses OpenAI models (gpt-5.5 / gpt-5.5-fast).';
   console.log(`${modelsInfo}`);
   const altProviders = 'For the full configuration reference, see:';
   console.log(altProviders);
