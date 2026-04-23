@@ -8,6 +8,7 @@ import {
   createApplyPatchHook,
   createAutoUpdateCheckerHook,
   createChatHeadersHook,
+  createDelegateTaskResumeHook,
   createDelegateTaskRetryHook,
   createFilterAvailableSkillsHook,
   createJsonErrorRecoveryHook,
@@ -36,6 +37,7 @@ import { resolveRuntimeAgentName, rewriteDisplayNameMentions } from './utils';
 import { initLogger, log } from './utils/logger';
 import { SubagentDepthTracker } from './utils/subagent-depth';
 import { collapseSystemInPlace } from './utils/system-collapse';
+import { TaskSessionTracker } from './utils/task-session-tracker';
 
 /**
  * Best-effort log to opencode's app logger.
@@ -107,6 +109,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let postFileToolNudgeHook: ReturnType<typeof createPostFileToolNudgeHook>;
   let chatHeadersHook: ReturnType<typeof createChatHeadersHook>;
   let delegateTaskRetryHook: ReturnType<typeof createDelegateTaskRetryHook>;
+  let delegateTaskResumeHook: ReturnType<typeof createDelegateTaskResumeHook>;
+  let taskSessionTracker: TaskSessionTracker;
   let applyPatchHook: ReturnType<typeof createApplyPatchHook>;
   let jsonErrorRecoveryHook: ReturnType<typeof createJsonErrorRecoveryHook>;
   let foregroundFallback: ForegroundFallbackManager;
@@ -232,6 +236,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Initialize delegate-task retry guidance hook
     delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
+
+    // Initialize task session tracker and resume hook for session recovery
+    taskSessionTracker = new TaskSessionTracker();
+    delegateTaskResumeHook = createDelegateTaskResumeHook(
+      ctx,
+      taskSessionTracker,
+    );
 
     applyPatchHook = createApplyPatchHook(ctx);
     // Initialize JSON parse error recovery hook
@@ -550,6 +561,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (depthTracker && childSessionId && parentSessionId) {
           depthTracker.registerChild(parentSessionId, childSessionId);
         }
+        // Track subagent task sessions for potential resumption.
+        // Only register child sessions (parentID set) since those are
+        // subagent sessions created by the task tool.
+        if (taskSessionTracker && childSessionId && parentSessionId) {
+          const agent = sessionAgentMap.get(childSessionId);
+          taskSessionTracker.register(childSessionId, parentSessionId, agent);
+          // Evict abandoned sessions as a safety net
+          taskSessionTracker.sweepStale();
+        }
       }
 
       // Runtime model fallback for foreground agents (rate-limit detection)
@@ -605,6 +625,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
         if (depthTracker && sessionID) {
           depthTracker.cleanup(sessionID);
+        }
+        if (taskSessionTracker && sessionID) {
+          taskSessionTracker.cleanup(sessionID);
         }
         if (sessionID) {
           sessionAgentMap.delete(sessionID);
@@ -689,6 +712,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       if (agent) {
         sessionAgentMap.set(input.sessionID, agent);
+        // Update the task session tracker with the resolved agent name
+        if (taskSessionTracker) {
+          taskSessionTracker.updateAgent(input.sessionID, agent);
+        }
       }
       todoContinuationHook.handleChatMessage({
         sessionID: input.sessionID,
@@ -816,6 +843,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'tool.execute.after': async (input, output) => {
       await delegateTaskRetryHook['tool.execute.after'](
         input as { tool: string },
+        output as { output: unknown },
+      );
+
+      // Session resumption: detect empty/interrupted task results and
+      // annotate with recovery note containing task_id
+      await delegateTaskResumeHook['tool.execute.after'](
+        input as { tool: string; sessionID?: string },
         output as { output: unknown },
       );
 
