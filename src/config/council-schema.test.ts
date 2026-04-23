@@ -93,7 +93,7 @@ test('unwraps legacy nested "councillors" key in preset', () => {
       default: {
         councillors: {
           alpha: { model: 'openai/gpt-5.5-fast' },
-          beta: { model: 'openai/gpt-5.5-fast' },
+          beta: { model: 'openai/gpt-5.3-codex' },
         },
       },
     },
@@ -106,7 +106,7 @@ test('unwraps legacy nested "councillors" key in preset', () => {
     const preset = result.data.presets.default;
     expect(Object.keys(preset)).toEqual(['alpha', 'beta']);
     expect(preset.alpha.model).toBe('openai/gpt-5.5-fast');
-    expect(preset.beta.model).toBe('openai/gpt-5.5-fast');
+    expect(preset.beta.model).toBe('openai/gpt-5.3-codex');
   }
 });
 
@@ -233,7 +233,7 @@ describe('CouncilPresetSchema', () => {
   test('validates a named preset with multiple councillors', () => {
     const raw = {
       alpha: {
-        model: 'openai/gpt-5.5-fast',
+        model: 'openai/gpt-5.3-codex',
       },
       beta: {
         model: 'openai/gpt-5.5-fast',
@@ -282,7 +282,7 @@ describe('CouncilConfigSchema', () => {
       presets: {
         default: {
           alpha: { model: 'openai/gpt-5.5-fast' },
-          beta: { model: 'openai/gpt-5.5-fast' },
+          beta: { model: 'openai/gpt-5.3-codex' },
           gamma: { model: 'google/gemini-3-pro' },
         },
       },
@@ -372,7 +372,7 @@ describe('CouncilConfigSchema', () => {
       presets: {
         default: {
           alpha: { model: 'openai/gpt-5.5-fast' },
-          beta: { model: 'openai/gpt-5.5-fast' },
+          beta: { model: 'openai/gpt-5.3-codex' },
         },
         fast: {
           quick: { model: 'openai/gpt-5.5-fast', variant: 'low' },

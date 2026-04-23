@@ -59,7 +59,7 @@ function createTestCouncilConfig(overrides?: {
     presets: overrides?.presets ?? {
       default: {
         alpha: { model: 'openai/gpt-5.5-fast' },
-        beta: { model: 'openai/gpt-5.5-fast' },
+        beta: { model: 'openai/gpt-5.3-codex' },
       },
     },
     default_preset: overrides?.default_preset,
@@ -145,7 +145,7 @@ describe('CouncilManager', () => {
             alpha: { model: 'openai/gpt-5.5-fast' },
           },
           custom: {
-            beta: { model: 'openai/gpt-5.5-fast' },
+            beta: { model: 'openai/gpt-5.3-codex' },
           },
         },
         default_preset: 'custom',
@@ -191,7 +191,7 @@ describe('CouncilManager', () => {
           presets: {
             default: {
               councillor1: { model: 'openai/gpt-5.5-fast' },
-              councillor2: { model: 'openai/gpt-5.5-fast' },
+              councillor2: { model: 'openai/gpt-5.3-codex' },
             },
           },
         },
@@ -237,7 +237,7 @@ describe('CouncilManager', () => {
               alpha: { model: 'openai/gpt-5.5-fast' },
             },
             custom: {
-              beta: { model: 'openai/gpt-5.5-fast' },
+              beta: { model: 'openai/gpt-5.3-codex' },
             },
           },
           default_preset: 'custom',
@@ -284,7 +284,7 @@ describe('CouncilManager', () => {
           presets: {
             default: {
               timeout: { model: 'openai/gpt-5.5-fast' },
-              success: { model: 'openai/gpt-5.5-fast' },
+              success: { model: 'openai/gpt-5.3-codex' },
             },
           },
         },
@@ -363,7 +363,7 @@ describe('CouncilManager', () => {
           presets: {
             default: {
               alpha: { model: 'openai/gpt-5.5-fast' },
-              beta: { model: 'openai/gpt-5.5-fast' },
+              beta: { model: 'openai/gpt-5.3-codex' },
             },
           },
         },
@@ -461,7 +461,7 @@ describe('CouncilManager', () => {
             alpha: { model: 'openai/gpt-5.5-fast' },
           },
           fast: {
-            beta: { model: 'openai/gpt-5.5-fast' },
+            beta: { model: 'openai/gpt-5.3-codex' },
           },
         },
       });
@@ -509,7 +509,7 @@ describe('CouncilManager', () => {
             alpha: { model: 'openai/gpt-5.5-fast' },
           },
           roled: {
-            beta: { model: 'openai/gpt-5.5-fast' },
+            beta: { model: 'openai/gpt-5.3-codex' },
           },
         },
       });

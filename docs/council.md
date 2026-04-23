@@ -91,7 +91,7 @@ Add a council model and at least one council preset to your plugin config:
       "default": {
         "alpha": { "model": "openai/gpt-5.5-fast" },
         "beta": { "model": "google/gemini-3-pro" },
-        "gamma": { "model": "openai/gpt-5.5-fast" }
+        "gamma": { "model": "openai/gpt-5.3-codex" }
       }
     }
   }
@@ -280,7 +280,7 @@ Each councillor can receive its own steering prompt:
           "prompt": "Focus on maintainability, boundaries, and long-term design."
         },
         "optimizer": {
-          "model": "openai/gpt-5.5-fast",
+          "model": "openai/gpt-5.3-codex",
           "prompt": "Focus on performance, latency, and resource usage."
         }
       }

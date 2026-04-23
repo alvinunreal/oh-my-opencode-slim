@@ -111,7 +111,7 @@ export const CouncillorExecutionModeSchema = z
  *     "presets": {
  *       "default": {
  *         "alpha": { "model": "openai/gpt-5.5-fast" },
- *         "beta":  { "model": "openai/gpt-5.5-fast" },
+ *         "beta":  { "model": "openai/gpt-5.3-codex" },
  *         "gamma": { "model": "google/gemini-3-pro" }
  *       }
  *     },
@@ -204,7 +204,7 @@ export const DEFAULT_COUNCIL_CONFIG: z.input<typeof CouncilConfigSchema> = {
   presets: {
     default: {
       alpha: { model: 'openai/gpt-5.5-fast' },
-      beta: { model: 'openai/gpt-5.5-fast' },
+      beta: { model: 'openai/gpt-5.3-codex' },
       gamma: { model: 'google/gemini-3-pro' },
     },
   },
