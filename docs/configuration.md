@@ -151,8 +151,9 @@ Set `autoUpdate` to `false` if you want update notifications without automatic
 }
 ```
 
-When enabled, this is notification-only mode: you'll see that a new version is
-available, but the plugin won't install it automatically.
+With `autoUpdate` set to `false`, this becomes notification-only mode: you'll
+see that a new version is available, but the plugin won't install it
+automatically.
 
 > Pinned plugin entries in `opencode.json` (for example
 > `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
