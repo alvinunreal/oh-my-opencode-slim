@@ -6,6 +6,8 @@
  * rather than a malformed task call.
  */
 
+import { parseTaskIdFromTaskOutput } from '../../utils/task';
+
 /** Patterns that suggest a provider error or interruption (not a parameter error). */
 const PROVIDER_ERROR_PATTERNS = [
   /provider.*error/i,
@@ -35,28 +37,22 @@ const PARAMETER_ERROR_SIGNALS = [
 /**
  * Extract the task_id from a task tool output string.
  *
- * Supports two formats:
- * 1. Line-based (OpenCode's actual format):
- *      task_id: ses_xxx (for resuming to continue this task if needed)
- * 2. XML-style (fallback):
- *      <task_id>ses_xxx</task_id>
+ * Reuses the canonical line-based parser from src/utils/task.ts introduced by
+ * the session-manager work, then falls back to legacy XML-style parsing for
+ * compatibility with older/synthetic test outputs.
  *
- * Returns undefined if the task_id cannot be found.
+ * Supported formats:
+ * 1. Line-based (canonical OpenCode format):
+ *      task_id: ses_xxx (for resuming to continue this task if needed)
+ * 2. XML-style (fallback only):
+ *      <task_id>ses_xxx</task_id>
  */
 export function parseTaskId(output: string): string | undefined {
-  // Format 1: Line-based "task_id: ses_xxx" (the real OpenCode format)
-  const lines = output.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const match = /^task_id:\s*([^\s()]+)(?:\s*\(.*\)?)?$/.exec(trimmed);
-    if (match) return match[1];
-  }
+  const taskId = parseTaskIdFromTaskOutput(output);
+  if (taskId) return taskId;
 
-  // Format 2: XML-style <task_id>ses_xxx</task_id>
   const xmlMatch = output.match(/<task_id>([^<]+)<\/task_id>/);
-  if (xmlMatch) return xmlMatch[1];
-
-  return undefined;
+  return xmlMatch ? xmlMatch[1] : undefined;
 }
 
 /**
