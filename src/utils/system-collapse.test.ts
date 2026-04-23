@@ -1,4 +1,4 @@
-import { expect, describe, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { collapseSystemInPlace } from './system-collapse';
 
 /**

@@ -4,258 +4,123 @@ This document provides guidelines for AI agents operating in this repository.
 
 ## Project Overview
 
-**oh-my-opencode-slim** - A lightweight agent orchestration plugin for OpenCode, a slimmed-down fork of oh-my-opencode. Built with TypeScript, Bun, and Biome.
+**oh-my-opencode-slim** — An OpenCode plugin that adds specialist-agent orchestration. Built with TypeScript, Bun, and Biome. Not a standalone app; it registers agents, tools, hooks, and MCPs into the OpenCode runtime.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `bun run build` | Build TypeScript to `dist/` (both index.ts and cli/index.ts) |
-| `bun run typecheck` | Run TypeScript type checking without emitting |
-| `bun test` | Run all tests with Bun |
-| `bun run lint` | Run Biome linter on entire codebase |
-| `bun run format` | Format entire codebase with Biome |
-| `bun run check` | Run Biome check with auto-fix (lint + format + organize imports) |
-| `bun run check:ci` | Run Biome check without auto-fix (CI mode) |
-| `bun run dev` | Build and run with OpenCode |
+| `bun run build` | Build plugin + CLI bundles to `dist/`, emit declarations, regenerate config schema |
+| `bun run typecheck` | `tsc --noEmit` — type check only |
+| `bun test` | Run all tests (root is `./src` via `bunfig.toml`) |
+| `bun run check` | Biome check with auto-fix (lint + format + organize imports) |
+| `bun run check:ci` | Biome check without auto-fix (CI gate) |
+| `bun run dev` | Build then launch OpenCode |
+| `bun run generate-schema` | Regenerate `oh-my-opencode-slim.schema.json` from Zod schema |
 
-**Running a single test:** Use Bun's test filtering with the `-t` flag:
-```bash
-bun test -t "test-name-pattern"
-```
+**Single test:** `bun test -t "test-name-pattern"`
+**Single file:** `bun test src/config/loader.test.ts`
 
-## Code Style
+### Build internals
 
-### General Rules
-- **Formatter/Linter:** Biome (configured in `biome.json`)
-- **Line width:** 80 characters
-- **Indentation:** 2 spaces
-- **Line endings:** LF (Unix)
-- **Quotes:** Single quotes in JavaScript/TypeScript
-- **Trailing commas:** Always enabled
+The build is a 4-step pipeline (`bun run build`):
 
-### TypeScript Guidelines
-- **Strict mode:** Enabled in `tsconfig.json`
-- **No explicit `any`:** Generates a linter warning (disabled for test files)
-- **Module resolution:** `bundler` strategy
-- **Declarations:** Generate `.d.ts` files in `dist/`
+1. `build:plugin` — Bun-bundle `src/index.ts` → `dist/index.js` (ESM, Node target)
+2. `build:cli` — Bun-bundle `src/cli/index.ts` → `dist/cli/index.js`
+3. `tsc --emitDeclarationOnly` — Generate `.d.ts` files into `dist/`
+4. `generate-schema` — Produce JSON Schema from the Zod config schema
 
-### Imports
-- Biome auto-organizes imports on save (`organizeImports: "on"`)
-- Let the formatter handle import sorting
-- Use path aliases defined in TypeScript configuration if present
+**Adding a new dependency?** Check `build:plugin`/`build:cli` in `package.json` — packages listed in `--external` are not bundled. New packages that should remain external (native modules, host-provided SDKs) must be added there.
 
-### Naming Conventions
-- **Variables/functions:** camelCase
-- **Classes/interfaces:** PascalCase
-- **Constants:** SCREAMING_SNAKE_CASE
-- **Files:** kebab-case for most, PascalCase for React components
+`prepare` script runs `build` automatically on install.
 
-### Error Handling
-- Use typed errors with descriptive messages
-- Let errors propagate appropriately rather than catching silently
-- Use Zod for runtime validation (already a dependency)
+### CI pipeline
 
-### Git Integration
-- Biome integrates with git (VCS enabled)
-- Commits should pass `bun run check:ci` before pushing
-
-## Project Structure
-
-```
-oh-my-opencode-slim/
-├── src/
-│   ├── agents/       # Agent factories (orchestrator, explorer, oracle, etc.)
-│   ├── cli/          # CLI entry point
-│   ├── config/       # Constants, schemas, MCP defaults
-│   ├── council/      # Council manager (multi-LLM session orchestration)
-│   ├── hooks/        # OpenCode lifecycle hooks
-│   ├── mcp/          # MCP server definitions
-│   ├── multiplexer/  # Tmux/Zellij pane integration for child sessions
-│   ├── skills/       # Skill definitions (included in package publish)
-│   ├── tools/        # Tool definitions (council, webfetch, AST-grep, etc.)
-│   └── utils/        # Shared utilities (tmux, session helpers)
-├── dist/             # Built JavaScript and declarations
-├── docs/             # User-facing documentation
-├── biome.json        # Biome configuration
-├── tsconfig.json     # TypeScript configuration
-└── package.json      # Project manifest and scripts
-```
-
-## Key Dependencies
-
-- `@modelcontextprotocol/sdk` - MCP protocol implementation
-- `@opencode-ai/sdk` - OpenCode AI SDK
-- `zod` - Runtime validation
+CI (`.github/workflows/ci.yml`) runs: `lint → typecheck → test → build` on every push/PR to `main`/`master`. A second job (`package-smoke`) builds and runs `verify:release` + `verify:host-smoke` on both Ubuntu and macOS.
 
 ## Development Workflow
 
 1. Make code changes
-2. Update docs when behavior, commands, configuration, workflows, or user-facing output changes
+2. Update docs when behavior, commands, configuration, or user-facing output changes
    - Check `README.md` plus relevant files in `docs/`
    - Keep examples, command snippets, and feature lists in sync with the code
    - If no doc update is needed, explicitly confirm that in your final summary
-3. Run `bun run check:ci` to verify linting and formatting
-4. Run `bun run typecheck` to verify types
-5. Run `bun test` to verify tests pass
+3. `bun run check:ci` — lint + format gate
+4. `bun run typecheck` — type gate
+5. `bun test` — test gate
 6. Commit changes
+
+## Code Style
+
+- **Formatter/Linter:** Biome (`biome.json`) — single quotes, 2-space indent, 80-char line width, trailing commas, LF endings
+- **Strict TypeScript:** `strict: true`, `moduleResolution: "bundler"`, declarations emitted to `dist/`
+- **No explicit `any`:** Linter warning in source, allowed in test files (Biome override)
+- **Imports:** Biome auto-organizes on check — don't manually sort
+- **`zod` v4:** Used for runtime validation and config schema. It is a **peerDependency** (`^4.0.0`), not a regular dep.
+
+## Project Structure
+
+```
+src/
+├── agents/       # Agent factories (orchestrator, explorer, oracle, designer, fixer, librarian, council, councillor, observer)
+├── cli/          # CLI entry point — install, config, presets, skill packaging
+├── config/       # Zod config schema, loaders, constants, agent/MCP policy helpers
+├── council/      # Council manager (multi-LLM session orchestration and synthesis)
+├── hooks/        # OpenCode lifecycle hooks (apply-patch, auto-update, error recovery, todo-continuation, etc.)
+├── interview/    # /interview feature — browser-based Q&A flow for spec generation
+├── mcp/          # Built-in MCP server definitions (websearch, context7, grep_app)
+├── multiplexer/  # Tmux/Zellij pane integration for live session visualization
+├── skills/       # Skill payloads shipped at install time (codemap, simplify)
+├── tools/        # Tool definitions (ast-grep search/replace, smartfetch, council tool, preset manager)
+└── utils/        # Shared utilities (logger, tmux, session helpers, subagent depth tracking)
+```
+
+Key entry points:
+- `src/index.ts` — Plugin bootstrap and composition root (840+ lines). Wires every subsystem together.
+- `src/cli/index.ts` — CLI entry point
+- `src/config/schema.ts` — Source-of-truth runtime config schema
 
 ## Tmux Session Lifecycle Management
 
-When working with tmux integration, understanding the session lifecycle is crucial for preventing orphaned processes and ghost panes.
+When working with tmux integration, orphaned processes and ghost panes are the primary failure mode.
 
-### Session Lifecycle Flow
+### Lifecycle
 
 ```
-Task Launch:
-  session.create() → tmux pane spawned → task runs
-
-Task Completes Normally:
-  session.status (idle) → extract results → session.abort()
-  → session.deleted event → tmux pane closed
-
-Task Cancelled:
-  cancel() → session.abort() → session.deleted event
-  → tmux pane closed
-
-Session Deleted Externally:
-  session.deleted event → task cleanup → tmux pane closed
+session.create() → tmux pane spawned → task runs
+  → session goes idle → extract results → session.abort()
+    → session.deleted event → tmux pane closed
 ```
 
-### Key Implementation Details
+### Key rules
 
-**1. Graceful Shutdown (src/utils/tmux.ts)**
-```typescript
-// Always send Ctrl+C before killing pane
-spawn([tmux, "send-keys", "-t", paneId, "C-c"])
-await delay(250)
-spawn([tmux, "kill-pane", "-t", paneId])
-```
+1. **Graceful shutdown** (`src/multiplexer/tmux/`): Always send `C-c` before `kill-pane`, with a short delay
+2. **Abort timing** (`src/council/council-manager.ts`): Call `session.abort()` AFTER extracting task results — content is destroyed on abort
+3. **Event wiring** (`src/index.ts`): `multiplexerSessionManager.onSessionDeleted()` must stay connected to close panes
 
-**2. Session Abort Timing (src/council/council-manager.ts)**
-- Call `session.abort()` AFTER extracting task results
-- This ensures content is preserved before session termination
-- Triggers `session.deleted` event for cleanup
-
-**3. Event Handlers (src/index.ts)**
-The multiplexer session handler must stay wired up:
-- `multiplexerSessionManager.onSessionDeleted()` - closes tmux/zellij panes
-
-### Testing Tmux Integration
-
-After making changes to session management:
+### Testing tmux integration
 
 ```bash
-# 1. Build the plugin
 bun run build
-
-# 2. Run from local fork (in ~/.config/opencode/opencode.jsonc):
-# "plugin": ["file:///path/to/oh-my-opencode-slim"]
-
-# 3. Launch test tasks
-@explorer count files in src/
-@librarian search for Bun documentation
-
-# 4. Verify no orphans
+# Configure plugin as file:// in opencode.jsonc
+# Launch tasks, then verify no orphans:
 ps aux | grep "opencode attach" | grep -v grep
-# Should return 0 processes after tasks complete
 ```
-
-### Common Issues
-
-**Ghost panes remaining open:**
-- Check that `session.abort()` is called after result extraction
-- Verify `session.deleted` handler is wired in src/index.ts
-
-**Orphaned opencode attach processes:**
-- Ensure graceful shutdown sends Ctrl+C before kill-pane
-- Check that tmux pane closes before process termination
 
 ## Pre-Push Code Review
 
-Before pushing changes to the repository, always run a code review to catch issues like:
-- Duplicate code
-- Redundant function calls
-- Race conditions
-- Logic errors
-
-### Using `/review` Command (Recommended)
-
-OpenCode has a built-in `/review` command that automatically performs comprehensive code reviews:
-
-```bash
-# Review uncommitted changes (default)
-/review
-
-# Review specific commit
-/review <commit-hash>
-
-# Review branch comparison
-/review <branch-name>
-
-# Review PR
-/review <pr-url-or-number>
-```
-
-**Why use `/review` instead of asking @oracle manually?**
-- Standardized review process with consistent focus areas (bugs, structure, performance)
-- Automatically handles git operations (diff, status, etc.)
-- Context-aware: reads full files and convention files (AGENTS.md, etc.)
-- Delegates to specialized @build subagent with proper permissions
-- Provides actionable, matter-of-fact feedback
-
-### Workflow Before Pushing
-
-1. **Make your changes**
-   ```bash
-   # ... edit files ...
-   ```
-
-2. **Stage changes**
-   ```bash
-   git add .
-   ```
-
-3. **Run code review**
-   ```
-   /review
-   ```
-
-4. **Address any issues found**
-
-5. **Run checks**
-   ```bash
-   bun run check:ci
-   bun test
-   ```
-
-6. **Commit and push**
-   ```bash
-   git commit -m "..."
-   git push origin <branch>
-   ```
-
-**Note:** The `/review` command found issues in our PR #127 (duplicate code, redundant abort calls) that neither linter nor tests caught. Always use it before pushing!
-
-## Common Patterns
-
-- This is an OpenCode plugin - most functionality lives in `src/`
-- The CLI entry point is `src/cli/index.ts`
-- The main plugin export is `src/index.ts`
-- Agent factories are in `src/agents/` — each agent has its own file + optional `.test.ts`
-- Skills are located in `src/skills/` (included in package publish)
-- Multiplexer session management is in `src/multiplexer/`
-- Council manager (multi-LLM orchestration) is in `src/council/`
-- Tmux utilities are in `src/utils/tmux.ts`
-- 468 tests across 35 files — run `bun test` to verify
+Use `/review` before pushing — it catches issues (duplicate code, redundant calls, race conditions) that linter and tests miss. It delegates to a specialized subagent with full file access.
 
 ## Repository Map
 
-A full codemap is available at `codemap.md` in the project root.
+`codemap.md` in the project root contains a full architectural map. Read it before working on unfamiliar subsystems. Each `src/` subdirectory also has its own `codemap.md`.
 
-Before working on any task, read `codemap.md` to understand:
-- Project architecture and entry points
-- Directory responsibilities and design patterns
-- Data flow and integration points between modules
+## Common Patterns
 
-For deep work on a specific folder, also read that folder's `codemap.md`.
+- Agent prompts are in `src/agents/<name>.ts` — each agent has its own file, prompt overrides come from `.md` files resolved by the config loader
+- Custom user agents are defined via `config.agents.<name>` with `prompt` and `orchestratorPrompt` fields
+- Hooks are composed in `src/hooks/index.ts` and attached during plugin init
+- The `interview/` feature runs a local HTTP server for browser-based spec capture
+- Multiplexer backends (tmux, zellij) are selected at runtime via factory pattern in `src/multiplexer/`
+- The `apply-patch` hook is a complex pipeline with matching, resolution, and recovery stages — changes there need careful testing
+- `bunfig.toml` sets test root to `./src` — tests must live under `src/`

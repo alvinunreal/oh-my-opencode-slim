@@ -1618,7 +1618,9 @@ describe('renderInterviewPage', () => {
     expect(html).toContain(
       "window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });",
     );
-    expect(html).toContain('overlayText.textContent = "Submitting Answers...";');
+    expect(html).toContain(
+      'overlayText.textContent = "Submitting Answers...";',
+    );
     expect(html).toContain('scrollToTop();');
   });
 });

@@ -197,6 +197,29 @@ ${enabledValidationRouting}
 - Confirm specialists completed successfully
 - Verify solution meets requirements
 
+## 7. Session Resumption
+When a delegated task returns an empty or incomplete result, the subagent session may still contain useful partial state (files read, edits made, tool calls executed).
+
+**If the task output contains \`[task partial state available]\`:**
+- The session was interrupted (provider error, timeout, etc.)
+- A \`task_id\` is provided in the output — pass it to the next task call to resume
+- The subagent will see all prior context and continue from where it stopped
+
+**When to resume (task_id):**
+- Task returned empty/interrupted but had partial progress
+- Provider error occurred during execution
+- User asks to continue/recover previous work
+
+**When NOT to resume:**
+- Previous task completed successfully (start fresh for new work)
+- Task failed due to wrong parameters (fix parameters, don't resume)
+- The follow-up work is unrelated to the interrupted task
+
+**Resuming example:**
+\`\`\`
+task(description="Continue fixing...", prompt="Pick up where you left off", task_id="ses_abc123", ...)
+\`\`\`
+
 </Workflow>
 
 <Communication>
