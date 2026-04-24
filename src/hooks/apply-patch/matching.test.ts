@@ -69,6 +69,46 @@ describe('apply-patch/matching', () => {
     ).toEqual({ kind: 'ambiguous', phase: 'prefix_suffix' });
   });
 
+  test('rescueByPrefixSuffix preserves one-line unicode plus trim-end pairing', () => {
+    expect(
+      rescueByPrefixSuffix(
+        ['left “x”', 'stale', 'right  '],
+        ['left "x"', 'old', 'right'],
+        ['left "x"', 'new', 'right'],
+        0,
+      ),
+    ).toEqual({
+      kind: 'match',
+      hit: {
+        start: 1,
+        del: 1,
+        add: ['new'],
+      },
+    });
+  });
+
+  test('rescueByPrefixSuffix keeps tolerant one-line ambiguity detection', () => {
+    expect(
+      rescueByPrefixSuffix(
+        ['left', 'stale-one', 'right', 'left  ', 'stale-two', 'right'],
+        ['left', 'old', 'right'],
+        ['left', 'new', 'right'],
+        0,
+      ),
+    ).toEqual({ kind: 'ambiguous', phase: 'prefix_suffix' });
+  });
+
+  test('rescueByPrefixSuffix ignores one-line right hits before the left edge', () => {
+    expect(
+      rescueByPrefixSuffix(
+        ['right', 'left', 'stale'],
+        ['left', 'old', 'right'],
+        ['left', 'new', 'right'],
+        0,
+      ),
+    ).toEqual({ kind: 'miss' });
+  });
+
   test('rescueByLcs respects the start and finds a single candidate', () => {
     const result = rescueByLcs(
       [

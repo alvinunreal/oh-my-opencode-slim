@@ -82,6 +82,31 @@ PATCH`);
     ]);
   });
 
+  test('parsePatchStrict preserves End Patch text when it is hunk context', () => {
+    const markerPadding = '  ';
+    const parsed = parsePatchStrict(`*** Begin Patch${markerPadding}
+*** Update File: sample.txt
+@@ marker
+ *** End Patch
+ keep
+*** End Patch${markerPadding}`);
+
+    expect(parsed.hunks).toEqual([
+      {
+        type: 'update',
+        path: 'sample.txt',
+        chunks: [
+          {
+            old_lines: ['*** End Patch', 'keep'],
+            new_lines: ['*** End Patch', 'keep'],
+            change_context: 'marker',
+            is_end_of_file: undefined,
+          },
+        ],
+      },
+    ]);
+  });
+
   test('parsePatchStrict fails on garbage inside @@', () => {
     expect(() =>
       parsePatchStrict(`*** Begin Patch

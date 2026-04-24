@@ -13,12 +13,12 @@ type NamedComparator = {
   same: LineComparator;
 };
 
-const AUTO_RESCUE_COMPARATOR_NAMES = new Set<MatchComparatorName>([
-  'exact',
-  'unicode',
-  'trim-end',
-  'unicode-trim-end',
-]);
+export type PreparedAutoRescueTarget = {
+  exact: string;
+  unicode: string;
+  trimEnd: string;
+  unicodeTrimEnd: string;
+};
 
 export function equalExact(a: string, b: string): boolean {
   return a === b;
@@ -44,7 +44,7 @@ export function equalUnicodeTrim(a: string, b: string): boolean {
   return normalizeUnicode(a.trim()) === normalizeUnicode(b.trim());
 }
 
-const comparatorEntries: NamedComparator[] = [
+const autoRescueComparatorEntries: NamedComparator[] = [
   { name: 'exact', exact: true, same: equalExact },
   { name: 'unicode', exact: false, same: equalUnicodeExact },
   { name: 'trim-end', exact: false, same: equalTrimEnd },
@@ -53,19 +53,60 @@ const comparatorEntries: NamedComparator[] = [
     exact: false,
     same: equalUnicodeTrimEnd,
   },
+];
+
+const comparatorEntries: NamedComparator[] = [
+  ...autoRescueComparatorEntries,
   { name: 'trim', exact: false, same: equalTrim },
   { name: 'unicode-trim', exact: false, same: equalUnicodeTrim },
 ];
-
-const autoRescueComparatorEntries = comparatorEntries.filter((entry) =>
-  AUTO_RESCUE_COMPARATOR_NAMES.has(entry.name),
-);
 
 const MAX_LCS_CHUNK_LINES = 48;
 const MAX_LCS_CANDIDATES = 64;
 
 export const autoRescueComparators: LineComparator[] =
   autoRescueComparatorEntries.map((entry) => entry.same);
+
+export function prepareAutoRescueTarget(
+  target: string,
+): PreparedAutoRescueTarget {
+  const trimEnd = target.trimEnd();
+  const unicode = normalizeUnicode(target);
+
+  return {
+    exact: target,
+    unicode,
+    trimEnd,
+    unicodeTrimEnd: trimEnd === target ? unicode : normalizeUnicode(trimEnd),
+  };
+}
+
+export function matchPreparedAutoRescueComparator(
+  candidate: string,
+  target: PreparedAutoRescueTarget,
+): MatchComparatorName | undefined {
+  if (candidate === target.exact) {
+    return 'exact';
+  }
+
+  const unicode = normalizeUnicode(candidate);
+  if (unicode === target.unicode) {
+    return 'unicode';
+  }
+
+  const trimEnd = candidate.trimEnd();
+  if (trimEnd === target.trimEnd) {
+    return 'trim-end';
+  }
+
+  const unicodeTrimEnd =
+    trimEnd === candidate ? unicode : normalizeUnicode(trimEnd);
+  if (unicodeTrimEnd === target.unicodeTrimEnd) {
+    return 'unicode-trim-end';
+  }
+
+  return undefined;
+}
 
 // Full-trim comparators remain available as explicit utilities, but stay out
 // of automatic canonicalization because they can cross indentation levels and
@@ -183,6 +224,23 @@ export function list(
   return out;
 }
 
+function lowerBound(values: number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (values[middle] < target) {
+      low = middle + 1;
+      continue;
+    }
+
+    high = middle;
+  }
+
+  return low;
+}
+
 export function sameRescueLine(a: string, b: string): boolean {
   return equalExact(a, b) || equalUnicodeExact(a, b);
 }
@@ -238,24 +296,59 @@ export function rescueByPrefixSuffix(
   const left = old_lines.slice(0, prefixLength);
   const right = old_lines.slice(old_lines.length - suffixLength);
   const middle = new_lines.slice(prefixLength, new_lines.length - suffixLength);
-  const hits = new Map<string, MatchHit>();
+
+  if (left.length === 1 && right.length === 1) {
+    const { leftHits, rightHits } = collectOneLinePrefixSuffixHits(
+      lines,
+      left[0],
+      right[0],
+      start,
+    );
+
+    return resolvePrefixSuffixHits(leftHits, rightHits, left.length, middle);
+  }
+
+  const hits = new Set<string>();
+  let hit: MatchHit | undefined;
 
   for (const same of autoRescueComparators) {
-    for (const leftIndex of list(lines, left, start, same)) {
+    const leftHits = list(lines, left, start, same);
+    if (leftHits.length === 0) {
+      continue;
+    }
+
+    const rightHits = list(lines, right, leftHits[0] + left.length, same);
+    if (rightHits.length === 0) {
+      continue;
+    }
+
+    for (const leftIndex of leftHits) {
       const from = leftIndex + left.length;
 
-      for (const rightIndex of list(lines, right, from, same)) {
+      for (
+        let index = lowerBound(rightHits, from);
+        index < rightHits.length;
+        index += 1
+      ) {
+        const rightIndex = rightHits[index];
         const key = `${from}:${rightIndex}`;
-        hits.set(key, {
-          start: from,
-          del: rightIndex - from,
-          add: [...middle],
-        });
+        if (!hits.has(key)) {
+          hits.add(key);
+          hit = {
+            start: from,
+            del: rightIndex - from,
+            add: [...middle],
+          };
+        }
+
+        if (hits.size > 1) {
+          return { kind: 'ambiguous', phase: 'prefix_suffix' };
+        }
       }
     }
   }
 
-  if (hits.size === 0) {
+  if (!hit) {
     return { kind: 'miss' };
   }
 
@@ -263,24 +356,99 @@ export function rescueByPrefixSuffix(
     return { kind: 'ambiguous', phase: 'prefix_suffix' };
   }
 
-  return { kind: 'match', hit: [...hits.values()][0] };
+  return { kind: 'match', hit };
 }
 
-export function score(a: string[], b: string[]): number {
-  const dp = Array.from({ length: a.length + 1 }, () =>
-    Array<number>(b.length + 1).fill(0),
-  );
+function collectOneLinePrefixSuffixHits(
+  lines: string[],
+  left: string,
+  right: string,
+  start: number,
+): { leftHits: number[]; rightHits: number[] } {
+  const leftTarget = prepareAutoRescueTarget(left);
+  const rightTarget = prepareAutoRescueTarget(right);
+  const leftHits: number[] = [];
+  const rightHits: number[] = [];
 
-  for (let i = 1; i <= a.length; i += 1) {
-    for (let j = 1; j <= b.length; j += 1) {
-      dp[i][j] =
-        normalizeUnicode(a[i - 1].trim()) === normalizeUnicode(b[j - 1].trim())
-          ? dp[i - 1][j - 1] + 1
-          : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  for (let index = start; index < lines.length; index += 1) {
+    const line = prepareAutoRescueTarget(lines[index]);
+
+    if (line.unicodeTrimEnd === leftTarget.unicodeTrimEnd) {
+      leftHits.push(index);
+    }
+
+    if (index > start && line.unicodeTrimEnd === rightTarget.unicodeTrimEnd) {
+      rightHits.push(index);
     }
   }
 
-  return dp[a.length][b.length];
+  return { leftHits, rightHits };
+}
+
+function resolvePrefixSuffixHits(
+  leftHits: number[],
+  rightHits: number[],
+  leftLength: number,
+  middle: string[],
+): RescueResult {
+  if (leftHits.length === 0 || rightHits.length === 0) {
+    return { kind: 'miss' };
+  }
+
+  const hits = new Set<string>();
+  let hit: MatchHit | undefined;
+
+  for (const leftIndex of leftHits) {
+    const from = leftIndex + leftLength;
+
+    for (
+      let index = lowerBound(rightHits, from);
+      index < rightHits.length;
+      index += 1
+    ) {
+      const rightIndex = rightHits[index];
+      const key = `${from}:${rightIndex}`;
+      if (!hits.has(key)) {
+        hits.add(key);
+        hit = {
+          start: from,
+          del: rightIndex - from,
+          add: [...middle],
+        };
+      }
+
+      if (hits.size > 1) {
+        return { kind: 'ambiguous', phase: 'prefix_suffix' };
+      }
+    }
+  }
+
+  if (!hit) {
+    return { kind: 'miss' };
+  }
+
+  return { kind: 'match', hit };
+}
+
+export function score(a: string[], b: string[]): number {
+  const normalizedA = a.map(normalizeLcsLine);
+  const normalizedB = b.map(normalizeLcsLine);
+  let previous = Array<number>(b.length + 1).fill(0);
+
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = Array<number>(b.length + 1).fill(0);
+
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] =
+        normalizedA[i - 1] === normalizedB[j - 1]
+          ? previous[j - 1] + 1
+          : Math.max(previous[j], current[j - 1]);
+    }
+
+    previous = current;
+  }
+
+  return previous[b.length];
 }
 
 function normalizeLcsLine(line: string): string {
@@ -315,30 +483,6 @@ function countLcsUpperBound(a: string[], b: string[]): number {
   return shared;
 }
 
-function hasStableBorders(oldLines: string[], candidate: string[]): boolean {
-  if (oldLines.length === 0 || candidate.length !== oldLines.length) {
-    return false;
-  }
-
-  // LCS keeps its current scoring, but only competes across windows whose
-  // edges pass safe comparators. Ignoring full-trim here prevents automatic
-  // rescue from changing indentation depth in format-sensitive files.
-  const same = autoRescueComparators.some((compare) =>
-    compare(oldLines[0], candidate[0]),
-  );
-  if (!same) {
-    return false;
-  }
-
-  if (oldLines.length === 1) {
-    return true;
-  }
-
-  return autoRescueComparators.some((compare) =>
-    compare(oldLines[oldLines.length - 1], candidate[candidate.length - 1]),
-  );
-}
-
 function collectBorderAnchoredStarts(
   lines: string[],
   oldLines: string[],
@@ -348,33 +492,31 @@ function collectBorderAnchoredStarts(
     return [];
   }
 
-  const firstHits = new Set<number>();
-  const lastHits = new Set<number>();
-  const lastLine = oldLines[oldLines.length - 1];
-
-  for (const same of autoRescueComparators) {
-    for (const index of list(lines, [oldLines[0]], start, same)) {
-      firstHits.add(index);
-    }
-
-    for (const index of list(lines, [lastLine], start, same)) {
-      lastHits.add(index);
-    }
-  }
-
   const candidates: number[] = [];
-  for (const index of [...firstHits].sort((a, b) => a - b)) {
-    const end = index + oldLines.length - 1;
-    if (end >= lines.length || !lastHits.has(end)) {
+  const firstLine = prepareAutoRescueTarget(oldLines[0]);
+  const lastLine = prepareAutoRescueTarget(oldLines[oldLines.length - 1]);
+
+  // LCS keeps its current scoring, but only competes across windows whose
+  // edges pass safe comparators. Ignoring full-trim here prevents automatic
+  // rescue from changing indentation depth in format-sensitive files.
+  const lastOffset = oldLines.length - 1;
+  const maxStart = lines.length - oldLines.length;
+
+  for (let index = start; index <= maxStart; index += 1) {
+    const end = index + lastOffset;
+
+    if (
+      matchPreparedAutoRescueComparator(lines[index], firstLine) === undefined
+    ) {
       continue;
     }
 
-    const candidate = lines.slice(index, index + oldLines.length);
-    if (!hasStableBorders(oldLines, candidate)) {
-      continue;
+    if (
+      oldLines.length === 1 ||
+      matchPreparedAutoRescueComparator(lines[end], lastLine) !== undefined
+    ) {
+      candidates.push(index);
     }
-
-    candidates.push(index);
   }
 
   return candidates;
@@ -387,13 +529,6 @@ export function rescueByLcs(
   start: number,
 ): RescueResult {
   if (old_lines.length === 0 || lines.length === 0) {
-    return { kind: 'miss' };
-  }
-
-  const from = start;
-  const to = lines.length - old_lines.length;
-
-  if (to < from) {
     return { kind: 'miss' };
   }
 
@@ -416,10 +551,6 @@ export function rescueByLcs(
   let ties = 0;
 
   for (const index of candidates) {
-    if (index < from || index > to) {
-      continue;
-    }
-
     const window = lines.slice(index, index + old_lines.length);
     if (countLcsUpperBound(old_lines, window) < needed) {
       continue;

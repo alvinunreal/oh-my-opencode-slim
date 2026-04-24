@@ -50,35 +50,29 @@ export function createApplyPatchHook(ctx: PluginInput) {
         return;
       }
 
-      if (typeof output.args?.patchText !== 'string') {
+      const args = output.args;
+      if (!args || typeof args.patchText !== 'string') {
         return;
       }
+      const patchText = args.patchText;
 
       const root = input.directory || ctx.directory || process.cwd();
       const worktree = ctx.worktree || root;
-
       try {
         const result = await rewritePatch(
           root,
-          output.args.patchText,
+          patchText,
           APPLY_PATCH_RESCUE_OPTIONS,
           worktree,
         );
 
         if (result.changed) {
-          output.args.patchText = result.patchText;
-          logHookStatus('rewrite', {
-            rewrittenChunks: result.rewrittenChunks,
-            totalChunks: result.totalChunks,
-            strategies: result.rewriteModes,
-          });
+          args.patchText = result.patchText;
+          logHookStatus('rewrite');
           return;
         }
 
-        logHookStatus('unchanged', {
-          rewrittenChunks: 0,
-          totalChunks: result.totalChunks,
-        });
+        logHookStatus('unchanged');
         return;
       } catch (error) {
         const normalizedError = isApplyPatchError(error)

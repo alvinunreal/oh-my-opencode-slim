@@ -20,9 +20,6 @@ import type {
 export type RewritePatchResult = {
   patchText: string;
   changed: boolean;
-  rewrittenChunks: number;
-  totalChunks: number;
-  rewriteModes: string[];
 };
 
 type RewriteUpdateGroup = {
@@ -253,18 +250,6 @@ function renderRewriteDependencyGroup(
       );
 }
 
-function rewriteModeForDependentUpdate(group: RewriteDependencyGroup): string {
-  if (group.kind === 'add') {
-    return 'collapse:add-followed-by-update';
-  }
-
-  if (group.group.outputPath !== group.group.sourcePath) {
-    return 'collapse:move-followed-by-update';
-  }
-
-  return 'merge:same-file-updates';
-}
-
 function combineDependentUpdateGroup(
   filePath: string,
   group: RewriteDependencyGroup,
@@ -328,16 +313,6 @@ export async function rewritePatch(
     const normalizedPatchText = normalizePatchText(patchText);
     const rewritten: PatchHunk[] = [];
     let changed = false;
-    let rewrittenChunks = 0;
-    const rewriteModes = new Set<string>();
-    const totalChunks = hunks.reduce(
-      (count, hunk) =>
-        count + (hunk.type === 'update' ? hunk.chunks.length : 0),
-      0,
-    );
-    if (pathsNormalized) {
-      rewriteModes.add('normalize:patch-paths');
-    }
 
     const dependencyGroups = new Map<string, RewriteDependencyGroup>();
 
@@ -416,17 +391,7 @@ export async function rewritePatch(
         if (!chunk.rewritten) {
           continue;
         }
-
         changed = true;
-        rewrittenChunks += 1;
-        if (chunk.strategy) {
-          rewriteModes.add(chunk.strategy);
-          continue;
-        }
-
-        if (chunk.matchComparator && chunk.matchComparator !== 'exact') {
-          rewriteModes.add(`match:${chunk.matchComparator}`);
-        }
       }
 
       const nextOutputPath = hunk.move_path ?? hunk.path;
@@ -447,7 +412,6 @@ export async function rewritePatch(
           cfg,
         );
         changed = true;
-        rewriteModes.add(rewriteModeForDependentUpdate(currentDependency));
         clearDependencyGroup(filePath);
         if (movePath && movePath !== filePath) {
           clearDependencyGroup(movePath);
@@ -497,9 +461,6 @@ export async function rewritePatch(
         return {
           patchText: formatPatch({ hunks }),
           changed: true,
-          rewrittenChunks: 0,
-          totalChunks,
-          rewriteModes: [...rewriteModes].sort(),
         };
       }
 
@@ -507,27 +468,18 @@ export async function rewritePatch(
         return {
           patchText: normalizedPatchText,
           changed: true,
-          rewrittenChunks: 0,
-          totalChunks,
-          rewriteModes: ['normalize:patch-text'],
         };
       }
 
       return {
         patchText,
         changed: false,
-        rewrittenChunks: 0,
-        totalChunks,
-        rewriteModes: [],
       };
     }
 
     return {
       patchText: formatPatch({ hunks: rewritten }),
       changed: true,
-      rewrittenChunks,
-      totalChunks,
-      rewriteModes: [...rewriteModes].sort(),
     };
   } catch (error) {
     throw ensureApplyPatchError(error, 'Unexpected rewrite failure');

@@ -265,6 +265,31 @@ describe('apply-patch/resolution', () => {
     });
   });
 
+  test('resolveUpdateChunks canonicalizes non-EOF insertion with a trim-end anchor', async () => {
+    const root = await createTempDir();
+    const file = path.join(root, 'sample.txt');
+    await writeFixture(root, 'sample.txt', 'top\nanchor  \nbottom\n');
+
+    const { resolved } = await resolveUpdateChunks(
+      file,
+      [
+        {
+          old_lines: [],
+          new_lines: ['middle'],
+          change_context: 'anchor',
+        },
+      ],
+      DEFAULT_OPTIONS,
+    );
+
+    expect(resolved[0]).toMatchObject({
+      canonical_change_context: 'anchor  ',
+      rewritten: true,
+      strategy: 'anchor',
+      matchComparator: 'trim-end',
+    });
+  });
+
   test('deriveNewContent fails if a pure insertion cannot find its anchor', async () => {
     const root = await createTempDir();
     const file = path.join(root, 'sample.txt');
@@ -302,6 +327,26 @@ describe('apply-patch/resolution', () => {
             old_lines: [],
             new_lines: ['middle'],
             change_context: 'anchor',
+          },
+        ],
+        DEFAULT_OPTIONS,
+      ),
+    ).rejects.toThrow('Insertion anchor was ambiguous');
+  });
+
+  test('deriveNewContent fails if a tolerant insertion anchor is ambiguous', async () => {
+    const root = await createTempDir();
+    const file = path.join(root, 'sample.txt');
+    await writeFixture(root, 'sample.txt', 'top\n“anchor”\n"anchor"\n');
+
+    await expect(
+      deriveNewContent(
+        file,
+        [
+          {
+            old_lines: [],
+            new_lines: ['middle'],
+            change_context: '"anchor"',
           },
         ],
         DEFAULT_OPTIONS,

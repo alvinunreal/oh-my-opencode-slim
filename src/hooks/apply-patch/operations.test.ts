@@ -67,8 +67,6 @@ describe('apply-patch/operations', () => {
     expect(await rewritePatch(root, patchText, DEFAULT_OPTIONS)).toMatchObject({
       patchText,
       changed: false,
-      rewrittenChunks: 0,
-      rewriteModes: [],
     });
   });
 
@@ -96,8 +94,6 @@ PATCH`;
     expect(await rewritePatch(root, patchText, DEFAULT_OPTIONS)).toMatchObject({
       patchText: cleanPatchText,
       changed: true,
-      rewrittenChunks: 0,
-      rewriteModes: ['normalize:patch-text'],
     });
   });
 
@@ -370,7 +366,6 @@ garbage
     );
 
     expect(rewritten.changed).toBeTrue();
-    expect(rewritten.rewriteModes).toContain('normalize:patch-paths');
     const [rewrittenHunk] = parsePatch(rewritten.patchText).hunks;
     expect(rewrittenHunk.type).toBe('update');
     expect(rewrittenHunk.path).toBe('sample.txt');
@@ -814,7 +809,6 @@ garbage
 
     const rewritten = parsePatch(result.patchText);
     expect(result.changed).toBeTrue();
-    expect(result.rewriteModes).toContain('merge:same-file-updates');
     expect(rewritten.hunks).toHaveLength(1);
     expect(rewritten.hunks[0]).toEqual({
       type: 'update',
@@ -904,7 +898,6 @@ garbage
     );
 
     expect(result.changed).toBeTrue();
-    expect(result.rewriteModes).toContain('collapse:add-followed-by-update');
     expect(parsePatch(result.patchText).hunks).toEqual([
       {
         type: 'add',
@@ -934,7 +927,6 @@ garbage
     );
 
     expect(result.changed).toBeTrue();
-    expect(result.rewriteModes).toContain('collapse:add-followed-by-update');
     expect(parsePatch(result.patchText).hunks).toEqual([
       {
         type: 'add',
@@ -969,7 +961,6 @@ garbage
     );
 
     expect(result.changed).toBeTrue();
-    expect(result.rewriteModes).toContain('collapse:move-followed-by-update');
     expect(parsePatch(result.patchText).hunks).toEqual([
       {
         type: 'update',
@@ -1011,7 +1002,6 @@ garbage
     );
 
     expect(result.changed).toBeTrue();
-    expect(result.rewriteModes).toContain('collapse:move-followed-by-update');
     expect(parsePatch(result.patchText).hunks).toEqual([
       {
         type: 'update',
