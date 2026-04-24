@@ -231,4 +231,66 @@ describe('createFilterAvailableSkillsHook', () => {
     );
     expect(output.messages[1].parts[0].text).toContain('No skills available.');
   });
+
+  test('reuses permission rules without caching the final skills block text', async () => {
+    const config: PluginConfig = {
+      agents: {
+        explorer: {
+          skills: ['skill1', 'skill3'],
+        },
+      },
+    };
+
+    const hook = createFilterAvailableSkillsHook(mockCtx, config);
+    const firstOutput = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            {
+              type: 'text',
+              text: availableSkillsBlock('skill1', 'skill2'),
+            },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'explorer' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+    const secondOutput = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            {
+              type: 'text',
+              text: availableSkillsBlock('skill2', 'skill3'),
+            },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'explorer' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, firstOutput);
+    await hook['experimental.chat.messages.transform']({}, secondOutput);
+
+    expect(firstOutput.messages[0].parts[0].text).toContain(
+      '<name>skill1</name>',
+    );
+    expect(firstOutput.messages[0].parts[0].text).not.toContain(
+      '<name>skill3</name>',
+    );
+    expect(secondOutput.messages[0].parts[0].text).not.toContain(
+      '<name>skill1</name>',
+    );
+    expect(secondOutput.messages[0].parts[0].text).toContain(
+      '<name>skill3</name>',
+    );
+  });
 });

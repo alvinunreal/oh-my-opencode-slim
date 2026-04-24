@@ -350,8 +350,9 @@ export class CouncilManager {
       // Parallel execution (default): run all councillors concurrently
       const promises = entries.map(([name, config], index) =>
         (async () => {
-          // Stagger launches to avoid tmux split-window collisions
-          if (index > 0) {
+          // Stagger launches only when multiplexer panes can be created.
+          // Outside tmux/zellij this delay only adds latency with no benefit.
+          if (this.tmuxEnabled && index > 0) {
             await new Promise((r) =>
               setTimeout(r, index * COUNCILLOR_STAGGER_MS),
             );

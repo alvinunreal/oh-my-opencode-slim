@@ -23,13 +23,15 @@ function createMockContext(parts: unknown[] = []) {
 
 function createInput(
   overrides?: Partial<{
+    sessionID: string;
     providerID: string;
     npm: string;
     messageID: string;
   }>,
 ) {
+  const sessionID = overrides?.sessionID ?? 'session-1';
   return {
-    sessionID: 'session-1',
+    sessionID,
     agent: 'orchestrator',
     model: {
       id: 'github-copilot/claude',
@@ -80,7 +82,7 @@ function createInput(
     },
     message: {
       id: overrides?.messageID ?? 'message-1',
-      sessionID: 'session-1',
+      sessionID,
       role: 'user' as const,
       time: { created: Date.now() },
       agent: 'orchestrator',
@@ -151,5 +153,84 @@ describe('createChatHeadersHook', () => {
     );
 
     expect(output.headers['x-initiator']).toBeUndefined();
+  });
+
+  test('caches marked internal messages', async () => {
+    const ctx = createMockContext([
+      createInternalAgentTextPart('internal notification'),
+    ]);
+    const hook = createChatHeadersHook(ctx);
+    const firstOutput = { headers: {} };
+    const secondOutput = { headers: {} };
+
+    await hook['chat.headers'](
+      createInput({ messageID: 'message-internal' }),
+      firstOutput,
+    );
+    await hook['chat.headers'](
+      createInput({ messageID: 'message-internal' }),
+      secondOutput,
+    );
+
+    expect(firstOutput.headers['x-initiator']).toBe('agent');
+    expect(secondOutput.headers['x-initiator']).toBe('agent');
+    expect(ctx.client.session.message).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not cache transient message lookup failures', async () => {
+    let calls = 0;
+    const messageMock = mock(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error('temporary failure');
+      }
+      return {
+        data: {
+          info: { role: 'user' },
+          parts: [createInternalAgentTextPart('internal notification')],
+        },
+      };
+    });
+    const ctx = {
+      client: {
+        session: {
+          message: messageMock,
+        },
+      },
+    } as unknown as PluginInput;
+    const hook = createChatHeadersHook(ctx);
+    const firstOutput = { headers: {} };
+    const secondOutput = { headers: {} };
+
+    await hook['chat.headers'](
+      createInput({ messageID: 'message-retry' }),
+      firstOutput,
+    );
+    await hook['chat.headers'](
+      createInput({ messageID: 'message-retry' }),
+      secondOutput,
+    );
+
+    expect(firstOutput.headers['x-initiator']).toBeUndefined();
+    expect(secondOutput.headers['x-initiator']).toBe('agent');
+    expect(messageMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('caches marked messages by session and message id', async () => {
+    const ctx = createMockContext([
+      createInternalAgentTextPart('internal notification'),
+    ]);
+    const hook = createChatHeadersHook(ctx);
+
+    await hook['chat.headers'](
+      createInput({ sessionID: 'session-a', messageID: 'message-normal' }),
+      { headers: {} },
+    );
+    await hook['chat.headers'](
+      createInput({ sessionID: 'session-b', messageID: 'message-normal' }),
+      { headers: {} },
+    );
+
+    expect(ctx.client.session.message).toHaveBeenCalledTimes(2);
   });
 });

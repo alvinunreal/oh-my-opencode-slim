@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { appendFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -7,6 +8,7 @@ const LOG_SUFFIX = '.log';
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 let logFile: string | null = null;
+let writeChain: Promise<void> = Promise.resolve();
 
 function getLogDir(): string {
   return (
@@ -66,18 +68,30 @@ export function initLogger(sessionId: string): void {
     // Directory creation failed — logging will silently fail
   }
   logFile = path.join(dir, `${LOG_PREFIX}${sessionId}${LOG_SUFFIX}`);
+  try {
+    fs.closeSync(fs.openSync(logFile, 'a'));
+  } catch {
+    // File creation failed — later writes will silently fail
+  }
   cleanupOldLogs(dir);
 }
 
 /** @internal Reset logger state for testing */
 export function resetLogger(): void {
   logFile = null;
+  writeChain = Promise.resolve();
+}
+
+/** @internal Wait for queued log writes in tests. */
+export async function flushLoggerForTesting(): Promise<void> {
+  await writeChain;
 }
 
 export { getLogDir };
 
 export function log(message: string, data?: unknown): void {
-  if (!logFile) return; // Uninitialized — silently no-op
+  const target = logFile;
+  if (!target) return; // Uninitialized — silently no-op
   try {
     const timestamp = new Date().toISOString();
     let dataStr = '';
@@ -89,7 +103,11 @@ export function log(message: string, data?: unknown): void {
       }
     }
     const logEntry = `[${timestamp}] ${message} ${dataStr}\n`;
-    fs.appendFileSync(logFile, logEntry);
+    writeChain = writeChain
+      .then(() => appendFile(target, logEntry))
+      .catch(() => {
+        // Silently ignore logging errors and keep future writes alive
+      });
   } catch {
     // Silently ignore logging errors
   }

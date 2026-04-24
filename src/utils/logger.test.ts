@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { getLogDir, initLogger, log, resetLogger } from './logger';
+import {
+  flushLoggerForTesting,
+  getLogDir,
+  initLogger,
+  log,
+  resetLogger,
+} from './logger';
 
 describe('logger', () => {
   let tmpDir: string;
@@ -15,7 +21,8 @@ describe('logger', () => {
     resetLogger();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await flushLoggerForTesting();
     if (origLogDir === undefined) {
       delete process.env.OPENCODE_LOG_DIR;
     } else {
@@ -37,9 +44,10 @@ describe('logger', () => {
     expect(files).toEqual(['oh-my-opencode-slim.20260416T143052.log']);
   });
 
-  test('writes log message with timestamp', () => {
+  test('writes log message with timestamp', async () => {
     initLogger('session1');
     log('timestamped message');
+    await flushLoggerForTesting();
 
     const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
@@ -47,9 +55,10 @@ describe('logger', () => {
     expect(content).toContain('timestamped message');
   });
 
-  test('logs message with data object', () => {
+  test('logs message with data object', async () => {
     initLogger('session1');
     log('message with data', { key: 'value', number: 42 });
+    await flushLoggerForTesting();
 
     const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
@@ -57,20 +66,22 @@ describe('logger', () => {
     expect(content).toContain('"number":42');
   });
 
-  test('logs message without extra JSON when no data', () => {
+  test('logs message without extra JSON when no data', async () => {
     initLogger('session1');
     log('message without data');
+    await flushLoggerForTesting();
 
     const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content.trim()).toMatch(/message without data\s*$/);
   });
 
-  test('appends multiple log entries', () => {
+  test('appends multiple log entries', async () => {
     initLogger('session1');
     log('first');
     log('second');
     log('third');
+    await flushLoggerForTesting();
 
     const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n');
@@ -80,11 +91,12 @@ describe('logger', () => {
     expect(lines[2]).toContain('third');
   });
 
-  test('initLogger called twice uses second session file', () => {
+  test('initLogger called twice uses second session file', async () => {
     initLogger('session1');
     log('from session1');
     initLogger('session2');
     log('from session2');
+    await flushLoggerForTesting();
 
     const files = fs.readdirSync(tmpDir).sort();
     expect(files).toEqual([
@@ -153,12 +165,13 @@ describe('logger', () => {
     expect(files.find((f) => f.includes('fresh'))).toBeDefined();
   });
 
-  test('handles circular references in data', () => {
+  test('handles circular references in data', async () => {
     initLogger('session1');
     const circular: any = { name: 'test' };
     circular.self = circular;
 
     expect(() => log('circular data', circular)).not.toThrow();
+    await flushLoggerForTesting();
 
     const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
@@ -185,7 +198,7 @@ describe('logger', () => {
     }
   });
 
-  test('handles complex data structures', () => {
+  test('handles complex data structures', async () => {
     initLogger('session1');
     log('complex data', {
       nested: { deep: { value: 'test' } },
@@ -193,6 +206,7 @@ describe('logger', () => {
       boolean: true,
       null: null,
     });
+    await flushLoggerForTesting();
 
     const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');

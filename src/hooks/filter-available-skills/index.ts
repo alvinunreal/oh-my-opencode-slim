@@ -107,6 +107,23 @@ export function createFilterAvailableSkillsHook(
   _ctx: PluginInput,
   config: PluginConfig,
 ) {
+  const permissionRulesByAgent = new Map<string, Record<string, SkillRule>>();
+
+  const getPermissionRules = (agentName: string): Record<string, SkillRule> => {
+    const cached = permissionRulesByAgent.get(agentName);
+    if (cached) {
+      return cached;
+    }
+
+    const configuredSkills = getAgentOverride(config, agentName)?.skills;
+    const permissionRules = getSkillPermissionsForAgent(
+      agentName,
+      configuredSkills,
+    );
+    permissionRulesByAgent.set(agentName, permissionRules);
+    return permissionRules;
+  };
+
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
@@ -118,11 +135,7 @@ export function createFilterAvailableSkillsHook(
       }
 
       const agentName = getCurrentAgent(messages);
-      const configuredSkills = getAgentOverride(config, agentName)?.skills;
-      const permissionRules = getSkillPermissionsForAgent(
-        agentName,
-        configuredSkills,
-      );
+      const permissionRules = getPermissionRules(agentName);
 
       for (const message of messages) {
         for (const part of message.parts) {

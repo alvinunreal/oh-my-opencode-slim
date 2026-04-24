@@ -172,9 +172,28 @@ export function processImageAttachments(args: {
   const observerEnabled = !disabledAgents.has('observer');
   if (!observerEnabled) return;
 
+  const messagesWithImages: Array<{
+    msg: MessageWithParts;
+    imageParts: ImagePart[];
+  }> = [];
+
+  for (const msg of messages) {
+    if (msg.info.role !== 'user') continue;
+    const imageParts = msg.parts.filter(isImagePart);
+    if (imageParts.length > 0) {
+      messagesWithImages.push({ msg, imageParts });
+    }
+  }
+
   // Save images inside the project's .opencode/images/ directory.
   // This is within the workspace so the read tool won't require extra permissions.
   const saveDir = join(workDir, '.opencode', 'images');
+
+  if (messagesWithImages.length === 0) {
+    if (existsSync(saveDir)) cleanupAllSessions(saveDir);
+    return;
+  }
+
   const gitignorePath = join(workDir, '.opencode', '.gitignore');
   try {
     mkdirSync(saveDir, { recursive: true });
@@ -185,11 +204,7 @@ export function processImageAttachments(args: {
 
   cleanupAllSessions(saveDir);
 
-  for (const msg of messages) {
-    if (msg.info.role !== 'user') continue;
-    const imageParts = msg.parts.filter(isImagePart);
-    if (imageParts.length === 0) continue;
-
+  for (const { msg, imageParts } of messagesWithImages) {
     const sessionSubdir = msg.info.sessionID
       ? sanitizeFilename(msg.info.sessionID)
       : undefined;

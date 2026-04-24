@@ -104,19 +104,12 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Rewrites user-facing display-name mentions (e.g. @advisor) into internal
- * agent mentions (e.g. @oracle) for runtime routing.
- */
-export function rewriteDisplayNameMentions(
-  config: PluginConfig | undefined,
-  text: string,
-): string {
-  if (!text.includes('@')) {
-    return text;
-  }
+export type DisplayNameMentionRewriter = (text: string) => string;
 
-  let rewritten = text;
+export function createDisplayNameMentionRewriter(
+  config: PluginConfig | undefined,
+): DisplayNameMentionRewriter {
+  const replacements: Array<{ regex: RegExp; internalName: string }> = [];
 
   for (const internalName of getRuntimeAgentNames(config)) {
     const displayName = getAgentOverride(config, internalName)?.displayName;
@@ -129,13 +122,45 @@ export function rewriteDisplayNameMentions(
       continue;
     }
 
-    rewritten = rewritten.replace(
-      new RegExp(`(^|[^\\w.])@${escapeRegExp(normalizedDisplayName)}\\b`, 'g'),
-      `$1@${internalName}`,
-    );
+    replacements.push({
+      regex: new RegExp(
+        `(^|[^\\w.])@${escapeRegExp(normalizedDisplayName)}\\b`,
+        'g',
+      ),
+      internalName,
+    });
   }
 
-  return rewritten;
+  if (replacements.length === 0) {
+    return (text) => text;
+  }
+
+  return (text) => {
+    if (!text.includes('@')) {
+      return text;
+    }
+
+    let rewritten = text;
+    for (const replacement of replacements) {
+      rewritten = rewritten.replace(
+        replacement.regex,
+        `$1@${replacement.internalName}`,
+      );
+    }
+
+    return rewritten;
+  };
+}
+
+/**
+ * Rewrites user-facing display-name mentions (e.g. @advisor) into internal
+ * agent mentions (e.g. @oracle) for runtime routing.
+ */
+export function rewriteDisplayNameMentions(
+  config: PluginConfig | undefined,
+  text: string,
+): string {
+  return createDisplayNameMentionRewriter(config)(text);
 }
 
 /**

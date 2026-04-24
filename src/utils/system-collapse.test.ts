@@ -57,6 +57,16 @@ describe('collapseSystemInPlace', () => {
     expect(system).toHaveLength(0);
   });
 
+  test('preserves previous empty-string cleanup behavior', () => {
+    const system = [''];
+    const output = { system };
+
+    collapseSystemInPlace(output.system);
+
+    expect(output.system).toBe(system);
+    expect(system).toHaveLength(0);
+  });
+
   test('reassignment would NOT be visible (regression guard)', () => {
     // This test documents WHY we mutate in-place and not via reassignment.
     // Simulating the broken PR #336 approach to prove it fails.

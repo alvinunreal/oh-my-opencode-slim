@@ -32,7 +32,10 @@ import {
   createPresetManager,
   createWebfetchTool,
 } from './tools';
-import { resolveRuntimeAgentName, rewriteDisplayNameMentions } from './utils';
+import {
+  createDisplayNameMentionRewriter,
+  resolveRuntimeAgentName,
+} from './utils';
 import { initLogger, log } from './utils/logger';
 import { SubagentDepthTracker } from './utils/subagent-depth';
 import { collapseSystemInPlace } from './utils/system-collapse';
@@ -89,6 +92,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // Declare variables that must survive the try/catch for the return
   // closure. These are set inside the try block.
   let config: ReturnType<typeof loadPluginConfig>;
+  let disabledAgents: Set<string>;
   let agentDefs: ReturnType<typeof createAgents>;
   let agents: ReturnType<typeof getAgentConfigs>;
   let mcps: ReturnType<typeof createBuiltinMcps>;
@@ -116,12 +120,17 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let presetManager: ReturnType<typeof createPresetManager>;
   let councilTools: Record<string, unknown>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
+  let rewriteDisplayNameMentions: ReturnType<
+    typeof createDisplayNameMentionRewriter
+  >;
 
   // Counters for post-init health check (set inside try, checked outside)
   let toolCount = 0;
 
   try {
     config = loadPluginConfig(ctx.directory);
+    disabledAgents = getDisabledAgents(config);
+    rewriteDisplayNameMentions = createDisplayNameMentionRewriter(config);
     agentDefs = createAgents(config);
     agents = getAgentConfigs(config);
 
@@ -174,7 +183,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Get multiplexer instance for capability checks
     const multiplexer = getMultiplexer(multiplexerConfig);
     multiplexerEnabled =
-      multiplexerConfig.type !== 'none' && multiplexer !== null;
+      multiplexerConfig.type !== 'none' &&
+      multiplexer !== null &&
+      multiplexer.isInsideSession();
 
     log('[plugin] initialized with multiplexer config', {
       multiplexerConfig,
@@ -729,7 +740,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const orchestratorPrompt =
             typeof orchestratorDef?.config?.prompt === 'string'
               ? orchestratorDef.config.prompt
-              : buildOrchestratorPrompt(getDisabledAgents(config));
+              : buildOrchestratorPrompt(disabledAgents);
           output.system[0] =
             orchestratorPrompt +
             (output.system[0] ? `\n\n${output.system[0]}` : '');
@@ -782,7 +793,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           if (part.type !== 'text' || typeof part.text !== 'string') {
             continue;
           }
-          part.text = rewriteDisplayNameMentions(config, part.text);
+          part.text = rewriteDisplayNameMentions(part.text);
         }
       }
 
@@ -794,7 +805,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       processImageAttachments({
         messages: typedOutput.messages,
         workDir: ctx.directory,
-        disabledAgents: getDisabledAgents(config),
+        disabledAgents,
         log,
       });
 
