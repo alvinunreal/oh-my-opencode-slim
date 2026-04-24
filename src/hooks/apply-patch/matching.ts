@@ -352,10 +352,6 @@ export function rescueByPrefixSuffix(
     return { kind: 'miss' };
   }
 
-  if (hits.size > 1) {
-    return { kind: 'ambiguous', phase: 'prefix_suffix' };
-  }
-
   return { kind: 'match', hit };
 }
 
@@ -370,6 +366,10 @@ function collectOneLinePrefixSuffixHits(
   const leftHits: number[] = [];
   const rightHits: number[] = [];
 
+  // The one-line prefix/suffix fast path intentionally compares at the
+  // broadest safe automatic level. This preserves exact/unicode/trim-end
+  // behavior while avoiding multiple full scans for the common one-line edge
+  // case. Full-trim remains excluded from automatic rescue.
   for (let index = start; index < lines.length; index += 1) {
     const line = prepareAutoRescueTarget(lines[index]);
 
