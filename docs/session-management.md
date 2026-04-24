@@ -39,9 +39,18 @@ The orchestrator sees a compact reminder in its system context, for example:
 
 ```text
 ### Resumable Sessions
-explorer: exp-1 Search routing files
-oracle: ora-1 Review auth architecture
+- explorer: exp-1 Search routing files
+  Context read by exp-1: src/router.ts (120 lines), src/routes/api.ts (74 lines)
+- oracle: ora-1 Review auth architecture
 ```
+
+When a child session reads files through OpenCode's `read` tool, the reminder can
+include a compact list of files that session has already inspected. This helps the
+orchestrator choose the right session to resume for related follow-up work.
+
+To keep the prompt small, read context only shows files where at least 10 lines
+were read, includes line counts, and caps each remembered session to the most
+recent 8 files.
 
 On a related follow-up, the orchestrator can reuse that session instead of
 launching a fresh one. If the remembered child session no longer exists, the
@@ -59,6 +68,8 @@ Session management is intentionally narrow:
 - It does not change manual `@agent` calls.
 - It keeps only a small number of recent sessions per specialist type.
 - Missing or deleted child sessions are cleaned up automatically.
+- Read context is best-effort and tracks normal OpenCode `read` tool usage, not
+  arbitrary filesystem access through shell commands or external MCP tools.
 
 This keeps the feature useful for continuity without turning child sessions into
 long-lived global state.

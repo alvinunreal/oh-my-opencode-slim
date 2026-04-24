@@ -108,6 +108,126 @@ describe('task-session-manager hook', () => {
     expect(next.args.task_id).toBe('child-1');
   });
 
+  test('tracks files read by child sessions in resumable prompt context', async () => {
+    const { hook } = createHook();
+
+    await hook['tool.execute.after'](
+      {
+        tool: 'read',
+        sessionID: 'child-1',
+        callID: 'read-1',
+      },
+      {
+        output: [
+          '<path>/tmp/src/index.ts</path>',
+          '<type>file</type>',
+          '<content>',
+          ...Array.from({ length: 12 }, (_, index) => `${index + 1}: line`),
+          '</content>',
+        ].join('\n'),
+        metadata: {
+          loaded: ['/tmp/AGENTS.md'],
+        },
+      },
+    );
+
+    await hook['tool.execute.before'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'call-1',
+      },
+      {
+        args: {
+          subagent_type: 'explorer',
+          description: 'session files',
+        },
+      },
+    );
+    await hook['tool.execute.after'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'call-1',
+      },
+      {
+        output:
+          'task_id: child-1 (for resuming to continue this task if needed)',
+      },
+    );
+
+    const system = { system: ['base'] };
+    await hook['experimental.chat.system.transform'](
+      { sessionID: 'parent-1' },
+      system,
+    );
+
+    expect(system.system.join('\n')).toContain('exp-1 session files');
+    expect(system.system.join('\n')).toContain(
+      'Context read by exp-1: src/index.ts (12 lines)',
+    );
+  });
+
+  test('accumulates multiple reads and hides tiny read context', async () => {
+    const { hook } = createHook();
+
+    await hook['tool.execute.after'](
+      { tool: 'read', sessionID: 'child-1', callID: 'read-1' },
+      {
+        output: [
+          '<path>/tmp/src/small.ts</path>',
+          '<content>',
+          ...Array.from({ length: 4 }, (_, index) => `${index + 1}: line`),
+          '</content>',
+        ].join('\n'),
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'read', sessionID: 'child-1', callID: 'read-2' },
+      {
+        output: [
+          '<path>/tmp/src/large.ts</path>',
+          '<content>',
+          ...Array.from({ length: 7 }, (_, index) => `${index + 1}: line`),
+          '</content>',
+        ].join('\n'),
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'read', sessionID: 'child-1', callID: 'read-3' },
+      {
+        output: [
+          '<path>/tmp/src/large.ts</path>',
+          '<content>',
+          ...Array.from({ length: 5 }, (_, index) => `${index + 8}: line`),
+          '</content>',
+        ].join('\n'),
+      },
+    );
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { args: { subagent_type: 'explorer', description: 'line counts' } },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        output:
+          'task_id: child-1 (for resuming to continue this task if needed)',
+      },
+    );
+
+    const system = { system: ['base'] };
+    await hook['experimental.chat.system.transform'](
+      { sessionID: 'parent-1' },
+      system,
+    );
+
+    const prompt = system.system.join('\n');
+    expect(prompt).not.toContain('small.ts');
+    expect(prompt).toContain('src/large.ts (12 lines)');
+  });
+
   test('drops stale remembered sessions and falls back to fresh', async () => {
     const { hook } = createHook();
 
