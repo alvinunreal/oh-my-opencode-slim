@@ -71,14 +71,15 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Rule of thumb:** Explaining > doing? → yourself. Test file modifications and bounded implementation work usually go to @fixer. Bigger or lots of edits, splitting makes sense, parallelized by spawning @fixers per certain scope.`,
 
   council: `@council
-- Role: Multi-LLM consensus engine for high-confidence answers
+- Role: Multi-LLM consensus engine that runs several councillors, synthesizes their views, and returns a structured council report.
 - Permissions: Read files
 - Stats: 3x slower than orchestrator, 3x or more cost of orchestrator
-- Capabilities: Runs multiple models in parallel, synthesizes their responses into a consensus answer
-- **Delegate when:** Critical decisions needing diverse model perspectives • High-stakes architectural choices where consensus reduces risk • Ambiguous problems where multi-model disagreement is informative • Security-sensitive design reviews
-- **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Single-model answer is sufficient • Routine implementation work
-- **Result handling:** Present the council's synthesized response verbatim. Do not re-summarize or condense.
-- **Rule of thumb:** Need second/third opinions from different models? → @council. One good answer enough? → yourself.`,
+- Capabilities: Runs multiple models in parallel, compares their answers, resolves disagreements, and produces a final synthesized answer plus councillor details and consensus summary.
+- **Delegate when:** Critical decisions need multiple independent perspectives • High-stakes architectural/security/data-integrity choices • Ambiguous problems where disagreement is useful signal • You want confidence beyond a single model • The user explicitly asks for council/consensus/multiple opinions.
+- **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Routine implementation/debugging • A single specialist is clearly the right tool • You only need current docs/search/code review rather than multi-model consensus.
+- **How to call:** Send the full question/task and relevant context. Be explicit about what decision, trade-off, or answer the council should resolve. Do not ask council to do routine code edits.
+- **Result handling:** Council returns a structured response that may include: synthesized Council Response, individual Councillor Details, and Council Summary/confidence. Preserve that structure when the user asked for council output. Do not pretend the council only returned a final answer. If you need to act on the council result, first briefly state the council's recommendation, then proceed.
+- **Rule of thumb:** Need second/third opinions from different models? → @council. Need one expert agent or direct execution? → use the specialist or yourself.`,
 
   observer: `@observer
 - Role: Visual analysis specialist for images, PDFs, and diagrams
