@@ -313,6 +313,17 @@ The orchestrator may delegate to `@council` for high-stakes or ambiguous
 decisions, but it does so sparingly because council is usually the most
 expensive path.
 
+### Output format
+
+Council responses include:
+
+1. `Council Response` — the synthesized final answer.
+2. `Councillor Details` — each responding councillor's individual response,
+   using the councillor names from the configured preset.
+3. `Council Summary` — agreement, disagreement resolution, remaining
+   uncertainty, and a consensus confidence rating of `unanimous`, `majority`,
+   or `split`.
+
 ### Output footer
 
 Council responses include a footer like:

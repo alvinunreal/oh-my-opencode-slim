@@ -19,27 +19,52 @@ orchestration system that runs consensus across multiple models.
 1. Call the \`council_session\` tool with the user's prompt
 2. Optionally specify a preset (default: "default")
 3. Receive the councillor responses formatted for synthesis
-4. Synthesize the optimal final answer from the councillor responses
-5. Present the synthesized result to the user
+4. Follow the Synthesis Process below
+5. Present the result to the user
 
-**Synthesis Guidelines**:
-When you receive councillor responses, synthesize them into the optimal final answer:
-- Review all councillor responses thoroughly and create the best possible answer
-- Credit specific insights from individual councillors by name (e.g., "alpha noted that...", "beta suggested...")
-- Clearly explain your reasoning for the chosen approach
-- Be transparent about trade-offs when different approaches have valid pros/cons
-- Note any remaining uncertainties or areas where further investigation is needed
-- If councillors disagree, explain the resolution and your reasoning
-- Acknowledge if consensus was impossible and explain why
-- Don't just average responses — choose the best approach and improve upon it
-- Present the synthesized solution with relevant code examples, concrete details, and clear explanations
+**Synthesis Process** (MANDATORY — follow in order):
+1. Read the original user prompt
+2. Review each councillor's response individually — note each councillor's \
+key insight and unique contribution by name
+3. Identify agreements and contradictions between councillors
+4. Resolve contradictions with explicit reasoning
+5. Synthesize the optimal final answer
+6. Format output per the Required Output Format below
 
 **Behavior**:
 - Delegate requests directly to council_session
 - Don't pre-analyze or filter the prompt before calling council_session
-- Synthesize the councillor results into a comprehensive, coherent answer
-- Include attribution for valuable insights from specific councillors
-- If councillors disagree, explain why you chose one approach over another`;
+- Credit specific insights from individual councillors using their names
+- If councillors disagree, explain why you chose one approach over another
+- Do not omit per-councillor details from the final response
+- Do not collapse the output into only a final summary
+- Be transparent about trade-offs when different approaches have valid pros/cons
+- Don't just average responses — choose the best approach and improve upon it
+
+**Required Output Format**:
+Always include these sections in your final response:
+
+## Council Response
+Provide the best synthesized answer. Integrate the strongest points from the \
+councillors, resolve disagreements, and give the user a clear final \
+recommendation or answer. Include relevant code examples and concrete details.
+
+## Councillor Details
+Include each councillor's response separately.
+
+Use each councillor name exactly as provided in the tool result.
+
+Format each councillor like:
+
+### <councillor name>
+<that councillor's response>
+
+If a councillor failed or timed out, include that status briefly.
+
+## Council Summary
+Summarize where councillors agreed, where they disagreed, why you chose the \
+final answer, and any remaining uncertainty. Include a consensus confidence \
+rating: unanimous, majority, or split.`;
 
 export function createCouncilAgent(
   model: string,
@@ -128,7 +153,9 @@ export function formatCouncillorResults(
     const errorDetails = councillorResults
       .map(
         (cr) =>
-          `**${cr.name}** (${shortModelLabel(cr.model)}): ${cr.status} — ${cr.error ?? 'Unknown'}`,
+          `**${cr.name}** (${shortModelLabel(cr.model)}): ${cr.status} — ${
+            cr.error ?? 'Unknown'
+          }`,
       )
       .join('\n');
 
@@ -141,7 +168,8 @@ export function formatCouncillorResults(
     prompt += `\n\n---\n\n**Failed/Timed-out Councillors**:\n${failedSection}`;
   }
 
-  prompt += '\n\n---\n\nSynthesize the optimal response based on the above.';
+  prompt +=
+    '\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually, then produce the required output with a synthesized Council Response, per-councillor details using their exact names, and a Council Summary with consensus confidence rating (unanimous, majority, or split).';
 
   return prompt;
 }
