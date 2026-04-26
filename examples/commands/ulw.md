@@ -9,6 +9,9 @@ You are now in OMO Slim autonomous work mode.
 User task:
 $ARGUMENTS
 
+If no task arguments were provided, ask the user for the concrete task instead
+of enabling auto-continue or creating todos.
+
 Activation:
 1. Immediately call the `auto_continue` tool with `{ "enabled": true }`.
 2. Immediately create a concrete task list using the `todowrite` tool before
@@ -37,6 +40,8 @@ Safety boundaries:
 Stop and ask before:
 - destructive or irreversible actions
 - deleting large files/directories
+- committing, pushing, opening pull requests, or publishing artifacts unless
+  explicitly requested
 - force-pushing, rebasing shared branches, or rewriting git history
 - running very long or expensive jobs without clear user intent
 - changing public APIs or data formats beyond the requested scope
@@ -57,6 +62,3 @@ Validation:
   - validation command(s)
   - validation result
   - remaining caveats, if any
-
-If no task arguments were provided, ask the user for the concrete task instead
-of inventing one.
