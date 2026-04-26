@@ -83,6 +83,19 @@ Session management is enabled by default even though it is not shown in the
 starter config. See **[Session Management](docs/session-management.md)** if you
 want to customize how many resumable child-agent sessions are remembered.
 
+### Optional `/ulw` Command Recipe
+
+OMO Slim includes an optional `/ulw` custom command recipe for autonomous
+implementation sessions. It uses the existing Todo Continuation mechanism
+instead of adding a separate loop engine or changing default runtime behavior.
+
+```text
+/ulw implement the requested change and run validation
+```
+
+See **[`/ulw` Command Recipe](docs/ulw-command.md)** and
+[`examples/commands/ulw.md`](examples/commands/ulw.md).
+
 ### For Alternative Providers
 
 To use Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
@@ -478,6 +491,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
 | **[Session Management](docs/session-management.md)** | Reuse recent child-agent sessions with short aliases instead of starting over |
 | **[Todo Continuation](docs/todo-continuation.md)** | Auto-continue orchestrator sessions with cooldowns and safety checks |
+| **[`/ulw` Command Recipe](docs/ulw-command.md)** | Optional autonomous work command built on Todo Continuation |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Codemap](docs/codemap.md)** | Generate hierarchical codemaps to understand large codebases faster |
 
