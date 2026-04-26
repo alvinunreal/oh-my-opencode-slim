@@ -1,5 +1,5 @@
 ---
-description: OMO Slim autonomous work mode: continue through todos until validated completion
+description: "OMO Slim autonomous work mode: continue through todos until validated completion"
 agent: orchestrator
 subtask: false
 ---
