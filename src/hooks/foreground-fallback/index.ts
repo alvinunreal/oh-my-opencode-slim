@@ -2,9 +2,10 @@
  * Runtime model fallback for foreground (interactive) agent sessions.
  *
  * When OpenCode fires a session.error, message.updated, or session.status
- * event containing a rate-limit signal, this manager:
+ * event containing a rate-limit or other retryable-failure signal, this
+ * manager:
  *   1. Looks up the next untried model in the agent's configured chain
- *   2. Aborts the rate-limited prompt via client.session.abort()
+ *   2. Aborts the failed prompt via client.session.abort()
  *   3. Re-queues the last user message via client.session.promptAsync()
  *      with the new model — promptAsync returns immediately so we never
  *      block the event handler waiting for a full LLM response.
@@ -12,6 +13,11 @@
  * This mirrors the same fallback loop used for delegated sessions, but operates
  * reactively through the event system instead of wrapping prompt() in a
  * try/catch, which is not possible for interactive (foreground) sessions.
+ *
+ * Retryable failures include rate limits, timeouts, connection errors, empty
+ * responses, and provider-side errors (5xx). This broad scope ensures that a
+ * consistently-failing model triggers fallback rather than OpenCode's built-in
+ * retry loop hammering the same endpoint.
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -20,9 +26,10 @@ import { log } from '../../utils/logger';
 type OpencodeClient = PluginInput['client'];
 
 // ---------------------------------------------------------------------------
-// Rate-limit detection
+// Retryable-failure detection
 // ---------------------------------------------------------------------------
 
+/** Patterns that signal a rate limit or quota exhaustion. */
 const RATE_LIMIT_PATTERNS = [
   /\b429\b/,
   /rate.?limit/i,
@@ -39,6 +46,44 @@ const RATE_LIMIT_PATTERNS = [
   /reduce concurrency/i,
 ];
 
+/** Patterns that signal other retryable failures (timeouts, connection errors,
+ *  empty responses, credential cool-downs, server errors). */
+const OTHER_RETRYABLE_PATTERNS = [
+  /timeout/i,
+  /timed?\s*out/i,
+  /connection\s*(refused|reset|failed|error|closed|dropped)/i,
+  /ECONNREFUSED/i,
+  /ECONNRESET/i,
+  /ETIMEDOUT/i,
+  /ENOTFOUND/i,
+  /ENETUNREACH/i,
+  /network/i,
+  /cooling\s*down/i,
+  /credentials?.*cool/i,
+  /all\s+credentials/i,
+  /\b5\d{2}\b/, // 5xx HTTP status codes
+  /service\s*unavailable/i,
+  /bad\s*gateway/i,
+  /gateway\s*timeout/i,
+  /internal\s*server\s*error/i,
+  /upstream/i,
+  /empty\s*(response|result|content)/i,
+  /no\s+(content|output|response)/i,
+  /failed\s+to\s+(generate|complete|respond|produce)/i,
+  /aborted/i,
+  /cancelled/i,
+  /context\s*length\s*exceeded/i,
+  /max.*tokens?.*exceed/i,
+  /context\s*window/i,
+  /token\s*limit/i,
+];
+
+const ALL_RETRYABLE_PATTERNS = [...RATE_LIMIT_PATTERNS, ...OTHER_RETRYABLE_PATTERNS];
+
+/**
+ * Checks whether an error represents a rate-limit condition (quota, throttle).
+ * Used by callers that want to distinguish rate limits from other failures.
+ */
 export function isRateLimitError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const err = error as {
@@ -54,6 +99,31 @@ export function isRateLimitError(error: unknown): boolean {
   return RATE_LIMIT_PATTERNS.some((p) => p.test(text));
 }
 
+/**
+ * Checks whether an error represents any retryable failure — rate limits,
+ * timeouts, connection errors, empty responses, 5xx errors, credential
+ * cool-downs, context-length overflows, etc.
+ *
+ * This is the primary check for fallback triggering: any model that fails
+ * for a retryable reason should be rotated out in favor of the next model
+ * in its chain, rather than letting OpenCode's built-in retry loop hammer
+ * the same failing endpoint.
+ */
+export function isRetryableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const err = error as {
+    message?: string;
+    data?: { statusCode?: number; message?: string; responseBody?: string };
+  };
+  const text = [
+    err.message ?? '',
+    String(err.data?.statusCode ?? ''),
+    err.data?.message ?? '',
+    err.data?.responseBody ?? '',
+  ].join(' ');
+  return ALL_RETRYABLE_PATTERNS.some((p) => p.test(text));
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -64,6 +134,63 @@ function parseModel(
   const slash = model.indexOf('/');
   if (slash <= 0 || slash >= model.length - 1) return null;
   return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
+}
+
+/**
+ * Checks whether a session.status message (type: 'retry') indicates a
+ * retryable failure. OpenCode emits retry status messages for rate limits,
+ * timeouts, connection failures, empty responses, credential cool-downs, and
+ * other transient issues. We match broadly so any persistent failure triggers
+ * fallback rather than looping on the same endpoint.
+ */
+function isRetryableStatusMessage(msg: string): boolean {
+  if (!msg) return false;
+  // Rate-limit and quota patterns
+  if (
+    msg.includes('rate limit') ||
+    msg.includes('usage limit') ||
+    msg.includes('usage exceeded') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('exceededbudget') ||
+    msg.includes('over budget') ||
+    msg.includes('high concurrency') ||
+    msg.includes('reduce concurrency')
+  ) {
+    return true;
+  }
+  // Timeout and connection patterns
+  if (
+    msg.includes('timeout') ||
+    msg.includes('timed out') ||
+    msg.includes('connection') ||
+    msg.includes('network') ||
+    msg.includes('econnrefused') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout')
+  ) {
+    return true;
+  }
+  // Credential cooling-down and provider overload patterns
+  if (
+    msg.includes('cooling down') ||
+    msg.includes('credentials') ||
+    msg.includes('overloaded') ||
+    msg.includes('unavailable') ||
+    msg.includes('empty') ||
+    msg.includes('aborted') ||
+    msg.includes('cancelled')
+  ) {
+    return true;
+  }
+  // Context / token overflow patterns
+  if (
+    msg.includes('context length') ||
+    msg.includes('context window') ||
+    msg.includes('token limit')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** Prevent re-triggering within this window for the same session. */
@@ -133,8 +260,8 @@ export class ForegroundFallbackManager {
             `${info.providerID}/${info.modelID}`,
           );
         }
-        // Rate-limit on an individual message
-        if (info.error && isRateLimitError(info.error)) {
+        // Any retryable failure on an individual message triggers fallback
+        if (info.error && isRetryableError(info.error)) {
           await this.tryFallback(sessionID);
         }
         break;
@@ -144,7 +271,7 @@ export class ForegroundFallbackManager {
         const props = event.properties as
           | { sessionID?: string; error?: unknown }
           | undefined;
-        if (props?.sessionID && props.error && isRateLimitError(props.error)) {
+        if (props?.sessionID && props.error && isRetryableError(props.error)) {
           await this.tryFallback(props.sessionID);
         }
         break;
@@ -157,19 +284,16 @@ export class ForegroundFallbackManager {
               status?: { type?: string; message?: string };
             }
           | undefined;
-        if (!props?.sessionID || props.status?.type !== 'retry') break;
-        const msg = props.status.message?.toLowerCase() ?? '';
-        if (
-          msg.includes('rate limit') ||
-          msg.includes('usage limit') ||
-          msg.includes('usage exceeded') ||
-          msg.includes('quota exceeded') ||
-          msg.includes('exceededbudget') ||
-          msg.includes('over budget') ||
-          msg.includes('high concurrency') ||
-          msg.includes('reduce concurrency')
-        ) {
-          await this.tryFallback(props.sessionID);
+        if (!props?.sessionID) break;
+        const statusType = props.status?.type;
+        const msg = props.status?.message?.toLowerCase() ?? '';
+
+        // Trigger fallback on 'retry' status with any retryable message
+        // (rate limit, timeout, connection, empty, cooling down, etc.)
+        if (statusType === 'retry') {
+          if (isRetryableStatusMessage(msg)) {
+            await this.tryFallback(props.sessionID);
+          }
         }
         break;
       }

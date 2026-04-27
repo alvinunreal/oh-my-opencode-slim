@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { ForegroundFallbackManager, isRateLimitError } from './index';
+import { ForegroundFallbackManager, isRateLimitError, isRetryableError } from './index';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,6 +88,129 @@ describe('isRateLimitError', () => {
 });
 
 // ---------------------------------------------------------------------------
+// isRetryableError
+// ---------------------------------------------------------------------------
+
+describe('isRetryableError', () => {
+  // Rate-limit patterns (same as isRateLimitError)
+  test('returns true for 429 status code', () => {
+    expect(isRetryableError({ data: { statusCode: 429 } })).toBe(true);
+  });
+
+  test('returns true for "rate limit" in message', () => {
+    expect(isRetryableError({ message: 'Rate limit exceeded' })).toBe(true);
+  });
+
+  test('returns true for "quota exceeded" in responseBody', () => {
+    expect(isRetryableError({ data: { responseBody: 'quota exceeded' } })).toBe(true);
+  });
+
+  // Timeout patterns
+  test('returns true for "timeout" in message', () => {
+    expect(isRetryableError({ message: 'request timeout after 30s' })).toBe(true);
+  });
+
+  test('returns true for "timed out" in message', () => {
+    expect(isRetryableError({ message: 'connection timed out' })).toBe(true);
+  });
+
+  // Connection error patterns
+  test('returns true for "connection refused"', () => {
+    expect(isRetryableError({ message: 'ECONNREFUSED connection refused' })).toBe(true);
+  });
+
+  test('returns true for "connection reset"', () => {
+    expect(isRetryableError({ message: 'ECONNRESET connection reset by peer' })).toBe(true);
+  });
+
+  test('returns true for "ETIMEDOUT"', () => {
+    expect(isRetryableError({ message: 'ETIMEDOUT' })).toBe(true);
+  });
+
+  // Credential cool-down patterns
+  test('returns true for "cooling down"', () => {
+    expect(isRetryableError({ message: 'All credentials for model go/kimi-k2.6 are cooling down' })).toBe(true);
+  });
+
+  test('returns true for "cooling down" in responseBody', () => {
+    expect(isRetryableError({ data: { responseBody: 'cooling down credentials' } })).toBe(true);
+  });
+
+  test('returns true for "all credentials"', () => {
+    expect(isRetryableError({ message: 'All credentials are cooling down' })).toBe(true);
+  });
+
+  // 5xx server error patterns
+  test('returns true for 500 status code', () => {
+    expect(isRetryableError({ data: { statusCode: 500 } })).toBe(true);
+  });
+
+  test('returns true for 502', () => {
+    expect(isRetryableError({ data: { statusCode: 502 } })).toBe(true);
+  });
+
+  test('returns true for 503', () => {
+    expect(isRetryableError({ data: { statusCode: 503 } })).toBe(true);
+  });
+
+  test('returns true for "service unavailable"', () => {
+    expect(isRetryableError({ message: 'Service Unavailable' })).toBe(true);
+  });
+
+  test('returns true for "bad gateway"', () => {
+    expect(isRetryableError({ message: 'Bad Gateway' })).toBe(true);
+  });
+
+  test('returns true for "gateway timeout"', () => {
+    expect(isRetryableError({ message: 'Gateway Timeout' })).toBe(true);
+  });
+
+  // Empty response patterns
+  test('returns true for "empty response"', () => {
+    expect(isRetryableError({ message: 'empty response from provider' })).toBe(true);
+  });
+
+  test('returns true for "no content"', () => {
+    expect(isRetryableError({ message: 'no content generated' })).toBe(true);
+  });
+
+  // Context length patterns
+  test('returns true for "context length exceeded"', () => {
+    expect(isRetryableError({ message: 'context length exceeded' })).toBe(true);
+  });
+
+  test('returns true for "token limit"', () => {
+    expect(isRetryableError({ message: 'token limit reached' })).toBe(true);
+  });
+
+  // Non-retryable: auth errors, invalid input, etc.
+  test('returns false for "invalid API key"', () => {
+    expect(isRetryableError({ message: 'invalid API key' })).toBe(false);
+  });
+
+  test('returns false for "invalid request"', () => {
+    expect(isRetryableError({ message: 'invalid request format' })).toBe(false);
+  });
+
+  test('returns false for null', () => {
+    expect(isRetryableError(null)).toBe(false);
+  });
+
+  test('returns false for non-object', () => {
+    expect(isRetryableError('string error')).toBe(false);
+  });
+
+  // Ensure 4xx that aren't 429 don't match
+  test('returns false for 403 status code', () => {
+    expect(isRetryableError({ data: { statusCode: 403 } })).toBe(false);
+  });
+
+  test('returns false for 401 status code', () => {
+    expect(isRetryableError({ data: { statusCode: 401 } })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ForegroundFallbackManager — disabled
 // ---------------------------------------------------------------------------
 
@@ -159,7 +282,7 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(call[0].body.model.modelID).toBe('gpt-4o');
   });
 
-  test('does nothing when error is not a rate limit', async () => {
+  test('does nothing when error is not retryable', async () => {
     await mgr.handleEvent({
       type: 'session.error',
       properties: {
@@ -169,6 +292,62 @@ describe('ForegroundFallbackManager session.error', () => {
     });
 
     expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('triggers fallback on timeout error', async () => {
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-timeout',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          error: { message: 'request timeout after 30s' },
+        },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('triggers fallback on cooling-down error', async () => {
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-cool',
+          providerID: 'cliproxyapi',
+          modelID: 'kimi-k2.6',
+          error: { message: 'All credentials for model go/kimi-k2.6 are cooling down' },
+        },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('triggers fallback on 5xx error via session.error', async () => {
+    // First seed the model
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-5xx',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-5xx',
+        error: { data: { statusCode: 503, message: 'service unavailable' } },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('does nothing when no chain configured for session', async () => {
@@ -279,7 +458,61 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
-  test('ignores session.status with non-rate-limit retry message', async () => {
+  test('triggers fallback on retry status with timeout message', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    // Pre-seed model
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-timeout-retry',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-timeout-retry',
+        status: { type: 'retry', message: 'connection timeout, retrying...' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('triggers fallback on retry status with cooling-down message', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    // Pre-seed model
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-cool-retry',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-cool-retry',
+        status: { type: 'retry', message: 'All credentials are cooling down' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('ignores session.status with non-retryable retry message', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true);
 
@@ -287,7 +520,7 @@ describe('ForegroundFallbackManager session.status', () => {
       type: 'session.status',
       properties: {
         sessionID: 'sess-4',
-        status: { type: 'retry', message: 'connection timeout, retrying...' },
+        status: { type: 'retry', message: 'unknown transient error' },
       },
     });
 

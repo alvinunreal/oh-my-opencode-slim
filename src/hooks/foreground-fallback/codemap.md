@@ -3,21 +3,36 @@
 ## Responsibility
 
 Provides reactive model fallback for foreground (interactive) sessions when
-rate-limit or provider-limit signals are observed in event streams.
+a rate-limit or other retryable failure is observed in event streams.
 
 ## Design
 
 - `index.ts` exports:
   - `ForegroundFallbackManager`
-  - `isRateLimitError(error)`
+  - `isRateLimitError(error)` — checks rate-limit/quota patterns only
+  - `isRetryableError(error)` — checks **all** retryable failures: rate limits,
+    timeouts, connection errors, credential cool-downs, 5xx errors, empty
+    responses, context-length overflows
+- Error detection is layered:
+  - `RATE_LIMIT_PATTERNS` — regexes for rate-limit/quota errors (429, "rate
+    limit", "quota exceeded", etc.)
+  - `OTHER_RETRYABLE_PATTERNS` — regexes for non-rate-limit retryable failures
+    (timeout, ECONNREFUSED, "cooling down", 5xx, "empty response", "context
+    length exceeded", etc.)
+  - `ALL_RETRYABLE_PATTERNS` — combined set used by `isRetryableError`
+  - `isRetryableStatusMessage(msg)` — string-matching for `session.status`
+    retry messages (lowercased), covering rate limits, timeouts, connection
+    issues, cool-downs, and context overflow
 - Manager state is per-session maps for:
   - active model (`sessionModel`)
   - mapped agent (`sessionAgent`)
   - attempted models (`sessionTried`)
   - dedupe timestamp (`lastTrigger`)
   - in-flight fallback lock (`inProgress`)
-- Rate-limit detection is regex based and also checks structured payload fields
-  (`message`, `statusCode`, `data.message`, `data.responseBody`).
+- Fallback trigger conditions (broadened beyond rate limits):
+  - `message.updated` with `info.error` → `isRetryableError()` check
+  - `session.error` → `isRetryableError()` check
+  - `session.status` with `type: 'retry'` → `isRetryableStatusMessage()` check
 - Fallback selection uses `resolveChain(agentName, currentModel)` with ordered
   priority:
   1. exact agent chain (if configured)
@@ -31,7 +46,8 @@ rate-limit or provider-limit signals are observed in event streams.
 
 1. `handleEvent` receives each plugin event.
 2. On `message.updated`, `session.error`, and retry `session.status`, it checks
-   rate-limit markers and calls `tryFallback(sessionID)` when matched.
+   for retryable failure markers (not just rate limits) and calls
+   `tryFallback(sessionID)` when matched.
 3. `subagent.session.created` updates session-to-agent mappings for better chain
    resolution.
 4. `tryFallback(sessionID)` enforces:
