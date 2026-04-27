@@ -86,6 +86,9 @@ export function createApplyPatchHook(ctx: PluginInput) {
 
         if (
           normalizedError.kind === 'blocked' &&
+          // Only the plugin-side outside-workspace preflight should fail open.
+          // Keep the code check explicit so any future blocked error remains
+          // fail-closed by default.
           details?.code === 'outside_workspace'
         ) {
           logHookStatus('skipped', {
