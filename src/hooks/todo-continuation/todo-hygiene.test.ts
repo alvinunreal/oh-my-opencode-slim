@@ -21,60 +21,76 @@ function createState(
   };
 }
 
+function createHook(options: Parameters<typeof createTodoHygiene>[0]) {
+  return createTodoHygiene({ reminderDebounceMs: 0, ...options });
+}
+
 describe('todo hygiene', () => {
   test('new request clears pending state from the previous turn', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => createState(),
     });
-    const stale = { system: ['base'] };
-    const fresh = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     hook.handleRequestStart({ sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, stale);
+    const stale = await hook.consumePendingReminder('s1');
 
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, fresh);
+    const fresh = await hook.consumePendingReminder('s1');
 
-    expect(stale.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
-    expect(fresh.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    expect(stale).toBeNull();
+    expect(fresh).toBe(TODO_HYGIENE_REMINDER);
   });
 
   test('does not arm before the current request calls todowrite', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
+      getTodoState: async () => createState(),
+    });
+
+    hook.handleRequestStart({ sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
+
+    expect(await hook.consumePendingReminder('s1')).toBeNull();
+  });
+
+  test('arms after the first relevant tool following todowrite', async () => {
+    const hook = createHook({
+      getTodoState: async () => createState(),
+    });
+
+    hook.handleRequestStart({ sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
+
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_HYGIENE_REMINDER,
+    );
+  });
+
+  test('chat system transform is a cache-friendly no-op', async () => {
+    const hook = createHook({
       getTodoState: async () => createState(),
     });
     const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
     expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_HYGIENE_REMINDER,
+    );
   });
 
-  test('arms after the first relevant tool following todowrite', async () => {
-    const hook = createTodoHygiene({
+  test('multiple tools in the same round still consume only one reminder', async () => {
+    const hook = createHook({
       getTodoState: async () => createState(),
     });
-    const system = { system: ['base'] };
-
-    hook.handleRequestStart({ sessionID: 's1' });
-    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
-
-    expect(system.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
-  });
-
-  test('multiple tools in the same round still inject only one reminder', async () => {
-    const hook = createTodoHygiene({
-      getTodoState: async () => createState(),
-    });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
@@ -82,36 +98,34 @@ describe('todo hygiene', () => {
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'glob', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(
-      system.system.filter((item) => item.includes(TODO_HYGIENE_REMINDER)),
-    ).toHaveLength(1);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_HYGIENE_REMINDER,
+    );
+    expect(await hook.consumePendingReminder('s1')).toBeNull();
   });
 
   test('injects again on a later round after new activity', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => createState(),
     });
-    const first = { system: ['base'] };
-    const second = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, first);
+    const first = await hook.consumePendingReminder('s1');
 
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, second);
+    const second = await hook.consumePendingReminder('s1');
 
-    expect(first.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
-    expect(second.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    expect(first).toBe(TODO_HYGIENE_REMINDER);
+    expect(second).toBe(TODO_HYGIENE_REMINDER);
   });
 
   test('upgrades to final-active on a later round', async () => {
     let call = 0;
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => {
         call++;
         if (call <= 4) {
@@ -124,24 +138,22 @@ describe('todo hygiene', () => {
         });
       },
     });
-    const first = { system: ['base'] };
-    const second = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, first);
+    const first = await hook.consumePendingReminder('s1');
 
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, second);
+    const second = await hook.consumePendingReminder('s1');
 
-    expect(first.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
-    expect(second.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
+    expect(first).toBe(TODO_HYGIENE_REMINDER);
+    expect(second).toBe(TODO_FINAL_ACTIVE_REMINDER);
   });
 
   test('todowrite can arm final-active immediately', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () =>
         createState({
           openCount: 1,
@@ -149,18 +161,18 @@ describe('todo hygiene', () => {
           pendingCount: 0,
         }),
     });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_FINAL_ACTIVE_REMINDER,
+    );
   });
 
   test('once final-active is armed, later tools skip extra todo lookups in the same round', async () => {
     let calls = 0;
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => {
         calls++;
         return createState({
@@ -180,25 +192,21 @@ describe('todo hygiene', () => {
   });
 
   test('shouldInject rejection consumes the pending reminder', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => createState(),
       shouldInject: () => false,
     });
-    const first = { system: ['base'] };
-    const second = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, first);
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, second);
 
-    expect(first.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
-    expect(second.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBeNull();
+    expect(await hook.consumePendingReminder('s1')).toBeNull();
   });
 
   test('final-active reminder wins when only one active todo remains', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () =>
         createState({
           openCount: 1,
@@ -206,18 +214,18 @@ describe('todo hygiene', () => {
           pendingCount: 0,
         }),
     });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(system.system.join('\n')).toContain(TODO_FINAL_ACTIVE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_FINAL_ACTIVE_REMINDER,
+    );
   });
 
   test('transform lookup failures are best-effort and do not drop later reminders', async () => {
     let fail = false;
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => {
         if (fail) {
           throw new Error('boom');
@@ -225,27 +233,25 @@ describe('todo hygiene', () => {
         return createState();
       },
     });
-    const failed = { system: ['base'] };
-    const recovered = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     fail = true;
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, failed);
+    const failed = await hook.consumePendingReminder('s1');
 
     fail = false;
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, recovered);
+    const recovered = await hook.consumePendingReminder('s1');
 
-    expect(failed.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
-    expect(recovered.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    expect(failed).toBeNull();
+    expect(recovered).toBe(TODO_HYGIENE_REMINDER);
   });
 
   test('a late tool failure does not clear a reminder already armed for the round', async () => {
     let call = 0;
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => {
         call++;
         if (call === 3) {
@@ -254,20 +260,20 @@ describe('todo hygiene', () => {
         return createState();
       },
     });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(system.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_HYGIENE_REMINDER,
+    );
   });
 
   test('todowrite lookup failures do not disable the current request', async () => {
     let fail = false;
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => {
         if (fail) {
           throw new Error('boom');
@@ -275,7 +281,6 @@ describe('todo hygiene', () => {
         return createState();
       },
     });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     fail = true;
@@ -283,37 +288,57 @@ describe('todo hygiene', () => {
     fail = false;
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(system.system.join('\n')).toContain(TODO_HYGIENE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_HYGIENE_REMINDER,
+    );
   });
 
-  test('non-injectable sessions are fully cleared after a rejected round', async () => {
+  test('non-injectable sessions are ignored before todo lookups', async () => {
     let calls = 0;
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => {
         calls++;
         return createState();
       },
       shouldInject: () => false,
     });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
+    await hook.consumePendingReminder('s1');
     await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
 
-    expect(calls).toBe(1);
-    expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+    expect(calls).toBe(0);
+  });
+
+  test('non-injectable todowrite sessions skip reset lookup and do not arm state', async () => {
+    let calls = 0;
+    const hook = createHook({
+      getTodoState: async () => {
+        calls++;
+        return createState({
+          openCount: 1,
+          inProgressCount: 1,
+          pendingCount: 0,
+        });
+      },
+      shouldInject: () => false,
+    });
+
+    hook.handleRequestStart({ sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
+
+    expect(calls).toBe(0);
+    expect(await hook.consumePendingReminder('s1')).toBeNull();
   });
 
   test('session.deleted clears all state', async () => {
-    const hook = createTodoHygiene({
+    const hook = createHook({
       getTodoState: async () => createState(),
     });
-    const system = { system: ['base'] };
 
     hook.handleRequestStart({ sessionID: 's1' });
     await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
@@ -322,8 +347,45 @@ describe('todo hygiene', () => {
       type: 'session.deleted',
       properties: { info: { id: 's1' } },
     });
-    await hook.handleChatSystemTransform({ sessionID: 's1' }, system);
 
-    expect(system.system.join('\n')).not.toContain(TODO_HYGIENE_REMINDER);
+    expect(await hook.consumePendingReminder('s1')).toBeNull();
+  });
+
+  test('default debounce avoids repeated todo lookups while a reminder is pending', async () => {
+    let calls = 0;
+    const hook = createTodoHygiene({
+      getTodoState: async () => {
+        calls++;
+        return createState();
+      },
+    });
+
+    hook.handleRequestStart({ sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'glob', sessionID: 's1' });
+
+    expect(calls).toBe(2);
+    expect(await hook.consumePendingReminder('s1')).toBe(
+      TODO_HYGIENE_REMINDER,
+    );
+  });
+
+  test('reminderDebounceMs=0 permits immediate reinspection while pending', async () => {
+    let calls = 0;
+    const hook = createHook({
+      getTodoState: async () => {
+        calls++;
+        return createState();
+      },
+    });
+
+    hook.handleRequestStart({ sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'todowrite', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 's1' });
+    await hook.handleToolExecuteAfter({ tool: 'grep', sessionID: 's1' });
+
+    expect(calls).toBe(3);
   });
 });
