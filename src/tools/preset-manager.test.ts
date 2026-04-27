@@ -731,7 +731,7 @@ describe('createPresetManager', () => {
       setActiveRuntimePreset(null);
     });
 
-    test('activePreset syncs from runtime-preset state on factory creation', () => {
+    test('activePreset syncs from runtime-preset state on factory creation', async () => {
       // Set runtime preset before creating manager
       setActiveRuntimePreset('cheap');
 
@@ -752,7 +752,7 @@ describe('createPresetManager', () => {
 
       // List presets should show cheap as active
       const output = createOutput();
-      manager.handleCommandExecuteBefore(
+      await manager.handleCommandExecuteBefore(
         { command: 'preset', sessionID: 's1', arguments: '' },
         output,
       );

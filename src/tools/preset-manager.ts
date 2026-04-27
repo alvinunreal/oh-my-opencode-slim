@@ -166,8 +166,9 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       }
     }
 
+    const hasAgentUpdates = Object.keys(agentUpdates).length > 0;
     const allUpdates = { ...resetUpdates, ...agentUpdates };
-    if (Object.keys(allUpdates).length === 0) {
+    if (!hasAgentUpdates) {
       output.parts.push(
         createInternalAgentTextPart(
           `Preset "${presetName}" is empty (no agent overrides defined).`,
