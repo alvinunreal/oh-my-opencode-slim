@@ -220,7 +220,7 @@ export function createTodoHygiene(options: Options) {
 
       pending.delete(sessionID);
       nextPendingInspectionAt.delete(sessionID);
-      options.log?.('Injected todo hygiene reminder', {
+      options.log?.('Consumed todo hygiene reminder', {
         sessionID,
         reminder,
         reasons: Array.from(reasons),
