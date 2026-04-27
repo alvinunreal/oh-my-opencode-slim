@@ -41,15 +41,22 @@ interface Options {
     pendingCount: number;
   }>;
   shouldInject?: (sessionID: string) => boolean;
+  reminderDebounceMs?: number;
   log?: (message: string, meta?: Record<string, unknown>) => void;
 }
 
+const DEFAULT_REMINDER_DEBOUNCE_MS = 1_000;
+
 export function createTodoHygiene(options: Options) {
   const pending = new Map<string, Set<Reason>>();
+  const nextPendingInspectionAt = new Map<string, number>();
   const active = new Set<string>();
+  const reminderDebounceMs =
+    options.reminderDebounceMs ?? DEFAULT_REMINDER_DEBOUNCE_MS;
 
   function clearCycle(sessionID: string): void {
     pending.delete(sessionID);
+    nextPendingInspectionAt.delete(sessionID);
   }
 
   function clear(sessionID: string): void {
@@ -73,6 +80,10 @@ export function createTodoHygiene(options: Options) {
     const reasons = pending.get(sessionID) ?? new Set<Reason>();
     reasons.add(reason);
     pending.set(sessionID, reasons);
+
+    if (reminderDebounceMs > 0) {
+      nextPendingInspectionAt.set(sessionID, Date.now() + reminderDebounceMs);
+    }
   }
 
   function pick(reasons: Set<Reason>): string {
@@ -100,6 +111,11 @@ export function createTodoHygiene(options: Options) {
 
       try {
         if (RESET.has(tool)) {
+          if (options.shouldInject && !options.shouldInject(input.sessionID)) {
+            clear(input.sessionID);
+            return;
+          }
+
           active.add(input.sessionID);
           clearCycle(input.sessionID);
           const state = await options.getTodoState(input.sessionID);
@@ -141,6 +157,16 @@ export function createTodoHygiene(options: Options) {
           return;
         }
 
+        const pendingReasons = pending.get(input.sessionID);
+        if (
+          pendingReasons &&
+          pendingReasons.size > 0 &&
+          reminderDebounceMs > 0 &&
+          Date.now() < (nextPendingInspectionAt.get(input.sessionID) ?? 0)
+        ) {
+          return;
+        }
+
         const state = await options.getTodoState(input.sessionID);
         if (!state.hasOpenTodos) {
           clear(input.sessionID);
@@ -171,49 +197,35 @@ export function createTodoHygiene(options: Options) {
     },
 
     async handleChatSystemTransform(
-      input: SystemInput,
-      output: SystemOutput,
+      _input: SystemInput,
+      _output: SystemOutput,
     ): Promise<void> {
-      if (!input.sessionID) {
-        return;
+      // Dynamic todo hygiene reminders are injected ephemerally in
+      // experimental.chat.messages.transform so system prompt output remains
+      // cache-friendly.
+    },
+
+    consumePendingReminder(sessionID: string): string | null {
+      const reasons = pending.get(sessionID);
+      if (!reasons || reasons.size === 0) {
+        return null;
       }
 
-      const reasons = pending.get(input.sessionID);
-      if (!reasons || reasons.size === 0) {
-        return;
+      if (options.shouldInject && !options.shouldInject(sessionID)) {
+        clear(sessionID);
+        return null;
       }
 
       const reminder = pick(reasons);
 
-      if (options.shouldInject && !options.shouldInject(input.sessionID)) {
-        clear(input.sessionID);
-        return;
-      }
-
-      try {
-        const state = await options.getTodoState(input.sessionID);
-        if (!state.hasOpenTodos) {
-          clear(input.sessionID);
-          return;
-        }
-
-        pending.delete(input.sessionID);
-        output.system.push(reminder);
-        options.log?.('Injected todo hygiene reminder', {
-          sessionID: input.sessionID,
-          reminder,
-          reasons: Array.from(reasons),
-        });
-      } catch (error) {
-        pending.delete(input.sessionID);
-        options.log?.(
-          'Skipped todo hygiene reminder: failed to inspect todos',
-          {
-            sessionID: input.sessionID,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-      }
+      pending.delete(sessionID);
+      nextPendingInspectionAt.delete(sessionID);
+      options.log?.('Injected todo hygiene reminder', {
+        sessionID,
+        reminder,
+        reasons: Array.from(reasons),
+      });
+      return reminder;
     },
 
     handleEvent(event: EventInput): void {
