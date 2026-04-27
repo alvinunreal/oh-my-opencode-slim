@@ -623,7 +623,7 @@ garbage
     );
   });
 
-  test('passes through relative targets outside root/worktree before native execution', async () => {
+  test('passes through sibling-directory targets outside root/worktree before native execution', async () => {
     const root = await createTempDir('apply-patch-hook-');
     const outside = path.join(path.dirname(root), 'outside.txt');
     await writeFile(outside, 'outside\n', 'utf-8');
