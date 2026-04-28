@@ -32,6 +32,7 @@ export function createApplyPatchHook(ctx: PluginInput) {
     state:
       | 'rewrite'
       | 'unchanged'
+      | 'skipped'
       | 'blocked'
       | 'validation'
       | 'verification'
@@ -82,6 +83,24 @@ export function createApplyPatchHook(ctx: PluginInput) {
               error,
             );
         const details = getApplyPatchErrorDetails(normalizedError);
+
+        if (
+          normalizedError.kind === 'blocked' &&
+          // Only the plugin-side outside-workspace preflight should fail open.
+          // Keep the code check explicit so any future blocked error remains
+          // fail-closed by default.
+          details?.code === 'outside_workspace'
+        ) {
+          logHookStatus('skipped', {
+            kind: details.kind,
+            code: details.code,
+            reason: normalizedError.message,
+            failOpen: true,
+            rescueOptions: APPLY_PATCH_RESCUE_OPTIONS,
+            rewriteStage: 'before-native',
+          });
+          return;
+        }
 
         logHookStatus(
           isApplyPatchVerificationError(normalizedError)
