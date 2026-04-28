@@ -88,7 +88,7 @@ function findConfigPathInDirs(
  * @param override - Override object whose values take precedence
  * @returns Merged object, or undefined if both inputs are undefined
  */
-function deepMerge<T extends Record<string, unknown>>(
+export function deepMerge<T extends Record<string, unknown>>(
   base?: T,
   override?: T,
 ): T | undefined {

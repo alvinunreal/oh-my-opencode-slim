@@ -5,6 +5,12 @@ import type {
   PluginConfig,
   Preset,
 } from '../config';
+import { AGENT_ALIASES } from '../config/constants';
+import {
+  getActiveRuntimePreset,
+  rollbackRuntimePreset,
+  setActiveRuntimePresetWithPrevious,
+} from '../config/runtime-preset';
 import { createInternalAgentTextPart } from '../utils';
 
 const COMMAND_NAME = 'preset';
@@ -21,7 +27,10 @@ const COMMAND_NAME = 'preset';
  * this tracker may become stale until the next /preset call.
  */
 export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
-  let activePreset: string | null = config.preset ?? null;
+  // Sync from module-level state in case of plugin re-init — the runtime
+  // preset persists across dispose()/re-init cycles.
+  let activePreset: string | null =
+    getActiveRuntimePreset() ?? config.preset ?? null;
 
   /**
    * Handle the /preset command from command.execute.before hook.
@@ -124,13 +133,47 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       }
     > = {};
     for (const [agentName, override] of Object.entries(preset)) {
+      const resolvedName = AGENT_ALIASES[agentName] ?? agentName;
       const agentConfig = mapOverrideToAgentConfig(override);
       if (Object.keys(agentConfig).length > 0) {
-        agentUpdates[agentName] = agentConfig;
+        agentUpdates[resolvedName] = agentConfig;
       }
     }
 
-    if (Object.keys(agentUpdates).length === 0) {
+    // Build reset updates for agents in the old preset but not the new one.
+    // The SDK accumulates client.config.update() calls, so switching from
+    // Preset A to Preset B leaks A's variant/temperature/options on agents
+    // that aren't in B. Reset them to the config-file baseline values.
+    const currentRuntimePreset = getActiveRuntimePreset();
+    const resetUpdates: Record<
+      string,
+      {
+        model?: string;
+        temperature?: number;
+        variant?: string;
+        options?: Record<string, unknown>;
+      }
+    > = {};
+    if (currentRuntimePreset && config.presets?.[currentRuntimePreset]) {
+      const oldPreset = config.presets[currentRuntimePreset];
+      for (const rawName of Object.keys(oldPreset)) {
+        const resolvedOld = AGENT_ALIASES[rawName] ?? rawName;
+        if (resolvedOld in agentUpdates) continue; // new preset handles this agent
+        const baseline = config.agents?.[resolvedOld];
+        if (baseline) {
+          // Note: mapOverrideToAgentConfig(baseline) only emits fields
+          // the baseline defines. Scalar fields (variant/temperature/options)
+          // not in baseline are NOT cleared here. The config() hook in
+          // src/index.ts handles complete cleanup using the previous
+          // preset's override keys to drive deletion.
+          resetUpdates[resolvedOld] = mapOverrideToAgentConfig(baseline);
+        }
+      }
+    }
+
+    const hasAgentUpdates = Object.keys(agentUpdates).length > 0;
+    const allUpdates = { ...resetUpdates, ...agentUpdates };
+    if (!hasAgentUpdates) {
       output.parts.push(
         createInternalAgentTextPart(
           `Preset "${presetName}" is empty (no agent overrides defined).`,
@@ -139,31 +182,39 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       return;
     }
 
+    const previousPreset = activePreset;
+    setActiveRuntimePresetWithPrevious(presetName);
+
     try {
       await ctx.client.config.update({
-        body: { agent: agentUpdates },
+        body: { agent: allUpdates },
       });
 
       activePreset = presetName;
 
-      const summary = Object.entries(agentUpdates)
-        .map(([name, cfg]) => {
-          const parts: string[] = [name];
-          if (cfg.model) parts.push(`model: ${cfg.model}`);
-          if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
-          if (cfg.temperature !== undefined)
-            parts.push(`temp: ${cfg.temperature}`);
-          if (cfg.options) parts.push('options: yes');
-          return parts.join(' → ');
-        })
-        .join('\n');
+      const summaryParts: string[] = [];
+      for (const [name, cfg] of Object.entries(agentUpdates)) {
+        const parts: string[] = [name];
+        if (cfg.model) parts.push(`model: ${cfg.model}`);
+        if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
+        if (cfg.temperature !== undefined)
+          parts.push(`temp: ${cfg.temperature}`);
+        if (cfg.options) parts.push('options: yes');
+        summaryParts.push(parts.join(' → '));
+      }
+      if (Object.keys(resetUpdates).length > 0) {
+        summaryParts.push(
+          `Reset to baseline: ${Object.keys(resetUpdates).join(', ')}`,
+        );
+      }
 
       output.parts.push(
         createInternalAgentTextPart(
-          `Switched to preset "${presetName}":\n${summary}`,
+          `Switched to preset "${presetName}":\n${summaryParts.join('\n')}`,
         ),
       );
     } catch (err) {
+      rollbackRuntimePreset(previousPreset);
       output.parts.push(
         createInternalAgentTextPart(
           `Failed to switch preset "${presetName}": ${String(err)}`,
