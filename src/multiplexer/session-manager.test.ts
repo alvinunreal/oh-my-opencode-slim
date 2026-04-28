@@ -255,7 +255,7 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
-    test('respawns pane on busy for known prior session', async () => {
+    test('respawns pane on later busy after idle close for resumable session', async () => {
       const ctx = createMockContext();
       const manager = new MultiplexerSessionManager(
         ctx,
@@ -308,6 +308,214 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
     });
 
+    test('respawns after in-flight idle close when busy resumes same session', async () => {
+      const ctx = createMockContext();
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+      const closeDeferred = createDeferred<boolean>();
+
+      mockMultiplexer.spawnPane
+        .mockResolvedValueOnce({
+          success: true,
+          paneId: 'p-close-race',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          paneId: 'p-close-race-resumed',
+        });
+      mockMultiplexer.closePane.mockImplementationOnce(
+        () => closeDeferred.promise,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-close-race',
+            parentID: 'parent-close-race',
+            title: 'Worker',
+          },
+        },
+      });
+
+      const idlePromise = manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-close-race',
+          status: { type: 'idle' },
+        },
+      });
+
+      await Promise.resolve();
+
+      const busyPromise = manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-close-race',
+          status: { type: 'busy' },
+        },
+      });
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+
+      closeDeferred.resolve(true);
+      await Promise.all([idlePromise, busyPromise]);
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(2);
+      expect(mockMultiplexer.spawnPane).toHaveBeenLastCalledWith(
+        'child-close-race',
+        'Worker',
+        `http://localhost:${process.env.OPENCODE_PORT ?? '4096'}/`,
+        '/test/directory',
+      );
+    });
+
+    test('does not respawn after in-flight close if session is deleted', async () => {
+      const ctx = createMockContext();
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+      const closeDeferred = createDeferred<boolean>();
+
+      mockMultiplexer.spawnPane
+        .mockResolvedValueOnce({
+          success: true,
+          paneId: 'p-delete-race',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          paneId: 'p-should-not-respawn',
+        });
+      mockMultiplexer.closePane.mockImplementationOnce(
+        () => closeDeferred.promise,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-delete-race',
+            parentID: 'parent-delete-race',
+            title: 'Worker',
+          },
+        },
+      });
+
+      const idlePromise = manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-delete-race',
+          status: { type: 'idle' },
+        },
+      });
+
+      await Promise.resolve();
+
+      const busyPromise = manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-delete-race',
+          status: { type: 'busy' },
+        },
+      });
+
+      const deletedPromise = manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: {
+          sessionID: 'child-delete-race',
+        },
+      });
+
+      closeDeferred.resolve(true);
+      await Promise.all([idlePromise, busyPromise, deletedPromise]);
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+    });
+
+    test('closes pane on session.deleted using info.id', async () => {
+      const ctx = createMockContext();
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      mockMultiplexer.spawnPane.mockResolvedValueOnce({
+        success: true,
+        paneId: 'p-info-id',
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-info-id',
+            parentID: 'parent-info-id',
+          },
+        },
+      });
+
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: {
+          info: { id: 'child-info-id' },
+        },
+      });
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p-info-id');
+
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-info-id',
+          status: { type: 'busy' },
+        },
+      });
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+    });
+
+    test('closes pane returned by a stale spawn after session deleted', async () => {
+      const ctx = createMockContext();
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+      const spawnDeferred = createDeferred<{ success: true; paneId: string }>();
+
+      mockMultiplexer.spawnPane.mockImplementationOnce(
+        () => spawnDeferred.promise,
+      );
+
+      const createPromise = manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-stale-spawn',
+            parentID: 'parent-stale-spawn',
+          },
+        },
+      });
+
+      await Promise.resolve();
+
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: {
+          info: { id: 'child-stale-spawn' },
+        },
+      });
+
+      spawnDeferred.resolve({ success: true, paneId: 'p-stale-spawn' });
+      await createPromise;
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p-stale-spawn');
+    });
+
     test('does nothing on busy for unknown session', async () => {
       const ctx = createMockContext();
       const manager = new MultiplexerSessionManager(
@@ -324,57 +532,6 @@ describe('MultiplexerSessionManager', () => {
       });
 
       expect(mockMultiplexer.spawnPane).not.toHaveBeenCalled();
-    });
-
-    test('re-checks tracked sessions after async respawn guard', async () => {
-      const ctx = createMockContext();
-      const manager = new MultiplexerSessionManager(
-        ctx,
-        defaultMultiplexerConfig,
-      );
-
-      mockMultiplexer.spawnPane
-        .mockResolvedValueOnce({ success: true, paneId: 'p-1' })
-        .mockResolvedValueOnce({
-          success: true,
-          paneId: 'p-should-not-happen',
-        });
-
-      await manager.onSessionCreated({
-        type: 'session.created',
-        properties: {
-          info: {
-            id: 'child-999',
-            parentID: 'parent-999',
-            title: 'Worker',
-            directory: '/task/dir',
-          },
-        },
-      });
-
-      ctx.client.session.status.mockResolvedValue({
-        data: { 'child-999': { type: 'idle' } },
-      });
-      await (manager as any).pollSessions();
-
-      const respawnPromise = (manager as any).respawnIfKnown('child-999');
-
-      (manager as any).sessions.set('child-999', {
-        sessionId: 'child-999',
-        paneId: 'p-existing',
-        parentId: 'parent-999',
-        title: 'Worker',
-        directory: '/task/dir',
-        createdAt: Date.now(),
-        lastSeenAt: Date.now(),
-      });
-
-      await respawnPromise;
-
-      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
-      expect((manager as any).sessions.get('child-999')?.paneId).toBe(
-        'p-existing',
-      );
     });
 
     test('does not respawn while initial pane spawn is still in progress', async () => {

@@ -41,6 +41,8 @@ interface SessionEvent {
   };
 }
 
+type CloseReason = 'idle' | 'deleted' | 'missing' | 'timeout';
+
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000;
 const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
 
@@ -58,6 +60,7 @@ export class MultiplexerSessionManager {
   private sessions = new Map<string, TrackedSession>();
   private knownSessions = new Map<string, KnownSession>();
   private spawningSessions = new Set<string>();
+  private closingSessions = new Map<string, Promise<void>>();
   private pollInterval?: ReturnType<typeof setInterval>;
   private enabled = false;
 
@@ -95,18 +98,23 @@ export class MultiplexerSessionManager {
     const title = info.title ?? 'Subagent';
     const directory = info.directory ?? this.directory;
 
-    this.knownSessions.set(sessionId, {
-      parentId,
-      title,
-      directory,
-    });
-
     if (this.isTrackedOrSpawning(sessionId)) {
       log('[multiplexer-session-manager] session already tracked or spawning', {
         sessionId,
       });
       return;
     }
+
+    const closing = this.closingSessions.get(sessionId);
+    if (closing) await closing;
+
+    if (this.isTrackedOrSpawning(sessionId)) return;
+
+    this.knownSessions.set(sessionId, {
+      parentId,
+      title,
+      directory,
+    });
 
     this.spawningSessions.add(sessionId);
 
@@ -119,7 +127,7 @@ export class MultiplexerSessionManager {
         return;
       }
 
-      if (this.sessions.has(sessionId)) {
+      if (this.closingSessions.has(sessionId) || this.sessions.has(sessionId)) {
         return;
       }
 
@@ -141,25 +149,42 @@ export class MultiplexerSessionManager {
           return { success: false, paneId: undefined };
         });
 
-      if (paneResult.success && paneResult.paneId) {
-        const now = Date.now();
-        this.sessions.set(sessionId, {
-          sessionId,
-          paneId: paneResult.paneId,
-          parentId,
-          title,
-          directory,
-          createdAt: now,
-          lastSeenAt: now,
-        });
+      if (!paneResult.success || !paneResult.paneId) return;
 
-        log('[multiplexer-session-manager] pane spawned', {
-          sessionId,
-          paneId: paneResult.paneId,
-        });
-
-        this.startPolling();
+      if (
+        !this.knownSessions.has(sessionId) ||
+        this.closingSessions.has(sessionId)
+      ) {
+        await this.multiplexer.closePane(paneResult.paneId).catch((err) =>
+          log(
+            '[multiplexer-session-manager] closing stale spawned pane failed',
+            {
+              sessionId,
+              paneId: paneResult.paneId,
+              error: String(err),
+            },
+          ),
+        );
+        return;
       }
+
+      const now = Date.now();
+      this.sessions.set(sessionId, {
+        sessionId,
+        paneId: paneResult.paneId,
+        parentId,
+        title,
+        directory,
+        createdAt: now,
+        lastSeenAt: now,
+      });
+
+      log('[multiplexer-session-manager] pane spawned', {
+        sessionId,
+        paneId: paneResult.paneId,
+      });
+
+      this.startPolling();
     } finally {
       this.spawningSessions.delete(sessionId);
     }
@@ -173,7 +198,7 @@ export class MultiplexerSessionManager {
     if (!sessionId) return;
 
     if (event.properties?.status?.type === 'idle') {
-      await this.closeSession(sessionId);
+      await this.closeSession(sessionId, 'idle');
       return;
     }
 
@@ -186,15 +211,14 @@ export class MultiplexerSessionManager {
     if (!this.enabled) return;
     if (event.type !== 'session.deleted') return;
 
-    const sessionId = event.properties?.sessionID;
+    const sessionId = this.getSessionId(event);
     if (!sessionId) return;
 
     log('[multiplexer-session-manager] session deleted, closing pane', {
       sessionId,
     });
 
-    await this.closeSession(sessionId);
-    this.knownSessions.delete(sessionId);
+    await this.closeSession(sessionId, 'deleted');
   }
 
   private startPolling(): void {
@@ -229,7 +253,8 @@ export class MultiplexerSessionManager {
       >;
 
       const now = Date.now();
-      const sessionsToClose: string[] = [];
+      const sessionsToClose: Array<{ sessionId: string; reason: CloseReason }> =
+        [];
 
       for (const [sessionId, tracked] of this.sessions.entries()) {
         const status = allStatuses[sessionId];
@@ -248,38 +273,71 @@ export class MultiplexerSessionManager {
         const isTimedOut = now - tracked.createdAt > SESSION_TIMEOUT_MS;
 
         if (isIdle || missingTooLong || isTimedOut) {
-          sessionsToClose.push(sessionId);
+          sessionsToClose.push({
+            sessionId,
+            reason: isIdle ? 'idle' : isTimedOut ? 'timeout' : 'missing',
+          });
         }
       }
 
-      for (const sessionId of sessionsToClose) {
-        await this.closeSession(sessionId);
+      for (const { sessionId, reason } of sessionsToClose) {
+        await this.closeSession(sessionId, reason);
       }
     } catch (err) {
       log('[multiplexer-session-manager] poll error', { error: String(err) });
     }
   }
 
-  private async closeSession(sessionId: string): Promise<void> {
+  private async closeSession(
+    sessionId: string,
+    reason: CloseReason,
+  ): Promise<void> {
+    if (reason === 'deleted') {
+      this.knownSessions.delete(sessionId);
+    }
+
+    const existingClose = this.closingSessions.get(sessionId);
+    if (existingClose) return existingClose;
+
     const tracked = this.sessions.get(sessionId);
     if (!tracked || !this.multiplexer) return;
+
+    this.sessions.delete(sessionId);
 
     log('[multiplexer-session-manager] closing session pane', {
       sessionId,
       paneId: tracked.paneId,
+      reason,
     });
 
-    await this.multiplexer.closePane(tracked.paneId);
-    this.sessions.delete(sessionId);
+    const closePromise: Promise<void> = this.multiplexer
+      .closePane(tracked.paneId)
+      .then(() => undefined)
+      .catch((err) =>
+        log('[multiplexer-session-manager] failed to close session pane', {
+          sessionId,
+          paneId: tracked.paneId,
+          reason,
+          error: String(err),
+        }),
+      )
+      .finally(() => {
+        this.closingSessions.delete(sessionId);
+        this.updatePolling();
+      });
 
-    if (this.sessions.size === 0) {
-      this.stopPolling();
-    }
+    this.closingSessions.set(sessionId, closePromise);
+    await closePromise;
   }
 
   private async respawnIfKnown(sessionId: string): Promise<void> {
     if (!this.enabled || !this.multiplexer) return;
-    if (this.isTrackedOrSpawning(sessionId)) return;
+    const closing = this.closingSessions.get(sessionId);
+    if (closing) await closing;
+
+    if (this.isTrackedOrSpawning(sessionId)) {
+      return;
+    }
 
     const known = this.knownSessions.get(sessionId);
     if (!known) return;
@@ -299,7 +357,9 @@ export class MultiplexerSessionManager {
         return;
       }
 
-      if (this.sessions.has(sessionId)) return;
+      if (this.sessions.has(sessionId) || this.closingSessions.has(sessionId)) {
+        return;
+      }
 
       log(
         '[multiplexer-session-manager] child session busy again, respawning pane',
@@ -320,6 +380,23 @@ export class MultiplexerSessionManager {
         });
 
       if (!paneResult.success || !paneResult.paneId) return;
+
+      if (
+        !this.knownSessions.has(sessionId) ||
+        this.closingSessions.has(sessionId)
+      ) {
+        await this.multiplexer.closePane(paneResult.paneId).catch((err) =>
+          log(
+            '[multiplexer-session-manager] closing stale respawned pane failed',
+            {
+              sessionId,
+              paneId: paneResult.paneId,
+              error: String(err),
+            },
+          ),
+        );
+        return;
+      }
 
       const now = Date.now();
       this.sessions.set(sessionId, {
@@ -347,8 +424,24 @@ export class MultiplexerSessionManager {
     return this.sessions.has(sessionId) || this.spawningSessions.has(sessionId);
   }
 
+  private updatePolling(): void {
+    if (this.sessions.size > 0 || this.closingSessions.size > 0) {
+      this.startPolling();
+    } else {
+      this.stopPolling();
+    }
+  }
+
+  private getSessionId(event: SessionEvent): string | undefined {
+    return event.properties?.info?.id ?? event.properties?.sessionID;
+  }
+
   async cleanup(): Promise<void> {
     this.stopPolling();
+
+    if (this.closingSessions.size > 0) {
+      await Promise.all(this.closingSessions.values());
+    }
 
     if (this.sessions.size > 0 && this.multiplexer) {
       log('[multiplexer-session-manager] closing all panes', {
@@ -369,6 +462,7 @@ export class MultiplexerSessionManager {
 
     this.knownSessions.clear();
     this.spawningSessions.clear();
+    this.closingSessions.clear();
 
     log('[multiplexer-session-manager] cleanup complete');
   }
