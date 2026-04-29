@@ -411,7 +411,29 @@ describe('config-io', () => {
     );
     expect(saved.preset).toBe('openai');
     expect(saved.presets.openai).toBeDefined();
+    expect(saved.presets['opencode-go']).toBeDefined();
     expect(saved.tmux.enabled).toBe(true);
+  });
+
+  test('writeLiteConfig writes selected preset', () => {
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+
+    const result = writeLiteConfig({
+      hasTmux: false,
+      installSkills: false,
+      installCustomSkills: false,
+      preset: 'opencode-go',
+      reset: false,
+    });
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
+    expect(saved.preset).toBe('opencode-go');
+    expect(saved.presets.openai).toBeDefined();
+    expect(saved.presets['opencode-go'].orchestrator.model).toBe(
+      'opencode-go/glm-5.1',
+    );
   });
 
   test('disableDefaultAgents disables explore and general agents', () => {

@@ -34,6 +34,7 @@ The installer supports the following options:
 | Option | Description |
 |--------|-------------|
 | `--skills=yes|no` | Install recommended and bundled skills (default: yes) |
+| `--preset=<name>` | Active generated config preset: `openai` or `opencode-go` (default: `openai`) |
 | `--no-tui` | Non-interactive mode |
 | `--dry-run` | Simulate install without writing files |
 | `--reset` | Force overwrite of existing configuration |
@@ -56,7 +57,7 @@ bunx oh-my-opencode-slim@latest install --reset
 
 ### After Installation
 
-The installer generates an OpenAI configuration by default (using `gpt-5.5` and `gpt-5.4-mini` models). To switch providers or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
+The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using `gpt-5.5` and `gpt-5.4-mini` models). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
 
 Then:
 
@@ -105,7 +106,7 @@ If not installed, direct the user to https://opencode.ai/docs first.
 
 ### Step 2: Run the Installer
 
-The installer generates an OpenAI configuration by default:
+The installer generates OpenAI and OpenCode Go presets, with OpenAI active by default:
 
 ```bash
 bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
@@ -118,6 +119,9 @@ bunx oh-my-opencode-slim@latest install
 
 # Non-interactive with default skills
 bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
+
+# Make the generated OpenCode Go preset active
+bunx oh-my-opencode-slim@latest install --preset=opencode-go
 
 # Non-interactive without skills
 bunx oh-my-opencode-slim@latest install --no-tui --skills=no
@@ -154,7 +158,7 @@ Verify all agents respond successfully.
 
 **Crucial Advice for the User:**
 - They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
-- If they want to add a different provider later (Kimi, GitHub Copilot, ZAI), they can update this file manually. See **[Configuration Reference](configuration.md)** and the preset docs for examples.
+- If they want to add a different provider later (OpenCode Go, Kimi, GitHub Copilot, ZAI), they can update this file manually. See **[Configuration Reference](configuration.md)** and the preset docs for examples.
 - Read the generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file to understand the current configuration.
 
 ---

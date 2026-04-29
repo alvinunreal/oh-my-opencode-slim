@@ -306,7 +306,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log();
 
   const modelsInfo =
-    'Default configuration uses OpenAI models (gpt-5.5 / gpt-5.4-mini).';
+    config.preset && config.preset !== 'openai'
+      ? `Generated OpenAI and OpenCode Go presets; ${config.preset} is active.`
+      : 'Generated OpenAI and OpenCode Go presets; OpenAI is active by default.';
   console.log(`${modelsInfo}`);
   const altProviders = 'For the full configuration reference, see:';
   console.log(altProviders);
@@ -326,6 +328,7 @@ export async function install(args: InstallArgs): Promise<number> {
     hasTmux: false,
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes',
+    preset: args.preset,
     promptForStar: args.tui,
     dryRun: args.dryRun,
     reset: args.reset ?? false,

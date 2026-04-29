@@ -3,6 +3,7 @@ export type BooleanArg = 'yes' | 'no';
 export interface InstallArgs {
   tui: boolean;
   skills?: BooleanArg;
+  preset?: string;
   dryRun?: boolean;
   reset?: boolean;
 }
@@ -18,6 +19,7 @@ export interface InstallConfig {
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;
+  preset?: string;
   promptForStar?: boolean;
   dryRun?: boolean;
   reset: boolean;

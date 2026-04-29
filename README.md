@@ -45,7 +45,7 @@ replacing OpenCode's built-in TUI footer. For manual setups, add
 
 ### Getting Started
 
-The installer generates an OpenAI preset by default, using `openai/gpt-5.5` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents.
+The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default. OpenAI uses `openai/gpt-5.5` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents. To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`.
 
 Then:
 
@@ -66,7 +66,7 @@ Then:
 > [!TIP]
 > Want to understand how automatic delegation works in practice? Review the **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** — it contains the delegation rules, specialist routing logic, and the thresholds for when the main agent should hand work off to subagents.
 
-The default generated configuration looks like this:
+The default generated configuration includes both `openai` and `opencode-go` presets. Abbreviated:
 
 ```jsonc
 {
@@ -91,7 +91,7 @@ want to customize how many resumable child-agent sessions are remembered.
 
 ### For Alternative Providers
 
-To use Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
+To use OpenCode Go, Kimi, GitHub Copilot, ZAI Coding Plan, or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
 
 The configuration guide also covers custom subagents via `agents.<name>`, where
 you can define both a normal `prompt` and an `orchestratorPrompt` block for

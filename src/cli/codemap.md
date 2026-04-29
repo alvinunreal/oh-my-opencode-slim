@@ -19,6 +19,7 @@ Current responsibilities:
 - `src/cli/index.ts` only dispatches:
   - `install` subcommand and flags
     - `--skills=yes|no`
+    - `--preset=<name>`
     - `--no-tui`
     - `--dry-run`
     - `--reset`
@@ -54,8 +55,9 @@ CLI install command
 
 `generateLiteConfig(installConfig)` behavior:
 
-- sets `$schema`, `preset: openai`, empty `presets`
-- always materializes preset `openai`
+- sets `$schema`, a selected `preset` that defaults to `openai`
+- always materializes generated presets `openai` and `opencode-go`
+- install-time `--preset` only selects between generated presets
 - maps each built-in agent name to provider-specific model/variant
 - injects skill list from recommended + custom skill registries and ensures `agent-browser` for designer
 - injects default MCP sets from `DEFAULT_AGENT_MCPS`
@@ -73,4 +75,4 @@ CLI install command
 
 - The previous TUI references are stale; no dedicated interactive flow exists in current sources.
 - `installSkills` in config covers both recommended external and bundled/custom skills as separate paths.
-- Provider support in code is effectively 4 providers (`openai`, `kimi`, `copilot`, `zai-plan`).
+- Built-in preset support includes `openai`, `opencode-go`, `kimi`, `copilot`, and `zai-plan`.
