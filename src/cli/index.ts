@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { install } from './install';
-import { getPresetNames, isPresetName } from './providers';
+import { getGeneratedPresetNames, isGeneratedPresetName } from './providers';
 import type { BooleanArg, InstallArgs } from './types';
 
 function parseArgs(args: string[]): InstallArgs {
@@ -16,9 +16,9 @@ function parseArgs(args: string[]): InstallArgs {
       result.skills = arg.split('=')[1] as BooleanArg;
     } else if (arg.startsWith('--preset=')) {
       const preset = arg.split('=')[1];
-      if (!isPresetName(preset)) {
+      if (!isGeneratedPresetName(preset)) {
         console.error(
-          `Unsupported preset: ${preset}. Available presets: ${getPresetNames().join(', ')}`,
+          `Unsupported preset: ${preset}. Available presets: ${getGeneratedPresetNames().join(', ')}`,
         );
         process.exit(1);
       }
@@ -50,7 +50,7 @@ Options:
   --reset                Force overwrite of existing configuration
   -h, --help             Show this help message
 
-Available presets: ${getPresetNames().join(', ')}
+Available presets: ${getGeneratedPresetNames().join(', ')}
 
 The installer generates OpenAI and OpenCode Go presets by default.
 OpenAI is active unless --preset selects another generated preset.

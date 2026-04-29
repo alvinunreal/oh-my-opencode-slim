@@ -34,7 +34,7 @@ The installer supports the following options:
 | Option | Description |
 |--------|-------------|
 | `--skills=yes|no` | Install recommended and bundled skills (default: yes) |
-| `--preset=<name>` | Active generated config preset: `openai`, `opencode-go`, `kimi`, `copilot`, or `zai-plan` (default: `openai`) |
+| `--preset=<name>` | Active generated config preset: `openai` or `opencode-go` (default: `openai`) |
 | `--no-tui` | Non-interactive mode |
 | `--dry-run` | Simulate install without writing files |
 | `--reset` | Force overwrite of existing configuration |

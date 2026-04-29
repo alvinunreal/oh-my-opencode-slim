@@ -95,6 +95,18 @@ describe('providers', () => {
     ).toThrow('Unsupported preset "not-real"');
   });
 
+  test('generateLiteConfig rejects non-generated model mappings as active presets', () => {
+    expect(() =>
+      generateLiteConfig({
+        hasTmux: false,
+        installSkills: false,
+        installCustomSkills: false,
+        preset: 'kimi',
+        reset: false,
+      }),
+    ).toThrow('Unsupported preset "kimi"');
+  });
+
   test('generateLiteConfig rejects inherited property names as presets', () => {
     expect(() =>
       generateLiteConfig({

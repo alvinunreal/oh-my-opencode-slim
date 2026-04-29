@@ -57,7 +57,7 @@ CLI install command
 
 - sets `$schema`, a selected `preset` that defaults to `openai`
 - always materializes generated presets `openai` and `opencode-go`
-- materializes other selected built-in presets when explicitly requested
+- install-time `--preset` only selects between generated presets
 - maps each built-in agent name to provider-specific model/variant
 - injects skill list from recommended + custom skill registries and ensures `agent-browser` for designer
 - injects default MCP sets from `DEFAULT_AGENT_MCPS`

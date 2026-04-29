@@ -6,7 +6,7 @@ import type { InstallConfig } from './types';
 const SCHEMA_URL =
   'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json';
 
-const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
+export const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
 
 // Model mappings by provider/preset.
 export const MODEL_MAPPINGS = {
@@ -57,6 +57,7 @@ export const MODEL_MAPPINGS = {
 } as const;
 
 export type PresetName = keyof typeof MODEL_MAPPINGS;
+export type GeneratedPresetName = (typeof GENERATED_PRESETS)[number];
 
 export function isPresetName(value: string): value is PresetName {
   return Object.hasOwn(MODEL_MAPPINGS, value);
@@ -66,13 +67,23 @@ export function getPresetNames(): PresetName[] {
   return Object.keys(MODEL_MAPPINGS) as PresetName[];
 }
 
+export function isGeneratedPresetName(
+  value: string,
+): value is GeneratedPresetName {
+  return GENERATED_PRESETS.includes(value as GeneratedPresetName);
+}
+
+export function getGeneratedPresetNames(): GeneratedPresetName[] {
+  return [...GENERATED_PRESETS];
+}
+
 export function generateLiteConfig(
   installConfig: InstallConfig,
 ): Record<string, unknown> {
   const preset = installConfig.preset ?? 'openai';
-  if (!isPresetName(preset)) {
+  if (!isGeneratedPresetName(preset)) {
     throw new Error(
-      `Unsupported preset "${preset}". Available presets: ${getPresetNames().join(', ')}`,
+      `Unsupported preset "${preset}". Available generated presets: ${getGeneratedPresetNames().join(', ')}`,
     );
   }
 
@@ -129,10 +140,6 @@ export function generateLiteConfig(
   const presets = config.presets as Record<string, unknown>;
   for (const presetName of GENERATED_PRESETS) {
     presets[presetName] = buildPreset(presetName);
-  }
-
-  if (!presets[preset]) {
-    presets[preset] = buildPreset(preset);
   }
 
   if (installConfig.hasTmux) {
