@@ -255,7 +255,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Initialize auto-update checker hook
     autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
-      showStartupToast: config.showStartupToast ?? true,
       autoUpdate: config.autoUpdate ?? true,
     });
 

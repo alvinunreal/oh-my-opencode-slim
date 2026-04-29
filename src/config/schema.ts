@@ -282,12 +282,6 @@ export const PluginConfigSchema = z
     setDefaultAgent: z.boolean().optional(),
     scoringEngineVersion: z.enum(['v1', 'v2-shadow', 'v2']).optional(),
     balanceProviderUsage: z.boolean().optional(),
-    showStartupToast: z
-      .boolean()
-      .optional()
-      .describe(
-        'Show the startup activation toast when OpenCode starts. Defaults to true.',
-      ),
     autoUpdate: z
       .boolean()
       .optional()

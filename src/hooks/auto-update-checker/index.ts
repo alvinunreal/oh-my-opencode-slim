@@ -22,7 +22,7 @@ export function createAutoUpdateCheckerHook(
   ctx: PluginInput,
   options: AutoUpdateCheckerOptions = {},
 ) {
-  const { showStartupToast = true, autoUpdate = true } = options;
+  const { autoUpdate = true } = options;
 
   let hasChecked = false;
 
@@ -39,30 +39,11 @@ export function createAutoUpdateCheckerHook(
       hasChecked = true;
 
       setTimeout(async () => {
-        const cachedVersion = getCachedVersion();
         const localDevVersion = getLocalDevVersion(ctx.directory);
-        const displayVersion = localDevVersion ?? cachedVersion;
 
         if (localDevVersion) {
-          if (showStartupToast) {
-            showToast(
-              ctx,
-              `OMO-Slim ${displayVersion} (dev)`,
-              'Running in local development mode.',
-              'info',
-            );
-          }
           log('[auto-update-checker] Local development mode');
           return;
-        }
-
-        if (showStartupToast) {
-          showToast(
-            ctx,
-            `OMO-Slim ${displayVersion ?? 'unknown'}`,
-            'oh-my-opencode-slim is active.',
-            'info',
-          );
         }
 
         runBackgroundUpdateCheck(ctx, autoUpdate).catch((err) => {

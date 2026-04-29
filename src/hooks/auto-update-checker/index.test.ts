@@ -117,7 +117,7 @@ describe('auto-update-checker/index', () => {
     expect(getAutoUpdateInstallDir()).toBe('/tmp/opencode');
   });
 
-  test('shows development toast and skips background update for local dev installs', async () => {
+  test('skips background update for local dev installs without startup toast', async () => {
     checkerMocks.getLocalDevVersion.mockImplementation(() => '0.9.11-dev');
 
     const { createAutoUpdateCheckerHook } = await import(
@@ -127,16 +127,9 @@ describe('auto-update-checker/index', () => {
 
     const hook = createAutoUpdateCheckerHook(ctx as never);
     hook.event({ event: { type: 'session.created', properties: {} } });
-    await waitForCalls(showToast);
+    await waitForCalls(logMock);
 
-    expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim 0.9.11-dev (dev)',
-        message: 'Running in local development mode.',
-        variant: 'info',
-        duration: 3000,
-      },
-    });
+    expect(showToast).not.toHaveBeenCalled();
     expect(checkerMocks.findPluginEntry).not.toHaveBeenCalled();
     expect(checkerMocks.getLatestVersion).not.toHaveBeenCalled();
   });
@@ -163,9 +156,7 @@ describe('auto-update-checker/index', () => {
     );
     const { ctx, showToast } = createCtx();
 
-    const hook = createAutoUpdateCheckerHook(ctx as never, {
-      showStartupToast: false,
-    });
+    const hook = createAutoUpdateCheckerHook(ctx as never);
     hook.event({ event: { type: 'session.created', properties: {} } });
     await waitForCalls(showToast);
 
@@ -201,7 +192,6 @@ describe('auto-update-checker/index', () => {
     const { ctx, showToast } = createCtx();
 
     const hook = createAutoUpdateCheckerHook(ctx as never, {
-      showStartupToast: false,
       autoUpdate: false,
     });
     hook.event({ event: { type: 'session.created', properties: {} } });
@@ -233,9 +223,7 @@ describe('auto-update-checker/index', () => {
     );
     const { ctx, showToast } = createCtx();
 
-    const hook = createAutoUpdateCheckerHook(ctx as never, {
-      showStartupToast: false,
-    });
+    const hook = createAutoUpdateCheckerHook(ctx as never);
     hook.event({ event: { type: 'session.created', properties: {} } });
     await waitForCalls(showToast);
 
@@ -273,9 +261,7 @@ describe('auto-update-checker/index', () => {
     );
     const { ctx, showToast } = createCtx();
 
-    const hook = createAutoUpdateCheckerHook(ctx as never, {
-      showStartupToast: false,
-    });
+    const hook = createAutoUpdateCheckerHook(ctx as never);
     hook.event({ event: { type: 'session.created', properties: {} } });
     await waitForCalls(showToast);
 

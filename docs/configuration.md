@@ -100,7 +100,6 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `agents.<customAgent>.prompt` | string | — | Full execution prompt for a custom agent |
 | `agents.<customAgent>.orchestratorPrompt` | string | — | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
 | `agents.<agent>.displayName` | string | — | Custom user-facing alias for the agent in the active config |
-| `showStartupToast` | boolean | `true` | Show the startup activation toast (`oh-my-opencode-slim is active`) when OpenCode starts |
 | `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, or `none` |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
@@ -142,17 +141,6 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 - The **councillor models** are configured separately under
   `council.presets.<name>.<councillor>.model`.
 - Deprecated `council.master*` fields should not be used in new configs.
-
-### Startup Toast
-
-Set `showStartupToast` to `false` if you want to disable the startup toast that
-appears when the plugin activates.
-
-```jsonc
-{
-  "showStartupToast": false
-}
-```
 
 ### Manual Update Mode
 
