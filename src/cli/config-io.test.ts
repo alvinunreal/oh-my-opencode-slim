@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   addPluginToOpenCodeConfig,
+  addPluginToOpenCodeTuiConfig,
   detectCurrentConfig,
   disableDefaultAgents,
   enableLspByDefault,
@@ -32,6 +33,7 @@ describe('config-io', () => {
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'opencode-io-test-'));
     delete process.env.OPENCODE_CONFIG_DIR;
+    delete process.env.OPENCODE_TUI_CONFIG;
     process.env.XDG_CONFIG_HOME = tmpDir;
   });
 
@@ -221,6 +223,168 @@ describe('config-io', () => {
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toContain('oh-my-opencode-slim');
+    expect(saved.plugin).toContain('other-plugin');
+    expect(saved.plugin).not.toContain('oh-my-opencode-slim@1.0.0');
+    // Non-string entries (objects) must survive the plugin refresh
+    expect(saved.plugin).toContainEqual(objectPlugin);
+    expect(saved.plugin.length).toBe(3);
+  });
+
+  test('addPluginToOpenCodeConfig removes tuple plugin entries', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    paths.ensureConfigDir();
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: ['other', ['oh-my-opencode-slim', { enabled: true }]],
+      }),
+    );
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeConfig();
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['other', 'oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeTuiConfig adds plugin to tui.json and removes duplicates', async () => {
+    const tuiPath = join(tmpDir, 'opencode', 'tui.json');
+    paths.ensureConfigDir();
+    writeFileSync(
+      tuiPath,
+      JSON.stringify({ plugin: ['other', 'oh-my-opencode-slim@1.0.0'] }),
+    );
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeTuiConfig();
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
+    expect(saved.plugin).toContain('oh-my-opencode-slim');
+    expect(saved.plugin).not.toContain('oh-my-opencode-slim@1.0.0');
+    expect(saved.plugin.length).toBe(2);
+  });
+
+  test('addPluginToOpenCodeTuiConfig stores package name for bunx temp paths', async () => {
+    const tuiPath = join(tmpDir, 'opencode', 'tui.json');
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@latest',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    paths.ensureConfigDir();
+    writeFileSync(tuiPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot);
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+    const result = await addPluginToOpenCodeTuiConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeTuiConfig removes tuple plugin entries', async () => {
+    const tuiPath = join(tmpDir, 'opencode', 'tui.json');
+    paths.ensureConfigDir();
+    writeFileSync(
+      tuiPath,
+      JSON.stringify({
+        plugin: ['other', ['oh-my-opencode-slim', { enabled: true }]],
+      }),
+    );
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeTuiConfig();
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['other', 'oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeTuiConfig honors OPENCODE_TUI_CONFIG', async () => {
+    const tuiPath = join(tmpDir, 'custom', 'tui.custom.json');
+    process.env.OPENCODE_TUI_CONFIG = tuiPath;
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeTuiConfig();
+    expect(result.success).toBe(true);
+    expect(result.configPath).toBe(tuiPath);
+
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeTuiConfig does not bypass OPENCODE_TUI_CONFIG for existing default config', async () => {
+    const defaultTuiPath = join(tmpDir, 'opencode', 'tui.jsonc');
+    const customTuiPath = join(tmpDir, 'custom', 'tui.json');
+    paths.ensureConfigDir();
+    writeFileSync(defaultTuiPath, JSON.stringify({ plugin: ['default'] }));
+    process.env.OPENCODE_TUI_CONFIG = customTuiPath;
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeTuiConfig();
+    expect(result.success).toBe(true);
+    expect(result.configPath).toBe(customTuiPath);
+
+    const custom = JSON.parse(readFileSync(customTuiPath, 'utf-8'));
+    const original = JSON.parse(readFileSync(defaultTuiPath, 'utf-8'));
+    expect(custom.plugin).toEqual(['oh-my-opencode-slim']);
+    expect(original.plugin).toEqual(['default']);
+  });
+
+  test('addPluginToOpenCodeTuiConfig stores local repo path for local dev paths', async () => {
+    const tuiPath = join(tmpDir, 'opencode', 'tui.json');
+    const packageRoot = join(tmpDir, 'repo');
+    const localCliPath = join(packageRoot, 'dist', 'cli', 'index.js');
+    paths.ensureConfigDir();
+    writeFileSync(tuiPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot);
+    process.argv[1] = localCliPath;
+
+    const result = await addPluginToOpenCodeTuiConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
+    expect(saved.plugin).toEqual([packageRoot]);
+  });
+
+  test('addPluginToOpenCodeTuiConfig deduplicates existing local repo path entries', async () => {
+    const tuiPath = join(tmpDir, 'opencode', 'tui.json');
+    const packageRoot = join(tmpDir, 'repo');
+    const localCliPath = join(packageRoot, 'dist', 'cli', 'index.js');
+    paths.ensureConfigDir();
+    writePackageJson(packageRoot);
+    writeFileSync(tuiPath, JSON.stringify({ plugin: ['other', packageRoot] }));
+    process.argv[1] = localCliPath;
+
+    const result = await addPluginToOpenCodeTuiConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['other', packageRoot]);
+  });
+
+  test('addPluginToOpenCodeTuiConfig preserves non-string plugin entries when refreshing', async () => {
+    const tuiPath = join(tmpDir, 'opencode', 'tui.json');
+    paths.ensureConfigDir();
+    process.argv[1] = '';
+
+    const objectPlugin = { name: 'some-tui-plugin', enabled: true };
+    writeFileSync(
+      tuiPath,
+      JSON.stringify({
+        plugin: ['other-plugin', objectPlugin, 'oh-my-opencode-slim@1.0.0'],
+      }),
+    );
+
+    const result = await addPluginToOpenCodeTuiConfig();
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
     expect(saved.plugin).toContain('oh-my-opencode-slim');
     expect(saved.plugin).toContain('other-plugin');
     expect(saved.plugin).not.toContain('oh-my-opencode-slim@1.0.0');

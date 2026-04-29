@@ -37,6 +37,12 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
+The installer also registers the companion TUI plugin in OpenCode's
+`tui.json`, which adds an `OMOS <version>` badge beside the prompt without
+replacing OpenCode's built-in TUI footer. For manual setups, add
+`oh-my-opencode-slim` to the `plugin` array in both `opencode.json` and
+`tui.json`.
+
 ### Getting Started
 
 The installer generates an OpenAI preset by default, using `openai/gpt-5.5` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents.

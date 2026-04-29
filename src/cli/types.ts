@@ -18,6 +18,7 @@ export interface InstallConfig {
   hasTmux: boolean;
   installSkills: boolean;
   installCustomSkills: boolean;
+  promptForStar?: boolean;
   dryRun?: boolean;
   reset: boolean;
 }

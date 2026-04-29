@@ -10,7 +10,9 @@ import { dirname, join } from 'node:path';
 import {
   ensureConfigDir,
   ensureOpenCodeConfigDir,
+  ensureTuiConfigDir,
   getExistingConfigPath,
+  getExistingTuiConfigPath,
   getLiteConfig,
 } from './paths';
 import { generateLiteConfig } from './providers';
@@ -33,6 +35,14 @@ function getPlugins(config: OpenCodeConfig): unknown[] {
 
 function getPluginEntries(config: OpenCodeConfig): string[] {
   return getPlugins(config).filter(isString);
+}
+
+function getPluginSpec(entry: unknown): string | undefined {
+  if (isString(entry)) return entry;
+  if (!Array.isArray(entry)) return undefined;
+
+  const spec = entry[0];
+  return isString(spec) ? spec : undefined;
 }
 
 function normalizePathForMatch(path: string): string {
@@ -101,6 +111,11 @@ function isPluginEntry(entry: string): boolean {
     (entry.startsWith('file://') && entry.includes(PACKAGE_NAME)) ||
     isLocalPackageRootEntry(entry)
   );
+}
+
+function isMatchingPluginEntry(entry: unknown): boolean {
+  const spec = getPluginSpec(entry);
+  return spec ? isPluginEntry(spec) : false;
 }
 
 function getPluginEntry(): string {
@@ -222,7 +237,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
 
     // Remove existing oh-my-opencode-slim entries
     const filteredPlugins = plugins.filter(
-      (plugin) => !isString(plugin) || !isPluginEntry(plugin),
+      (plugin) => !isMatchingPluginEntry(plugin),
     );
 
     // Add fresh entry
@@ -236,6 +251,49 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
       success: false,
       configPath,
       error: `Failed to update opencode config: ${err}`,
+    };
+  }
+}
+
+export async function addPluginToOpenCodeTuiConfig(): Promise<ConfigMergeResult> {
+  const configPath = getExistingTuiConfigPath();
+
+  try {
+    ensureTuiConfigDir();
+  } catch (err) {
+    return {
+      success: false,
+      configPath,
+      error: `Failed to create config directory: ${err}`,
+    };
+  }
+
+  try {
+    const { config: parsedConfig, error } = parseConfig(configPath);
+    if (error) {
+      return {
+        success: false,
+        configPath,
+        error: `Failed to parse TUI config: ${error}`,
+      };
+    }
+    const config = parsedConfig ?? {};
+    const plugins = getPlugins(config);
+    const pluginEntry = getPluginEntry();
+    const filteredPlugins = plugins.filter(
+      (plugin) => !isMatchingPluginEntry(plugin),
+    );
+
+    filteredPlugins.push(pluginEntry);
+    config.plugin = filteredPlugins;
+
+    writeConfig(configPath, config);
+    return { success: true, configPath };
+  } catch (err) {
+    return {
+      success: false,
+      configPath,
+      error: `Failed to update opencode TUI config: ${err}`,
     };
   }
 }

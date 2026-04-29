@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import {
   addPluginToOpenCodeConfig,
+  addPluginToOpenCodeTuiConfig,
   detectCurrentConfig,
   disableDefaultAgents,
   enableLspByDefault,
@@ -31,8 +33,11 @@ const SYMBOLS = {
   bullet: `${DIM}-${RESET}`,
   info: `${BLUE}[i]${RESET}`,
   warn: `${YELLOW}[!]${RESET}`,
-  star: `${YELLOW}*${RESET}`,
+  star: `${YELLOW}★${RESET}`,
 };
+
+const GITHUB_REPO = 'alvinunreal/oh-my-opencode-slim';
+const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
 
 function printHeader(isUpdate: boolean): void {
   console.log();
@@ -57,6 +62,46 @@ function printError(message: string): void {
 
 function printInfo(message: string): void {
   console.log(`${SYMBOLS.info} ${message}`);
+}
+
+async function confirm(message: string, defaultYes = true): Promise<boolean> {
+  const suffix = defaultYes ? ' (Y/n) ' : ' (y/N) ';
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    const answer = (await rl.question(`${message}${suffix}`))
+      .trim()
+      .toLowerCase();
+    if (!answer) return defaultYes;
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+async function askToStarRepo(config: InstallConfig): Promise<void> {
+  if (!config.promptForStar || config.dryRun || !process.stdin.isTTY) return;
+
+  console.log();
+  const shouldStar = await confirm(
+    `${SYMBOLS.star} Star the repo on GitHub?`,
+    true,
+  );
+  if (!shouldStar) return;
+
+  try {
+    const { execFileSync } = await import('node:child_process');
+    execFileSync(
+      'gh',
+      ['api', '--silent', '--method', 'PUT', `/user/starred/${GITHUB_REPO}`],
+      { stdio: 'ignore', timeout: 10_000 },
+    );
+    printSuccess('Thanks for starring! ★');
+  } catch {
+    printInfo(
+      `Couldn't star automatically. You can star manually:\n  ${BLUE}${GITHUB_URL}${RESET}`,
+    );
+  }
 }
 
 async function checkOpenCodeInstalled(): Promise<{
@@ -105,7 +150,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printHeader(isUpdate);
 
-  let totalSteps = 5;
+  let totalSteps = 6;
   if (config.installSkills) totalSteps += 1;
   if (config.installCustomSkills) totalSteps += 1;
 
@@ -125,6 +170,19 @@ async function runInstall(config: InstallConfig): Promise<number> {
     const pluginResult = await addPluginToOpenCodeConfig();
     if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
   }
+
+  printStep(step++, totalSteps, 'Adding TUI version badge...');
+  if (config.dryRun) {
+    printInfo('Dry run mode - skipping TUI plugin installation');
+  } else {
+    const tuiResult = await addPluginToOpenCodeTuiConfig();
+    if (!tuiResult.success) {
+      printInfo(`Skipped TUI badge: ${tuiResult.error}`);
+    } else {
+      handleStepResult(tuiResult, 'TUI badge added');
+    }
+  }
+
   printStep(step++, totalSteps, 'Disabling OpenCode default agents...');
   if (config.dryRun) {
     printInfo('Dry run mode - skipping agent disabling');
@@ -258,6 +316,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`  ${BLUE}${docsUrl}${RESET}`);
   console.log();
 
+  await askToStarRepo(config);
+
   return 0;
 }
 
@@ -266,6 +326,7 @@ export async function install(args: InstallArgs): Promise<number> {
     hasTmux: false,
     installSkills: args.skills === 'yes',
     installCustomSkills: args.skills === 'yes',
+    promptForStar: args.tui,
     dryRun: args.dryRun,
     reset: args.reset ?? false,
   };

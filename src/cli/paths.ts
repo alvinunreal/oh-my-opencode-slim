@@ -15,6 +15,11 @@ function getCustomOpenCodeConfigDir(): string | undefined {
   return configDir || undefined;
 }
 
+function getCustomTuiConfigPath(): string | undefined {
+  const configPath = process.env.OPENCODE_TUI_CONFIG?.trim();
+  return configPath || undefined;
+}
+
 /**
  * Get the OpenCode plugin config directory.
  *
@@ -70,11 +75,35 @@ export function getLiteConfigJsonc(): string {
   return join(getConfigDir(), 'oh-my-opencode-slim.jsonc');
 }
 
+export function getTuiConfig(): string {
+  const customConfigPath = getCustomTuiConfigPath();
+  if (customConfigPath) return customConfigPath;
+
+  return join(getConfigDir(), 'tui.json');
+}
+
+export function getTuiConfigJsonc(): string {
+  return join(getConfigDir(), 'tui.jsonc');
+}
+
 export function getExistingLiteConfigPath(): string {
   const jsonPath = getLiteConfig();
   if (existsSync(jsonPath)) return jsonPath;
 
   const jsoncPath = getLiteConfigJsonc();
+  if (existsSync(jsoncPath)) return jsoncPath;
+
+  return jsonPath;
+}
+
+export function getExistingTuiConfigPath(): string {
+  const customConfigPath = getCustomTuiConfigPath();
+  if (customConfigPath) return customConfigPath;
+
+  const jsonPath = join(getConfigDir(), 'tui.json');
+  if (existsSync(jsonPath)) return jsonPath;
+
+  const jsoncPath = getTuiConfigJsonc();
   if (existsSync(jsoncPath)) return jsoncPath;
 
   return jsonPath;
@@ -92,6 +121,13 @@ export function getExistingConfigPath(): string {
 
 export function ensureConfigDir(): void {
   const configDir = getConfigDir();
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
+  }
+}
+
+export function ensureTuiConfigDir(): void {
+  const configDir = dirname(getTuiConfig());
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
   }
