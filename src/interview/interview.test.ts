@@ -844,6 +844,48 @@ describe("interview service", () => {
 
       await fs.rm(tempDir, { recursive: true, force: true });
     });
+
+    test("more-questions nudge uses the current interview document", async () => {
+      const tempDir = await fs.mkdtemp("/tmp/interview-test-");
+      const ctx = createMockContext({ directory: tempDir });
+
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => "http://localhost:9999");
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+
+      await service.handleCommandExecuteBefore(
+        {
+          command: "interview",
+          sessionID: "session-nudge-doc",
+          arguments: "Prompt Document Test",
+        },
+        output
+      );
+
+      const interviewId = requireInterviewId(
+        extractInterviewIdFromLastPrompt(ctx.client.session.prompt)
+      );
+      const interviewPath = path.join(
+        tempDir,
+        "interview",
+        "prompt-document-test.md"
+      );
+      await fs.writeFile(
+        interviewPath,
+        "# Prompt Document Test\n\n## Current spec\n\nExisting spec content.\n",
+        "utf8"
+      );
+
+      ctx.client.session.promptAsync.mock.calls.length = 0;
+      await service.handleNudgeAction(interviewId, "more-questions");
+
+      const promptText = getPromptTexts(ctx.client.session.promptAsync)[0] ?? "";
+      expect(promptText).toContain("Current interview document:");
+      expect(promptText).toContain("Existing spec content.");
+      expect(promptText).not.toContain("undefined");
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
   });
 
   describe("configurable output folder", () => {

@@ -19,7 +19,6 @@ import {
   readInterviewDocument,
   relativeInterviewPath,
   resolveExistingInterviewPath,
-  rewriteInterviewDocument,
   slugify,
 } from './document';
 import { buildFallbackState, findLatestAssistantState } from './parser';
@@ -308,7 +307,7 @@ export function createInterviewService(
     const fallbackState = buildFallbackState(interviewMessages);
     const state = parsed.state ?? fallbackState;
 
-    const document = await rewriteInterviewDocument(interview, state.questions);
+    const document = await readInterviewDocument(interview);
 
     const interviewState: InterviewState = {
       interview,
@@ -685,7 +684,9 @@ export function createInterviewService(
         prompt = [
           `The user reviewed the completed interview spec and wants you to continue.`,
           ``,
-          `Current spec summary: ${state.summary}`,
+          `Current interview document:`,
+          ``,
+          state.document,
           ``,
           `Ask up to ${maxQuestions} new clarifying questions about aspects that are still unclear or underspecified.`,
           ``,

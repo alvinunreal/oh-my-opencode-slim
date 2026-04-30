@@ -208,15 +208,6 @@ export async function readInterviewDocument(
   return fs.readFile(record.markdownPath, 'utf8');
 }
 
-export async function rewriteInterviewDocument(
-  record: InterviewRecord,
-  _questions: InterviewQuestion[],
-): Promise<string> {
-  // For now, just return the existing document as-is
-  // The document is updated via appendInterviewAnswers when answers are submitted
-  return readInterviewDocument(record);
-}
-
 export async function appendInterviewAnswers(
   record: InterviewRecord,
   questions: InterviewQuestion[],
