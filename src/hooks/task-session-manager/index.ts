@@ -189,10 +189,11 @@ export function createTaskSessionManagerHook(
 
   function pendingCallId(input: {
     callID?: string;
-    sessionID: string;
+    sessionID?: string;
   }): string {
     return (
-      input.callID ?? `${input.sessionID}:anonymous-${++anonymousPendingCallId}`
+      input.callID ??
+      `${input.sessionID ?? 'unknown'}:anonymous-${++anonymousPendingCallId}`
     );
   }
 

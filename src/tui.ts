@@ -2,12 +2,18 @@ import type { TuiPluginModule } from '@opencode-ai/plugin/tui';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { DEFAULT_DISABLED_AGENTS, SUBAGENT_NAMES } from './config/constants';
-import { readTuiSnapshot, type TuiSnapshot } from './tui-state';
+import {
+  readTuiSnapshot,
+  readTuiSnapshotAsync,
+  type TuiSnapshot,
+} from './tui-state';
 
 const PLUGIN_NAME = 'oh-my-opencode-slim';
-const PLUGIN_LABEL = 'OMOS';
 const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
-  (agent) => agent !== 'councillor' && !DEFAULT_DISABLED_AGENTS.includes(agent),
+  (agent) =>
+    agent !== 'councillor' &&
+    agent !== 'council' &&
+    !DEFAULT_DISABLED_AGENTS.includes(agent),
 );
 const BORDER = { type: 'single' };
 
@@ -87,7 +93,7 @@ function row(
 
 function renderSidebar(
   snapshot: TuiSnapshot,
-  versionText: string,
+  version: string,
   theme: {
     accent: unknown;
     background: unknown;
@@ -118,11 +124,9 @@ function renderSidebar(
         [
           box(
             { paddingLeft: 1, paddingRight: 1, backgroundColor: theme.accent },
-            [text({ fg: theme.background }, ['Oh My OpenCode Slim'])],
+            [text({ fg: theme.background }, ['OMO-Slim'])],
           ),
-          text({ fg: theme.textMuted }, [
-            versionText.replace(`${PLUGIN_LABEL} `, 'v'),
-          ]),
+          text({ fg: theme.textMuted }, [`v${version}`]),
         ],
       ),
       box({ width: '100%', marginTop: 1 }, [
@@ -145,9 +149,10 @@ const plugin: TuiPluginModule & { id: string } = {
   id: `${PLUGIN_NAME}:tui`,
   tui: async (api, _options, meta) => {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
-    const versionText = `${PLUGIN_LABEL} ${version}`;
-    const renderTimer = setInterval(() => {
+    let snapshot = readTuiSnapshot();
+    const renderTimer = setInterval(async () => {
       try {
+        snapshot = await readTuiSnapshotAsync();
         api.renderer.requestRender();
       } catch {
         // Ignore render errors; this is best-effort live status.
@@ -161,22 +166,8 @@ const plugin: TuiPluginModule & { id: string } = {
     api.slots.register({
       order: 900,
       slots: {
-        home_prompt_right() {
-          const theme = api.theme.current;
-
-          return text({ fg: theme.textMuted }, [versionText]);
-        },
-        session_prompt_right() {
-          const theme = api.theme.current;
-
-          return text({ fg: theme.textMuted }, [versionText]);
-        },
         sidebar_content() {
-          return renderSidebar(
-            readTuiSnapshot(),
-            versionText,
-            api.theme.current,
-          );
+          return renderSidebar(snapshot, version, api.theme.current);
         },
       },
     });

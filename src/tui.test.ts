@@ -30,6 +30,7 @@ describe('tui sidebar agents', () => {
     expect(agentNames).toContain('explorer');
     expect(agentNames).toContain('fixer');
     expect(agentNames).not.toContain('observer');
+    expect(agentNames).not.toContain('council');
     expect(agentNames).not.toContain('councillor');
   });
 });

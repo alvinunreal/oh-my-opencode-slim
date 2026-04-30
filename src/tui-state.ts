@@ -29,18 +29,29 @@ function emptySnapshot(): TuiSnapshot {
   };
 }
 
+function parseSnapshot(value: string): TuiSnapshot {
+  const parsed = JSON.parse(value) as Partial<TuiSnapshot> | undefined;
+  if (parsed?.version !== 1) return emptySnapshot();
+
+  return {
+    version: 1,
+    updatedAt:
+      typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+    agentModels: parsed.agentModels ?? {},
+  };
+}
+
 export function readTuiSnapshot(): TuiSnapshot {
   try {
-    const parsed = JSON.parse(fs.readFileSync(getTuiStatePath(), 'utf8')) as
-      | Partial<TuiSnapshot>
-      | undefined;
-    if (parsed?.version !== 1) return emptySnapshot();
-    return {
-      version: 1,
-      updatedAt:
-        typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
-      agentModels: parsed.agentModels ?? {},
-    };
+    return parseSnapshot(fs.readFileSync(getTuiStatePath(), 'utf8'));
+  } catch {
+    return emptySnapshot();
+  }
+}
+
+export async function readTuiSnapshotAsync(): Promise<TuiSnapshot> {
+  try {
+    return parseSnapshot(await fs.promises.readFile(getTuiStatePath(), 'utf8'));
   } catch {
     return emptySnapshot();
   }
