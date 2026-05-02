@@ -407,6 +407,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "maou-shonen",
+      "name": "魔王少年(maou shonen)",
+      "avatar_url": "https://avatars.githubusercontent.com/u/22576780?v=4",
+      "profile": "https://github.com/maou-shonen",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
