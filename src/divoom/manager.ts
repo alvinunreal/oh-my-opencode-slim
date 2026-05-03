@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import * as os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DivoomConfig } from '../config';
@@ -27,6 +28,7 @@ const AGENT_GIFS: Record<string, string> = {
   designer: 'designer.gif',
   explorer: 'explorer.gif',
   fixer: 'fixer.gif',
+  input: 'input.gif',
   intro: 'intro.gif',
   librarian: 'librarian.gif',
   oracle: 'oracle.gif',
@@ -82,10 +84,32 @@ function isEnvEnabled(value: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
 }
 
+function inputKey(sessionId: string, requestId: string): string {
+  return `${sessionId}:${requestId}`;
+}
+
+export function getDivoomOutDir(homeDir = os.homedir()): string {
+  const xdg = process.env.XDG_DATA_HOME?.trim();
+  const baseDir =
+    xdg && xdg.length > 0 && path.isAbsolute(xdg)
+      ? xdg
+      : path.join(homeDir, '.local', 'share');
+  return path.join(
+    baseDir,
+    'opencode',
+    'storage',
+    'oh-my-opencode-slim',
+    'divoom',
+    'captures',
+  );
+}
+
 export class DivoomManager {
   private assetDir: string | null;
   private config: DivoomConfig;
   private parentStates = new Map<string, ParentState>();
+  private pendingUserInputs = new Set<string>();
+  private orchestratorBusy = false;
   private latestRequestedGifPath?: string;
   private lastGifPath?: string;
   private sendQueue = Promise.resolve();
@@ -98,7 +122,9 @@ export class DivoomManager {
     this.config = {
       ...DEFAULT_DIVOOM_CONFIG,
       ...config,
-      enabled: config?.enabled ?? isEnvEnabled(process.env[DIVOOM_ENABLE_ENV]),
+      enabled: isEnvEnabled(process.env[DIVOOM_ENABLE_ENV])
+        ? true
+        : (config?.enabled ?? false),
       gifs: config?.gifs,
     };
     this.assetDir = options.assetDir ?? resolveAssetDir();
@@ -125,11 +151,13 @@ export class DivoomManager {
     const state = this.getParentState(input.parentSessionId);
     const wasIdle = state.activeCalls.size === 0;
     state.activeCalls.set(input.callId, agent);
+    this.orchestratorBusy = true;
 
-    if (!wasIdle || state.displayedAgent) return;
+    if (wasIdle && !state.displayedAgent) {
+      state.displayedAgent = agent;
+    }
 
-    state.displayedAgent = agent;
-    this.show(agent);
+    this.render();
   }
 
   onTaskEnd(input: { parentSessionId?: string; callId?: string }): void {
@@ -139,10 +167,25 @@ export class DivoomManager {
     if (!state) return;
 
     state.activeCalls.delete(input.callId);
-    if (state.activeCalls.size > 0) return;
+    if (state.activeCalls.size === 0) {
+      this.parentStates.delete(input.parentSessionId);
+    }
 
-    this.parentStates.delete(input.parentSessionId);
-    this.show('orchestrator');
+    this.render();
+  }
+
+  onUserInputRequired(input: { sessionId?: string; requestId?: string }): void {
+    if (!input.sessionId || !input.requestId) return;
+
+    this.pendingUserInputs.add(inputKey(input.sessionId, input.requestId));
+    this.render();
+  }
+
+  onUserInputResolved(input: { sessionId?: string; requestId?: string }): void {
+    if (!input.sessionId || !input.requestId) return;
+
+    this.pendingUserInputs.delete(inputKey(input.sessionId, input.requestId));
+    this.render();
   }
 
   onOrchestratorStatus(input: {
@@ -152,22 +195,50 @@ export class DivoomManager {
   }): void {
     if (!input.sessionId || !input.isOrchestrator) return;
 
-    const state = this.parentStates.get(input.sessionId);
     if (input.status === 'busy') {
-      if (state && state.activeCalls.size > 0) return;
-      this.show('orchestrator');
+      this.orchestratorBusy = true;
+      this.render();
       return;
     }
 
     if (input.status === 'idle') {
+      this.orchestratorBusy = false;
       this.parentStates.delete(input.sessionId);
-      this.show('intro');
+      this.render();
     }
   }
 
-  onSessionDeleted(sessionId?: string): void {
+  onSessionDeleted(input: {
+    sessionId?: string;
+    isOrchestrator?: boolean;
+  }): void {
+    const sessionId = input.sessionId;
     if (!sessionId) return;
+    if (input.isOrchestrator) this.orchestratorBusy = false;
     this.parentStates.delete(sessionId);
+    this.pendingUserInputs = new Set(
+      Array.from(this.pendingUserInputs).filter(
+        (key) => !key.startsWith(`${sessionId}:`),
+      ),
+    );
+    this.render();
+  }
+
+  private render(): void {
+    if (this.pendingUserInputs.size > 0) {
+      this.show('input');
+      return;
+    }
+
+    const activeAgent = Array.from(this.parentStates.values()).find(
+      (state) => state.displayedAgent && state.activeCalls.size > 0,
+    )?.displayedAgent;
+    if (activeAgent) {
+      this.show(activeAgent);
+      return;
+    }
+
+    this.show(this.orchestratorBusy ? 'orchestrator' : 'intro');
   }
 
   private getParentState(parentSessionId: string): ParentState {
@@ -191,16 +262,34 @@ export class DivoomManager {
 
     const fileName =
       this.config.gifs?.[agent] ?? AGENT_GIFS[agent] ?? AGENT_GIFS.orchestrator;
-    const gifPath = path.isAbsolute(fileName)
+    const requestedGifPath = path.isAbsolute(fileName)
       ? fileName
       : path.join(this.assetDir, fileName);
+    const fallbackGifPath = path.join(this.assetDir, AGENT_GIFS.intro);
+    const gifPath = existsSync(requestedGifPath)
+      ? requestedGifPath
+      : agent === 'input'
+        ? fallbackGifPath
+        : requestedGifPath;
     if (!existsSync(gifPath)) {
-      log('[divoom] gif not found', { agent, gifPath });
+      log('[divoom] gif not found', { agent, gifPath: requestedGifPath });
       return;
     }
 
     if (gifPath === this.latestRequestedGifPath) return;
     this.latestRequestedGifPath = gifPath;
+
+    const outDir = getDivoomOutDir();
+    try {
+      mkdirSync(outDir, { recursive: true });
+    } catch (error) {
+      this.clearLatestIfCurrent(gifPath);
+      log('[divoom] output directory not writable', {
+        outDir,
+        error: String(error),
+      });
+      return;
+    }
 
     const call = {
       command: this.config.python,
@@ -217,6 +306,8 @@ export class DivoomManager {
         String(this.config.maxFrames),
         '--posterize-bits',
         String(this.config.posterizeBits),
+        '--out-dir',
+        outDir,
       ],
     };
 

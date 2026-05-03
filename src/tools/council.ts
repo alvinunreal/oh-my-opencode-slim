@@ -2,9 +2,9 @@ import {
   type PluginInput,
   type ToolDefinition,
   tool,
-} from "@opencode-ai/plugin";
-import type { CouncilManager } from "../council/council-manager";
-import { shortModelLabel } from "../utils/session";
+} from '@opencode-ai/plugin';
+import type { CouncilManager } from '../council/council-manager';
+import { shortModelLabel } from '../utils/session';
 
 const z = tool.schema;
 
@@ -13,14 +13,14 @@ const z = tool.schema;
  * Shows short model labels per councillor: "α: gpt-5.4-mini, β: gemini-3-pro"
  */
 function formatModelComposition(
-  councillorResults: Array<{ name: string; model: string }>
+  councillorResults: Array<{ name: string; model: string }>,
 ): string {
   return councillorResults
     .map((cr) => {
       const shortModel = shortModelLabel(cr.model);
       return `${cr.name}: ${shortModel}`;
     })
-    .join(", ");
+    .join(', ');
 }
 
 /**
@@ -32,7 +32,7 @@ function formatModelComposition(
  */
 export function createCouncilTool(
   _ctx: PluginInput,
-  councilManager: CouncilManager
+  councilManager: CouncilManager,
 ): Record<string, ToolDefinition> {
   const council_session = tool({
     description: `Launch a multi-LLM council session for consensus-based analysis.
@@ -41,52 +41,52 @@ Sends the prompt to multiple models (councillors) in parallel and returns their 
 
 Returns the councillor responses with a summary footer.`,
     args: {
-      prompt: z.string().describe("The prompt to send to all councillors"),
+      prompt: z.string().describe('The prompt to send to all councillors'),
       preset: z
         .string()
         .optional()
         .describe(
-          'Council preset to use (default: "default"). Must match a preset in the council config.'
+          'Council preset to use (default: "default"). Must match a preset in the council config.',
         ),
     },
     async execute(args, toolContext) {
       if (
         !toolContext ||
-        typeof toolContext !== "object" ||
-        !("sessionID" in toolContext)
+        typeof toolContext !== 'object' ||
+        !('sessionID' in toolContext)
       ) {
-        throw new Error("Invalid toolContext: missing sessionID");
+        throw new Error('Invalid toolContext: missing sessionID');
       }
 
       // Guard: Only the council agent can invoke council sessions.
       // If agent is missing from context, allow through (backward compatible).
-      const allowedAgents = ["council"];
+      const allowedAgents = ['council'];
       const callingAgent = (toolContext as { agent?: string }).agent;
       if (callingAgent && !allowedAgents.includes(callingAgent)) {
         throw new Error(
-          `Council sessions can only be invoked by the council agent. Current agent: ${callingAgent}`
+          `Council sessions can only be invoked by the council agent. Current agent: ${callingAgent}`,
         );
       }
 
       const prompt = String(args.prompt);
-      const preset = typeof args.preset === "string" ? args.preset : undefined;
+      const preset = typeof args.preset === 'string' ? args.preset : undefined;
       const parentSessionId = (toolContext as { sessionID: string }).sessionID;
 
       const result = await councilManager.runCouncil(
         prompt,
         preset,
-        parentSessionId
+        parentSessionId,
       );
 
       if (!result.success) {
         return `Council session failed: ${result.error}`;
       }
 
-      let output = result.result ?? "(No output)";
+      let output = result.result ?? '(No output)';
 
       // Append councillor summary for transparency
       const completed = result.councillorResults.filter(
-        (cr) => cr.status === "completed"
+        (cr) => cr.status === 'completed',
       ).length;
       const total = result.councillorResults.length;
       const composition = formatModelComposition(result.councillorResults);
@@ -97,27 +97,27 @@ Returns the councillor responses with a summary footer.`,
       const deprecated = councilManager.getDeprecatedFields();
       if (deprecated && deprecated.length > 0) {
         const legacyMasterModel = councilManager.getLegacyMasterModel();
-        const hasMaster = deprecated.includes("master");
+        const hasMaster = deprecated.includes('master');
         const trulyIgnored =
           hasMaster && !legacyMasterModel
             ? deprecated // master has no model → treat as ignored too
-            : deprecated.filter((f) => f !== "master");
+            : deprecated.filter((f) => f !== 'master');
         const parts: string[] = [];
         if (hasMaster && legacyMasterModel) {
           parts.push(
-            `\`council.master\` is deprecated and will be removed in a future version. Its \`model\` is currently used as a fallback for the council agent — add a \`council\` entry to your preset to make this explicit.`
+            `\`council.master\` is deprecated and will be removed in a future version. Its \`model\` is currently used as a fallback for the council agent — add a \`council\` entry to your preset to make this explicit.`,
           );
         }
         if (trulyIgnored.length > 0) {
           parts.push(
-            `${trulyIgnored.map((f) => `\`council.${f}\``).join(", ")} ${
-              trulyIgnored.length === 1 ? "is" : "are"
+            `${trulyIgnored.map((f) => `\`council.${f}\``).join(', ')} ${
+              trulyIgnored.length === 1 ? 'is' : 'are'
             } deprecated and ignored — remove ${
-              trulyIgnored.length === 1 ? "it" : "them"
-            } from your config.`
+              trulyIgnored.length === 1 ? 'it' : 'them'
+            } from your config.`,
           );
         }
-        output += `\n⚠ Config warning: ${parts.join(" ")}`;
+        output += `\n⚠ Config warning: ${parts.join(' ')}`;
       }
 
       return output;

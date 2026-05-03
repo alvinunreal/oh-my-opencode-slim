@@ -14,15 +14,18 @@ When enabled, the plugin sends bundled GIFs as OpenCode changes state:
 
 | OpenCode state | Divoom display |
 |----------------|----------------|
-| Plugin loaded / orchestrator waiting for user input | `intro.gif` |
+| Plugin loaded | `intro.gif` |
 | Orchestrator is busy planning or working directly | `orchestrator.gif` |
 | A delegated agent starts | that agent's GIF |
 | Multiple agents run in parallel | first delegated agent keeps the display |
 | Delegated agents finish but orchestrator is still working | `orchestrator.gif` |
 | Orchestrator becomes idle again | `intro.gif` |
+| Permission prompt or question needs a reply | `input.gif` |
 
 Bundled GIFs currently cover `orchestrator`, `explorer`, `librarian`, `oracle`,
-`designer`, `fixer`, and `council`.
+`designer`, `fixer`, `council`, `input`, and `intro`. You can configure
+`divoom.gifs.input` to customize user-input waits; if `input.gif` is not present
+yet, the plugin falls back to `intro.gif`.
 
 ## Prerequisites
 
@@ -74,10 +77,20 @@ Before blaming OpenCode, verify the Divoom sender works directly:
   --fps 8 \
   --speed 125 \
   --max-frames 24 \
-  --posterize-bits 3
+  --posterize-bits 3 \
+  --out-dir ~/.local/share/opencode/storage/oh-my-opencode-slim/divoom/captures
 ```
 
+**Note:** The sender must support the `--out-dir` flag. This requires a recent
+version of the Divoom MiniToo sender (the plugin uses this for temporary
+processing files).
+
 If that updates the display, the OpenCode integration should work once enabled.
+
+**Output directory path:** The plugin writes temporary processing files to
+`$XDG_DATA_HOME/opencode/storage/oh-my-opencode-slim/divoom/captures` when
+`XDG_DATA_HOME` is set to a non-empty absolute path. Otherwise it falls back to
+`~/.local/share/opencode/storage/oh-my-opencode-slim/divoom/captures`.
 
 ## Enable in oh-my-opencode-slim
 
@@ -105,8 +118,9 @@ For one-off runs, you can enable Divoom without changing your config:
 OH_MY_OPENCODE_SLIM_DIVOOM=1 opencode
 ```
 
-Accepted truthy values are `1`, `true`, `yes`, and `on`. If `divoom.enabled`
-is explicitly set in config, the config value wins over the environment variable.
+Accepted truthy values are `1`, `true`, `yes`, and `on`. The environment
+variable force-enables Divoom for that run, even if `divoom.enabled` is `false`
+in config.
 
 ## Tunable settings
 

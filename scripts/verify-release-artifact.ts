@@ -32,6 +32,7 @@ const packagedRequiredFiles = [
   'dist/divoom/designer.gif',
   'dist/divoom/explorer.gif',
   'dist/divoom/fixer.gif',
+  'dist/divoom/input.gif',
   'dist/divoom/intro.gif',
   'dist/divoom/librarian.gif',
   'dist/divoom/oracle.gif',

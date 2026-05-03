@@ -737,6 +737,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             sessionID?: string;
           };
           sessionID?: string;
+          id?: string;
+          requestID?: string;
           status?: { type: string };
         };
       };
@@ -796,6 +798,33 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
       );
 
+      if (
+        event.type === 'permission.asked' ||
+        event.type === 'question.asked'
+      ) {
+        const props = event.properties as
+          | { sessionID?: string; id?: string; requestID?: string }
+          | undefined;
+        divoomManager.onUserInputRequired({
+          sessionId: props?.sessionID,
+          requestId: props?.id ?? props?.requestID,
+        });
+      }
+
+      if (
+        event.type === 'permission.replied' ||
+        event.type === 'question.replied' ||
+        event.type === 'question.rejected'
+      ) {
+        const props = event.properties as
+          | { sessionID?: string; requestID?: string; id?: string }
+          | undefined;
+        divoomManager.onUserInputResolved({
+          sessionId: props?.sessionID,
+          requestId: props?.requestID ?? props?.id,
+        });
+      }
+
       if (input.event.type === 'session.status') {
         const props = input.event.properties as
           | { sessionID?: string; status?: { type?: string } }
@@ -814,7 +843,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const props = input.event.properties as
           | { info?: { id?: string }; sessionID?: string }
           | undefined;
-        divoomManager.onSessionDeleted(props?.info?.id ?? props?.sessionID);
+        const sessionID = props?.info?.id ?? props?.sessionID;
+        divoomManager.onSessionDeleted({
+          sessionId: sessionID,
+          isOrchestrator: sessionID
+            ? sessionAgentMap.get(sessionID) === 'orchestrator'
+            : false,
+        });
       }
 
       if (input.event.type === 'session.deleted') {

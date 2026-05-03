@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { DivoomManager, type DivoomSenderCall } from './manager';
+import {
+  DivoomManager,
+  type DivoomSenderCall,
+  getDivoomOutDir,
+} from './manager';
 
 function createGifAssets(dir: string, names: string[]): void {
   for (const name of names) {
@@ -16,11 +20,15 @@ describe('DivoomManager', () => {
   let pythonPath: string;
   let scriptPath: string;
   let originalDivoomEnv: string | undefined;
+  let originalXdgDataHome: string | undefined;
 
   beforeEach(() => {
     originalDivoomEnv = process.env.OH_MY_OPENCODE_SLIM_DIVOOM;
+    originalXdgDataHome = process.env.XDG_DATA_HOME;
     delete process.env.OH_MY_OPENCODE_SLIM_DIVOOM;
     tempDir = mkdtempSync(path.join(tmpdir(), 'divoom-test-'));
+    // Set XDG_DATA_HOME to a temp path to avoid writing to real user data directory
+    process.env.XDG_DATA_HOME = path.join(tempDir, 'xdg-data');
     calls = [];
     pythonPath = path.join(tempDir, 'python');
     scriptPath = path.join(tempDir, 'divoom_send.py');
@@ -31,6 +39,7 @@ describe('DivoomManager', () => {
       'orchestrator.gif',
       'explorer.gif',
       'fixer.gif',
+      'input.gif',
       'oracle.gif',
     ]);
   });
@@ -40,6 +49,11 @@ describe('DivoomManager', () => {
       delete process.env.OH_MY_OPENCODE_SLIM_DIVOOM;
     } else {
       process.env.OH_MY_OPENCODE_SLIM_DIVOOM = originalDivoomEnv;
+    }
+    if (originalXdgDataHome === undefined) {
+      delete process.env.XDG_DATA_HOME;
+    } else {
+      process.env.XDG_DATA_HOME = originalXdgDataHome;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -104,14 +118,16 @@ describe('DivoomManager', () => {
     ]);
   });
 
-  test('explicit config disabled wins over env var', async () => {
+  test('env var force-enables even when config disables', async () => {
     process.env.OH_MY_OPENCODE_SLIM_DIVOOM = 'true';
     const manager = createManager({ enabled: false });
 
     manager.onPluginLoad();
     await manager.flush();
 
-    expect(calls).toHaveLength(0);
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'intro.gif'),
+    ]);
   });
 
   test('shows task agent then orchestrator after a single task', async () => {
@@ -190,6 +206,122 @@ describe('DivoomManager', () => {
     ]);
   });
 
+  test('explicit question requests show input until work resumes', async () => {
+    const manager = createManager();
+
+    manager.onOrchestratorStatus({
+      sessionId: 'parent',
+      status: 'busy',
+      isOrchestrator: true,
+    });
+    await manager.flush();
+    manager.onUserInputRequired({ sessionId: 'parent', requestId: 'q-1' });
+    await manager.flush();
+    manager.onOrchestratorStatus({
+      sessionId: 'parent',
+      status: 'busy',
+      isOrchestrator: true,
+    });
+    await manager.flush();
+    manager.onUserInputResolved({ sessionId: 'parent', requestId: 'q-1' });
+    await manager.flush();
+    manager.onOrchestratorStatus({
+      sessionId: 'parent',
+      status: 'busy',
+      isOrchestrator: true,
+    });
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'orchestrator.gif'),
+      path.join(tempDir, 'input.gif'),
+      path.join(tempDir, 'orchestrator.gif'),
+    ]);
+  });
+
+  test('child prompt restores delegated agent after reply', async () => {
+    const manager = createManager();
+
+    manager.onTaskStart({
+      parentSessionId: 'parent',
+      callId: 'call-1',
+      args: { subagent_type: 'explorer' },
+    });
+    await manager.flush();
+    manager.onUserInputRequired({ sessionId: 'child', requestId: 'p-1' });
+    await manager.flush();
+    manager.onUserInputResolved({ sessionId: 'child', requestId: 'p-1' });
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'explorer.gif'),
+      path.join(tempDir, 'input.gif'),
+      path.join(tempDir, 'explorer.gif'),
+    ]);
+  });
+
+  test('overlapping prompts keep input until all resolve', async () => {
+    const manager = createManager();
+
+    manager.onUserInputRequired({ sessionId: 'one', requestId: 'p-1' });
+    await manager.flush();
+    manager.onUserInputRequired({ sessionId: 'two', requestId: 'p-2' });
+    await manager.flush();
+    manager.onUserInputResolved({ sessionId: 'one', requestId: 'p-1' });
+    await manager.flush();
+    manager.onUserInputResolved({ sessionId: 'two', requestId: 'p-2' });
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'input.gif'),
+      path.join(tempDir, 'intro.gif'),
+    ]);
+  });
+
+  test('session deletion clears pending input and rerenders', async () => {
+    const manager = createManager();
+
+    manager.onUserInputRequired({ sessionId: 'child', requestId: 'p-1' });
+    await manager.flush();
+    manager.onSessionDeleted({ sessionId: 'child' });
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'input.gif'),
+      path.join(tempDir, 'intro.gif'),
+    ]);
+  });
+
+  test('orchestrator deletion clears busy display', async () => {
+    const manager = createManager();
+
+    manager.onOrchestratorStatus({
+      sessionId: 'parent',
+      status: 'busy',
+      isOrchestrator: true,
+    });
+    await manager.flush();
+    manager.onSessionDeleted({ sessionId: 'parent', isOrchestrator: true });
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'orchestrator.gif'),
+      path.join(tempDir, 'intro.gif'),
+    ]);
+  });
+
+  test('pending user input falls back to intro when input gif is absent', async () => {
+    rmSync(path.join(tempDir, 'input.gif'));
+    const manager = createManager();
+
+    manager.onUserInputRequired({ sessionId: 'parent', requestId: 'q-1' });
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'intro.gif'),
+    ]);
+  });
+
   test('keeps first agent visible for parallel tasks', async () => {
     const manager = createManager();
 
@@ -263,23 +395,25 @@ describe('DivoomManager', () => {
     });
     await manager.flush();
 
-    expect(calls[0]).toEqual({
-      command: customPython,
-      args: [
-        customScript,
-        customGif,
-        '--size',
-        '64',
-        '--fps',
-        '12',
-        '--speed',
-        '250',
-        '--max-frames',
-        '10',
-        '--posterize-bits',
-        '4',
-      ],
-    });
+    expect(calls[0].command).toBe(customPython);
+    expect(calls[0].args).toHaveLength(14);
+    expect(calls[0].args[0]).toBe(customScript);
+    expect(calls[0].args[1]).toBe(customGif);
+    expect(calls[0].args.slice(2, 13)).toEqual([
+      '--size',
+      '64',
+      '--fps',
+      '12',
+      '--speed',
+      '250',
+      '--max-frames',
+      '10',
+      '--posterize-bits',
+      '4',
+      '--out-dir',
+    ]);
+    // Verify out-dir is absolute (last arg)
+    expect(path.isAbsolute(calls[0].args[13])).toBe(true);
   });
 
   test('drops stale queued sends and keeps latest requested gif', async () => {
@@ -322,5 +456,72 @@ describe('DivoomManager', () => {
     await manager.flush();
 
     expect(calls).toHaveLength(0);
+  });
+
+  test('out-dir is absolute and independent of process.cwd', async () => {
+    const originalCwd = process.cwd();
+    const tempCwd = mkdtempSync(path.join(tmpdir(), 'divoom-cwd-test-'));
+
+    try {
+      process.chdir(tempCwd);
+      const manager = createManager();
+
+      manager.onPluginLoad();
+      await manager.flush();
+
+      expect(calls).toHaveLength(1);
+      const outDirArg = calls[0].args[calls[0].args.length - 1];
+      // Must be absolute, not relative to cwd
+      expect(path.isAbsolute(outDirArg)).toBe(true);
+      // Must not start with the temp cwd
+      expect(outDirArg.startsWith(tempCwd)).toBe(false);
+      // Must contain the expected path segments
+      expect(outDirArg).toContain('divoom');
+      expect(outDirArg).toContain('captures');
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(tempCwd, { recursive: true, force: true });
+    }
+  });
+
+  test('empty XDG_DATA_HOME falls back to homedir/.local/share', async () => {
+    // Set empty XDG_DATA_HOME
+    process.env.XDG_DATA_HOME = '';
+    const homeDir = path.join(tempDir, 'home');
+    const outDirArg = getDivoomOutDir(homeDir);
+    // Must be absolute
+    expect(path.isAbsolute(outDirArg)).toBe(true);
+    expect(outDirArg).toStartWith(path.join(tempDir, 'home'));
+    // Must contain the expected path segments
+    expect(outDirArg).toContain('divoom');
+    expect(outDirArg).toContain('captures');
+  });
+
+  test('relative XDG_DATA_HOME falls back to homedir/.local/share', async () => {
+    // Set relative XDG_DATA_HOME (should be rejected)
+    process.env.XDG_DATA_HOME = 'relative/path/to/data';
+    const homeDir = path.join(tempDir, 'home');
+    const outDirArg = getDivoomOutDir(homeDir);
+    // Must be absolute
+    expect(path.isAbsolute(outDirArg)).toBe(true);
+    // Must not start with the relative path
+    expect(outDirArg.startsWith('relative')).toBe(false);
+    expect(outDirArg).toStartWith(path.join(tempDir, 'home'));
+    // Must contain the expected path segments
+    expect(outDirArg).toContain('divoom');
+    expect(outDirArg).toContain('captures');
+  });
+
+  test('whitespace-only XDG_DATA_HOME falls back to homedir/.local/share', async () => {
+    // Set whitespace-only XDG_DATA_HOME (should be rejected after trim)
+    process.env.XDG_DATA_HOME = '   ';
+    const homeDir = path.join(tempDir, 'home');
+    const outDirArg = getDivoomOutDir(homeDir);
+    // Must be absolute
+    expect(path.isAbsolute(outDirArg)).toBe(true);
+    expect(outDirArg).toStartWith(path.join(tempDir, 'home'));
+    // Must contain the expected path segments
+    expect(outDirArg).toContain('divoom');
+    expect(outDirArg).toContain('captures');
   });
 });

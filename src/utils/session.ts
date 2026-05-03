@@ -2,16 +2,16 @@
  * Shared session utilities for council and background managers.
  */
 
-import type { PluginInput } from "@opencode-ai/plugin";
+import type { PluginInput } from '@opencode-ai/plugin';
 
-type OpencodeClient = PluginInput["client"];
+type OpencodeClient = PluginInput['client'];
 
 /**
  * Extract the short model label from a "provider/model" string.
  * E.g. "openai/gpt-5.4-mini" → "gpt-5.4-mini"
  */
 export function shortModelLabel(model: string): string {
-  return model.split("/").pop() ?? model;
+  return model.split('/').pop() ?? model;
 }
 
 export type PromptBody = {
@@ -21,7 +21,7 @@ export type PromptBody = {
   noReply?: boolean;
   system?: string;
   tools?: { [key: string]: boolean };
-  parts: Array<{ type: "text"; text: string }>;
+  parts: Array<{ type: 'text'; text: string }>;
   variant?: string;
 };
 
@@ -31,9 +31,9 @@ export type PromptBody = {
  * @returns Object with providerID and modelID, or null if invalid
  */
 export function parseModelReference(
-  model: string
+  model: string,
 ): { providerID: string; modelID: string } | null {
-  const slashIndex = model.indexOf("/");
+  const slashIndex = model.indexOf('/');
   if (slashIndex <= 0 || slashIndex >= model.length - 1) {
     return null;
   }
@@ -53,8 +53,8 @@ export function parseModelReference(
  */
 export async function promptWithTimeout(
   client: OpencodeClient,
-  args: Parameters<OpencodeClient["session"]["prompt"]>[0],
-  timeoutMs: number
+  args: Parameters<OpencodeClient['session']['prompt']>[0],
+  timeoutMs: number,
 ): Promise<void> {
   if (timeoutMs <= 0) {
     await client.session.prompt(args);
@@ -104,7 +104,7 @@ export interface SessionExtractionResult {
 export async function extractSessionResult(
   client: OpencodeClient,
   sessionId: string,
-  options?: { includeReasoning?: boolean }
+  options?: { includeReasoning?: boolean },
 ): Promise<SessionExtractionResult> {
   const includeReasoning = options?.includeReasoning ?? true;
 
@@ -116,21 +116,21 @@ export async function extractSessionResult(
     parts?: Array<{ type: string; text?: string }>;
   }>;
   const assistantMessages = messages.filter(
-    (m) => m.info?.role === "assistant"
+    (m) => m.info?.role === 'assistant',
   );
 
   const extractedContent: string[] = [];
   for (const message of assistantMessages) {
     for (const part of message.parts ?? []) {
       const allowed = includeReasoning
-        ? part.type === "text" || part.type === "reasoning"
-        : part.type === "text";
+        ? part.type === 'text' || part.type === 'reasoning'
+        : part.type === 'text';
       if (allowed && part.text) {
         extractedContent.push(part.text);
       }
     }
   }
 
-  const text = extractedContent.filter((t) => t.length > 0).join("\n\n");
+  const text = extractedContent.filter((t) => t.length > 0).join('\n\n');
   return { text, empty: text.length === 0 };
 }

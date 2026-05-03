@@ -527,9 +527,7 @@ export function createInterviewService(
         path: { id: interview.sessionID },
         body: {
           parts: [createInternalAgentTextPart(prompt)],
-          ...(model
-            ? { model: parseModelReference(model) ?? undefined }
-            : {}),
+          ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
         },
       });
       promptSent = true;
@@ -762,9 +760,7 @@ export function createInterviewService(
         path: { id: interview.sessionID },
         body: {
           parts: [createInternalAgentTextPart(prompt)],
-          ...(model
-            ? { model: parseModelReference(model) ?? undefined }
-            : {}),
+          ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
         },
       });
       promptSent = true;

@@ -1,21 +1,21 @@
 // Agent names
 export const AGENT_ALIASES: Record<string, string> = {
-  explore: "explorer",
-  "frontend-ui-ux-engineer": "designer",
+  explore: 'explorer',
+  'frontend-ui-ux-engineer': 'designer',
 };
 
 export const SUBAGENT_NAMES = [
-  "explorer",
-  "librarian",
-  "oracle",
-  "designer",
-  "fixer",
-  "observer",
-  "council",
-  "councillor",
+  'explorer',
+  'librarian',
+  'oracle',
+  'designer',
+  'fixer',
+  'observer',
+  'council',
+  'councillor',
 ] as const;
 
-export const ORCHESTRATOR_NAME = "orchestrator" as const;
+export const ORCHESTRATOR_NAME = 'orchestrator' as const;
 
 export const ALL_AGENT_NAMES = [ORCHESTRATOR_NAME, ...SUBAGENT_NAMES] as const;
 
@@ -31,24 +31,24 @@ export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 // Which agents each agent type can spawn via delegation.
 // councillor is internal — only CouncilManager spawns it.
 export const ORCHESTRATABLE_AGENTS = [
-  "explorer",
-  "librarian",
-  "oracle",
-  "designer",
-  "fixer",
-  "observer",
-  "council",
+  'explorer',
+  'librarian',
+  'oracle',
+  'designer',
+  'fixer',
+  'observer',
+  'council',
 ] as const;
 
 /** Agents that cannot be disabled even if listed in disabled_agents config. */
-export const PROTECTED_AGENTS = new Set(["orchestrator", "councillor"]);
+export const PROTECTED_AGENTS = new Set(['orchestrator', 'councillor']);
 
 /**
  * Get the list of orchestratable agents, excluding any disabled agents.
  * This is used for delegation validation at runtime.
  */
 export function getOrchestratableAgents(
-  disabledAgents?: Set<string>
+  disabledAgents?: Set<string>,
 ): string[] {
   return ORCHESTRATABLE_AGENTS.filter((name) => !disabledAgents?.has(name));
 }
@@ -69,14 +69,14 @@ export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
 // orchestrator is undefined so its model is fully resolved at runtime via priority fallback
 export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   orchestrator: undefined,
-  oracle: "openai/gpt-5.5",
-  librarian: "openai/gpt-5.4-mini",
-  explorer: "openai/gpt-5.4-mini",
-  designer: "openai/gpt-5.4-mini",
-  fixer: "openai/gpt-5.4-mini",
-  observer: "openai/gpt-5.4-mini",
-  council: "openai/gpt-5.4-mini",
-  councillor: "openai/gpt-5.4-mini",
+  oracle: 'openai/gpt-5.5',
+  librarian: 'openai/gpt-5.4-mini',
+  explorer: 'openai/gpt-5.4-mini',
+  designer: 'openai/gpt-5.4-mini',
+  fixer: 'openai/gpt-5.4-mini',
+  observer: 'openai/gpt-5.4-mini',
+  council: 'openai/gpt-5.4-mini',
+  councillor: 'openai/gpt-5.4-mini',
 };
 
 // Polling configuration
@@ -108,4 +108,4 @@ export const STABLE_POLLS_THRESHOLD = 3;
 
 /** Agents that are disabled by default. Users must explicitly enable them
  *  by removing from disabled_agents and configuring an appropriate model. */
-export const DEFAULT_DISABLED_AGENTS: string[] = ["observer"];
+export const DEFAULT_DISABLED_AGENTS: string[] = ['observer'];
