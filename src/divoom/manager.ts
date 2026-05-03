@@ -14,7 +14,7 @@ export type DivoomSenderCall = {
   args: string[];
 };
 
-export type DivoomSender = (call: DivoomSenderCall) => void;
+export type DivoomSender = (call: DivoomSenderCall) => Promise<void> | void;
 
 type ParentState = {
   activeCalls: Map<string, string>;
@@ -79,7 +79,9 @@ export class DivoomManager {
   private assetDir: string | null;
   private config: DivoomConfig;
   private parentStates = new Map<string, ParentState>();
+  private latestRequestedGifPath?: string;
   private lastGifPath?: string;
+  private sendQueue = Promise.resolve();
 
   constructor(
     config?: Partial<DivoomConfig>,
@@ -143,14 +145,14 @@ export class DivoomManager {
     if (!input.sessionId || !input.isOrchestrator) return;
 
     const state = this.parentStates.get(input.sessionId);
-    if (state && state.activeCalls.size > 0) return;
-
     if (input.status === 'busy') {
+      if (state && state.activeCalls.size > 0) return;
       this.show('orchestrator');
       return;
     }
 
     if (input.status === 'idle') {
+      this.parentStates.delete(input.sessionId);
       this.show('intro');
     }
   }
@@ -189,30 +191,63 @@ export class DivoomManager {
       return;
     }
 
-    if (gifPath === this.lastGifPath) return;
-    this.lastGifPath = gifPath;
+    if (gifPath === this.latestRequestedGifPath) return;
+    this.latestRequestedGifPath = gifPath;
 
-    try {
-      this.sender({
-        command: this.config.python,
-        args: [
-          this.config.script,
-          gifPath,
-          '--size',
-          String(this.config.size),
-          '--fps',
-          String(this.config.fps),
-          '--speed',
-          String(this.config.speed),
-          '--max-frames',
-          String(this.config.maxFrames),
-          '--posterize-bits',
-          String(this.config.posterizeBits),
-        ],
+    const call = {
+      command: this.config.python,
+      args: [
+        this.config.script,
+        gifPath,
+        '--size',
+        String(this.config.size),
+        '--fps',
+        String(this.config.fps),
+        '--speed',
+        String(this.config.speed),
+        '--max-frames',
+        String(this.config.maxFrames),
+        '--posterize-bits',
+        String(this.config.posterizeBits),
+      ],
+    };
+
+    this.sendQueue = this.sendQueue
+      .catch(() => {})
+      .then(async () => {
+        if (gifPath !== this.latestRequestedGifPath) return;
+        if (!existsSync(this.config.python)) {
+          this.clearLatestIfCurrent(gifPath);
+          log('[divoom] python executable not found', this.config.python);
+          return;
+        }
+        if (!existsSync(this.config.script)) {
+          this.clearLatestIfCurrent(gifPath);
+          log('[divoom] sender script not found', this.config.script);
+          return;
+        }
+
+        try {
+          await this.sender(call);
+          this.lastGifPath = gifPath;
+          log('[divoom] showing gif', { agent, gifPath });
+        } catch (error) {
+          this.clearLatestIfCurrent(gifPath);
+          log('[divoom] failed to send gif', String(error));
+        }
       });
-      log('[divoom] showing gif', { agent, gifPath });
-    } catch (error) {
-      log('[divoom] failed to spawn sender', String(error));
+  }
+
+  async flush(): Promise<void> {
+    await this.sendQueue.catch(() => {});
+  }
+
+  private clearLatestIfCurrent(gifPath: string): void {
+    if (this.latestRequestedGifPath === gifPath) {
+      this.latestRequestedGifPath = undefined;
+    }
+    if (this.lastGifPath === gifPath) {
+      this.lastGifPath = undefined;
     }
   }
 }
@@ -221,12 +256,19 @@ function isTaskArgs(value: unknown): value is TaskArgs {
   return typeof value === 'object' && value !== null;
 }
 
-function defaultSender(call: DivoomSenderCall): void {
-  const child = spawn(call.command, call.args, {
-    detached: true,
-    stdio: 'ignore',
+function defaultSender(call: DivoomSenderCall): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(call.command, call.args, {
+      detached: true,
+      stdio: 'ignore',
+    });
+
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
   });
-  child.unref();
 }
 
 export function createDivoomManager(
