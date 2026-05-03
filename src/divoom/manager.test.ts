@@ -15,8 +15,11 @@ describe('DivoomManager', () => {
   let calls: DivoomSenderCall[];
   let pythonPath: string;
   let scriptPath: string;
+  let originalDivoomEnv: string | undefined;
 
   beforeEach(() => {
+    originalDivoomEnv = process.env.OH_MY_OPENCODE_SLIM_DIVOOM;
+    delete process.env.OH_MY_OPENCODE_SLIM_DIVOOM;
     tempDir = mkdtempSync(path.join(tmpdir(), 'divoom-test-'));
     calls = [];
     pythonPath = path.join(tempDir, 'python');
@@ -33,6 +36,11 @@ describe('DivoomManager', () => {
   });
 
   afterEach(() => {
+    if (originalDivoomEnv === undefined) {
+      delete process.env.OH_MY_OPENCODE_SLIM_DIVOOM;
+    } else {
+      process.env.OH_MY_OPENCODE_SLIM_DIVOOM = originalDivoomEnv;
+    }
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -73,6 +81,37 @@ describe('DivoomManager', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].args[1]).toBe(path.join(tempDir, 'intro.gif'));
+  });
+
+  test('can be enabled for one run with env var', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_DIVOOM = '1';
+    const manager = new DivoomManager(
+      {
+        python: pythonPath,
+        script: scriptPath,
+      },
+      (call) => {
+        calls.push(call);
+      },
+      { assetDir: tempDir },
+    );
+
+    manager.onPluginLoad();
+    await manager.flush();
+
+    expect(calls.map((call) => call.args[1])).toEqual([
+      path.join(tempDir, 'intro.gif'),
+    ]);
+  });
+
+  test('explicit config disabled wins over env var', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_DIVOOM = 'true';
+    const manager = createManager({ enabled: false });
+
+    manager.onPluginLoad();
+    await manager.flush();
+
+    expect(calls).toHaveLength(0);
   });
 
   test('shows task agent then orchestrator after a single task', async () => {

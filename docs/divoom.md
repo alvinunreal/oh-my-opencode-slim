@@ -99,6 +99,15 @@ Add:
 
 Then rebuild/restart OpenCode if you are running from a local checkout.
 
+For one-off runs, you can enable Divoom without changing your config:
+
+```bash
+OH_MY_OPENCODE_SLIM_DIVOOM=1 opencode
+```
+
+Accepted truthy values are `1`, `true`, `yes`, and `on`. If `divoom.enabled`
+is explicitly set in config, the config value wins over the environment variable.
+
 ## Tunable settings
 
 The defaults target the macOS Divoom MiniToo app bundle:

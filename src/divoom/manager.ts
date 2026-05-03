@@ -46,6 +46,8 @@ const DEFAULT_DIVOOM_CONFIG: DivoomConfig = {
   posterizeBits: 3,
 };
 
+const DIVOOM_ENABLE_ENV = 'OH_MY_OPENCODE_SLIM_DIVOOM';
+
 type DivoomManagerOptions = {
   assetDir?: string | null;
   sender?: DivoomSender;
@@ -75,6 +77,11 @@ function normalizeAgentName(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function isEnvEnabled(value: string | undefined): boolean {
+  if (!value) return false;
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
 export class DivoomManager {
   private assetDir: string | null;
   private config: DivoomConfig;
@@ -91,6 +98,7 @@ export class DivoomManager {
     this.config = {
       ...DEFAULT_DIVOOM_CONFIG,
       ...config,
+      enabled: config?.enabled ?? isEnvEnabled(process.env[DIVOOM_ENABLE_ENV]),
       gifs: config?.gifs,
     };
     this.assetDir = options.assetDir ?? resolveAssetDir();

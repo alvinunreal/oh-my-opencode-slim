@@ -196,6 +196,15 @@ CLI:
 }
 ```
 
+For a one-off run without editing config:
+
+```bash
+OH_MY_OPENCODE_SLIM_DIVOOM=1 opencode
+```
+
+If `divoom.enabled` is explicitly set in config, the config value wins over the
+environment variable.
+
 The defaults target the macOS Divoom MiniToo app bundle:
 
 ```jsonc
