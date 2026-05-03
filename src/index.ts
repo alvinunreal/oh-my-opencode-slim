@@ -803,11 +803,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         event.type === 'question.asked'
       ) {
         const props = event.properties as
-          | { sessionID?: string; id?: string }
+          | { sessionID?: string; id?: string; requestID?: string }
           | undefined;
         divoomManager.onUserInputRequired({
           sessionId: props?.sessionID,
-          requestId: props?.id,
+          requestId: props?.id ?? props?.requestID,
         });
       }
 
@@ -817,11 +817,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         event.type === 'question.rejected'
       ) {
         const props = event.properties as
-          | { sessionID?: string; requestID?: string }
+          | { sessionID?: string; requestID?: string; id?: string }
           | undefined;
         divoomManager.onUserInputResolved({
           sessionId: props?.sessionID,
-          requestId: props?.requestID,
+          requestId: props?.requestID ?? props?.id,
         });
       }
 

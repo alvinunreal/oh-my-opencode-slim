@@ -216,11 +216,11 @@ export class DivoomManager {
     if (!sessionId) return;
     if (input.isOrchestrator) this.orchestratorBusy = false;
     this.parentStates.delete(sessionId);
-    for (const key of this.pendingUserInputs) {
-      if (key.startsWith(`${sessionId}:`)) {
-        this.pendingUserInputs.delete(key);
-      }
-    }
+    this.pendingUserInputs = new Set(
+      Array.from(this.pendingUserInputs).filter(
+        (key) => !key.startsWith(`${sessionId}:`),
+      ),
+    );
     this.render();
   }
 
