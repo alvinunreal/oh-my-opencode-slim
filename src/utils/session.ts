@@ -106,7 +106,6 @@ export async function promptWithTimeout(
 
   const sessionId = args.path.id;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
 
   try {
     const promptPromise = client.session.prompt(args);
@@ -116,13 +115,16 @@ export async function promptWithTimeout(
       promptPromise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          timedOut = true;
-          reject(new Error(`Prompt timed out after ${timeoutMs}ms`));
+          reject(
+            new OperationTimeoutError(
+              `Prompt timed out after ${timeoutMs}ms`,
+            ),
+          );
         }, timeoutMs);
       }),
     ]);
   } catch (error) {
-    if (timedOut) {
+    if (error instanceof OperationTimeoutError) {
       try {
         await abortSessionWithTimeout(client, sessionId);
       } catch {
