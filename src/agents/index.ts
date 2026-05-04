@@ -37,6 +37,7 @@ type AgentFactory = (
 ) => AgentDefinition;
 
 const COUNCIL_TOOL_ALLOWED_AGENTS = new Set(['council']);
+const SAFE_AGENT_ALIAS_RE = /^[a-z][a-z0-9_-]*$/i;
 
 function normalizeDisplayName(displayName: string): string {
   const trimmed = displayName.trim();
@@ -44,7 +45,7 @@ function normalizeDisplayName(displayName: string): string {
 }
 
 function isSafeDisplayName(displayName: string): boolean {
-  return /^[a-z][a-z0-9_-]*$/i.test(displayName);
+  return SAFE_AGENT_ALIAS_RE.test(displayName);
 }
 
 function escapeRegExp(value: string): string {
@@ -96,7 +97,7 @@ function normalizeCustomAgentName(name: string): string {
 }
 
 function isSafeCustomAgentName(name: string): boolean {
-  return /^[a-z][a-z0-9_-]*$/i.test(name) && !isKnownAgentName(name);
+  return SAFE_AGENT_ALIAS_RE.test(name) && !isKnownAgentName(name);
 }
 
 function hasCustomAgentModel(
