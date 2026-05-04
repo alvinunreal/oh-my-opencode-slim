@@ -7,6 +7,8 @@ import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import type { Multiplexer, PaneResult } from '../types';
 
+const TMUX_LAYOUT_DEBOUNCE_MS = 150;
+
 export class TmuxMultiplexer implements Multiplexer {
   readonly type = 'tmux' as const;
 
@@ -15,6 +17,8 @@ export class TmuxMultiplexer implements Multiplexer {
   private storedLayout: MultiplexerLayout;
   private storedMainPaneSize: number;
   private targetPane = process.env.TMUX_PANE;
+  private layoutTimer?: ReturnType<typeof setTimeout>;
+  private layoutGeneration = 0;
 
   constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
     this.storedLayout = layout;
@@ -101,8 +105,8 @@ export class TmuxMultiplexer implements Multiplexer {
         );
         await renameProc.exited;
 
-        // Apply layout
-        await this.applyLayout(this.storedLayout, this.storedMainPaneSize);
+        // Rebalance panes after bursts of child sessions settle.
+        this.scheduleLayout();
 
         log('[tmux] spawnPane: SUCCESS', { paneId });
         return { success: true, paneId };
@@ -152,8 +156,8 @@ export class TmuxMultiplexer implements Multiplexer {
       log('[tmux] closePane: result', { exitCode, stderr: stderr.trim() });
 
       if (exitCode === 0) {
-        // Reapply layout to rebalance
-        await this.applyLayout(this.storedLayout, this.storedMainPaneSize);
+        // Rebalance panes after bursts of child sessions settle.
+        this.scheduleLayout();
         return true;
       }
 
@@ -170,6 +174,32 @@ export class TmuxMultiplexer implements Multiplexer {
     layout: MultiplexerLayout,
     mainPaneSize: number,
   ): Promise<void> {
+    if (this.layoutTimer) {
+      clearTimeout(this.layoutTimer);
+      this.layoutTimer = undefined;
+    }
+
+    this.layoutGeneration++;
+    await this.applyLayoutNow(layout, mainPaneSize);
+  }
+
+  private scheduleLayout(): void {
+    if (this.layoutTimer) clearTimeout(this.layoutTimer);
+
+    const gen = ++this.layoutGeneration;
+    this.layoutTimer = setTimeout(() => {
+      this.layoutTimer = undefined;
+      if (this.layoutGeneration === gen) {
+        void this.applyLayoutNow(this.storedLayout, this.storedMainPaneSize);
+      }
+    }, TMUX_LAYOUT_DEBOUNCE_MS);
+    this.layoutTimer.unref?.();
+  }
+
+  private async applyLayoutNow(
+    layout: MultiplexerLayout,
+    mainPaneSize: number,
+  ): Promise<void> {
     const tmux = await this.getBinary();
     if (!tmux) return;
 
@@ -179,50 +209,66 @@ export class TmuxMultiplexer implements Multiplexer {
 
     try {
       // Apply the layout
-      const layoutProc = crossSpawn(
-        [tmux, 'select-layout', ...this.targetArgs(), layout],
-        {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        },
+      const layoutResult = await this.runTmux(
+        tmux,
+        ['select-layout', ...this.targetArgs(), layout],
       );
-      await layoutProc.exited;
+      if (layoutResult !== 0) return;
 
       // For main-* layouts, set the main pane size
       if (layout === 'main-horizontal' || layout === 'main-vertical') {
         const sizeOption =
           layout === 'main-horizontal' ? 'main-pane-height' : 'main-pane-width';
 
-        const sizeProc = crossSpawn(
+        const sizeResult = await this.runTmux(
+          tmux,
           [
-            tmux,
             'set-window-option',
             ...this.targetArgs(),
             sizeOption,
             `${mainPaneSize}%`,
           ],
-          {
-            stdout: 'pipe',
-            stderr: 'pipe',
-          },
         );
-        await sizeProc.exited;
+        if (sizeResult !== 0) return;
 
         // Reapply layout to use the new size
-        const reapplyProc = crossSpawn(
-          [tmux, 'select-layout', ...this.targetArgs(), layout],
-          {
-            stdout: 'pipe',
-            stderr: 'pipe',
-          },
+        const reapplyResult = await this.runTmux(
+          tmux,
+          ['select-layout', ...this.targetArgs(), layout],
         );
-        await reapplyProc.exited;
+        if (reapplyResult !== 0) return;
       }
 
       log('[tmux] applyLayout: applied', { layout, mainPaneSize });
     } catch (err) {
       log('[tmux] applyLayout: exception', { error: String(err) });
     }
+  }
+
+  private async runTmux(
+    tmux: string,
+    args: string[],
+  ): Promise<number> {
+    const proc = crossSpawn([tmux, ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, , stderr] = await Promise.all([
+      proc.exited,
+      proc.stdout(),
+      proc.stderr(),
+    ]);
+
+    if (exitCode !== 0) {
+      log('[tmux] command failed', {
+        command: args[0],
+        args: [tmux, ...args],
+        exitCode,
+        stderr: stderr.trim(),
+      });
+    }
+
+    return exitCode;
   }
 
   private async getBinary(): Promise<string | null> {
