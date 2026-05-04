@@ -2,6 +2,7 @@ import type { TuiPluginModule } from '@opencode-ai/plugin/tui';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { DEFAULT_DISABLED_AGENTS, SUBAGENT_NAMES } from './config/constants';
+import { loadPluginConfig } from './config/loader';
 import {
   readTuiSnapshot,
   readTuiSnapshotAsync,
@@ -9,6 +10,7 @@ import {
 } from './tui-state';
 
 const PLUGIN_NAME = 'oh-my-opencode-slim';
+const CONFIG_WARNING_COLOR = 'orange';
 const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
   (agent) =>
     agent !== 'councillor' &&
@@ -64,6 +66,12 @@ function truncate(value: string, max = 24): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
+function getTuiDirectory(api: {
+  state?: { path?: { directory?: string } };
+}): string {
+  return api.state?.path?.directory ?? process.cwd();
+}
+
 export function formatSidebarModelName(model: string): string {
   const lastSlash = model.lastIndexOf('/');
   return lastSlash === -1 ? model : model.slice(lastSlash + 1);
@@ -101,7 +109,10 @@ function renderSidebar(
     text: unknown;
     textMuted: unknown;
   },
+  configInvalid: boolean,
 ): JSX.Element {
+  const configStatusRow = buildConfigStatusRow(configInvalid, theme);
+
   return box(
     {
       width: '100%',
@@ -129,6 +140,7 @@ function renderSidebar(
           text({ fg: theme.textMuted }, [`v${version}`]),
         ],
       ),
+      configStatusRow,
       box({ width: '100%', marginTop: 1 }, [
         text({ fg: theme.text }, ['Agents']),
       ]),
@@ -145,14 +157,52 @@ function renderSidebar(
   );
 }
 
+function buildConfigStatusRow(
+  configInvalid: boolean,
+  theme: { textMuted: unknown },
+): JSX.Element | null {
+  if (!configInvalid) return null;
+
+  return box(
+    {
+      width: '100%',
+      flexDirection: 'column',
+      marginTop: 1,
+      marginBottom: 1,
+    },
+    [
+      text({ fg: CONFIG_WARNING_COLOR }, ['Config invalid']),
+      text({ fg: theme.textMuted }, ['Run doctor for details']),
+    ],
+  );
+}
+
+export function readConfigInvalid(directory: string): boolean {
+  let configInvalid = false;
+  loadPluginConfig(directory, {
+    silent: true,
+    onWarning: () => {
+      configInvalid = true;
+    },
+  });
+  return configInvalid;
+}
+
 const plugin: TuiPluginModule & { id: string } = {
   id: `${PLUGIN_NAME}:tui`,
   tui: async (api, _options, meta) => {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
+    let configDirectory = getTuiDirectory(api);
+    let configInvalid = readConfigInvalid(configDirectory);
     let snapshot = readTuiSnapshot();
     const renderTimer = setInterval(async () => {
       try {
         snapshot = await readTuiSnapshotAsync();
+        const currentDirectory = getTuiDirectory(api);
+        if (currentDirectory !== configDirectory) {
+          configDirectory = currentDirectory;
+          configInvalid = readConfigInvalid(configDirectory);
+        }
         api.renderer.requestRender();
       } catch {
         // Ignore render errors; this is best-effort live status.
@@ -167,7 +217,12 @@ const plugin: TuiPluginModule & { id: string } = {
       order: 900,
       slots: {
         sidebar_content() {
-          return renderSidebar(snapshot, version, api.theme.current);
+          return renderSidebar(
+            snapshot,
+            version,
+            api.theme.current,
+            configInvalid,
+          );
         },
       },
     });

@@ -62,4 +62,29 @@ describe('tui-state persistence', () => {
       explorer: 'openai/gpt-5.4-mini',
     });
   });
+  test('ignores legacy config status fields in old snapshots', () => {
+    const filePath = path.join(
+      tempDir,
+      'opencode',
+      'storage',
+      'oh-my-opencode-slim',
+      'tui-state.json',
+    );
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: Date.now(),
+        agentModels: { explorer: 'openai/gpt-5.4-mini' },
+        configInvalid: true,
+        configInvalidByProject: { old: true },
+      }),
+    );
+
+    const snapshot = readTuiSnapshot();
+    expect(snapshot.agentModels).toEqual({
+      explorer: 'openai/gpt-5.4-mini',
+    });
+  });
 });

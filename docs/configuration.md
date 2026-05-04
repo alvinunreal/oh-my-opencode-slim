@@ -15,6 +15,8 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 
 > **💡 JSONC recommended:** Use the `.jsonc` extension to add comments and trailing commas. If both `.jsonc` and `.json` exist, `.jsonc` takes precedence.
 
+If OmO-slim detects an invalid plugin config for the current project, the TUI sidebar shows a warning. Run `oh-my-opencode-slim doctor` from your project root for full diagnostics.
+
 ---
 
 ## Prompt Overriding

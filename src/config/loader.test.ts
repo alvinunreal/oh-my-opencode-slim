@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { ConfigLoadWarning } from './loader';
 import { loadAgentPrompt, loadPluginConfig } from './loader';
 
 // Test deepMerge indirectly through loadPluginConfig behavior
@@ -236,6 +237,215 @@ describe('loadPluginConfig', () => {
     expect(config.agents?.oracle?.model).toBe('fallback/default-config');
 
     fs.rmSync(customDir, { recursive: true, force: true });
+  });
+});
+
+describe('onWarning callback', () => {
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onwarning-test-'));
+    originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.XDG_CONFIG_HOME = tempDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  test('invalid schema calls onWarning with invalid-schema', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ agents: { oracle: { temperature: 5 } } }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.kind).toBe('invalid-schema');
+    expect(warnings[0]?.path).toBe(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+    );
+    expect(warnings[0]?.message).toBe('Config does not match schema');
+    expect(config).toEqual({});
+  });
+
+  test('invalid JSON calls onWarning with invalid-json', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      '{ invalid json }',
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.kind).toBe('invalid-json');
+    expect(warnings[0]?.path).toBe(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+    );
+    expect(config).toEqual({});
+  });
+
+  test('silent option suppresses console warnings', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      '{ invalid json }',
+    );
+
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        silent: true,
+        onWarning: (warning) => warnings.push(warning),
+      });
+
+      expect(warnings).toHaveLength(1);
+      expect(config).toEqual({});
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('read error calls onWarning with read-error', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    const configPath = path.join(projectConfigDir, 'oh-my-opencode-slim.json');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({}));
+
+    const originalReadFileSync = fs.readFileSync;
+    const readSpy = spyOn(fs, 'readFileSync').mockImplementation(((
+      ...args: Parameters<typeof fs.readFileSync>
+    ) => {
+      const [filePath] = args;
+      if (filePath === configPath) {
+        const error = new Error('Permission denied') as NodeJS.ErrnoException;
+        error.code = 'EACCES';
+        throw error;
+      }
+
+      return originalReadFileSync(...args);
+    }) as typeof fs.readFileSync);
+
+    try {
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        onWarning: (warning) => warnings.push(warning),
+      });
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.kind).toBe('read-error');
+      expect(warnings[0]?.path).toBe(configPath);
+      expect(warnings[0]?.message).toBe('Permission denied');
+      expect(config).toEqual({});
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  test('missing preset calls onWarning with missing-preset', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'nonexistent',
+        presets: { other: { oracle: { model: 'other' } } },
+        agents: { oracle: { model: 'root' } },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.kind).toBe('missing-preset');
+    expect(warnings[0]?.message).toContain('Preset "nonexistent" not found');
+    expect(config.agents?.oracle?.model).toBe('root');
+  });
+
+  test('silent: true on missing preset still calls onWarning but not console.warn', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'nonexistent',
+        presets: { other: { oracle: { model: 'other' } } },
+        agents: { oracle: { model: 'root' } },
+      }),
+    );
+
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        silent: true,
+        onWarning: (warning) => warnings.push(warning),
+      });
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.kind).toBe('missing-preset');
+      expect(config.agents?.oracle?.model).toBe('root');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('valid config does not call onWarning', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ agents: { oracle: { model: 'valid/model' } } }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(0);
+    expect(config.agents?.oracle?.model).toBe('valid/model');
+  });
+
+  test('no options object does not break loadPluginConfig', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ agents: { oracle: { model: 'model' } } }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('model');
   });
 });
 
