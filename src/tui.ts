@@ -10,6 +10,7 @@ import {
 } from './tui-state';
 
 const PLUGIN_NAME = 'oh-my-opencode-slim';
+const CONFIG_WARNING_COLOR = 'orange';
 const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
   (agent) =>
     agent !== 'councillor' &&
@@ -170,7 +171,7 @@ function buildConfigStatusRow(
       marginBottom: 1,
     },
     [
-      text({ fg: 'yellow' }, ['Config invalid']),
+      text({ fg: CONFIG_WARNING_COLOR }, ['Config invalid']),
       text({ fg: theme.textMuted }, ['Run doctor for details']),
     ],
   );
