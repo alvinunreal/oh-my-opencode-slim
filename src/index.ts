@@ -1070,52 +1070,84 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Post-tool hooks: retry guidance for delegation errors + file-tool
     // nudge
     'tool.execute.after': async (input, output) => {
-      await delegateTaskRetryHook['tool.execute.after'](
-        input as { tool: string },
-        output as { output: unknown },
+      const meta = input as {
+        tool?: string;
+        sessionID?: string;
+        callID?: string;
+      };
+      const runPostToolHook = async (
+        name: string,
+        fn: () => Promise<void>,
+      ): Promise<void> => {
+        try {
+          await fn();
+        } catch (error) {
+          log('[plugin] post-tool hook failed open', {
+            hook: name,
+            tool: meta.tool,
+            sessionID: meta.sessionID,
+            callID: meta.callID,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
+
+      await runPostToolHook('delegate-task-retry', () =>
+        delegateTaskRetryHook['tool.execute.after'](
+          input as { tool: string },
+          output as { output: unknown },
+        ),
       );
 
-      await jsonErrorRecoveryHook['tool.execute.after'](
-        input as {
-          tool: string;
-          sessionID: string;
-          callID: string;
-        },
-        output as {
-          title: string;
-          output: unknown;
-          metadata: unknown;
-        },
+      await runPostToolHook('json-error-recovery', () =>
+        jsonErrorRecoveryHook['tool.execute.after'](
+          input as {
+            tool: string;
+            sessionID: string;
+            callID: string;
+          },
+          output as {
+            title: string;
+            output: unknown;
+            metadata: unknown;
+          },
+        ),
       );
 
-      await todoContinuationHook.handleToolExecuteAfter(
-        input as {
-          tool: string;
-          sessionID?: string;
-        },
-        output as { output?: unknown },
+      await runPostToolHook('todo-continuation', () =>
+        todoContinuationHook.handleToolExecuteAfter(
+          input as {
+            tool: string;
+            sessionID?: string;
+          },
+          output as { output?: unknown },
+        ),
       );
 
-      await postFileToolNudgeHook['tool.execute.after'](
-        input as {
-          tool: string;
-          sessionID?: string;
-          callID?: string;
-        },
-        output as {
-          title: string;
-          output: string;
-          metadata: Record<string, unknown>;
-        },
+      await runPostToolHook('post-file-tool-nudge', () =>
+        postFileToolNudgeHook['tool.execute.after'](
+          input as {
+            tool: string;
+            sessionID?: string;
+            callID?: string;
+          },
+          output as {
+            title: string;
+            output: string;
+            metadata: Record<string, unknown>;
+          },
+        ),
       );
 
-      await taskSessionManagerHook['tool.execute.after'](
-        input as {
-          tool: string;
-          sessionID?: string;
-          callID?: string;
-        },
-        output as { output: unknown },
+      await runPostToolHook('task-session-manager', () =>
+        taskSessionManagerHook['tool.execute.after'](
+          input as {
+            tool: string;
+            sessionID?: string;
+            callID?: string;
+          },
+          output as { output: unknown },
+        ),
       );
 
       if (input.tool.toLowerCase() === 'task') {

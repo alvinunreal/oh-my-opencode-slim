@@ -1,34 +1,45 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { ForegroundFallbackManager, isRateLimitError } from './index';
 
+type ForegroundFallbackClient = ConstructorParameters<
+  typeof ForegroundFallbackManager
+>[0];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function createMockClient(overrides?: {
   promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+  abortImpl?: () => Promise<unknown>;
+  includePromptAsync?: boolean;
   messagesData?: Array<{ info: { role: string }; parts: unknown[] }>;
 }) {
   const promptAsync = mock(async (args: unknown) => {
     if (overrides?.promptAsyncImpl) return overrides.promptAsyncImpl(args);
     return {};
   });
-  const abort = mock(async () => ({}));
+  const abort = mock(async () => {
+    if (overrides?.abortImpl) return overrides.abortImpl();
+    return {};
+  });
   const messages = mock(async () => ({
     data: overrides?.messagesData ?? [
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
     ],
   }));
+  const session: Record<string, unknown> = {
+    abort,
+    messages,
+  };
+  if (overrides?.includePromptAsync !== false) {
+    session.promptAsync = promptAsync;
+  }
 
   return {
     client: {
-      session: {
-        abort,
-        messages,
-        // promptAsync is cast at runtime — expose via the session object
-        promptAsync,
-      },
-    } as unknown as Parameters<typeof ForegroundFallbackManager>[0],
+      session,
+    } as unknown as ForegroundFallbackClient,
     mocks: { promptAsync, abort, messages },
   };
 }
@@ -182,6 +193,42 @@ describe('ForegroundFallbackManager session.error', () => {
     });
 
     expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('does not abort when promptAsync is unavailable', async () => {
+    const { client, mocks } = createMockClient({ includePromptAsync: false });
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-no-prompt-async',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('continues fallback when abort rejects', async () => {
+    const { client, mocks } = createMockClient({
+      abortImpl: async () => {
+        throw new Error('abort failed');
+      },
+    });
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-abort-rejects',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 });
 

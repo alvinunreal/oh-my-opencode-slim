@@ -4,11 +4,13 @@ import {
   createInternalAgentTextPart,
   log,
   SLIM_INTERNAL_INITIATOR_MARKER,
+  withTimeout,
 } from '../../utils';
 import { createTodoHygiene } from './todo-hygiene';
 
 const HOOK_NAME = 'todo-continuation';
 const COMMAND_NAME = 'auto-continue';
+const TODO_STATE_TIMEOUT_MS = 500;
 
 const CONTINUATION_PROMPT =
   '[Auto-continue: enabled - there are incomplete todos remaining. Continue with the next uncompleted item. Press Esc to cancel. If you need user input or review for the next item, ask instead of proceeding.]';
@@ -212,12 +214,20 @@ export function createTodoContinuationHook(
     notificationBusyUntilBySession: new Map<string, number>(),
   };
 
+  async function fetchTodos(sessionID: string): Promise<TodoItem[]> {
+    const result = await withTimeout(
+      ctx.client.session.todo({
+        path: { id: sessionID },
+      }),
+      TODO_STATE_TIMEOUT_MS,
+      `Todo state lookup timed out after ${TODO_STATE_TIMEOUT_MS}ms`,
+    );
+    return result.data as TodoItem[];
+  }
+
   const hygiene = createTodoHygiene({
     getTodoState: async (sessionID) => {
-      const result = await ctx.client.session.todo({
-        path: { id: sessionID },
-      });
-      const todos = result.data as TodoItem[];
+      const todos = await fetchTodos(sessionID);
       const openTodos = todos.filter(
         (todo) => !TERMINAL_TODO_STATUSES.includes(todo.status),
       );
@@ -500,10 +510,7 @@ export function createTodoContinuationHook(
       // todos exist, automatically enable auto-continue.
       if (autoEnable && !state.enabled) {
         try {
-          const todosResult = await ctx.client.session.todo({
-            path: { id: sessionID },
-          });
-          const todos = todosResult.data as TodoItem[];
+          const todos = await fetchTodos(sessionID);
           const incompleteCount = todos.filter(
             (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
           ).length;
@@ -544,10 +551,7 @@ export function createTodoContinuationHook(
       let hasIncompleteTodos = false;
       let incompleteCount = 0;
       try {
-        const todosResult = await ctx.client.session.todo({
-          path: { id: sessionID },
-        });
-        const todos = todosResult.data as TodoItem[];
+        const todos = await fetchTodos(sessionID);
         incompleteCount = todos.filter(
           (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
         ).length;
@@ -838,10 +842,7 @@ export function createTodoContinuationHook(
     // Check for incomplete todos to decide on immediate continuation
     let hasIncompleteTodos = false;
     try {
-      const todosResult = await ctx.client.session.todo({
-        path: { id: input.sessionID },
-      });
-      const todos = todosResult.data as TodoItem[];
+      const todos = await fetchTodos(input.sessionID);
       hasIncompleteTodos = todos.some(
         (t) => !TERMINAL_TODO_STATUSES.includes(t.status),
       );

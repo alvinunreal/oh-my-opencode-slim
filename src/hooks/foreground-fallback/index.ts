@@ -15,6 +15,7 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
+import { abortSessionWithTimeout } from '../../utils/session';
 import { log } from '../../utils/logger';
 
 type OpencodeClient = PluginInput['client'];
@@ -68,6 +69,7 @@ function parseModel(
 
 /** Prevent re-triggering within this window for the same session. */
 const DEDUP_WINDOW_MS = 5_000;
+const REPROMPT_DELAY_MS = 500;
 
 // ---------------------------------------------------------------------------
 // Manager
@@ -277,23 +279,13 @@ export class ForegroundFallbackManager {
         return;
       }
 
-      // Abort the currently rate-limited prompt so the session becomes idle.
-      try {
-        await this.client.session.abort({ path: { id: sessionID } });
-      } catch {
-        // Session may already be idle; safe to ignore.
-      }
-
-      // Give the server a moment to finalise the abort before re-prompting.
-      await new Promise((r) => setTimeout(r, 500));
-
       // promptAsync queues the prompt and returns immediately — this avoids
       // blocking the event handler while waiting for a full LLM response.
       // Cast required: promptAsync is not in the plugin TypeScript types for
       // oh-my-opencode-slim but IS present on the real OpenCode client at
       // runtime (verified by opencode-rate-limit-fallback reference impl).
       const sessionClient = this.client.session as unknown as {
-        promptAsync: (args: {
+        promptAsync?: (args: {
           path: { id: string };
           body: {
             parts: unknown[];
@@ -301,6 +293,25 @@ export class ForegroundFallbackManager {
           };
         }) => Promise<unknown>;
       };
+      if (typeof sessionClient.promptAsync !== 'function') {
+        log('[foreground-fallback] promptAsync unavailable', { sessionID });
+        return;
+      }
+
+      // Abort the currently rate-limited prompt so the session becomes idle.
+      try {
+        await abortSessionWithTimeout(this.client, sessionID);
+      } catch (error) {
+        // Session may already be idle or abort may be slow; keep fallback best-effort.
+        log('[foreground-fallback] abort did not complete cleanly', {
+          sessionID,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      // Give the server a moment to finalise the abort before re-prompting.
+      await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+
       await sessionClient.promptAsync({
         path: { id: sessionID },
         body: { parts: lastUser.parts, model: ref },

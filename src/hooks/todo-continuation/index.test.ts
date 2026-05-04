@@ -187,6 +187,23 @@ describe('createTodoContinuationHook', () => {
       );
     });
 
+    test('skips hygiene reminder when todo state lookup times out', async () => {
+      const ctx = createMockContext();
+      ctx.client.session.todo = mock(() => new Promise(() => {}));
+      const hook = createTodoContinuationHook(ctx);
+      const output = userMessages('primera request', 'main1', 'orchestrator');
+
+      await hook.handleMessagesTransform(output);
+      await hook.handleToolExecuteAfter({
+        tool: 'todowrite',
+        sessionID: 'main1',
+      });
+      await hook.handleToolExecuteAfter({ tool: 'read', sessionID: 'main1' });
+      await hook.handleMessagesTransform(output);
+
+      expect(allMessageText(output)).not.toContain(TODO_HYGIENE_REMINDER);
+    });
+
     test('compaction-like transform does not consume pending reminder', async () => {
       const ctx = createMockContext({
         todoResult: {
