@@ -65,6 +65,12 @@ function truncate(value: string, max = 24): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
+function getTuiDirectory(api: {
+  state?: { path?: { directory?: string } };
+}): string {
+  return api.state?.path?.directory ?? process.cwd();
+}
+
 export function formatSidebarModelName(model: string): string {
   const lastSlash = model.lastIndexOf('/');
   return lastSlash === -1 ? model : model.slice(lastSlash + 1);
@@ -185,13 +191,13 @@ const plugin: TuiPluginModule & { id: string } = {
   id: `${PLUGIN_NAME}:tui`,
   tui: async (api, _options, meta) => {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
-    let configDirectory = api.state.path.directory;
+    let configDirectory = getTuiDirectory(api);
     let configInvalid = readConfigInvalid(configDirectory);
     let snapshot = readTuiSnapshot();
     const renderTimer = setInterval(async () => {
       try {
         snapshot = await readTuiSnapshotAsync();
-        const currentDirectory = api.state.path.directory;
+        const currentDirectory = getTuiDirectory(api);
         if (currentDirectory !== configDirectory) {
           configDirectory = currentDirectory;
           configInvalid = readConfigInvalid(configDirectory);

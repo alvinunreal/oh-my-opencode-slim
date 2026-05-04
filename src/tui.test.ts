@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -61,6 +61,23 @@ describe('formatSidebarModelName', () => {
 });
 
 describe('readConfigInvalid', () => {
+  let originalEnv: typeof process.env;
+  let configHome: string;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    // Isolate from real user config and env presets
+    delete process.env.OPENCODE_CONFIG_DIR;
+    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+    configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-tui-env-'));
+    process.env.XDG_CONFIG_HOME = configHome;
+  });
+
+  afterEach(() => {
+    fs.rmSync(configHome, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
   test('detects invalid config from the current directory without persisted state', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-tui-'));
     try {
