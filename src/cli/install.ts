@@ -10,6 +10,7 @@ import {
   getOpenCodePath,
   getOpenCodeVersion,
   isOpenCodeInstalled,
+  warmOpenCodePluginCache,
   writeLiteConfig,
 } from './config-manager';
 import { CUSTOM_SKILLS, installCustomSkill } from './custom-skills';
@@ -153,6 +154,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   let totalSteps = 6;
   if (config.installSkills) totalSteps += 1;
   if (config.installCustomSkills) totalSteps += 1;
+  totalSteps += 1;
 
   let step = 1;
 
@@ -180,6 +182,20 @@ async function runInstall(config: InstallConfig): Promise<number> {
       printInfo(`Skipped TUI badge: ${tuiResult.error}`);
     } else {
       handleStepResult(tuiResult, 'TUI badge added');
+    }
+  }
+
+  printStep(step++, totalSteps, 'Warming OpenCode plugin cache...');
+  if (config.dryRun) {
+    printInfo('Dry run mode - skipping cache warm-up');
+  } else {
+    const cacheResult = await warmOpenCodePluginCache();
+    if (cacheResult === null) {
+      printInfo('Local development install - cache warm-up not required');
+    } else if (!cacheResult.success) {
+      printInfo(`Skipped cache warm-up: ${cacheResult.error}`);
+    } else {
+      handleStepResult(cacheResult, 'OpenCode cache warmed');
     }
   }
 

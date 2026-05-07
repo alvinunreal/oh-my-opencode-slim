@@ -11,14 +11,14 @@ export const SESSION_ABORT_TIMEOUT_MS = 1_000;
 export class OperationTimeoutError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "OperationTimeoutError";
+    this.name = 'OperationTimeoutError';
   }
 }
 
 export async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
-  message: string
+  message: string,
 ): Promise<T> {
   if (timeoutMs <= 0) return operation;
 
@@ -40,12 +40,12 @@ export async function withTimeout<T>(
 export async function abortSessionWithTimeout(
   client: OpencodeClient,
   sessionId: string,
-  timeoutMs = SESSION_ABORT_TIMEOUT_MS
+  timeoutMs = SESSION_ABORT_TIMEOUT_MS,
 ): Promise<void> {
   await withTimeout(
     client.session.abort({ path: { id: sessionId } }),
     timeoutMs,
-    `Session abort timed out after ${timeoutMs}ms`
+    `Session abort timed out after ${timeoutMs}ms`,
   );
 }
 
@@ -116,9 +116,7 @@ export async function promptWithTimeout(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           reject(
-            new OperationTimeoutError(
-              `Prompt timed out after ${timeoutMs}ms`,
-            ),
+            new OperationTimeoutError(`Prompt timed out after ${timeoutMs}ms`),
           );
         }, timeoutMs);
       }),

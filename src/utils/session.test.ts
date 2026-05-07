@@ -34,11 +34,7 @@ describe('session utilities', () => {
     } as any;
 
     await expect(
-      promptWithTimeout(
-        client,
-        { path: { id: 's1' }, body: { parts: [] } },
-        5,
-      ),
+      promptWithTimeout(client, { path: { id: 's1' }, body: { parts: [] } }, 5),
     ).rejects.toThrow('Prompt timed out after 5ms');
 
     expect(abort).toHaveBeenCalledWith({ path: { id: 's1' } });
@@ -57,11 +53,7 @@ describe('session utilities', () => {
     } as any;
 
     await expect(
-      promptWithTimeout(
-        client,
-        { path: { id: 's1' }, body: { parts: [] } },
-        5,
-      ),
+      promptWithTimeout(client, { path: { id: 's1' }, body: { parts: [] } }, 5),
     ).rejects.toThrow('Prompt timed out after 5ms');
   });
 

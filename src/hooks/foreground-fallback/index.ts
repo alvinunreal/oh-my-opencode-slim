@@ -15,8 +15,8 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
-import { abortSessionWithTimeout } from '../../utils/session';
 import { log } from '../../utils/logger';
+import { abortSessionWithTimeout } from '../../utils/session';
 
 type OpencodeClient = PluginInput['client'];
 

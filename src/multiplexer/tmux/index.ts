@@ -209,10 +209,11 @@ export class TmuxMultiplexer implements Multiplexer {
 
     try {
       // Apply the layout
-      const layoutResult = await this.runTmux(
-        tmux,
-        ['select-layout', ...this.targetArgs(), layout],
-      );
+      const layoutResult = await this.runTmux(tmux, [
+        'select-layout',
+        ...this.targetArgs(),
+        layout,
+      ]);
       if (layoutResult !== 0) return;
 
       // For main-* layouts, set the main pane size
@@ -220,22 +221,20 @@ export class TmuxMultiplexer implements Multiplexer {
         const sizeOption =
           layout === 'main-horizontal' ? 'main-pane-height' : 'main-pane-width';
 
-        const sizeResult = await this.runTmux(
-          tmux,
-          [
-            'set-window-option',
-            ...this.targetArgs(),
-            sizeOption,
-            `${mainPaneSize}%`,
-          ],
-        );
+        const sizeResult = await this.runTmux(tmux, [
+          'set-window-option',
+          ...this.targetArgs(),
+          sizeOption,
+          `${mainPaneSize}%`,
+        ]);
         if (sizeResult !== 0) return;
 
         // Reapply layout to use the new size
-        const reapplyResult = await this.runTmux(
-          tmux,
-          ['select-layout', ...this.targetArgs(), layout],
-        );
+        const reapplyResult = await this.runTmux(tmux, [
+          'select-layout',
+          ...this.targetArgs(),
+          layout,
+        ]);
         if (reapplyResult !== 0) return;
       }
 
@@ -245,10 +244,7 @@ export class TmuxMultiplexer implements Multiplexer {
     }
   }
 
-  private async runTmux(
-    tmux: string,
-    args: string[],
-  ): Promise<number> {
+  private async runTmux(tmux: string, args: string[]): Promise<number> {
     const proc = crossSpawn([tmux, ...args], {
       stdout: 'pipe',
       stderr: 'pipe',

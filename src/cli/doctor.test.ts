@@ -484,7 +484,7 @@ describe('doctor CLI wrapper', () => {
       expect(exitCode).toBe(0);
       const parsed = JSON.parse(output);
       expect(parsed.ok).toBe(true);
-      expect(parsed.project).toBe(projectDir);
+      expect(fs.realpathSync(parsed.project)).toBe(fs.realpathSync(projectDir));
       expect(parsed.configs).toHaveLength(2);
       expect(parsed.configs[0].scope).toBe('user');
       expect(parsed.configs[1].scope).toBe('project');
