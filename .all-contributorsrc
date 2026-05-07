@@ -416,6 +416,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "jelasin",
+      "name": "  Jelasin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/97788570?v=4",
+      "profile": "https://github.com/jelasin",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
