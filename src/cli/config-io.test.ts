@@ -135,7 +135,7 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
-  test('addPluginToOpenCodeConfig stores package name for bunx temp paths', async () => {
+  test('addPluginToOpenCodeConfig stores package root for bunx temp paths', async () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     const packageRoot = join(
       tmpDir,
@@ -152,7 +152,7 @@ describe('config-io', () => {
 
     expect(result.success).toBe(true);
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+    expect(saved.plugin).toEqual([packageRoot]);
   });
 
   test('addPluginToOpenCodeConfig stores local repo path for local dev paths', async () => {
@@ -267,7 +267,7 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
-  test('addPluginToOpenCodeTuiConfig stores package name for bunx temp paths', async () => {
+  test('addPluginToOpenCodeTuiConfig stores package root for bunx temp paths', async () => {
     const tuiPath = join(tmpDir, 'opencode', 'tui.json');
     const packageRoot = join(
       tmpDir,
@@ -284,7 +284,7 @@ describe('config-io', () => {
 
     expect(result.success).toBe(true);
     const saved = JSON.parse(readFileSync(tuiPath, 'utf-8'));
-    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+    expect(saved.plugin).toEqual([packageRoot]);
   });
 
   test('addPluginToOpenCodeTuiConfig removes tuple plugin entries', async () => {

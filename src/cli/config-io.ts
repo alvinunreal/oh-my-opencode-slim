@@ -45,10 +45,6 @@ function getPluginSpec(entry: unknown): string | undefined {
   return isString(spec) ? spec : undefined;
 }
 
-function normalizePathForMatch(path: string): string {
-  return path.replaceAll('\\', '/');
-}
-
 function findPackageRoot(startPath: string): string | null {
   let currentPath = dirname(startPath);
 
@@ -77,11 +73,6 @@ function findPackageRoot(startPath: string): string | null {
     }
     currentPath = parentPath;
   }
-}
-
-function isPackageManagerInstall(path: string): boolean {
-  const normalizedPath = normalizePathForMatch(path);
-  return normalizedPath.includes(`/node_modules/${PACKAGE_NAME}`);
 }
 
 function isLocalPackageRootEntry(entry: string): boolean {
@@ -128,11 +119,7 @@ function getPluginEntry(): string {
   try {
     const packageRoot = findPackageRoot(cliEntryPath);
 
-    if (!packageRoot || isPackageManagerInstall(packageRoot)) {
-      return PACKAGE_NAME;
-    }
-
-    return packageRoot;
+    return packageRoot ?? PACKAGE_NAME;
   } catch {
     return PACKAGE_NAME;
   }
