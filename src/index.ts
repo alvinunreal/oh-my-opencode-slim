@@ -632,22 +632,38 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // target agents (e.g. "explorer") AFTER all model mutations so the
       // alias always reflects the latest target model/variant/temperature.
       // This also overrides any core built-in agents that share alias names.
+      // Fields are deleted from the alias when absent from the target so
+      // that preset switches which clear fields (e.g. temperature → unset)
+      // correctly propagate rather than leaving stale values behind.
       for (const [alias, target] of Object.entries(AGENT_ALIASES)) {
         const targetEntry = configAgent[target] as
           | Record<string, unknown>
           | undefined;
         if (!targetEntry) continue;
-        // Only sync model-routing fields — don't copy tools/instructions/MCPs
-        const synced: Record<string, unknown> = { hidden: true };
-        if (typeof targetEntry.model === 'string')
-          synced.model = targetEntry.model;
-        if (typeof targetEntry.variant === 'string')
-          synced.variant = targetEntry.variant;
-        if (typeof targetEntry.temperature === 'number')
-          synced.temperature = targetEntry.temperature;
-        // Merge into existing alias entry so user-configured permission,
-        // tools, and other non-model fields are preserved
-        configAgent[alias] = { ...(configAgent[alias] as object), ...synced };
+        const aliasEntry = (configAgent[alias] ?? {}) as Record<
+          string,
+          unknown
+        >;
+        // Mirror model-routing fields: set when present, delete when absent
+        for (const field of ['model', 'variant', 'temperature'] as const) {
+          if (targetEntry[field] !== undefined) {
+            aliasEntry[field] = targetEntry[field];
+          } else {
+            delete aliasEntry[field];
+          }
+        }
+        // Mirror options using the same shape guard as the preset reset code
+        if (
+          targetEntry.options &&
+          typeof targetEntry.options === 'object' &&
+          !Array.isArray(targetEntry.options)
+        ) {
+          aliasEntry.options = targetEntry.options;
+        } else {
+          delete aliasEntry.options;
+        }
+        aliasEntry.hidden = true;
+        configAgent[alias] = aliasEntry;
       }
 
       const tuiAgentModels: Record<string, string> = {};
