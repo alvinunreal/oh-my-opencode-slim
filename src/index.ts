@@ -640,7 +640,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           | Record<string, unknown>
           | undefined;
         if (!targetEntry) continue;
-        const aliasEntry = (configAgent[alias] ?? {}) as Record<
+        // Only sync aliases that already exist as entries in configAgent
+        // (e.g., core built-ins like "explore"). Skip aliases with no
+        // existing entry to avoid injecting ghost agent configs.
+        if (!(alias in configAgent)) continue;
+        const aliasEntry = configAgent[alias] as Record<
           string,
           unknown
         >;
