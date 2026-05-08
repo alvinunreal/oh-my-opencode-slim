@@ -425,27 +425,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
 
-      // Synchronize alias agents with their target agents so that
-      // delegation via alias names (e.g. @explore) resolves to the
-      // same model/settings as the target agent (e.g. @explorer).
-      // This also ensures aliases override any core built-in agents
-      // that share the same name (e.g. opencode's native "explore").
-      for (const [alias, target] of Object.entries(AGENT_ALIASES)) {
-        const targetEntry = configAgent[target] as
-          | Record<string, unknown>
-          | undefined;
-        if (!targetEntry) continue;
-        // If the alias already has a user-configured model, respect it
-        const aliasEntry = configAgent[alias] as
-          | Record<string, unknown>
-          | undefined;
-        if (aliasEntry?.model) continue;
-        configAgent[alias] = {
-          ...targetEntry,
-          hidden: true,
-        };
-      }
-
       // Model resolution for foreground agents: combine _modelArray
       // entries with fallback.chains config, then pick the first model in
       // the effective array for startup-time selection.
@@ -647,6 +626,28 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             });
           }
         }
+      }
+
+      // Synchronize alias agents (e.g. "explore") with their canonical
+      // target agents (e.g. "explorer") AFTER all model mutations so the
+      // alias always reflects the latest target model/variant/temperature.
+      // This also overrides any core built-in agents that share alias names.
+      for (const [alias, target] of Object.entries(AGENT_ALIASES)) {
+        const targetEntry = configAgent[target] as
+          | Record<string, unknown>
+          | undefined;
+        if (!targetEntry) continue;
+        // Only sync model-routing fields — don't copy tools/instructions/MCPs
+        const synced: Record<string, unknown> = { hidden: true };
+        if (typeof targetEntry.model === 'string')
+          synced.model = targetEntry.model;
+        if (typeof targetEntry.variant === 'string')
+          synced.variant = targetEntry.variant;
+        if (typeof targetEntry.temperature === 'number')
+          synced.temperature = targetEntry.temperature;
+        // Merge into existing alias entry so user-configured permission,
+        // tools, and other non-model fields are preserved
+        configAgent[alias] = { ...(configAgent[alias] as object), ...synced };
       }
 
       const tuiAgentModels: Record<string, string> = {};
