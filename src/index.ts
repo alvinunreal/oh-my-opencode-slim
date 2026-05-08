@@ -425,6 +425,27 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
 
+      // Synchronize alias agents with their target agents so that
+      // delegation via alias names (e.g. @explore) resolves to the
+      // same model/settings as the target agent (e.g. @explorer).
+      // This also ensures aliases override any core built-in agents
+      // that share the same name (e.g. opencode's native "explore").
+      for (const [alias, target] of Object.entries(AGENT_ALIASES)) {
+        const targetEntry = configAgent[target] as
+          | Record<string, unknown>
+          | undefined;
+        if (!targetEntry) continue;
+        // If the alias already has a user-configured model, respect it
+        const aliasEntry = configAgent[alias] as
+          | Record<string, unknown>
+          | undefined;
+        if (aliasEntry?.model) continue;
+        configAgent[alias] = {
+          ...targetEntry,
+          hidden: true,
+        };
+      }
+
       // Model resolution for foreground agents: combine _modelArray
       // entries with fallback.chains config, then pick the first model in
       // the effective array for startup-time selection.
