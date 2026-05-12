@@ -20,6 +20,9 @@ describe('skills permissions', () => {
     // Oracle should have simplify allowed by default
     const oraclePerms = getSkillPermissionsForAgent('oracle');
     expect(oraclePerms.simplify).toBe('allow');
+
+    const orchestratorPerms = getSkillPermissionsForAgent('orchestrator');
+    expect(orchestratorPerms.clonedeps).toBe('allow');
   });
 
   it('should honor explicit skill list overrides', () => {

@@ -40,6 +40,12 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     allowedAgents: ['orchestrator'],
     sourcePath: 'src/skills/codemap',
   },
+  {
+    name: 'clonedeps',
+    description: 'Clone important dependency source for local inspection',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/clonedeps',
+  },
 ];
 
 /**

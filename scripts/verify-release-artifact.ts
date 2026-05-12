@@ -40,6 +40,7 @@ const packagedRequiredFiles = [
   'oh-my-opencode-slim.schema.json',
   'src/skills/simplify/SKILL.md',
   'src/skills/codemap/SKILL.md',
+  'src/skills/clonedeps/SKILL.md',
 ];
 
 function fail(message: string): never {

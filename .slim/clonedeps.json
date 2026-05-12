@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "updatedAt": "2026-05-12T00:00:00.000Z",
+  "dependencies": [
+    {
+      "name": "@opencode-ai/plugin",
+      "resolvedVersion": "1.4.3",
+      "repoUrl": "https://github.com/opencode-ai/opencode.git",
+      "ref": "main@73ee493265acf15fcd8caab2bc8cd3bd375b63cb",
+      "path": ".slim/clonedeps/repos/opencode-ai__opencode",
+      "packagePath": "packages/plugin",
+      "reason": "Core plugin lifecycle and hook API used by the orchestration plugin."
+    },
+    {
+      "name": "@opencode-ai/sdk",
+      "resolvedVersion": "1.4.3",
+      "repoUrl": "https://github.com/opencode-ai/opencode.git",
+      "ref": "main@73ee493265acf15fcd8caab2bc8cd3bd375b63cb",
+      "path": ".slim/clonedeps/repos/opencode-ai__opencode",
+      "packagePath": "packages/sdk/js",
+      "reason": "SDK types and runtime client/session/message shapes used across agents, hooks, tools, and council code."
+    },
+    {
+      "name": "@modelcontextprotocol/sdk",
+      "resolvedVersion": "1.29.0",
+      "repoUrl": "https://github.com/modelcontextprotocol/typescript-sdk.git",
+      "ref": "v1.29.0@e12cbd7078db388152f6e839abdbe09ba01f3f32",
+      "path": ".slim/clonedeps/repos/modelcontextprotocol__typescript-sdk",
+      "packagePath": ".",
+      "reason": "MCP protocol/server implementation details used by built-in MCP integrations."
+    }
+  ]
+}

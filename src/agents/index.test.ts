@@ -236,7 +236,7 @@ describe('per-model variant in array config', () => {
 });
 
 describe('skill permissions', () => {
-  test('orchestrator gets codemap skill allowed by default', () => {
+  test('orchestrator gets command-style bundled skills allowed by default', () => {
     const agents = createAgents();
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator).toBeDefined();
@@ -247,6 +247,7 @@ describe('skill permissions', () => {
     expect(skillPerm?.['*']).toBe('allow');
     // CUSTOM_SKILLS loop must also add a named codemap entry for orchestrator
     expect(skillPerm?.codemap).toBe('allow');
+    expect(skillPerm?.clonedeps).toBe('allow');
   });
 
   test('fixer does not get codemap skill allowed by default', () => {
@@ -256,6 +257,7 @@ describe('skill permissions', () => {
     const skillPerm = (fixer?.config.permission as Record<string, unknown>)
       ?.skill as Record<string, string>;
     expect(skillPerm?.codemap).not.toBe('allow');
+    expect(skillPerm?.clonedeps).not.toBe('allow');
   });
 
   test('oracle gets requesting-code-review skill allowed by default', () => {

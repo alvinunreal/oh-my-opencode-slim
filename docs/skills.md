@@ -20,6 +20,7 @@ Skills are installed via the `oh-my-opencode-slim` installer or manually with `n
 |-------|-------------|----------------------|
 | [`simplify`](#simplify) | Behavior-preserving code simplification | `oracle` |
 | [`codemap`](#codemap) | Repository codemap generation | `orchestrator` |
+| [`clonedeps`](#clonedeps) | Local dependency source cloning | `orchestrator` |
 
 ---
 
@@ -58,6 +59,39 @@ Source: adapted from Addy Osmani's `code-simplification` skill and bundled local
 - **Timeless documentation** — focuses on high-level design, not implementation details
 
 See **[Codemap Skill](codemap.md)** for full documentation including manual commands and technical details.
+
+---
+
+## clonedeps
+
+**Local source mirroring for important project dependencies.**
+
+`clonedeps` helps the Orchestrator clone a small, approved set of dependency
+source repositories into `.slim/clonedeps/repos/` so OpenCode can inspect library
+internals while keeping cloned code out of git.
+
+The skill is assigned to `orchestrator`. The orchestrator may ask `@librarian`
+to identify important dependencies and resolve official repository URLs/tags,
+then asks for approval before cloning with direct git/filesystem operations.
+There is intentionally no helper script; dependency discovery and ref validation
+are handled by the orchestrator/librarian workflow so the skill works across
+languages and repository types.
+
+Before planning, the orchestrator checks `.slim/clonedeps.json` and reuses
+existing clones when possible. After cloning, it adds or updates a concise
+`## Cloned Dependency Source` section in root `AGENTS.md` that lists each
+read-only cloned repo path directly with a one-sentence purpose.
+
+Safety defaults:
+
+- direct, important dependencies only;
+- max 3-5 clones by default;
+- HTTPS repositories only;
+- pinned tags/commits only;
+- no dependency scripts are executed;
+- ignore-file edits are limited to managed marker blocks.
+
+See **[Clonedeps](clonedeps.md)** for the full workflow and file layout.
 
 ---
 

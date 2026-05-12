@@ -12,10 +12,11 @@
 
 - `CUSTOM_SKILLS` in `src/cli/custom-skills.ts` is the authoritative skill manifest for bundled
   skills; each entry maps folder name + `sourcePath` to an install-time consumer.
-- `install.ts` runs `installCustomSkill()` which recursively copies `src/skills/codemap` and
-  `src/skills/simplify` into the OpenCode skills directory.
+- `install.ts` runs `installCustomSkill()` which recursively copies bundled skill
+  directories into the OpenCode skills directory.
 - This directory is partitioned by skill:
   - `src/skills/codemap/` (command-style repository mapping skill)
+  - `src/skills/clonedeps/` (workflow skill for dependency source mirroring)
   - `src/skills/simplify/` (readability/refactor guidance skill)
 - Files are considered static runtime payload. No plugin TS module in `src/` imports these files directly; they
   are loaded by OpenCode via filesystem installation.
@@ -34,7 +35,9 @@
 
 - `src/cli/custom-skills.ts`: source-of-truth registry consumed by installer and permission helpers.
 - `src/cli/skills.ts:getSkillPermissionsForAgent()` auto-populates permission rules for
-  `codemap` and `simplify` when agent policy is derived from built-in recommendations.
-- `verify-release-artifact.ts` enforces artifact completeness by asserting `src/skills/simplify/SKILL.md`
-  and `src/skills/codemap/SKILL.md` are present in the tarball.
+  bundled skills when agent policy is derived from built-in recommendations.
+- `verify-release-artifact.ts` enforces artifact completeness by asserting key
+  bundled skill payloads such as `src/skills/simplify/SKILL.md`,
+  `src/skills/codemap/SKILL.md`, and `src/skills/clonedeps/SKILL.md` are present
+  in the tarball.
 - `package.json` scripts (`verify:release`, `build`) rely on these assets to ensure install-time skill availability.
