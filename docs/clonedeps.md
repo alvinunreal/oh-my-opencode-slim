@@ -1,5 +1,7 @@
 # Clonedeps
 
+![Clonedeps dependency source workspace](../img/clonedeps.jpg)
+
 `clonedeps` is a bundled Orchestrator skill for cloning a small set of important
 dependency source repositories into a local, ignored workspace so agents can
 inspect library internals while working on your project.

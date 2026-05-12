@@ -1,5 +1,7 @@
 # Subtask
 
+![Subtask worker session](../img/subtask.png)
+
 `/subtask` lets the current agent spin up a separate, bounded worker session for
 one specific piece of work. The worker runs as an orchestrator in a real child
 session, completes the requested task, and sends a structured summary back to
