@@ -23,7 +23,12 @@ describe('subtask tool', () => {
         data: [
           {
             info: { role: 'assistant' },
-            parts: [{ type: 'text', text: 'Summary from worker' }],
+            parts: [
+              {
+                type: 'text',
+                text: '<subtask_summary>\nSummary from worker\n</subtask_summary>',
+              },
+            ],
           },
         ],
       }));
@@ -53,6 +58,8 @@ describe('subtask tool', () => {
       expect(result).toContain('task_id: ses_new');
       expect(result).toContain('<subtask_summary>');
       expect(result).toContain('Summary from worker');
+      expect(result.match(/<subtask_summary>/g)).toHaveLength(1);
+      expect(result.match(/<\/subtask_summary>/g)).toHaveLength(1);
       expect(sessionCreate).toHaveBeenCalledWith({
         responseStyle: 'data',
         throwOnError: true,
@@ -96,6 +103,98 @@ describe('subtask tool', () => {
         path: { id: 'ses_new' },
         query: { directory },
       });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('normalizes nested worker summary tags', async () => {
+    const directory = makeTempDir();
+    try {
+      const sessionCreate = mock(async () => ({ data: { id: 'ses_new' } }));
+      const sessionPrompt = mock(async () => ({}));
+      const sessionMessages = mock(async () => ({
+        data: [
+          {
+            info: { role: 'assistant' },
+            parts: [
+              {
+                type: 'text',
+                text: '<subtask_summary><subtask_summary>Inner</subtask_summary></subtask_summary>',
+              },
+            ],
+          },
+        ],
+      }));
+      const sessionAbort = mock(async () => ({}));
+      const state = createSubtaskState();
+      const tool = createSubtaskTool(
+        {
+          directory,
+          client: {
+            session: {
+              abort: sessionAbort,
+              create: sessionCreate,
+              messages: sessionMessages,
+              prompt: sessionPrompt,
+            },
+          },
+        } as any,
+        state,
+      );
+
+      const result = await tool.execute({ prompt: 'Summarize only' }, {
+        sessionID: 'ses_old',
+      } as any);
+
+      expect(result).toContain('Inner');
+      expect(result.match(/<subtask_summary>/g)).toHaveLength(1);
+      expect(result.match(/<\/subtask_summary>/g)).toHaveLength(1);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('aborts child session when parent tool call is cancelled', async () => {
+    const directory = makeTempDir();
+    const controller = new AbortController();
+    try {
+      const sessionCreate = mock(async () => ({ data: { id: 'ses_new' } }));
+      const sessionPrompt = mock(() => {
+        setTimeout(() => controller.abort(), 0);
+        return new Promise(() => {});
+      });
+      const sessionMessages = mock(async () => ({ data: [] }));
+      const sessionAbort = mock(async () => ({}));
+      const state = createSubtaskState();
+      const tool = createSubtaskTool(
+        {
+          directory,
+          client: {
+            session: {
+              abort: sessionAbort,
+              create: sessionCreate,
+              messages: sessionMessages,
+              prompt: sessionPrompt,
+            },
+          },
+        } as any,
+        state,
+      );
+
+      await expect(
+        tool.execute({ prompt: 'Cancel me' }, {
+          sessionID: 'ses_old',
+          abort: controller.signal,
+        } as any),
+      ).rejects.toThrow('Prompt cancelled');
+
+      expect(sessionAbort).toHaveBeenCalledWith({
+        path: { id: 'ses_new' },
+        query: { directory },
+      });
+      expect(state.isSubtaskSession('ses_new')).toBe(false);
+      expect(sessionMessages).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

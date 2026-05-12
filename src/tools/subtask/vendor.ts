@@ -98,8 +98,7 @@ export async function isBinaryFile(filepath: string): Promise<boolean> {
 /**
  * Format file content matching OpenCode's Read tool output format.
  *
- * @param _filepath - Absolute path to the file (unused in output, kept for
- *   signature compatibility)
+ * @param _filepath - Absolute path to the file (used as `<path>` in the output)
  * @param content - File content as string
  * @returns Formatted output with line numbers in <file> tags
  */

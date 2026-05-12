@@ -10,11 +10,35 @@ import type { PluginInput, ToolDefinition } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin';
 import { extractSessionResult, promptWithTimeout } from '../../utils/session';
 import type { SubagentDepthTracker } from '../../utils/subagent-depth';
-import { buildSyntheticFileParts, parseFileReferences } from './files';
+import {
+  buildSyntheticFileParts,
+  cleanFileReference,
+  parseFileReferences,
+} from './files';
 import type { SubtaskState } from './state';
 
 export type OpencodeClient = PluginInput['client'];
 const SUBTASK_TIMEOUT_MS = 5 * 60 * 1000;
+const SUBTASK_SUMMARY_TAG_REGEX = /<\/?subtask_summary>/g;
+
+function normalizeSubtaskSummary(text: string): string {
+  return text.replace(SUBTASK_SUMMARY_TAG_REGEX, '').trim();
+}
+
+function getAbortSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('abort' in context)) {
+    return undefined;
+  }
+
+  const signal = (context as { abort?: unknown }).abort;
+  return signal &&
+    typeof signal === 'object' &&
+    'addEventListener' in signal &&
+    'removeEventListener' in signal &&
+    'aborted' in signal
+    ? (signal as AbortSignal)
+    : undefined;
+}
 
 /**
  * Create the subtask tool.
@@ -50,6 +74,7 @@ export function createSubtaskTool(
         context && typeof context === 'object' && 'sessionID' in context
           ? (context as { sessionID: string }).sessionID
           : 'unknown';
+      const abortSignal = getAbortSignal(context);
       if (state.isSubtaskSession(sessionID)) {
         return 'Nested subtask is disabled: this session is already a subtask worker. Finish this worker and return its summary to the parent session instead.';
       }
@@ -68,7 +93,7 @@ If needed context is missing, use read_session to inspect the parent session.
 Do not spawn another subtask.`;
       const files = new Set([
         ...parseFileReferences(args.prompt),
-        ...(args.files ?? []).map((file) => file.replace(/^@/, '')),
+        ...(args.files ?? []).map(cleanFileReference),
       ]);
       const fileRefs =
         files.size > 0 ? [...files].map((f) => `@${f}`).join(' ') : '';
@@ -126,6 +151,7 @@ Do not spawn another subtask.`;
             },
           },
           SUBTASK_TIMEOUT_MS,
+          abortSignal,
         );
 
         const extraction = await extractSessionResult(client, childSessionID, {
@@ -135,12 +161,13 @@ Do not spawn another subtask.`;
         if (extraction.empty) {
           throw new Error('Subtask worker returned no summary');
         }
+        const summary = normalizeSubtaskSummary(extraction.text);
 
         return [
           `task_id: ${childSessionID}`,
           '',
           '<subtask_summary>',
-          extraction.text,
+          summary,
           '</subtask_summary>',
         ].join('\n');
       } finally {

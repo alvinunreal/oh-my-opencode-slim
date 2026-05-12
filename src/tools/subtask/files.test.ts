@@ -76,13 +76,11 @@ describe('parseFileReferences', () => {
   });
 
   it('should handle references with trailing punctuation', () => {
-    // Note: The regex includes trailing punctuation as part of the path
-    // This is the vendored behavior from opencode-subtask
     const text = 'See @src/file.ts, @src/other.ts. And @src/more.ts!';
     const refs = parseFileReferences(text);
-    // The regex captures the trailing punctuation, so these won't match
-    // the clean paths. This is expected vendored behavior.
-    expect(refs.size).toBeGreaterThanOrEqual(0);
+    expect(refs).toEqual(
+      new Set(['src/file.ts', 'src/other.ts', 'src/more.ts']),
+    );
   });
 });
 

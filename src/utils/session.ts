@@ -98,7 +98,10 @@ export async function promptWithTimeout(
   client: OpencodeClient,
   args: Parameters<OpencodeClient['session']['prompt']>[0],
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) throw new Error('Prompt cancelled');
+
   if (timeoutMs <= 0) {
     await client.session.prompt(args);
     return;
@@ -106,6 +109,7 @@ export async function promptWithTimeout(
 
   const sessionId = args.path.id;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
 
   try {
     const promptPromise = client.session.prompt(args);
@@ -120,6 +124,15 @@ export async function promptWithTimeout(
           );
         }, timeoutMs);
       }),
+      new Promise<never>((_, reject) => {
+        if (!signal) return;
+        if (signal.aborted) {
+          reject(new Error('Prompt cancelled'));
+          return;
+        }
+        onAbort = () => reject(new Error('Prompt cancelled'));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
     ]);
   } catch (error) {
     if (error instanceof OperationTimeoutError) {
@@ -132,6 +145,7 @@ export async function promptWithTimeout(
     throw error;
   } finally {
     clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
   }
 }
 

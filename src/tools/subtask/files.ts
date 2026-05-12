@@ -16,6 +16,11 @@ import { formatFileContent, isBinaryFile } from './vendor';
  * Matches @file references like @src/plugin.ts
  */
 export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g;
+const TRAILING_PATH_PUNCTUATION = /[!?:;]+$/;
+
+export function cleanFileReference(ref: string): string {
+  return ref.replace(/^@/, '').replace(TRAILING_PATH_PUNCTUATION, '');
+}
 
 /**
  * Parse @file references from text.
@@ -28,7 +33,7 @@ export function parseFileReferences(text: string): Set<string> {
 
   for (const match of text.matchAll(FILE_REGEX)) {
     if (match[1]) {
-      fileRefs.add(match[1]);
+      fileRefs.add(cleanFileReference(match[1]));
     }
   }
 

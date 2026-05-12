@@ -41,7 +41,6 @@ Only include files that are clearly relevant. If no files are needed, omit files
 export function createSubtaskCommandManager(
   _ctx: PluginInput,
   state: SubtaskState,
-  _processedSessions?: Set<string>,
 ) {
   /**
    * Register the /subtask command in the OpenCode config.
