@@ -19,9 +19,44 @@ performs the approved filesystem/git operations directly.
 
 Delegate dependency discovery and source resolution to `@librarian`.
 
-Ask librarian to inspect the current repo enough to identify the few dependency
-sources worth cloning across whatever languages/ecosystems the repo uses. It
-should return a small plan with:
+Use this prompt:
+
+```md
+Understand this project first, then recommend remote source repos that would
+help a developer work on it.
+
+Read enough of the current repo to understand:
+- what the project does
+- its main architecture
+- the important integration points
+- what external systems or libraries it depends on in practice
+
+Think like a developer trying to debug or extend this project.
+
+Which remote repositories, if cloned locally, would actually help understand the
+codebase or solve likely implementation/debugging tasks?
+
+Do not make a dependency dump. Most dependencies are not worth cloning.
+Recommend a repo only when its source code would be more useful than docs or the
+current repo alone.
+
+For each recommendation, include:
+- repo name
+- repo URL
+- suggested ref/tag/commit if known
+- why cloning this source would help
+- when it would be useful
+- caveats
+
+Also include:
+- current-repo files/folders to inspect first
+- repos/dependencies you considered but would not clone
+
+Keep it small. Prefer 0–3 strong recommendations over 5 weak ones. If nothing
+clearly needs cloning, say so.
+```
+
+Librarian should return a small plan with:
 
 - dependency name;
 - current version/range if discoverable;
