@@ -13,6 +13,7 @@ and cloning are repo-specific enough that the orchestrator/librarian workflow is
 safer than a brittle cross-ecosystem script.
 
 Cloned repositories live under `.slim/clonedeps/repos/<safe-name>/` and are
-ignored by git. After syncing, the orchestrator should add or update a concise
-`## Cloned Dependency Source` section in root `AGENTS.md` pointing future agents
-to `.slim/clonedeps.json` and `.slim/clonedeps/repos/`.
+ignored by git. `.slim/clonedeps.json` is intentionally trackable project
+metadata. After cloning, the orchestrator should add or update a concise
+`## Cloned Dependency Source` section in root `AGENTS.md` that points future
+agents to the JSON manifest and read-only cloned repos.

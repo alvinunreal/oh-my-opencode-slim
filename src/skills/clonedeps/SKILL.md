@@ -139,13 +139,16 @@ Write `.slim/clonedeps.json` so future agents know what exists:
 If a clone fails after earlier clones succeeded, still write state for the
 successful clones so future inspection is not misleading.
 
+Do not add `.slim/clonedeps.json` to `.gitignore`. It is small, reviewable
+project metadata that can be committed. Only the cloned repository contents
+under `.slim/clonedeps/repos/` should be ignored.
+
 ### Step 5: Update Ignore Files
 
 Update `.gitignore` with an idempotent marker block:
 
 ```gitignore
 # BEGIN oh-my-opencode-slim clonedeps
-.slim/clonedeps.json
 .slim/clonedeps/repos/
 # END oh-my-opencode-slim clonedeps
 ```
@@ -178,28 +181,24 @@ section. Otherwise append this section:
 ```markdown
 ## Cloned Dependency Source
 
-Selected dependency source repositories are available under
-`.slim/clonedeps/repos/` for local inspection. These clones are ignored by git
-but intentionally unignored for OpenCode visibility. They are local cache and
-may not exist in every checkout.
+Read-only dependency source repositories are available for inspection under
+`.slim/clonedeps/repos/`.
 
-If `.slim/clonedeps.json` exists, read it before using the clones; it records
-package names, versions/refs, local paths, and why each dependency was cloned.
+See `.slim/clonedeps.json` for the list of cloned repositories, their refs,
+paths, and why they were added.
 
-Use these clones for dependency internals/source inspection. For ordinary API
-usage or current docs, prefer `@librarian`.
+Treat these repositories as read-only reference source. Do not edit them.
 ```
 
-Keep the section concise. Do not paste the full clone plan into `AGENTS.md`;
-the detailed source of truth is `.slim/clonedeps.json`.
+Keep the section concise. Do not paste the full clone plan into `AGENTS.md`; the
+detailed source of truth is `.slim/clonedeps.json`.
 
 ## Cleanup
 
 When the user asks to clean cloned dependencies, remove:
 
 - `.slim/clonedeps/repos/`
-- `.slim/clonedeps.json`
 - the managed clonedeps marker blocks from `.gitignore` and `.ignore`
 
-Ask before removing the `AGENTS.md` section unless the user explicitly requests
-full cleanup.
+Ask before removing `.slim/clonedeps.json` or the `AGENTS.md` section because
+they may be intentional project metadata.

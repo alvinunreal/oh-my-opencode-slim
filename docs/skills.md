@@ -77,7 +77,7 @@ There is intentionally no helper script; dependency discovery and ref validation
 are handled by the orchestrator/librarian workflow so the skill works across
 languages and repository types.
 
-After syncing, the orchestrator also adds or updates a concise
+After cloning, the orchestrator also adds or updates a concise
 `## Cloned Dependency Source` section in root `AGENTS.md`, pointing future agents
 to `.slim/clonedeps.json` and `.slim/clonedeps/repos/`.
 

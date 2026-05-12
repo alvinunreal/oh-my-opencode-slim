@@ -13,8 +13,9 @@ directly.
   orchestrator.
 - No helper script is bundled. The skill avoids brittle cross-ecosystem parsing
   and keeps repo-specific judgment in librarian/orchestrator.
-- State is local cache data stored in `.slim/clonedeps.json`; clone contents live
-  under `.slim/clonedeps/repos/<safe-dependency-name>/`.
+- State is trackable project metadata stored in `.slim/clonedeps.json`; clone
+  contents live under `.slim/clonedeps/repos/<safe-dependency-name>/` and are
+  ignored by git.
 - The workflow updates `.gitignore`, `.ignore`, and root `AGENTS.md` with
   concise marker sections so cloned source stays out of git but visible to
   OpenCode and discoverable by future agents.
