@@ -2,34 +2,31 @@
 
 ## Responsibility
 
-Command-style bundled OpenCode skill for local dependency source mirroring. It
-provides prompt instructions plus a deterministic script that scans npm project
-metadata, validates LLM-assisted clone plans, manages `.slim/clonedeps` state,
-updates ignore marker blocks, and shallow-clones selected repositories.
+Workflow-only bundled OpenCode skill for local dependency source mirroring. It
+instructs the orchestrator to use `@librarian` for dependency discovery and
+source URL/ref resolution, then perform approved git/filesystem operations
+directly.
 
 ## Design
 
 - `SKILL.md` is the prompt contract loaded by OpenCode and assigned only to the
   orchestrator.
-- `scripts/clonedeps.mjs` is a standalone Node ESM CLI with exported pure helper
-  functions for testability.
-- The skill uses a trust-boundary pattern: librarian/orchestrator can propose a
-  plan, but the script validates URLs, refs, dependency counts, and clone paths.
+- No helper script is bundled. The skill avoids brittle cross-ecosystem parsing
+  and keeps repo-specific judgment in librarian/orchestrator.
 - State is local cache data stored in `.slim/clonedeps.json`; clone contents live
-  under `.slim/clonedeps/repos/`.
+  under `.slim/clonedeps/repos/<safe-dependency-name>/`.
+- The workflow updates `.gitignore`, `.ignore`, and root `AGENTS.md` with
+  concise marker sections so cloned source stays out of git but visible to
+  OpenCode and discoverable by future agents.
 
 ## Flow
 
-1. Orchestrator runs `scan` to inspect package metadata.
-2. Orchestrator asks librarian for a small source-resolution plan.
-3. User approves the plan.
-4. Orchestrator runs `sync --plan`, which validates input, updates ignore files,
-   verifies refs where possible, clones to temp directories, then writes state.
-5. Orchestrator updates root `AGENTS.md` with a concise
-   `## Cloned Dependency Source` pointer to `.slim/clonedeps.json` and the clone
-   directory.
-6. `status` reports current state; `clean` removes managed clones/state and
-   marker blocks.
+1. Orchestrator asks librarian for a small source-resolution plan across the
+   repository's actual languages/ecosystems.
+2. Orchestrator verifies refs where possible and asks the user to approve.
+3. Orchestrator clones/fetches each approved repo into `.slim/clonedeps/repos/`.
+4. Orchestrator writes `.slim/clonedeps.json` with paths, refs, and reasons.
+5. Orchestrator updates `.gitignore`, `.ignore`, and root `AGENTS.md`.
 
 ## Integration
 

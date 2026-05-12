@@ -72,7 +72,10 @@ internals while keeping cloned code out of git.
 
 The skill is assigned to `orchestrator`. The orchestrator may ask `@librarian`
 to identify important dependencies and resolve official repository URLs/tags,
-then asks for approval before running the bundled sync script.
+then asks for approval before cloning with direct git/filesystem operations.
+There is intentionally no helper script; dependency discovery and ref validation
+are handled by the orchestrator/librarian workflow so the skill works across
+languages and repository types.
 
 After syncing, the orchestrator also adds or updates a concise
 `## Cloned Dependency Source` section in root `AGENTS.md`, pointing future agents

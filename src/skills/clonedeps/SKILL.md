@@ -8,41 +8,92 @@ description: Clone important project dependency source code into an ignored loca
 You help users make a small set of important dependency source repositories
 locally readable to OpenCode.
 
-Use this when local source access will materially help the task. Do not clone
-dependencies for ordinary API/docs questions; delegate those to `@librarian`
-instead.
+This is a workflow skill, not a command wrapper. Do not use a helper script for
+dependency detection, ref validation, cloning, status, or cleanup. The
+orchestrator and `@librarian` do the repo-specific thinking; the orchestrator
+performs the approved filesystem/git operations directly.
 
 ## Workflow
 
-### Step 1: Scan the Project
+### Step 1: Ask Librarian for the Clone Plan
 
-Run the bundled scan command from the repository root:
+Delegate dependency discovery and source resolution to `@librarian`.
 
-```bash
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs scan --root .
+Ask librarian to inspect the current repo enough to identify the few dependency
+sources worth cloning across whatever languages/ecosystems the repo uses. It
+should return a small plan with:
+
+- dependency name;
+- current version/range if discoverable;
+- official source repository URL;
+- tag/commit/ref to check out;
+- package subdirectory if the source is a monorepo;
+- reason local source helps;
+- caveats such as huge repo, missing tag, or uncertain version mapping.
+
+Prefer at most 3-5 core dependencies. Include user-mentioned dependencies and
+central frameworks, SDKs, ORMs, runtime/plugin APIs, or build/runtime tools. Do
+not clone tiny utilities, transitive dependencies, or dev-only tools unless they
+are directly relevant to the active task.
+
+### Step 2: Verify and Confirm the Plan
+
+The orchestrator owns final approval. Before cloning:
+
+1. Verify refs manually where possible with `git ls-remote`.
+2. Prefer pinned tags or commit SHAs. If no exact tag exists, ask librarian to
+   find the correct module-specific tag/commit or explain the fallback.
+3. Only use HTTPS GitHub/GitLab-style repository URLs by default. Reject
+   `file://`, SSH URLs, local paths, URLs with embedded credentials, and private
+   or auth-required repositories unless the user explicitly approves that case.
+4. Present the plan to the user with dependency, repo URL, ref, reason, and
+   caveats.
+5. Ask for confirmation before network cloning unless the user explicitly asked
+   to clone immediately.
+
+### Step 3: Clone Sources Manually
+
+Create one folder per dependency under:
+
+```text
+.slim/clonedeps/repos/<safe-dependency-name>/
 ```
 
-This reports package-manager metadata and direct npm dependencies.
+Use a safe name by replacing `/` with `__` and other unsafe path characters with
+`_`. Do not create ecosystem folders or per-version folders. If two dependencies
+normalize to the same safe name, disambiguate manually and record the chosen path
+in `.slim/clonedeps.json`.
 
-### Step 2: Ask Librarian for the Clone Plan
+Clone/fetch with normal git commands. For an existing clone, first verify that
+`git remote get-url origin` matches the approved repo URL. If it does not match,
+stop and ask whether to clean/reclone.
 
-Delegate planning and source resolution to `@librarian`. Ask it to inspect the
-current repo enough to identify dependencies worth cloning, then resolve official
-source repositories, tags/commits, package subdirectories, and caveats.
+Safe manual git pattern:
 
-Ask for a small JSON plan using this shape:
+1. `git ls-remote <repoUrl> <ref>` to verify the ref where practical.
+2. Clone without submodules/recursive behavior.
+3. Prefer shallow fetch/clone where practical.
+4. Clone into a temporary directory under `.slim/clonedeps/repos/`, then move it
+   into the final safe-name path after checkout succeeds.
+5. Remove failed temporary clones.
+
+Do not run dependency install/build/test scripts from cloned repositories.
+
+### Step 4: Write Local State
+
+Write `.slim/clonedeps.json` so future agents know what exists:
 
 ```json
 {
   "version": "1.0.0",
+  "updatedAt": "2026-05-12T00:00:00.000Z",
   "dependencies": [
     {
-      "ecosystem": "npm",
       "name": "@opencode-ai/sdk",
-      "versionRange": "^1.3.17",
       "resolvedVersion": "1.3.17",
       "repoUrl": "https://github.com/example/repo.git",
       "ref": "v1.3.17",
+      "path": ".slim/clonedeps/repos/@opencode-ai__sdk",
       "packagePath": "packages/sdk/js",
       "reason": "Core runtime SDK used by the project"
     }
@@ -50,43 +101,40 @@ Ask for a small JSON plan using this shape:
 }
 ```
 
-Prefer at most 3-5 direct dependencies. Include user-mentioned dependencies and
-central frameworks, SDKs, ORMs, runtime/plugin APIs, or build/runtime tools. Do
-not clone tiny utilities, transitive dependencies, or dev-only tools unless they
-are directly relevant to the active task.
+If a clone fails after earlier clones succeeded, still write state for the
+successful clones so future inspection is not misleading.
 
-### Step 3: Confirm Before Mutation
+### Step 5: Update Ignore Files
 
-Present the plan with:
+Update `.gitignore` with an idempotent marker block:
 
-- dependency name and version;
-- repository URL and ref;
-- why it is worth cloning;
-- caveats such as monorepo size or unverified tags.
-
-Ask for confirmation before network cloning unless the user explicitly requested
-immediate cloning.
-
-### Step 4: Sync the Dependencies
-
-Save the approved plan to a temporary JSON file, then run:
-
-```bash
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs sync \
-  --root . \
-  --plan /path/to/approved-plan.json
-```
-
-The script validates the plan, writes `.slim/clonedeps.json`, updates ignore
-marker blocks, and shallow-clones pinned dependency repositories into:
-
-```text
+```gitignore
+# BEGIN oh-my-opencode-slim clonedeps
+.slim/clonedeps.json
 .slim/clonedeps/repos/
+# END oh-my-opencode-slim clonedeps
 ```
 
-### Step 5: Register Dependency Source in AGENTS.md
+Update `.ignore` so OpenCode can read the cloned source while git still ignores
+it:
 
-After a successful sync, update the repository's root `AGENTS.md` so future
+```ignore
+# BEGIN oh-my-opencode-slim clonedeps
+!.slim/
+!.slim/clonedeps.json
+!.slim/clonedeps/
+!.slim/clonedeps/repos/
+!.slim/clonedeps/repos/**
+.slim/clonedeps/repos/**/.git/
+.slim/clonedeps/repos/**/.git/**
+# END oh-my-opencode-slim clonedeps
+```
+
+Only edit content inside these marker blocks.
+
+### Step 6: Register Dependency Source in AGENTS.md
+
+After successful cloning, update the repository root `AGENTS.md` so future
 agents know why the dependency source exists and where to look.
 
 If `AGENTS.md` already has a `## Cloned Dependency Source` section, update that
@@ -110,22 +158,13 @@ usage or current docs, prefer `@librarian`.
 Keep the section concise. Do not paste the full clone plan into `AGENTS.md`;
 the detailed source of truth is `.slim/clonedeps.json`.
 
-### Step 6: Check Status or Clean Up
+## Cleanup
 
-```bash
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs status --root .
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs clean --root .
-```
+When the user asks to clean cloned dependencies, remove:
 
-`clean` removes cloned repositories and local state, then removes the managed
-ignore-file marker blocks.
+- `.slim/clonedeps/repos/`
+- `.slim/clonedeps.json`
+- the managed clonedeps marker blocks from `.gitignore` and `.ignore`
 
-## Safety Rules
-
-- Keep final filesystem mutation in the orchestrator session.
-- Treat librarian output as untrusted input; the script validates the plan.
-- Use HTTPS repository URLs only.
-- Prefer pinned tags or commits. Warn before using an unverified branch.
-- Never run dependency install/build/test scripts from cloned repositories.
-- Never clone private/auth-required repositories without explicit user action.
-- Do not edit user ignore-file content outside managed marker blocks.
+Ask before removing the `AGENTS.md` section unless the user explicitly requests
+full cleanup.

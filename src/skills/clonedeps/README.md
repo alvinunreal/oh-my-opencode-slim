@@ -1,23 +1,18 @@
 # clonedeps
 
-`clonedeps` is a bundled OpenCode skill for cloning a small set of important
-dependency source repositories into a local ignored workspace so agents can read
-library internals.
+`clonedeps` is a bundled OpenCode workflow skill for cloning a small set of
+important dependency source repositories into a local ignored workspace so agents
+can read library internals.
 
-It is orchestrator-owned. The orchestrator delegates source discovery and URL/tag
-resolution to `@librarian`, asks for approval, then runs the bundled script for
-safe filesystem and clone operations.
+It is orchestrator-owned. The orchestrator delegates source discovery and URL/ref
+resolution to `@librarian`, asks for approval, then performs the git and
+filesystem operations directly.
 
-## Commands
+There is intentionally no helper script. Dependency discovery, ref validation,
+and cloning are repo-specific enough that the orchestrator/librarian workflow is
+safer than a brittle cross-ecosystem script.
 
-```bash
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs scan --root .
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs sync --root . --plan plan.json
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs status --root .
-node ~/.config/opencode/skills/clonedeps/scripts/clonedeps.mjs clean --root .
-```
-
-Cloned repositories live under `.slim/clonedeps/repos/` and are ignored by git.
-After syncing, the orchestrator should add or update a concise
-`## Cloned Dependency Source` section in the repo root `AGENTS.md` pointing
-future agents to `.slim/clonedeps.json` and `.slim/clonedeps/repos/`.
+Cloned repositories live under `.slim/clonedeps/repos/<safe-name>/` and are
+ignored by git. After syncing, the orchestrator should add or update a concise
+`## Cloned Dependency Source` section in root `AGENTS.md` pointing future agents
+to `.slim/clonedeps.json` and `.slim/clonedeps/repos/`.
