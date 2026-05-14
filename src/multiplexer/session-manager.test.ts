@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { MultiplexerSessionManager } from './session-manager';
+import {
+  MultiplexerSessionManager,
+  resetMultiplexerSessionManagerState,
+} from './session-manager';
 
 const originalFetch = globalThis.fetch;
 let mockSessionStatuses: Record<string, { type: string }> = {};
@@ -75,6 +78,7 @@ function createDeferred<T>() {
 
 describe('MultiplexerSessionManager', () => {
   beforeEach(() => {
+    resetMultiplexerSessionManagerState();
     mockSessionStatuses = {};
     mockFetch.mockClear();
     globalThis.fetch = mockFetch as typeof fetch;
@@ -256,6 +260,116 @@ describe('MultiplexerSessionManager', () => {
       await (manager as any).pollSessions();
 
       expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p-1');
+    });
+
+    test('closes pane immediately on session.idle event', async () => {
+      const ctx = createMockContext();
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-idle-event',
+      });
+
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'idle-event-child', parentID: 'parent' } },
+      });
+
+      await manager.onSessionStatus({
+        type: 'session.idle',
+        properties: { sessionID: 'idle-event-child' },
+      });
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p-idle-event');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test('closes pane when idle event reaches a different manager instance', async () => {
+      const ctx = createMockContext();
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-shared-idle',
+      });
+
+      const spawningManager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+      const idleManager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      await spawningManager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'shared-child', parentID: 'parent' } },
+      });
+
+      await idleManager.onSessionStatus({
+        type: 'session.idle',
+        properties: { sessionID: 'shared-child' },
+      });
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p-shared-idle');
+    });
+
+    test('respawns resumed known session from a different manager instance', async () => {
+      const ctx = createMockContext();
+      mockMultiplexer.spawnPane
+        .mockResolvedValueOnce({
+          success: true,
+          paneId: 'p-first',
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          paneId: 'p-resumed',
+        });
+
+      const firstManager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+      const secondManager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      await firstManager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'resumed-child',
+            parentID: 'parent',
+            title: 'Resumed Worker',
+            directory: '/resumed/dir',
+          },
+        },
+      });
+
+      await secondManager.onSessionStatus({
+        type: 'session.idle',
+        properties: { sessionID: 'resumed-child' },
+      });
+
+      await secondManager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'resumed-child',
+          status: { type: 'busy' },
+        },
+      });
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(2);
+      expect(mockMultiplexer.spawnPane).toHaveBeenLastCalledWith(
+        'resumed-child',
+        'Resumed Worker',
+        `http://localhost:${process.env.OPENCODE_PORT ?? '4096'}/`,
+        '/resumed/dir',
+      );
     });
 
     test('does not close on transient status absence', async () => {

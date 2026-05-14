@@ -784,6 +784,16 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
+      // Handle multiplexer pane spawning for OpenCode's Task tool sessions
+      await multiplexerSessionManager.onSessionCreated(event);
+
+      // Handle session status/idle events for pane cleanup early so child panes
+      // close promptly even if later hooks do additional work on idle.
+      await multiplexerSessionManager.onSessionStatus(event);
+
+      // Handle session.deleted events for pane cleanup
+      await multiplexerSessionManager.onSessionDeleted(event);
+
       // Runtime model fallback for foreground agents (rate-limit detection)
       await foregroundFallback.handleEvent(input.event);
 
@@ -798,15 +808,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
-
-      // Handle multiplexer pane spawning for OpenCode's Task tool sessions
-      await multiplexerSessionManager.onSessionCreated(event);
-
-      // Handle session.status events for pane cleanup
-      await multiplexerSessionManager.onSessionStatus(event);
-
-      // Handle session.deleted events for pane cleanup
-      await multiplexerSessionManager.onSessionDeleted(event);
 
       await interviewManager.handleEvent(
         input as {
