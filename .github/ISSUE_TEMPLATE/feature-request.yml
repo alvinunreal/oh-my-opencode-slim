@@ -7,15 +7,8 @@ body:
   - type: textarea
     id: problem
     attributes:
-      label: What problem are you trying to solve?
-      placeholder: I'm trying to...
-    validations:
-      required: true
-  - type: textarea
-    id: idea
-    attributes:
-      label: What do you want to happen?
-      placeholder: I want...
+      label: Description
+      placeholder: 
     validations:
       required: true
   - type: textarea
