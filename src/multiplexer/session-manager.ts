@@ -8,8 +8,6 @@ import {
 } from '../multiplexer';
 import { log } from '../utils/logger';
 
-type OpencodeClient = PluginInput['client'];
-
 interface TrackedSession {
   sessionId: string;
   paneId: string;
@@ -53,7 +51,6 @@ const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
  * with polling kept as a fallback for reliability.
  */
 export class MultiplexerSessionManager {
-  private client: OpencodeClient;
   private serverUrl: string;
   private directory: string;
   private multiplexer: Multiplexer | null = null;
@@ -65,7 +62,6 @@ export class MultiplexerSessionManager {
   private enabled = false;
 
   constructor(ctx: PluginInput, config: MultiplexerConfig) {
-    this.client = ctx.client;
     this.directory = ctx.directory;
     const defaultPort = process.env.OPENCODE_PORT ?? '4096';
     this.serverUrl =
@@ -246,11 +242,7 @@ export class MultiplexerSessionManager {
     }
 
     try {
-      const statusResult = await this.client.session.status();
-      const allStatuses = (statusResult.data ?? {}) as Record<
-        string,
-        { type: string }
-      >;
+      const allStatuses = await this.fetchSessionStatuses();
 
       const now = Date.now();
       const sessionsToClose: Array<{ sessionId: string; reason: CloseReason }> =
@@ -286,6 +278,21 @@ export class MultiplexerSessionManager {
     } catch (err) {
       log('[multiplexer-session-manager] poll error', { error: String(err) });
     }
+  }
+
+  private async fetchSessionStatuses(): Promise<
+    Record<string, { type: string }>
+  > {
+    const url = new URL('/session/status', this.serverUrl);
+    const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+
+    if (!response.ok) {
+      throw new Error(
+        `session status request failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()) as Record<string, { type: string }>;
   }
 
   private async closeSession(
