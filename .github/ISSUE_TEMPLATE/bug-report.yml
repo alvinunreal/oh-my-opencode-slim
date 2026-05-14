@@ -8,6 +8,14 @@ body:
     attributes:
       value: |
         Thanks for filing a bug. Keep it short, but include enough detail for us to reproduce it.
+
+        Before filing, please try clearing OpenCode's cache and restarting OpenCode:
+
+        ```sh
+        rm -rf ~/.cache/opencode
+        ```
+
+        If the bug still happens after that, continue with this report.
   - type: textarea
     id: summary
     attributes:
