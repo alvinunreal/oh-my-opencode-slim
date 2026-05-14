@@ -2,6 +2,10 @@
 
 Auto-continue the orchestrator when it stops with incomplete todos. Opt-in only — nothing resumes automatically unless you enable it.
 
+If a [Session Goal](session-goal.md) is active, auto-continuation resumes under that
+goal, but the goal does not trigger continuation by itself. Only incomplete
+todos do.
+
 ## Controls
 
 | Tool / Command | Description |

@@ -25,6 +25,7 @@ import {
   createJsonErrorRecoveryHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
+  createSessionGoalHook,
   createTaskSessionManagerHook,
   createTodoContinuationHook,
   ForegroundFallbackManager,
@@ -137,6 +138,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let jsonErrorRecoveryHook: ReturnType<typeof createJsonErrorRecoveryHook>;
   let foregroundFallback: ForegroundFallbackManager;
   let todoContinuationHook: ReturnType<typeof createTodoContinuationHook>;
+  let sessionGoalHook: ReturnType<typeof createSessionGoalHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
@@ -306,6 +308,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       cooldownMs: config.todoContinuation?.cooldownMs ?? 3000,
       autoEnable: config.todoContinuation?.autoEnable ?? false,
       autoEnableThreshold: config.todoContinuation?.autoEnableThreshold ?? 4,
+    });
+    sessionGoalHook = createSessionGoalHook(ctx, config, {
+      getAgentName: (sessionID) => sessionAgentMap.get(sessionID),
     });
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
       maxSessionsPerAgent: config.sessionManager?.maxSessionsPerAgent ?? 2,
@@ -732,6 +737,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       interviewManager.registerCommand(opencodeConfig);
+      sessionGoalHook.registerCommand(opencodeConfig);
       presetManager.registerCommand(opencodeConfig);
       subtaskCommandManager.registerCommand(opencodeConfig);
     },
@@ -783,6 +789,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       // Todo-continuation: auto-continue orchestrator on incomplete todos
       await todoContinuationHook.handleEvent(input);
+
+      sessionGoalHook.handleEvent(
+        input as {
+          event: { type: string; properties?: Record<string, unknown> };
+        },
+      );
 
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
@@ -952,6 +964,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
         output as { parts: Array<{ type: string; text?: string }> },
       );
+
+      await sessionGoalHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
     },
 
     'chat.headers': chatHeadersHook['chat.headers'],
@@ -1023,6 +1044,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             (output.system[0] ? `\n\n${output.system[0]}` : '');
         }
       }
+
+      sessionGoalHook.handleSystemTransform(input, output);
 
       // Collapse to single system message for provider compatibility.
       // Some providers (e.g. Qwen via VLLM/DashScope) reject multiple

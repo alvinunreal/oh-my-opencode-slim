@@ -492,6 +492,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer with `@council` |
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
 | **[Session Management](docs/session-management.md)** | Reuse recent child-agent sessions with short aliases instead of starting over |
+| **[Session Goal](docs/session-goal.md)** | Pin a session objective with `/goal` so todos, delegation, and verification stay aligned |
 | **[Todo Continuation](docs/todo-continuation.md)** | Auto-continue orchestrator sessions with cooldowns and safety checks |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Subtask](docs/subtask.md)** | Run a bounded child worker with `/subtask` and return a structured summary to the main session |

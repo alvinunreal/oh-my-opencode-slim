@@ -70,3 +70,19 @@ Includes Prettier, Biome, `gofmt`, `rustfmt`, `ruff`, and 20+ others.
 Auto-continue has its own guide now:
 
 - [Todo Continuation](todo-continuation.md) — controls, safety gates, behavior, and config
+
+---
+
+## Session Goal
+
+Pin a session-scoped objective that keeps planning, todos, delegation, and
+verification aligned.
+
+| Command | Description |
+|---------|-------------|
+| `/goal <objective>` | Set the current session goal |
+| `/goal` | Show the active goal |
+| `/goal clear` | Clear the active goal |
+| `/goal from <interview>` | Promote an interview markdown spec into the active goal |
+
+See [Session Goal](session-goal.md) for the full workflow.

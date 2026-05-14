@@ -42,6 +42,15 @@ You can also resume by basename if it exists in the configured output folder:
 /interview kanban-design-tool
 ```
 
+Promote an interview spec into the current session goal:
+
+```text
+/goal from kanban-design-tool
+```
+
+This uses the interview title and `Current spec` section as the pinned goal, so
+todos, delegation, and verification stay aligned with the clarified spec.
+
 ## What the browser UI gives you
 
 - focused question flow instead of open-ended chat

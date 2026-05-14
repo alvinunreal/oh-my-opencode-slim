@@ -48,6 +48,9 @@ Keep the request narrow. A good subtask has a clear finish line.
 In tmux or zellij, the subtask appears like other child-agent work because it is
 a real child session. Existing depth limits and pane cleanup handling apply.
 
+If the parent session has an active [Session Goal](session-goal.md), the worker inherits
+it as context. The explicit subtask request still defines the worker's scope.
+
 ## Worker scope
 
 The worker prompt is intentionally bounded:
