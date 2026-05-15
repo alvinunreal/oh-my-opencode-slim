@@ -1517,3 +1517,140 @@ describe('loadAgentPrompt', () => {
     fs.rmSync(customDir, { recursive: true, force: true });
   });
 });
+
+describe('env variable interpolation', () => {
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-interp-test-'));
+    originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  test('basic substitution: {env:FOO} resolves to the value of FOO', () => {
+    process.env.FOO = 'foo-model';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: '{env:FOO}' } },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('foo-model');
+  });
+
+  test('multiple variables: multiple {env:...} tokens resolve', () => {
+    process.env.FOO = 'foo-model';
+    process.env.BAR = 'bar-model';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: {
+          oracle: { model: '{env:FOO}' },
+          explorer: { model: '{env:BAR}' },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('foo-model');
+    expect(config.agents?.explorer?.model).toBe('bar-model');
+  });
+
+  test('undefined variable: {env:NONEXISTENT} resolves to empty string', () => {
+    delete process.env.NONEXISTENT;
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: '{env:NONEXISTENT}' } },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('');
+  });
+
+  test('no interpolation needed: config without {env:...} works unchanged', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: 'foo-model' } },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('foo-model');
+  });
+
+  test('partial string: "prefix-{env:FOO}-suffix" resolves correctly', () => {
+    process.env.FOO = 'foo';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: 'prefix-{env:FOO}-suffix' } },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('prefix-foo-suffix');
+  });
+
+  test('works in JSONC files with comments', () => {
+    process.env.FOO = 'foo-model';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      `{
+        // Use env variable for model
+        "agents": { "oracle": { "model": "{env:FOO}" } }
+      }`,
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('foo-model');
+  });
+
+  test('multiple env vars in a single value', () => {
+    process.env.FOO = 'foo';
+    process.env.BAR = 'bar';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: {
+          oracle: { model: '{env:FOO}/{env:BAR}' },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+    expect(config.agents?.oracle?.model).toBe('foo/bar');
+  });
+});
