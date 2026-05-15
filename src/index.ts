@@ -51,6 +51,7 @@ import {
 } from './tools';
 import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
+  BackgroundJobBoard,
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
@@ -140,6 +141,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let todoContinuationHook: ReturnType<typeof createTodoContinuationHook>;
   let sessionGoalHook: ReturnType<typeof createSessionGoalHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
+  let backgroundJobBoard: BackgroundJobBoard;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
   let divoomManager: ReturnType<typeof createDivoomManager>;
@@ -301,6 +303,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         Object.keys(runtimeChains).length > 0,
     );
 
+    backgroundJobBoard = new BackgroundJobBoard();
+
     // Initialize todo-continuation hook (opt-in auto-continue for
     // incomplete todos)
     todoContinuationHook = createTodoContinuationHook(ctx, {
@@ -308,6 +312,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       cooldownMs: config.todoContinuation?.cooldownMs ?? 3000,
       autoEnable: config.todoContinuation?.autoEnable ?? false,
       autoEnableThreshold: config.todoContinuation?.autoEnableThreshold ?? 4,
+      backgroundJobBoard,
     });
     sessionGoalHook = createSessionGoalHook(ctx, config, {
       getAgentName: (sessionID) => sessionAgentMap.get(sessionID),
@@ -316,6 +321,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       maxSessionsPerAgent: config.sessionManager?.maxSessionsPerAgent ?? 2,
       readContextMinLines: config.sessionManager?.readContextMinLines ?? 10,
       readContextMaxFiles: config.sessionManager?.readContextMaxFiles ?? 8,
+      backgroundJobBoard,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
     });

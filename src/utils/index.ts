@@ -1,4 +1,5 @@
 export * from './agent-variant';
+export * from './background-job-board';
 export * from './env';
 export * from './internal-initiator';
 export { getLogDir, initLogger, log, resetLogger } from './logger';
