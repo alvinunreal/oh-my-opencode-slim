@@ -60,7 +60,12 @@ function loadConfigFromPath(
     // Use stripJsonComments to support JSONC format (comments and trailing commas)
     let rawConfig: unknown;
     try {
-      rawConfig = JSON.parse(stripJsonComments(content));
+      const stripped = stripJsonComments(content);
+      const interpolated = stripped.replace(
+        /\{env:([^}]+)\}/g,
+        (_, varName) => process.env[varName] ?? '',
+      );
+      rawConfig = JSON.parse(interpolated);
     } catch (error) {
       // Empty file or JSON parse error is treated as invalid-json
       const message = error instanceof Error ? error.message : String(error);
