@@ -2,9 +2,13 @@ import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { AgentName } from '../../config';
 import {
+  BackgroundJobBoard,
+  type BackgroundJobRecord,
   type ContextFile,
   deriveTaskSessionLabel,
   parseTaskIdFromTaskOutput,
+  parseTaskLaunchOutput,
+  parseTaskStatusOutput,
   SessionManager,
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
@@ -61,6 +65,8 @@ interface ChatMessage {
 
 const RESUMABLE_SESSIONS_START = '<resumable_sessions>';
 const RESUMABLE_SESSIONS_END = '</resumable_sessions>';
+const BACKGROUND_COMPLETION_PREFIX = /^Background task (completed|failed): /;
+const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;
 
 function isAgentName(value: unknown): value is AgentName {
   return typeof value === 'string' && AGENT_NAME_SET.has(value as AgentName);
@@ -115,6 +121,7 @@ export function createTaskSessionManagerHook(
     maxSessionsPerAgent: number;
     readContextMinLines?: number;
     readContextMaxFiles?: number;
+    backgroundJobBoard?: BackgroundJobBoard;
     shouldManageSession: (sessionID: string) => boolean;
   },
 ) {
@@ -122,10 +129,15 @@ export function createTaskSessionManagerHook(
     readContextMinLines: options.readContextMinLines,
     readContextMaxFiles: options.readContextMaxFiles,
   });
+  const backgroundJobBoard =
+    options.backgroundJobBoard ?? new BackgroundJobBoard();
   const pendingCalls = new Map<string, PendingTaskCall>();
   const pendingCallOrder: string[] = [];
   const contextByTask = new Map<string, Map<string, PendingContextFile>>();
   const pendingManagedTaskIds = new Set<string>();
+  const terminalJobsInjectedByParent = new Map<string, Set<string>>();
+  const processedInjectedCompletions = new Set<string>();
+  const processedInjectedCompletionOrder: string[] = [];
   let anonymousPendingCallId = 0;
 
   function addTaskContext(taskId: string, files: ContextFile[]): void {
@@ -175,6 +187,70 @@ export function createTaskSessionManagerHook(
       if (!pendingManagedTaskIds.has(taskId) && !remembered.has(taskId)) {
         contextByTask.delete(taskId);
       }
+    }
+  }
+
+  function updateBackgroundJobFromOutput(
+    output: unknown,
+  ): BackgroundJobRecord | undefined {
+    if (typeof output !== 'string') return undefined;
+
+    const status = parseTaskStatusOutput(output);
+    if (!status) return undefined;
+
+    const updated = backgroundJobBoard.updateStatus({
+      taskID: status.taskID,
+      state: status.state,
+      timedOut: status.timedOut,
+      resultSummary: status.result,
+    });
+    if (!updated) return undefined;
+
+    if (updated.terminalUnreconciled) {
+      pendingManagedTaskIds.delete(updated.taskID);
+      contextByTask.delete(updated.taskID);
+      pruneContext();
+    }
+
+    return updated;
+  }
+
+  function updateFromInjectedCompletion(
+    part: ChatMessagePart,
+  ): BackgroundJobRecord | undefined {
+    if (
+      part.type !== 'text' ||
+      typeof part.text !== 'string' ||
+      part.synthetic !== true ||
+      !BACKGROUND_COMPLETION_PREFIX.test(part.text)
+    ) {
+      return undefined;
+    }
+
+    const status = parseTaskStatusOutput(part.text);
+    if (!status) return undefined;
+
+    const signature = `${status.taskID}:${status.state}:${status.result ?? ''}`;
+    if (processedInjectedCompletions.has(signature)) return undefined;
+
+    const updated = updateBackgroundJobFromOutput(part.text);
+    if (!updated) return undefined;
+
+    rememberProcessedInjectedCompletion(signature);
+    return updated;
+  }
+
+  function rememberProcessedInjectedCompletion(signature: string): void {
+    processedInjectedCompletions.add(signature);
+    processedInjectedCompletionOrder.push(signature);
+
+    while (
+      processedInjectedCompletionOrder.length >
+      MAX_PROCESSED_INJECTED_COMPLETIONS
+    ) {
+      const evicted = processedInjectedCompletionOrder.shift();
+      if (!evicted) break;
+      processedInjectedCompletions.delete(evicted);
     }
   }
 
@@ -240,6 +316,31 @@ export function createTaskSessionManagerHook(
     return pendingCallOrder.find(
       (callId) => pendingCalls.get(callId)?.parentSessionId === parentSessionId,
     );
+  }
+
+  function rememberInjectedTerminalJobs(parentSessionID: string): void {
+    const taskIDs = backgroundJobBoard
+      .list(parentSessionID)
+      .filter((job) => job.terminalUnreconciled)
+      .map((job) => job.taskID);
+    if (taskIDs.length === 0) return;
+
+    const existing =
+      terminalJobsInjectedByParent.get(parentSessionID) ?? new Set<string>();
+    for (const taskID of taskIDs) {
+      existing.add(taskID);
+    }
+    terminalJobsInjectedByParent.set(parentSessionID, existing);
+  }
+
+  function reconcileInjectedTerminalJobs(parentSessionID: string): void {
+    const taskIDs = terminalJobsInjectedByParent.get(parentSessionID);
+    if (!taskIDs) return;
+
+    for (const taskID of taskIDs) {
+      backgroundJobBoard.markReconciled(taskID);
+    }
+    terminalJobsInjectedByParent.delete(parentSessionID);
   }
 
   return {
@@ -315,11 +416,37 @@ export function createTaskSessionManagerHook(
         return;
       }
 
+      if (input.tool.toLowerCase() === 'task_status') {
+        if (!input.sessionID || !options.shouldManageSession(input.sessionID)) {
+          return;
+        }
+        updateBackgroundJobFromOutput(output.output);
+        return;
+      }
+
       if (input.tool.toLowerCase() !== 'task') return;
 
       const pending = takePendingCall(input.callID, input.sessionID);
 
       if (!pending || typeof output.output !== 'string') return;
+      const launch = parseTaskLaunchOutput(output.output);
+      if (launch) {
+        backgroundJobBoard.registerLaunch({
+          taskID: launch.taskID,
+          parentSessionID: pending.parentSessionId,
+          agent: pending.agentType,
+          description: pending.label,
+          objective: pending.label,
+        });
+        sessionManager.drop(
+          pending.parentSessionId,
+          pending.agentType,
+          pending.resumedTaskId ?? launch.taskID,
+        );
+        pendingManagedTaskIds.add(launch.taskID);
+        return;
+      }
+
       const taskId = parseTaskIdFromTaskOutput(output.output);
       if (!taskId) {
         if (
@@ -359,6 +486,23 @@ export function createTaskSessionManagerHook(
       _input: Record<string, never>,
       output: { messages: ChatMessage[] },
     ): Promise<void> => {
+      for (const message of output.messages) {
+        if (message.info.role !== 'user') continue;
+        if (message.info.agent && message.info.agent !== 'orchestrator') {
+          continue;
+        }
+        if (
+          !message.info.sessionID ||
+          !options.shouldManageSession(message.info.sessionID)
+        ) {
+          continue;
+        }
+
+        for (const part of message.parts) {
+          updateFromInjectedCompletion(part);
+        }
+      }
+
       for (let i = output.messages.length - 1; i >= 0; i -= 1) {
         const message = output.messages[i];
         if (message.info.role !== 'user') continue;
@@ -370,8 +514,11 @@ export function createTaskSessionManagerHook(
           return;
         }
 
-        const reminder = sessionManager.formatForPrompt(message.info.sessionID);
-        if (!reminder) return;
+        const reminders = [
+          backgroundJobBoard.formatForPrompt(message.info.sessionID),
+          sessionManager.formatForPrompt(message.info.sessionID),
+        ].filter((item): item is string => Boolean(item));
+        if (reminders.length === 0) return;
 
         const textPart = message.parts.find(
           (part) => part.type === 'text' && typeof part.text === 'string',
@@ -380,11 +527,12 @@ export function createTaskSessionManagerHook(
         if (textPart.text?.includes(SLIM_INTERNAL_INITIATOR_MARKER)) return;
         if (textPart.text?.includes(RESUMABLE_SESSIONS_START)) return;
 
+        rememberInjectedTerminalJobs(message.info.sessionID);
         textPart.text = [
           textPart.text ?? '',
           '',
           RESUMABLE_SESSIONS_START,
-          reminder,
+          reminders.join('\n\n'),
           RESUMABLE_SESSIONS_END,
         ].join('\n');
         return;
@@ -397,6 +545,8 @@ export function createTaskSessionManagerHook(
         properties?: {
           info?: { id?: string; parentID?: string };
           sessionID?: string;
+          status?: { type?: string };
+          error?: { name?: string };
         };
       };
     }): Promise<void> => {
@@ -412,13 +562,39 @@ export function createTaskSessionManagerHook(
         return;
       }
 
+      if (
+        input.event.type === 'session.idle' ||
+        (input.event.type === 'session.status' &&
+          (input.event.properties as { status?: { type?: string } } | undefined)
+            ?.status?.type === 'idle')
+      ) {
+        const sessionId =
+          input.event.properties?.info?.id ?? input.event.properties?.sessionID;
+        if (sessionId && options.shouldManageSession(sessionId)) {
+          reconcileInjectedTerminalJobs(sessionId);
+        }
+        return;
+      }
+
+      if (input.event.type === 'session.error') {
+        const sessionId =
+          input.event.properties?.info?.id ?? input.event.properties?.sessionID;
+        if (sessionId && options.shouldManageSession(sessionId)) {
+          terminalJobsInjectedByParent.delete(sessionId);
+        }
+        return;
+      }
+
       if (input.event.type !== 'session.deleted') return;
       const sessionId =
         input.event.properties?.info?.id ?? input.event.properties?.sessionID;
       if (!sessionId) return;
 
       sessionManager.dropTask(sessionId);
+      backgroundJobBoard.drop(sessionId);
       sessionManager.clearParent(sessionId);
+      backgroundJobBoard.clearParent(sessionId);
+      terminalJobsInjectedByParent.delete(sessionId);
       contextByTask.delete(sessionId);
       pendingManagedTaskIds.delete(sessionId);
       pruneContext();

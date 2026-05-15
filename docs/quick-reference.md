@@ -13,6 +13,7 @@
 | Doc | Contents |
 |-----|----------|
 | [Council Agent](council.md) | Multi-LLM consensus, presets, role prompts, timeouts |
+| [V2 Background Orchestration](v2-background-orchestration.md) | Scheduler-first orchestrator model for native background subagents |
 | [Interview](interview.md) | `/interview` command, browser UI, dashboard mode, multi-session coordination |
 | [Multiplexer Integration](multiplexer-integration.md) | Real-time pane monitoring, layouts, troubleshooting |
 | [Todo Continuation](todo-continuation.md) | `auto_continue`, `/auto-continue`, cooldowns, safety gates |

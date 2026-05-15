@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
+import {
+  BackgroundJobBoard,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../../utils';
 import { createTodoContinuationHook } from './index';
 import {
   TODO_FINAL_ACTIVE_REMINDER,
@@ -649,6 +652,44 @@ describe('createTodoContinuationHook', () => {
       expect(allMessageText(output)).toContain(TODO_FINAL_ACTIVE_REMINDER);
       expect(allMessageText(output)).not.toContain(TODO_HYGIENE_REMINDER);
     });
+
+    test('todo hygiene reminder includes unreconciled background results', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            {
+              id: '1',
+              content: 'todo1',
+              status: 'in_progress',
+              priority: 'high',
+            },
+          ],
+        },
+      });
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'child-1',
+        parentSessionID: 'main1',
+        agent: 'oracle',
+        description: 'review plan',
+      });
+      board.updateStatus({ taskID: 'child-1', state: 'completed' });
+      const hook = createTodoContinuationHook(ctx, {
+        backgroundJobBoard: board,
+      });
+      const output = userMessages('haz esto', 'main1', 'orchestrator');
+
+      await hook.handleMessagesTransform(output);
+      await hook.handleToolExecuteAfter({
+        tool: 'todowrite',
+        sessionID: 'main1',
+      });
+      await hook.handleMessagesTransform(output);
+
+      expect(allMessageText(output)).toContain(
+        'Background jobs have terminal results: reconcile the Background Job Board results before finalizing.',
+      );
+    });
   });
 
   describe('continuation scheduling', () => {
@@ -697,6 +738,49 @@ describe('createTodoContinuationHook', () => {
       );
       expect(promptCall[0].body.parts[0].text).toContain(
         SLIM_INTERNAL_INITIATOR_MARKER,
+      );
+    });
+
+    test('continuation prompt nudges toward running background job status', async () => {
+      const ctx = createMockContext({
+        todoResult: {
+          data: [
+            { id: '1', content: 'todo1', status: 'pending', priority: 'high' },
+          ],
+        },
+        messagesResult: {
+          data: [
+            {
+              info: { role: 'assistant' },
+              parts: [{ type: 'text', text: 'Continuing' }],
+            },
+          ],
+        },
+      });
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'child-1',
+        parentSessionID: 'session-123',
+        agent: 'fixer',
+        description: 'implement change',
+      });
+      const hook = createTodoContinuationHook(ctx, {
+        cooldownMs: 50,
+        backgroundJobBoard: board,
+      });
+
+      await hook.tool.auto_continue.execute({ enabled: true });
+      await hook.handleEvent({
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: 'session-123' },
+        },
+      });
+      await delay(60);
+
+      const promptCall = contCall(ctx.client.session.prompt);
+      expect(promptCall[0].body.parts[0].text).toContain(
+        'Background jobs are still running: call task_status',
       );
     });
 

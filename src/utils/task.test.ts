@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { parseTaskIdFromTaskOutput } from './task';
+import {
+  parseTaskIdFromTaskOutput,
+  parseTaskLaunchOutput,
+  parseTaskResultFromOutput,
+  parseTaskStatusOutput,
+} from './task';
 
 describe('parseTaskIdFromTaskOutput', () => {
   test('parses task_id line from successful task tool output', () => {
@@ -20,5 +25,144 @@ describe('parseTaskIdFromTaskOutput', () => {
     );
 
     expect(parseTaskIdFromTaskOutput(output)).toBeUndefined();
+  });
+});
+
+describe('parseTaskLaunchOutput', () => {
+  test('parses background task launch output only when state is running', () => {
+    const output = [
+      'task_id: ses_123 (for polling this task with task_status)',
+      'state: running',
+      '',
+      '<task_result>',
+      'Background task started.',
+      '</task_result>',
+    ].join('\n');
+
+    expect(parseTaskLaunchOutput(output)).toEqual({
+      taskID: 'ses_123',
+      state: 'running',
+      result: 'Background task started.',
+    });
+  });
+
+  test('ignores blocking task output without running state', () => {
+    const output = [
+      'task_id: ses_123 (for resuming to continue this task if needed)',
+      '',
+      '<task_result>',
+      'completed result',
+      '</task_result>',
+    ].join('\n');
+
+    expect(parseTaskLaunchOutput(output)).toBeUndefined();
+  });
+
+  test('ignores state lines inside task result body', () => {
+    const output = [
+      'task_id: ses_123 (for resuming to continue this task if needed)',
+      '',
+      '<task_result>',
+      'state: running',
+      '</task_result>',
+    ].join('\n');
+
+    expect(parseTaskLaunchOutput(output)).toBeUndefined();
+  });
+});
+
+describe('parseTaskStatusOutput', () => {
+  test('parses completed status output with task result', () => {
+    const output = [
+      'task_id: ses_123',
+      'state: completed',
+      '',
+      '<task_result>',
+      'done',
+      '</task_result>',
+    ].join('\n');
+
+    expect(parseTaskStatusOutput(output)).toEqual({
+      taskID: 'ses_123',
+      state: 'completed',
+      timedOut: false,
+      result: 'done',
+    });
+  });
+
+  test('parses error status output with task_error', () => {
+    const output = [
+      'task_id: ses_123',
+      'state: error',
+      '',
+      '<task_error>',
+      'failed hard',
+      '</task_error>',
+    ].join('\n');
+
+    expect(parseTaskStatusOutput(output)).toEqual({
+      taskID: 'ses_123',
+      state: 'error',
+      timedOut: false,
+      result: 'failed hard',
+    });
+  });
+
+  test('parses cancelled status output with task_error', () => {
+    const output = [
+      'task_id: ses_123',
+      'state: cancelled',
+      '',
+      '<task_error>',
+      'cancelled by user',
+      '</task_error>',
+    ].join('\n');
+
+    expect(parseTaskStatusOutput(output)).toEqual({
+      taskID: 'ses_123',
+      state: 'cancelled',
+      timedOut: false,
+      result: 'cancelled by user',
+    });
+  });
+
+  test('keeps timeout as running with timedOut overlay', () => {
+    const output = [
+      'task_id: ses_123',
+      'state: running',
+      '',
+      '<task_result>',
+      'Timed out after 120000ms while waiting for task completion.',
+      '</task_result>',
+    ].join('\n');
+
+    expect(parseTaskStatusOutput(output)).toEqual({
+      taskID: 'ses_123',
+      state: 'running',
+      timedOut: true,
+      result: 'Timed out after 120000ms while waiting for task completion.',
+    });
+  });
+
+  test('returns undefined when state is absent', () => {
+    expect(parseTaskStatusOutput('task_id: ses_123')).toBeUndefined();
+  });
+});
+
+describe('parseTaskResultFromOutput', () => {
+  test('extracts trimmed task result block', () => {
+    expect(
+      parseTaskResultFromOutput(
+        ['<task_result>', '  hello  ', '</task_result>'].join('\n'),
+      ),
+    ).toBe('hello');
+  });
+
+  test('extracts task error block', () => {
+    expect(
+      parseTaskResultFromOutput(
+        ['<task_error>', '  broken  ', '</task_error>'].join('\n'),
+      ),
+    ).toBe('broken');
   });
 });
