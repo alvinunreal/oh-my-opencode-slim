@@ -74,7 +74,6 @@ Suggested state shape:
 
 ```ts
 type BackgroundJobState =
-  | 'launched'
   | 'running'
   | 'completed'
   | 'error'
@@ -172,9 +171,12 @@ Initial rule:
 This is intentionally simple. It avoids terminal jobs living forever while still
 forcing at least one orchestrator turn to see and account for each result.
 
-Initial V2 should not try to infer from free text whether the orchestrator
-mentioned, ignored, blocked, or failed a job. If a more precise protocol is
-needed later, add an explicit marker/tool for reconciliation.
+**Important:** Idle-based reconciliation is a heuristic. Reconciled status means
+a terminal result was injected into an orchestrator turn that completed and the
+parent returned to idle; it is not proof the result was explicitly acknowledged
+or used by the orchestrator. Initial V2 should not try to infer from free text
+whether the orchestrator mentioned, ignored, blocked, or failed a job. If a more
+precise protocol is needed later, add an explicit marker/tool for reconciliation.
 
 ---
 

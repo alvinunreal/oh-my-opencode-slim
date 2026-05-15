@@ -1,6 +1,6 @@
 import { parseTaskStatusOutput, type TaskOutputState } from './task';
 
-export type BackgroundJobState = TaskOutputState | 'launched' | 'reconciled';
+export type BackgroundJobState = TaskOutputState | 'reconciled';
 
 export interface BackgroundJobRecord {
   taskID: string;

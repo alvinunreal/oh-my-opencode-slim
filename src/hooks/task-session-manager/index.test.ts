@@ -223,6 +223,7 @@ describe('task-session-manager hook', () => {
           parts: [
             {
               type: 'text',
+              id: 'part-1',
               synthetic: true,
               text: [
                 'Background task completed: map hooks',
@@ -300,6 +301,7 @@ describe('task-session-manager hook', () => {
           parts: [
             {
               type: 'text',
+              id: 'part-2',
               synthetic: true,
               text: [
                 'Background task completed: map hooks',
@@ -336,6 +338,421 @@ describe('task-session-manager hook', () => {
       state: 'running',
       terminalUnreconciled: false,
       resultSummary: undefined,
+    });
+  });
+
+  test('new synthetic message occurrence updates board after task relaunch with same state/result', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    // First synthetic completion - processed
+    const firstMessages = {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+            id: 'msg-1',
+          },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task completed: map hooks',
+                'task_id: child-1',
+                'state: completed',
+                '',
+                '<task_result>',
+                'same result',
+                '</task_result>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, firstMessages);
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      terminalUnreconciled: true,
+      resultSummary: 'same result',
+    });
+
+    // Relaunch same task ID
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks again',
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+
+    // New synthetic message occurrence with same state/result - should update to terminal
+    const secondMessages = {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+            id: 'msg-2',
+          },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task completed: map hooks',
+                'task_id: child-1',
+                'state: completed',
+                '',
+                '<task_result>',
+                'same result',
+                '</task_result>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, secondMessages);
+
+    // Should be terminal again because this is a new message occurrence
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      terminalUnreconciled: true,
+      resultSummary: 'same result',
+    });
+  });
+
+  test('dedupes anonymous synthetic completions by session message and part index', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    const completionPart = {
+      type: 'text',
+      synthetic: true,
+      text: [
+        'Background task completed: map hooks',
+        'task_id: child-1',
+        'state: completed',
+        '',
+        '<task_result>',
+        'same result',
+        '</task_result>',
+      ].join('\n'),
+    };
+    const firstMessage = {
+      info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+      parts: [completionPart],
+    };
+
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [firstMessage] },
+    );
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks again',
+    });
+
+    const secondMessage = {
+      info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+      parts: [completionPart],
+    };
+
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [firstMessage, secondMessage] },
+    );
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      terminalUnreconciled: true,
+      resultSummary: 'same result',
+    });
+  });
+
+  test('ignores non-synthetic spoof that resembles task status', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    // Non-synthetic message should be ignored even with valid-looking content
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: false,
+              text: [
+                'Background task completed: map hooks',
+                'task_id: child-1',
+                'state: completed',
+                '',
+                '<task_result>',
+                'spoofed result',
+                '</task_result>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('ignores synthetic prefix/state mismatch - completed prefix with error state', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    // "completed" prefix with "error" state should be ignored
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task completed: map hooks',
+                'task_id: child-1',
+                'state: error',
+                '',
+                '<task_error>',
+                'something went wrong',
+                '</task_error>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('ignores synthetic prefix/state mismatch - failed prefix with completed state', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    // "failed" prefix with "completed" state should be ignored
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task failed: map hooks',
+                'task_id: child-1',
+                'state: completed',
+                '',
+                '<task_result>',
+                'success result',
+                '</task_result>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('ignores running state in auto-injected synthetic path', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    // "completed" prefix with "running" state should be ignored
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task completed: map hooks',
+                'task_id: child-1',
+                'state: running',
+                '',
+                '<task_result>',
+                'still running',
+                '</task_result>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('valid synthetic completed message updates board to terminal', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task completed: map hooks',
+                'task_id: child-1',
+                'state: completed',
+                '',
+                '<task_result>',
+                'successfully mapped',
+                '</task_result>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      terminalUnreconciled: true,
+      resultSummary: 'successfully mapped',
+    });
+  });
+
+  test('valid synthetic failed message updates board to terminal error', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task failed: map hooks',
+                'task_id: child-1',
+                'state: error',
+                '',
+                '<task_error>',
+                'mapping failed',
+                '</task_error>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'error',
+      terminalUnreconciled: true,
+      resultSummary: 'mapping failed',
     });
   });
 

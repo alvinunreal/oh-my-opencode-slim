@@ -148,6 +148,12 @@ The orchestrator should use `task_status` to:
 - collect outputs before final response,
 - surface failures or blocked tasks clearly.
 
+**Note on reconciliation:** Idle-based reconciliation is a heuristic. A job marked
+as reconciled means its terminal result was injected into an orchestrator turn
+that completed and the parent returned to idle; it is not proof the result was
+explicitly acknowledged or used. The orchestrator should still verify it consumed
+the relevant outputs before finalizing.
+
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
 

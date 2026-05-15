@@ -80,11 +80,11 @@ export function parseTaskStateFromOutput(
 }
 
 export function parseTaskResultFromOutput(output: string): string | undefined {
-  const match =
-    /<task_(?:result|error)>\s*([\s\S]*?)\s*<\/task_(?:result|error)>/m.exec(
-      output,
-    );
-  const result = match?.[1]?.trim();
+  // Require matching open/close tags via backreference
+  const match = /<task_(result|error)>\s*([\s\S]*?)\s*<\/task_\1>/m.exec(
+    output,
+  );
+  const result = match?.[2]?.trim();
 
   return result || undefined;
 }

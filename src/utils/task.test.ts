@@ -165,4 +165,40 @@ describe('parseTaskResultFromOutput', () => {
       ),
     ).toBe('broken');
   });
+
+  test('returns undefined for mismatched tags', () => {
+    // Opening with task_result but closing with task_error
+    expect(
+      parseTaskResultFromOutput(
+        ['<task_result>', 'content', '</task_error>'].join('\n'),
+      ),
+    ).toBeUndefined();
+
+    // Opening with task_error but closing with task_result
+    expect(
+      parseTaskResultFromOutput(
+        ['<task_error>', 'content', '</task_result>'].join('\n'),
+      ),
+    ).toBeUndefined();
+  });
+
+  test('requires matching open and close tags via backreference', () => {
+    // Valid: task_result with task_result
+    expect(parseTaskResultFromOutput('<task_result>data</task_result>')).toBe(
+      'data',
+    );
+
+    // Valid: task_error with task_error
+    expect(
+      parseTaskResultFromOutput('<task_error>error data</task_error>'),
+    ).toBe('error data');
+
+    // Invalid: mismatched
+    expect(
+      parseTaskResultFromOutput('<task_result>data</task_error>'),
+    ).toBeUndefined();
+    expect(
+      parseTaskResultFromOutput('<task_error>data</task_result>'),
+    ).toBeUndefined();
+  });
 });

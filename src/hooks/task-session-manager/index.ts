@@ -59,13 +59,15 @@ interface ChatMessage {
     role: string;
     agent?: string;
     sessionID?: string;
+    id?: string;
   };
   parts: ChatMessagePart[];
 }
 
 const RESUMABLE_SESSIONS_START = '<resumable_sessions>';
 const RESUMABLE_SESSIONS_END = '</resumable_sessions>';
-const BACKGROUND_COMPLETION_PREFIX = /^Background task (completed|failed): /;
+const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
+const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;
 
 function isAgentName(value: unknown): value is AgentName {
@@ -217,26 +219,45 @@ export function createTaskSessionManagerHook(
 
   function updateFromInjectedCompletion(
     part: ChatMessagePart,
+    message: ChatMessage,
+    messageIndex: number,
+    partIndex: number,
   ): BackgroundJobRecord | undefined {
-    if (
-      part.type !== 'text' ||
-      typeof part.text !== 'string' ||
-      part.synthetic !== true ||
-      !BACKGROUND_COMPLETION_PREFIX.test(part.text)
-    ) {
+    if (part.type !== 'text' || typeof part.text !== 'string') {
+      return undefined;
+    }
+
+    // Only process synthetic messages with valid completion prefixes
+    const isCompleted = BACKGROUND_COMPLETION_COMPLETED.test(part.text);
+    const isFailed = BACKGROUND_COMPLETION_FAILED.test(part.text);
+
+    if (part.synthetic !== true || (!isCompleted && !isFailed)) {
       return undefined;
     }
 
     const status = parseTaskStatusOutput(part.text);
     if (!status) return undefined;
 
-    const signature = `${status.taskID}:${status.state}:${status.result ?? ''}`;
-    if (processedInjectedCompletions.has(signature)) return undefined;
+    // Enforce prefix/state consistency: completed prefix only accepts completed state
+    // failed prefix only accepts error state; ignore running/cancelled in auto-injected path
+    if (isCompleted && status.state !== 'completed') return undefined;
+    if (isFailed && status.state !== 'error') return undefined;
+
+    // Dedupe by synthetic message occurrence using part.id if available,
+    // fallback to message.info.id + part index, then message/part index.
+    const occurrenceId =
+      typeof part.id === 'string'
+        ? part.id
+        : typeof message.info.id === 'string'
+          ? `${message.info.id}:${partIndex}`
+          : `${message.info.sessionID ?? 'unknown'}:${messageIndex}:${partIndex}`;
+
+    if (processedInjectedCompletions.has(occurrenceId)) return undefined;
 
     const updated = updateBackgroundJobFromOutput(part.text);
     if (!updated) return undefined;
 
-    rememberProcessedInjectedCompletion(signature);
+    rememberProcessedInjectedCompletion(occurrenceId);
     return updated;
   }
 
@@ -486,7 +507,7 @@ export function createTaskSessionManagerHook(
       _input: Record<string, never>,
       output: { messages: ChatMessage[] },
     ): Promise<void> => {
-      for (const message of output.messages) {
+      for (const [messageIndex, message] of output.messages.entries()) {
         if (message.info.role !== 'user') continue;
         if (message.info.agent && message.info.agent !== 'orchestrator') {
           continue;
@@ -498,8 +519,8 @@ export function createTaskSessionManagerHook(
           continue;
         }
 
-        for (const part of message.parts) {
-          updateFromInjectedCompletion(part);
+        for (const [partIndex, part] of message.parts.entries()) {
+          updateFromInjectedCompletion(part, message, messageIndex, partIndex);
         }
       }
 
