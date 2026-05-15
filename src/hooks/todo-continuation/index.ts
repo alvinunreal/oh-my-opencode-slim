@@ -1,6 +1,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { tool } from '@opencode-ai/plugin/tool';
 import {
+  type BackgroundJobBoard,
   createInternalAgentTextPart,
   log,
   SLIM_INTERNAL_INITIATOR_MARKER,
@@ -169,6 +170,7 @@ export function createTodoContinuationHook(
     cooldownMs?: number;
     autoEnable?: boolean;
     autoEnableThreshold?: number;
+    backgroundJobBoard?: BackgroundJobBoard;
   },
 ): {
   tool: Record<string, unknown>;
@@ -199,6 +201,7 @@ export function createTodoContinuationHook(
   const cooldownMs = config?.cooldownMs ?? 3000;
   const autoEnable = config?.autoEnable ?? false;
   const autoEnableThreshold = config?.autoEnableThreshold ?? 4;
+  const backgroundJobBoard = config?.backgroundJobBoard;
   const requestSignatureBySession = new Map<string, string>();
 
   const state: ContinuationState = {
@@ -373,8 +376,12 @@ export function createTodoContinuationHook(
       lastUserMessage.signature
     ) {
       const reminder = hygiene.getPendingReminder(lastUserMessage.sessionID);
-      if (reminder) {
-        appendTodoHygieneInstruction(lastUserMessage.message, reminder);
+      const guardrail = backgroundGuardrail(lastUserMessage.sessionID);
+      const combinedReminder = [reminder, guardrail]
+        .filter((item): item is string => Boolean(item))
+        .join(' ');
+      if (combinedReminder) {
+        appendTodoHygieneInstruction(lastUserMessage.message, combinedReminder);
       } else {
         stripTodoHygieneInstructionFromMessage(lastUserMessage.message);
       }
@@ -425,6 +432,31 @@ export function createTodoContinuationHook(
 
   function registerOrchestratorSession(sessionID: string): void {
     state.orchestratorSessionIds.add(sessionID);
+  }
+
+  function backgroundGuardrail(sessionID: string): string | undefined {
+    if (!backgroundJobBoard) return undefined;
+
+    const hasRunning = backgroundJobBoard.hasRunning(sessionID);
+    const hasTerminal = backgroundJobBoard.hasTerminalUnreconciled(sessionID);
+    if (hasRunning && hasTerminal) {
+      return 'Background jobs are still unresolved: call task_status for running jobs and reconcile terminal Background Job Board results before dependent work or finalizing.';
+    }
+    if (hasTerminal) {
+      return 'Background jobs have terminal results: reconcile the Background Job Board results before finalizing.';
+    }
+    if (hasRunning) {
+      return 'Background jobs are still running: call task_status before dependent work or finalizing.';
+    }
+
+    return undefined;
+  }
+
+  function continuationPrompt(sessionID: string): string {
+    const guardrail = backgroundGuardrail(sessionID);
+    if (!guardrail) return CONTINUATION_PROMPT;
+
+    return `${CONTINUATION_PROMPT} ${guardrail}`;
   }
 
   function handleChatMessage(input: {
@@ -689,7 +721,9 @@ export function createTodoContinuationHook(
           await ctx.client.session.prompt({
             path: { id: sessionID },
             body: {
-              parts: [createInternalAgentTextPart(CONTINUATION_PROMPT)],
+              parts: [
+                createInternalAgentTextPart(continuationPrompt(sessionID)),
+              ],
             },
           });
           state.consecutiveContinuations++;
@@ -856,7 +890,7 @@ export function createTodoContinuationHook(
     if (hasIncompleteTodos) {
       output.parts.push(
         createInternalAgentTextPart(
-          `${CONTINUATION_PROMPT} [Auto-continue enabled: up to ${maxContinuations} continuations.]`,
+          `${continuationPrompt(input.sessionID)} [Auto-continue enabled: up to ${maxContinuations} continuations.]`,
         ),
       );
     } else {
