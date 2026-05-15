@@ -68,7 +68,9 @@
     "prepublishOnly": "bun run build",
     "release:patch": "npm version patch && git push --follow-tags && npm publish",
     "release:minor": "npm version minor && git push --follow-tags && npm publish",
-    "release:major": "npm version major && git push --follow-tags && npm publish"
+    "release:major": "npm version major && git push --follow-tags && npm publish",
+    "release:beta": "npm version premajor --preid beta && git push --follow-tags && npm publish --tag beta",
+    "release:beta:next": "npm version prerelease --preid beta && git push --follow-tags && npm publish --tag beta"
   },
   "dependencies": {
     "@ast-grep/cli": "^0.42.1",
