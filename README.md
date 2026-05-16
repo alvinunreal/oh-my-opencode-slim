@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v2beta.webp" alt="V2 Beta Release" style="border-radius: 10px;">
+    <img src="img/4k.png" alt="4K GitHub Stars Milestone" style="border-radius: 10px;">
   </a>
   <h3>✨ V2 Beta Release: Background Orchestration Has Arrived ✨</h3>
   <p><i>The orchestrator now schedules specialist agents in the background,<br>while <code>/deepwork</code> turns big goals into file-backed plans.<br>Beta testers: share your feedback with us on Telegram.</i></p>
