@@ -168,6 +168,7 @@ export class ForegroundFallbackManager {
           msg.includes('quota exceeded') ||
           msg.includes('exceededbudget') ||
           msg.includes('over budget') ||
+          msg.includes('insufficient') ||
           msg.includes('high concurrency') ||
           msg.includes('reduce concurrency')
         ) {
