@@ -35,6 +35,20 @@ Create a task-specific file such as:
 .slim/deepwork/<short-task-slug>.md
 ```
 
+Keep `.slim/deepwork/` out of git, but make it readable to OpenCode. Ensure the
+project ignore files include:
+
+```gitignore
+# .gitignore
+.slim/deepwork/
+```
+
+```gitignore
+# .ignore
+!.slim/deepwork/
+!.slim/deepwork/**
+```
+
 Do not follow a rigid template. Choose whatever markdown structure best fits the
 work. The file only needs to remain useful as persistent session state and should
 capture, as applicable:
