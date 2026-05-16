@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/4k.png" alt="4K GitHub Stars Milestone" style="border-radius: 10px;">
+    <img src="img/v2beta.webp" alt="V2 Beta Release" style="border-radius: 10px;">
   </a>
   <h3>🎉 4,000+ Stars! Thank you! 🎉</h3>
   <p><i>We are incredibly grateful to our community for helping us reach this milestone.<br>The Pantheon grows stronger every day because of your feedback, contributions, and support!</i></p>
