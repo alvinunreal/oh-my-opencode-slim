@@ -6,6 +6,17 @@ export interface TuiSnapshot {
   version: 1;
   updatedAt: number;
   agentModels: Record<string, string>;
+  /**
+   * Per-agent variant (e.g. "high", "max"). Optional; only populated when
+   * a preset or agent override defines it.
+   */
+  agentVariants: Record<string, string>;
+  /**
+   * Name of the currently active preset, or null when no preset is active.
+   * Shown in the OMO-Slim sidebar so the user can see which preset is in
+   * effect even when the textarea variant chip is stale.
+   */
+  activePreset: string | null;
 }
 
 const STATE_DIR = 'oh-my-opencode-slim';
@@ -26,6 +37,8 @@ function emptySnapshot(): TuiSnapshot {
     version: 1,
     updatedAt: Date.now(),
     agentModels: {},
+    agentVariants: {},
+    activePreset: null,
   };
 }
 
@@ -38,6 +51,9 @@ function parseSnapshot(value: string): TuiSnapshot {
     updatedAt:
       typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     agentModels: parsed.agentModels ?? {},
+    agentVariants: parsed.agentVariants ?? {},
+    activePreset:
+      typeof parsed.activePreset === 'string' ? parsed.activePreset : null,
   };
 }
 
@@ -76,17 +92,32 @@ function updateSnapshot(mutator: (snapshot: TuiSnapshot) => void): void {
 
 export function recordTuiAgentModels(input: {
   agentModels: Record<string, string>;
+  agentVariants?: Record<string, string>;
+  activePreset?: string | null;
 }): void {
   updateSnapshot((snapshot) => {
     snapshot.agentModels = { ...input.agentModels };
+    if (input.agentVariants) {
+      snapshot.agentVariants = { ...input.agentVariants };
+    }
+    if (
+      typeof input.activePreset === 'string' ||
+      input.activePreset === null
+    ) {
+      snapshot.activePreset = input.activePreset;
+    }
   });
 }
 
 export function recordTuiAgentModel(input: {
   agentName: string;
   model: string;
+  variant?: string;
 }): void {
   updateSnapshot((snapshot) => {
     snapshot.agentModels[input.agentName] = input.model;
+    if (typeof input.variant === 'string') {
+      snapshot.agentVariants[input.agentName] = input.variant;
+    }
   });
 }

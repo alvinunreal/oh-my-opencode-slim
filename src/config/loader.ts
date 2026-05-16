@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
 import { getConfigSearchDirs } from '../cli/paths';
+import { getActiveRuntimePreset } from './runtime-preset';
 import { type PluginConfig, PluginConfigSchema } from './schema';
 
 /**
@@ -283,10 +284,18 @@ export function loadPluginConfig(
   // Migrate legacy tmux config to multiplexer config for backward compatibility
   config = migrateTmuxToMultiplexer(config);
 
-  // Override preset from environment variable if set
+  // Override preset selection. Precedence:
+  //   1. OH_MY_OPENCODE_SLIM_PRESET environment variable (explicit user intent).
+  //   2. Active runtime preset set via /preset command (persists across
+  //      Instance.dispose() re-init cycles because runtime-preset state is
+  //      module-level).
+  //   3. config.preset from the config file (default).
   const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+  const runtimePreset = getActiveRuntimePreset();
   if (envPreset) {
     config.preset = envPreset;
+  } else if (runtimePreset) {
+    config.preset = runtimePreset;
   }
 
   // Resolve preset and merge with root agents

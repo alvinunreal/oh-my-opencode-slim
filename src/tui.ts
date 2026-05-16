@@ -141,17 +141,30 @@ function renderSidebar(
         ],
       ),
       configStatusRow,
+      snapshot.activePreset
+        ? box(
+            {
+              width: '100%',
+              marginTop: 1,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+            },
+            [
+              text({ fg: theme.textMuted }, ['preset']),
+              text({ fg: theme.accent }, [snapshot.activePreset]),
+            ],
+          )
+        : null,
       box({ width: '100%', marginTop: 1 }, [
         text({ fg: theme.text }, ['Agents']),
       ]),
       ...getSidebarAgentNames(snapshot).map((agentName) => {
         const model = snapshot.agentModels[agentName] ?? 'pending';
-        return row(
-          agentName,
-          truncate(formatSidebarModelName(model), 26),
-          theme,
-          theme.textMuted,
-        );
+        const variant = snapshot.agentVariants?.[agentName];
+        const display = variant
+          ? `${truncate(formatSidebarModelName(model), 18)} · ${variant}`
+          : truncate(formatSidebarModelName(model), 26);
+        return row(agentName, display, theme, theme.textMuted);
       }),
     ],
   );

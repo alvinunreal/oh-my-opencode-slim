@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -31,6 +31,10 @@ function getOutputText(output: ReturnType<typeof createOutput>): string {
     .filter((p) => p.type === 'text')
     .map((p) => p.text ?? '')
     .join('\n');
+}
+
+async function flushDeferred(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 let previousXdgDataHome: string | undefined;
@@ -151,6 +155,8 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       const text = getOutputText(output);
       expect(text).toContain('Switched to preset "cheap"');
       expect(text).toContain('orchestrator');
@@ -192,6 +198,8 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       expect(readTuiSnapshot().agentModels).toEqual({
         explorer: 'openai/gpt-5.5',
         fixer: 'openai/gpt-5.4-mini',
@@ -215,6 +223,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'precise' },
         output,
       );
+
+      await flushDeferred();
 
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
@@ -244,6 +254,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'thinker' },
         output,
       );
+
+      await flushDeferred();
 
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
@@ -305,6 +317,7 @@ describe('createPresetManager', () => {
       ctx.client.config.update = mock(async () => {
         throw new Error('Server unavailable');
       });
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
       const config: PluginConfig = {
         presets: {
           cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
@@ -318,12 +331,19 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       const text = getOutputText(output);
-      expect(text).toContain('Failed to switch preset');
-      expect(text).toContain('Server unavailable');
+      expect(text).toContain('Switched to preset "cheap"');
+      expect(text).not.toContain('Failed to switch preset');
+      expect(text).not.toContain('Server unavailable');
       expect(readTuiSnapshot().agentModels).toEqual({
         explorer: 'openai/gpt-5.4-mini',
       });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Server unavailable'),
+      );
+      warnSpy.mockRestore();
     });
 
     test('shows empty preset message when preset has no valid overrides', async () => {
@@ -370,6 +390,8 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
           agent: {
@@ -398,6 +420,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: '  cheap  ' },
         output,
       );
+
+      await flushDeferred();
 
       const text = getOutputText(output);
       expect(text).toContain('Switched to preset "cheap"');
@@ -464,6 +488,8 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       const text = getOutputText(output);
       expect(text).toContain('Switched to preset "mixed"');
       // Only orchestrator and oracle should be forwarded
@@ -495,6 +521,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'fallback' },
         output,
       );
+
+      await flushDeferred();
 
       const text = getOutputText(output);
       expect(text).toContain('Switched to preset "fallback"');
@@ -529,6 +557,8 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
           agent: {
@@ -562,6 +592,8 @@ describe('createPresetManager', () => {
         output,
       );
 
+      await flushDeferred();
+
       const text = getOutputText(output);
       expect(text).toContain('variant: thinking');
       expect(text).toContain('options: yes');
@@ -583,6 +615,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'cheap' },
         output1,
       );
+
+      await flushDeferred();
       expect(getOutputText(output1)).toContain('Switched');
 
       // List presets should now show cheap as active
@@ -599,6 +633,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'powerful' },
         output3,
       );
+
+      await flushDeferred();
       expect(getOutputText(output3)).toContain('Switched to preset "powerful"');
 
       // List should now show powerful as active
@@ -671,6 +707,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'cheap' },
         output1,
       );
+
+      await flushDeferred();
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
           agent: {
@@ -687,6 +725,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'powerful' },
         output2,
       );
+
+      await flushDeferred();
 
       // Second update should reset oracle to baseline and set orchestrator
       expect(ctx.client.config.update).toHaveBeenCalledWith({
@@ -722,6 +762,8 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'cheap' },
         output1,
       );
+
+      await flushDeferred();
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
           agent: {
@@ -739,6 +781,8 @@ describe('createPresetManager', () => {
         output2,
       );
 
+      await flushDeferred();
+
       // Second update should only have oracle, no reset updates
       expect(ctx.client.config.update).toHaveBeenCalledWith({
         body: {
@@ -753,6 +797,12 @@ describe('createPresetManager', () => {
     });
 
     test('preset state rolled back on config.update error', async () => {
+      recordTuiAgentModels({
+        agentModels: {
+          explorer: 'openai/gpt-5.4-mini',
+        },
+      });
+
       const ctx = createMockContext();
       ctx.client.config.update = mock(async () => {
         throw new Error('Server unavailable');
@@ -778,6 +828,7 @@ describe('createPresetManager', () => {
         { command: 'preset', sessionID: 's1', arguments: 'cheap' },
         output1,
       );
+      await flushDeferred();
       expect(getActiveRuntimePreset()).toBe('cheap');
 
       // Reset mock to throw error
@@ -792,9 +843,16 @@ describe('createPresetManager', () => {
         output2,
       );
 
+      await flushDeferred();
+
       // Active preset should still be "cheap" after error
       expect(getActiveRuntimePreset()).toBe('cheap');
-      expect(getOutputText(output2)).toContain('Failed to switch preset');
+      expect(readTuiSnapshot().agentModels).toEqual({
+        explorer: 'openai/gpt-5.4-mini',
+        oracle: 'a',
+      });
+      expect(getOutputText(output2)).toContain('Switched to preset "expensive"');
+      expect(getOutputText(output2)).not.toContain('Failed to switch preset');
 
       // Cleanup
       setActiveRuntimePreset(null);

@@ -33,6 +33,18 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
   let activePreset: string | null =
     getActiveRuntimePreset() ?? config.preset ?? null;
 
+  // Holds the agent overrides for a pending SDK config.update() call.
+  // See the comment in switchPreset() for why the call is deferred.
+  let pendingConfigUpdate: Record<
+    string,
+    {
+      model?: string;
+      temperature?: number;
+      variant?: string;
+      options?: Record<string, unknown>;
+    }
+  > | null = null;
+
   /**
    * Handle the /preset command from command.execute.before hook.
    *
@@ -186,51 +198,81 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
     const previousPreset = activePreset;
     setActiveRuntimePresetWithPrevious(presetName);
 
-    try {
-      await ctx.client.config.update({
-        body: { agent: allUpdates },
-      });
-
-      const snapshot = readTuiSnapshot();
-      const agentModels = { ...snapshot.agentModels };
-      for (const [agentName, agentConfig] of Object.entries(allUpdates)) {
-        if (typeof agentConfig.model === 'string') {
-          agentModels[agentName] = agentConfig.model;
-        }
+    // Update in-memory tracking synchronously so the success message and
+    // any subsequent /preset (no-arg) listing reflect the switch.
+    const snapshotBefore = readTuiSnapshot();
+    const previousAgentModels = { ...snapshotBefore.agentModels };
+    const previousAgentVariants = { ...snapshotBefore.agentVariants };
+    const previousActivePreset = snapshotBefore.activePreset;
+    const agentModels = { ...snapshotBefore.agentModels };
+    const agentVariants = { ...snapshotBefore.agentVariants };
+    for (const [agentName, agentConfig] of Object.entries(allUpdates)) {
+      if (typeof agentConfig.model === 'string') {
+        agentModels[agentName] = agentConfig.model;
       }
-      recordTuiAgentModels({ agentModels });
-
-      activePreset = presetName;
-
-      const summaryParts: string[] = [];
-      for (const [name, cfg] of Object.entries(agentUpdates)) {
-        const parts: string[] = [name];
-        if (cfg.model) parts.push(`model: ${cfg.model}`);
-        if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
-        if (cfg.temperature !== undefined)
-          parts.push(`temp: ${cfg.temperature}`);
-        if (cfg.options) parts.push('options: yes');
-        summaryParts.push(parts.join(' → '));
+      if (typeof agentConfig.variant === 'string') {
+        agentVariants[agentName] = agentConfig.variant;
+      } else {
+        delete agentVariants[agentName];
       }
-      if (Object.keys(resetUpdates).length > 0) {
-        summaryParts.push(
-          `Reset to baseline: ${Object.keys(resetUpdates).join(', ')}`,
-        );
-      }
+    }
+    recordTuiAgentModels({
+      agentModels,
+      agentVariants,
+      activePreset: presetName,
+    });
+    activePreset = presetName;
 
-      output.parts.push(
-        createInternalAgentTextPart(
-          `Switched to preset "${presetName}":\n${summaryParts.join('\n')}`,
-        ),
-      );
-    } catch (err) {
-      rollbackRuntimePreset(previousPreset);
-      output.parts.push(
-        createInternalAgentTextPart(
-          `Failed to switch preset "${presetName}": ${String(err)}`,
-        ),
+    const summaryParts: string[] = [];
+    for (const [name, cfg] of Object.entries(agentUpdates)) {
+      const parts: string[] = [name];
+      if (cfg.model) parts.push(`model: ${cfg.model}`);
+      if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
+      if (cfg.temperature !== undefined)
+        parts.push(`temp: ${cfg.temperature}`);
+      if (cfg.options) parts.push('options: yes');
+      summaryParts.push(parts.join(' → '));
+    }
+    if (Object.keys(resetUpdates).length > 0) {
+      summaryParts.push(
+        `Reset to baseline: ${Object.keys(resetUpdates).join(', ')}`,
       );
     }
+
+    output.parts.push(
+      createInternalAgentTextPart(
+        `Switched to preset "${presetName}":\n${summaryParts.join('\n')}`,
+      ),
+    );
+
+    // Defer the SDK config.update call until after the command response has
+    // been flushed. In OpenCode 1.15.x, client.config.update() writes
+    // <project>/config.json and synchronously disposes the active instance.
+    // If this happens during command.execute.before, the in-flight
+    // SessionPrompt.createUserMessage runs against the disposed instance and
+    // throws UnknownError, surfacing as a generic red error popup in the TUI.
+    // Deferring with setImmediate lets opencode finish delivering the
+    // success message above before the dispose fires.
+    // See https://github.com/alvinunreal/oh-my-opencode-slim/issues/438
+    pendingConfigUpdate = allUpdates;
+    setImmediate(() => {
+      const updates = pendingConfigUpdate;
+      pendingConfigUpdate = null;
+      if (!updates) return;
+      ctx.client.config.update({ body: { agent: updates } }).catch((err) => {
+        rollbackRuntimePreset(previousPreset);
+        activePreset = previousPreset;
+        recordTuiAgentModels({
+          agentModels: previousAgentModels,
+          agentVariants: previousAgentVariants,
+          activePreset: previousActivePreset,
+        });
+        // The TUI response is already sent; surface the failure to logs.
+        console.warn(
+          `[oh-my-opencode-slim] Preset switch "${presetName}" config update failed: ${String(err)}`,
+        );
+      });
+    });
   }
 
   /**

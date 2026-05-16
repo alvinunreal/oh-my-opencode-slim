@@ -39,6 +39,7 @@ import {
   startAvailabilityCheck,
 } from './multiplexer';
 import {
+  applyPresetVariantOverride,
   ast_grep_replace,
   ast_grep_search,
   createCouncilTool,
@@ -646,6 +647,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       const tuiAgentModels: Record<string, string> = {};
+      const tuiAgentVariants: Record<string, string> = {};
       for (const agentDef of agentDefs) {
         if (agentDef.name === 'councillor') continue;
 
@@ -662,8 +664,23 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : undefined;
 
         tuiAgentModels[agentDef.name] = resolvedModel ?? 'default';
+
+        const resolvedVariant =
+          typeof entry?.variant === 'string'
+            ? (entry.variant as string)
+            : typeof (agentDef.config as { variant?: unknown } | undefined)
+                  ?.variant === 'string'
+              ? ((agentDef.config as { variant?: string }).variant as string)
+              : undefined;
+        if (resolvedVariant) {
+          tuiAgentVariants[agentDef.name] = resolvedVariant;
+        }
       }
-      recordTuiAgentModels({ agentModels: tuiAgentModels });
+      recordTuiAgentModels({
+        agentModels: tuiAgentModels,
+        agentVariants: tuiAgentVariants,
+        activePreset: getActiveRuntimePreset() ?? config.preset ?? null,
+      });
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as
@@ -1004,6 +1021,17 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         sessionID: input.sessionID,
         agent,
       });
+
+      // Apply runtime preset variant override to in-flight messages.
+      // Required because opencode reads variant from user.model.variant
+      // captured at session start, not from the live agent config. Without
+      // this, /preset switches affect only new sessions.
+      applyPresetVariantOverride(
+        config,
+        agent,
+        output as { message?: Record<string, unknown> } | undefined,
+        log,
+      );
     },
 
     // Inject orchestrator system prompt for serve-mode sessions. In serve
