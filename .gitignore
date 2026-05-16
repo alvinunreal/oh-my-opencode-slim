@@ -86,3 +86,6 @@ captures/
 # BEGIN oh-my-opencode-slim clonedeps
 .slim/clonedeps/repos/
 # END oh-my-opencode-slim clonedeps
+
+# Local git worktrees for parallel feature work
+.slim/worktrees/
