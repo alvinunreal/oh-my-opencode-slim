@@ -1,4 +1,4 @@
-import type { AgentConfig } from '@opencode-ai/sdk/v2';
+import type { AgentConfig } from "@opencode-ai/sdk/v2";
 
 export interface AgentDefinition {
   name: string;
@@ -17,7 +17,7 @@ export interface AgentDefinition {
 export function resolvePrompt(
   base: string,
   customPrompt?: string,
-  customAppendPrompt?: string,
+  customAppendPrompt?: string
 ): string {
   if (customPrompt) return customPrompt;
   if (customAppendPrompt) return `${base}\n\n${customAppendPrompt}`;
@@ -36,14 +36,14 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Don't delegate when:** Know the path and need actual content • Need full file anyway • Single specific lookup • About to edit the file`,
 
   librarian: `@librarian
-- Lane: External knowledge and library research
-- Role: Authoritative source for current library docs and API references
+- Lane: External knowledge and library research, fast web research
+- Role: Authoritative source for current library docs and API references, web information retrieval
 - Permissions: External docs/search MCPs; no file edits
 - Stats: 10x better finding up-to-date library docs than orchestrator, 1/2 cost of orchestrator
 - Capabilities: Fetches latest official docs, examples, API signatures, version-specific behavior via grep_app MCP
-- **Delegate when:** Libraries with frequent API changes (React, Next.js, AI SDKs) • Complex APIs needing official examples (ORMs, auth) • Version-specific behavior matters • Unfamiliar library • Edge cases or advanced features • Nuanced best practices
+- **Delegate when:** Libraries with frequent API changes (React, Next.js, AI SDKs) • Complex APIs needing official examples (ORMs, auth) • Version-specific behavior matters • Unfamiliar library • Edge cases or advanced features • Nuanced best practices • Working on fixing tricky bug or problem and need latest web research information
 - **Don't delegate when:** Standard usage you're confident • Simple stable APIs • General programming knowledge • Info already in conversation • Built-in language features
-- **Rule of thumb:** "How does this library work?" → @librarian. "How does programming work?" → answer directly.`,
+- **Rule of thumb:** "How does this library work?" → @librarian. "How does programming work?" → answer directly. How does others solve or workaround this tricky issue?" → @librarian.`,
 
   oracle: `@oracle
 - Lane: Architecture, risk, debugging strategy, and review
@@ -56,24 +56,25 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Rule of thumb:** Need senior architect review? → @oracle. Need code review or simplification? → @oracle. Routine coordination or final synthesis? → handle directly.`,
 
   designer: `@designer
-- Lane: User-facing UI/UX design, polish, and review
+- Lane: User-facing UI/UX design related edits, polish, and review
 - Role: UI/UX specialist for intentional, polished experiences
 - Permissions: Read/write files
 - Stats: 10x better UI/UX than orchestrator
 - Capabilities: Visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge.
+- Weakness: copywriting, needs Orchestrator control, dictation, reviews
 - **Delegate when:** User-facing interfaces needing polish • Responsive layouts • UX-critical components (forms, nav, dashboards) • Visual consistency systems • Animations/micro-interactions • Landing/marketing pages • Refining functional→delightful • Reviewing existing UI/UX quality
 - **Don't delegate when:** Backend/logic with no visual • Quick prototypes where design doesn't matter yet
 - **Rule of thumb:** Users see it and polish matters? → @designer. Headless/functional implementation? → schedule @fixer.`,
 
   fixer: `@fixer
-- Lane: Bounded implementation and test execution
-- Role: Fast execution specialist for well-defined tasks, which empowers orchestrator with parallel, speedy executions
+- Lane: Bounded implementation and test execution.
+- Role: Fast execution specialist for well-defined tasks.
 - Permissions: Read/write files
 - Stats: 2x faster code edits, 1/2 cost of orchestrator, 0.8x quality of orchestrator
 - Tools/Constraints: Execution-focused—no research, no architectural decisions
 - **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Writing or updating tests • Tasks that touch test files, fixtures, mocks, or test helpers. Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixers for each folder.
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Sequential dependencies
-- **Rule of thumb:** If implementation or tests are needed, schedule @fixer with clear scope. Bigger or lots of edits should be split by ownership and dispatched as parallel background fixer lanes when safe.`,
+- **Rule of thumb:** Implementation are needed, schedule @fixer with clear scope. Bigger or lots of edits should be split by ownership and dispatched as parallel background fixer lanes when safe.`,
 
   council: `@council
 - Lane: High-stakes multi-model decision support
@@ -101,19 +102,19 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 
 // Validation routing lines that reference agents
 const VALIDATION_ROUTING = [
-  '- Route UI/UX validation and review to @designer',
-  '- Route code review, simplification, maintainability review, and YAGNI checks to @oracle',
-  '- Route test writing, test updates, and changes touching test files to @fixer',
-  '- Route visual/media analysis and interpretation to @observer',
-  '- If a request spans multiple lanes, delegate only the lanes that add clear value',
+  "- Route UI/UX validation and review to @designer",
+  "- Route code review, simplification, maintainability review, and YAGNI checks to @oracle",
+  "- Route implementation to @fixer or multiple @fixer instances for maximum parallel execution",
+  "- Route visual/media analysis and interpretation to @observer",
+  "- If a request spans multiple lanes, delegate only the lanes that add clear value",
 ];
 
 // Parallel delegation examples
 const PARALLEL_DELEGATION_EXAMPLES = [
-  '- Multiple @explorer searches across different domains?',
-  '- @explorer + @librarian research in parallel?',
-  '- Multiple @fixer instances for faster, scoped implementation?',
-  '- @observer + @explorer in parallel (visual analysis + code search)?',
+  "- Multiple @explorer searches across different domains?",
+  "- @explorer + @librarian research in parallel?",
+  "- Multiple @fixer instances for faster, scoped implementation?",
+  "- @observer + @explorer in parallel (visual analysis + code search)?",
 ];
 
 /**
@@ -126,14 +127,14 @@ export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
   const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
     .filter(([name]) => !disabledAgents?.has(name))
     .map(([, desc]) => desc)
-    .join('\n\n');
+    .join("\n\n");
 
   // Filter validation routing lines — remove lines mentioning any disabled agent
   const enabledValidationRouting = VALIDATION_ROUTING.filter((line) => {
     const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
     if (mentions.length === 0) return true;
     return mentions.every((name) => !disabledAgents?.has(name));
-  }).join('\n');
+  }).join("\n");
 
   // Filter parallel delegation examples — remove lines mentioning any disabled agent
   const enabledParallelExamples = PARALLEL_DELEGATION_EXAMPLES.filter(
@@ -141,8 +142,8 @@ export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
       const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
       if (mentions.length === 0) return true;
       return mentions.every((name) => !disabledAgents?.has(name));
-    },
-  ).join('\n');
+    }
+  ).join("\n");
 
   return `<Role>
 You are a workflow manager for coding work. Your job is to plan, schedule, delegate, monitor, reconcile, and verify specialist-agent work. You are not the default implementation worker.
@@ -277,15 +278,15 @@ export function createOrchestratorAgent(
   model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
-  disabledAgents?: Set<string>,
+  disabledAgents?: Set<string>
 ): AgentDefinition {
   const basePrompt = buildOrchestratorPrompt(disabledAgents);
   const prompt = resolvePrompt(basePrompt, customPrompt, customAppendPrompt);
 
   const definition: AgentDefinition = {
-    name: 'orchestrator',
+    name: "orchestrator",
     description:
-      'AI coding orchestrator that delegates tasks to specialist agents for optimal quality, speed, and cost',
+      "AI coding orchestrator that delegates tasks to specialist agents for optimal quality, speed, and cost",
     config: {
       temperature: 0.1,
       prompt,
@@ -294,9 +295,9 @@ export function createOrchestratorAgent(
 
   if (Array.isArray(model)) {
     definition._modelArray = model.map((m) =>
-      typeof m === 'string' ? { id: m } : m,
+      typeof m === "string" ? { id: m } : m
     );
-  } else if (typeof model === 'string' && model) {
+  } else if (typeof model === "string" && model) {
     definition.config.model = model;
   }
 
