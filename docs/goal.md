@@ -32,7 +32,7 @@ Interview → Goal → Todos → Auto-continuation → Delegation → Verify
 - **Todos** are the execution ledger.
 - **Auto-continuation** keeps executing unfinished todos when enabled.
 - **Interview** turns a rough idea into a markdown spec that can become a goal.
-- **Task/Subtask delegation** inherits the parent goal as context, while each
+- **Task/delegation** inherits the parent goal as context, while each
   delegated prompt remains the bounded task.
 
 ## Important behavior

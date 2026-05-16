@@ -7,7 +7,7 @@
 - AST-aware search/replace via `ast-grep` stack.
 - Remote fetch/transform utility via `smartfetch` (`webfetch` tool).
 - Council orchestration via `createCouncilTool` (`council.ts`).
-- Child-session subtasks via `subtask` and `/subtask` (`subtask/`).
+- (No custom subtask feature in V2 — use native background `task` + `task_status`)
 - Runtime preset switching via `/preset` hook via `createPresetManager` (`preset-manager.ts`).
 
 It is the bridge between plugin runtime integration (`src/index.ts`) and the lower-level
@@ -18,8 +18,7 @@ implementations in feature folders.
 - `ast_grep_search`, `ast_grep_replace` from `./ast-grep`
 - `createWebfetchTool`, `WEBFETCH_DESCRIPTION`, and related types from `./smartfetch`
 - `createCouncilTool`
-- `createSubtaskTool`, `createSubtaskCommandManager`, `createSubtaskState`, and
-  `createReadSessionTool` from `./subtask`
+
 - `createPresetManager` and `PresetManager` type
 
 ## Design patterns
@@ -60,18 +59,6 @@ implementations in feature folders.
   `displayName`).
 - In-memory `activePreset` supports immediate status display and updates after successful switches.
 
-### Subtask path
-
-- `createSubtaskCommandManager` registers `/subtask` and asks the current
-  agent to call the `subtask` tool with the worker prompt and relevant files.
-- `createSubtaskTool` creates a real child session with `parentID`, injects
-  referenced files as synthetic Read-tool context, waits for the worker to
-  finish, returns `<subtask_summary>`, then aborts the child for cleanup.
-- `createReadSessionTool` lets a subtask worker read only the source session
-  that spawned it when the summary prompt lacks details.
-- `SubtaskState` marks child sessions so nested subtasks can be blocked and
-  session.deleted events can clear stale markers.
-
 ### Smartfetch path
 
 - `createWebfetchTool` owns fetch orchestration, permission prompts, cache checks,
@@ -98,7 +85,7 @@ implementations in feature folders.
 - Tool registration:
   - `council` tools (only when `config.council` exists),
   - `webfetch`,
-  - `subtask`, `read_session`,
+  
   - AST tools.
 - `presetManager` is initialized in plugin init and:
   - calls `registerCommand` during config hook,

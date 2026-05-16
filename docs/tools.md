@@ -34,27 +34,6 @@ Fast, structural code search and refactoring — more powerful than plain text g
 
 ---
 
-## Session Subtask
-
-Run a focused child worker session for a bounded task and return its summary to
-the caller.
-
-| Command / Tool | Description |
-|----------------|-------------|
-| `/subtask <goal>` | Ask the current agent to prepare and start a bounded worker for the requested task |
-| `subtask` | Creates a child orchestrator session and returns its structured summary |
-| `read_session` | Lets a subtask worker inspect the source session when needed context is missing |
-
-Slim creates a real child session with the current session as `parentID`, injects
-relevant file context, and asks the worker to complete only the requested task.
-The worker returns a `<subtask_summary>` with status, changes, files touched,
-validation, and follow-up notes. In tmux/zellij this appears like other child
-agent work: a pane can open for the worker and close after cleanup.
-
-See [Subtask](subtask.md) for the full workflow.
-
----
-
 ## Formatters
 
 OpenCode automatically formats files after they are written or edited, using language-specific formatters. No manual step needed.

@@ -34,7 +34,7 @@
 
 - Connects directly to `@opencode-ai/plugin`: returns the plugin object, mutates runtime agent configuration, handles event hooks, and routes RPC via `ctx.client`/`ctx.client.session`.
 - Integrates with host multiplexer backends through `src/multiplexer`, and with session lifecycle constraints through `SubagentDepthTracker`.
-- Hooks/subtask integration points now include:
+- Hook integration points now include:
   - `createTaskSessionManagerHook` for resumable Task sessions,
   - `createTodoContinuationHook`, `createPhaseReminderHook`, `createFilterAvailableSkillsHook`, and `createPostFileToolNudgeHook` for chat/tool behavior,
   - `createInterviewManager` / `createPresetManager` command handlers.

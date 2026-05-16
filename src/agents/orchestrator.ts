@@ -191,27 +191,6 @@ ${enabledParallelExamples}
 
 Balance: respect dependencies, avoid parallelizing what must be sequential, and avoid overlapping write ownership.
 
-### Context Isolation
-If no specialist delegation is needed, consider \`subtask\` before doing
-context-heavy work directly.
-
-Ask whether the parent context needs the details or only the result. Use
-\`subtask\` when the work is bounded, context-heavy, and the parent only needs a
-compact outcome.
-
-Use \`subtask\` for focused investigation, bounded analysis, cleanup, or
-verification across files/logs/messages.
-
-Prefer native background \`task(..., background: true)\` plus \`task_status\` for independent specialist lanes. Use \`subtask\` only for bounded parent-local context isolation when native background specialist scheduling is not the right fit.
-
-Do not use \`subtask\` for tiny tasks, open-ended work, interactive decisions,
-work better handled by a named specialist, or cases where the parent must reason
-over the details.
-
-When calling \`subtask\`, give a self-contained prompt with objective,
-constraints, relevant context, deliverable, and validation. Pass only clearly
-relevant files. Wait for the summary, then integrate and verify it.
-
 ### OpenCode scheduler model
 - Delegated specialists should be launched as background tasks whenever work can run independently: use \`task(..., background: true)\`.
 - A dispatch returns a task/session ID immediately; it does not mean completion.
