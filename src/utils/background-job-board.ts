@@ -12,6 +12,7 @@ export interface BackgroundJobRecord {
   timedOut: boolean;
   terminalUnreconciled: boolean;
   launchedAt: number;
+  lastLaunchedAt: number;
   updatedAt: number;
   completedAt?: number;
   resultSummary?: string;
@@ -70,6 +71,7 @@ export class BackgroundJobBoard {
         terminalUnreconciled: false,
         completedAt: undefined,
         resultSummary: undefined,
+        lastLaunchedAt: now,
         updatedAt: now,
       } satisfies BackgroundJobRecord;
       this.jobs.set(input.taskID, updated);
@@ -86,6 +88,7 @@ export class BackgroundJobBoard {
       timedOut: false,
       terminalUnreconciled: false,
       launchedAt: now,
+      lastLaunchedAt: now,
       updatedAt: now,
       alias: this.nextAlias(input.parentSessionID, input.agent),
     };
@@ -180,7 +183,7 @@ export class BackgroundJobBoard {
     return this.list(parentSessionID).some((job) => job.terminalUnreconciled);
   }
 
-  formatForPrompt(parentSessionID: string): string | undefined {
+  formatForPrompt(parentSessionID: string, now = Date.now()): string | undefined {
     const jobs = this.list(parentSessionID).filter(
       (job) => job.state === 'running' || job.terminalUnreconciled,
     );
@@ -191,7 +194,7 @@ export class BackgroundJobBoard {
       '### Background Job Board',
       'Use task_status before consuming running jobs. Reconcile terminal jobs before final response.',
       '',
-      ...jobs.map(formatJob),
+      ...jobs.map((job) => formatJob(job, now)),
     ].join('\n');
   }
 
@@ -215,12 +218,18 @@ export class BackgroundJobBoard {
   }
 }
 
-function formatJob(job: BackgroundJobRecord): string {
+function formatJob(job: BackgroundJobRecord, now = Date.now()): string {
+  const ageMs = now - job.lastLaunchedAt;
+  const isResume = job.lastLaunchedAt !== job.launchedAt;
+  const ageLabel =
+    job.state === 'running' && ageMs < 30_000
+      ? ` [${isResume ? 'resumed' : 'just launched'}, ${Math.round(ageMs / 1000)}s ago]`
+      : '';
   const status = job.terminalUnreconciled
     ? `${job.state}, unreconciled`
     : job.timedOut
       ? `${job.state}, timed out`
-      : job.state;
+      : `${job.state}${ageLabel}`;
   const lines = [
     `- ${job.alias} / ${job.taskID} / ${job.agent} / ${status}`,
     `  Objective: ${job.objective || job.description}`,
