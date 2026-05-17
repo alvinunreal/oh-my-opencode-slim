@@ -85,6 +85,10 @@ describe('isRateLimitError', () => {
     expect(isRateLimitError({ message: 'overloaded_error' })).toBe(true);
   });
 
+  test('returns true for "Insufficient balance."', () => {
+    expect(isRateLimitError({ message: 'Insufficient balance.' })).toBe(true);
+  });
+
   test('returns false for non-rate-limit error', () => {
     expect(isRateLimitError({ message: 'invalid API key' })).toBe(false);
   });
@@ -320,6 +324,32 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         sessionID: 'sess-4',
         status: { type: 'retry', message: 'usage limit reached, retrying...' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('triggers fallback on retry status with insufficient balance message', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-5',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-5',
+        status: { type: 'retry', message: 'Insufficient balance.' },
       },
     });
 

@@ -35,7 +35,7 @@ const RATE_LIMIT_PATTERNS = [
   /usage limit/i,
   /overloaded/i,
   /resource.?exhausted/i,
-  /insufficient.?quota/i,
+  /insufficient.?(quota|balance)/i,
   /high concurrency/i,
   /reduce concurrency/i,
 ];
@@ -168,6 +168,7 @@ export class ForegroundFallbackManager {
           msg.includes('quota exceeded') ||
           msg.includes('exceededbudget') ||
           msg.includes('over budget') ||
+          msg.includes('insufficient') ||
           msg.includes('high concurrency') ||
           msg.includes('reduce concurrency')
         ) {
