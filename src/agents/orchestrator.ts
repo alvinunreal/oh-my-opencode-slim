@@ -218,6 +218,19 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 - When too much unrelated, and really needed, start a fresh session with the specialist
 - If multiple remembered sessions fit, prefer the most recently used matching session.
 - Prefer re-uses over creating new sessions all the time
+- **Session reuse requires explicit \`task_id\`:** passing \`task_id=<session_id>\` to \`task()\` is what triggers reuse. Omitting it always creates a fresh session regardless of intent.
+
+### Background Job Board
+
+Each tracked task has a **short alias** (\`lib-1\`, \`exp-2\`, \`fix-3\`). Use the alias in your reasoning — never rewrite a full session ID from memory. Only use the full session ID when a tool requires it, and **always copy it verbatim from the tool output**.
+
+**Reading the status line:**
+- \`running [just launched, Xs ago]\` — you dispatched this in the **current turn**. It is NOT pre-existing.
+- \`running [resumed, Xs ago]\` — you continued this session in the **current turn** (passed \`task_id\`). It is NOT pre-existing.
+- \`running\` (no label) — was already running **before your last dispatch turn**. Poll with \`task_status\` before acting on it.
+- \`completed, unreconciled\` — finished, result not yet read.
+
+**Job board vs. Resumable Sessions:** The job board shows current task state. The Resumable Sessions section lists sessions that *can* be reused — presence there does not mean currently running.
 
 ### Auto-Continue
 When working through multi-step tasks, consider enabling auto-continue to avoid stopping between batches:
