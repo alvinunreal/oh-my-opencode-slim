@@ -17,7 +17,7 @@ orchestration system that runs consensus across multiple models.
 
 **Usage**:
 1. Call the \`council_session\` tool with the user's prompt
-2. Optionally specify a preset (default: "default")
+2. Optionally specify a preset (if omitted, uses council.default_preset from config)
 3. Receive the councillor responses formatted for synthesis
 4. Follow the Synthesis Process below
 5. Present the result to the user

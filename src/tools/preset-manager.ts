@@ -186,6 +186,30 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
     const previousPreset = activePreset;
     setActiveRuntimePresetWithPrevious(presetName);
 
+    // Build summary and emit response BEFORE config.update() to avoid
+    // race condition where instance disposal kills the in-flight response.
+    // See GitHub issues #488 and #438.
+    const summaryParts: string[] = [];
+    for (const [name, cfg] of Object.entries(agentUpdates)) {
+      const parts: string[] = [name];
+      if (cfg.model) parts.push(`model: ${cfg.model}`);
+      if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
+      if (cfg.temperature !== undefined) parts.push(`temp: ${cfg.temperature}`);
+      if (cfg.options) parts.push('options: yes');
+      summaryParts.push(parts.join(' → '));
+    }
+    if (Object.keys(resetUpdates).length > 0) {
+      summaryParts.push(
+        `Reset to baseline: ${Object.keys(resetUpdates).join(', ')}`,
+      );
+    }
+
+    output.parts.push(
+      createInternalAgentTextPart(
+        `Switched to preset "${presetName}":\n${summaryParts.join('\n')}`,
+      ),
+    );
+
     try {
       await ctx.client.config.update({
         body: { agent: allUpdates },
@@ -201,33 +225,11 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       recordTuiAgentModels({ agentModels });
 
       activePreset = presetName;
-
-      const summaryParts: string[] = [];
-      for (const [name, cfg] of Object.entries(agentUpdates)) {
-        const parts: string[] = [name];
-        if (cfg.model) parts.push(`model: ${cfg.model}`);
-        if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
-        if (cfg.temperature !== undefined)
-          parts.push(`temp: ${cfg.temperature}`);
-        if (cfg.options) parts.push('options: yes');
-        summaryParts.push(parts.join(' → '));
-      }
-      if (Object.keys(resetUpdates).length > 0) {
-        summaryParts.push(
-          `Reset to baseline: ${Object.keys(resetUpdates).join(', ')}`,
-        );
-      }
-
-      output.parts.push(
-        createInternalAgentTextPart(
-          `Switched to preset "${presetName}":\n${summaryParts.join('\n')}`,
-        ),
-      );
     } catch (err) {
       rollbackRuntimePreset(previousPreset);
       output.parts.push(
         createInternalAgentTextPart(
-          `Failed to switch preset "${presetName}": ${String(err)}`,
+          `Warning: preset "${presetName}" may not have fully applied: ${String(err)}`,
         ),
       );
     }

@@ -319,7 +319,9 @@ describe('createPresetManager', () => {
       );
 
       const text = getOutputText(output);
-      expect(text).toContain('Failed to switch preset');
+      expect(text).toContain(
+        'Warning: preset "cheap" may not have fully applied',
+      );
       expect(text).toContain('Server unavailable');
       expect(readTuiSnapshot().agentModels).toEqual({
         explorer: 'openai/gpt-5.4-mini',
@@ -794,7 +796,9 @@ describe('createPresetManager', () => {
 
       // Active preset should still be "cheap" after error
       expect(getActiveRuntimePreset()).toBe('cheap');
-      expect(getOutputText(output2)).toContain('Failed to switch preset');
+      expect(getOutputText(output2)).toContain(
+        'Warning: preset "expensive" may not have fully applied',
+      );
 
       // Cleanup
       setActiveRuntimePreset(null);

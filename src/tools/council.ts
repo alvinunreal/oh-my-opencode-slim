@@ -46,7 +46,7 @@ Returns the councillor responses with a summary footer.`,
         .string()
         .optional()
         .describe(
-          'Council preset to use (default: "default"). Must match a preset in the council config.',
+          'Council preset to use. If omitted, uses council.default_preset from config (falls back to "default"). Must match a preset in the council config.',
         ),
     },
     async execute(args, toolContext) {
