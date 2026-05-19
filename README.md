@@ -56,7 +56,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
 
 ### Getting Started
 
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default. OpenAI uses `openai/gpt-5.5` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents. To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
+The installer generates OpenAI, Anthropic, and OpenCode Go presets, with OpenAI active by default. OpenAI uses `openai/gpt-5.5` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents. The Anthropic preset uses `anthropic/claude-sonnet-4.6` for the core engineering roles, `anthropic/claude-opus-4.7` for the oracle, and `anthropic/claude-haiku-4.5` for the lightweight specialist roles. To change the active preset during install, run `bunx oh-my-opencode-slim@latest install --preset=anthropic` (or `--preset=opencode-go`), or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
 
 Then:
 
@@ -77,7 +77,7 @@ Then:
 > [!TIP]
 > It's **recommended** to understand how automatic delegation works. The **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** contains the delegation rules, specialist routing logic, and the thresholds for when the main agent should hand work off to subagents. You can alway delegate manually by calling a subagent via: `@agentName <task>`
 
-The default generated configuration includes both `openai` and `opencode-go` presets.
+The default generated configuration includes `openai`, `anthropic`, and `opencode-go` presets.
 
 ```jsonc
 {
@@ -91,6 +91,14 @@ The default generated configuration includes both `openai` and `opencode-go` pre
       "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] },
       "designer": { "model": "openai/gpt-5.4-mini", "variant": "medium", "skills": [], "mcps": [] },
       "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
+    },
+    "anthropic": {
+      "orchestrator": { "model": "anthropic/claude-sonnet-4.6", "skills": ["*"], "mcps": ["*", "!context7"] },
+      "oracle": { "model": "anthropic/claude-opus-4.7", "variant": "high", "skills": ["simplify"], "mcps": [] },
+      "librarian": { "model": "anthropic/claude-haiku-4.5", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "grep_app"] },
+      "explorer": { "model": "anthropic/claude-haiku-4.5", "variant": "low", "skills": [], "mcps": [] },
+      "designer": { "model": "anthropic/claude-sonnet-4.6", "variant": "medium", "skills": [], "mcps": [] },
+      "fixer": { "model": "anthropic/claude-haiku-4.5", "variant": "low", "skills": [], "mcps": [] }
     },
     "opencode-go": {
       "orchestrator": { "model": "opencode-go/glm-5.1", "skills": [ "*" ], "mcps": [ "*", "!context7" ] },
@@ -107,7 +115,7 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 
 ### For Alternative Providers
 
-To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
+To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Anthropic Preset](docs/anthropic-preset.md)**, **[Author's Preset](docs/authors-preset.md)**, and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
 
 The configuration guide also covers custom subagents via `agents.<name>`, where
 you can define both a normal `prompt` and an `orchestratorPrompt` block for
@@ -171,7 +179,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.5</code> <code>anthropic/claude-opus-4.6</code>
+      <b>Recommended Models:</b> <code>openai/gpt-5.5</code> <code>anthropic/claude-sonnet-4.6</code>
     </td>
   </tr>
   <tr>
@@ -212,7 +220,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code> <code>anthropic/claude-haiku-4.5</code>
     </td>
   </tr>
   <tr>
@@ -253,7 +261,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.5 (high)</code> <code>google/gemini-3.1-pro-preview (high)</code>
+      <b>Recommended Models:</b> <code>openai/gpt-5.5 (high)</code> <code>google/gemini-3.1-pro-preview (high)</code> <code>anthropic/claude-opus-4.7 (high)</code>
     </td>
   </tr>
   <tr>
@@ -343,7 +351,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code> <code>anthropic/claude-haiku-4.5</code>
     </td>
   </tr>
   <tr>
@@ -384,7 +392,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>kimi-for-coding/k2p5</code> 
+      <b>Recommended Models:</b> <code>google/gemini-3.1-pro-preview</code> <code>kimi-for-coding/k2p5</code> <code>anthropic/claude-sonnet-4.6</code>
     </td>
   </tr>
   <tr>
@@ -425,7 +433,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code>
+      <b>Recommended Models:</b> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo</code> <code>openai/gpt-5.4-mini</code> <code>anthropic/claude-haiku-4.5</code>
     </td>
   </tr>
   <tr>
@@ -522,6 +530,7 @@ Use this section as a map: start with installation, then jump to features, confi
 
 | Doc | What it covers |
 |-----|----------------|
+| **[Anthropic Preset](docs/anthropic-preset.md)** | The bundled `anthropic` preset generated by the installer (Haiku / Sonnet / Opus) |
 | **[Author's Preset](docs/authors-preset.md)** | The author's daily mixed-provider setup |
 | **[$30 Preset](docs/thirty-dollars-preset.md)** | A budget mixed-provider setup for around $30/month |
 | **[OpenCode Go Preset](docs/opencode-go-preset.md)** | The bundled `opencode-go` preset generated by the installer |
