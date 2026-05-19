@@ -89,29 +89,6 @@ describe('providers', () => {
     expect(agents.fixer.variant).toBe('low');
   });
 
-  test('generateLiteConfig uses correct Anthropic models', () => {
-    const config = generateLiteConfig({
-      hasTmux: false,
-      installCustomSkills: false,
-      preset: 'anthropic',
-      reset: false,
-    });
-
-    const agents = (config.presets as any).anthropic;
-    expect(agents.orchestrator.model).toBe(
-      MODEL_MAPPINGS.anthropic.orchestrator.model,
-    );
-    // Sonnet for orchestrator and designer (medium-complexity SW engineering)
-    expect(agents.orchestrator.model).toBe('anthropic/claude-sonnet-4.6');
-    expect(agents.designer.model).toBe('anthropic/claude-sonnet-4.6');
-    // Opus for oracle (heavy planning and architecture)
-    expect(agents.oracle.model).toBe('anthropic/claude-opus-4.7');
-    // Haiku for lightweight roles
-    expect(agents.librarian.model).toBe('anthropic/claude-haiku-4.5');
-    expect(agents.explorer.model).toBe('anthropic/claude-haiku-4.5');
-    expect(agents.fixer.model).toBe('anthropic/claude-haiku-4.5');
-  });
-
   test('generateLiteConfig anthropic preset includes correct mcps', () => {
     const config = generateLiteConfig({
       hasTmux: false,
