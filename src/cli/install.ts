@@ -296,8 +296,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   const modelsInfo =
     config.preset && config.preset !== 'openai'
-      ? `Generated OpenAI and OpenCode Go presets; ${config.preset} is active.`
-      : 'Generated OpenAI and OpenCode Go presets; OpenAI is active by default.';
+      ? `Generated OpenAI, Anthropic, and OpenCode Go presets; ${config.preset} is active.`
+      : 'Generated OpenAI, Anthropic, and OpenCode Go presets; OpenAI is active by default.';
   console.log(`${modelsInfo}`);
   const altProviders = 'For the full configuration reference, see:';
   console.log(altProviders);

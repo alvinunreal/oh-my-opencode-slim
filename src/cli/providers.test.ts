@@ -7,6 +7,7 @@ describe('providers', () => {
   test('MODEL_MAPPINGS includes supported providers', () => {
     const keys = Object.keys(MODEL_MAPPINGS);
     expect(keys.sort()).toEqual([
+      'anthropic',
       'copilot',
       'kimi',
       'openai',
@@ -31,6 +32,7 @@ describe('providers', () => {
     expect((config.presets as any)['opencode-go'].observer.model).toBe(
       'opencode-go/kimi-k2.6',
     );
+    expect((config.presets as any).anthropic).toBeDefined();
     const agents = (config.presets as any).openai;
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('openai/gpt-5.5');
@@ -58,6 +60,72 @@ describe('providers', () => {
     expect(agents.explorer.variant).toBe('low');
     expect(agents.designer.model).toBe('openai/gpt-5.4-mini');
     expect(agents.designer.variant).toBe('medium');
+  });
+
+  test('generateLiteConfig can set anthropic as active preset', () => {
+    const config = generateLiteConfig({
+      hasTmux: false,
+      installCustomSkills: false,
+      preset: 'anthropic',
+      reset: false,
+    });
+
+    expect(config.preset).toBe('anthropic');
+    expect(config.disabled_agents).toBeUndefined();
+    expect((config.presets as any).openai).toBeDefined();
+    const agents = (config.presets as any).anthropic;
+    expect(agents).toBeDefined();
+    expect(agents.orchestrator.model).toBe('anthropic/claude-sonnet-4.6');
+    expect(agents.orchestrator.variant).toBeUndefined();
+    expect(agents.oracle.model).toBe('anthropic/claude-opus-4.7');
+    expect(agents.oracle.variant).toBe('high');
+    expect(agents.librarian.model).toBe('anthropic/claude-haiku-4.5');
+    expect(agents.librarian.variant).toBe('low');
+    expect(agents.explorer.model).toBe('anthropic/claude-haiku-4.5');
+    expect(agents.explorer.variant).toBe('low');
+    expect(agents.designer.model).toBe('anthropic/claude-sonnet-4.6');
+    expect(agents.designer.variant).toBe('medium');
+    expect(agents.fixer.model).toBe('anthropic/claude-haiku-4.5');
+    expect(agents.fixer.variant).toBe('low');
+  });
+
+  test('generateLiteConfig uses correct Anthropic models', () => {
+    const config = generateLiteConfig({
+      hasTmux: false,
+      installCustomSkills: false,
+      preset: 'anthropic',
+      reset: false,
+    });
+
+    const agents = (config.presets as any).anthropic;
+    expect(agents.orchestrator.model).toBe(
+      MODEL_MAPPINGS.anthropic.orchestrator.model,
+    );
+    // Sonnet for orchestrator and designer (medium-complexity SW engineering)
+    expect(agents.orchestrator.model).toBe('anthropic/claude-sonnet-4.6');
+    expect(agents.designer.model).toBe('anthropic/claude-sonnet-4.6');
+    // Opus for oracle (heavy planning and architecture)
+    expect(agents.oracle.model).toBe('anthropic/claude-opus-4.7');
+    // Haiku for lightweight roles
+    expect(agents.librarian.model).toBe('anthropic/claude-haiku-4.5');
+    expect(agents.explorer.model).toBe('anthropic/claude-haiku-4.5');
+    expect(agents.fixer.model).toBe('anthropic/claude-haiku-4.5');
+  });
+
+  test('generateLiteConfig anthropic preset includes correct mcps', () => {
+    const config = generateLiteConfig({
+      hasTmux: false,
+      installCustomSkills: false,
+      preset: 'anthropic',
+      reset: false,
+    });
+
+    const agents = (config.presets as any).anthropic;
+    expect(agents.orchestrator.mcps).toEqual(['*', '!context7']);
+    expect(agents.librarian.mcps).toContain('websearch');
+    expect(agents.librarian.mcps).toContain('context7');
+    expect(agents.librarian.mcps).toContain('grep_app');
+    expect(agents.designer.mcps).toEqual([]);
   });
 
   test('generateLiteConfig can set opencode-go as active preset', () => {

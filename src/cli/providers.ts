@@ -5,7 +5,11 @@ import type { InstallConfig } from './types';
 const SCHEMA_URL =
   'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json';
 
-export const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
+export const GENERATED_PRESETS = [
+  'openai',
+  'anthropic',
+  'opencode-go',
+] as const;
 
 // Model mappings by provider/preset.
 export const MODEL_MAPPINGS = {
@@ -16,6 +20,14 @@ export const MODEL_MAPPINGS = {
     explorer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
     designer: { model: 'openai/gpt-5.4-mini', variant: 'medium' },
     fixer: { model: 'openai/gpt-5.4-mini', variant: 'low' },
+  },
+  anthropic: {
+    orchestrator: { model: 'anthropic/claude-sonnet-4.6' },
+    oracle: { model: 'anthropic/claude-opus-4.7', variant: 'high' },
+    librarian: { model: 'anthropic/claude-haiku-4.5', variant: 'low' },
+    explorer: { model: 'anthropic/claude-haiku-4.5', variant: 'low' },
+    designer: { model: 'anthropic/claude-sonnet-4.6', variant: 'medium' },
+    fixer: { model: 'anthropic/claude-haiku-4.5', variant: 'low' },
   },
   kimi: {
     orchestrator: { model: 'kimi-for-coding/k2p5' },
