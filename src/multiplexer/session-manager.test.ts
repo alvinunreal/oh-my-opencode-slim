@@ -390,6 +390,61 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
+    test('does not close missing session that was never seen in status', async () => {
+      const ctx = createMockContext();
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-never-seen',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'never-seen', parentID: 'p1' } },
+      });
+
+      const tracked = (manager as any).sessions.get('never-seen');
+      tracked.missingSince = Date.now() - 60_000;
+
+      setMockSessionStatuses({});
+      await (manager as any).pollSessions();
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
+    test('keeps missing cleanup for sessions previously seen in status', async () => {
+      const ctx = createMockContext();
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-seen-before-missing',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'seen-before-missing', parentID: 'p1' } },
+      });
+
+      setMockSessionStatuses({ 'seen-before-missing': { type: 'busy' } });
+      await (manager as any).pollSessions();
+
+      const tracked = (manager as any).sessions.get('seen-before-missing');
+      tracked.missingSince = Date.now() - 60_000;
+
+      setMockSessionStatuses({});
+      await (manager as any).pollSessions();
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-seen-before-missing',
+      );
+    });
+
     test('polls the actual serverUrl instead of the plugin SDK default URL', async () => {
       const ctx = createMockContext({
         serverUrl: 'http://127.0.0.1:63871/',

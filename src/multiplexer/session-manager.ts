@@ -16,6 +16,7 @@ interface TrackedSession {
   directory: string;
   createdAt: number;
   lastSeenAt: number;
+  seenInStatus: boolean;
   missingSince?: number;
 }
 
@@ -221,6 +222,7 @@ export class MultiplexerSessionManager {
         directory,
         createdAt: now,
         lastSeenAt: now,
+        seenInStatus: false,
       });
 
       log('[multiplexer-session-manager] pane spawned', {
@@ -330,12 +332,14 @@ export class MultiplexerSessionManager {
 
         if (status) {
           tracked.lastSeenAt = now;
+          tracked.seenInStatus = true;
           tracked.missingSince = undefined;
         } else if (!tracked.missingSince) {
           tracked.missingSince = now;
         }
 
         const missingTooLong =
+          tracked.seenInStatus &&
           !!tracked.missingSince &&
           now - tracked.missingSince >= SESSION_MISSING_GRACE_MS;
         const isTimedOut = now - tracked.createdAt > SESSION_TIMEOUT_MS;
@@ -505,6 +509,7 @@ export class MultiplexerSessionManager {
         directory: known.directory,
         createdAt: now,
         lastSeenAt: now,
+        seenInStatus: false,
       });
 
       log('[multiplexer-session-manager] pane respawned on busy', {
