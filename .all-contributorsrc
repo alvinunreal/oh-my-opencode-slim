@@ -452,6 +452,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "andrewylies",
+      "name": "m.seomoon",
+      "avatar_url": "https://avatars.githubusercontent.com/u/103019336?v=4",
+      "profile": "https://github.com/andrewylies",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
