@@ -66,7 +66,7 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Permissions: Read/write files
 - Stats: 2x faster code edits, 1/2 cost of orchestrator, 0.8x quality of orchestrator
 - Tools/Constraints: Execution-focused—no research, no architectural decisions
-- **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Writing or updating tests • Tasks that touch test files, fixtures, mocks, or test helpers. Parallelization benefits: Task involves multiple folders and multiple files modificaiton, scoping work per folder and spawning parallel @fixers for each folder.
+- **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Writing or updating tests • Tasks that touch test files, fixtures, mocks, or test helpers. Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixers for each folder.
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Sequential dependencies
 - **Rule of thumb:** Explaining > doing? → yourself. Test file modifications and bounded implementation work usually go to @fixer. Bigger or lots of edits, splitting makes sense, parallelized by spawning @fixers per certain scope.`,
 
@@ -206,7 +206,7 @@ relevant files. Wait for the summary, then integrate and verify it.
 5. Adjust if needed
 
 ### Session Reuse
-- Smartly reuse an available specialist session - constext reuse saves time and tokens
+- Smartly reuse an available specialist session - context reuse saves time and tokens
 - When too much unrelated, and really needed, start a fresh session with the specialist
 - If multiple remembered sessions fit, prefer the most recently used matching session.
 - Prefer re-uses over creating new sessions all the time
