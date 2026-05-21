@@ -9,6 +9,7 @@ const FALLBACK_AGENT_NAMES = [
   'explorer',
   'librarian',
   'fixer',
+  'verifier',
 ] as const;
 
 const MANUAL_AGENT_NAMES = [
@@ -74,6 +75,7 @@ const FallbackChainsSchema = z
     explorer: AgentModelChainSchema.optional(),
     librarian: AgentModelChainSchema.optional(),
     fixer: AgentModelChainSchema.optional(),
+    verifier: AgentModelChainSchema.optional(),
   })
   .catchall(AgentModelChainSchema);
 
@@ -322,7 +324,7 @@ export const PluginConfigSchema = z
         'Agent names to disable completely. ' +
           'Disabled agents are not instantiated and cannot be delegated to. ' +
           'Orchestrator and council internal agents (councillor) cannot be disabled. ' +
-          "By default, 'observer' is disabled. Remove it from this list and configure a vision-capable model to enable.",
+          "By default, 'observer' and 'verifier' are disabled. Use ['verifier'] to enable only observer, ['observer'] to enable only verifier, or [] to enable both optional agents.",
       ),
     disabled_mcps: z.array(z.string()).optional(),
     // Multiplexer config (new unified config - preferred)

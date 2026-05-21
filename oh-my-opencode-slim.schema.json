@@ -372,7 +372,7 @@
       }
     },
     "disabled_agents": {
-      "description": "Agent names to disable completely. Disabled agents are not instantiated and cannot be delegated to. Orchestrator and council internal agents (councillor) cannot be disabled. By default, 'observer' is disabled. Remove it from this list and configure a vision-capable model to enable.",
+      "description": "Agent names to disable completely. Disabled agents are not instantiated and cannot be delegated to. Orchestrator and council internal agents (councillor) cannot be disabled. By default, 'observer' and 'verifier' are disabled. Use ['verifier'] to enable only observer, ['observer'] to enable only verifier, or [] to enable both optional agents.",
       "type": "array",
       "items": {
         "type": "string"
@@ -656,6 +656,13 @@
               }
             },
             "fixer": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "verifier": {
               "minItems": 1,
               "type": "array",
               "items": {

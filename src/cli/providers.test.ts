@@ -69,7 +69,7 @@ describe('providers', () => {
     });
 
     expect(config.preset).toBe('opencode-go');
-    expect(config.disabled_agents).toEqual([]);
+    expect(config.disabled_agents).toEqual(['verifier']);
     expect((config.presets as any).openai).toBeDefined();
     const agents = (config.presets as any)['opencode-go'];
     expect(agents).toBeDefined();
@@ -83,6 +83,8 @@ describe('providers', () => {
     expect(agents.designer.model).toBe('opencode-go/kimi-k2.6');
     expect(agents.fixer.model).toBe('opencode-go/deepseek-v4-flash');
     expect(agents.fixer.variant).toBe('high');
+    expect(agents.verifier.model).toBe('opencode-go/deepseek-v4-flash');
+    expect(agents.verifier.variant).toBe('high');
     expect(agents.observer.model).toBe('opencode-go/kimi-k2.6');
   });
 

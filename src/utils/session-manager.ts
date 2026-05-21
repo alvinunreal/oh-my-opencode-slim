@@ -39,6 +39,8 @@ function aliasPrefix(agentType: AgentName): string {
       return 'des';
     case 'fixer':
       return 'fix';
+    case 'verifier':
+      return 'ver';
     case 'observer':
       return 'obs';
     case 'council':

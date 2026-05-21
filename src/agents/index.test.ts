@@ -335,7 +335,7 @@ describe('agent classification', () => {
   });
 
   test('getAgentConfigs applies correct classification visibility and mode', () => {
-    // Enable all agents (including observer) for classification testing
+    // Enable all agents (including optional disabled-by-default agents) for classification testing
     const configs = getAgentConfigs({ disabled_agents: [] });
 
     // Primary agent
@@ -365,7 +365,7 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 7 agents by default (observer disabled, council unconfigured)', () => {
+  test('creates exactly 7 agents by default (optional agents disabled, council unconfigured)', () => {
     const agents = createAgents();
     expect(agents.length).toBe(7);
   });
@@ -796,10 +796,10 @@ describe('disabled_agents', () => {
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents();
-    expect(agents.length).toBe(7); // observer disabled, council unconfigured
+    expect(agents.length).toBe(7); // observer/verifier disabled, council unconfigured
 
     const disabledConfig: PluginConfig = {
-      disabled_agents: ['observer', 'designer'],
+      disabled_agents: ['observer', 'verifier', 'designer'],
     };
     const disabledAgents = createAgents(disabledConfig);
     expect(disabledAgents.length).toBe(6);
@@ -840,14 +840,15 @@ describe('disabled_agents', () => {
     expect(enabled).not.toContain('janitor');
   });
 
-  test('empty disabled_agents creates observer but not unconfigured council', () => {
+  test('empty disabled_agents creates optional agents but not unconfigured council', () => {
     const config: PluginConfig = {
       disabled_agents: [],
     };
     const agents = createAgents(config);
     const names = agents.map((a) => a.name);
-    expect(agents.length).toBe(8);
+    expect(agents.length).toBe(9);
     expect(names).toContain('observer');
+    expect(names).toContain('verifier');
     expect(names).not.toContain('council');
   });
 });
@@ -889,5 +890,32 @@ describe('observer agent', () => {
 
   test('DEFAULT_DISABLED_AGENTS contains observer', () => {
     expect(DEFAULT_DISABLED_AGENTS).toContain('observer');
+  });
+});
+
+describe('verifier agent', () => {
+  test('verifier is disabled by default and filtered from orchestrator prompt', () => {
+    const agents = createAgents();
+    const names = agents.map((a) => a.name);
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+
+    expect(names).not.toContain('verifier');
+    expect(orchestrator?.config.prompt).not.toContain('@verifier');
+  });
+
+  test('verifier is enabled when removed from disabled_agents', () => {
+    const agents = createAgents({ disabled_agents: [] });
+    const verifier = agents.find((a) => a.name === 'verifier');
+
+    expect(verifier).toBeDefined();
+    expect(verifier?.config.model).toBe(DEFAULT_MODELS.verifier);
+    expect((verifier?.config.permission as any).read).toBe('allow');
+    expect((verifier?.config.permission as any).bash).toBe('ask');
+    expect((verifier?.config.permission as any).task).toBe('deny');
+    expect((verifier?.config.permission as any).write).toBe('deny');
+  });
+
+  test('DEFAULT_DISABLED_AGENTS contains verifier', () => {
+    expect(DEFAULT_DISABLED_AGENTS).toContain('verifier');
   });
 });

@@ -34,11 +34,11 @@ If both presets are already in your config, switch from inside OpenCode:
 
 See [Preset Switching](preset-switching.md) for the full runtime switching
 workflow. If you originally installed with the default OpenAI preset, also add
-`"disabled_agents": []` to your config and restart OpenCode so Observer is
+`"disabled_agents": ["verifier"]` to your config and restart OpenCode so Observer is
 available before switching to `opencode-go`.
 
 `disabled_agents` is global, not per-preset. If you later switch back to OpenAI
-and restart while keeping `"disabled_agents": []`, Observer will remain enabled
+and restart while keeping `"disabled_agents": ["verifier"]`, Observer will remain enabled
 and use the default Observer model unless you configure one explicitly.
 
 ## Bundled Model Mapping
@@ -65,7 +65,7 @@ setting the top-level `preset` field:
 ```jsonc
 {
   "preset": "opencode-go",
-  "disabled_agents": [],
+  "disabled_agents": ["verifier"],
   "presets": {
     "opencode-go": {
       "orchestrator": { "model": "opencode-go/glm-5.1" },

@@ -10,6 +10,7 @@ export const SUBAGENT_NAMES = [
   'oracle',
   'designer',
   'fixer',
+  'verifier',
   'observer',
   'council',
   'councillor',
@@ -36,6 +37,7 @@ export const ORCHESTRATABLE_AGENTS = [
   'oracle',
   'designer',
   'fixer',
+  'verifier',
   'observer',
   'council',
 ] as const;
@@ -56,6 +58,7 @@ export function getOrchestratableAgents(
 export const SUBAGENT_DELEGATION_RULES: Record<AgentName, readonly string[]> = {
   orchestrator: ORCHESTRATABLE_AGENTS,
   fixer: [],
+  verifier: [],
   designer: [],
   explorer: [],
   librarian: [],
@@ -74,6 +77,7 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   explorer: 'openai/gpt-5.4-mini',
   designer: 'openai/gpt-5.4-mini',
   fixer: 'openai/gpt-5.4-mini',
+  verifier: 'openai/gpt-5.4-mini',
   observer: 'openai/gpt-5.4-mini',
   council: 'openai/gpt-5.4-mini',
   councillor: 'openai/gpt-5.4-mini',
@@ -106,4 +110,4 @@ export const STABLE_POLLS_THRESHOLD = 3;
 
 /** Agents that are disabled by default. Users must explicitly enable them
  *  by removing from disabled_agents and configuring an appropriate model. */
-export const DEFAULT_DISABLED_AGENTS: string[] = ['observer'];
+export const DEFAULT_DISABLED_AGENTS: string[] = ['observer', 'verifier'];

@@ -35,6 +35,7 @@ const AGENT_NAME_SET = new Set<AgentName>([
   'explorer',
   'librarian',
   'fixer',
+  'verifier',
   'observer',
   'council',
   'councillor',

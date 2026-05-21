@@ -165,6 +165,8 @@ Examples:
 
 - route UI review to `designer`,
 - route code review to `oracle`,
+- route optional read-only mechanical requirement/evidence checks to `verifier`
+  when enabled,
 - route test writing or test updates to `fixer`,
 - run final shell checks directly only when appropriate.
 

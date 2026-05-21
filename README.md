@@ -443,10 +443,19 @@ If any agent fails to respond, check your provider authentication and config fil
 
 ## Optional Agents
 
+### Verifier: Evidence Checker
+
+`verifier` is an optional read-only validation lane for V2. It is disabled by
+default, has no default MCPs, and uses explicit read/search permissions with
+`bash` set to ask for diagnostics. Enable it by removing `verifier` from
+`disabled_agents`, then use it only after implementation/background jobs are
+terminal and reconciled. Keep architecture, risk, maintainability, and YAGNI
+review routed to `oracle`.
+
 ### Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, PDFs, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, PDFs, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Remove `observer` from `disabled_agents` and configure an `observer` model. The bundled `opencode-go` install preset enables Observer while keeping Verifier disabled.
 
 <table>
   <tr>
@@ -460,7 +469,7 @@ If any agent fails to respond, check your provider authentication and config fil
 
 - Images, screenshots, diagrams → `read` tool (native image support)
 - PDFs and binary documents → `read` tool (text + structure extraction)
-- **Disabled by default** — enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/kimi-k2.6`
+- **Disabled by default** — remove `observer` from `disabled_agents` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/kimi-k2.6` while leaving `verifier` disabled
 
     </td>
   </tr>

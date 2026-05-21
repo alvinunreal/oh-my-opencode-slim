@@ -428,13 +428,16 @@ describe('config-io', () => {
 
     const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
     expect(saved.preset).toBe('opencode-go');
-    expect(saved.disabled_agents).toEqual([]);
+    expect(saved.disabled_agents).toEqual(['verifier']);
     expect(saved.presets.openai).toBeDefined();
     expect(saved.presets['opencode-go'].orchestrator.model).toBe(
       'opencode-go/glm-5.1',
     );
     expect(saved.presets['opencode-go'].observer.model).toBe(
       'opencode-go/kimi-k2.6',
+    );
+    expect(saved.presets['opencode-go'].verifier.model).toBe(
+      'opencode-go/deepseek-v4-flash',
     );
   });
 

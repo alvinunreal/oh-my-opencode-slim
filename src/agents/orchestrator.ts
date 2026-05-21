@@ -77,6 +77,16 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Sequential dependencies
 - **Rule of thumb:** Implementation are needed, schedule @fixer with clear scope. Bigger or lots of edits should be split by ownership and dispatched as parallel background fixer lanes when safe.`,
 
+  verifier: `@verifier
+- Lane: Optional mechanical validation after implementation
+- Role: Read-only evidence checker that validates completed work against explicit requirements
+- Permissions: Read/search files; bash diagnostics require approval; no edits or delegation
+- Stats: Cheap focused verification lane; best after task_status jobs are terminal and reconciled
+- Capabilities: Checks files, diffs, tests, diagnostics, and specialist outputs for PASS/FAIL/INCONCLUSIVE evidence
+- **Delegate when:** Implementation is complete and you need independent mechanical validation • Multiple independent scopes can be checked without contending for global checks • Acceptance criteria need evidence mapping
+- **Don't delegate when:** Jobs are still running • You need architecture/risk/maintainability review (use @oracle) • You need edits/fixes (use @fixer) • Validation is trivial enough to run directly
+- **Rule of thumb:** Orchestrator owns verification decisions. Use @verifier only as an optional read-only validation lane when enabled and evidence can be checked mechanically.`,
+
   council: `@council
 - Lane: High-stakes multi-model decision support
 - Role: Multi-LLM consensus engine that runs several councillors, synthesizes their views, and returns a structured council report.
@@ -105,6 +115,7 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 const VALIDATION_ROUTING = [
   '- Route UI/UX validation and review to @designer',
   '- Route code review, simplification, maintainability review, and YAGNI checks to @oracle',
+  '- Route optional mechanical requirement/evidence checks to @verifier only after relevant jobs are terminal and reconciled',
   '- Route implementation to @fixer or multiple @fixer instances for maximum parallel execution',
   '- Route visual/media analysis and interpretation to @observer',
   '- If a request spans multiple lanes, delegate only the lanes that add clear value',
@@ -115,6 +126,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
   '- Multiple @explorer searches across different domains?',
   '- @explorer + @librarian research in parallel?',
   '- Multiple @fixer instances for faster, scoped implementation?',
+  '- Independent @verifier checks after scoped implementation jobs finish?',
   '- @observer + @explorer in parallel (visual analysis + code search)?',
 ];
 
@@ -227,12 +239,14 @@ When working through multi-step tasks, consider enabling auto-continue to avoid 
 - The user can toggle this anytime via the \`/auto-continue\` command.
 
 ### Validation routing
-- Validation is a workflow stage owned by the Orchestrator, not a separate specialist
+- Verification decisions remain owned by the Orchestrator; specialists provide evidence, not final responsibility
+- Optional read-only mechanical validation can be delegated when that specialist is enabled and relevant background jobs are terminal/reconciled
+- Keep @oracle for architecture, risk, maintainability, simplification, and YAGNI review
 ${enabledValidationRouting}
 
 ## 6. Verify
 - Run relevant checks/diagnostics for the change
-- Use validation routing when applicable instead of doing all review work yourself
+- Use validation routing when applicable; do direct checks for simple cases
 - If test files are involved, prefer @fixer for bounded test changes and @oracle only for test strategy or quality review
 - Confirm specialists completed successfully
 - Verify solution meets requirements
