@@ -20,6 +20,7 @@ const suspiciousPathPatterns = [
   /\/Users\/[^\s'"`]+(?:node_modules|oh-my-opencode-slim)[^\s'"`]*/,
   /\/home\/[^\s'"`]+(?:node_modules|oh-my-opencode-slim)[^\s'"`]*/,
 ];
+const suspiciousImportPatterns = [/from\s+["']vscode-jsonrpc\/node["']/];
 
 const packagedRequiredFiles = [
   'package.json',
@@ -97,6 +98,11 @@ function verifyDistHasNoLeakedPaths() {
   for (const file of files) {
     const content = readFileSync(file, 'utf8');
     for (const pattern of suspiciousPathPatterns) {
+      const match = content.match(pattern);
+      if (!match) continue;
+      leaks.push(`${path.relative(repoRoot, file)}: ${match[0]}`);
+    }
+    for (const pattern of suspiciousImportPatterns) {
       const match = content.match(pattern);
       if (!match) continue;
       leaks.push(`${path.relative(repoRoot, file)}: ${match[0]}`);

@@ -47,8 +47,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:plugin": "bun build src/index.ts src/tui.ts --outdir dist --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/sdk --external @opentui/core --external @opentui/solid --external jsdom --external zod",
-    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/sdk --external jsdom --external zod",
+    "build:plugin": "bun build src/index.ts src/tui.ts --outdir dist --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/* --external @opencode-ai/sdk --external @opencode-ai/sdk/* --external @opentui/core --external @opentui/solid --external jsdom --external zod",
+    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/* --external @opencode-ai/sdk --external @opencode-ai/sdk/* --external jsdom --external zod",
     "copy:divoom-assets": "bun run scripts/copy-divoom-assets.ts",
     "build": "bun run build:plugin && bun run build:cli && bun run copy:divoom-assets && tsc --emitDeclarationOnly && bun run generate-schema",
     "prepare": "bun run build",
