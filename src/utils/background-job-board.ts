@@ -17,12 +17,16 @@ export interface BackgroundJobRecord {
   objective?: string;
   state: BackgroundJobState;
   timedOut: boolean;
+  statusUncertain: boolean;
+  cancellationRequested: boolean;
   terminalUnreconciled: boolean;
   launchedAt: number;
   lastLaunchedAt: number;
   updatedAt: number;
+  lastLiveBusyAt?: number;
   completedAt?: number;
   resultSummary?: string;
+  lastStatusError?: string;
   alias: string;
   lastUsedAt: number;
   terminalState?: TaskOutputState;
@@ -48,7 +52,9 @@ export interface BackgroundJobStatusInput {
   taskID: string;
   state: TaskOutputState;
   timedOut?: boolean;
+  statusUncertain?: boolean;
   resultSummary?: string;
+  lastStatusError?: string;
   now?: number;
 }
 
@@ -94,11 +100,15 @@ export class BackgroundJobBoard {
         objective: input.objective ?? existing.objective,
         state: 'running',
         timedOut: false,
+        statusUncertain: false,
+        cancellationRequested: false,
         terminalUnreconciled: false,
         completedAt: undefined,
         resultSummary: undefined,
+        lastStatusError: undefined,
         terminalState: undefined,
         lastLaunchedAt: now,
+        lastLiveBusyAt: now,
         lastUsedAt: now,
         updatedAt: now,
       } satisfies BackgroundJobRecord;
@@ -114,9 +124,12 @@ export class BackgroundJobBoard {
       objective: input.objective,
       state: 'running',
       timedOut: false,
+      statusUncertain: false,
+      cancellationRequested: false,
       terminalUnreconciled: false,
       launchedAt: now,
       lastLaunchedAt: now,
+      lastLiveBusyAt: now,
       lastUsedAt: now,
       updatedAt: now,
       alias: this.nextAlias(input.parentSessionID, input.agent),
@@ -148,6 +161,7 @@ export class BackgroundJobBoard {
       ...existing,
       state: input.state,
       timedOut: input.timedOut ?? false,
+      statusUncertain: input.statusUncertain ?? false,
       terminalUnreconciled: terminal ? true : existing.terminalUnreconciled,
       updatedAt: now,
       completedAt: terminal
@@ -155,6 +169,7 @@ export class BackgroundJobBoard {
         : existing.completedAt,
       terminalState: terminal ? input.state : existing.terminalState,
       resultSummary: input.resultSummary ?? existing.resultSummary,
+      lastStatusError: input.lastStatusError,
     };
 
     this.jobs.set(input.taskID, updated);
@@ -181,26 +196,34 @@ export class BackgroundJobBoard {
     const existing = this.jobs.get(taskID);
     if (!existing) return undefined;
 
-    // Temporary mitigation for https://github.com/anomalyco/opencode/issues/28995:
-    // OpenCode can report task_status=cancelled after compaction while the child
-    // session keeps running. Trust live session.status=busy over that stale
-    // BackgroundJob terminal state, including after the stale cancellation was
-    // already injected/reconciled into the parent prompt.
-    const isStaleCancellation =
-      existing.state === 'cancelled' ||
-      (existing.state === 'reconciled' &&
-        existing.terminalState === 'cancelled');
-    if (!isStaleCancellation) return existing;
+    // OpenCode process-local task status can briefly disagree with the live
+    // session event stream. Trust live session.status=busy over stale terminal
+    // board state, except for explicit user cancellations where the next step is
+    // stronger cancellation/delete rather than reopening the lane.
+    const isStaleTerminal =
+      TERMINAL_STATES.has(existing.state) || existing.state === 'reconciled';
+    if (!isStaleTerminal || existing.cancellationRequested) {
+      const updated: BackgroundJobRecord = {
+        ...existing,
+        lastLiveBusyAt: now,
+      };
+      this.jobs.set(taskID, updated);
+      return updated;
+    }
 
     const updated: BackgroundJobRecord = {
       ...existing,
       state: 'running',
       timedOut: false,
+      statusUncertain: false,
+      cancellationRequested: false,
       terminalUnreconciled: false,
       updatedAt: now,
+      lastLiveBusyAt: now,
       completedAt: undefined,
       terminalState: undefined,
       resultSummary: undefined,
+      lastStatusError: undefined,
     };
 
     this.jobs.set(taskID, updated);
@@ -224,6 +247,7 @@ export class BackgroundJobBoard {
       ...existing,
       state: 'reconciled',
       terminalUnreconciled: false,
+      statusUncertain: false,
       updatedAt: now,
       lastUsedAt: now,
       terminalState: existing.terminalState ?? terminalStateOf(existing.state),
@@ -238,22 +262,28 @@ export class BackgroundJobBoard {
     taskID: string,
     reason?: string,
     now = Date.now(),
+    options: { force?: boolean } = {},
   ): BackgroundJobRecord | undefined {
     const existing = this.jobs.get(taskID);
     if (!existing) return undefined;
-    if (existing.state === 'reconciled') return existing;
-    if (TERMINAL_STATES.has(existing.state)) return existing;
+    if (!options.force) {
+      if (existing.state === 'reconciled') return existing;
+      if (TERMINAL_STATES.has(existing.state)) return existing;
+    }
 
     const summary = normalizeCancelReason(reason);
     const updated: BackgroundJobRecord = {
       ...existing,
       state: 'cancelled',
       timedOut: false,
+      statusUncertain: false,
+      cancellationRequested: true,
       terminalUnreconciled: true,
       updatedAt: now,
       completedAt: existing.completedAt ?? now,
       terminalState: 'cancelled',
       resultSummary: summary,
+      lastStatusError: undefined,
     };
 
     this.jobs.set(taskID, updated);
@@ -354,7 +384,7 @@ export class BackgroundJobBoard {
     return [
       '### Background Job Board',
       'SENTINEL: background-job-board-v2',
-      'Use task_status for running jobs. Reconcile terminal jobs before final response. Reuse any non-running session for the same specialist/context.',
+      'Use task_status for running jobs. Reconcile terminal jobs before final response. Reuse only completed sessions for the same specialist/context; never reuse cancelled or errored sessions.',
       '',
       '#### Active / Unreconciled',
       ...(active.length > 0
@@ -435,7 +465,8 @@ export function deriveTaskSessionLabel(input: {
 }
 
 function isReusable(job: BackgroundJobRecord): boolean {
-  return job.state !== 'running';
+  const terminal = job.terminalState ?? terminalStateOf(job.state);
+  return terminal === 'completed' && !job.terminalUnreconciled;
 }
 
 function terminalStateOf(
@@ -469,9 +500,11 @@ function formatJob(job: BackgroundJobRecord, now = Date.now()): string {
       : '';
   const status = job.terminalUnreconciled
     ? `${job.state}, unreconciled`
-    : job.timedOut
-      ? `${job.state}, timed out`
-      : `${job.state}${ageLabel}`;
+    : job.statusUncertain
+      ? `${job.state}, status uncertain`
+      : job.timedOut
+        ? `${job.state}, timed out`
+        : `${job.state}${ageLabel}`;
   const lines = [
     `- ${job.alias} / ${job.taskID} / ${job.agent} / ${status}`,
     `  Objective: ${job.objective || job.description}`,
@@ -479,6 +512,8 @@ function formatJob(job: BackgroundJobRecord, now = Date.now()): string {
 
   if (job.resultSummary && job.terminalUnreconciled) {
     lines.push(`  Result: ${singleLine(job.resultSummary)}`);
+  } else if (job.lastStatusError && job.statusUncertain) {
+    lines.push(`  Status: ${singleLine(job.lastStatusError)}`);
   }
 
   return lines.join('\n');

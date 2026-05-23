@@ -7,10 +7,15 @@ function createHook(options?: {
   readContextMinLines?: number;
   readContextMaxFiles?: number;
   backgroundJobBoard?: BackgroundJobBoard;
+  sessionStatus?: unknown;
 }) {
   const hook = createTaskSessionManagerHook(
     {
-      client: { session: { status: mock(async () => ({ data: {} })) } },
+      client: {
+        session: {
+          status: mock(async () => ({ data: options?.sessionStatus ?? {} })),
+        },
+      },
       directory: '/tmp',
       worktree: '/tmp',
     } as never,
@@ -191,6 +196,109 @@ describe('task-session-manager hook', () => {
     expect(messages.messages[0].parts[0].text).toContain(
       'fix-1 / child-1 / fixer / running, timed out',
     );
+  });
+
+  test('classifies transient task_status errors for known running jobs', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+
+    const output = {
+      output: [
+        'task_id: child-1',
+        'state: error',
+        '',
+        '<task_error>',
+        'Task is not running in this process and has no final output.',
+        '</task_error>',
+      ].join('\n'),
+      metadata: { state: 'error' },
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      output,
+    );
+
+    expect(output.output).toContain('state: error');
+    expect(output.metadata).toMatchObject({ state: 'error' });
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('does not terminalize transient task_status errors when live session is busy', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      sessionStatus: { 'child-1': { type: 'busy' } },
+    });
+
+    const output = {
+      output: [
+        'task_id: child-1',
+        'state: error',
+        '',
+        '<task_error>',
+        'Task is not running in this process and has no final output.',
+        '</task_error>',
+      ].join('\n'),
+      metadata: { state: 'error' },
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      output,
+    );
+
+    expect(output.output).toContain('state: error');
+    expect(output.metadata).toMatchObject({ state: 'error' });
+    expect(board.get('child-1')).toBeUndefined();
+  });
+
+  test('treats transient task_status errors as ambiguous for stale terminal records with live busy evidence', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      sessionStatus: { 'child-1': { type: 'busy' } },
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'completed' });
+
+    const output = {
+      output: [
+        'task_id: child-1',
+        'state: error',
+        '',
+        '<task_error>',
+        'Task is not running in this process and has no final output.',
+        '</task_error>',
+      ].join('\n'),
+      metadata: { state: 'error' },
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      output,
+    );
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      terminalUnreconciled: true,
+    });
   });
 
   test('updates background job board from injected completion messages', async () => {
@@ -967,7 +1075,7 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('child-1');
   });
 
-  test('non-running jobs resolve as reusable task sessions even before reconciliation', async () => {
+  test('only reconciled completed jobs resolve as reusable task sessions', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -994,23 +1102,30 @@ describe('task-session-manager hook', () => {
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       unreconciled,
     );
-    expect(unreconciled.args.task_id).toBe('done-1');
+    expect(unreconciled.args.task_id).toBeUndefined();
+
+    board.markReconciled('done-1');
 
     const failed = { args: { subagent_type: 'oracle', task_id: 'ora-2' } };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
       failed,
     );
-    expect(failed.args.task_id).toBe('err-1');
+    expect(failed.args.task_id).toBeUndefined();
+
+    const completed = { args: { subagent_type: 'oracle', task_id: 'ora-1' } };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-3' },
+      completed,
+    );
+    expect(completed.args.task_id).toBe('done-1');
 
     const messages = createMessages('parent-1', 'continue');
     await hook['experimental.chat.messages.transform']({}, messages);
     expect(messages.messages[0].parts[0].text).toContain(
-      'ora-1 / done-1 / oracle / completed, unreconciled',
+      'ora-1 / done-1 / oracle / completed, reconciled',
     );
-    expect(messages.messages[0].parts[0].text).toContain(
-      'ora-2 / err-1 / oracle / error, reconciled',
-    );
+    expect(messages.messages[0].parts[0].text).not.toContain('err-1');
   });
 
   test('running alias is polled through task_status but not resumed by task', async () => {

@@ -45,6 +45,9 @@ the current orchestrator session, and it does not roll back partial edits. After
 cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
 
+See [Background Job Board Lessons](background-job-board-lessons.md) for the
+session lifecycle and cancellation edge cases behind this tool.
+
 ---
 
 ## Formatters

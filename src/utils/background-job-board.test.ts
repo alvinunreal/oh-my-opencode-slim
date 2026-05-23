@@ -122,6 +122,64 @@ describe('BackgroundJobBoard', () => {
     expect(board.formatForPrompt('parent-1')).toContain('Reusable Sessions');
   });
 
+  test('does not expose unreconciled terminal jobs as reusable', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+    board.updateStatus({ taskID: 'ses_1', state: 'completed' });
+
+    const prompt = board.formatForPrompt('parent-1');
+
+    expect(prompt).toContain(
+      'ora-1 / ses_1 / oracle / completed, unreconciled',
+    );
+    expect(prompt).toContain('#### Reusable Sessions\n- none');
+  });
+
+  test('does not expose cancelled or errored jobs as reusable', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_cancelled',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'cancelled review',
+    });
+    board.updateStatus({ taskID: 'ses_cancelled', state: 'cancelled' });
+    board.markReconciled('ses_cancelled');
+    board.registerLaunch({
+      taskID: 'ses_error',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'errored review',
+    });
+    board.updateStatus({ taskID: 'ses_error', state: 'error' });
+    board.markReconciled('ses_error');
+
+    expect(board.formatForPrompt('parent-1')).toBeUndefined();
+    expect(board.resolveReusable('parent-1', 'ses_cancelled')).toBeUndefined();
+    expect(board.resolveReusable('parent-1', 'ses_error')).toBeUndefined();
+  });
+
+  test('prompt tells orchestrator to reuse completed sessions only', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+    board.updateStatus({ taskID: 'ses_1', state: 'completed' });
+    board.markReconciled('ses_1');
+
+    expect(board.formatForPrompt('parent-1')).toContain(
+      'Reuse only completed sessions',
+    );
+  });
+
   test('does not reconcile running jobs', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
@@ -367,6 +425,24 @@ describe('BackgroundJobBoard', () => {
     expect(updated?.resultSummary).toBeUndefined();
   });
 
+  test('live busy session does not reopen explicit cancel requests', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    board.markCancelled('ses_1', 'user requested', 100);
+
+    const updated = board.markRunningFromLiveSession('ses_1', 200);
+
+    expect(updated).toMatchObject({
+      state: 'cancelled',
+      cancellationRequested: true,
+      terminalUnreconciled: true,
+    });
+  });
+
   test('live busy session reopens reconciled stale cancellations', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
@@ -387,7 +463,7 @@ describe('BackgroundJobBoard', () => {
     expect(updated?.terminalState).toBeUndefined();
   });
 
-  test('live busy session does not reopen non-cancelled terminal jobs', () => {
+  test('live busy session reopens non-cancelled terminal jobs', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -399,9 +475,11 @@ describe('BackgroundJobBoard', () => {
     const updated = board.markRunningFromLiveSession('ses_1', 200);
 
     expect(updated).toMatchObject({
-      state: 'completed',
-      terminalUnreconciled: true,
-      completedAt: 100,
+      state: 'running',
+      terminalUnreconciled: false,
+      completedAt: undefined,
+      terminalState: undefined,
+      lastLiveBusyAt: 200,
     });
   });
 

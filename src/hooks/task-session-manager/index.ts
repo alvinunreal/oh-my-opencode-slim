@@ -5,6 +5,7 @@ import {
   BackgroundJobBoard,
   type BackgroundJobRecord,
   type ContextFile,
+  classifyTaskStatusOutput,
   deriveTaskSessionLabel,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
@@ -295,6 +296,83 @@ export function createTaskSessionManagerHook(
     return updated;
   }
 
+  async function handleTransientTaskStatusOutput(output: {
+    output: unknown;
+    metadata?: unknown;
+  }): Promise<boolean> {
+    if (typeof output.output !== 'string') return false;
+
+    const status = parseTaskStatusOutput(output.output);
+    if (!status) return false;
+    if (classifyTaskStatusOutput(status) !== 'transient_process_error') {
+      return false;
+    }
+
+    const existing = backgroundJobBoard.get(status.taskID);
+    const liveStatus =
+      existing && existing.state === 'running'
+        ? undefined
+        : await getLiveSessionStatus(status.taskID);
+    const recentLiveBusy =
+      !!existing?.lastLiveBusyAt &&
+      (!existing.completedAt ||
+        existing.lastLiveBusyAt >= existing.completedAt);
+    const isStillRunning =
+      existing?.state === 'running' ||
+      recentLiveBusy ||
+      liveStatus === 'busy' ||
+      liveStatus === 'retry';
+    if (!isStillRunning) return false;
+
+    const updated =
+      existing?.state === 'running'
+        ? backgroundJobBoard.updateStatus({
+            taskID: status.taskID,
+            state: 'running',
+            statusUncertain: true,
+            lastStatusError: status.result,
+          })
+        : undefined;
+
+    log('[task-session-manager] classified transient task_status error', {
+      taskID: status.taskID,
+      alias: existing?.alias,
+      parentSessionID: existing?.parentSessionID,
+      previousState: existing?.state,
+      updatedState: updated?.state,
+      liveStatus,
+      recentLiveBusy,
+    });
+
+    return true;
+  }
+
+  async function getLiveSessionStatus(
+    sessionID: string,
+  ): Promise<string | undefined> {
+    try {
+      const response = await (
+        _ctx.client.session.status as unknown as () => Promise<unknown>
+      )();
+      const data = (response as { data?: unknown }).data;
+      if (!isObjectRecord(data)) return undefined;
+      const item = data[sessionID];
+      if (item === undefined) return 'idle';
+      if (isObjectRecord(item) && typeof item.type === 'string') {
+        return item.type;
+      }
+      const directType = data.type;
+      if (typeof directType === 'string') return directType;
+      const nestedStatus = data.status;
+      if (!isObjectRecord(nestedStatus)) return undefined;
+      return typeof nestedStatus.type === 'string'
+        ? nestedStatus.type
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   function updateFromInjectedCompletion(
     part: ChatMessagePart,
     message: ChatMessage,
@@ -546,6 +624,9 @@ export function createTaskSessionManagerHook(
         if (!input.sessionID || !options.shouldManageSession(input.sessionID)) {
           return;
         }
+        if (await handleTransientTaskStatusOutput(output)) {
+          return;
+        }
         updateBackgroundJobFromOutput(output.output);
         return;
       }
@@ -729,6 +810,17 @@ export function createTaskSessionManagerHook(
         const updated = sessionId
           ? backgroundJobBoard.markRunningFromLiveSession(sessionId)
           : undefined;
+        if (before?.cancellationRequested) {
+          log('[task-session-manager] busy observed after cancel request', {
+            sessionID: sessionId,
+            previousState: before.state,
+            previousTerminalState: before.terminalState,
+            terminalUnreconciled: before.terminalUnreconciled,
+            resultSummary: before.resultSummary,
+            updatedState: updated?.state,
+            updatedCancellationRequested: updated?.cancellationRequested,
+          });
+        }
         log('[task-session-manager] busy/status busy observed', {
           sessionID: sessionId,
           managesSession: sessionId
@@ -736,7 +828,11 @@ export function createTaskSessionManagerHook(
             : false,
           previousState: before?.state,
           previousTerminalState: before?.terminalState,
+          previousCancellationRequested: before?.cancellationRequested,
+          previousLastLiveBusyAt: before?.lastLiveBusyAt,
           updatedState: updated?.state,
+          updatedCancellationRequested: updated?.cancellationRequested,
+          updatedLastLiveBusyAt: updated?.lastLiveBusyAt,
         });
         return;
       }

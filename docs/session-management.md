@@ -4,6 +4,9 @@ Background job management lets the orchestrator track native background tasks,
 poll active work, and reuse completed/reconciled child sessions when follow-up
 work matches the same specialist context.
 
+For implementation/debugging notes from hardening cancellation and pane cleanup,
+see [Background Job Board Lessons](background-job-board-lessons.md).
+
 It is enabled by default. You do not need to add anything to your config unless
 you want to change how many sessions are remembered.
 

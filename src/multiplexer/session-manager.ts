@@ -451,7 +451,7 @@ export class MultiplexerSessionManager {
       return;
     }
 
-    if (tracked.ownerInstanceId !== this.instanceId) {
+    if (reason !== 'deleted' && tracked.ownerInstanceId !== this.instanceId) {
       log('[multiplexer-session-manager] close skipped; non-owner instance', {
         instanceId: this.instanceId,
         ownerInstanceId: tracked.ownerInstanceId,
@@ -460,6 +460,15 @@ export class MultiplexerSessionManager {
         reason,
       });
       return;
+    }
+    if (reason === 'deleted' && tracked.ownerInstanceId !== this.instanceId) {
+      log('[multiplexer-session-manager] closing deleted pane as non-owner', {
+        instanceId: this.instanceId,
+        ownerInstanceId: tracked.ownerInstanceId,
+        sessionId,
+        paneId: tracked.paneId,
+        reason,
+      });
     }
 
     if (reason === 'idle' && this.isRunningBackgroundJob(sessionId)) {

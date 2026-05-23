@@ -860,6 +860,44 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
     });
 
+    test('closes deleted pane even when current instance is not owner', async () => {
+      const ctx = createMockContext();
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+      );
+
+      mockMultiplexer.spawnPane.mockResolvedValueOnce({
+        success: true,
+        paneId: 'p-non-owner-delete',
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-non-owner-delete',
+            parentID: 'parent-non-owner-delete',
+          },
+        },
+      });
+
+      const tracked = (manager as any).sessions.get('child-non-owner-delete');
+      tracked.ownerInstanceId = 'other-instance';
+
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'child-non-owner-delete' },
+      });
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-non-owner-delete',
+      );
+      expect((manager as any).sessions.has('child-non-owner-delete')).toBe(
+        false,
+      );
+    });
+
     test('closes pane returned by a stale spawn after session deleted', async () => {
       const ctx = createMockContext();
       const manager = new MultiplexerSessionManager(
