@@ -173,7 +173,7 @@ Review available agents and lane rules.
 - Brief user on delegation goal before each call
 - For trivial conversational answers or tiny mechanical edits, direct execution is allowed when scheduling overhead would clearly dominate
 - Record task IDs, state, and advisory ownership/dependency labels
-- Poll/wait for terminal results with \`task_status(wait: true, timeout_ms: ...)\`
+- Do not immediately wait after spawning independent background tasks unless the next step truly depends on their result
 - Reconcile results, resolve conflicts, and gate dependent lanes
 
 **File operations rules:**
@@ -199,10 +199,22 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 - Delegated specialists should be launched as background tasks whenever work can run independently: use \`task(..., background: true)\`.
 - A dispatch returns a task/session ID immediately; it does not mean completion.
 - Track each task ID with specialist, objective, state, and any advisory ownership/dependency labels from the dispatch plan.
-- Continue orchestration while tasks run: planning, scheduling independent lanes, preparing synthesis, and asking needed user questions.
-- Poll or wait with \`task_status(wait: true, timeout_ms: ...)\` before consuming outputs or starting dependent work.
+- Background completion is event/hook-driven: when a background task finishes, OpenCode injects a follow-up message with the terminal result.
+- Continue orchestration while tasks run only when useful: planning, scheduling independent lanes, preparing synthesis, or asking needed user questions.
+- If no useful independent work remains, stop after a brief status response; do not call \`task_status\` just to wait. OpenCode will resume you when the background completion event arrives.
+- Use \`task_status(wait: true, timeout_ms: ...)\` only when you actively need a result before a dependent step or final response and no completion event has arrived yet.
 - Parallel background tasks are allowed only when their write scopes do not conflict.
 - Final response requires relevant tasks to be terminal and reconciled.
+
+### Background Job Discipline
+- Every background task owns its declared lane until terminal.
+- Do not duplicate, undermine, or race a running lane.
+- After dispatch, classify the next step:
+  1. independent: continue,
+  2. dependent: wait/poll,
+  3. no useful independent work: stop and let hook-driven completion resume.
+- Before editing files or spawning another writer, compare against running job scopes.
+- Never finalize work that depends on unresolved background jobs.
 
 ### Session Reuse
 - Smartly reuse an available specialist session - context reuse saves time and tokens

@@ -48,10 +48,10 @@ bunx oh-my-opencode-slim@latest install
 ### V2 Background-Orchestration Beta
 
 V2 changes the orchestrator from the default execution worker into a scheduler:
-it plans work, dispatches specialists as background tasks, polls their status,
-then reconciles results before continuing. This requires OpenCode's native
-background subagent support, so beta users must start OpenCode with the
-experimental flag enabled.
+it plans work, dispatches specialists as background tasks, receives completion
+events from OpenCode or checks status only when needed, then reconciles results
+before continuing. This requires OpenCode's native background subagent support,
+so beta users must start OpenCode with the experimental flag enabled.
 
 ```bash
 bunx oh-my-opencode-slim@beta install
