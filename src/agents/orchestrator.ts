@@ -1,4 +1,5 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
+import { WRITABLE_FILE_OPERATIONS_RULES } from '../config';
 
 export interface AgentDefinition {
   name: string;
@@ -177,12 +178,7 @@ Review available agents and lane rules.
 - Do not immediately wait after spawning independent background tasks unless the next step truly depends on their result
 - Reconcile results, resolve conflicts, and gate dependent lanes
 
-**File operations rules:**
-- Always use dedicated file tools for file I/O.
-- Search files/code with \`glob\`, \`grep\`, or \`ast_grep_search\`.
-- Read files with \`read\`. Never use \`cat\`, \`head\`, \`tail\`, \`sed\`, \`awk\`, or bash commands to read file contents.
-- Edit files with \`apply_patch\`. Never use shell redirection, \`echo\`, \`printf\`, or heredocs for file content unless no file tool can do the job.
-- Use \`bash\` only for execution: git, package managers, tests, builds, scripts, or diagnostics.
+${WRITABLE_FILE_OPERATIONS_RULES}
 
 ## 4. Plan and Parallelize
 Build a short work graph before dispatching:

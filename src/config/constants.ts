@@ -95,6 +95,24 @@ export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 // Workflow reminders
 export const PHASE_REMINDER_TEXT = `!IMPORTANT! Scheduler workflow: plan lanes/dependencies → dispatch background specialists → track task IDs → wait for hook-driven completion or use task_status only when needed → reconcile terminal results → verify. Do not consume running-job output or advance dependent work. !END!`;
 
+export const WRITABLE_FILE_OPERATIONS_RULES = `**File Operations Rules**:
+- Prefer dedicated file tools for normal code work: glob/grep/ast_grep_search for discovery, read for file contents, and edit/write/apply_patch for targeted source changes.
+- Use bash for execution and automation: git, package managers, tests, builds, scripts, diagnostics, and shell-native filesystem operations.
+- Shell is acceptable for bulk or mechanical filesystem changes when it is clearer or safer than many individual edits (for example: truncate generated logs, remove build artifacts, batch rename/move files), especially when the user explicitly asks for that shell operation.
+- Before destructive or broad shell operations, verify the target set and quote paths. Prefer a dry-run/listing first when practical.
+- Do not use cat/head/tail/sed/awk only to read code into context; use read/grep unless a shell pipeline is genuinely the better diagnostic.`;
+
+export const READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
+- READ-ONLY: inspect and report; do not modify files.
+- Prefer dedicated file tools for codebase inspection: glob/grep/ast_grep_search for discovery and read for file contents.
+- Bash is allowed for non-mutating diagnostics and shell-native inspection when it is the clearest tool, but not for modifying files.
+- Do not use cat/head/tail/sed/awk only to read code into context; use read/grep unless a shell pipeline is genuinely the better diagnostic.`;
+
+export const NO_SHELL_READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
+- READ-ONLY: inspect and report; do not modify files.
+- Use glob/grep/ast_grep_search for discovery and read for file contents.
+- Do not use bash or shell commands.`;
+
 // Tmux pane spawn delay (ms) — gives TmuxSessionManager time to create pane
 export const TMUX_SPAWN_DELAY_MS = 500;
 

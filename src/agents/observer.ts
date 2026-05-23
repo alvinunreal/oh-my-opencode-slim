@@ -1,3 +1,4 @@
+import { READONLY_FILE_OPERATIONS_RULES } from '../config';
 import type { AgentDefinition } from './orchestrator';
 
 const OBSERVER_PROMPT = `You are Observer — a visual analysis specialist.
@@ -18,10 +19,7 @@ const OBSERVER_PROMPT = `You are Observer — a visual analysis specialist.
 - Match the language of the request
 - If info not found, state clearly what's missing
 
-**File Operations Rules**:
-- READ-ONLY: do not modify files
-- Read files with read. Never use cat, head, tail, sed, awk, or bash commands to read file contents
-- Use bash only for execution/diagnostics, never for file I/O
+${READONLY_FILE_OPERATIONS_RULES}
 `;
 
 export function createObserverAgent(
