@@ -891,6 +891,98 @@ describe('task-session-manager hook', () => {
     });
   });
 
+  test('normalizes late injected failure for an explicitly cancelled task', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'cancelled review',
+    });
+    board.markCancelled('child-1', 'user requested');
+    board.markReconciled('child-1');
+
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: [
+                'Background task failed: cancelled review',
+                'task_id: child-1',
+                'state: error',
+                '',
+                '<task_error>',
+                'No user message found in stream. This should never happen.',
+                '</task_error>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    expect(messages.messages[0].parts[0].text).toContain('state: cancelled');
+    expect(messages.messages[0].parts[0].text).toContain(
+      'cancelled: user requested',
+    );
+    expect(messages.messages[0].parts[0].text).not.toContain(
+      'No user message found',
+    );
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'cancelled',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('normalizes late task_status error output for an explicitly cancelled task', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'cancelled review',
+    });
+    board.markCancelled('child-1', 'user requested');
+    board.markReconciled('child-1');
+
+    const output = {
+      output: [
+        'task_id: child-1',
+        'state: error',
+        '',
+        '<task_error>',
+        'No user message found in stream. This should never happen.',
+        '</task_error>',
+      ].join('\n'),
+      metadata: { state: 'error' },
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      output,
+    );
+
+    expect(output.output).toContain('state: cancelled');
+    expect(output.output).toContain('cancelled: user requested');
+    expect(output.output).not.toContain('No user message found');
+    expect(output.metadata).toMatchObject({ state: 'cancelled' });
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'cancelled',
+    });
+  });
+
   test('marks terminal jobs reconciled after injected prompt reaches idle', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });

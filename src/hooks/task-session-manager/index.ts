@@ -261,6 +261,18 @@ export function createTaskSessionManagerHook(
       hasResult: Boolean(status.result),
     });
 
+    const existing = backgroundJobBoard.get(status.taskID);
+    if (isLateCancelledTaskError(existing, status.state)) {
+      log('[task-session-manager] suppressed late cancelled task error', {
+        taskID: status.taskID,
+        alias: existing?.alias,
+        state: existing?.state,
+        terminalState: existing?.terminalState,
+        result: status.result,
+      });
+      return existing;
+    }
+
     const updated = backgroundJobBoard.updateStatus({
       taskID: status.taskID,
       state: status.state,
@@ -394,14 +406,31 @@ export function createTaskSessionManagerHook(
     const status = parseTaskStatusOutput(part.text);
     if (!status) return undefined;
 
+    const occurrenceId = createOccurrenceId(part, message, partIndex);
+
+    const existing = backgroundJobBoard.get(status.taskID);
+    if (isFailed && isLateCancelledTaskError(existing, status.state)) {
+      part.text = formatCancelledTaskStatusOutput(
+        status.taskID,
+        existing?.resultSummary,
+      );
+      log('[task-session-manager] normalized late cancelled injected failure', {
+        taskID: status.taskID,
+        alias: existing?.alias,
+        state: existing?.state,
+        terminalState: existing?.terminalState,
+        result: status.result,
+      });
+      rememberProcessedInjectedCompletion(occurrenceId);
+      return existing;
+    }
+
     // Enforce prefix/state consistency: completed prefix only accepts completed state
     // failed prefix only accepts error state; ignore running/cancelled in auto-injected path
     if (isCompleted && status.state !== 'completed') return undefined;
     if (isFailed && status.state !== 'error') return undefined;
 
     // Dedupe by synthetic message occurrence using stable occurrence ID
-    const occurrenceId = createOccurrenceId(part, message, partIndex);
-
     if (processedInjectedCompletions.has(occurrenceId)) return undefined;
 
     const updated = updateBackgroundJobFromOutput(part.text);
@@ -624,6 +653,7 @@ export function createTaskSessionManagerHook(
         if (!input.sessionID || !options.shouldManageSession(input.sessionID)) {
           return;
         }
+        normalizeLateCancelledToolStatus(output);
         if (await handleTransientTaskStatusOutput(output)) {
           return;
         }
@@ -874,4 +904,52 @@ export function createTaskSessionManagerHook(
       }
     },
   };
+
+  function normalizeLateCancelledToolStatus(output: {
+    output: unknown;
+    metadata?: unknown;
+  }): void {
+    if (typeof output.output !== 'string') return;
+    const status = parseTaskStatusOutput(output.output);
+    if (!status) return;
+    const existing = backgroundJobBoard.get(status.taskID);
+    if (!isLateCancelledTaskError(existing, status.state)) return;
+    log('[task-session-manager] normalized late cancelled task_status output', {
+      taskID: status.taskID,
+      alias: existing?.alias,
+      state: existing?.state,
+      terminalState: existing?.terminalState,
+      result: status.result,
+    });
+    output.output = formatCancelledTaskStatusOutput(
+      status.taskID,
+      existing?.resultSummary,
+    );
+    if (isObjectRecord(output) && isObjectRecord(output.metadata)) {
+      output.metadata.state = 'cancelled';
+    }
+  }
+}
+
+function isLateCancelledTaskError(
+  job: BackgroundJobRecord | undefined,
+  state: string,
+): boolean {
+  if (state !== 'error') return false;
+  if (!job?.cancellationRequested) return false;
+  return job.state === 'cancelled' || job.terminalState === 'cancelled';
+}
+
+function formatCancelledTaskStatusOutput(
+  taskID: string,
+  summary = 'cancelled',
+): string {
+  return [
+    `task_id: ${taskID}`,
+    'state: cancelled',
+    '',
+    '<task_error>',
+    summary,
+    '</task_error>',
+  ].join('\n');
 }
