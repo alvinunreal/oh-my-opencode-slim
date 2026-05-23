@@ -1,8 +1,8 @@
 # Session Management
 
-Session management lets the orchestrator keep track of recent delegated child
-sessions so follow-up work can continue in the right specialist context instead
-of starting from scratch every time.
+Background job management lets the orchestrator track native background tasks,
+poll active work, and reuse completed/reconciled child sessions when follow-up
+work matches the same specialist context.
 
 It is enabled by default. You do not need to add anything to your config unless
 you want to change how many sessions are remembered.
@@ -27,7 +27,7 @@ management, the orchestrator can reuse recent child sessions when it makes sense
 
 ## How It Feels in Practice
 
-When a child task runs, the plugin remembers it under a short alias such as:
+When a child task runs, the plugin tracks it under a short alias such as:
 
 ```text
 exp-1
@@ -38,10 +38,16 @@ fix-2
 The orchestrator sees a compact reminder in its system context, for example:
 
 ```text
-### Resumable Sessions
-- explorer: exp-1 Search routing files
-  Context read by exp-1: src/router.ts (120 lines), src/routes/api.ts (74 lines)
-- oracle: ora-1 Review auth architecture
+### Background Job Board
+SENTINEL: background-job-board-v2
+
+#### Active / Unreconciled
+- exp-1 / child-1 / explorer / running
+  Objective: Search routing files
+
+#### Reusable Sessions
+- ora-1 / child-2 / oracle / completed, reconciled
+  Objective: Review auth architecture
 ```
 
 When a child session reads files through OpenCode's `read` tool, the reminder can
@@ -52,9 +58,9 @@ To keep the prompt small, read context only shows files where at least 10 lines
 were read, includes line counts, and caps each remembered session to the most
 recent 8 files by default. Both thresholds are configurable.
 
-On a related follow-up, the orchestrator can reuse that session instead of
-launching a fresh one. If the remembered child session no longer exists, the
-plugin drops the stale entry and falls back to a new session automatically.
+On a related follow-up, the orchestrator can reuse a completed/reconciled session
+instead of launching a fresh one. Running jobs must be polled with `task_status`;
+terminal jobs must be reconciled before dependent work or a final response.
 
 ---
 
@@ -78,7 +84,8 @@ long-lived global state.
 
 ## Default Behavior
 
-By default, the plugin remembers **2 recent child sessions per specialist type**.
+By default, the plugin keeps **2 reusable completed child sessions per specialist
+type** while active/unreconciled jobs remain visible until resolved.
 
 That means the generated starter config can stay clean:
 
@@ -95,18 +102,18 @@ That means the generated starter config can stay clean:
 }
 ```
 
-Session management still works because the runtime falls back to the built-in
+Background job management still works because the runtime falls back to the built-in
 default.
 
 ---
 
 ## Configuration
 
-Only add `sessionManager` if you want to change the default limits:
+Only add `backgroundJobs` if you want to change the default limits:
 
 ```jsonc
 {
-  "sessionManager": {
+  "backgroundJobs": {
     "maxSessionsPerAgent": 2,
     "readContextMinLines": 10,
     "readContextMaxFiles": 8
@@ -114,22 +121,22 @@ Only add `sessionManager` if you want to change the default limits:
 }
 ```
 
-### `sessionManager.maxSessionsPerAgent`
+### `backgroundJobs.maxSessionsPerAgent`
 
 | Type | Default | Range | Meaning |
 |------|---------|-------|---------|
-| integer | `2` | `1`–`10` | Number of recent resumable child sessions remembered per specialist type in the current parent session |
+| integer | `2` | `1`–`10` | Number of completed/reconciled reusable child sessions retained per specialist type in the current parent session |
 
-### `sessionManager.readContextMinLines`
+### `backgroundJobs.readContextMinLines`
 
 | Type | Default | Range | Meaning |
 |------|---------|-------|---------|
-| integer | `10` | `0`–`1000` | Minimum number of lines read from a file before it appears in resumable-session context |
+| integer | `10` | `0`–`1000` | Minimum number of lines read from a file before it appears in reusable job context |
 
 Set this lower if you want short config files to appear. Set it higher to keep
 the prompt focused on substantial file reads.
 
-### `sessionManager.readContextMaxFiles`
+### `backgroundJobs.readContextMaxFiles`
 
 | Type | Default | Range | Meaning |
 |------|---------|-------|---------|
@@ -158,7 +165,7 @@ Example with a smaller memory window:
 
 ```jsonc
 {
-  "sessionManager": {
+  "backgroundJobs": {
     "maxSessionsPerAgent": 1,
     "readContextMaxFiles": 4
   }
@@ -169,7 +176,7 @@ Example with a larger memory window:
 
 ```jsonc
 {
-  "sessionManager": {
+  "backgroundJobs": {
     "maxSessionsPerAgent": 4,
     "readContextMinLines": 5
   }

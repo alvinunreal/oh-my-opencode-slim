@@ -761,9 +761,9 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     expect(result.success).toBe(true);
   });
 
-  test('accepts sessionManager config', () => {
+  test('accepts backgroundJobs config', () => {
     const result = PluginConfigSchema.safeParse({
-      sessionManager: {
+      backgroundJobs: {
         maxSessionsPerAgent: 2,
         readContextMinLines: 10,
         readContextMaxFiles: 8,

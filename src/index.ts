@@ -254,7 +254,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
     webfetch = createWebfetchTool(ctx);
-    backgroundJobBoard = new BackgroundJobBoard();
+    backgroundJobBoard = new BackgroundJobBoard({
+      maxReusablePerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
+      readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
+      readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
+    });
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
@@ -312,9 +316,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     deepworkCommandHook = createDeepworkCommandHook();
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
-      maxSessionsPerAgent: config.sessionManager?.maxSessionsPerAgent ?? 2,
-      readContextMinLines: config.sessionManager?.readContextMinLines ?? 10,
-      readContextMaxFiles: config.sessionManager?.readContextMaxFiles ?? 8,
+      maxSessionsPerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
+      readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
+      readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
       backgroundJobBoard,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',

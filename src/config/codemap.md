@@ -30,7 +30,7 @@ resolution, and helper APIs used by agents, council, and runtime subsystems.
 3. Validate with schema. Invalid/malformed files are warned and ignored by
    returning `null` for that file.
 4. Merge user+project configs where project takes precedence:
-   nested merges for `agents`, `tmux`, `multiplexer`, `interview`, `sessionManager`,
+   nested merges for `agents`, `tmux`, `multiplexer`, `interview`, `backgroundJobs`,
    `fallback`, `council`.
    top-level arrays/values are overridden.
 5. If `tmux` is enabled and no explicit `multiplexer` is configured,

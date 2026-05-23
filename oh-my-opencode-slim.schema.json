@@ -486,7 +486,7 @@
         }
       }
     },
-    "sessionManager": {
+    "backgroundJobs": {
       "type": "object",
       "properties": {
         "maxSessionsPerAgent": {

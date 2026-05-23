@@ -119,7 +119,7 @@ describe('BackgroundJobBoard', () => {
       terminalUnreconciled: false,
       updatedAt: 300,
     });
-    expect(board.formatForPrompt('parent-1')).toBeUndefined();
+    expect(board.formatForPrompt('parent-1')).toContain('Reusable Sessions');
   });
 
   test('does not reconcile running jobs', () => {
@@ -381,8 +381,7 @@ describe('BackgroundJobBoard', () => {
       terminalUnreconciled: false,
     });
 
-    // Job should remain hidden from prompt
-    expect(board.formatForPrompt('parent-1')).toBeUndefined();
+    expect(board.formatForPrompt('parent-1')).toContain('Reusable Sessions');
   });
 
   test('annotates just-launched running jobs with age in the prompt', () => {

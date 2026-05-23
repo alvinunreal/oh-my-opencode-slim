@@ -119,9 +119,9 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` |
 | `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` |
 | `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` |
-| `sessionManager.maxSessionsPerAgent` | integer | `2` | Maximum remembered resumable child sessions per specialist type in the current orchestrator session (1–10). See [Session Management](session-management.md) |
-| `sessionManager.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in resumable-session context (0–1000) |
-| `sessionManager.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per remembered child session (0–50) |
+| `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10). See [Session Management](session-management.md) |
+| `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) |
+| `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `false` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
@@ -238,11 +238,11 @@ To override a GIF, use either a bundled filename or an absolute path:
 }
 ```
 
-### Session Management
+### Background Job Management
 
-Session management is enabled by default and does not need to be present in the
-starter config. Add `sessionManager` only if you want to tune how many resumable
-child-agent sessions are remembered or how much read context is shown. See
+Background job management is enabled by default and does not need to be present
+in the starter config. Add `backgroundJobs` only if you want to tune how many
+completed/reconciled child-agent sessions are reusable or how much read context is shown. See
 [Session Management](session-management.md) for the concept, defaults, and
 examples.
 

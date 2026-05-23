@@ -310,14 +310,25 @@ Primary files:
 
 - `src/hooks/task-session-manager/index.ts`
 - `src/utils/task.ts`
-- `src/utils/session-manager.ts`
+- `src/utils/background-job-board.ts`
 
 Current behavior:
 
-- `tool.execute.before` tracks `task` calls.
-- `tool.execute.after` parses a `task_id` from output.
-- the parsed ID is immediately remembered as a resumable session.
-- there is no terminal/non-terminal distinction.
+- `src/index.ts` creates one shared `BackgroundJobBoard` using
+  `backgroundJobs` caps/context config and passes it to task-session-manager,
+  todo-continuation, cancel-task, and multiplexer integration.
+- `tool.execute.before(task)` validates `subagent_type`, strips stale/invalid
+  `task_id` aliases when they cannot safely resolve, and only resolves reusable
+  aliases for matching completed/reconciled jobs.
+- `tool.execute.before(task_status)` resolves job-board aliases for polling
+  running or terminal tasks.
+- `tool.execute.after(task)` parses native launch output and records running
+  jobs in the shared board; it does not treat launch as completion.
+- `tool.execute.after(task_status)` and synthetic completion messages parse
+  status output into running/terminal job-board state.
+- Prompt injection is owned by the job board: running and terminal unreconciled
+  jobs appear under `### Background Job Board`; completed/reconciled jobs appear
+  only in the reusable section.
 
 V2 behavior:
 
@@ -336,7 +347,7 @@ V2 behavior:
    parseTaskStatusOutput(output) → { taskID, state, result? }
    ```
 
-2. Store background job records in a shared scheduler/job-board module scoped by
+2. Store background job records in `src/utils/background-job-board.ts`, scoped by
    parent orchestrator session.
 
 3. Update `tool.execute.after` for `task`:
@@ -353,13 +364,13 @@ V2 behavior:
 
 5. Update system-context injection:
 
-   - replace or augment `### Resumable Sessions` with `### Background Job Board`,
+   - inject the unified `### Background Job Board`,
    - include compact running/terminal unreconciled jobs,
    - keep aliases short.
 
 6. Do not expose running background jobs as resumable sessions. A running job
    alias should nudge `task_status`, not `task(task_id=...)`. Only completed and
-   reconciled sessions should enter the old resumable-session pool.
+   reconciled sessions should enter the reusable section.
 
 ---
 
@@ -614,7 +625,8 @@ Start here:
    - phase reminder rewrite.
 
 7. `src/multiplexer/session-manager.test.ts`
-   - add V2 lifecycle tests once behavior is understood.
+   - keep multiplexer lifecycle coverage aligned with background-job-board-owned
+     task state.
 
 ---
 

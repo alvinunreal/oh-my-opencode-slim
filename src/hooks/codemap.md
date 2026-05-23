@@ -68,7 +68,7 @@ and managers for all hook-based runtime behaviors used by
   system transform, command interception, tool-after, and events. It owns
   auto-injection state, cooldown, suppress windows, and orchestration session
   tracking.
-- `createTaskSessionManagerHook` tracks task sessions for resumability: generates
+- `createTaskSessionManagerHook` tracks V2 background jobs and reusable completed sessions: generates
   user-facing aliases, resolves alias/task IDs before delegation, remembers fresh
   task IDs after completion, and drops stale entries on missing-session failure,
   renamed task IDs, or session deletion.

@@ -181,13 +181,13 @@ export const InterviewConfigSchema = z.object({
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
 
-export const SessionManagerConfigSchema = z.object({
+export const BackgroundJobsConfigSchema = z.object({
   maxSessionsPerAgent: z.number().int().min(1).max(10).default(2),
   readContextMinLines: z.number().int().min(0).max(1000).default(10),
   readContextMaxFiles: z.number().int().min(0).max(50).default(8),
 });
 
-export type SessionManagerConfig = z.infer<typeof SessionManagerConfigSchema>;
+export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
 
 export const DivoomConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -332,7 +332,7 @@ export const PluginConfigSchema = z
     tmux: TmuxConfigSchema.optional(),
     websearch: WebsearchConfigSchema.optional(),
     interview: InterviewConfigSchema.optional(),
-    sessionManager: SessionManagerConfigSchema.optional(),
+    backgroundJobs: BackgroundJobsConfigSchema.optional(),
     divoom: DivoomConfigSchema.optional(),
     todoContinuation: TodoContinuationConfigSchema.optional(),
     fallback: FailoverConfigSchema.optional(),
