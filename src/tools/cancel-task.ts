@@ -61,7 +61,12 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         ].join('\n');
       }
 
-      if (job.state !== 'running') {
+      const shouldAbort =
+        job.state === 'running' ||
+        job.state === 'cancelled' ||
+        (job.state === 'reconciled' && job.terminalState === 'cancelled');
+
+      if (!shouldAbort) {
         return [
           `task_id: ${job.taskID}`,
           `state: ${job.state}`,

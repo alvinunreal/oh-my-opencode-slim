@@ -289,7 +289,7 @@ describe('MultiplexerSessionManager', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    test('closes pane when idle event reaches a different manager instance', async () => {
+    test('does not close another manager instance pane on idle event', async () => {
       const ctx = createMockContext();
       mockMultiplexer.spawnPane.mockResolvedValue({
         success: true,
@@ -315,7 +315,7 @@ describe('MultiplexerSessionManager', () => {
         properties: { sessionID: 'shared-child' },
       });
 
-      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('p-shared-idle');
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
     test('respawns resumed known session from a different manager instance', async () => {
@@ -351,7 +351,7 @@ describe('MultiplexerSessionManager', () => {
         },
       });
 
-      await secondManager.onSessionStatus({
+      await firstManager.onSessionStatus({
         type: 'session.idle',
         properties: { sessionID: 'resumed-child' },
       });
@@ -371,6 +371,42 @@ describe('MultiplexerSessionManager', () => {
         `http://localhost:${process.env.OPENCODE_PORT ?? '4096'}/`,
         '/resumed/dir',
       );
+    });
+
+    test('does not close running background child pane on idle event', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'running-idle-child',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-running-idle-child',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'running-idle-child', parentID: 'parent-1' },
+        },
+      });
+
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'running-idle-child',
+          status: { type: 'idle' },
+        },
+      });
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
     test('does not close on transient status absence', async () => {

@@ -15,6 +15,7 @@ interface TrackedSession {
   parentId: string;
   title: string;
   directory: string;
+  ownerInstanceId: string;
   createdAt: number;
   lastSeenAt: number;
   seenInStatus: boolean;
@@ -224,6 +225,7 @@ export class MultiplexerSessionManager {
         parentId,
         title,
         directory,
+        ownerInstanceId: this.instanceId,
         createdAt: now,
         lastSeenAt: now,
         seenInStatus: false,
@@ -253,6 +255,7 @@ export class MultiplexerSessionManager {
         sessionId,
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
+        ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
         backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
       });
 
@@ -271,6 +274,7 @@ export class MultiplexerSessionManager {
         sessionId,
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
+        ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
         backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
       });
       await this.closeSession(sessionId, 'idle');
@@ -283,6 +287,7 @@ export class MultiplexerSessionManager {
         sessionId,
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
+        ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
         backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
       });
       await this.respawnIfKnown(sessionId);
@@ -301,6 +306,7 @@ export class MultiplexerSessionManager {
       sessionId,
       tracked: this.sessions.has(sessionId),
       known: this.knownSessions.has(sessionId),
+      ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
       backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
     });
 
@@ -343,6 +349,16 @@ export class MultiplexerSessionManager {
         [];
 
       for (const [sessionId, tracked] of this.sessions.entries()) {
+        if (tracked.ownerInstanceId !== this.instanceId) {
+          log('[multiplexer-session-manager] skipping non-owner poll close', {
+            instanceId: this.instanceId,
+            ownerInstanceId: tracked.ownerInstanceId,
+            sessionId,
+            paneId: tracked.paneId,
+          });
+          continue;
+        }
+
         const status = allStatuses[sessionId];
         const isIdle = status?.type === 'idle';
 
@@ -358,7 +374,7 @@ export class MultiplexerSessionManager {
           !!tracked.missingSince &&
           now - tracked.missingSince >= SESSION_MISSING_GRACE_MS;
         const shouldKeepRunningBackgroundJob =
-          missingTooLong && this.isRunningBackgroundJob(sessionId);
+          (isIdle || missingTooLong) && this.isRunningBackgroundJob(sessionId);
         if (isIdle || missingTooLong) {
           if (shouldKeepRunningBackgroundJob) {
             log(
@@ -432,6 +448,31 @@ export class MultiplexerSessionManager {
         tracked: !!tracked,
         hasMultiplexer: !!this.multiplexer,
       });
+      return;
+    }
+
+    if (tracked.ownerInstanceId !== this.instanceId) {
+      log('[multiplexer-session-manager] close skipped; non-owner instance', {
+        instanceId: this.instanceId,
+        ownerInstanceId: tracked.ownerInstanceId,
+        sessionId,
+        paneId: tracked.paneId,
+        reason,
+      });
+      return;
+    }
+
+    if (reason === 'idle' && this.isRunningBackgroundJob(sessionId)) {
+      log(
+        '[multiplexer-session-manager] close skipped; background job running',
+        {
+          instanceId: this.instanceId,
+          sessionId,
+          paneId: tracked.paneId,
+          reason,
+          backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        },
+      );
       return;
     }
 
@@ -547,6 +588,7 @@ export class MultiplexerSessionManager {
         parentId: known.parentId,
         title: known.title,
         directory: known.directory,
+        ownerInstanceId: this.instanceId,
         createdAt: now,
         lastSeenAt: now,
         seenInStatus: false,

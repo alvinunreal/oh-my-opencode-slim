@@ -90,6 +90,43 @@ describe('cancel_task tool', () => {
     expect(board.get('ses_1')).toMatchObject({ state: 'completed' });
   });
 
+  test('still aborts stale cancelled jobs', async () => {
+    const { board, abort, cancelTask } = createTool();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    board.updateStatus({ taskID: 'ses_1', state: 'cancelled' });
+
+    const output = await cancelTask.execute(
+      { task_id: 'ses_1', reason: 'stop ghost worker' },
+      context,
+    );
+
+    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(String(output)).toContain('state: cancelled');
+  });
+
+  test('still aborts reconciled stale cancellations', async () => {
+    const { board, abort, cancelTask } = createTool();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    board.updateStatus({ taskID: 'ses_1', state: 'cancelled' });
+    board.markReconciled('ses_1');
+
+    const output = await cancelTask.execute(
+      { task_id: 'ses_1', reason: 'stop ghost worker' },
+      context,
+    );
+
+    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(String(output)).toContain('state: reconciled');
+  });
+
   test('does not mark cancelled when abort fails', async () => {
     const { board, abort, cancelTask } = createTool({
       abort: async () => {
