@@ -33,7 +33,29 @@ Required behavior:
 - after each phase, validate, update the deepwork file, prepare the plan file
   for oracle review and ask `@oracle` to review the phase result, fix
   actionable issues, then continue;
+- when a phase includes `@designer`, preserve designer intent across later
+  phases. Use `@fixer` only for mechanical follow-up that does not alter the
+  UI/UX;
 - finish with final validation and a concise summary.
+
+## Designer Handoff Guardrail
+
+When a deepwork phase includes `@designer`, treat the delivered UI/UX as
+accepted design intent for later phases. Record any important design decisions in
+the deepwork file before continuing.
+
+After designer work:
+
+- preserve layout, rhythm, hierarchy, motion, spacing, color, affordances,
+  responsiveness, and component feel;
+- review and improve user-facing copy with grounded, normal wording, but do not
+  change visual structure or interaction intent;
+- route follow-up visual, responsive, motion, hierarchy, polish, or
+  component-feel changes back to `@designer`;
+- use `@fixer` only for bounded mechanical follow-up that preserves the design
+  exactly, such as wiring, tests, type fixes, or non-visual behavior changes;
+- if design intent must change, record why in the deepwork file before changing
+  it.
 
 ## Deepwork File
 

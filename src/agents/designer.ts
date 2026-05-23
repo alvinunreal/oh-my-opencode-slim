@@ -47,6 +47,7 @@ const DESIGNER_PROMPT = `You are a Designer - a frontend UI/UX specialist who cr
 - Respect existing design systems when present
 - Leverage component libraries where available
 - Prioritize visual excellence—code perfection comes second
+- Use grounded, normal, regular english - don't use jargon or overly technical language
 
 ## File Operations Rules
 - Always use dedicated file tools for file I/O

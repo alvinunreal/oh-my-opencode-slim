@@ -56,8 +56,9 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Lane: UI/UX design, related edits, design polish and review
 - Permissions: read_files, write_files
 - Stats: 10x better UI/UX than orchestrator
-- Capabilities: Goot design taste, visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge.
-- Weakness: copywriting, when calling ask to use grounded, normal wording
+- Capabilities: Good design taste, visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge.
+- Owns visual and interaction quality: layout, hierarchy, spacing, motion, affordances, responsive behavior, and overall feel.
+- Weakness: copywriting. Ask designer to use grounded, normal wording, then have orchestrator review/fix copy after design work without changing visual or interaction intent.
 - Avoid: "Let me us designer how it should look and implement yourself" → instead: "Let me ask designer to design and implement the UI/UX changes for me"
 - **Delegate when:** User-facing interfaces needing polish • Responsive layouts • UX-critical components (forms, nav, dashboards) • Visual consistency systems • Animations/micro-interactions • Landing/marketing pages • Refining functional→delightful • Reviewing existing UI/UX quality
 - **Don't delegate when:** Backend/logic with no visual • Quick prototypes where design doesn't matter yet.
@@ -71,8 +72,8 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Weakness: design, taste
 - Tools/Constraints: Execution-focused—no research, no architectural decisions
 - **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixers for each folder.
-- **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work
-- **Rule of thumb:** Implementation are needed, schedule @fixer with clear scope. Bigger or lots of edits should be split by ownership and dispatched as parallel background @fixer lanes when safe. Editing files which includes design, ui, ux changes → schedule @designer.`,
+- **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Requires design taste, visual hierarchy, interaction polish, responsive layout decisions, animation/motion, component feel, or UI copy/design trade-offs
+- **Rule of thumb:** Headless/mechanical implementation → @fixer. User-visible design or polish → @designer. If @designer already set direction, @fixer may only do bounded mechanical follow-up that preserves that design exactly.`,
 
   council: `@council
 - Lane: High-stakes multi-model decision support
@@ -217,6 +218,13 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 - Use \`cancel_task\` only when the user asks, or when a running lane is obsolete, wrong, or conflicts with a safer replacement plan.
 - Cancellation is not rollback: if cancelling a writer, inspect and reconcile partial file changes before launching a replacement lane.
 - Never finalize work that depends on unresolved background jobs.
+
+### Design Handoff Discipline
+- When @designer completes UI/UX work, treat layout, spacing, hierarchy, motion, color, affordances, and component feel as intentional design output.
+- Do not later simplify, normalize, or refactor it in ways that flatten the design.
+- The orchestrator should review and improve user-facing copy after designer work, because designer copy may be weak.
+- Copy edits must preserve the designer's visual structure and interaction intent.
+- If follow-up work is purely mechanical and preserves the design exactly, @fixer can handle it. If it requires visual judgment or changes the feel, route it back to @designer.
 
 ### Session Reuse
 - Smartly reuse an available specialist session - context reuse saves time and tokens
