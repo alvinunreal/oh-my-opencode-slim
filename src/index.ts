@@ -45,11 +45,11 @@ import {
   createCouncilTool,
   createPresetManager,
   createReadSessionTool,
+  createSpecTools,
   createSubtaskCommandManager,
   createSubtaskState,
   createSubtaskTool,
   createTraceTool,
-  createSpecTools,
   createWebfetchTool,
 } from './tools';
 import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTraceFreshnessHook } from './index';
@@ -42,7 +48,10 @@ describe('trace-freshness hook', () => {
     const spec = join(dir, 'spec');
     require('node:fs').mkdirSync(spec);
     writeFileSync(join(spec, 'requirements.md'), '## REQ-001: x\n');
-    writeFileSync(join(spec, 'design.md'), '## DES-001: y\nRationale anchor: REQ-001.\n');
+    writeFileSync(
+      join(spec, 'design.md'),
+      '## DES-001: y\nRationale anchor: REQ-001.\n',
+    );
     const hook = createTraceFreshnessHook({ specDir: spec });
     const messages: Message[] = [userMsg('hi', 'fixer')];
     await hook['experimental.chat.messages.transform'](
@@ -74,8 +83,9 @@ describe('trace-freshness hook', () => {
 
     expect(messages[0].parts).toHaveLength(2);
     expect(messages[0].parts[1].text).toContain('trace_regenerate: refreshed');
-    expect(require('node:fs').readFileSync(join(spec, 'trace.md'), 'utf8'))
-      .toContain('REQ-001');
+    expect(
+      require('node:fs').readFileSync(join(spec, 'trace.md'), 'utf8'),
+    ).toContain('REQ-001');
   });
 
   test('no-op when trace is up-to-date', async () => {

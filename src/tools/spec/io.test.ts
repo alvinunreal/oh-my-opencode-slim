@@ -25,9 +25,7 @@ afterEach(() => {
 function seedTrunk(reqs: string[] = ['REQ-001'], dess: string[] = ['DES-001']) {
   const reqBody =
     `# Requirements\n\n` +
-    reqs
-      .map((id) => `## ${id}: seed\n\nbody\n`)
-      .join('\n');
+    reqs.map((id) => `## ${id}: seed\n\nbody\n`).join('\n');
   const desBody =
     `# Design\n\n` +
     dess
@@ -113,10 +111,7 @@ describe('mergeChange', () => {
       'feat-x',
       'delta-design.md',
     );
-    writeFileSync(
-      deltaReq,
-      '## REQ-002: new req\n\nbody\n',
-    );
+    writeFileSync(deltaReq, '## REQ-002: new req\n\nbody\n');
     writeFileSync(
       deltaDes,
       '## DES-002: new des\n\nRationale anchor: REQ-002.\n\nbody\n',
@@ -132,10 +127,7 @@ describe('mergeChange', () => {
     );
     expect(trunkReq).toContain('## REQ-002: new req');
 
-    const trace = readFileSync(
-      join(root, 'docs', 'spec', 'trace.md'),
-      'utf8',
-    );
+    const trace = readFileSync(join(root, 'docs', 'spec', 'trace.md'), 'utf8');
     expect(trace).toContain('REQ-002');
   });
 
@@ -143,26 +135,19 @@ describe('mergeChange', () => {
     seedTrunk(['REQ-001'], ['DES-001']);
     proposeChange(join(root, 'docs', 'spec'), 'feat-y', 'y');
     writeFileSync(
-      join(
-        root,
-        'docs',
-        'spec',
-        'changes',
-        'feat-y',
-        'delta-requirements.md',
-      ),
+      join(root, 'docs', 'spec', 'changes', 'feat-y', 'delta-requirements.md'),
       '## REQ-001: collision\n\nbody\n',
     );
-    expect(() =>
-      mergeChange(join(root, 'docs', 'spec'), 'feat-y'),
-    ).toThrow(/already exists in trunk/);
+    expect(() => mergeChange(join(root, 'docs', 'spec'), 'feat-y')).toThrow(
+      /already exists in trunk/,
+    );
   });
 
   test('refuses when change directory missing', () => {
     seedTrunk();
-    expect(() =>
-      mergeChange(join(root, 'docs', 'spec'), 'nope'),
-    ).toThrow(/not found/);
+    expect(() => mergeChange(join(root, 'docs', 'spec'), 'nope')).toThrow(
+      /not found/,
+    );
   });
 });
 
@@ -175,16 +160,16 @@ describe('archiveChange', () => {
       /docs\/spec\/archive\/\d{4}-\d{2}-\d{2}-feat-z$/,
     );
     expect(existsSync(result.archivePath)).toBe(true);
-    expect(
-      existsSync(join(root, 'docs', 'spec', 'changes', 'feat-z')),
-    ).toBe(false);
+    expect(existsSync(join(root, 'docs', 'spec', 'changes', 'feat-z'))).toBe(
+      false,
+    );
   });
 
   test('refuses when change dir missing', () => {
     seedTrunk();
-    expect(() =>
-      archiveChange(join(root, 'docs', 'spec'), 'nope'),
-    ).toThrow(/not found/);
+    expect(() => archiveChange(join(root, 'docs', 'spec'), 'nope')).toThrow(
+      /not found/,
+    );
   });
 
   test('refuses on archive collision (same slug same day)', () => {
@@ -192,8 +177,8 @@ describe('archiveChange', () => {
     proposeChange(join(root, 'docs', 'spec'), 'feat-q', 'q');
     archiveChange(join(root, 'docs', 'spec'), 'feat-q');
     proposeChange(join(root, 'docs', 'spec'), 'feat-q', 'q-again');
-    expect(() =>
-      archiveChange(join(root, 'docs', 'spec'), 'feat-q'),
-    ).toThrow(/archive .* already exists/);
+    expect(() => archiveChange(join(root, 'docs', 'spec'), 'feat-q')).toThrow(
+      /archive .* already exists/,
+    );
   });
 });

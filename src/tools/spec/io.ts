@@ -1,8 +1,8 @@
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   renameSync,
   writeFileSync,
 } from 'node:fs';
@@ -184,10 +184,7 @@ function todayStamp(): string {
   return `${y}-${m}-${day}`;
 }
 
-export function archiveChange(
-  specDir: string,
-  slug: string,
-): ArchiveResult {
+export function archiveChange(specDir: string, slug: string): ArchiveResult {
   const changeDir = join(changesDir(specDir), slug);
   if (!existsSync(changeDir)) {
     throw new Error(`change ${slug} not found at ${changeDir}`);

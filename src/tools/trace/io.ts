@@ -1,10 +1,6 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  extractAnchors,
-  extractIds,
-  generateTraceTable,
-} from './parser';
+import { extractAnchors, extractIds, generateTraceTable } from './parser';
 
 export interface RegenerateResult {
   written: boolean;
