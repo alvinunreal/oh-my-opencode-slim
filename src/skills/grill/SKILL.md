@@ -164,6 +164,11 @@ prompt).
 - Skipping phase 1 because "the request is obvious" → there are always
   hidden assumptions; surface them.
 - Asking the human in phase 4 things you could have answered in phase 3.
+- Before writing any `H-N`, run this self-check: *"Could `grep`, a file
+  read, or a doc fetch answer this?"* If yes, it belongs in phase 3,
+  not phase 4. Default to resolving the question yourself; escalate
+  only what is genuinely a judgment call (business priority, scope
+  tradeoff, taste — never something derivable from code or docs).
 - Letting an external dependency through without read+write responsibilities
   defined.
 - Writing `requirements.md` while questions still block.
