@@ -488,6 +488,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "dev-wantap",
+      "name": "GWANWOO KIM",
+      "avatar_url": "https://avatars.githubusercontent.com/u/69743540?v=4",
+      "profile": "https://github.com/dev-wantap",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
