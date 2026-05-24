@@ -107,6 +107,19 @@ Rationale anchor: REQ-001, REQ-003.
 The `Rationale anchor:` line is mandatory and is what `trace_regenerate`
 parses. Anchor every DES to ≥1 REQ.
 
+### Heading format is strict
+
+`trace_regenerate` parses headings with the exact pattern
+`## REQ-<digits>:` and `## DES-<digits>:` (level-2 heading, ID, then a
+colon). If you write `## REQ-1 多平台插件库` without the colon, the
+parser finds zero IDs and `trace.md` ends up with only the table header.
+Likewise, multiple REQ anchors must be comma-separated on a single
+`Rationale anchor:` line (e.g. `Rationale anchor: REQ-001, REQ-003.`) —
+multi-line anchor blocks are not parsed.
+
+If `trace.md` regenerates to an empty table, the first thing to check is
+whether every REQ/DES heading has the trailing colon.
+
 ### After both files exist
 
 Run `trace_regenerate` (the tool, not check-only). This emits `trace.md`
