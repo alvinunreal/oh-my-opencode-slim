@@ -89,6 +89,27 @@ Safety rules:
 - large files are capped before injection,
 - unreadable or missing files are skipped.
 
+## Timeout
+
+Each subtask worker has a timeout. If the worker has not returned a summary
+before the timeout elapses, Slim aborts the child session and the `subtask` tool
+call fails with `Prompt timed out after <ms>ms`.
+
+The default timeout is **5 minutes** (`300000` ms). Override it via
+`subtask.timeoutMs` in your plugin config:
+
+```jsonc
+{
+  // Give workers up to 30 minutes before timing out
+  "subtask": {
+    "timeoutMs": 1800000
+  }
+}
+```
+
+Set `timeoutMs` to `0` to disable the timeout entirely. The maximum accepted
+value is `86400000` (24 hours).
+
 ## Summary format
 
 The worker is instructed to finish with:

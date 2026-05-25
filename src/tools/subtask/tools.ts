@@ -18,8 +18,13 @@ import {
 import type { SubtaskState } from './state';
 
 export type OpencodeClient = PluginInput['client'];
-const SUBTASK_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_SUBTASK_TIMEOUT_MS = 5 * 60 * 1000;
 const SUBTASK_SUMMARY_TAG_REGEX = /<\/?subtask_summary>/g;
+
+export interface CreateSubtaskToolOptions {
+  /** Worker timeout in ms. 0 disables the timeout. */
+  timeoutMs?: number;
+}
 
 function normalizeSubtaskSummary(text: string): string {
   return text.replace(SUBTASK_SUMMARY_TAG_REGEX, '').trim();
@@ -49,8 +54,10 @@ export function createSubtaskTool(
   ctx: PluginInput,
   state: SubtaskState,
   depthTracker?: SubagentDepthTracker,
+  options: CreateSubtaskToolOptions = {},
 ): ToolDefinition {
   const client = ctx.client;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SUBTASK_TIMEOUT_MS;
 
   return tool({
     description:
@@ -150,7 +157,7 @@ Do not spawn another subtask.`;
               ],
             },
           },
-          SUBTASK_TIMEOUT_MS,
+          timeoutMs,
           abortSignal,
         );
 

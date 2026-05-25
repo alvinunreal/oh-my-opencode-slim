@@ -401,7 +401,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...todoContinuationHook.tool,
       ast_grep_search,
       ast_grep_replace,
-      subtask: createSubtaskTool(ctx, subtaskState, depthTracker),
+      subtask: createSubtaskTool(ctx, subtaskState, depthTracker, {
+        timeoutMs: config.subtask?.timeoutMs,
+      }),
       read_session: createReadSessionTool(ctx.client, subtaskState),
     },
 

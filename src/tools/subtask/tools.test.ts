@@ -243,6 +243,46 @@ describe('subtask tool', () => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test('honors custom timeoutMs option', async () => {
+    const directory = makeTempDir();
+    try {
+      const sessionCreate = mock(async () => ({ data: { id: 'ses_new' } }));
+      const sessionPrompt = mock(() => new Promise(() => {}));
+      const sessionMessages = mock(async () => ({ data: [] }));
+      const sessionAbort = mock(async () => ({}));
+      const state = createSubtaskState();
+      const tool = createSubtaskTool(
+        {
+          directory,
+          client: {
+            session: {
+              abort: sessionAbort,
+              create: sessionCreate,
+              messages: sessionMessages,
+              prompt: sessionPrompt,
+            },
+          },
+        } as any,
+        state,
+        undefined,
+        { timeoutMs: 5 },
+      );
+
+      await expect(
+        tool.execute({ prompt: 'Will time out' }, {
+          sessionID: 'ses_old',
+        } as any),
+      ).rejects.toThrow('Prompt timed out after 5ms');
+
+      expect(sessionAbort).toHaveBeenCalledWith({
+        path: { id: 'ses_new' },
+        query: { directory },
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('read_session tool', () => {

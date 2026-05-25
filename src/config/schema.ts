@@ -252,6 +252,20 @@ export type TodoContinuationConfig = z.infer<
   typeof TodoContinuationConfigSchema
 >;
 
+export const SubtaskConfigSchema = z.object({
+  timeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(24 * 60 * 60 * 1000)
+    .default(5 * 60 * 1000)
+    .describe(
+      'Subtask worker timeout in ms. 0 disables the timeout. Defaults to 300000 (5 minutes).',
+    ),
+});
+
+export type SubtaskConfig = z.infer<typeof SubtaskConfigSchema>;
+
 export const FailoverConfigSchema = z.object({
   enabled: z.boolean().default(true),
   timeoutMs: z.number().min(0).default(15000),
@@ -335,6 +349,7 @@ export const PluginConfigSchema = z
     sessionManager: SessionManagerConfigSchema.optional(),
     divoom: DivoomConfigSchema.optional(),
     todoContinuation: TodoContinuationConfigSchema.optional(),
+    subtask: SubtaskConfigSchema.optional(),
     fallback: FailoverConfigSchema.optional(),
     council: CouncilConfigSchema.optional(),
   })
