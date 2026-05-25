@@ -32,12 +32,6 @@ This is the exact configuration the author runs day-to-day.
         "gamma": { "model": "fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo" }
       }
     }
-  },
-  "todoContinuation": {
-    "maxContinuations": 50,
-    "cooldownMs": 3000,
-    "autoEnable": false,
-    "autoEnableThreshold": 4
-  } 
+  }
 }
 ```

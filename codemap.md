@@ -42,7 +42,6 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 | `src/hooks/phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases. | [View Map](src/hooks/phase-reminder/codemap.md) |
 | `src/hooks/post-file-tool-nudge/` | Post-read/write reminder path that nudges delegation-aware next steps. | [View Map](src/hooks/post-file-tool-nudge/codemap.md) |
 | `src/hooks/task-session-manager/` | Resumable `task` session tracking, short alias resolution, prompt injection, and stale-session cleanup. | [View Map](src/hooks/task-session-manager/codemap.md) |
-| `src/hooks/todo-continuation/` | Auto-continue behavior for outstanding todo execution. | [View Map](src/hooks/todo-continuation/codemap.md) |
 | `src/interview/` | `/interview` feature: per-session and dashboard prompt/state orchestration, persistence, local UI, and cross-process coordination. | [View Map](src/interview/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and per-provider MCP definitions. | [View Map](src/mcp/codemap.md) |
 | `src/multiplexer/` | Terminal multiplexer abstraction layer with backend selection, session mirroring, polling fallback, and shutdown lifecycle orchestration. | [View Map](src/multiplexer/codemap.md) |

@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-05-12T00:00:00.000Z",
+  "updatedAt": "2026-05-25T00:00:00.000Z",
   "dependencies": [
     {
       "name": "@opencode-ai/plugin",

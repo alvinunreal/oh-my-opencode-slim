@@ -503,7 +503,6 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[V2 Background Orchestration](docs/v2-background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
 | **[Session Management](docs/session-management.md)** | Reuse recent child-agent sessions with short aliases instead of starting over |
-| **[Todo Continuation](docs/todo-continuation.md)** | Auto-continue orchestrator sessions with cooldowns and safety checks |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | Define your own specialists with custom prompts, models, MCP access, and Orchestrator delegation rules |
 | **[Codemap](docs/codemap.md)** | Generate hierarchical codemaps to understand large codebases faster |

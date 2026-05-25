@@ -63,7 +63,7 @@ describe('createPresetManager', () => {
       const output = createOutput();
 
       await manager.handleCommandExecuteBefore(
-        { command: 'auto-continue', sessionID: 's1', arguments: 'on' },
+        { command: 'unknown-command', sessionID: 's1', arguments: 'on' },
         output,
       );
 

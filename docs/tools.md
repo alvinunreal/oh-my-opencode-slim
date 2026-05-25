@@ -59,11 +59,3 @@ Includes Prettier, Biome, `gofmt`, `rustfmt`, `ruff`, and 20+ others.
 > See the [official OpenCode docs](https://opencode.ai/docs/formatters/#built-in) for the complete list.
 
 ---
-
-## Todo Continuation
-
-Auto-continue has its own guide now:
-
-- [Todo Continuation](todo-continuation.md) — controls, safety gates, behavior, and config
-
----

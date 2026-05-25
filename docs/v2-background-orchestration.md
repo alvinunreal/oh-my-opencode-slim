@@ -316,8 +316,6 @@ Important areas:
   notifications, Divoom, multiplexer, and cleanup behavior.
 - `src/multiplexer/` — verify panes stay attached to running background child
   sessions while the parent continues.
-- `src/hooks/todo-continuation/` — avoid marking workflows complete before
-  relevant background tasks have terminal results.
 
 ---
 

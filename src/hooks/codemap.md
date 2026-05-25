@@ -51,11 +51,11 @@ and managers for all hook-based runtime behaviors used by
 | `tool.execute.before` | Pre-process tool inputs | `apply-patch`, `task-session-manager` |
 | `tool.execute.after` | Post-process tool outputs | `delegate-task-retry`, `json-error-recovery`, `post-file-tool-nudge`, `task-session-manager` |
 | `experimental.chat.messages.transform` | Rewrite outbound user content | `filter-available-skills`, `phase-reminder` |
-| `experimental.chat.system.transform` | Inject system-level directives | `todo-continuation`, `post-file-tool-nudge`, `task-session-manager` |
+| `experimental.chat.system.transform` | Inject system-level directives | `post-file-tool-nudge`, `task-session-manager` |
 | `chat.headers` | Mutate request headers | `chat-headers` |
-| `chat.message` | Track runtime session/agent mapping | `todo-continuation` |
-| `command.execute.before` | Handle slash-command UX | `todo-continuation` (`auto-continue`) |
-| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `todo-continuation`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers, `task-session-manager` |
+| `chat.message` | Track runtime session/agent mapping | `src/index.ts` session map |
+| `command.execute.before` | Handle slash-command UX | `interview`, `preset-manager`, `deepwork` |
+| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers, `task-session-manager` |
 
 ## Implementation Notes
 
@@ -64,10 +64,6 @@ and managers for all hook-based runtime behaviors used by
 - `ForegroundFallbackManager` listens to event traffic and remediates
   foreground rate-limit failures by aborting the current prompt and re-queuing the
   latest user message on the next model in a per-agent chain.
-- `createTodoContinuationHook` spans multiple surfaces: message transform,
-  system transform, command interception, tool-after, and events. It owns
-  auto-injection state, cooldown, suppress windows, and orchestration session
-  tracking.
 - `createTaskSessionManagerHook` tracks V2 background jobs and reusable completed sessions: generates
   user-facing aliases, resolves alias/task IDs before delegation, remembers fresh
   task IDs after completion, and drops stale entries on missing-session failure,

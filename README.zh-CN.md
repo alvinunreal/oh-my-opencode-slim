@@ -495,7 +495,6 @@ ping all agents
 | **[Council (议会) (docs/council.md)](docs/council.md)** | 使用 `@council` 并行运行多个模型并合成单一答案 |
 | **[多路复用器集成 (docs/multiplexer-integration.md)](docs/multiplexer-integration.md)** | 在 Tmux 或 Zellij 窗格中实时观看智能体的工作过程 |
 | **[会话管理 (docs/session-management.md)](docs/session-management.md)** | 使用短别名复用最近的子智能体会话，而不是重新开始 |
-| **[待办事项持续执行 (docs/todo-continuation.md)](docs/todo-continuation.md)** | 具备冷却时间和安全检查的编排者会话自动持续执行 |
 | **[运行时预设切换 (docs/preset-switching.md)](docs/preset-switching.md)** | 在运行时使用 `/preset` 切换智能体模型预设 |
 | **[自定义智能体 (docs/configuration.md#custom-agents)](docs/configuration.md#custom-agents)** | 自定义专家智能体：配置独特的提示词、模型、MCP 权限和编排者委派规则 |
 | **[子任务 (docs/subtask.md)](docs/subtask.md)** | 使用 `/subtask` 运行受限的子工作器，并将结构化总结返回到主会话 |

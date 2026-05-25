@@ -8,8 +8,7 @@ Scope for this pass:
 - scheduler/job-board behavior,
 - `task` and `task_status` integration,
 - task-session-manager changes,
-- tmux/zellij multiplexer compatibility,
-- todo-continuation guardrails.
+- tmux/zellij multiplexer compatibility.
 
 Out of scope for this pass:
 
@@ -151,7 +150,6 @@ formatForPrompt(parentSessionID)
 Then pass the shared state into:
 
 - task-session-manager,
-- todo-continuation,
 - any future prompt/system-context hook that needs scheduler state.
 
 ### Reconciliation rule
@@ -316,7 +314,7 @@ Current behavior:
 
 - `src/index.ts` creates one shared `BackgroundJobBoard` using
   `backgroundJobs` caps/context config and passes it to task-session-manager,
-  todo-continuation, cancel-task, and multiplexer integration.
+  cancel-task, and multiplexer integration.
 - `tool.execute.before(task)` validates `subagent_type`, strips stale/invalid
   `task_id` aliases when they cannot safely resolve, and only resolves reusable
   aliases for matching completed/reconciled jobs.
@@ -498,34 +496,6 @@ Potential later improvement:
 
 ---
 
-## Todo Continuation Guardrails
-
-Primary file:
-
-- `src/hooks/todo-continuation/index.ts`
-
-Risk:
-
-- parent orchestrator becomes idle while background jobs are still running,
-- auto-continuation assumes the workflow can proceed or finish,
-- dependent work advances too early.
-
-V2 rule:
-
-```text
-If relevant background jobs are running, continuation should poll/reconcile them
-instead of treating the workflow as complete.
-```
-
-Implementation direction:
-
-- expose a `hasRunningBackgroundJobs(parentSessionID)` query from the scheduler
-  state,
-- expose `hasTerminalUnreconciledJobs(parentSessionID)`,
-- have continuation reminders nudge toward `task_status` and reconciliation.
-
----
-
 ## Agent Lane Reframing
 
 V2 should describe specialists as execution lanes, not optional helpers.
@@ -594,13 +564,6 @@ prompt can rely on visible scheduler state.
 - add tests for delayed completion,
 - adjust close-on-idle only if native events prove insufficient.
 
-### Phase 8 — Todo Continuation Safety
-
-- prevent auto-continuation from finalizing while jobs run,
-- nudge the orchestrator to poll terminal states and reconcile.
-
----
-
 ## First Code Targets
 
 Start here:
@@ -641,7 +604,7 @@ Core V2 is working when:
 - dependent work waits for terminal results,
 - prompt-level advisory ownership reduces conflicting background workers,
 - multiplexer panes show background child sessions while parent continues,
-- todo-continuation does not finalize with unresolved background jobs.
+- final responses do not depend on unresolved background jobs.
 
 The core invariant:
 

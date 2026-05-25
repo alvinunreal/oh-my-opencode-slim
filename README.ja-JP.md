@@ -501,7 +501,6 @@ ping all agents
 | **[Council](docs/council.md)** | 複数のモデルを並列実行し、`@council` で 1 つの回答に統合します |
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | エージェントの動作を Tmux や Zellij のペインでライブ表示します |
 | **[Session Management](docs/session-management.md)** | 短いエイリアスで最近の子エージェントセッションを再利用し、最初からやり直さずに済みます |
-| **[Todo Continuation](docs/todo-continuation.md)** | クールダウンと安全チェック付きで Orchestrator セッションを自動継続します |
 | **[Preset Switching](docs/preset-switching.md)** | `/preset` で実行時にエージェントモデルのプリセットを切り替えます |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | カスタムプロンプト、モデル、MCP アクセス、Orchestrator の委譲ルールを備えた独自の専門エージェントを定義します |
 | **[Subtask](docs/subtask.md)** | `/subtask` で境界が明確な子ワーカーを実行し、構造化された要約をメインセッションに返します |
