@@ -1,9 +1,6 @@
 <div align="center">
-  <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v2beta.webp" alt="V2 Beta Release" style="border-radius: 10px;">
-  </a>
-  <h3>✨ V2 ベータリリース：バックグラウンドオーケストレーションが登場 ✨</h3>
-  <p><i>オーケストレーターがバックグラウンドで専門エージェントをスケジューリングし、<br><code>/deepwork</code> が大きなゴールをファイルに紐づいた計画へと変換します。<br>ベータテスターの皆様：フィードバックは Telegram でお寄せください。</i></p>
+  <h3>✨ デフォルトのバックグラウンドオーケストレーションが登場 ✨</h3>
+  <p><i>オーケストレーターはワークフローマネージャーとしてバックグラウンドで専門エージェントをスケジューリングし、<br><code>/deepwork</code> が大きなゴールをファイルに紐づいた計画へと変換します。<br>フィードバックは Telegram でお寄せください。</i></p>
 
   <p><b>オープン・マルチエージェント・スイート</b> · あらゆるモデルを組み合わせ · タスクを自動委譲</p>
 
@@ -45,18 +42,20 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
-### V2 バックグラウンドオーケストレーション・ベータ
+> **翻訳ステータス:** 英語版 README が最新です。この日本語訳には古い表現が一部残っている可能性があります。
 
-V2 では、オーケストレーターがデフォルトの実行ワーカーからスケジューラーへと役割を変えます。
+### デフォルトのバックグラウンドオーケストレーション
+
+現在のデフォルトでは、オーケストレーターが実行ワーカーではなくスケジューラーとして動作します。
 作業を計画し、専門エージェントをバックグラウンドタスクとしてディスパッチし、ステータスをポーリングし、
 結果を整合させてから処理を続行します。これには OpenCode のネイティブな
-バックグラウンドサブエージェントサポートが必要であり、ベータユーザーは実験的なフラグを
-有効にして OpenCode を起動する必要があります。
+バックグラウンドサブエージェントサポートが必要です。下記の環境変数を有効にして OpenCode を起動してください。
 
 ```bash
-bunx oh-my-opencode-slim@beta install
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
+bunx oh-my-opencode-slim@latest install --background-subagents=yes
 ```
+
+インストール後はターミナルを再起動するか、更新された shell ファイルを source してから `opencode` を実行してください。一回限りなら `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode` でも起動できます。
 
 ### はじめに
 
@@ -79,7 +78,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
 4. **各エージェントに使用したいモデルを更新します**
 
 > [!TIP]
-> 自動委譲の仕組みを理解しておくことを**推奨**します。**[Orchestrator のプロンプト](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** には、委譲ルール、専門エージェントへのルーティングロジック、メインエージェントがサブエージェントに作業を引き継ぐべきしきい値が記述されています。`@agentName <task>` のようにサブエージェントを呼び出すことで、いつでも手動で委譲できます。
+> バックグラウンドオーケストレーションの仕組みを理解しておくことを**推奨**します。**[Orchestrator のプロンプト](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** には、スケジューラーのルール、専門エージェントへのルーティングロジック、作業をバックグラウンドエージェントへ割り当てるしきい値が記述されています。`@agentName <task>` のようにサブエージェントを呼び出すことで、いつでも手動で委譲できます。
 
 デフォルトで生成される設定には `openai` と `opencode-go` の両方のプリセットが含まれます。
 
@@ -122,8 +121,10 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
 
 インストールと認証を済ませた後、すべてのエージェントが設定済みで応答することを確認してください:
 
+先にターミナルを再起動するか、更新された shell ファイルを source してください。環境変数が有効なら `opencode` を実行できます。現在の shell で未設定の場合は次を使います:
+
 ```bash
-opencode
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
 次に以下を実行します:
@@ -503,7 +504,6 @@ ping all agents
 | **[Session Management](docs/session-management.md)** | 短いエイリアスで最近の子エージェントセッションを再利用し、最初からやり直さずに済みます |
 | **[Preset Switching](docs/preset-switching.md)** | `/preset` で実行時にエージェントモデルのプリセットを切り替えます |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | カスタムプロンプト、モデル、MCP アクセス、Orchestrator の委譲ルールを備えた独自の専門エージェントを定義します |
-| **[Subtask](docs/subtask.md)** | `/subtask` で境界が明確な子ワーカーを実行し、構造化された要約をメインセッションに返します |
 | **[Codemap](docs/codemap.md)** | 階層的なコードマップを生成し、大規模コードベースを迅速に理解します |
 | **[Clonedeps](docs/clonedeps.md)** | 選択した依存関係のソースを ignore 済みのローカルワークスペースにクローンし、調査できるようにします |
 | **[Interview](docs/interview.md)** | ブラウザベースの Q&A フローで、ざっくりとしたアイデアを構造化された Markdown 仕様に変換します |

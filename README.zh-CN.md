@@ -1,9 +1,6 @@
 <div align="center">
-  <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v2beta.webp" alt="V2 Beta Release" style="border-radius: 10px;">
-  </a>
-  <h3>✨ V2 Beta 版本：后台编排已上线 ✨</h3>
-  <p><i>编排者（Orchestrator）现在可在后台调度专家智能体，<br>同时 <code>/deepwork</code> 可以将宏大目标转化为基于文件的具体计划。<br>Beta 测试人员：请在 Telegram 上与我们分享您的反馈。</i></p>
+  <h3>✨ 默认后台编排已上线 ✨</h3>
+  <p><i>编排者（Orchestrator）现在作为工作流管理器在后台调度专家智能体，<br>同时 <code>/deepwork</code> 可以将宏大目标转化为基于文件的具体计划。<br>欢迎在 Telegram 上与我们分享反馈。</i></p>
 
   <p><b>开放式多智能体套件</b> · 混合任意模型 · 自动委派任务</p>
 
@@ -43,15 +40,18 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
-### V2 后台编排 Beta 版
+> **翻译状态说明：** 英文 README 是最新版本；此中文翻译可能仍有少量旧表述。
 
-V2 将编排者（Orchestrator）从默认的执行工作器转变为调度器：
-它规划工作、将专家作为后台任务分发、轮询其状态，并在继续执行之前核对结果。这需要 OpenCode 原生的后台子智能体支持，因此 Beta 版用户必须在启用实验性标志的情况下启动 OpenCode。
+### 默认后台编排
+
+当前版本将编排者（Orchestrator）从默认的执行工作器转变为调度器：
+它规划工作、将专家作为后台任务分发、按需检查状态，并在继续执行之前核对结果。这需要 OpenCode 原生的后台子智能体支持，因此请使用下方环境变量启动 OpenCode。
 
 ```bash
-bunx oh-my-opencode-slim@beta install
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
+bunx oh-my-opencode-slim@latest install --background-subagents=yes
 ```
+
+安装后请重启终端或 source 更新过的 shell 文件，然后再运行 `opencode`；也可以一次性使用 `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode` 启动。
 
 ### 入门指南
 
@@ -74,7 +74,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
 4. **为您要分配的每个智能体更新模型配置**
 
 > [!TIP]
-> **强烈建议**了解自动委派（Automatic Delegation）的工作原理。**[编排者提示词 (Orchestrator prompt)](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** 包含了委派规则、专家路由逻辑，以及主智能体何时将工作转交给子智能体的阈值。您始终可以通过以下方式手动委派任务：`@智能体名称 <任务内容>`
+> **建议**了解后台编排的工作原理。**[编排者提示词 (Orchestrator prompt)](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** 包含调度规则、专家路由逻辑，以及何时应把工作分配给后台智能体的阈值。您始终可以通过以下方式手动委派任务：`@智能体名称 <任务内容>`
 
 默认生成的配置包含 `openai` 和 `opencode-go` 两个预设：
 
@@ -116,8 +116,10 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
 
 在完成安装与认证后，请验证所有智能体是否已正确配置并能够响应：
 
+请先确保已重启终端或 source 更新过的 shell 文件。环境变量生效后可运行 `opencode`；如果尚未更新当前 shell，请使用：
+
 ```bash
-opencode
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
 然后运行：
@@ -497,7 +499,6 @@ ping all agents
 | **[会话管理 (docs/session-management.md)](docs/session-management.md)** | 使用短别名复用最近的子智能体会话，而不是重新开始 |
 | **[运行时预设切换 (docs/preset-switching.md)](docs/preset-switching.md)** | 在运行时使用 `/preset` 切换智能体模型预设 |
 | **[自定义智能体 (docs/configuration.md#custom-agents)](docs/configuration.md#custom-agents)** | 自定义专家智能体：配置独特的提示词、模型、MCP 权限和编排者委派规则 |
-| **[子任务 (docs/subtask.md)](docs/subtask.md)** | 使用 `/subtask` 运行受限的子工作器，并将结构化总结返回到主会话 |
 | **[代码地图 (Codemap) (docs/codemap.md)](docs/codemap.md)** | 生成层级代码地图，快速理解大型代码库 |
 | **[克隆依赖 (Clonedeps) (docs/clonedeps.md)](docs/clonedeps.md)** | 将选定的依赖源码克隆到被忽略的本地工作区中以供检查 |
 | **[访谈式生成 (Interview) (docs/interview.md)](docs/interview.md)** | 通过基于浏览器的问答流，将粗糙的想法转变为结构化的 Markdown 规范文档 |

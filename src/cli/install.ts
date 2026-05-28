@@ -1,6 +1,14 @@
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import {
+  detectBackgroundSubagentsTarget,
+  expandHomePath,
+  getBackgroundSubagentsBlock,
+  isBackgroundSubagentsEnabled,
+  manualBackgroundSubagentsInstructions,
+  writeBackgroundSubagentsBlock,
+} from './background-subagents';
+import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
   detectCurrentConfig,
@@ -130,6 +138,92 @@ async function checkOpenCodeInstalled(): Promise<{
   return { ok: true, version: version ?? undefined, path: path ?? undefined };
 }
 
+export function shouldPromptForBackgroundSubagents(
+  config: InstallConfig,
+): boolean {
+  return Boolean(config.promptForStar && process.stdin.isTTY);
+}
+
+export async function configureBackgroundSubagents(
+  config: InstallConfig,
+): Promise<{ enabledNow: boolean; configuredTarget?: string }> {
+  if (
+    isBackgroundSubagentsEnabled(
+      process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS,
+    )
+  ) {
+    printSuccess(
+      'OpenCode background subagents already enabled in environment',
+    );
+    return { enabledNow: true };
+  }
+
+  const target =
+    config.backgroundSubagentsTarget !== undefined
+      ? expandHomePath(config.backgroundSubagentsTarget)
+      : detectBackgroundSubagentsTarget();
+
+  if (config.backgroundSubagents === 'no') {
+    printInfo('OpenCode background subagents are not enabled.');
+    console.log(manualBackgroundSubagentsInstructions({ targetPath: target }));
+    return { enabledNow: false };
+  }
+
+  if (!target) {
+    printInfo('No safe shell startup file detected.');
+    console.log(manualBackgroundSubagentsInstructions());
+    return { enabledNow: false };
+  }
+
+  const block = getBackgroundSubagentsBlock(target);
+
+  if (config.dryRun) {
+    printInfo(
+      'Dry run mode - background subagents block that would be written:',
+    );
+    console.log(`Target: ${target}`);
+    console.log(`\n${block}\n`);
+    return { enabledNow: false, configuredTarget: target };
+  }
+
+  if (config.backgroundSubagents === 'ask') {
+    if (!shouldPromptForBackgroundSubagents(config)) {
+      printInfo('Skipped background subagents shell configuration.');
+      console.log(
+        manualBackgroundSubagentsInstructions({ targetPath: target }),
+      );
+      return { enabledNow: false };
+    }
+
+    const shouldWrite = await confirm(
+      `Enable OpenCode background subagents in ${target}?`,
+      true,
+    );
+    if (!shouldWrite) {
+      printInfo('Skipped background subagents shell configuration.');
+      console.log(
+        manualBackgroundSubagentsInstructions({ targetPath: target }),
+      );
+      return { enabledNow: false };
+    }
+  }
+
+  try {
+    writeBackgroundSubagentsBlock(target);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    printError(`Could not write background subagents shell config: ${message}`);
+    printInfo('Add the setting manually instead:');
+    console.log(manualBackgroundSubagentsInstructions({ targetPath: target }));
+    return { enabledNow: false };
+  }
+
+  printSuccess(
+    `Background subagents enabled ${SYMBOLS.arrow} ${DIM}${target}${RESET}`,
+  );
+  return { enabledNow: false, configuredTarget: target };
+}
+
 function handleStepResult(
   result: ConfigMergeResult,
   successMsg: string,
@@ -150,7 +244,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printHeader(isUpdate);
 
-  let totalSteps = 6;
+  let totalSteps = 7;
   if (config.installCustomSkills) totalSteps += 1;
   totalSteps += 1;
 
@@ -212,6 +306,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
     const lspResult = enableLspByDefault();
     if (!handleStepResult(lspResult, 'LSP enabled')) return 1;
   }
+
+  printStep(step++, totalSteps, 'Configuring OpenCode background subagents...');
+  const backgroundSubagents = await configureBackgroundSubagents(config);
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
   if (config.dryRun) {
@@ -288,7 +385,21 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`     ${BLUE}${configPath}${RESET}`);
   console.log();
   console.log('  4. Start OpenCode:');
-  console.log(`     ${BLUE}$ opencode${RESET}`);
+  if (backgroundSubagents.enabledNow) {
+    console.log(`     ${BLUE}$ opencode${RESET}`);
+  } else if (backgroundSubagents.configuredTarget) {
+    console.log(
+      `     ${BLUE}$ source ${backgroundSubagents.configuredTarget}${RESET}`,
+    );
+    console.log(`     ${BLUE}$ opencode${RESET}`);
+    console.log(
+      `     ${DIM}Or restart your terminal before running opencode.${RESET}`,
+    );
+  } else {
+    console.log(
+      `     ${BLUE}$ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode${RESET}`,
+    );
+  }
   console.log();
   console.log('  5. Verify the agents are responding:');
   console.log(`     ${BLUE}> ping all agents${RESET}`);
@@ -320,6 +431,8 @@ export async function install(args: InstallArgs): Promise<number> {
     promptForStar: args.tui,
     dryRun: args.dryRun,
     reset: args.reset ?? false,
+    backgroundSubagents: args.backgroundSubagents ?? 'no',
+    backgroundSubagentsTarget: args.backgroundSubagentsTarget,
   };
 
   return runInstall(config);

@@ -1,8 +1,8 @@
-# V2 Background Orchestration
+# Background Orchestration
 
-V2 is the next orchestration model for oh-my-opencode-slim. It assumes native
-OpenCode background subagents are available and changes the orchestrator from a
-primary worker into a scheduler.
+Background orchestration is the default orchestration model for
+oh-my-opencode-slim. It assumes native OpenCode background subagents are
+available and changes the orchestrator from a primary worker into a scheduler.
 
 The old model was:
 
@@ -10,7 +10,7 @@ The old model was:
 orchestrator works directly → delegates when useful → waits for result
 ```
 
-The V2 model is:
+The default background-orchestration model is:
 
 ```text
 orchestrator plans → dispatches background specialists → monitors → reconciles → verifies
@@ -22,7 +22,9 @@ This is a clean rebuild, not a compatibility layer over the old blocking model.
 
 ## Runtime Requirement
 
-V2 requires OpenCode with native background subagents enabled:
+Background orchestration requires an OpenCode release that includes native
+background subagents and `task_status`, launched with background subagents
+enabled:
 
 ```bash
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
@@ -36,8 +38,12 @@ The required native/background-control tools are:
 | `task_status` | Poll or wait for a background task result when needed |
 | `cancel_task` | Plugin-provided tool to cancel a tracked background task by task ID or Background Job Board alias |
 
-If these are not available, V2 should fail loudly instead of falling back to the
-legacy blocking orchestration model.
+If these are not available, the scheduler cannot use the default background
+workflow. Configure the environment variable through the installer or use the
+one-shot export above before starting OpenCode.
+
+Use an OpenCode release that includes native background subagents/task_status;
+run `opencode --version` and update if `task_status` is missing.
 
 ---
 
@@ -180,7 +186,7 @@ and reconciled.
 
 ---
 
-## Specialist Roles In V2
+## Specialist Roles
 
 ### Explorer
 
@@ -220,7 +226,7 @@ Visual/media analysis isolated from the orchestrator context.
 
 ## Direct Work Boundary
 
-V2 removes the orchestrator-as-worker default.
+Background orchestration removes the orchestrator-as-worker default.
 
 The orchestrator may directly:
 
@@ -282,7 +288,7 @@ Look into background tasks.
 
 ## State The Orchestrator Must Track
 
-V2 prompt/runtime should treat background tasks as a small job board:
+The prompt/runtime treats background tasks as a small job board:
 
 | Field | Meaning |
 |-------|---------|
@@ -299,45 +305,34 @@ ownership need to be explicit in the orchestrator's working context.
 
 ---
 
-## Plugin Changes Needed
+## Runtime Integration
 
-V2 is more than a prompt rewrite. The plugin should become aware that a task
-tool return can mean "background job launched" rather than "work complete".
-
-Important areas:
-
-- `src/agents/orchestrator.ts` — replace blocking delegation language with the
-  scheduler contract.
-- `src/config/constants.ts` — update phase reminders so they reinforce scheduler
-  behavior instead of old delegation behavior.
-- `src/hooks/task-session-manager/` — track running background task IDs and
-  update aliases from `task_status` results.
-- `src/index.ts` task hooks — separate "task launched" from "task finished" for
-  notifications, Divoom, multiplexer, and cleanup behavior.
-- `src/multiplexer/` — verify panes stay attached to running background child
-  sessions while the parent continues.
+The plugin is aware that a `task` return can mean "background job launched"
+rather than "work complete". It tracks running task IDs, exposes recent work in
+the background job board, updates aliases from `task_status` results, and keeps
+multiplexer panes attached while the parent orchestrator continues scheduling.
 
 ---
 
-## V2 Startup Behavior
+## Startup Behavior
 
-V2 should be strict.
-
-If background subagents are unavailable, the plugin should not silently behave
-like V1. It should tell the user exactly what is missing:
+The installer and docs configure background subagents as a requirement for the
+default scheduler workflow. If background subagents or `task_status` are
+unavailable, treat it as an environment or OpenCode-version issue rather than an
+intentional V1 fallback:
 
 ```text
-V2 orchestration requires OpenCode background subagents.
+Background orchestration requires OpenCode background subagents.
 Start OpenCode with:
 
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
-No legacy fallback keeps the mental model clean.
+No automatic legacy fallback keeps the mental model clean.
 
 ---
 
-## Example V2 Flow
+## Example Flow
 
 User asks:
 
@@ -365,7 +360,7 @@ At no point does the orchestrator become the main implementer.
 
 ## Success Criteria
 
-V2 is working when:
+Background orchestration is working when:
 
 - the orchestrator launches independent specialists in background by default,
 - task IDs are tracked until terminal state,
@@ -375,5 +370,5 @@ V2 is working when:
 - users see faster progress on multi-step work,
 - the orchestrator context stays focused on decisions instead of worker detail.
 
-V2 is not just "parallel agents." It is a scheduler-centered operating model for
-OpenCode's native background subagents.
+Background orchestration is not just "parallel agents." It is a
+scheduler-centered operating model for OpenCode's native background subagents.

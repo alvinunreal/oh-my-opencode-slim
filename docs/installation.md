@@ -24,7 +24,7 @@ bunx oh-my-opencode-slim@latest install
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --skills=yes --background-subagents=yes
 ```
 
 ### Configuration Options
@@ -38,6 +38,50 @@ The installer supports the following options:
 | `--no-tui` | Non-interactive mode |
 | `--dry-run` | Simulate install without writing files |
 | `--reset` | Force overwrite of existing configuration |
+| `--background-subagents=ask\|yes\|no` | Configure `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` in your shell startup file (`ask` by default only in an interactive TTY; otherwise `no`) |
+| `--background-subagents-target=<path>` | Write the background-subagents export to a specific shell/profile file |
+
+### Background Subagents Environment Setup
+
+Background orchestration is the default workflow. It depends on OpenCode's native
+background subagents, which are enabled by this environment variable:
+
+```bash
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+```
+
+The installer can add that export to your shell startup file. Use one of:
+
+```bash
+# Ask before editing a shell startup file (default in interactive TTY only)
+bunx oh-my-opencode-slim@latest install --background-subagents=ask
+
+# Always configure the export when possible
+bunx oh-my-opencode-slim@latest install --background-subagents=yes
+
+# Do not modify shell startup files
+bunx oh-my-opencode-slim@latest install --background-subagents=no
+
+# Write to an explicit target file
+bunx oh-my-opencode-slim@latest install \
+  --background-subagents=yes \
+  --background-subagents-target="$HOME/.zshrc"
+```
+
+After the installer updates a shell startup file, restart your terminal or source
+the file before launching OpenCode. Examples:
+
+```bash
+source ~/.zshrc
+# or
+source ~/.bashrc
+```
+
+For a one-shot manual launch without changing shell files:
+
+```bash
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
+```
 
 ### Non-Destructive Behavior
 
@@ -109,7 +153,7 @@ If not installed, direct the user to https://opencode.ai/docs first.
 The installer generates OpenAI and OpenCode Go presets, with OpenAI active by default:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --skills=yes --background-subagents=yes
 ```
 
 **Examples:**
@@ -118,7 +162,10 @@ bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
 bunx oh-my-opencode-slim@latest install
 
 # Non-interactive with bundled skills
-bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
+bunx oh-my-opencode-slim@latest install --no-tui --skills=yes --background-subagents=yes
+
+# Non-interactive and configure background subagents env setup
+bunx oh-my-opencode-slim@latest install --no-tui --background-subagents=yes
 
 # Make the generated OpenCode Go preset active
 bunx oh-my-opencode-slim@latest install --preset=opencode-go
@@ -134,6 +181,7 @@ The installer automatically:
 - Adds the plugin to `~/.config/opencode/opencode.json`
 - Disables default OpenCode agents
 - Enables OpenCode LSP integration when no explicit `lsp` setting exists
+- Configures `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` when approved
 - Generates agent model mappings in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
 
 ### Step 3: Authenticate with Providers
@@ -151,7 +199,9 @@ Ask the user to:
 
 1. Authenticate: `opencode auth login`
 2. Refresh models: `opencode models --refresh`
-3. Start OpenCode: `opencode`
+3. Restart the terminal or source the shell file updated by the installer
+   (`source ~/.zshrc` or `source ~/.bashrc`), then start OpenCode: `opencode`
+   - One-shot alternative: `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode`
 4. Run: `ping all agents`
 
 Verify all agents respond successfully.
@@ -200,6 +250,35 @@ If the installer reports that the configuration already exists, you have two opt
    ```
 
 3. Check that your provider is configured in `~/.config/opencode/opencode.json`
+
+### Missing `task_status` or Background Task Tools
+
+If the orchestrator says `task_status` is unavailable, background tasks never
+return task IDs, or delegation behaves like a blocking foreground call:
+
+1. Confirm OpenCode was launched with the environment variable:
+   ```bash
+   env | grep OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS
+   ```
+   It should show `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`.
+
+   Also use an OpenCode release that includes native background
+   subagents/task_status; run `opencode --version` and update OpenCode if
+   `task_status` is missing.
+
+2. Restart your terminal or source the shell file the installer updated, then
+   start OpenCode again. Plain `opencode` is only sufficient after that
+   environment is active.
+
+3. For a quick manual test, launch OpenCode with a one-shot export:
+   ```bash
+   OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
+   ```
+
+4. If you intentionally skipped shell setup, rerun the installer with:
+   ```bash
+   bunx oh-my-opencode-slim@latest install --background-subagents=yes
+   ```
 
 ### Authentication Issues
 

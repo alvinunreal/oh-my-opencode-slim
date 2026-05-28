@@ -148,7 +148,8 @@ Presets can also be switched at runtime without restarting using the `/preset` c
   `presets.<name>.council.model`.
 - The **councillor models** are configured separately under
   `council.presets.<name>.<councillor>.model`.
-- Deprecated `council.master*` fields should not be used in new configs.
+- Deprecated `council.master*` fields are legacy compatibility aliases only;
+  do not use them in new configs.
 
 ### Manual Update Mode
 

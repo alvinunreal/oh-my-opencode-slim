@@ -1,6 +1,13 @@
-# V2 Core Refactor Plan
+# Internal: V2 Core Refactor Plan
 
-This document is the implementation plan for the V2 orchestration core.
+> **Internal historical planning doc.** This file records the V2 implementation
+> plan that led to the current default background-orchestration release. It is
+> not the beta user guide and may mention branch or rollout details that are now
+> historical. For user-facing setup, see [Installation](installation.md) and
+> [Background Orchestration](v2-background-orchestration.md).
+
+This archival document records the implementation plan for the V2 orchestration
+core. It is retained for maintainers who need the design history.
 
 Scope for this pass:
 

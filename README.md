@@ -2,8 +2,8 @@
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
     <img src="img/4k.png" alt="4K GitHub Stars Milestone" style="border-radius: 10px;">
   </a>
-  <h3>✨ V2 Beta Release: Background Orchestration Has Arrived ✨</h3>
-  <p><i>The orchestrator now schedules specialist agents in the background,<br>while <code>/deepwork</code> turns big goals into file-backed plans.<br>Beta testers: share your feedback with us on Telegram.</i></p>
+  <h3>✨ Default Background Orchestration Has Arrived ✨</h3>
+  <p><i>The orchestrator now manages the workflow and schedules specialist agents in the background,<br>while <code>/deepwork</code> turns big goals into file-backed plans.<br>Share feedback and questions with us on Telegram.</i></p>
 
   <p><b>Open Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
 
@@ -45,22 +45,31 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
-### V2 Background-Orchestration Beta
+### Default Background Orchestration
 
-V2 changes the orchestrator from the default execution worker into a scheduler:
-it plans work, dispatches specialists as background tasks, receives completion
-events from OpenCode or checks status only when needed, then reconciles results
-before continuing. This requires OpenCode's native background subagent support,
-so beta users must start OpenCode with the experimental flag enabled.
+The orchestrator is now a workflow manager and scheduler, not the main coding
+worker: it plans work, dispatches specialists as background tasks, receives
+completion events from OpenCode or checks status only when needed, then
+reconciles results before continuing. This uses OpenCode's native background
+subagent support, so OpenCode must run with the background-subagents environment
+variable enabled.
 
 ```bash
-bunx oh-my-opencode-slim@beta install
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
+bunx oh-my-opencode-slim@latest install --background-subagents=yes
 ```
+
+The installer can set this up for you with
+`--background-subagents=ask|yes|no`. In an interactive TTY, the default is
+`ask`; in non-interactive mode, the default is `no`. Use
+`--background-subagents=yes` to opt in immediately or `--background-subagents=no`
+to skip. If you want the installer to write to a specific shell/profile file,
+add `--background-subagents-target=<path>`. After shell setup, restart your
+terminal or source the updated file before starting `opencode`; for a one-shot
+launch, run `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode`.
 
 ### Getting Started
 
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default. OpenAI uses `openai/gpt-5.5` for the higher-judgment agents and `openai/gpt-5.4-mini` for the faster scoped agents. To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
+The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default. OpenAI uses `openai/gpt-5.5` for the workflow manager/scheduler and higher-judgment agents, and `openai/gpt-5.4-mini` for faster scoped specialists. To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
 
 Then:
 
@@ -79,7 +88,13 @@ Then:
 4. **Update the models you want for each agent**
 
 > [!TIP]
-> It's **recommended** to understand how automatic delegation works. The **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** contains the delegation rules, specialist routing logic, and the thresholds for when the main agent should hand work off to subagents. You can alway delegate manually by calling a subagent via: `@agentName <task>`
+> It's **recommended** to understand how background orchestration works. The **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** contains the scheduler rules, specialist routing logic, and thresholds for when work should be assigned to background agents. You can always delegate manually by calling a subagent via: `@agentName <task>`
+
+### Legacy V1 note
+
+The current `@latest` package is the background-orchestration release. If a
+maintained V1 branch or tag is created later, it will be documented separately as
+historical compatibility guidance rather than part of the default install path.
 
 The default generated configuration includes both `openai` and `opencode-go` presets.
 
@@ -180,7 +195,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Model Guidance:</b> Choose your default, strongest all-around coding model. Orchestrator is both the main coding agent and the delegator, so it needs strong implementation ability, good judgment, and reliable instruction-following.
+      <b>Model Guidance:</b> Choose your strongest planning and judgment model. Orchestrator is the workflow manager: it plans, schedules background specialists, reconciles results, and verifies outcomes, so it needs reliable instruction-following and high-level technical judgment more than raw worker throughput.
     </td>
   </tr>
 </table>
@@ -500,7 +515,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | Doc | What it covers |
 |-----|----------------|
 | **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer with `@council` |
-| **[V2 Background Orchestration](docs/v2-background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
+| **[Background Orchestration](docs/v2-background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
 | **[Session Management](docs/session-management.md)** | Reuse recent child-agent sessions with short aliases instead of starting over |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
