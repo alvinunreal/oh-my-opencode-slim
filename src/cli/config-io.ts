@@ -150,10 +150,12 @@ function getPinnedVersionFromConfig(): string | undefined {
   try {
     const { config } = parseConfig(getExistingConfigPath());
     if (!config) return undefined;
-    for (const entry of getPluginEntries(config)) {
-      if (entry === PACKAGE_NAME) return undefined;
-      if (entry.startsWith(`${PACKAGE_NAME}@`)) {
-        const version = entry.slice(PACKAGE_NAME.length + 1);
+    for (const entry of getPlugins(config)) {
+      const spec = getPluginSpec(entry);
+      if (!spec) continue;
+      if (spec === PACKAGE_NAME) return undefined;
+      if (spec.startsWith(`${PACKAGE_NAME}@`)) {
+        const version = spec.slice(PACKAGE_NAME.length + 1);
         if (version && version !== 'latest') return version;
       }
     }

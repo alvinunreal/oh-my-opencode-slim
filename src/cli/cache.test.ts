@@ -469,6 +469,71 @@ describe('warmOpenCodePluginCache', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test('uses pinned version from array-format plugin entry', async () => {
+    const tmpDir = mkdirTemp();
+    const cacheHome = join(tmpDir, 'cache');
+    process.env.XDG_CACHE_HOME = cacheHome;
+
+    // Config uses array tuple format: [spec, options]
+    const configDir = join(tmpDir, 'config');
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, 'opencode.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: [['oh-my-opencode-slim@1.2.3', { someOption: true }]],
+      }),
+    );
+
+    const pathsMod = await import('./paths');
+    const configPathSpy = spyOn(
+      pathsMod,
+      'getExistingConfigPath',
+    ).mockReturnValue(configPath);
+
+    try {
+      const packageRoot = join(
+        tmpDir,
+        'bunx-1000-oh-my-opencode-slim@latest',
+        'node_modules',
+        'oh-my-opencode-slim',
+      );
+      mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+      writeFileSync(
+        join(packageRoot, 'package.json'),
+        JSON.stringify({ name: 'oh-my-opencode-slim' }),
+      );
+      process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+      const { warmOpenCodePluginCache } = await importFreshConfigIo();
+      const result = await warmOpenCodePluginCache();
+
+      const expectedCacheDir = join(
+        cacheHome,
+        'opencode',
+        'packages',
+        'oh-my-opencode-slim@1.2.3',
+      );
+
+      expect(result?.success).toBe(true);
+      expect(result?.configPath).toBe(expectedCacheDir);
+      expect(
+        JSON.parse(
+          readFileSync(join(expectedCacheDir, 'package.json'), 'utf-8'),
+        ),
+      ).toEqual({
+        name: 'oh-my-opencode-slim-cache',
+        private: true,
+        dependencies: {
+          'oh-my-opencode-slim': '1.2.3',
+        },
+      });
+    } finally {
+      configPathSpy.mockRestore();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test('pinned config version takes precedence over running version', async () => {
     const tmpDir = mkdirTemp();
     const cacheHome = join(tmpDir, 'cache');
