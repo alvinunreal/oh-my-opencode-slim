@@ -141,14 +141,55 @@ function getPluginEntry(): string {
   }
 }
 
-function getOpenCodePluginCacheDir(): string {
+/**
+ * Reads the OpenCode config to find the pinned version for this plugin.
+ * Returns the version string (e.g. "1.2.3") if pinned, or undefined
+ * if the plugin is unpinned (bare name or @latest).
+ */
+function getPinnedVersionFromConfig(): string | undefined {
+  try {
+    const { config } = parseConfig(getExistingConfigPath());
+    if (!config) return undefined;
+    for (const entry of getPluginEntries(config)) {
+      if (entry === PACKAGE_NAME) return undefined;
+      if (entry.startsWith(`${PACKAGE_NAME}@`)) {
+        const version = entry.slice(PACKAGE_NAME.length + 1);
+        if (version && version !== 'latest') return version;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
+/**
+ * Reads the version from the package.json at the given package root.
+ * Used as a fallback when the config entry is unpinned (e.g. bunx @beta install).
+ */
+function getVersionFromPackageRoot(packageRoot: string): string | undefined {
+  try {
+    const packageJsonPath = join(packageRoot, 'package.json');
+    if (!existsSync(packageJsonPath)) return undefined;
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
+      version?: string;
+    };
+    return pkg.version;
+  } catch {
+    return undefined;
+  }
+}
+
+function getOpenCodePluginCacheDir(version?: string): string {
   const cacheDir =
     process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache');
-  return join(cacheDir, 'opencode', 'packages', `${PACKAGE_NAME}@latest`);
+  const suffix = version
+    ? `${PACKAGE_NAME}@${version}`
+    : `${PACKAGE_NAME}@latest`;
+  return join(cacheDir, 'opencode', 'packages', suffix);
 }
 
 function writeOpenCodePluginCacheManifest(
   cacheDir: string,
+  version: string = 'latest',
 ): ConfigMergeResult | null {
   try {
     writeFileSync(
@@ -158,7 +199,7 @@ function writeOpenCodePluginCacheManifest(
           name: `${PACKAGE_NAME}-cache`,
           private: true,
           dependencies: {
-            [PACKAGE_NAME]: 'latest',
+            [PACKAGE_NAME]: version,
           },
         },
         null,
@@ -227,7 +268,10 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     return null;
   }
 
-  const cacheDir = getOpenCodePluginCacheDir();
+  const pinnedVersion = getPinnedVersionFromConfig();
+  const runningVersion = getVersionFromPackageRoot(packageRoot);
+  const cacheVersion = pinnedVersion ?? runningVersion;
+  const cacheDir = getOpenCodePluginCacheDir(cacheVersion);
 
   try {
     mkdirSync(cacheDir, { recursive: true });
@@ -239,7 +283,10 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     };
   }
 
-  const manifestError = writeOpenCodePluginCacheManifest(cacheDir);
+  const manifestError = writeOpenCodePluginCacheManifest(
+    cacheDir,
+    cacheVersion,
+  );
   if (manifestError) return manifestError;
 
   try {
