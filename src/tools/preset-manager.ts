@@ -1,4 +1,6 @@
+import * as fs from 'node:fs';
 import type { PluginInput } from '@opencode-ai/plugin';
+import { stripJsonComments } from '../cli/config-io';
 import type {
   AgentOverrideConfig,
   ModelEntry,
@@ -6,9 +8,9 @@ import type {
   Preset,
 } from '../config';
 import { AGENT_ALIASES } from '../config/constants';
+import { findPluginConfigPaths } from '../config/loader';
 import {
   getActiveRuntimePreset,
-  rollbackRuntimePreset,
   setActiveRuntimePresetWithPrevious,
 } from '../config/runtime-preset';
 import { readTuiSnapshot, recordTuiAgentModels } from '../tui-state';
@@ -19,13 +21,12 @@ const COMMAND_NAME = 'preset';
 /**
  * Creates a preset manager for the /preset slash command.
  *
- * Uses the OpenCode SDK's client.config.update() to change agent models
- * and temperatures without restarting. The server invalidates its agent
- * cache and re-reads config on the next prompt.
- *
- * Note: activePreset is tracked in-memory only and resets on plugin reload.
- * If the user manually edits config or another mechanism changes agents,
- * this tracker may become stale until the next /preset call.
+ * Stores the requested runtime preset in plugin memory and updates the
+ * plugin-facing TUI snapshot. It deliberately does not call OpenCode's
+ * client.config.update() or instance.dispose() from command hooks because
+ * OpenCode continues the same command into the prompt loop after
+ * command.execute.before, which can break the active conversation while
+ * the agent registry is changing.
  */
 export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
   // Sync from module-level state in case of plugin re-init — the runtime
@@ -98,7 +99,9 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
   }
 
   /**
-   * Switch to the given preset name by calling client.config.update().
+   * Save the given preset name for the plugin runtime without mutating the
+   * active OpenCode instance. The preset is applied by the plugin config path
+   * when OpenCode reloads the plugin in a safe lifecycle boundary.
    */
   async function switchPreset(
     presetName: string,
@@ -141,39 +144,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       }
     }
 
-    // Build reset updates for agents in the old preset but not the new one.
-    // The SDK accumulates client.config.update() calls, so switching from
-    // Preset A to Preset B leaks A's variant/temperature/options on agents
-    // that aren't in B. Reset them to the config-file baseline values.
-    const currentRuntimePreset = getActiveRuntimePreset();
-    const resetUpdates: Record<
-      string,
-      {
-        model?: string;
-        temperature?: number;
-        variant?: string;
-        options?: Record<string, unknown>;
-      }
-    > = {};
-    if (currentRuntimePreset && config.presets?.[currentRuntimePreset]) {
-      const oldPreset = config.presets[currentRuntimePreset];
-      for (const rawName of Object.keys(oldPreset)) {
-        const resolvedOld = AGENT_ALIASES[rawName] ?? rawName;
-        if (resolvedOld in agentUpdates) continue; // new preset handles this agent
-        const baseline = config.agents?.[resolvedOld];
-        if (baseline) {
-          // Note: mapOverrideToAgentConfig(baseline) only emits fields
-          // the baseline defines. Scalar fields (variant/temperature/options)
-          // not in baseline are NOT cleared here. The config() hook in
-          // src/index.ts handles complete cleanup using the previous
-          // preset's override keys to drive deletion.
-          resetUpdates[resolvedOld] = mapOverrideToAgentConfig(baseline);
-        }
-      }
-    }
-
     const hasAgentUpdates = Object.keys(agentUpdates).length > 0;
-    const allUpdates = { ...resetUpdates, ...agentUpdates };
     if (!hasAgentUpdates) {
       output.parts.push(
         createInternalAgentTextPart(
@@ -183,59 +154,61 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       return;
     }
 
-    const previousPreset = activePreset;
     setActiveRuntimePresetWithPrevious(presetName);
 
+    // Persist preset name to user config file so it survives
+    // process restarts. The file write is best-effort and must not
+    // fail the command.
     try {
-      await ctx.client.config.update({
-        body: { agent: allUpdates },
-      });
-
-      const snapshot = readTuiSnapshot();
-      const agentModels = { ...snapshot.agentModels };
-      for (const [agentName, agentConfig] of Object.entries(allUpdates)) {
-        if (typeof agentConfig.model === 'string') {
-          agentModels[agentName] = agentConfig.model;
-        }
-      }
-      recordTuiAgentModels({ agentModels });
-
-      activePreset = presetName;
-
-      const summaryParts: string[] = [];
-      for (const [name, cfg] of Object.entries(agentUpdates)) {
-        const parts: string[] = [name];
-        if (cfg.model) parts.push(`model: ${cfg.model}`);
-        if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
-        if (cfg.temperature !== undefined)
-          parts.push(`temp: ${cfg.temperature}`);
-        if (cfg.options) parts.push('options: yes');
-        summaryParts.push(parts.join(' → '));
-      }
-      if (Object.keys(resetUpdates).length > 0) {
-        summaryParts.push(
-          `Reset to baseline: ${Object.keys(resetUpdates).join(', ')}`,
+      const { userConfigPath } = findPluginConfigPaths(ctx.directory);
+      if (userConfigPath) {
+        const raw = fs.readFileSync(userConfigPath, 'utf-8');
+        const persisted = JSON.parse(stripJsonComments(raw)) as Record<
+          string,
+          unknown
+        >;
+        persisted.preset = presetName;
+        fs.writeFileSync(
+          userConfigPath,
+          `${JSON.stringify(persisted, null, 2)}\n`,
         );
       }
-
-      output.parts.push(
-        createInternalAgentTextPart(
-          `Switched to preset "${presetName}":\n${summaryParts.join('\n')}`,
-        ),
-      );
-    } catch (err) {
-      rollbackRuntimePreset(previousPreset);
-      output.parts.push(
-        createInternalAgentTextPart(
-          `Failed to switch preset "${presetName}": ${String(err)}`,
-        ),
-      );
+    } catch {
+      // Non-critical: runtime state is set regardless
     }
+
+    const snapshot = readTuiSnapshot();
+    const agentModels = { ...snapshot.agentModels };
+    for (const [agentName, agentConfig] of Object.entries(agentUpdates)) {
+      if (typeof agentConfig.model === 'string') {
+        agentModels[agentName] = agentConfig.model;
+      }
+    }
+
+    recordTuiAgentModels({ agentModels });
+
+    activePreset = presetName;
+
+    const summaryParts: string[] = [];
+    for (const [name, cfg] of Object.entries(agentUpdates)) {
+      const parts: string[] = [name];
+      if (cfg.model) parts.push(`model: ${cfg.model}`);
+      if (cfg.variant) parts.push(`variant: ${cfg.variant}`);
+      if (cfg.temperature !== undefined) parts.push(`temp: ${cfg.temperature}`);
+      if (cfg.options) parts.push('options: yes');
+      summaryParts.push(parts.join(' → '));
+    }
+
+    output.parts.push(
+      createInternalAgentTextPart(
+        `Saved preset "${presetName}". Restart or reload OpenCode to apply it to agent configuration. The current session was not reloaded to avoid interrupting the active conversation.\n${summaryParts.join('\n')}`,
+      ),
+    );
   }
 
   /**
    * Map an AgentOverrideConfig (from plugin config) to the subset of
-   * SDK AgentConfig fields that client.config.update() can apply at runtime.
+   * Agent config fields shown in the saved preset summary.
    *
    * Excluded fields and why:
    * - prompt, orchestratorPrompt: require restart (resolved at init by config() hook)
