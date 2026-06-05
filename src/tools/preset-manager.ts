@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import type { PluginInput } from '@opencode-ai/plugin';
+import { stripJsonComments } from '../cli/config-io';
 import type {
   AgentOverrideConfig,
   ModelEntry,
@@ -162,7 +163,10 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       const { userConfigPath } = findPluginConfigPaths(ctx.directory);
       if (userConfigPath) {
         const raw = fs.readFileSync(userConfigPath, 'utf-8');
-        const persisted = JSON.parse(raw) as Record<string, unknown>;
+        const persisted = JSON.parse(stripJsonComments(raw)) as Record<
+          string,
+          unknown
+        >;
         persisted.preset = presetName;
         fs.writeFileSync(
           userConfigPath,
@@ -204,7 +208,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
 
   /**
    * Map an AgentOverrideConfig (from plugin config) to the subset of
-   * SDK AgentConfig fields that client.config.update() can apply at runtime.
+   * Agent config fields shown in the saved preset summary.
    *
    * Excluded fields and why:
    * - prompt, orchestratorPrompt: require restart (resolved at init by config() hook)

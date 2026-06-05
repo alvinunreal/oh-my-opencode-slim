@@ -38,12 +38,15 @@ function getOutputText(output: ReturnType<typeof createOutput>): string {
 }
 
 let previousXdgDataHome: string | undefined;
+let previousOpenCodeConfigDir: string | undefined;
 let tempDir: string;
 
 beforeEach(() => {
   previousXdgDataHome = process.env.XDG_DATA_HOME;
+  previousOpenCodeConfigDir = process.env.OPENCODE_CONFIG_DIR;
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-preset-manager-'));
   process.env.XDG_DATA_HOME = tempDir;
+  delete process.env.OPENCODE_CONFIG_DIR;
   setActiveRuntimePreset(null);
 });
 
@@ -52,6 +55,12 @@ afterEach(() => {
     delete process.env.XDG_DATA_HOME;
   } else {
     process.env.XDG_DATA_HOME = previousXdgDataHome;
+  }
+
+  if (previousOpenCodeConfigDir === undefined) {
+    delete process.env.OPENCODE_CONFIG_DIR;
+  } else {
+    process.env.OPENCODE_CONFIG_DIR = previousOpenCodeConfigDir;
   }
 
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -196,6 +205,51 @@ describe('createPresetManager', () => {
         fixer: 'openai/gpt-5.4-mini',
         orchestrator: 'anthropic/claude-3.5-haiku',
       });
+    });
+
+    test('persists preset changes from JSONC user config', async () => {
+      const configDir = path.join(tempDir, 'opencode-config');
+      fs.mkdirSync(configDir, { recursive: true });
+      process.env.OPENCODE_CONFIG_DIR = configDir;
+
+      const configPath = path.join(configDir, 'oh-my-opencode-slim.jsonc');
+      fs.writeFileSync(
+        configPath,
+        `{
+          // User-selected preset should be updated even in JSONC files.
+          "preset": "old",
+          "agents": {
+            "orchestrator": { "model": "old-model" },
+          },
+        }`,
+      );
+
+      const ctx = { ...createMockContext(), directory: tempDir };
+      const config: PluginConfig = {
+        presets: {
+          cheap: {
+            orchestrator: { model: 'anthropic/claude-3.5-haiku' },
+          },
+        },
+      };
+      const manager = createPresetManager(ctx, config);
+      const output = createOutput();
+
+      await manager.handleCommandExecuteBefore(
+        { command: 'preset', sessionID: 's1', arguments: 'cheap' },
+        output,
+      );
+
+      const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+        preset?: string;
+        agents?: Record<string, unknown>;
+      };
+      expect(persisted.preset).toBe('cheap');
+      expect(persisted.agents).toEqual({
+        orchestrator: { model: 'old-model' },
+      });
+      expect(ctx.client.config.update).not.toHaveBeenCalled();
+      expect(ctx.client.instance.dispose).not.toHaveBeenCalled();
     });
 
     test('shows temperature in preset summary without runtime config update', async () => {
