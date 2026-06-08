@@ -6,17 +6,27 @@ import { log } from '../../utils/logger';
 import {
   INSTALLED_PACKAGE_JSON,
   NPM_FETCH_TIMEOUT,
+  NPM_PACKAGE_URL,
   NPM_REGISTRY_URL,
   PACKAGE_NAME,
   USER_OPENCODE_CONFIG,
   USER_OPENCODE_CONFIG_JSONC,
 } from './constants';
 import type {
+  CompatibleVersionResult,
   NpmDistTags,
+  NpmPackageMetadata,
   OpencodeConfig,
   PackageJson,
   PluginEntryInfo,
 } from './types';
+
+interface ParsedVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: string | null;
+}
 
 function isString(value: unknown): value is string {
   return typeof value === 'string';
@@ -38,6 +48,82 @@ function isPrereleaseVersion(version: string): boolean {
  */
 function isDistTag(version: string): boolean {
   return !/^\d/.test(version);
+}
+
+function parseVersion(version: string): ParsedVersion | null {
+  const normalized = version.trim().replace(/^[~^=<>\s]+/, '');
+  const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?/);
+  if (!match) return null;
+
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ?? null,
+  };
+}
+
+function compareVersions(a: string, b: string): number {
+  const parsedA = parseVersion(a);
+  const parsedB = parseVersion(b);
+  if (!parsedA || !parsedB) return a.localeCompare(b);
+
+  const parts: Array<keyof Pick<ParsedVersion, 'major' | 'minor' | 'patch'>> = [
+    'major',
+    'minor',
+    'patch',
+  ];
+  for (const part of parts) {
+    if (parsedA[part] !== parsedB[part]) {
+      return parsedA[part] - parsedB[part];
+    }
+  }
+
+  if (parsedA.prerelease === parsedB.prerelease) return 0;
+  if (!parsedA.prerelease) return 1;
+  if (!parsedB.prerelease) return -1;
+  return comparePrerelease(parsedA.prerelease, parsedB.prerelease);
+}
+
+function comparePrerelease(a: string, b: string): number {
+  const segmentsA = a.split('.');
+  const segmentsB = b.split('.');
+  const length = Math.max(segmentsA.length, segmentsB.length);
+
+  for (let i = 0; i < length; i++) {
+    const segmentA = segmentsA[i];
+    const segmentB = segmentsB[i];
+    if (segmentA === segmentB) continue;
+    if (segmentA === undefined) return -1;
+    if (segmentB === undefined) return 1;
+
+    const numberA = Number(segmentA);
+    const numberB = Number(segmentB);
+    const numericA = Number.isInteger(numberA);
+    const numericB = Number.isInteger(numberB);
+
+    if (numericA && numericB) return numberA - numberB;
+    if (numericA) return -1;
+    if (numericB) return 1;
+
+    const comparison = segmentA.localeCompare(segmentB);
+    if (comparison !== 0) return comparison;
+  }
+
+  return 0;
+}
+
+function getPrereleaseChannel(version: ParsedVersion): string | null {
+  if (!version.prerelease) return null;
+
+  return version.prerelease.split('.')[0] ?? null;
+}
+
+function isVersionInChannel(version: string, channel: string): boolean {
+  const parsed = parseVersion(version);
+  if (!parsed) return false;
+  if (channel === 'latest') return parsed.prerelease === null;
+  return getPrereleaseChannel(parsed) === channel;
 }
 
 /**
@@ -287,6 +373,11 @@ export function updatePinnedVersion(
 export async function getLatestVersion(
   channel: string = 'latest',
 ): Promise<string | null> {
+  const distTags = await fetchDistTags();
+  return distTags?.[channel] ?? distTags?.latest ?? null;
+}
+
+async function fetchDistTags(): Promise<NpmDistTags | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), NPM_FETCH_TIMEOUT);
 
@@ -299,10 +390,115 @@ export async function getLatestVersion(
     if (!response.ok) return null;
 
     const data = (await response.json()) as NpmDistTags;
-    return data[channel] ?? data.latest ?? null;
+    return data;
   } catch {
     return null;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * Resolves the newest version that is safe for the current install to use.
+ * Auto-update never crosses major versions; newer majors are surfaced as a
+ * manual migration notification instead.
+ */
+export async function getLatestCompatibleVersion(
+  currentVersion: string,
+  channel: string = 'latest',
+): Promise<CompatibleVersionResult> {
+  const current = parseVersion(currentVersion);
+  if (!current) {
+    const latestVersion = await getLatestVersion(channel);
+    return {
+      latestVersion: null,
+      latestMajorVersion: latestVersion,
+      blockedByMajor: latestVersion !== null,
+      unsafeReason: latestVersion ? 'unparseable-current-version' : undefined,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), NPM_FETCH_TIMEOUT);
+
+  try {
+    const response = await fetch(NPM_PACKAGE_URL, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!response.ok) return await getCompatibleFromDistTags(current, channel);
+
+    const data = (await response.json()) as NpmPackageMetadata;
+    const distTags = data['dist-tags'] ?? { latest: '' };
+    const taggedVersion = distTags[channel] ?? distTags.latest ?? null;
+    const latestMajorVersion = getBlockingMajorVersion(current, [
+      taggedVersion,
+      distTags.latest,
+    ]);
+    const blockedByMajor = latestMajorVersion !== null;
+
+    const versions = Object.keys(data.versions ?? {})
+      .filter((version) => {
+        const parsed = parseVersion(version);
+        return (
+          parsed?.major === current.major &&
+          isVersionInChannel(version, channel)
+        );
+      })
+      .sort(compareVersions);
+    const latestVersion = versions.at(-1) ?? null;
+
+    return { latestVersion, latestMajorVersion, blockedByMajor };
+  } catch {
+    return await getCompatibleFromDistTags(current, channel);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function getCompatibleFromDistTags(
+  current: ParsedVersion,
+  channel: string,
+): Promise<CompatibleVersionResult> {
+  const distTags = await fetchDistTags();
+  if (!distTags) {
+    return {
+      latestVersion: null,
+      latestMajorVersion: null,
+      blockedByMajor: false,
+    };
+  }
+
+  const latestVersion = distTags[channel] ?? distTags.latest ?? null;
+  const latestMajorVersion = getBlockingMajorVersion(current, [
+    latestVersion,
+    distTags.latest,
+  ]);
+  const blockedByMajor = latestMajorVersion !== null;
+  const parsedLatest = latestVersion ? parseVersion(latestVersion) : null;
+  const compatibleLatestVersion =
+    parsedLatest?.major === current.major &&
+    latestVersion &&
+    isVersionInChannel(latestVersion, channel)
+      ? latestVersion
+      : null;
+
+  return {
+    latestVersion: compatibleLatestVersion,
+    latestMajorVersion,
+    blockedByMajor,
+  };
+}
+
+function getBlockingMajorVersion(
+  current: ParsedVersion,
+  candidates: Array<string | null | undefined>,
+): string | null {
+  for (const candidate of candidates) {
+    const parsed = candidate ? parseVersion(candidate) : null;
+    if (parsed && parsed.major > current.major) return candidate ?? null;
+  }
+
+  return null;
 }

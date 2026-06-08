@@ -6,7 +6,7 @@ import {
   extractChannel,
   findPluginEntry,
   getCachedVersion,
-  getLatestVersion,
+  getLatestCompatibleVersion,
   getLocalDevVersion,
 } from './checker';
 import { CACHE_DIR, PACKAGE_NAME } from './constants';
@@ -77,7 +77,32 @@ async function runBackgroundUpdateCheck(
   }
 
   const channel = extractChannel(pluginInfo.pinnedVersion ?? currentVersion);
-  const latestVersion = await getLatestVersion(channel);
+  const latestInfo = await getLatestCompatibleVersion(currentVersion, channel);
+  if (latestInfo.unsafeReason === 'unparseable-current-version') {
+    log(
+      `[auto-update-checker] Current version is not semver; skipping auto-update: ${currentVersion}`,
+    );
+    if (latestInfo.latestMajorVersion) {
+      showToast(
+        ctx,
+        `OMO-Slim ${latestInfo.latestMajorVersion}`,
+        `v${latestInfo.latestMajorVersion} available. Auto-update skipped because the current version could not be compared safely.`,
+        'info',
+        8000,
+      );
+    }
+    return;
+  }
+
+  if (latestInfo.blockedByMajor && latestInfo.latestMajorVersion) {
+    showMajorUpgradeToast(ctx, latestInfo.latestMajorVersion);
+    log(
+      `[auto-update-checker] Major update available; skipping auto-update: ${latestInfo.latestMajorVersion}`,
+    );
+    return;
+  }
+
+  const latestVersion = latestInfo.latestVersion;
   if (!latestVersion) {
     log(
       '[auto-update-checker] Failed to fetch latest version for channel:',
@@ -158,6 +183,16 @@ async function runBackgroundUpdateCheck(
     );
     log('[auto-update-checker] bun install failed; update not installed');
   }
+}
+
+function showMajorUpgradeToast(ctx: PluginInput, version: string): void {
+  showToast(
+    ctx,
+    `oh-my-opencode-slim v${version} is available.`,
+    'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-slim@latest install --background-subagents=yes',
+    'info',
+    12_000,
+  );
 }
 
 export function getAutoUpdateInstallDir(): string {

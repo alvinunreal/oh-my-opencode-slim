@@ -3,6 +3,18 @@ export interface NpmDistTags {
   [key: string]: string;
 }
 
+export interface NpmPackageMetadata {
+  'dist-tags'?: NpmDistTags;
+  versions?: Record<string, unknown>;
+}
+
+export interface CompatibleVersionResult {
+  latestVersion: string | null;
+  latestMajorVersion: string | null;
+  blockedByMajor: boolean;
+  unsafeReason?: 'unparseable-current-version';
+}
+
 export interface OpencodeConfig {
   plugin?: unknown[];
   [key: string]: unknown;

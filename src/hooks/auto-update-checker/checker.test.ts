@@ -156,4 +156,261 @@ describe('auto-update-checker/checker', () => {
       readSpy.mockRestore();
     });
   });
+
+  describe('getLatestCompatibleVersion', () => {
+    test('selects latest version within current major', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '2.0.0',
+          },
+          versions: {
+            '1.1.0': {},
+            '1.1.2': {},
+            '2.0.0': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.1.1');
+
+      expect(result).toEqual({
+        latestVersion: '1.1.2',
+        latestMajorVersion: '2.0.0',
+        blockedByMajor: true,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('does not report major block when latest is same major', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '1.1.2',
+          },
+          versions: {
+            '1.1.1': {},
+            '1.1.2': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.1.1');
+
+      expect(result).toEqual({
+        latestVersion: '1.1.2',
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('uses channel tag as blocking major version', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '1.9.0',
+            beta: '2.0.0-beta.1',
+          },
+          versions: {
+            '1.9.0': {},
+            '2.0.0-beta.1': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.8.0-beta.1', 'beta');
+
+      expect(result).toEqual({
+        latestVersion: null,
+        latestMajorVersion: '2.0.0-beta.1',
+        blockedByMajor: true,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('treats unparseable current version as unsafe for auto-update', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          latest: '2.0.0',
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('workspace:*');
+
+      expect(result).toEqual({
+        latestVersion: null,
+        latestMajorVersion: '2.0.0',
+        blockedByMajor: true,
+        unsafeReason: 'unparseable-current-version',
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('parses range prefixes before checking major compatibility', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '1.9.0',
+          },
+          versions: {
+            '1.8.0': {},
+            '1.9.0': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('^1.0.0');
+
+      expect(result).toEqual({
+        latestVersion: '1.9.0',
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('sorts prerelease numeric suffixes numerically', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            beta: '1.0.0-beta.10',
+            latest: '1.0.0',
+          },
+          versions: {
+            '1.0.0-beta.2': {},
+            '1.0.0-beta.10': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.0.0-beta.1', 'beta');
+
+      expect(result).toEqual({
+        latestVersion: '1.0.0-beta.10',
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('supports custom prerelease dist-tag channel names', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '1.0.0',
+            nightly: '1.0.0-nightly.2',
+          },
+          versions: {
+            '1.0.0-nightly.1': {},
+            '1.0.0-nightly.2': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion(
+        '1.0.0-nightly.1',
+        'nightly',
+      );
+
+      expect(result).toEqual({
+        latestVersion: '1.0.0-nightly.2',
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('fallback dist-tags never return lower-major versions as compatible', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async (url: string) => {
+        if (url.includes('/-/package/')) {
+          return Response.json({ latest: '1.5.0' });
+        }
+
+        return new Response(null, { status: 503 });
+      }) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('2.0.0');
+
+      expect(result).toEqual({
+        latestVersion: null,
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('fallback dist-tags never return stable latest for prerelease channel', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async (url: string) => {
+        if (url.includes('/-/package/')) {
+          return Response.json({ latest: '1.5.0' });
+        }
+
+        return new Response(null, { status: 503 });
+      }) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.4.0-beta.1', 'beta');
+
+      expect(result).toEqual({
+        latestVersion: null,
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+  });
 });
