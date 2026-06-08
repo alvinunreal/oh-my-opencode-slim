@@ -196,13 +196,9 @@ export class BackgroundJobBoard {
     const existing = this.jobs.get(taskID);
     if (!existing) return undefined;
 
-    // OpenCode process-local task status can briefly disagree with the live
-    // session event stream. Trust live session.status=busy over stale terminal
-    // board state, except for explicit user cancellations where the next step is
-    // stronger cancellation/delete rather than reopening the lane.
     const isStaleTerminal =
       TERMINAL_STATES.has(existing.state) || existing.state === 'reconciled';
-    if (!isStaleTerminal || existing.cancellationRequested) {
+    if (isStaleTerminal) {
       const updated: BackgroundJobRecord = {
         ...existing,
         lastLiveBusyAt: now,
@@ -213,17 +209,8 @@ export class BackgroundJobBoard {
 
     const updated: BackgroundJobRecord = {
       ...existing,
-      state: 'running',
-      timedOut: false,
-      statusUncertain: false,
-      cancellationRequested: false,
-      terminalUnreconciled: false,
       updatedAt: now,
       lastLiveBusyAt: now,
-      completedAt: undefined,
-      terminalState: undefined,
-      resultSummary: undefined,
-      lastStatusError: undefined,
     };
 
     this.jobs.set(taskID, updated);

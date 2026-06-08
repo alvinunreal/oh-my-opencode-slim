@@ -398,7 +398,7 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
-  test('live busy session reopens stale cancelled jobs', () => {
+  test('live busy session does not reopen stale cancelled jobs', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -415,14 +415,13 @@ describe('BackgroundJobBoard', () => {
     const updated = board.markRunningFromLiveSession('ses_1', 200);
 
     expect(updated).toMatchObject({
-      state: 'running',
-      terminalUnreconciled: false,
-      timedOut: false,
-      updatedAt: 200,
+      state: 'cancelled',
+      terminalUnreconciled: true,
+      lastLiveBusyAt: 200,
     });
-    expect(updated?.completedAt).toBeUndefined();
-    expect(updated?.terminalState).toBeUndefined();
-    expect(updated?.resultSummary).toBeUndefined();
+    expect(updated?.completedAt).toBeDefined();
+    expect(updated?.terminalState).toBe('cancelled');
+    expect(updated?.resultSummary).toBe('upstream cancelled during compaction');
   });
 
   test('live busy session does not reopen explicit cancel requests', () => {
@@ -443,7 +442,7 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
-  test('live busy session reopens reconciled stale cancellations', () => {
+  test('live busy session does not reopen reconciled stale cancellations', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -456,14 +455,14 @@ describe('BackgroundJobBoard', () => {
     const updated = board.markRunningFromLiveSession('ses_1', 200);
 
     expect(updated).toMatchObject({
-      state: 'running',
+      state: 'reconciled',
       terminalUnreconciled: false,
-      updatedAt: 200,
+      terminalState: 'cancelled',
+      lastLiveBusyAt: 200,
     });
-    expect(updated?.terminalState).toBeUndefined();
   });
 
-  test('live busy session reopens non-cancelled terminal jobs', () => {
+  test('live busy session does not reopen non-cancelled terminal jobs', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -475,12 +474,12 @@ describe('BackgroundJobBoard', () => {
     const updated = board.markRunningFromLiveSession('ses_1', 200);
 
     expect(updated).toMatchObject({
-      state: 'running',
-      terminalUnreconciled: false,
-      completedAt: undefined,
-      terminalState: undefined,
+      state: 'completed',
+      terminalUnreconciled: true,
+      terminalState: 'completed',
       lastLiveBusyAt: 200,
     });
+    expect(updated?.completedAt).toBeDefined();
   });
 
   test('stale status updates cannot reopen already reconciled jobs', () => {

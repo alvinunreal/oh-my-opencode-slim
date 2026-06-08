@@ -1024,7 +1024,7 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('reopens stale cancelled child job when child session becomes busy', async () => {
+  test('does not reopen stale cancelled child job when child session becomes busy', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -1045,10 +1045,10 @@ describe('task-session-manager hook', () => {
     });
 
     expect(board.get('child-1')).toMatchObject({
-      state: 'running',
+      state: 'reconciled',
       terminalUnreconciled: false,
+      terminalState: 'cancelled',
     });
-    expect(board.get('child-1')?.terminalState).toBeUndefined();
   });
 
   test('does not reconcile terminal jobs before they are injected into a prompt', async () => {
@@ -1414,6 +1414,40 @@ describe('task-session-manager hook', () => {
       resume,
     );
     expect(resume.args.task_id).toBe('ses_child');
+  });
+
+  test('late child busy event does not reopen completed foreground XML task', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { args: { subagent_type: 'fixer', description: 'reuse probe' } },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        output: [
+          '<task id="ses_child" state="completed">',
+          '<task_result>',
+          'done',
+          '</task_result>',
+          '</task>',
+        ].join('\n'),
+      },
+    );
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'ses_child', status: { type: 'busy' } },
+      },
+    });
+
+    expect(board.get('ses_child')).toMatchObject({
+      state: 'completed',
+      terminalState: 'completed',
+      terminalUnreconciled: true,
+    });
   });
 
   test('preserves explicit raw session ids when reusable board misses', async () => {
