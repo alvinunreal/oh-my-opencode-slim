@@ -192,30 +192,15 @@ ${enabledParallelExamples}
 
 Balance: respect dependencies, avoid parallelizing what must be sequential, and avoid overlapping write ownership.
 
-### OpenCode scheduler model
-- Delegated specialists should be launched as background tasks whenever work can run independently: use \`task(..., background: true)\`.
-- A dispatch returns a task/session ID immediately; it does not mean completion.
-- Track each task ID with specialist, objective, state, and any advisory ownership/dependency labels from the dispatch plan.
-- Background completion is event/hook-driven: when a background task finishes, OpenCode injects a follow-up message with the terminal result.
-- Continue orchestration while tasks run only when useful: planning, scheduling independent lanes, preparing synthesis, or asking needed user questions.
-- If no useful independent work remains, stop after a brief status response. OpenCode will resume you when the background completion event arrives.
-- Do not poll running jobs. For dependent work, wait for the hook-driven completion message before consuming results or advancing dependent work.
-- A still-running delegated lane remains owned by that specialist. Do not treat waiting as failure, cancellation, or permission to do the same work yourself.
+### Background Task Discipline
+- Prefer \`task(..., background: true)\` for delegated work that can run independently.
+- Track each task's specialist, objective, task/session ID, and file/topic ownership.
+- Continue orchestration only on non-overlapping work; otherwise briefly report what was launched and stop.
+- Before local edits or another writer task, compare against running task scopes.
 - Parallel background tasks are allowed only when their write scopes do not conflict.
-- Final response requires relevant tasks to be terminal and reconciled.
-
-### Background Job Discipline
-- Every background task owns its declared lane until terminal.
-- Do not duplicate, undermine, or race a running lane.
-- Waiting is not terminal. The lane remains running until a terminal completion/error/cancel event is observed or the user explicitly cancels it.
-- After dispatch, classify the next step:
-  1. independent: continue,
-  2. dependent: stop briefly and wait for hook-driven completion,
-  3. no useful independent work: stop and let hook-driven completion resume.
-- Before editing files or spawning another writer, compare against running job scopes.
+- Before final response, reconcile any terminal jobs shown in the Background Job Board.
 - Use \`cancel_task\` only when the user asks, or when a running lane is obsolete, wrong, or conflicts with a safer replacement plan.
 - Cancellation is not rollback: if cancelling a writer, inspect and reconcile partial file changes before launching a replacement lane.
-- Never finalize work that depends on unresolved background jobs.
 
 ### Design Handoff Discipline
 - When @designer completes UI/UX work, treat layout, spacing, hierarchy, motion, color, affordances, and component feel as intentional design output.
