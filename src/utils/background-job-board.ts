@@ -291,13 +291,6 @@ export class BackgroundJobBoard {
     );
   }
 
-  resolveForStatus(
-    parentSessionID: string,
-    taskIDOrAlias: string,
-  ): BackgroundJobRecord | undefined {
-    return this.resolve(parentSessionID, taskIDOrAlias);
-  }
-
   resolveReusable(
     parentSessionID: string,
     taskIDOrAlias: string,
@@ -371,7 +364,7 @@ export class BackgroundJobBoard {
     return [
       '### Background Job Board',
       'SENTINEL: background-job-board-v2',
-      'Use task_status for running jobs. Reconcile terminal jobs before final response. Reuse only completed sessions for the same specialist/context; never reuse cancelled or errored sessions.',
+      'Do not poll running jobs. Wait for hook-driven completion, or use cancel_task only for explicit cancellation. Reconcile terminal jobs before final response. Reuse only completed sessions for the same specialist/context; never reuse cancelled or errored sessions.',
       '',
       '#### Active / Unreconciled',
       ...(active.length > 0

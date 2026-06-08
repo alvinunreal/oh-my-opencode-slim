@@ -12,7 +12,7 @@ function activationPrompt(task: string): string {
     '- draft a plan and get `@oracle` review before implementation;',
     '- create and review a phased implementation/delegation plan;',
     '- execute phase by phase with background specialists where useful;',
-    '- poll `task_status`, reconcile results, validate, and ask `@oracle` to review each phase;',
+    '- wait for hook-driven background completion, reconcile results, validate, and ask `@oracle` to review each phase;',
     '- ask `@oracle` to include simplify/readability feedback in phase reviews;',
     '- fix actionable review issues before continuing.',
     '',

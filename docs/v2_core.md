@@ -13,7 +13,7 @@ Scope for this pass:
 
 - core prompts,
 - scheduler/job-board behavior,
-- `task` and `task_status` integration,
+- native `task` and hook-driven completion integration,
 - task-session-manager changes,
 - tmux/zellij multiplexer compatibility.
 
@@ -58,14 +58,14 @@ OpenCode background task semantics are the foundation:
 task(background: true)
   → returns immediately with task_id
   → child session continues elsewhere
-  → task_status(task_id) reports running or terminal state
+  → OpenCode injects completion when terminal
   → orchestrator consumes terminal result
 ```
 
 Important distinction:
 
 - `task` result means **launched**.
-- `task_status` terminal result means **finished**.
+- Injected terminal completion means **finished**.
 - Finished is not the same as reconciled.
 
 V2 must model these as separate states.
@@ -104,7 +104,7 @@ interface BackgroundJobRecord {
 }
 ```
 
-Native `task_status` states are `running`, `completed`, `error`, and
+Native task output states are `running`, `completed`, `error`, and
 `cancelled`. A wait timeout is not a terminal native state; represent it as a
 `timedOut` overlay while the job remains `running`.
 
@@ -165,7 +165,7 @@ The plugin needs one concrete reconciliation transition.
 
 Initial rule:
 
-1. `task_status` or an auto-injected completion message marks a job terminal and
+1. Task output or an auto-injected completion message marks a job terminal and
    `terminalUnreconciled: true`.
 2. The next orchestrator assistant turn after that terminal result is treated as
    the reconciliation turn for all terminal unreconciled jobs visible in context.
@@ -211,7 +211,7 @@ The orchestrator may directly:
 - read minimal context required to route work,
 - manage todos,
 - dispatch specialists,
-- poll task status,
+- track task state through hook-driven completion,
 - synthesize results,
 - run final checks when that is the simplest verification path.
 
@@ -240,7 +240,7 @@ New execution model:
   ownership/dependency labels available from the dispatch plan.
 - Continue orchestration while tasks run: planning, scheduling independent lanes,
   preparing synthesis, and asking needed user questions.
-- Poll or wait with `task_status(wait: true, timeout_ms: ...)` before consuming
+- Wait for hook-driven completion before consuming
   outputs or starting dependent work.
 - Parallel background tasks are allowed only when their write scopes do not
   conflict.
@@ -258,7 +258,7 @@ V2 workflow should be:
 3. Dispatch independent specialists as background tasks.
 4. Record task IDs, state, and advisory ownership/dependency labels.
 5. Continue only independent orchestration while jobs run.
-6. Poll/wait for terminal results with task_status.
+6. Wait for terminal results via hook-driven completion.
 7. Reconcile results, resolve conflicts, and gate dependent lanes.
 8. Dispatch follow-up jobs if needed.
 9. Verify final state.
@@ -272,7 +272,7 @@ Update `PHASE_REMINDER_TEXT` so it reinforces scheduler behavior:
 Build a short work graph with independent lanes, dependencies, and advisory
 ownership.
 Dispatch independent specialists as background tasks, record task/session IDs,
-then continue orchestration. Poll task_status and only consume outputs or advance
+then continue orchestration. Wait for hook-driven completion and only consume outputs or advance
 dependent work when results are terminal.
 ```
 
@@ -325,11 +325,11 @@ Current behavior:
 - `tool.execute.before(task)` validates `subagent_type`, strips stale/invalid
   `task_id` aliases when they cannot safely resolve, and only resolves reusable
   aliases for matching completed/reconciled jobs.
-- `tool.execute.before(task_status)` resolves job-board aliases for polling
+- No `task_status` hook is installed; upstream no longer exposes that tool
   running or terminal tasks.
 - `tool.execute.after(task)` parses native launch output and records running
   jobs in the shared board; it does not treat launch as completion.
-- `tool.execute.after(task_status)` and synthetic completion messages parse
+- `tool.execute.after(task)` and synthetic completion messages parse
   status output into running/terminal job-board state.
 - Prompt injection is owned by the job board: running and terminal unreconciled
   jobs appear under `### Background Job Board`; completed/reconciled jobs appear
@@ -338,7 +338,7 @@ Current behavior:
 V2 behavior:
 
 - `task` tool output creates or updates a job as `launched` or `running`.
-- `task_status` output updates the job to `running`, `completed`, `error`, or
+- Task output updates the job to `running`, `completed`, `error`, or
   `cancelled`; timeout is metadata while the job remains `running`.
 - only terminal jobs become ready for reconciliation.
 - only reconciled/appropriate sessions should be offered for reuse.
@@ -361,7 +361,7 @@ V2 behavior:
    - register job as launched/running,
    - do not treat it as completed.
 
-4. Add handling for `task_status`:
+4. Handle task output and injected completions:
 
    - parse status output,
    - update job state,
@@ -374,7 +374,7 @@ V2 behavior:
    - keep aliases short.
 
 6. Do not expose running background jobs as resumable sessions. A running job
-   alias should nudge `task_status`, not `task(task_id=...)`. Only completed and
+   alias should not be used with running `task(task_id=...)`. Only completed and
    reconciled sessions should enter the reusable section.
 
 ---
@@ -387,7 +387,7 @@ Target injected shape:
 
 ```text
 ### Background Job Board
-Use task_status before consuming running jobs. Reconcile terminal jobs before
+Do not poll running jobs. Reconcile terminal jobs before
 final response.
 
 - exp-4 / ses_abc / explorer / running
@@ -396,7 +396,7 @@ final response.
   Dependencies: none
 
 - fix-2 / ses_def / fixer / completed, unreconciled
-  Objective: Update task-session-manager task_status handling
+  Objective: Update task-session-manager task output handling
   Ownership: src/hooks/task-session-manager/**
 ```
 
@@ -404,19 +404,19 @@ Keep this small. The point is scheduling state, not full task transcripts.
 
 ---
 
-## `task_status` Integration
+## Task Completion Integration
 
 Primary files:
 
 - `src/index.ts`
 - `src/hooks/task-session-manager/index.ts`
 
-Add hook support for the native `task_status` tool.
+Track native `task` output and injected completion messages.
 
 Target flow:
 
 ```text
-tool.execute.after(task_status)
+tool.execute.after(task)
   → parse task_id + state
   → update job board
   → if terminal, attach compact result summary
@@ -432,7 +432,7 @@ its own compact scheduler state from tool results and events.
 ### Auto-injected completion path
 
 Native background tasks can also complete through an OpenCode-injected parent
-message instead of an explicit `task_status` call. V2 must ingest that path too.
+message as a synthetic completion message. V2 must ingest that path too.
 
 Parse this in the chat/message transform path that already inspects parent
 conversation messages, most likely `experimental.chat.messages.transform` in the
@@ -451,9 +451,9 @@ state: completed | error
 </task_result>
 ```
 
-That path should update the same shared job-board state as `task_status`.
+That path should update the same shared job-board state as task output.
 Initially parse verified auto-message states only. `cancelled` can still be
-handled through explicit `task_status` output unless verified in auto-injected
+handled through task output unless verified in auto-injected
 messages.
 
 ```text
@@ -546,9 +546,9 @@ prompt can rely on visible scheduler state.
 
 - inject compact job board into orchestrator context.
 
-### Phase 4 — `task_status` Handling
+### Phase 4 — Task Completion Handling
 
-- hook `task_status`,
+- hook `task` output,
 - update job states from status output,
 - mark terminal jobs as unreconciled,
 - keep running jobs visible.
@@ -586,7 +586,7 @@ Start here:
      running jobs as resumable sessions.
 
 4. `src/index.ts`
-   - route `task_status` after-hooks into the task-session-manager hook.
+   - route `task` after-hooks into the task-session-manager hook.
 
 5. `src/agents/orchestrator.ts`
    - prompt role and workflow rewrite after scheduler state exists.
@@ -606,7 +606,7 @@ Core V2 is working when:
 
 - orchestrator prompt consistently schedules rather than implements,
 - background `task` output registers running jobs,
-- `task_status` terminal output updates job board state,
+- terminal task output updates job board state,
 - orchestrator context shows running and terminal unreconciled jobs,
 - dependent work waits for terminal results,
 - prompt-level advisory ownership reduces conflicting background workers,
@@ -616,6 +616,6 @@ Core V2 is working when:
 The core invariant:
 
 ```text
-task creates jobs; task_status or auto-completion finishes jobs; orchestrator
+task creates jobs; task output or auto-completion finishes jobs; orchestrator
 reconciles jobs.
 ```

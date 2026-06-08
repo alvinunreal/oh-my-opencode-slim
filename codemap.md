@@ -73,7 +73,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
    - Hooks can transform prompts/messages, normalize system message arrays, repair tool failures, or intercept runtime commands before/after execution.
 
 3. **Delegated execution**
-   - Native OpenCode background tasks are parsed from `task`/`task_status` output and tracked in the shared background job board.
+   - Native OpenCode background tasks are parsed from `task` output and injected completion messages and tracked in the shared background job board.
    - `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and injects background/reusable job context into the orchestrator prompt.
    - `src/multiplexer/` optionally mirrors those sessions into tmux/zellij panes.
    - Results flow back into the parent session through notifications/output polling.

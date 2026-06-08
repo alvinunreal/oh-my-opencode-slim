@@ -2,8 +2,8 @@
 
 ## Responsibility
 
-Provides V2 background job-board state for `task`/`task_status` calls so the
-orchestrator can poll active jobs and reuse only completed, reconciled child
+Provides V2 background job-board state for `task` output and injected completion messages so the
+orchestrator can track active jobs and reuse only completed, reconciled child
 sessions by short aliases (`exp-1`, `ora-2`).
 
 ## Design
@@ -23,12 +23,10 @@ sessions by short aliases (`exp-1`, `ora-2`).
 
 ## Flow
 
-1. `tool.execute.before` receives `task` or `task_status` calls.
-2. `task_status.task_id` aliases resolve against any parent-scoped job; unknown
-   raw IDs are left unchanged.
-3. `task.task_id` aliases resolve only to completed/reconciled jobs for the same
+1. `tool.execute.before` receives `task` calls.
+2. `task.task_id` aliases resolve only to completed/reconciled jobs for the same
    specialist; misses remove `task_id` to force fresh task creation.
-4. `tool.execute.after` registers launches and status transitions from native V2
+3. `tool.execute.after` registers launches and status transitions from native V2
    output; bare task IDs without state do not create reusable jobs.
 5. Read context from child sessions is attached to board records with line-count
    and file caps.

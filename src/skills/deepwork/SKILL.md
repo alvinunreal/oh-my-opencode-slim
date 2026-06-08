@@ -104,8 +104,8 @@ Use the scheduler model throughout:
 
 - follow Orchestrator delegations rules
 - record task/session IDs and ownership boundaries;
-- poll `task_status` before consuming background results;
-- avoid blocking Orchestrator lane too long; prefer shorter periodic task waits
-  rather than one long wait;
+- wait for hook-driven background completion before consuming background results;
+- avoid blocking Orchestrator lane while background jobs run; if no independent
+  work remains, stop briefly and let the completion event resume the workflow;
 - do not advance to the next phase while relevant jobs are running or terminal
   results are unreconciled.

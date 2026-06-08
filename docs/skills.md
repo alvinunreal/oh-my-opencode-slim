@@ -106,7 +106,7 @@ Start it directly with:
 - Persistent session state in markdown files
 - Mandatory oracle reviews at plan and phase boundaries
 - Oracle phase reviews include simplify/readability feedback alongside regular correctness and risk review
-- V2 scheduler integration (dispatch specialists, poll task_status, reconcile)
+- V2 scheduler integration (dispatch specialists, wait for hook-driven completion, reconcile)
 - OpenCode todo lists for progress tracking
 - Flexible structure - orchestrator adapts format to task needs
 

@@ -7,7 +7,7 @@
 - AST-aware search/replace via `ast-grep` stack.
 - Remote fetch/transform utility via `smartfetch` (`webfetch` tool).
 - Council orchestration via `createCouncilTool` (`council.ts`).
-- (No custom subtask feature in V2 — use native background `task` + `task_status`)
+- (No custom subtask feature in V2 — use native background `task` plus hook-driven completion)
 - Runtime preset switching via `/preset` hook via `createPresetManager` (`preset-manager.ts`).
 
 It is the bridge between plugin runtime integration (`src/index.ts`) and the lower-level

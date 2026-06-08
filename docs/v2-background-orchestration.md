@@ -23,7 +23,7 @@ This is a clean rebuild, not a compatibility layer over the old blocking model.
 ## Runtime Requirement
 
 Background orchestration requires an OpenCode release that includes native
-background subagents and `task_status`, launched with background subagents
+background subagents, launched with background subagents
 enabled:
 
 ```bash
@@ -35,15 +35,14 @@ The required native/background-control tools are:
 | Tool | Purpose |
 |------|---------|
 | `task(..., background: true)` | Start a specialist in the background and immediately return a task ID |
-| `task_status` | Poll or wait for a background task result when needed |
+| hook-driven completion | OpenCode injects terminal background task results automatically |
 | `cancel_task` | Plugin-provided tool to cancel a tracked background task by task ID or Background Job Board alias |
 
 If these are not available, the scheduler cannot use the default background
 workflow. Configure the environment variable through the installer or use the
 one-shot export above before starting OpenCode.
 
-Use an OpenCode release that includes native background subagents/task_status;
-run `opencode --version` and update if `task_status` is missing.
+Use an OpenCode release that includes native background subagents and hook-driven completion; run `opencode --version` and update if background tasks are missing.
 
 ---
 
@@ -82,7 +81,7 @@ Track task IDs and ownership
   ↓
 Continue only independent coordination work
   ↓
-Wait for hook-driven completion or use task_status when needed
+Wait for hook-driven completion
   ↓
 Reconcile results and resolve conflicts
   ↓
@@ -147,9 +146,9 @@ Rules:
 ### 4. Wait, cancel, and reconcile
 
 Background tasks are not complete until OpenCode injects their terminal result or
-`task_status` says they are terminal.
+hook-driven completion marks them terminal.
 
-The orchestrator should use `task_status` to:
+The orchestrator should use background completion events to:
 
 - wait for dependent results,
 - check long-running tasks,
@@ -309,7 +308,7 @@ ownership need to be explicit in the orchestrator's working context.
 
 The plugin is aware that a `task` return can mean "background job launched"
 rather than "work complete". It tracks running task IDs, exposes recent work in
-the background job board, updates aliases from `task_status` results, and keeps
+the background job board, updates aliases from task results, and keeps
 multiplexer panes attached while the parent orchestrator continues scheduling.
 
 ---
@@ -317,7 +316,7 @@ multiplexer panes attached while the parent orchestrator continues scheduling.
 ## Startup Behavior
 
 The installer and docs configure background subagents as a requirement for the
-default scheduler workflow. If background subagents or `task_status` are
+default scheduler workflow. If background subagents are
 unavailable, treat it as an environment or OpenCode-version issue rather than an
 intentional V1 fallback:
 
@@ -346,7 +345,7 @@ The orchestrator should do something like:
 2. Launch Explorer in background to map task-session hooks and task lifecycle.
 3. Launch Oracle in background to review architecture risks.
 4. Continue by preparing the dependency graph and file ownership plan.
-5. Wait for Explorer and Oracle with `task_status`.
+5. Wait for Explorer and Oracle via hook-driven completion.
 6. Dispatch Fixer to implement prompt/config/hook changes with clear ownership.
 7. Dispatch a second Fixer for tests if file ownership is separate.
 8. Wait for implementation results.

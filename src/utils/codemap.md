@@ -21,7 +21,7 @@ Cross-cutting runtime utilities used by orchestration, hooks, and plugin I/O.
   support.
 - **zip-extractor.ts**: Cross-platform zip/tar extraction with Windows fallback
   tooling.
-- **task.ts**: Parses `task` and `task_status` tool output.
+- **task.ts**: Parses native `task` output and injected background completion text.
 - **system-collapse.ts**: Collapses multiple system prompt fragments into one
   array element while mutating the original array reference.
 - **logger.ts**: Structured JSON logging to temporary files.
@@ -58,7 +58,7 @@ Cross-cutting runtime utilities used by orchestration, hooks, and plugin I/O.
   within each parent+agent (`exp-1`, `lib-2`, etc.).
 - `updateStatus` marks terminal jobs unreconciled; `markReconciled` makes only
   completed terminal jobs reusable.
-- `resolveForStatus`, `resolveReusable`, `markUsed`, `drop`, and `clearParent`
+- `resolveReusable`, `markUsed`, `drop`, and `clearParent`
   keep job aliases consistent on polling, reuse, and teardown.
 - `formatForPrompt` returns the unified `### Background Job Board` prompt section
   with Active / Unreconciled and Reusable Sessions subsections.

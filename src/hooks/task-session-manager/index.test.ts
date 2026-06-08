@@ -70,7 +70,7 @@ describe('task-session-manager hook', () => {
       },
       {
         output: [
-          'task_id: child-1 (for polling this task with task_status)',
+          'task_id: child-1',
           'state: running',
           '',
           '<task_result>',
@@ -93,7 +93,7 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('updates background job board from task_status output', async () => {
+  test('updates background job board from task output', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -109,15 +109,18 @@ describe('task-session-manager hook', () => {
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       {
-        output: [
-          'task_id: child-1 (for polling this task with task_status)',
-          'state: running',
-        ].join('\n'),
+        output: ['task_id: child-1', 'state: running'].join('\n'),
       },
     );
 
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: { subagent_type: 'oracle', description: 'review scheduler plan' },
+      },
+    );
     await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
       {
         output: [
           'task_id: child-1',
@@ -147,7 +150,7 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('keeps task_status timeout as a running timed-out job', async () => {
+  test('keeps task timeout as a running timed-out job', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -163,15 +166,21 @@ describe('task-session-manager hook', () => {
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       {
-        output: [
-          'task_id: child-1 (for polling this task with task_status)',
-          'state: running',
-        ].join('\n'),
+        output: ['task_id: child-1', 'state: running'].join('\n'),
       },
     );
 
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'implement scheduler wiring',
+        },
+      },
+    );
     await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
       {
         output: [
           'task_id: child-1',
@@ -198,109 +207,6 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('classifies transient task_status errors for known running jobs', async () => {
-    const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
-
-    board.registerLaunch({
-      taskID: 'child-1',
-      parentSessionID: 'parent-1',
-      agent: 'oracle',
-      description: 'review plan',
-    });
-
-    const output = {
-      output: [
-        'task_id: child-1',
-        'state: error',
-        '',
-        '<task_error>',
-        'Task is not running in this process and has no final output.',
-        '</task_error>',
-      ].join('\n'),
-      metadata: { state: 'error' },
-    };
-
-    await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
-      output,
-    );
-
-    expect(output.output).toContain('state: error');
-    expect(output.metadata).toMatchObject({ state: 'error' });
-    expect(board.get('child-1')).toMatchObject({
-      state: 'running',
-      statusUncertain: true,
-      terminalUnreconciled: false,
-    });
-  });
-
-  test('does not terminalize transient task_status errors when live session is busy', async () => {
-    const board = new BackgroundJobBoard();
-    const { hook } = createHook({
-      backgroundJobBoard: board,
-      sessionStatus: { 'child-1': { type: 'busy' } },
-    });
-
-    const output = {
-      output: [
-        'task_id: child-1',
-        'state: error',
-        '',
-        '<task_error>',
-        'Task is not running in this process and has no final output.',
-        '</task_error>',
-      ].join('\n'),
-      metadata: { state: 'error' },
-    };
-
-    await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
-      output,
-    );
-
-    expect(output.output).toContain('state: error');
-    expect(output.metadata).toMatchObject({ state: 'error' });
-    expect(board.get('child-1')).toBeUndefined();
-  });
-
-  test('treats transient task_status errors as ambiguous for stale terminal records with live busy evidence', async () => {
-    const board = new BackgroundJobBoard();
-    const { hook } = createHook({
-      backgroundJobBoard: board,
-      sessionStatus: { 'child-1': { type: 'busy' } },
-    });
-    board.registerLaunch({
-      taskID: 'child-1',
-      parentSessionID: 'parent-1',
-      agent: 'oracle',
-      description: 'review plan',
-    });
-    board.updateStatus({ taskID: 'child-1', state: 'completed' });
-
-    const output = {
-      output: [
-        'task_id: child-1',
-        'state: error',
-        '',
-        '<task_error>',
-        'Task is not running in this process and has no final output.',
-        '</task_error>',
-      ].join('\n'),
-      metadata: { state: 'error' },
-    };
-
-    await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
-      output,
-    );
-
-    expect(board.get('child-1')).toMatchObject({
-      state: 'completed',
-      terminalUnreconciled: true,
-    });
-  });
-
   test('updates background job board from injected completion messages', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
@@ -317,10 +223,7 @@ describe('task-session-manager hook', () => {
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       {
-        output: [
-          'task_id: child-1 (for polling this task with task_status)',
-          'state: running',
-        ].join('\n'),
+        output: ['task_id: child-1', 'state: running'].join('\n'),
       },
     );
 
@@ -334,13 +237,12 @@ describe('task-session-manager hook', () => {
               id: 'part-1',
               synthetic: true,
               text: [
-                'Background task completed: map hooks',
-                'task_id: child-1',
-                'state: completed',
-                '',
+                '<task id="child-1" state="completed">',
+                '<summary>Background task completed: map hooks</summary>',
                 '<task_result>',
                 'found hook flow',
                 '</task_result>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -676,7 +578,7 @@ describe('task-session-manager hook', () => {
     });
   });
 
-  test('ignores synthetic prefix/state mismatch - completed prefix with error state', async () => {
+  test('ignores synthetic summary/state mismatch - completed summary with error state', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -687,7 +589,7 @@ describe('task-session-manager hook', () => {
       description: 'map hooks',
     });
 
-    // "completed" prefix with "error" state should be ignored
+    // "completed" summary with "error" state should be ignored
     const messages = {
       messages: [
         {
@@ -697,13 +599,12 @@ describe('task-session-manager hook', () => {
               type: 'text',
               synthetic: true,
               text: [
-                'Background task completed: map hooks',
-                'task_id: child-1',
-                'state: error',
-                '',
+                '<task id="child-1" state="error">',
+                '<summary>Background task completed: map hooks</summary>',
                 '<task_error>',
                 'something went wrong',
                 '</task_error>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -719,7 +620,7 @@ describe('task-session-manager hook', () => {
     });
   });
 
-  test('ignores synthetic prefix/state mismatch - failed prefix with completed state', async () => {
+  test('ignores synthetic summary/state mismatch - failed summary with completed state', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -730,7 +631,7 @@ describe('task-session-manager hook', () => {
       description: 'map hooks',
     });
 
-    // "failed" prefix with "completed" state should be ignored
+    // "failed" summary with "completed" state should be ignored
     const messages = {
       messages: [
         {
@@ -740,13 +641,12 @@ describe('task-session-manager hook', () => {
               type: 'text',
               synthetic: true,
               text: [
-                'Background task failed: map hooks',
-                'task_id: child-1',
-                'state: completed',
-                '',
+                '<task id="child-1" state="completed">',
+                '<summary>Background task failed: map hooks</summary>',
                 '<task_result>',
                 'success result',
                 '</task_result>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -773,7 +673,7 @@ describe('task-session-manager hook', () => {
       description: 'map hooks',
     });
 
-    // "completed" prefix with "running" state should be ignored
+    // "completed" summary with "running" state should be ignored
     const messages = {
       messages: [
         {
@@ -783,13 +683,12 @@ describe('task-session-manager hook', () => {
               type: 'text',
               synthetic: true,
               text: [
-                'Background task completed: map hooks',
-                'task_id: child-1',
-                'state: running',
-                '',
+                '<task id="child-1" state="running">',
+                '<summary>Background task completed: map hooks</summary>',
                 '<task_result>',
                 'still running',
                 '</task_result>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -825,13 +724,12 @@ describe('task-session-manager hook', () => {
               type: 'text',
               synthetic: true,
               text: [
-                'Background task completed: map hooks',
-                'task_id: child-1',
-                'state: completed',
-                '',
+                '<task id="child-1" state="completed">',
+                '<summary>Background task completed: map hooks</summary>',
                 '<task_result>',
                 'successfully mapped',
                 '</task_result>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -868,13 +766,12 @@ describe('task-session-manager hook', () => {
               type: 'text',
               synthetic: true,
               text: [
-                'Background task failed: map hooks',
-                'task_id: child-1',
-                'state: error',
-                '',
+                '<task id="child-1" state="error">',
+                '<summary>Background task failed: map hooks</summary>',
                 '<task_error>',
                 'mapping failed',
                 '</task_error>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -913,13 +810,12 @@ describe('task-session-manager hook', () => {
               type: 'text',
               synthetic: true,
               text: [
-                'Background task failed: cancelled review',
-                'task_id: child-1',
-                'state: error',
-                '',
+                '<task id="child-1" state="error">',
+                '<summary>Background task failed: cancelled review</summary>',
                 '<task_error>',
                 'No user message found in stream. This should never happen.',
                 '</task_error>',
+                '</task>',
               ].join('\n'),
             },
           ],
@@ -943,7 +839,7 @@ describe('task-session-manager hook', () => {
     });
   });
 
-  test('normalizes late task_status error output for an explicitly cancelled task', async () => {
+  test('normalizes late task error output for an explicitly cancelled task', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -955,6 +851,11 @@ describe('task-session-manager hook', () => {
     });
     board.markCancelled('child-1', 'user requested');
     board.markReconciled('child-1');
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      { args: { subagent_type: 'oracle', description: 'cancelled review' } },
+    );
 
     const output = {
       output: [
@@ -969,7 +870,7 @@ describe('task-session-manager hook', () => {
     };
 
     await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'call-2' },
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
       output,
     );
 
@@ -1220,7 +1121,7 @@ describe('task-session-manager hook', () => {
     expect(messages.messages[0].parts[0].text).not.toContain('err-1');
   });
 
-  test('running alias is polled through task_status but not resumed by task', async () => {
+  test('running alias is not resumed by task', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
     board.registerLaunch({
@@ -1236,13 +1137,6 @@ describe('task-session-manager hook', () => {
       resume,
     );
     expect(resume.args.task_id).toBeUndefined();
-
-    const poll = { args: { task_id: 'exp-1' } };
-    await hook['tool.execute.before'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'poll' },
-      poll,
-    );
-    expect(poll.args.task_id).toBe('child-1');
   });
 
   test('task alias is dropped when subagent_type is missing', async () => {
@@ -1303,23 +1197,6 @@ describe('task-session-manager hook', () => {
       wrongAgent,
     );
     expect(wrongAgent.args.task_id).toBeUndefined();
-
-    const wrongParent = { args: { task_id: 'exp-1' } };
-    await hook['tool.execute.before'](
-      { tool: 'task_status', sessionID: 'parent-2', callID: 'parent' },
-      wrongParent,
-    );
-    expect(wrongParent.args.task_id).toBe('exp-1');
-  });
-
-  test('unknown raw task_status id remains unchanged', async () => {
-    const { hook } = createHook();
-    const poll = { args: { task_id: 'raw-unknown' } };
-    await hook['tool.execute.before'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'poll' },
-      poll,
-    );
-    expect(poll.args.task_id).toBe('raw-unknown');
   });
 
   test('resuming reusable job relaunches running and removes reusable entry', async () => {
@@ -1516,8 +1393,12 @@ describe('task-session-manager hook', () => {
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       { output: ['task_id: child-1', 'state: running'].join('\n') },
     );
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'status-1' },
+      { args: { subagent_type: 'explorer', description: 'context caps' } },
+    );
     await hook['tool.execute.after'](
-      { tool: 'task_status', sessionID: 'parent-1', callID: 'status-1' },
+      { tool: 'task', sessionID: 'parent-1', callID: 'status-1' },
       { output: ['task_id: child-1', 'state: completed'].join('\n') },
     );
     const messages = createMessages('parent-1', 'continue');

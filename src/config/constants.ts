@@ -93,7 +93,7 @@ export const FALLBACK_FAILOVER_TIMEOUT_MS = 15_000;
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 
 // Workflow reminders
-export const PHASE_REMINDER_TEXT = `!IMPORTANT! Scheduler workflow: plan lanes/dependencies → dispatch background specialists → track task IDs → wait for hook-driven completion or use task_status only when needed → reconcile terminal results → verify. Do not consume running-job output or advance dependent work. !END!`;
+export const PHASE_REMINDER_TEXT = `!IMPORTANT! Scheduler workflow: plan lanes/dependencies → dispatch background specialists → track task IDs → wait for hook-driven completion → reconcile terminal results → verify. Do not poll running jobs, consume running-job output, or advance dependent work. !END!`;
 
 export const WRITABLE_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 - Prefer dedicated file tools for normal code work: glob/grep/ast_grep_search for discovery, read for file contents, and edit/write/apply_patch for targeted source changes.

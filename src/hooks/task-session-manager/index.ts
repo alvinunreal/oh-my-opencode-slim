@@ -5,7 +5,6 @@ import {
   BackgroundJobBoard,
   type BackgroundJobRecord,
   type ContextFile,
-  classifyTaskStatusOutput,
   deriveTaskSessionLabel,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
@@ -135,6 +134,11 @@ function extractPath(output: string): string | undefined {
   return /<path>([^<]+)<\/path>/.exec(output)?.[1];
 }
 
+function extractTaskSummary(output: string): string | undefined {
+  const summary = /<summary>\s*([\s\S]*?)\s*<\/summary>/i.exec(output)?.[1];
+  return summary?.trim() || undefined;
+}
+
 function normalizePath(root: string, file: string): string {
   const relative = path.relative(root, file);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -255,7 +259,7 @@ export function createTaskSessionManagerHook(
     const status = parseTaskStatusOutput(output);
     if (!status) return undefined;
 
-    log('[task-session-manager] parsed task status output', {
+    log('[task-session-manager] parsed task output status', {
       taskID: status.taskID,
       state: status.state,
       timedOut: status.timedOut,
@@ -309,83 +313,6 @@ export function createTaskSessionManagerHook(
     return updated;
   }
 
-  async function handleTransientTaskStatusOutput(output: {
-    output: unknown;
-    metadata?: unknown;
-  }): Promise<boolean> {
-    if (typeof output.output !== 'string') return false;
-
-    const status = parseTaskStatusOutput(output.output);
-    if (!status) return false;
-    if (classifyTaskStatusOutput(status) !== 'transient_process_error') {
-      return false;
-    }
-
-    const existing = backgroundJobBoard.get(status.taskID);
-    const liveStatus =
-      existing && existing.state === 'running'
-        ? undefined
-        : await getLiveSessionStatus(status.taskID);
-    const recentLiveBusy =
-      !!existing?.lastLiveBusyAt &&
-      (!existing.completedAt ||
-        existing.lastLiveBusyAt >= existing.completedAt);
-    const isStillRunning =
-      existing?.state === 'running' ||
-      recentLiveBusy ||
-      liveStatus === 'busy' ||
-      liveStatus === 'retry';
-    if (!isStillRunning) return false;
-
-    const updated =
-      existing?.state === 'running'
-        ? backgroundJobBoard.updateStatus({
-            taskID: status.taskID,
-            state: 'running',
-            statusUncertain: true,
-            lastStatusError: status.result,
-          })
-        : undefined;
-
-    log('[task-session-manager] classified transient task_status error', {
-      taskID: status.taskID,
-      alias: existing?.alias,
-      parentSessionID: existing?.parentSessionID,
-      previousState: existing?.state,
-      updatedState: updated?.state,
-      liveStatus,
-      recentLiveBusy,
-    });
-
-    return true;
-  }
-
-  async function getLiveSessionStatus(
-    sessionID: string,
-  ): Promise<string | undefined> {
-    try {
-      const response = await (
-        _ctx.client.session.status as unknown as () => Promise<unknown>
-      )();
-      const data = (response as { data?: unknown }).data;
-      if (!isObjectRecord(data)) return undefined;
-      const item = data[sessionID];
-      if (item === undefined) return 'idle';
-      if (isObjectRecord(item) && typeof item.type === 'string') {
-        return item.type;
-      }
-      const directType = data.type;
-      if (typeof directType === 'string') return directType;
-      const nestedStatus = data.status;
-      if (!isObjectRecord(nestedStatus)) return undefined;
-      return typeof nestedStatus.type === 'string'
-        ? nestedStatus.type
-        : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
   function updateFromInjectedCompletion(
     part: ChatMessagePart,
     message: ChatMessage,
@@ -396,16 +323,22 @@ export function createTaskSessionManagerHook(
       return undefined;
     }
 
-    // Only process synthetic messages with valid completion prefixes
-    const isCompleted = BACKGROUND_COMPLETION_COMPLETED.test(part.text);
-    const isFailed = BACKGROUND_COMPLETION_FAILED.test(part.text);
-
-    if (part.synthetic !== true || (!isCompleted && !isFailed)) {
-      return undefined;
-    }
+    if (part.synthetic !== true) return undefined;
 
     const status = parseTaskStatusOutput(part.text);
     if (!status) return undefined;
+    if (status.state !== 'completed' && status.state !== 'error') {
+      return undefined;
+    }
+
+    const summary = extractTaskSummary(part.text);
+    const isCompleted = summary
+      ? BACKGROUND_COMPLETION_COMPLETED.test(summary)
+      : status.state === 'completed';
+    const isFailed = summary
+      ? BACKGROUND_COMPLETION_FAILED.test(summary)
+      : status.state === 'error';
+    if (summary && !isCompleted && !isFailed) return undefined;
 
     const occurrenceId = createOccurrenceId(part, message, partIndex);
 
@@ -426,8 +359,10 @@ export function createTaskSessionManagerHook(
       return existing;
     }
 
-    // Enforce prefix/state consistency: completed prefix only accepts completed state
-    // failed prefix only accepts error state; ignore running/cancelled in auto-injected path
+    // Enforce summary/state consistency when upstream includes a completion
+    // summary. Current upstream renders synthetic completions as task XML with
+    // the completion/failure label inside <summary> rather than as the first
+    // line of text.
     if (isCompleted && status.state !== 'completed') return undefined;
     if (isFailed && status.state !== 'error') return undefined;
 
@@ -568,24 +503,11 @@ export function createTaskSessionManagerHook(
       output: { args?: unknown },
     ): Promise<void> => {
       const toolName = input.tool.toLowerCase();
-      if (toolName !== 'task' && toolName !== 'task_status') return;
+      if (toolName !== 'task') return;
       if (!input.sessionID || !options.shouldManageSession(input.sessionID)) {
         return;
       }
       if (!isObjectRecord(output.args)) return;
-
-      if (toolName === 'task_status') {
-        const args = output.args as { task_id?: unknown };
-        if (typeof args.task_id !== 'string' || args.task_id.trim() === '') {
-          return;
-        }
-        const resolved = backgroundJobBoard.resolveForStatus(
-          input.sessionID,
-          args.task_id.trim(),
-        );
-        if (resolved) args.task_id = resolved.taskID;
-        return;
-      }
 
       const args = output.args as TaskArgs;
       if (!isAgentName(args.subagent_type)) {
@@ -655,25 +577,13 @@ export function createTaskSessionManagerHook(
         return;
       }
 
-      if (input.tool.toLowerCase() === 'task_status') {
-        if (!input.sessionID || !options.shouldManageSession(input.sessionID)) {
-          return;
-        }
-        normalizeLateCancelledToolStatus(output);
-        if (await handleTransientTaskStatusOutput(output)) {
-          return;
-        }
-        updateBackgroundJobFromOutput(output.output);
-        return;
-      }
-
       if (input.tool.toLowerCase() !== 'task') return;
 
       const pending = takePendingCall(input.callID, input.sessionID);
 
       if (!pending || typeof output.output !== 'string') return;
       const launch = parseTaskLaunchOutput(output.output);
-      if (launch) {
+      if (launch && !launch.result?.match(/Timed out after \d+ms/i)) {
         const record = backgroundJobBoard.registerLaunch({
           taskID: launch.taskID,
           parentSessionID: pending.parentSessionId,
@@ -697,6 +607,7 @@ export function createTaskSessionManagerHook(
         return;
       }
 
+      normalizeLateCancelledTaskOutput(output);
       const status = parseTaskStatusOutput(output.output);
       if (status) {
         const existing = backgroundJobBoard.get(status.taskID);
@@ -948,7 +859,7 @@ export function createTaskSessionManagerHook(
     },
   };
 
-  function normalizeLateCancelledToolStatus(output: {
+  function normalizeLateCancelledTaskOutput(output: {
     output: unknown;
     metadata?: unknown;
   }): void {
@@ -957,7 +868,7 @@ export function createTaskSessionManagerHook(
     if (!status) return;
     const existing = backgroundJobBoard.get(status.taskID);
     if (!isLateCancelledTaskError(existing, status.state)) return;
-    log('[task-session-manager] normalized late cancelled task_status output', {
+    log('[task-session-manager] normalized late cancelled task output', {
       taskID: status.taskID,
       alias: existing?.alias,
       state: existing?.state,

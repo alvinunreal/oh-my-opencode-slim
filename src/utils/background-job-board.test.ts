@@ -25,7 +25,7 @@ describe('BackgroundJobBoard', () => {
     expect(board.hasRunning('parent-1')).toBe(true);
   });
 
-  test('updates terminal task_status results as unreconciled', () => {
+  test('updates terminal task results as unreconciled', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -229,7 +229,7 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
-  test('updates status from native task_status output', () => {
+  test('updates status from native task output', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',

@@ -1,8 +1,8 @@
 # Session Management
 
 Background job management lets the orchestrator track native background tasks,
-poll active work, and reuse completed/reconciled child sessions when follow-up
-work matches the same specialist context.
+wait for hook-driven completion, and reuse completed/reconciled child sessions
+when follow-up work matches the same specialist context.
 
 For implementation/debugging notes from hardening cancellation and pane cleanup,
 see [Background Job Board Lessons](background-job-board-lessons.md).
@@ -62,7 +62,7 @@ were read, includes line counts, and caps each remembered session to the most
 recent 8 files by default. Both thresholds are configurable.
 
 On a related follow-up, the orchestrator can reuse a completed/reconciled session
-instead of launching a fresh one. Running jobs must be polled with `task_status`;
+instead of launching a fresh one. Running jobs must wait for hook-driven completion;
 terminal jobs must be reconciled before dependent work or a final response.
 
 ---

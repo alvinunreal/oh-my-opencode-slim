@@ -14,7 +14,7 @@ The Background Job Board is a compact prompt reminder for orchestrator-managed
 - what files a remembered specialist session already read.
 
 The board is not an authority over OpenCode runtime state. It is a coordination
-cache. Live OpenCode events, `task_status`, `/session/status`, and session
+cache. Live OpenCode events, task output, `/session/status`, and session
 delete/abort behavior can disagree, so cancellation and reuse must be defensive.
 
 ## Correct Prompt Contract
@@ -22,7 +22,7 @@ delete/abort behavior can disagree, so cancellation and reuse must be defensive.
 The board prompt should say:
 
 ```text
-Use task_status for running jobs. Reconcile terminal jobs before final response.
+Do not poll running jobs. Reconcile terminal jobs before final response.
 Reuse only completed sessions for the same specialist/context; never reuse
 cancelled or errored sessions.
 ```
@@ -77,7 +77,7 @@ Implication:
 - Prefer `session.delete` over a long idle polling window for explicit user
   cancellation.
 
-## Transient `task_status` Errors Are Ambiguous
+## Transient Task Errors Are Ambiguous
 
 OpenCode can return:
 
@@ -111,7 +111,7 @@ not for deletion.
 
 ## Reconciliation Rules
 
-- Running jobs: use `task_status` or wait for hook-driven completion.
+- Running jobs: wait for hook-driven completion.
 - Terminal unreconciled jobs: mention/reconcile before final response.
 - Completed + reconciled jobs: may be reusable if the same specialist/context
   matches.
@@ -141,7 +141,8 @@ deleted and the pane close path ran.
 
 - Board state is advisory; OpenCode session lifecycle is authoritative.
 - `abort` interrupts work; `delete` terminates the child session lifecycle.
-- Status polling is useful but insufficient by itself.
+- Hook-driven completion is the normal path; explicit lifecycle checks are only
+  supporting evidence when diagnosing cancellation or pane cleanup.
 - Event-backed state catches runtime behavior that status maps can miss.
 - Prompt wording matters: “non-running” was too broad; “completed only” is the
   safer reuse contract.

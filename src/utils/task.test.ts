@@ -43,7 +43,7 @@ describe('parseTaskIdFromTaskOutput', () => {
 describe('parseTaskLaunchOutput', () => {
   test('parses background task launch output only when state is running', () => {
     const output = [
-      'task_id: ses_123 (for polling this task with task_status)',
+      'task_id: ses_123',
       'state: running',
       '',
       '<task_result>',
