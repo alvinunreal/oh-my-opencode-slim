@@ -330,6 +330,39 @@ describe('auto-update-checker/checker', () => {
       globalThis.fetch = originalFetch;
     });
 
+    test('supports custom prerelease dist-tag channel names', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '1.0.0',
+            nightly: '1.0.0-nightly.2',
+          },
+          versions: {
+            '1.0.0-nightly.1': {},
+            '1.0.0-nightly.2': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion(
+        '1.0.0-nightly.1',
+        'nightly',
+      );
+
+      expect(result).toEqual({
+        latestVersion: '1.0.0-nightly.2',
+        latestMajorVersion: null,
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
     test('fallback dist-tags never return lower-major versions as compatible', async () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = mock(async (url: string) => {

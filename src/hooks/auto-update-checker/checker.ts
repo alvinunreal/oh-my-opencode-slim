@@ -116,7 +116,7 @@ function comparePrerelease(a: string, b: string): number {
 function getPrereleaseChannel(version: ParsedVersion): string | null {
   if (!version.prerelease) return null;
 
-  return version.prerelease.match(/^(alpha|beta|rc|canary|next)/)?.[1] ?? null;
+  return version.prerelease.split('.')[0] ?? null;
 }
 
 function isVersionInChannel(version: string, channel: string): boolean {
