@@ -173,6 +173,10 @@ With `autoUpdate` set to `false`, this becomes notification-only mode: you'll
 see that a new version is available, but the plugin won't install it
 automatically.
 
+Auto-update never crosses major versions. For example, a 1.x install can
+auto-update to a newer 1.x release, but it won't auto-install 2.x. When a newer
+major is available, the plugin shows a migration command instead.
+
 > Pinned plugin entries in `opencode.json` (for example
 > `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
 > regardless of `autoUpdate`.

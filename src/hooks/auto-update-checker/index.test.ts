@@ -6,6 +6,11 @@ const checkerMocks = {
   extractChannel: mock(() => 'latest'),
   findPluginEntry: mock(() => null),
   getCachedVersion: mock(() => null),
+  getLatestCompatibleVersion: mock(async () => ({
+    latestVersion: null,
+    latestMajorVersion: null,
+    blockedByMajor: false,
+  })),
   getLatestVersion: mock(async () => null),
   getLocalDevVersion: mock(() => null),
   getCurrentRuntimePackageJsonPath: mock(() => null),
@@ -82,6 +87,12 @@ describe('auto-update-checker/index', () => {
     checkerMocks.findPluginEntry.mockImplementation(() => null);
     checkerMocks.getCachedVersion.mockReset();
     checkerMocks.getCachedVersion.mockImplementation(() => null);
+    checkerMocks.getLatestCompatibleVersion.mockReset();
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: null,
+      latestMajorVersion: null,
+      blockedByMajor: false,
+    }));
     checkerMocks.getLatestVersion.mockReset();
     checkerMocks.getLatestVersion.mockImplementation(async () => null);
     checkerMocks.getLocalDevVersion.mockReset();
@@ -140,7 +151,11 @@ describe('auto-update-checker/index', () => {
       isPinned: false,
     }));
     checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
-    checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '0.9.11',
+      latestMajorVersion: '0.9.11',
+      blockedByMajor: false,
+    }));
 
     crossSpawnMock.mockImplementation(() => ({
       exited: Promise.resolve(0),
@@ -184,7 +199,11 @@ describe('auto-update-checker/index', () => {
       isPinned: false,
     }));
     checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
-    checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '0.9.11',
+      latestMajorVersion: '0.9.11',
+      blockedByMajor: false,
+    }));
 
     const { createAutoUpdateCheckerHook } = await import(
       `./index?test=${importCounter++}`
@@ -215,7 +234,11 @@ describe('auto-update-checker/index', () => {
       isPinned: false,
     }));
     checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
-    checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '0.9.11',
+      latestMajorVersion: '0.9.11',
+      blockedByMajor: false,
+    }));
     cacheMocks.preparePackageUpdate.mockImplementation(() => null);
 
     const { createAutoUpdateCheckerHook } = await import(
@@ -245,7 +268,11 @@ describe('auto-update-checker/index', () => {
       isPinned: false,
     }));
     checkerMocks.getCachedVersion.mockImplementation(() => '0.9.1');
-    checkerMocks.getLatestVersion.mockImplementation(async () => '0.9.11');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '0.9.11',
+      latestMajorVersion: '0.9.11',
+      blockedByMajor: false,
+    }));
 
     crossSpawnMock.mockImplementation(() => ({
       exited: Promise.resolve(1),
@@ -278,5 +305,39 @@ describe('auto-update-checker/index', () => {
         duration: 8000,
       },
     });
+  });
+
+  test('does not auto-update across major versions', async () => {
+    checkerMocks.findPluginEntry.mockImplementation(() => ({
+      pinnedVersion: null,
+      isPinned: false,
+    }));
+    checkerMocks.getCachedVersion.mockImplementation(() => '1.1.2');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '1.1.2',
+      latestMajorVersion: '2.0.0',
+      blockedByMajor: true,
+    }));
+
+    const { createAutoUpdateCheckerHook } = await import(
+      `./index?test=${importCounter++}`
+    );
+    const { ctx, showToast } = createCtx();
+
+    const hook = createAutoUpdateCheckerHook(ctx as never);
+    hook.event({ event: { type: 'session.created', properties: {} } });
+    await waitForCalls(showToast);
+
+    expect(showToast).toHaveBeenCalledWith({
+      body: {
+        title: 'oh-my-opencode-slim v2.0.0 is available.',
+        message:
+          'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-slim@latest install --background-subagents=yes',
+        variant: 'info',
+        duration: 12000,
+      },
+    });
+    expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
+    expect(crossSpawnMock).not.toHaveBeenCalled();
   });
 });

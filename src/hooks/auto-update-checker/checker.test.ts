@@ -156,4 +156,65 @@ describe('auto-update-checker/checker', () => {
       readSpy.mockRestore();
     });
   });
+
+  describe('getLatestCompatibleVersion', () => {
+    test('selects latest version within current major', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '2.0.0',
+          },
+          versions: {
+            '1.1.0': {},
+            '1.1.2': {},
+            '2.0.0': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.1.1');
+
+      expect(result).toEqual({
+        latestVersion: '1.1.2',
+        latestMajorVersion: '2.0.0',
+        blockedByMajor: true,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+
+    test('does not report major block when latest is same major', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async () =>
+        Response.json({
+          'dist-tags': {
+            latest: '1.1.2',
+          },
+          versions: {
+            '1.1.1': {},
+            '1.1.2': {},
+          },
+        }),
+      ) as never;
+
+      const { getLatestCompatibleVersion } = await import(
+        `./checker?test=${importCounter++}`
+      );
+
+      const result = await getLatestCompatibleVersion('1.1.1');
+
+      expect(result).toEqual({
+        latestVersion: '1.1.2',
+        latestMajorVersion: '1.1.2',
+        blockedByMajor: false,
+      });
+
+      globalThis.fetch = originalFetch;
+    });
+  });
 });

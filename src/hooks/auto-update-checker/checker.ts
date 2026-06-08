@@ -6,17 +6,27 @@ import { log } from '../../utils/logger';
 import {
   INSTALLED_PACKAGE_JSON,
   NPM_FETCH_TIMEOUT,
+  NPM_PACKAGE_URL,
   NPM_REGISTRY_URL,
   PACKAGE_NAME,
   USER_OPENCODE_CONFIG,
   USER_OPENCODE_CONFIG_JSONC,
 } from './constants';
 import type {
+  CompatibleVersionResult,
   NpmDistTags,
+  NpmPackageMetadata,
   OpencodeConfig,
   PackageJson,
   PluginEntryInfo,
 } from './types';
+
+interface ParsedVersion {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: string | null;
+}
 
 function isString(value: unknown): value is string {
   return typeof value === 'string';
@@ -38,6 +48,53 @@ function isPrereleaseVersion(version: string): boolean {
  */
 function isDistTag(version: string): boolean {
   return !/^\d/.test(version);
+}
+
+function parseVersion(version: string): ParsedVersion | null {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?/);
+  if (!match) return null;
+
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ?? null,
+  };
+}
+
+function compareVersions(a: string, b: string): number {
+  const parsedA = parseVersion(a);
+  const parsedB = parseVersion(b);
+  if (!parsedA || !parsedB) return a.localeCompare(b);
+
+  const parts: Array<keyof Pick<ParsedVersion, 'major' | 'minor' | 'patch'>> = [
+    'major',
+    'minor',
+    'patch',
+  ];
+  for (const part of parts) {
+    if (parsedA[part] !== parsedB[part]) {
+      return parsedA[part] - parsedB[part];
+    }
+  }
+
+  if (parsedA.prerelease === parsedB.prerelease) return 0;
+  if (!parsedA.prerelease) return 1;
+  if (!parsedB.prerelease) return -1;
+  return parsedA.prerelease.localeCompare(parsedB.prerelease);
+}
+
+function getPrereleaseChannel(version: ParsedVersion): string | null {
+  if (!version.prerelease) return null;
+
+  return version.prerelease.match(/^(alpha|beta|rc|canary|next)/)?.[1] ?? null;
+}
+
+function isVersionInChannel(version: string, channel: string): boolean {
+  const parsed = parseVersion(version);
+  if (!parsed) return false;
+  if (channel === 'latest') return parsed.prerelease === null;
+  return getPrereleaseChannel(parsed) === channel;
 }
 
 /**
@@ -305,4 +362,75 @@ export async function getLatestVersion(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * Resolves the newest version that is safe for the current install to use.
+ * Auto-update never crosses major versions; newer majors are surfaced as a
+ * manual migration notification instead.
+ */
+export async function getLatestCompatibleVersion(
+  currentVersion: string,
+  channel: string = 'latest',
+): Promise<CompatibleVersionResult> {
+  const current = parseVersion(currentVersion);
+  if (!current) {
+    const latestVersion = await getLatestVersion(channel);
+    return {
+      latestVersion,
+      latestMajorVersion: latestVersion,
+      blockedByMajor: false,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), NPM_FETCH_TIMEOUT);
+
+  try {
+    const response = await fetch(NPM_PACKAGE_URL, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!response.ok) return await getCompatibleFromDistTags(current, channel);
+
+    const data = (await response.json()) as NpmPackageMetadata;
+    const distTags = data['dist-tags'] ?? { latest: '' };
+    const latestMajorVersion = distTags.latest || null;
+    const taggedVersion = distTags[channel] ?? distTags.latest ?? null;
+    const tagged = taggedVersion ? parseVersion(taggedVersion) : null;
+    const blockedByMajor = Boolean(tagged && tagged.major > current.major);
+
+    const versions = Object.keys(data.versions ?? {})
+      .filter((version) => {
+        const parsed = parseVersion(version);
+        return (
+          parsed?.major === current.major &&
+          isVersionInChannel(version, channel)
+        );
+      })
+      .sort(compareVersions);
+    const latestVersion = versions.at(-1) ?? null;
+
+    return { latestVersion, latestMajorVersion, blockedByMajor };
+  } catch {
+    return await getCompatibleFromDistTags(current, channel);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function getCompatibleFromDistTags(
+  current: ParsedVersion,
+  channel: string,
+): Promise<CompatibleVersionResult> {
+  const latestVersion = await getLatestVersion(channel);
+  const latest = latestVersion ? parseVersion(latestVersion) : null;
+  const blockedByMajor = Boolean(latest && latest.major > current.major);
+
+  return {
+    latestVersion: blockedByMajor ? null : latestVersion,
+    latestMajorVersion: latestVersion,
+    blockedByMajor,
+  };
 }
