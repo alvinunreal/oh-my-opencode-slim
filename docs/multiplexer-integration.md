@@ -128,7 +128,7 @@ Please analyze this codebase and create a documentation structure.
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, or `"none"` |
-| `layout` | string | `"main-vertical"` | Layout preset for tmux only |
+| `layout` | string | `"main-vertical"` | Layout preset for tmux; mapped to Zellij pane directions where possible |
 | `main_pane_size` | number | `60` | Main pane size percentage for tmux only (`20`-`80`) |
 | `zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `"agent-tab"` creates/reuses a dedicated tab; `"current-tab"` opens panes in the tab containing the parent OpenCode pane |
 
@@ -137,7 +137,7 @@ Please analyze this codebase and create a documentation structure.
 | Multiplexer | Status | Notes |
 |-------------|--------|-------|
 | **Tmux** | ✅ Supported | Full layout control with `main-vertical`, `main-horizontal`, `tiled`, and more |
-| **Zellij** | ✅ Supported | Creates a dedicated `opencode-agents` tab by default; can open panes in the parent OpenCode tab with `zellij_pane_mode: "current-tab"` |
+| **Zellij** | ✅ Supported | Creates a dedicated `opencode-agents` tab by default; can open panes in the parent OpenCode tab with `zellij_pane_mode: "current-tab"`; maps `main-*` layouts to pane directions |
 
 **Example: open Zellij subagents in the parent OpenCode tab**
 
@@ -175,7 +175,9 @@ This is converted automatically to `multiplexer.type: "tmux"`.
 
 ## Layouts
 
-These layouts apply to **tmux only**:
+Tmux supports full layout control and main pane sizing. Zellij maps only the
+`main-*` layout settings to pane creation directions; exact `main_pane_size`
+rebalancing is tmux-only.
 
 | Layout | Description |
 |--------|-------------|
@@ -184,6 +186,16 @@ These layouts apply to **tmux only**:
 | `tiled` | All panes in an equal-sized grid |
 | `even-horizontal` | All panes side by side |
 | `even-vertical` | All panes stacked vertically |
+
+For Zellij:
+
+| Layout | Zellij behavior |
+|--------|-----------------|
+| `main-vertical` | Opens new subagent panes to the right |
+| `main-horizontal` | Opens new subagent panes down |
+| `even-horizontal` | Uses Zellij's native pane placement |
+| `even-vertical` | Uses Zellij's native pane placement |
+| `tiled` | Uses Zellij's native pane placement |
 
 **Example: wide-screen layout**
 

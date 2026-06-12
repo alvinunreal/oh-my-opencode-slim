@@ -29,6 +29,8 @@ interface ZellijPaneInfo {
   tab_id?: number;
 }
 
+type ZellijPaneDirection = 'right' | 'down';
+
 export class ZellijMultiplexer implements Multiplexer {
   readonly type = 'zellij' as const;
 
@@ -39,17 +41,17 @@ export class ZellijMultiplexer implements Multiplexer {
   private firstPaneUsed = false;
   private parentTabId: string | null = null;
   private readonly parentPaneId = process.env.ZELLIJ_PANE_ID;
+  private readonly paneDirection: ZellijPaneDirection | null;
 
   constructor(
     layout: MultiplexerLayout = 'main-vertical',
     mainPaneSize = 60,
     private readonly paneMode: ZellijPaneMode = 'agent-tab',
   ) {
-    // Note: Zellij does NOT support layout configuration like tmux.
-    // These params are accepted for API consistency but are no-ops.
-    // Zellij uses its own native layout algorithm for pane arrangement.
-    void layout;
+    // Note: Zellij does not support exact main pane sizing like tmux.
+    // Layout config is mapped to pane creation directions where possible.
     void mainPaneSize;
+    this.paneDirection = getPaneDirection(layout);
   }
 
   async isAvailable(): Promise<boolean> {
@@ -142,6 +144,7 @@ export class ZellijMultiplexer implements Multiplexer {
       'action',
       'new-pane',
       ...this.tabIdArgs(targetTabId),
+      ...this.directionArgs(),
       '--name',
       paneName,
       '--close-on-exit',
@@ -188,6 +191,7 @@ export class ZellijMultiplexer implements Multiplexer {
       const args = [
         'action',
         'new-pane',
+        ...this.directionArgs(),
         '--name',
         paneName,
         '--close-on-exit',
@@ -230,6 +234,7 @@ export class ZellijMultiplexer implements Multiplexer {
     const args = [
       'action',
       'new-pane',
+      ...this.directionArgs(),
       '--name',
       paneName,
       '--close-on-exit',
@@ -518,8 +523,13 @@ export class ZellijMultiplexer implements Multiplexer {
     _layout: MultiplexerLayout,
     _mainPaneSize: number,
   ): Promise<void> {
-    // No-op for zellij - zellij uses its own native layout algorithm.
-    // Unlike tmux, zellij does not support programmatic layout control.
+    // No-op for zellij after panes are spawned. Zellij does not support tmux-like
+    // exact main pane sizing/rebalancing; layout is applied to future pane
+    // creation by mapping configured layouts to pane directions.
+  }
+
+  private directionArgs(): string[] {
+    return this.paneDirection ? ['--direction', this.paneDirection] : [];
   }
 
   private tabIdArgs(tabId: string | null): string[] {
@@ -537,7 +547,8 @@ export class ZellijMultiplexer implements Multiplexer {
       }
     }
 
-    return await this.getCurrentTabId(zellij);
+    this.parentTabId = await this.getCurrentTabId(zellij);
+    return this.parentTabId;
   }
 
   private async findTabIdForPane(
@@ -592,6 +603,21 @@ export class ZellijMultiplexer implements Multiplexer {
 
 function normalizePaneId(paneId: string): string {
   return paneId.replace(/^terminal_/, '');
+}
+
+function getPaneDirection(
+  layout: MultiplexerLayout,
+): ZellijPaneDirection | null {
+  switch (layout) {
+    case 'main-vertical':
+      return 'right';
+    case 'main-horizontal':
+      return 'down';
+    case 'even-horizontal':
+    case 'even-vertical':
+    case 'tiled':
+      return null;
+  }
 }
 
 function buildOpencodeAttachCommand(

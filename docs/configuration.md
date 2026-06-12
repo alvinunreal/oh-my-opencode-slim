@@ -108,8 +108,8 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset |
 | `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, or `none` |
-| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical` |
-| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) |
+| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Tmux applies full layouts; Zellij maps `main-vertical` to right and `main-horizontal` to down |
+| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij |
 | `multiplexer.zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `agent-tab` creates/reuses a dedicated `opencode-agents` tab; `current-tab` opens subagents as panes in the tab containing the parent OpenCode pane, falling back to the focused tab if the parent pane cannot be resolved |
 | `divoom.enabled` | boolean | `false` | Enable Divoom Bluetooth display status GIFs for plugin load and delegated agent calls |
 | `divoom.python` | string | Divoom MiniToo bundled Python | Python executable used to run Divoom MiniToo's `divoom_send.py` helper |
