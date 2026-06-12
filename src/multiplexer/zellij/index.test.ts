@@ -55,6 +55,51 @@ function commands(): string[][] {
   return crossSpawnMock.mock.calls.map((call) => call[0] as string[]);
 }
 
+async function spawnSecondAgentTabPane(
+  layout: 'main-vertical' | 'main-horizontal' | 'tiled',
+): Promise<string[] | undefined> {
+  const { ZellijMultiplexer } = await importFreshZellij();
+  const zellij = new ZellijMultiplexer(layout, 60, 'agent-tab');
+
+  crossSpawnMock.mockImplementation((command: string[]) => {
+    if (command[0] === 'which') {
+      return createSpawnResult(0, '/usr/bin/zellij\n');
+    }
+    if (command.includes('list-tabs')) {
+      return createSpawnResult(
+        0,
+        JSON.stringify([{ name: 'opencode-agents', tab_id: 5 }]),
+      );
+    }
+    if (command.includes('current-tab-info')) {
+      return createSpawnResult(0, JSON.stringify({ tab_id: 0 }));
+    }
+    if (command.includes('list-panes')) {
+      return createSpawnResult(0, 'PANE ID\nterminal_7\n');
+    }
+    if (command.includes('new-pane')) {
+      return createSpawnResult(0, 'terminal_8\n');
+    }
+    return createSpawnResult();
+  });
+
+  await zellij.spawnPane(
+    'session-1',
+    'First agent worker',
+    'http://localhost:4096',
+    '/repo',
+  );
+
+  await zellij.spawnPane(
+    'session-2',
+    'Second agent worker',
+    'http://localhost:4096',
+    '/repo',
+  );
+
+  return commands().findLast((command) => command.includes('new-pane'));
+}
+
 describe('ZellijMultiplexer', () => {
   const originalZellij = process.env.ZELLIJ;
   const originalZellijPaneId = process.env.ZELLIJ_PANE_ID;
@@ -247,6 +292,52 @@ describe('ZellijMultiplexer', () => {
     expect(newPaneCommand?.[tabIdArgIndex + 1]).toBe('1');
   });
 
+  test('current-tab mode caches the fallback focused tab after parent tab lookup fails', async () => {
+    const { ZellijMultiplexer } = await importFreshZellij();
+    const zellij = new ZellijMultiplexer('main-vertical', 60, 'current-tab');
+    let currentTabId = 1;
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/zellij\n');
+      }
+      if (command.includes('list-panes')) {
+        return createSpawnResult(1, '', 'list failed');
+      }
+      if (command.includes('current-tab-info')) {
+        return createSpawnResult(0, JSON.stringify({ tab_id: currentTabId++ }));
+      }
+      if (command.includes('new-pane')) {
+        return createSpawnResult(0, 'terminal_2\n');
+      }
+      return createSpawnResult();
+    });
+
+    await zellij.spawnPane(
+      'session-1',
+      'Current tab worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+    await zellij.spawnPane(
+      'session-2',
+      'Current tab worker 2',
+      'http://localhost:4096',
+      '/repo',
+    );
+
+    const newPaneCommands = commands().filter((command) =>
+      command.includes('new-pane'),
+    );
+
+    expect(
+      newPaneCommands.map((command) => {
+        const tabIdArgIndex = command.indexOf('--tab-id');
+        return command[tabIdArgIndex + 1];
+      }),
+    ).toEqual(['1', '1']);
+  });
+
   test('main-horizontal layout opens current-tab panes down', async () => {
     const { ZellijMultiplexer } = await importFreshZellij();
     const zellij = new ZellijMultiplexer('main-horizontal', 60, 'current-tab');
@@ -315,6 +406,28 @@ describe('ZellijMultiplexer', () => {
     const newPaneCommand = commands().find((command) =>
       command.includes('new-pane'),
     );
+
+    expect(newPaneCommand).not.toContain('--direction');
+  });
+
+  test('main-vertical layout opens agent-tab panes right', async () => {
+    const newPaneCommand = await spawnSecondAgentTabPane('main-vertical');
+    const directionArgIndex = newPaneCommand?.indexOf('--direction') ?? -1;
+
+    expect(directionArgIndex).toBeGreaterThanOrEqual(0);
+    expect(newPaneCommand?.[directionArgIndex + 1]).toBe('right');
+  });
+
+  test('main-horizontal layout opens agent-tab panes down', async () => {
+    const newPaneCommand = await spawnSecondAgentTabPane('main-horizontal');
+    const directionArgIndex = newPaneCommand?.indexOf('--direction') ?? -1;
+
+    expect(directionArgIndex).toBeGreaterThanOrEqual(0);
+    expect(newPaneCommand?.[directionArgIndex + 1]).toBe('down');
+  });
+
+  test('tiled layout uses zellij native agent-tab pane placement', async () => {
+    const newPaneCommand = await spawnSecondAgentTabPane('tiled');
 
     expect(newPaneCommand).not.toContain('--direction');
   });

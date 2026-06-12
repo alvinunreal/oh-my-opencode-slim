@@ -547,7 +547,8 @@ export class ZellijMultiplexer implements Multiplexer {
       }
     }
 
-    return await this.getCurrentTabId(zellij);
+    this.parentTabId = await this.getCurrentTabId(zellij);
+    return this.parentTabId;
   }
 
   private async findTabIdForPane(
