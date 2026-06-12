@@ -2,10 +2,10 @@
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
     <img src="img/4k.png" alt="4K GitHub Stars Milestone" style="border-radius: 10px;">
   </a>
-  <h3>✨ Default Background Orchestration Has Arrived ✨</h3>
-  <p><i>The orchestrator now manages the workflow and schedules specialist agents in the background,<br>while <code>/deepwork</code> turns big goals into file-backed plans.<br>Share feedback and questions with us on Telegram.</i></p>
+  <h3>✨ oh-my-opencode-slim ✨</h3>
+  <p><b>Opencode Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
 
-  <p><b>Open Multi Agent Suite</b> · Mix any models · Auto delegate tasks</p>
+  <p><i>Seven divine beings emerged from the dawn of code,<br>each an immortal master of their craft,<br>awaiting your command to forge order from chaos and build what was once thought impossible.</i></p>
 
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
@@ -20,19 +20,7 @@
 
   <p><sub>✦ ✦ ✦</sub></p>
 
-## Support the Project 💖
-
-oh-my-opencode-slim is built and maintained in my spare time. If it helps you consider sponsoring my codex subscription.
-
-**Goal: $200/month**
-
-[![Sponsor](https://img.shields.io/github/sponsors/alvinunreal?style=for-the-badge&logo=GitHub-Sponsors&logoColor=EA4AAA&label=Sponsor)](https://github.com/sponsors/alvinunreal)
-
-See live progress + become a sponsor → [GitHub Sponsors](https://github.com/sponsors/alvinunreal)
-
 </div>
-
----
 
 ## What's This Plugin
 
