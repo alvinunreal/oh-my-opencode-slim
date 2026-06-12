@@ -140,11 +140,6 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Generate checksums
-        run: |
-          set -euo pipefail
-          cd artifacts
-          sha256sum * > SHA256SUMS
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,13 +1,13 @@
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v2beta.webp" alt="V2 Beta Release" style="border-radius: 10px;">
+    <img src="img/v2.webp" alt="oh-my-opencode-slim V2 Release" style="border-radius: 10px;">
   </a>
-  <h3>✨ V2 베타 릴리스: 백그라운드 오케스트레이션이 도착했습니다 ✨</h3>
-  <p><i>오케스트레이터가 이제 백그라운드에서 전문 에이전트를 스케줄링하고,<br><code>/deepwork</code>가 큰 목표를 파일 기반 계획으로 변환합니다.<br>베타 테스터 여러분, Telegram에서 피드백을 공유해 주세요.</i></p>
+  <h3>✨ oh-my-opencode-slim ✨</h3>
 
-  <p><b>오픈 멀티 에이전트 스위트</b> · 모델 자유 조합 · 작업 자동 위임</p>
+  <p><i>코드의 여명에서 일곱 신성한 존재가 나타났습니다. 각자는 불멸의 장인으로서,<br>당신의 명령을 기다리며 혼돈에서 질서를 빚고 한때 불가능하다고 여겨졌던 것을 만들어냅니다.</i></p>
 
-  <p><sub>제작: <b>Boring Dystopia Development</b></sub></p>
+  <p><b>Opencode 멀티 에이전트 스위트</b> · 어떤 모델이든 조합 · 작업 자동 위임</p>
+  <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
     <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
@@ -17,17 +17,20 @@
   <p>
     <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <b>한국어</b>
   </p>
+
+  <p><sub>✦ ✦ ✦</sub></p>
+
 </div>
 
 ---
 
-## Oh My OpenCode Slim
+## 이 플러그인은 무엇인가요
 
 oh-my-opencode-slim은 OpenCode용 에이전트 오케스트레이션 플러그인입니다. 코드베이스 정찰, 최신 문서 조회, 아키텍처 리뷰, UI 작업, 잘 정의된 범위의 구현 작업까지 처리하는 전문 에이전트 팀이 내장되어 있으며, 모두 하나의 오케스트레이터 아래에서 동작합니다.
 
 핵심 아이디어는 간단합니다. 하나의 모델이 모든 작업을 처리하도록 강제하는 대신, 각 작업에 가장 적합한 에이전트로 라우팅하여 **품질, 속도, 비용**의 균형을 맞춥니다.
 
-에이전트 자체를 살펴보려면 **[판테온 만나보기](#meet-the-pantheon)** 를 참고하세요. 전체 기능 목록은 아래의 **[기능 & 워크플로우](#features-and-workflows)** 에서 확인할 수 있습니다.
+에이전트 자체를 살펴보려면 **[판테온 만나보기](#meet-the-pantheon)** 를 참고하세요. 전체 기능 세트는 아래의 **[기능 & 워크플로우](#features-and-workflows)** 에서 확인할 수 있습니다.
 
 ### 빠른 시작
 
@@ -45,20 +48,9 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
-### V2 백그라운드 오케스트레이션 베타
-
-V2는 오케스트레이터를 기본 실행 워커에서 스케줄러로 변경합니다. 작업을 계획하고, 전문 에이전트를 백그라운드 작업으로 디스패치한 다음, 상태를 폴링하여 결과를 조정한 뒤 계속 진행합니다. 이를 위해 OpenCode의 네이티브 백그라운드 서브에이전트 지원이 필요하므로, 베타 사용자는 실험적 플래그를 활성화한 상태로 OpenCode를 시작해야 합니다.
-
-```bash
-# 기존 사용자: 먼저 OpenCode의 캐시된 패키지를 삭제해 beta를 새로 받으세요.
-rm -rf ~/.cache/opencode/packages/oh-my-opencode-slim
-bunx oh-my-opencode-slim@beta install
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
-```
-
 ### 시작하기
 
-인스톨러는 OpenAI와 OpenCode Go 프리셋을 모두 생성하며, 기본적으로 OpenAI가 활성화됩니다. OpenAI는 판단력이 높은 에이전트에 `openai/gpt-5.5`를, 빠른 범위 작업 에이전트에 `openai/gpt-5.4-mini`를 사용합니다. 설치 시 OpenCode Go를 활성화하려면 `bunx oh-my-opencode-slim@latest install --preset=opencode-go`를 실행하거나, 설치 후 `~/.config/opencode/oh-my-opencode-slim.json`에서 기본 프리셋 이름을 변경하세요.
+인스톨러는 OpenAI와 OpenCode Go 프리셋을 모두 생성하며, 기본적으로 OpenAI가 활성화됩니다. OpenAI는 워크플로 매니저/스케줄러에 `openai/gpt-5.5 (medium)`, Oracle에 `openai/gpt-5.5 (high)`, Fixer에 `openai/gpt-5.5 (low)`, 그 외 전문가에는 `openai/gpt-5.4-mini` 변형을 사용합니다. 설치 중 OpenCode Go를 활성화하려면 `bunx oh-my-opencode-slim@latest install --preset=opencode-go`를 실행하거나, 설치 후 `~/.config/opencode/oh-my-opencode-slim.json`에서 기본 프리셋 이름을 변경하세요.
 
 그 다음:
 
@@ -73,6 +65,8 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
    opencode models --refresh
    ```
 3. **플러그인 설정 파일**을 `~/.config/opencode/oh-my-opencode-slim.json`에서 엽니다.
+   사용자 지정 OpenCode 설정 디렉터리를 사용한다면
+   `$OPENCODE_CONFIG_DIR/oh-my-opencode-slim.json`을 엽니다.
 
 4. **각 에이전트에 사용할 모델을 업데이트합니다**
 
@@ -87,12 +81,12 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1 opencode
   "preset": "openai",
   "presets": {
     "openai": {
-      "orchestrator": { "model": "openai/gpt-5.5", "skills": ["*"], "mcps": ["*", "!context7"] },
+      "orchestrator": { "model": "openai/gpt-5.5", "variant": "medium", "skills": ["*"], "mcps": ["*", "!context7"] },
       "oracle": { "model": "openai/gpt-5.5", "variant": "high", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": ["websearch", "context7", "gh_grep"] },
       "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] },
       "designer": { "model": "openai/gpt-5.4-mini", "variant": "medium", "skills": [], "mcps": [] },
-      "fixer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] }
+      "fixer": { "model": "openai/gpt-5.5", "variant": "low", "skills": [], "mcps": [] }
     },
     "opencode-go": {
       "orchestrator": { "model": "opencode-go/glm-5.1", "skills": [ "*" ], "mcps": [ "*", "!context7" ] },
@@ -135,6 +129,63 @@ ping all agents
 </div>
 
 응답하지 않는 에이전트가 있다면 프로바이더 인증과 설정 파일을 확인하세요.
+
+---
+
+### V2의 새로운 점
+
+V2는 oh-my-opencode-slim을 스케줄러 중심의 멀티 에이전트 워크플로 시스템으로 바꿉니다. Orchestrator는 계획, 위임, 결과 조정, 검증에 집중하고, 전문가들은 각자의 lane에서 작업합니다.
+
+- **[백그라운드 에이전트](#백그라운드-에이전트)** — Orchestrator가 전문가를 백그라운드 작업으로 디스패치하고, 작업/세션 ID를 추적하며, 완료 이벤트를 기다린 뒤 결과를 조정합니다.
+- **[Companion](#companion)** — 선택 사항인 플로팅 데스크톱 창이 병렬 백그라운드 전문가를 포함해 현재 활성 에이전트를 보여줍니다.
+- **[Deepwork](#deepwork)** — 대규모, 다중 파일, 위험도가 높거나 단계적인 코딩 작업을 위한 구조화된 워크플로입니다. 지속적인 계획 파일과 Oracle 리뷰 게이트를 사용합니다.
+- **[oh-my-opencode-slim Skill](#oh-my-opencode-slim-skill)** — 모델, 프롬프트, 커스텀 에이전트, MCP 접근, 프리셋, 플러그인 동작을 안전하게 조정하는 번들 설정 skill입니다.
+
+#### 백그라운드 에이전트
+
+V2에서는 백그라운드 전문가가 기본 동작 모델입니다. Orchestrator는 작업 그래프를 계획하고, 적절한 에이전트를 실행하며, 겹치는 쓰기 소유권을 피하고, 터미널 작업 결과를 받은 뒤에 다음 행동을 이어갑니다.
+
+전체 스케줄러 모델은 **[Background Orchestration](docs/v2-background-orchestration.md)** 을 참고하세요.
+
+#### Companion
+
+선택 사항인 Companion은 실시간 에이전트 활동을 보여주는 플로팅 데스크톱 상태 창입니다. 현재 세션 상태와 활성 에이전트를 표시해 백그라운드 작업을 한눈에 파악할 수 있습니다.
+
+<div align="center">
+  <img src="img/companion.gif" alt="Companion showing active agents" width="600">
+  <p><i>왼쪽 아래의 시각적 companion.</i></p>
+</div>
+
+대화형 설치 중 인스톨러는 Companion 활성화 여부를 묻고 기본값은 `yes`입니다. 자동화에서는 명시적으로 활성화할 수 있습니다.
+
+```bash
+bunx oh-my-opencode-slim@latest install --companion=yes
+```
+
+설정, 위치, 크기, 설치 세부 사항은 **[Companion](docs/companion.md)** 을 참고하세요.
+
+#### Deepwork
+
+Deepwork는 대규모 리팩터링, 다단계 기능, 위험한 아키텍처 변경, 지속적인 계획이 필요한 작업 같은 무거운 코딩 세션을 위한 기능입니다. 로컬 markdown 진행 파일을 만들고, Oracle 리뷰 게이트를 사용하며, 구현 단계를 구조화합니다.
+
+다음으로 시작합니다.
+
+```text
+/deepwork <heavy coding task>
+```
+
+사용 시점과 워크플로 동작 방식은 **[Skills](docs/skills.md#deepwork)** 를 참고하세요.
+
+#### oh-my-opencode-slim Skill
+
+번들된 `oh-my-opencode-slim` skill은 Orchestrator가 플러그인 자체를 설정하고 개선하도록 돕습니다. 모델 튜닝, 커스텀 에이전트, 프롬프트 오버라이드, skill/MCP 권한, 프리셋, 선택적 에이전트, 백그라운드 오케스트레이션, 반복되는 워크플로 마찰에 사용할 수 있습니다.
+
+<div align="center">
+  <img src="img/oh-my-opencode-skill.png" alt="oh-my-opencode-slim skill in use" width="600">
+  <p><i>번들 skill에 에이전트 설정 튜닝과 개선을 요청하세요.</i></p>
+</div>
+
+예시와 안전 규칙은 **[Skills](docs/skills.md#oh-my-opencode-slim)** 를 참고하세요.
 
 ---
 
@@ -532,7 +583,7 @@ ping all agents
   <p><sub>병합된 모든 기여는 이 영역에 흔적을 남깁니다.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-53-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-59-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -613,6 +664,14 @@ ping all agents
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/yolo2h"><img src="https://avatars.githubusercontent.com/u/10754850?v=4?s=100" width="100px;" alt="Yolo"/><br /><sub><b>Yolo</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=yolo2h" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/xinxingi"><img src="https://avatars.githubusercontent.com/u/49302071?v=4?s=100" width="100px;" alt="XinXing"/><br /><sub><b>XinXing</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=xinxingi" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/eltociear"><img src="https://avatars.githubusercontent.com/u/22633385?v=4?s=100" width="100px;" alt="Ikko Eltociear Ashimine"/><br /><sub><b>Ikko Eltociear Ashimine</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=eltociear" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/dev-wantap"><img src="https://avatars.githubusercontent.com/u/69743540?v=4?s=100" width="100px;" alt="GWANWOO KIM"/><br /><sub><b>GWANWOO KIM</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=dev-wantap" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/OmerFarukOruc"><img src="https://avatars.githubusercontent.com/u/7347742?v=4?s=100" width="100px;" alt="Omer Faruk Oruc"/><br /><sub><b>Omer Faruk Oruc</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=OmerFarukOruc" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://khallaf.uk/"><img src="https://avatars.githubusercontent.com/u/51155980?v=4?s=100" width="100px;" alt="Omar Mohamed Khallaf"/><br /><sub><b>Omar Mohamed Khallaf</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=omar-mohamed-khallaf" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/Qesire"><img src="https://avatars.githubusercontent.com/u/102657430?v=4?s=100" width="100px;" alt="Knowingthesea_Qesire"/><br /><sub><b>Knowingthesea_Qesire</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=Qesire" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="http://www.flyinghail.net/"><img src="https://avatars.githubusercontent.com/u/157430?v=4?s=100" width="100px;" alt="FENG Hao"/><br /><sub><b>FENG Hao</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=flyinghail" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/smatheusblu"><img src="https://avatars.githubusercontent.com/u/5666794?v=4?s=100" width="100px;" alt="Matheus Nogueira Silveira"/><br /><sub><b>Matheus Nogueira Silveira</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=smatheusblu" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

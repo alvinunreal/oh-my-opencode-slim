@@ -37,6 +37,10 @@ During interactive installation, the installer asks whether to download and
 enable the native Companion binary. The prompt defaults to `yes`, so pressing
 Enter installs it.
 
+Companion installation is best-effort. If the binary cannot be downloaded or
+installed, the installer prints a warning and continues installing the core
+plugin without Companion enabled.
+
 For automation, pass `--companion=yes` to install without prompting:
 
 ```bash
@@ -74,11 +78,9 @@ plan:
    `companion-v0.1.0` GitHub release.
 2. **Separate Companion Versioning**: the companion uses its own version so the
    plugin can ship beta updates without rebuilding native binaries every time.
-3. **Checksums**: the installer downloads `SHA256SUMS` and verifies the selected
-   archive before installing it.
-4. **OS/Arch Detection**: `--companion=yes` selects the archive for the current
+3. **OS/Arch Detection**: `--companion=yes` selects the archive for the current
    target.
-5. **No R2 Required**: GitHub Releases are the source of truth. R2 can be added
+4. **No R2 Required**: GitHub Releases are the source of truth. R2 can be added
    later as a mirror if download volume becomes a problem.
 
 Current release assets are named:
@@ -89,7 +91,6 @@ oh-my-opencode-slim-companion-v0.1.0-x86_64-apple-darwin.tar.gz
 oh-my-opencode-slim-companion-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
 oh-my-opencode-slim-companion-v0.1.0-aarch64-unknown-linux-gnu.tar.gz
 oh-my-opencode-slim-companion-v0.1.0-x86_64-pc-windows-msvc.zip
-SHA256SUMS
 ```
 
 Supported installer targets:
@@ -99,10 +100,6 @@ Supported installer targets:
 - Linux x64: `x86_64-unknown-linux-gnu`
 - Linux arm64: `aarch64-unknown-linux-gnu`
 - Windows x64: `x86_64-pc-windows-msvc`
-
-For release bootstrapping only, checksum verification can be bypassed with
-`SKIP_COMPANION_CHECKSUM=true`, but normal user installs should keep checksum
-verification enabled.
 
 ## Maintainer Release Process
 
@@ -157,7 +154,7 @@ windows-x64
 ```
 
 The workflow creates or updates the `companion-v<version>` release and uploads
-the selected archives plus `SHA256SUMS`.
+the selected archives.
 
 ### 3. Verify release assets
 
@@ -165,7 +162,6 @@ After the workflow finishes:
 
 ```bash
 gh release view companion-v0.1.0
-gh release download companion-v0.1.0 --pattern SHA256SUMS --output -
 ```
 
 Confirm the release contains the archive names expected by the installer for the
@@ -180,8 +176,9 @@ bunx oh-my-opencode-slim@beta install --companion=yes
 ```
 
 The installer detects the user's OS/architecture, downloads the matching archive
-from `companion-v0.1.0`, verifies it against `SHA256SUMS`, installs it to the
-runtime binary path, and writes the companion config block.
+from `companion-v0.1.0`, installs it to the runtime binary path, and writes the
+companion config block. If the companion install fails, the core plugin install
+continues without enabling Companion.
 
 ### Cost controls
 

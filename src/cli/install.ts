@@ -69,6 +69,10 @@ function printError(message: string): void {
   console.log(`${SYMBOLS.cross} ${RED}${message}${RESET}`);
 }
 
+function printWarning(message: string): void {
+  console.log(`${SYMBOLS.warn} ${YELLOW}${message}${RESET}`);
+}
+
 function printInfo(message: string): void {
   console.log(`${SYMBOLS.info} ${message}`);
 }
@@ -277,6 +281,20 @@ function handleStepResult(
   return true;
 }
 
+function handleOptionalCompanionResult(result: ConfigMergeResult): void {
+  if (result.success) {
+    printSuccess(
+      `Companion installed ${SYMBOLS.arrow} ${DIM}${result.configPath}${RESET}`,
+    );
+    return;
+  }
+
+  printWarning(`Desktop companion install skipped: ${result.error}`);
+  printInfo(
+    'The desktop companion is optional; continuing plugin installation without it.',
+  );
+}
+
 async function runInstall(config: InstallConfig): Promise<number> {
   const detected = detectCurrentConfig();
   const isUpdate = detected.isInstalled;
@@ -355,7 +373,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (companionInstall) {
     printStep(step++, totalSteps, 'Installing desktop companion binary...');
     const companionResult = await installCompanion(config);
-    if (!handleStepResult(companionResult, 'Companion installed')) return 1;
+    handleOptionalCompanionResult(companionResult);
+    if (!companionResult.success) config.companion = 'no';
   }
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -66,43 +65,15 @@ export async function installCompanion(
   const ext = isWindows ? 'zip' : 'tar.gz';
   const archiveName = `oh-my-opencode-slim-companion-v${COMPANION_VERSION}-${target}.${ext}`;
   const downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/${COMPANION_TAG}/${archiveName}`;
-  const checksumUrl = `https://github.com/${GITHUB_REPO}/releases/download/${COMPANION_TAG}/SHA256SUMS`;
 
   if (config.dryRun) {
     console.log(`  [dry-run] Detected companion target: ${target}`);
     console.log(`  [dry-run] Would download archive: ${downloadUrl}`);
-    console.log(`  [dry-run] Would download checksum: ${checksumUrl}`);
-    console.log(
-      '  [dry-run] Would verify via SHA256SUMS unless SKIP_COMPANION_CHECKSUM=true',
-    );
     console.log(`  [dry-run] Would extract and install to: ${finalBinaryPath}`);
     return {
       success: true,
       configPath: finalBinaryPath,
     };
-  }
-
-  const skipChecksum = process.env.SKIP_COMPANION_CHECKSUM === 'true';
-  let shaSumsText = '';
-
-  if (!skipChecksum) {
-    try {
-      const res = await fetch(checksumUrl);
-      if (!res.ok) {
-        return {
-          success: false,
-          configPath: finalBinaryPath,
-          error: `Failed to fetch checksum manifest (HTTP ${res.status}): ${res.statusText}. For release bootstrap, you can bypass this error by setting the SKIP_COMPANION_CHECKSUM=true environment variable.`,
-        };
-      }
-      shaSumsText = await res.text();
-    } catch (err) {
-      return {
-        success: false,
-        configPath: finalBinaryPath,
-        error: `Failed to fetch SHA256SUMS: ${err instanceof Error ? err.message : String(err)}. For release bootstrap, you can bypass this error by setting the SKIP_COMPANION_CHECKSUM=true environment variable.`,
-      };
-    }
   }
 
   let buffer: ArrayBuffer;
@@ -122,43 +93,6 @@ export async function installCompanion(
       configPath: finalBinaryPath,
       error: `Failed to fetch companion archive: ${err instanceof Error ? err.message : String(err)}`,
     };
-  }
-
-  if (!skipChecksum) {
-    const lines = shaSumsText.split('\n');
-    let expectedHash: string | undefined;
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 2) {
-        const [hashVal, fileVal] = parts;
-        const cleanFilename = fileVal.startsWith('*')
-          ? fileVal.slice(1)
-          : fileVal;
-        if (cleanFilename === archiveName) {
-          expectedHash = hashVal.toLowerCase();
-          break;
-        }
-      }
-    }
-
-    if (!expectedHash) {
-      return {
-        success: false,
-        configPath: finalBinaryPath,
-        error: `No SHA256 checksum entry found for ${archiveName} in SHA256SUMS. For release bootstrap, you can bypass this error by setting the SKIP_COMPANION_CHECKSUM=true environment variable.`,
-      };
-    }
-
-    const computedHash = createHash('sha256')
-      .update(Buffer.from(buffer))
-      .digest('hex');
-    if (computedHash !== expectedHash) {
-      return {
-        success: false,
-        configPath: finalBinaryPath,
-        error: `SHA256 checksum mismatch for ${archiveName}. Expected ${expectedHash}, got ${computedHash}`,
-      };
-    }
   }
 
   let tempDir = '';
