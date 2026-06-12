@@ -17,7 +17,6 @@ import {
   setActiveRuntimePreset,
 } from './config/runtime-preset';
 import { CouncilManager } from './council';
-import { createDivoomManager } from './divoom/manager';
 import {
   createApplyPatchHook,
   createAutoUpdateCheckerHook,
@@ -142,7 +141,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
   let companionManager: CompanionManager;
-  let divoomManager: ReturnType<typeof createDivoomManager>;
   let councilTools: Record<string, unknown>;
   let cancelTaskTools: Record<string, unknown>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
@@ -327,7 +325,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ctx.directory,
       config.companion,
     );
-    divoomManager = createDivoomManager(config.divoom);
     cancelTaskTools = createCancelTaskTool({
       client: ctx.client,
       backgroundJobBoard,
@@ -396,7 +393,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
   });
 
-  divoomManager.onPluginLoad();
   companionManager.onLoad();
 
   return {
@@ -813,13 +809,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         event.type === 'permission.asked' ||
         event.type === 'question.asked'
       ) {
-        const props = event.properties as
-          | { sessionID?: string; id?: string; requestID?: string }
-          | undefined;
-        divoomManager.onUserInputRequired({
-          sessionId: props?.sessionID,
-          requestId: props?.id ?? props?.requestID,
-        });
         companionManager.onWaitingInput();
       }
 
@@ -828,13 +817,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         event.type === 'question.replied' ||
         event.type === 'question.rejected'
       ) {
-        const props = event.properties as
-          | { sessionID?: string; requestID?: string; id?: string }
-          | undefined;
-        divoomManager.onUserInputResolved({
-          sessionId: props?.sessionID,
-          requestId: props?.requestID ?? props?.id,
-        });
         companionManager.onInputResolved();
       }
 
@@ -843,14 +825,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           | { sessionID?: string; status?: { type?: string } }
           | undefined;
         const sessionID = props?.sessionID;
-        const isOrch = sessionID
-          ? sessionAgentMap.get(sessionID) === 'orchestrator'
-          : false;
-        divoomManager.onOrchestratorStatus({
-          sessionId: sessionID,
-          status: props?.status?.type,
-          isOrchestrator: isOrch,
-        });
         companionManager.onSessionStatus({
           sessionId: sessionID,
           agent: sessionID ? sessionAgentMap.get(sessionID) : undefined,
@@ -863,13 +837,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           | { info?: { id?: string }; sessionID?: string }
           | undefined;
         const sessionID = props?.info?.id ?? props?.sessionID;
-        const isOrch = sessionID
-          ? sessionAgentMap.get(sessionID) === 'orchestrator'
-          : false;
-        divoomManager.onSessionDeleted({
-          sessionId: sessionID,
-          isOrchestrator: isOrch,
-        });
         companionManager.onSessionDeleted(sessionID);
       }
 
@@ -910,13 +877,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         output as { args?: unknown },
       );
 
-      if (input.tool.toLowerCase() === 'task') {
-        divoomManager.onTaskStart({
-          parentSessionId: input.sessionID,
-          callId: input.callID,
-          args: output.args,
-        });
-      }
+      // No-op for divoom
     },
 
     'command.execute.before': async (input, output) => {
@@ -1159,13 +1120,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           output as { output: unknown },
         ),
       );
-
-      if (input.tool.toLowerCase() === 'task') {
-        divoomManager.onTaskEnd({
-          parentSessionId: input.sessionID,
-          callId: input.callID,
-        });
-      }
     },
   };
 };

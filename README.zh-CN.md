@@ -502,7 +502,6 @@ ping all agents
 | **[代码地图 (Codemap) (docs/codemap.md)](docs/codemap.md)** | 生成层级代码地图，快速理解大型代码库 |
 | **[克隆依赖 (Clonedeps) (docs/clonedeps.md)](docs/clonedeps.md)** | 将选定的依赖源码克隆到被忽略的本地工作区中以供检查 |
 | **[访谈式生成 (Interview) (docs/interview.md)](docs/interview.md)** | 通过基于浏览器的问答流，将粗糙的想法转变为结构化的 Markdown 规范文档 |
-| **[Divoom 显示屏 (docs/divoom.md)](docs/divoom.md)** | 将编排者与专家智能体的活动镜像显示到 Divoom MiniToo 蓝牙显示屏上 |
 
 ### ⚙️ 配置与参考
 

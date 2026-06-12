@@ -201,7 +201,6 @@ export function mergePluginConfigs(
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
-    divoom: deepMerge(base.divoom, override.divoom),
     fallback: deepMerge(base.fallback, override.fallback),
     council: deepMerge(base.council, override.council),
     companion: deepMerge(

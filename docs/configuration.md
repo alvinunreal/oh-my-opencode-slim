@@ -111,15 +111,6 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Tmux applies full layouts; Zellij maps `main-vertical` to right and `main-horizontal` to down |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij |
 | `multiplexer.zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `agent-tab` creates/reuses a dedicated `opencode-agents` tab; `current-tab` opens subagents as panes in the tab containing the parent OpenCode pane, falling back to the focused tab if the parent pane cannot be resolved |
-| `divoom.enabled` | boolean | `false` | Enable Divoom Bluetooth display status GIFs for plugin load and delegated agent calls |
-| `divoom.python` | string | Divoom MiniToo bundled Python | Python executable used to run Divoom MiniToo's `divoom_send.py` helper |
-| `divoom.script` | string | Divoom MiniToo `divoom_send.py` | Divoom sender script path |
-| `divoom.size` | integer | `128` | Output GIF size passed to `divoom_send.py` |
-| `divoom.fps` | integer | `8` | Output GIF FPS passed to `divoom_send.py` |
-| `divoom.speed` | integer | `125` | Playback speed passed to `divoom_send.py` |
-| `divoom.maxFrames` | integer | `24` | Maximum frames passed to `divoom_send.py` |
-| `divoom.posterizeBits` | integer | `3` | Posterization bits passed to `divoom_send.py` |
-| `divoom.gifs.<agent>` | string | bundled GIF | Optional per-agent GIF filename or absolute path override |
 | `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` |
 | `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` |
 | `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` |
@@ -180,71 +171,6 @@ major is available, the plugin shows a migration command instead.
 > Pinned plugin entries in `opencode.json` (for example
 > `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
 > regardless of `autoUpdate`.
-
-### Divoom Display Integration
-
-Divoom integration is disabled by default. Install and start the Divoom MiniToo
-macOS daemon from
-[`divoom-minitoo-osx`](https://github.com/alvinunreal/divoom-minitoo-osx)
-first, then enable this plugin integration. See the full
-**[Divoom guide](divoom.md)** for setup, daemon startup, and troubleshooting.
-
-When enabled, the plugin sends bundled GIFs to the Divoom MiniToo app's bundled
-CLI:
-
-- plugin load / waiting for user input: `intro.gif`
-- orchestrator busy: `orchestrator.gif`
-- first active delegated agent: that agent's GIF
-- parallel delegated agents: the first agent keeps the display
-- all delegated agents complete while orchestrator keeps working: `orchestrator.gif`
-- orchestrator idle again: `intro.gif`
-
-```jsonc
-{
-  "divoom": {
-    "enabled": true
-  }
-}
-```
-
-For a one-off run without editing config:
-
-```bash
-OH_MY_OPENCODE_SLIM_DIVOOM=1 opencode
-```
-
-If `divoom.enabled` is explicitly set in config, the config value wins over the
-environment variable.
-
-The defaults target the macOS Divoom MiniToo app bundle:
-
-```jsonc
-{
-  "divoom": {
-    "enabled": true,
-    "python": "/Applications/Divoom MiniToo.app/Contents/Resources/.venv/bin/python",
-    "script": "/Applications/Divoom MiniToo.app/Contents/Resources/tools/divoom_send.py",
-    "size": 128,
-    "fps": 8,
-    "speed": 125,
-    "maxFrames": 24,
-    "posterizeBits": 3
-  }
-}
-```
-
-To override a GIF, use either a bundled filename or an absolute path:
-
-```jsonc
-{
-  "divoom": {
-    "enabled": true,
-    "gifs": {
-      "oracle": "/Users/me/Pictures/oracle.gif"
-    }
-  }
-}
-```
 
 ### Background Job Management
 

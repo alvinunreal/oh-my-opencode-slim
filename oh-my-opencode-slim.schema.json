@@ -517,65 +517,6 @@
         }
       }
     },
-    "divoom": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        },
-        "python": {
-          "default": "/Applications/Divoom MiniToo.app/Contents/Resources/.venv/bin/python",
-          "type": "string",
-          "minLength": 1
-        },
-        "script": {
-          "default": "/Applications/Divoom MiniToo.app/Contents/Resources/tools/divoom_send.py",
-          "type": "string",
-          "minLength": 1
-        },
-        "size": {
-          "default": 128,
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1024
-        },
-        "fps": {
-          "default": 8,
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 60
-        },
-        "speed": {
-          "default": 125,
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        },
-        "maxFrames": {
-          "default": 24,
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 500
-        },
-        "posterizeBits": {
-          "default": 3,
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 8
-        },
-        "gifs": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      }
-    },
     "fallback": {
       "type": "object",
       "properties": {

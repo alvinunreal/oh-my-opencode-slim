@@ -506,8 +506,7 @@ ping all agents
 | **[Custom Agents](docs/configuration.md#custom-agents)** | カスタムプロンプト、モデル、MCP アクセス、Orchestrator の委譲ルールを備えた独自の専門エージェントを定義します |
 | **[Codemap](docs/codemap.md)** | 階層的なコードマップを生成し、大規模コードベースを迅速に理解します |
 | **[Clonedeps](docs/clonedeps.md)** | 選択した依存関係のソースを ignore 済みのローカルワークスペースにクローンし、調査できるようにします |
-| **[Interview](docs/interview.md)** | ブラウザベースの Q&A フローで、ざっくりとしたアイデアを構造化された Markdown 仕様に変換します |
-| **[Divoom Display](docs/divoom.md)** | Orchestrator および専門エージェントの動作を Divoom MiniToo Bluetooth ディスプレイにミラーリングします |
+| **[Interview](docs/interview.md)** | ブラウザベース의 Q&A フローで、ざっくりとしたアイデアを構造化された Markdown 仕様に変換します |
 
 ### ⚙️ 設定 & リファレンス
 

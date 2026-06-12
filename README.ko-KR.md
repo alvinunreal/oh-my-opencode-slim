@@ -504,7 +504,6 @@ ping all agents
 | **[Codemap](docs/codemap.md)** | 계층형 코드맵을 생성하여 대규모 코드베이스를 빠르게 파악 |
 | **[Clonedeps](docs/clonedeps.md)** | 선택한 의존성 소스를 무시된 로컬 워크스페이스에 복제하여 검사 |
 | **[Interview](docs/interview.md)** | 브라우저 기반 Q&A 흐름을 통해 거친 아이디어를 구조화된 마크다운 명세로 변환 |
-| **[Divoom Display](docs/divoom.md)** | 오케스트레이터와 전문 에이전트 활동을 Divoom MiniToo 블루투스 디스플레이에 미러링 |
 
 ### ⚙️ 설정 & 레퍼런스
 
