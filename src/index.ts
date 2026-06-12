@@ -229,6 +229,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       type: config.multiplexer?.type ?? 'none',
       layout: config.multiplexer?.layout ?? 'main-vertical',
       main_pane_size: config.multiplexer?.main_pane_size ?? 60,
+      zellij_pane_mode: config.multiplexer?.zellij_pane_mode ?? 'agent-tab',
     };
 
     // Get multiplexer instance for capability checks

@@ -32,7 +32,11 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       actualType = 'tmux';
       break;
     case 'zellij':
-      multiplexer = new ZellijMultiplexer(config.layout, config.main_pane_size);
+      multiplexer = new ZellijMultiplexer(
+        config.layout,
+        config.main_pane_size,
+        config.zellij_pane_mode,
+      );
       actualType = 'zellij';
       break;
     case 'auto': {
@@ -45,6 +49,7 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
         multiplexer = new ZellijMultiplexer(
           config.layout,
           config.main_pane_size,
+          config.zellij_pane_mode,
         );
         actualType = 'zellij';
       } else {

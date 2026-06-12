@@ -124,6 +124,10 @@ export const MultiplexerLayoutSchema = z.enum([
 
 export type MultiplexerLayout = z.infer<typeof MultiplexerLayoutSchema>;
 
+// Zellij pane placement options
+export const ZellijPaneModeSchema = z.enum(['agent-tab', 'current-tab']);
+export type ZellijPaneMode = z.infer<typeof ZellijPaneModeSchema>;
+
 // Legacy Tmux layout options (for backward compatibility)
 export const TmuxLayoutSchema = MultiplexerLayoutSchema;
 export type TmuxLayout = MultiplexerLayout;
@@ -133,6 +137,7 @@ export const MultiplexerConfigSchema = z.object({
   type: MultiplexerTypeSchema.default('none'),
   layout: MultiplexerLayoutSchema.default('main-vertical'),
   main_pane_size: z.number().min(20).max(80).default(60), // percentage for main pane
+  zellij_pane_mode: ZellijPaneModeSchema.default('agent-tab'),
 });
 
 export type MultiplexerConfig = z.infer<typeof MultiplexerConfigSchema>;

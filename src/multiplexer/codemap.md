@@ -36,6 +36,9 @@
   - First child uses default pane in that tab; additional children create panes.
   - Falls back to first available pane ID heuristics and restores original tab
     context around cross-tab operations.
+  - `current-tab` pane mode targets the tab containing the parent OpenCode pane
+    via `ZELLIJ_PANE_ID` + `list-panes --json --tab --all`, not whichever tab
+    is focused when a child session starts.
   - Layout configuration is accepted but effectively no-op (tool semantics differ
     from tmux).
 

@@ -413,6 +413,14 @@
           "type": "number",
           "minimum": 20,
           "maximum": 80
+        },
+        "zellij_pane_mode": {
+          "default": "agent-tab",
+          "type": "string",
+          "enum": [
+            "agent-tab",
+            "current-tab"
+          ]
         }
       }
     },

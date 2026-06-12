@@ -64,6 +64,7 @@ const defaultMultiplexerConfig = {
   type: 'tmux' as const,
   layout: 'main-vertical' as const,
   main_pane_size: 60,
+  zellij_pane_mode: 'agent-tab' as const,
 };
 
 function createDeferred<T>() {

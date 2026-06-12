@@ -23,6 +23,7 @@ describe('multiplexer factory', () => {
       type: 'tmux',
       layout: 'main-vertical',
       main_pane_size: 60,
+      zellij_pane_mode: 'agent-tab',
     });
 
     process.env.TMUX_PANE = '%2';
@@ -34,6 +35,7 @@ describe('multiplexer factory', () => {
       type: 'tmux',
       layout: 'main-vertical',
       main_pane_size: 60,
+      zellij_pane_mode: 'agent-tab',
     });
 
     expect(first).not.toBeNull();
@@ -51,6 +53,7 @@ describe('multiplexer factory', () => {
       type: 'auto',
       layout: 'main-vertical',
       main_pane_size: 60,
+      zellij_pane_mode: 'agent-tab',
     });
 
     process.env.TMUX_PANE = '%2';
@@ -62,6 +65,7 @@ describe('multiplexer factory', () => {
       type: 'auto',
       layout: 'main-vertical',
       main_pane_size: 60,
+      zellij_pane_mode: 'agent-tab',
     });
 
     expect(first).not.toBeNull();

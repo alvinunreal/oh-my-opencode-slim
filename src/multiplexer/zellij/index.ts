@@ -1,13 +1,18 @@
 /**
  * Zellij multiplexer implementation
  *
- * Creates a dedicated "opencode-agents" tab for all sub-agent panes.
+ * Creates panes for sub-agent sessions in Zellij.
+ *
+ * The default mode creates a dedicated "opencode-agents" tab:
  * - First sub-agent uses the default pane from new-tab
  * - Subsequent sub-agents create new panes
  * - User stays in their original tab
+ *
+ * The optional "current-tab" mode creates panes in the tab containing the
+ * parent OpenCode pane instead.
  */
 
-import type { MultiplexerLayout } from '../../config/schema';
+import type { MultiplexerLayout, ZellijPaneMode } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
 import type { Multiplexer, PaneResult } from '../types';
 
@@ -18,6 +23,12 @@ interface ZellijTabInfo {
   tab_id: number;
 }
 
+interface ZellijPaneInfo {
+  id: number;
+  is_plugin: boolean;
+  tab_id?: number;
+}
+
 export class ZellijMultiplexer implements Multiplexer {
   readonly type = 'zellij' as const;
 
@@ -26,8 +37,14 @@ export class ZellijMultiplexer implements Multiplexer {
   private agentTabId: string | null = null;
   private firstPaneId: string | null = null;
   private firstPaneUsed = false;
+  private parentTabId: string | null = null;
+  private readonly parentPaneId = process.env.ZELLIJ_PANE_ID;
 
-  constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
+  constructor(
+    layout: MultiplexerLayout = 'main-vertical',
+    mainPaneSize = 60,
+    private readonly paneMode: ZellijPaneMode = 'agent-tab',
+  ) {
     // Note: Zellij does NOT support layout configuration like tmux.
     // These params are accepted for API consistency but are no-ops.
     // Zellij uses its own native layout algorithm for pane arrangement.
@@ -58,6 +75,16 @@ export class ZellijMultiplexer implements Multiplexer {
     if (!zellij) return { success: false };
 
     try {
+      if (this.paneMode === 'current-tab') {
+        return await this.createPaneInCurrentTab(
+          zellij,
+          sessionId,
+          serverUrl,
+          directory,
+          description,
+        );
+      }
+
       // Ensure agent tab exists on first call
       if (!this.agentTabId) {
         const result = await this.ensureAgentTab(zellij);
@@ -94,6 +121,49 @@ export class ZellijMultiplexer implements Multiplexer {
     } catch {
       return { success: false };
     }
+  }
+
+  private async createPaneInCurrentTab(
+    zellij: string,
+    sessionId: string,
+    serverUrl: string,
+    directory: string,
+    description: string,
+  ): Promise<PaneResult> {
+    const opencodeCmd = buildOpencodeAttachCommand(
+      sessionId,
+      serverUrl,
+      directory,
+    );
+    const paneName = description.slice(0, 30).replace(/"/g, '\\"');
+    const targetTabId = await this.getParentTabId(zellij);
+
+    const args = [
+      'action',
+      'new-pane',
+      ...this.tabIdArgs(targetTabId),
+      '--name',
+      paneName,
+      '--close-on-exit',
+      '--',
+      'sh',
+      '-lc',
+      opencodeCmd,
+    ];
+
+    const proc = crossSpawn([zellij, ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const exitCode = await proc.exited;
+    const stdout = await proc.stdout();
+    const paneId = stdout.trim();
+
+    if (exitCode === 0 && paneId?.startsWith('terminal_')) {
+      return { success: true, paneId };
+    }
+    return { success: false };
   }
 
   private async createPaneInAgentTab(
@@ -452,6 +522,53 @@ export class ZellijMultiplexer implements Multiplexer {
     // Unlike tmux, zellij does not support programmatic layout control.
   }
 
+  private tabIdArgs(tabId: string | null): string[] {
+    return tabId ? ['--tab-id', tabId] : [];
+  }
+
+  private async getParentTabId(zellij: string): Promise<string | null> {
+    if (this.parentTabId) return this.parentTabId;
+
+    if (this.parentPaneId) {
+      const tabId = await this.findTabIdForPane(zellij, this.parentPaneId);
+      if (tabId) {
+        this.parentTabId = tabId;
+        return tabId;
+      }
+    }
+
+    return await this.getCurrentTabId(zellij);
+  }
+
+  private async findTabIdForPane(
+    zellij: string,
+    paneId: string,
+  ): Promise<string | null> {
+    try {
+      const proc = crossSpawn(
+        [zellij, 'action', 'list-panes', '--json', '--tab', '--all'],
+        {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      );
+
+      if ((await proc.exited) !== 0) return null;
+
+      const stdout = await proc.stdout();
+      const panes: ZellijPaneInfo[] = JSON.parse(stdout);
+      const normalizedPaneId = normalizePaneId(paneId);
+      const pane = panes.find(
+        (candidate) =>
+          !candidate.is_plugin && String(candidate.id) === normalizedPaneId,
+      );
+
+      return pane?.tab_id === undefined ? null : String(pane.tab_id);
+    } catch {
+      return null;
+    }
+  }
+
   private async getBinary(): Promise<string | null> {
     await this.isAvailable();
     return this.binaryPath;
@@ -471,6 +588,10 @@ export class ZellijMultiplexer implements Multiplexer {
       return null;
     }
   }
+}
+
+function normalizePaneId(paneId: string): string {
+  return paneId.replace(/^terminal_/, '');
 }
 
 function buildOpencodeAttachCommand(
