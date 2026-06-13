@@ -176,25 +176,17 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     agentDefs = createAgents(config);
     agents = getAgentConfigs(config);
 
-    // Build a map of agent name → priority model array for runtime
-    // fallback. Populated when the user configures model as an array in
-    // their plugin config.
+    // Build model array map and runtime fallback chains from _modelArray
+    // entries (when the user configures model as an array in
+    // agents.<name>.model). A single pass populates both data structures.
     modelArrayMap = {} as Record<
       string,
       Array<{ id: string; variant?: string }>
     >;
-    for (const agentDef of agentDefs) {
-      if (agentDef._modelArray && agentDef._modelArray.length > 0) {
-        modelArrayMap[agentDef.name] = agentDef._modelArray;
-      }
-    }
-    // Build runtime fallback chains for all foreground agents. Each chain
-    // is an ordered list of model strings to try when the current model is
-    // rate-limited. Populated from _modelArray entries (when the user
-    // configures model as an array in agents.<name>.model).
     runtimeChains = {} as Record<string, string[]>;
     for (const agentDef of agentDefs) {
       if (agentDef._modelArray?.length) {
+        modelArrayMap[agentDef.name] = agentDef._modelArray;
         runtimeChains[agentDef.name] = agentDef._modelArray.map((m) => m.id);
       }
     }
@@ -430,27 +422,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Runtime failover on API errors (e.g. rate limits
       // mid-conversation) is handled separately by
       // ForegroundFallbackManager via the event hook.
-      const effectiveArrays: Record<
-        string,
-        Array<{ id: string; variant?: string }>
-      > = {};
+      if (Object.keys(modelArrayMap).length > 0) {
+        for (const [agentName, models] of Object.entries(modelArrayMap)) {
+          if (models.length === 0) continue;
 
-      for (const [agentName, models] of Object.entries(modelArrayMap)) {
-        effectiveArrays[agentName] = [...models];
-      }
-
-      if (Object.keys(effectiveArrays).length > 0) {
-        for (const [agentName, modelArray] of Object.entries(effectiveArrays)) {
-          if (modelArray.length === 0) continue;
-
-          // Use the first model in the effective array. Not all providers
+          // Use the first model in the model array. Not all providers
           // require entries in opencodeConfig.provider — some are loaded
           // automatically by opencode (e.g. github-copilot, openrouter).
           // We cannot distinguish these from truly unconfigured providers
           // at config-hook time, so we cannot gate on the provider config
           // keys. Runtime failover is handled separately by
           // ForegroundFallbackManager.
-          const chosen = modelArray[0];
+          const chosen = models[0];
           const entry = configAgent[agentName] as
             | Record<string, unknown>
             | undefined;

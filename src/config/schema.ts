@@ -170,18 +170,20 @@ export const BackgroundJobsConfigSchema = z.object({
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
 
-export const FailoverConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  timeoutMs: z.number().min(0).default(15000),
-  retryDelayMs: z.number().min(0).default(500),
-  retry_on_empty: z
-    .boolean()
-    .default(true)
-    .describe(
-      'When true (default), empty provider responses are treated as failures, ' +
-        'triggering fallback/retry. Set to false to treat them as successes.',
-    ),
-});
+export const FailoverConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    timeoutMs: z.number().min(0).default(15000),
+    retryDelayMs: z.number().min(0).default(500),
+    retry_on_empty: z
+      .boolean()
+      .default(true)
+      .describe(
+        'When true (default), empty provider responses are treated as failures, ' +
+          'triggering fallback/retry. Set to false to treat them as successes.',
+      ),
+  })
+  .strict();
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
