@@ -50,7 +50,9 @@ bunx oh-my-opencode-slim@latest install
 
 ### 시작하기
 
-인스톨러는 OpenAI와 OpenCode Go 프리셋을 모두 생성하며, 기본적으로 OpenAI가 활성화됩니다. OpenAI는 워크플로 매니저/스케줄러에 `openai/gpt-5.5 (medium)`, Oracle에 `openai/gpt-5.5 (high)`, Fixer에 `openai/gpt-5.5 (low)`, 그 외 전문가에는 `openai/gpt-5.4-mini` 변형을 사용합니다. 설치 중 OpenCode Go를 활성화하려면 `bunx oh-my-opencode-slim@latest install --preset=opencode-go`를 실행하거나, 설치 후 `~/.config/opencode/oh-my-opencode-slim.json`에서 기본 프리셋 이름을 변경하세요.
+인스톨러는 OpenAI와 OpenCode Go 프리셋을 모두 생성하며, 기본적으로 OpenAI가 활성화됩니다.
+
+설치 중 OpenCode Go를 활성화하려면 `bunx oh-my-opencode-slim@latest install --preset=opencode-go`를 실행하거나, 설치 후 `~/.config/opencode/oh-my-opencode-slim.json`에서 기본 프리셋 이름을 변경하세요.
 
 그 다음:
 
@@ -65,8 +67,6 @@ bunx oh-my-opencode-slim@latest install
    opencode models --refresh
    ```
 3. **플러그인 설정 파일**을 `~/.config/opencode/oh-my-opencode-slim.json`에서 엽니다.
-   사용자 지정 OpenCode 설정 디렉터리를 사용한다면
-   `$OPENCODE_CONFIG_DIR/oh-my-opencode-slim.json`을 엽니다.
 
 4. **각 에이전트에 사용할 모델을 업데이트합니다**
 
@@ -104,10 +104,6 @@ bunx oh-my-opencode-slim@latest install
 ### 대체 프로바이더 사용하기
 
 커스텀 프로바이더나 여러 프로바이더를 혼합해서 사용하려면, **[Configuration](docs/configuration.md)** 에서 전체 레퍼런스를 확인하세요. 바로 사용할 수 있는 시작점을 찾고 있다면 **[Author's Preset](docs/authors-preset.md)** 과 **[$30 Preset](docs/thirty-dollars-preset.md)** 을 확인해 보세요. `$30` 프리셋이 가장 가성비 좋은 설정입니다.
-
-설정 가이드에서는 `agents.<name>`을 통한 커스텀 서브에이전트 정의도 다룹니다. 일반 `prompt`와 위임용 `orchestratorPrompt` 블록을 모두 정의할 수 있습니다.
-
-모델 추천은 아래 각 에이전트에 나열된 **Recommended Models** 를 참고하세요.
 
 ### ✅ 설정 확인하기
 
@@ -532,13 +528,7 @@ Deepwork는 대규모 리팩터링, 다단계 기능, 위험한 아키텍처 변
 
 ## 📚 문서
 
-이 섹션을 지도로 활용하세요. 설치부터 시작한 뒤, 필요에 따라 기능, 설정, 예시 프리셋으로 이동하세요.
-
-### 🚀 시작하기
-
-| 문서 | 내용 |
-|-----|------|
-| **[Installation Guide](docs/installation.md)** | 플러그인 설치, CLI 플래그 사용, 설정 초기화, 설치 문제 해결 |
+이 섹션은 지도로 활용하세요. 설치부터 시작한 뒤, 필요에 따라 기능, 설정 또는 예시 프리셋으로 이동하면 됩니다.
 
 <a id="features-and-workflows"></a>
 
@@ -547,20 +537,21 @@ Deepwork는 대규모 리팩터링, 다단계 기능, 위험한 아키텍처 변
 | 문서 | 내용 |
 |-----|------|
 | **[Council](docs/council.md)** | `@council`로 여러 모델을 병렬 실행하고 하나의 답변으로 종합 |
-| **[Background Orchestration](docs/v2-background-orchestration.md)** | OpenCode 네이티브 백그라운드 서브에이전트를 기반으로 한 스케줄러 우선 오케스트레이터 모델 |
-| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Tmux 또는 Zellij 페인에서 에이전트 작업을 실시간으로 확인 |
-| **[Session Management](docs/session-management.md)** | 단축 별칭으로 최근 자식 에이전트 세션을 재사용하여 처음부터 다시 시작하지 않기 |
-| **[Preset Switching](docs/preset-switching.md)** | `/preset`으로 런타임에 에이전트 모델 프리셋 전환 |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | 커스텀 프롬프트, 모델, MCP 접근, Orchestrator 위임 규칙으로 커스텀 전문 에이전트 정의 |
+| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Tmux 또는 Zellij 페인에서 에이전트 작업을 실시간으로 확인 |
 | **[Codemap](docs/codemap.md)** | 계층형 코드맵을 생성하여 대규모 코드베이스를 빠르게 파악 |
 | **[Clonedeps](docs/clonedeps.md)** | 선택한 의존성 소스를 무시된 로컬 워크스페이스에 복제하여 검사 |
+| **[Preset Switching](docs/preset-switching.md)** | `/preset`으로 런타임에 에이전트 모델 프리셋 전환 |
 | **[Interview](docs/interview.md)** | 브라우저 기반 Q&A 흐름을 통해 거친 아이디어를 구조화된 마크다운 명세로 변환 |
+| **[Companion](docs/companion.md)** | 파싱, 도움말, 타입을 위한 플로팅 창 companion |
 
 ### ⚙️ 설정 & 레퍼런스
 
 | 문서 | 내용 |
 |-----|------|
+| **[Installation Guide](docs/installation.md)** | 플러그인 설치, CLI 플래그 사용, 설정 초기화, 설치 문제 해결 |
 | **[Configuration](docs/configuration.md)** | 설정 파일 위치, JSONC 지원, 프롬프트 오버라이드, 전체 옵션 레퍼런스 |
+| **[Background Orchestration](docs/background-orchestration.md)** | 네이티브 백그라운드 서브에이전트를 기반으로 한 스케줄러 우선 Orchestrator 모델 |
 | **[Maintainer Guide](docs/maintainers.md)** | 이슈 트리아지 규칙, 라벨 의미, 지원 라우팅, 저장소 유지보수 워크플로우 |
 | **[Skills](docs/skills.md)** | `simplify`, `codemap`, `clonedeps`, `deepwork`, `oh-my-opencode-slim` 등 번들된 스킬 |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `gh_grep` 및 에이전트별 MCP 권한 동작 방식 |
