@@ -542,6 +542,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "sktr",
+      "name": "sktr",
+      "avatar_url": "https://avatars.githubusercontent.com/u/44969514?v=4",
+      "profile": "https://github.com/sktr",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
