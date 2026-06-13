@@ -30,6 +30,29 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 
 To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
 
+### What Users Say
+
+> “Task management went from 5/10 to 8-9/10 easily. The Orchestrator sends
+> Fixers and Explorers, and I can still talk and plan with the Orchestrator in
+> the same session. The experience feels way smoother now.”
+>
+> \- `vipor_idk`
+
+> “I ditched all my harnesses for this beta version of omo-slim and don't look
+> back or miss anything. Great work and IMHO all in the right direction.”
+>
+> \- `stephanschielke`
+
+> “I love omo-slim, and can't imagine running opencode without it. I love that I
+> can create a Frankenstein of models... Makes the setup such a beast.”
+>
+> \- `Capital-One3039`
+
+> “It has significantly improved my workflow... Now, it is working very
+> smoothly, and I love it.”
+>
+> \- `xenstar1`
+
 ### Quick Start
 
 Copy and paste this prompt to your LLM agent (Claude Code, AmpCode, Cursor, etc.):
@@ -48,7 +71,9 @@ bunx oh-my-opencode-slim@latest install
 
 ### Getting Started
 
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default. OpenAI uses `openai/gpt-5.5 (medium)` for the workflow manager/scheduler, `openai/gpt-5.5 (high)` for the Oracle, `openai/gpt-5.5 (low)` for the Fixer, and `openai/gpt-5.4-mini` variants for other specialists. To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
+The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
+
+To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
 
 Then:
 
@@ -63,8 +88,6 @@ Then:
    opencode models --refresh
    ```
 3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
-   or `$OPENCODE_CONFIG_DIR/oh-my-opencode-slim.json` if you use a custom
-   OpenCode config directory
 
 4. **Update the models you want for each agent**
 
@@ -102,10 +125,6 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 ### For Alternative Providers
 
 To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
-
-The configuration guide also covers custom subagents via `agents.<name>`, where
-you can define both a normal `prompt` and an `orchestratorPrompt` block for
-delegation.
 
 ### ✅ Verify Your Setup
 
@@ -502,7 +521,7 @@ rules.
   </tr>
   <tr>
     <td colspan="2">
-      <b>Model Guidance:</b> Choose a fast, reliable coding model for routine, scoped implementation work. Fixer usually receives a concrete plan or bounded instructions from Orchestrator, making it a good place for efficient execution tasks such as tests, test updates, and straightforward code changes.
+      <b>Model Guidance:</b> Choose a reliable coding model for scoped implementation work. Fixer receives a concrete plan or bounded instructions from Orchestrator, making it a good place for efficient execution tasks and straightforward code changes.
     </td>
   </tr>
 </table>
@@ -555,12 +574,6 @@ rules.
 
 Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.
 
-### 🚀 Start Here
-
-| Doc | What it covers |
-|-----|----------------|
-| **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
-
 <a id="features-and-workflows"></a>
 
 ### ✨ Features & Workflows
@@ -568,12 +581,11 @@ Use this section as a map: start with installation, then jump to features, confi
 | Doc | What it covers |
 |-----|----------------|
 | **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer with `@council` |
-| **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
-| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
-| **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | Define your own specialists with custom prompts, models, MCP access, and Orchestrator delegation rules |
+| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
 | **[Codemap](docs/codemap.md)** | Generate hierarchical codemaps to understand large codebases faster |
 | **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
+| **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
 
@@ -581,7 +593,9 @@ Use this section as a map: start with installation, then jump to features, confi
 
 | Doc | What it covers |
 |-----|----------------|
+| **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
+| **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
 | **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `gh_grep`, and how MCP permissions work per agent |
