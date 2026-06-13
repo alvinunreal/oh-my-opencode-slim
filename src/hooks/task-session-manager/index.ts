@@ -126,9 +126,7 @@ function isAgentName(value: unknown): value is AgentName {
   return typeof value === 'string' && AGENT_NAME_SET.has(value as AgentName);
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
+import { isRecord as isObjectRecord } from '../../utils/guards';
 
 function extractPath(output: string): string | undefined {
   return /<path>([^<]+)<\/path>/.exec(output)?.[1];

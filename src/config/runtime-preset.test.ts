@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import {
   getActiveRuntimePreset,
   getPreviousRuntimePreset,
-  rollbackRuntimePreset,
   setActiveRuntimePreset,
   setActiveRuntimePresetWithPrevious,
 } from './runtime-preset';
@@ -37,25 +36,6 @@ describe('runtime-preset', () => {
     setActiveRuntimePresetWithPrevious(null);
     expect(getActiveRuntimePreset()).toBeNull();
     expect(getPreviousRuntimePreset()).toBe('old');
-    setActiveRuntimePreset(null);
-  });
-
-  test('rollbackRuntimePreset restores active and clears previous', () => {
-    setActiveRuntimePreset(null);
-    setActiveRuntimePreset('old');
-    setActiveRuntimePresetWithPrevious('new');
-    rollbackRuntimePreset('old');
-    expect(getActiveRuntimePreset()).toBe('old');
-    expect(getPreviousRuntimePreset()).toBeNull();
-    setActiveRuntimePreset(null);
-  });
-
-  test('rollbackRuntimePreset with null clears active and previous', () => {
-    setActiveRuntimePreset(null);
-    setActiveRuntimePresetWithPrevious('new');
-    rollbackRuntimePreset(null);
-    expect(getActiveRuntimePreset()).toBeNull();
-    expect(getPreviousRuntimePreset()).toBeNull();
     setActiveRuntimePreset(null);
   });
 });

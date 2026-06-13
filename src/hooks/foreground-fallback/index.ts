@@ -59,13 +59,7 @@ export function isRateLimitError(error: unknown): boolean {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function parseModel(
-  model: string,
-): { providerID: string; modelID: string } | null {
-  const slash = model.indexOf('/');
-  if (slash <= 0 || slash >= model.length - 1) return null;
-  return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
-}
+import { parseModelReference } from '../../utils/session';
 
 /** Prevent re-triggering within this window for the same session. */
 const DEDUP_WINDOW_MS = 5_000;
@@ -79,7 +73,7 @@ const REPROMPT_DELAY_MS = 500;
  * Manages runtime model fallback for foreground agent sessions.
  *
  * Constructed at plugin init with the ordered fallback chains for each agent
- * (built from _modelArray entries merged with fallback.chains config).
+ * (built from _modelArray entries in agents.<name>.model).
  */
 export class ForegroundFallbackManager {
   /** sessionID → last observed model string ("providerID/modelID") */
@@ -255,7 +249,7 @@ export class ForegroundFallbackManager {
       }
       tried.add(nextModel);
 
-      const ref = parseModel(nextModel);
+      const ref = parseModelReference(nextModel);
       if (!ref) {
         log('[foreground-fallback] invalid model format', {
           sessionID,

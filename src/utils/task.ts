@@ -17,18 +17,6 @@ export interface TaskStatusOutput {
   result?: string;
 }
 
-export type TaskStatusClassification =
-  | 'running'
-  | 'terminal'
-  | 'timeout'
-  | 'transient_process_error'
-  | 'unknown_error';
-
-const TRANSIENT_PROCESS_ERROR_TEXT = new Set([
-  'Task is not running in this process and has no final output.',
-  'Task is not running in this process and has not produced output.',
-]);
-
 export function parseTaskIdFromTaskOutput(output: string): string | undefined {
   const xmlMatch = /<task\s+[^>]*\bid=["']([^"']+)["'][^>]*>/i.exec(output);
   if (xmlMatch) return xmlMatch[1];
@@ -78,20 +66,6 @@ export function parseTaskStatusOutput(
     timedOut: state === 'running' && /Timed out after \d+ms/i.test(output),
     result: parseTaskResultFromOutput(output),
   };
-}
-
-export function classifyTaskStatusOutput(
-  status: TaskStatusOutput,
-): TaskStatusClassification {
-  if (status.timedOut) return 'timeout';
-  if (status.state === 'running') return 'running';
-  if (status.state === 'completed' || status.state === 'cancelled') {
-    return 'terminal';
-  }
-  if (TRANSIENT_PROCESS_ERROR_TEXT.has(status.result ?? '')) {
-    return 'transient_process_error';
-  }
-  return 'unknown_error';
 }
 
 export function parseTaskStateFromOutput(

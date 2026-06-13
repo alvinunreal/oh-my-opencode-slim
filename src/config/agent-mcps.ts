@@ -1,9 +1,4 @@
-import {
-  type AgentName,
-  getAgentOverride,
-  McpNameSchema,
-  type PluginConfig,
-} from '.';
+import { type AgentName, getAgentOverride, type PluginConfig } from '.';
 
 /** Default MCPs per agent - "*" means all MCPs, "!item" excludes specific MCPs */
 
@@ -41,15 +36,6 @@ export function parseList(items: string[], allAvailable: string[]): string[] {
   return allow.filter(
     (item) => !deny.includes(item) && allAvailable.includes(item),
   );
-}
-
-/**
- * Get available MCP names from schema and config.
- */
-export function getAvailableMcpNames(config?: PluginConfig): string[] {
-  const builtinMcps = McpNameSchema.options;
-  const disabled = new Set(config?.disabled_mcps ?? []);
-  return builtinMcps.filter((name) => !disabled.has(name));
 }
 
 /**

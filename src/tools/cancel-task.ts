@@ -460,9 +460,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
+import { isRecord as isObjectRecord } from '../utils/guards';
 
 function isSessionID(value: string): boolean {
   return /^ses_[\w-]+$/.test(value);
