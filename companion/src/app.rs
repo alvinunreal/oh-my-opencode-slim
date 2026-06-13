@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -18,15 +17,10 @@ const SIZE_PRESETS: &[(&str, f32)] = &[
     ("XL  ·  200px", 200.0),
 ];
 
-const SESSIONS_KEY: &str = "companion_sessions";
 const SIZE_KEY: &str = "companion_size";
 const MENU_OPEN_KEY: &str = "companion_menu_open";
 const MENU_POS_KEY: &str = "companion_menu_pos";
 
-// Per session: (id, cwd, agents, status)
-type SessionSnapshot = Vec<(String, String, Vec<String>, String)>;
-
-/// Grid columns for N agents.
 fn grid_cols(n: usize) -> usize {
     match n {
         0 | 1 => 1,
@@ -35,7 +29,6 @@ fn grid_cols(n: usize) -> usize {
     }
 }
 
-/// Returns (cols, rows) for N agents.
 fn grid_dims(n: usize) -> (usize, usize) {
     let n = n.max(1);
     let cols = grid_cols(n);
@@ -43,7 +36,6 @@ fn grid_dims(n: usize) -> (usize, usize) {
     (cols, rows)
 }
 
-/// Cell rects for each agent, with orphan cells centered in the last row.
 fn cell_rects(agents: usize, cols: usize, rows: usize, cell: f32) -> Vec<egui::Rect> {
     let mut rects = Vec::with_capacity(agents);
     let full_rows = agents / cols;
@@ -68,8 +60,31 @@ fn cell_rects(agents: usize, cols: usize, rows: usize, cell: f32) -> Vec<egui::R
         }
     }
 
-    let _ = rows; // used by caller for window sizing
+    let _ = rows;
     rects
+}
+
+fn choose_session(sessions: &[SessionInfo]) -> Option<usize> {
+    sessions
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.status == "waiting-input")
+        .map(|(i, _)| i)
+        .or_else(|| {
+            sessions
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.active_agents.iter().any(|agent| agent != "intro"))
+                .map(|(i, _)| i)
+        })
+        .or_else(|| {
+            sessions
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.status == "busy")
+                .map(|(i, _)| i)
+        })
+        .or_else(|| sessions.first().map(|_| 0))
 }
 
 pub struct CompanionApp {
@@ -78,11 +93,11 @@ pub struct CompanionApp {
     gifs: Gifs,
     rx: Receiver<()>,
     registered: bool,
-    positioned: HashSet<String>,
     size: f32,
     screen: [f32; 2],
     position: String,
     has_modern_config: bool,
+    applied_layout: Option<(String, f32, u32, u32, String)>,
 }
 
 impl CompanionApp {
@@ -112,11 +127,11 @@ impl CompanionApp {
             gifs: Gifs::new(),
             rx,
             registered: false,
-            positioned: HashSet::new(),
             size: initial_size,
             screen: primary_size(),
             position,
             has_modern_config,
+            applied_layout: None,
         }
     }
 
@@ -133,39 +148,17 @@ impl CompanionApp {
             }
         }
 
-        // Liveness check runs every tick, not just on file changes: when an
-        // opencode process is killed it never rewrites the state file, so
-        // waiting on the watcher would leave its window open forever.
         let has_modern = self.has_modern_config;
         self.sessions
             .retain(|s| s.pid.map(is_pid_alive).unwrap_or(!has_modern));
-        let live: HashSet<_> = self.sessions.iter().map(|s| s.session_id.clone()).collect();
-        self.positioned.retain(|id| live.contains(id));
     }
 
-    fn initial_pos(&self, index: usize, win_w: f32, win_h: f32) -> [f32; 2] {
-        let slot = index as f32;
+    fn initial_pos(&self, win_w: f32, win_h: f32) -> [f32; 2] {
         let (x, y) = match self.position.as_str() {
-            "bottom-left" => {
-                let x = GAP + (win_w + GAP) * slot;
-                let y = self.screen[1] - win_h - GAP;
-                (x, y)
-            }
-            "top-right" => {
-                let x = self.screen[0] - (win_w + GAP) * (slot + 1.0);
-                let y = GAP;
-                (x, y)
-            }
-            "top-left" => {
-                let x = GAP + (win_w + GAP) * slot;
-                let y = GAP;
-                (x, y)
-            }
-            _ => { // "bottom-right"
-                let x = self.screen[0] - (win_w + GAP) * (slot + 1.0);
-                let y = self.screen[1] - win_h - GAP;
-                (x, y)
-            }
+            "bottom-left" => (GAP, self.screen[1] - win_h - GAP),
+            "top-right" => (self.screen[0] - win_w - GAP, GAP),
+            "top-left" => (GAP, GAP),
+            _ => (self.screen[0] - win_w - GAP, self.screen[1] - win_h - GAP),
         };
         let x_max = (self.screen[0] - win_w - GAP).max(GAP);
         let y_max = (self.screen[1] - win_h - GAP).max(GAP);
@@ -194,101 +187,87 @@ impl eframe::App for CompanionApp {
 
         self.size = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
 
-        // Store registered GIF URIs (with unknown agents falling back to the
-        // orchestrator GIF) so cells never point at an unregistered image.
-        let snapshot: SessionSnapshot = self
-            .sessions
-            .iter()
-            .map(|s| {
-                let uris: Vec<String> = if s.active_agents.is_empty() {
-                    vec![self.gifs.uri("intro")]
-                } else {
-                    s.active_agents.iter().map(|a| self.gifs.uri(a)).collect()
-                };
-                (s.session_id.clone(), s.cwd.clone(), uris, s.status.clone())
-            })
-            .collect();
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(SESSIONS_KEY), snapshot));
+        let Some(selected_idx) = choose_session(&self.sessions) else {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(egui::Color32::TRANSPARENT))
+                .show(ctx, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("No active sessions");
+                    });
+                });
+            ctx.request_repaint_after(Duration::from_millis(150));
+            return;
+        };
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::TRANSPARENT))
-            .show(ctx, |_| {});
+        let session = self.sessions[selected_idx].clone();
+        let agent_uris: Vec<String> = if session.active_agents.is_empty() {
+            vec![self.gifs.uri("intro")]
+        } else {
+            session
+                .active_agents
+                .iter()
+                .map(|agent| self.gifs.uri(agent))
+                .collect()
+        };
+        let n = agent_uris.len().max(1);
+        let (cols, rows) = grid_dims(n);
+        let win_w = self.size * cols as f32;
+        let win_h = self.size * rows as f32;
 
-        for (i, session) in self.sessions.iter().enumerate() {
-            let vid = egui::ViewportId::from_hash_of(&session.session_id);
-            let sid = session.session_id.clone();
-            let size = self.size;
+        let layout = (
+            session.session_id.clone(),
+            self.size,
+            cols as u32,
+            rows as u32,
+            self.position.clone(),
+        );
+        if self.applied_layout.as_ref() != Some(&layout) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
+            let pos = self.initial_pos(win_w, win_h);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                pos[0], pos[1],
+            )));
+            self.applied_layout = Some(layout);
+        }
 
-            let agents: Vec<String> = if session.active_agents.is_empty() {
-                vec!["intro".to_string()]
-            } else {
-                session.active_agents.clone()
-            };
-            let n = agents.len().max(1);
-            let (cols, rows) = grid_dims(n);
-            let win_w = size * cols as f32;
-            let win_h = size * rows as f32;
+        if ctx.input(|i| i.pointer.primary_down()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
 
-            let is_first = !self.positioned.contains(&session.session_id);
-            if is_first {
-                self.positioned.insert(session.session_id.clone());
-            }
-
-            let mut builder = egui::ViewportBuilder::default()
-                .with_title(&session.project_name())
-                .with_decorations(false)
-                .with_transparent(true)
-                .with_always_on_top()
-                .with_active(false)
-                .with_inner_size([win_w, win_h]);
-
-            if is_first {
-                builder = builder.with_position(self.initial_pos(i, win_w, win_h));
-            }
-
-            ctx.show_viewport_deferred(vid, builder, move |ctx, _class| {
-                render_session_window(ctx, &sid, size);
+        if ctx.input(|i| i.pointer.secondary_released()) {
+            let cursor = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
+            ctx.data_mut(|d| {
+                d.insert_temp(egui::Id::new(MENU_POS_KEY), [cursor.x, cursor.y]);
+                d.insert_temp(egui::Id::new(MENU_OPEN_KEY), true);
             });
         }
 
-        // Size-picker popup
-        let menu_open: bool =
-            ctx.data(|d| d.get_temp(egui::Id::new(MENU_OPEN_KEY)).unwrap_or(false));
-        if menu_open {
-            let pos: [f32; 2] =
-                ctx.data(|d| d.get_temp(egui::Id::new(MENU_POS_KEY)).unwrap_or([200.0, 200.0]));
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::TRANSPARENT)
+                    .inner_margin(egui::Margin::ZERO),
+            )
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                render_session(ui, ctx, &session, &agent_uris, self.size, win_w, win_h);
+            });
 
-            ctx.show_viewport_deferred(
-                egui::ViewportId::from_hash_of("size_picker"),
-                egui::ViewportBuilder::default()
-                    .with_title("size")
-                    .with_decorations(false)
-                    .with_always_on_top()
-                    .with_inner_size([160.0, 190.0])
-                    .with_position(pos),
-                |ctx, _| render_size_picker(ctx),
-            );
-        }
-
-        ctx.request_repaint_after(Duration::from_millis(150));
+        render_size_picker(ctx);
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 }
 
-fn render_session_window(ctx: &egui::Context, session_id: &str, _size: f32) {
-    let sessions: SessionSnapshot =
-        ctx.data(|d| d.get_temp(egui::Id::new(SESSIONS_KEY)).unwrap_or_default());
-    let (_, cwd, agents, _) = sessions
-        .iter()
-        .find(|(id, _, _, _)| id == session_id)
-        .cloned()
-        .unwrap_or_default();
-
-    // Snapshot holds ready-to-use GIF URIs.
-    let uris: Vec<String> = if agents.is_empty() {
-        vec!["bytes://intro.gif".to_string()]
-    } else {
-        agents
-    };
+fn render_session(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    session: &SessionInfo,
+    agent_uris: &[String],
+    current_size: f32,
+    win_w: f32,
+    win_h: f32,
+) {
+    let cwd = &session.cwd;
 
     let project = std::path::Path::new(&cwd)
         .file_name()
@@ -296,164 +275,110 @@ fn render_session_window(ctx: &egui::Context, session_id: &str, _size: f32) {
         .unwrap_or("unknown")
         .to_string();
 
-    let current_size: f32 =
-        ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
-
-    let n = uris.len().max(1);
+    let n = agent_uris.len().max(1);
     let (cols, rows) = grid_dims(n);
-    let win_w = current_size * cols as f32;
-    let win_h = current_size * rows as f32;
+    let rects = cell_rects(n, cols, rows, current_size);
 
-    // Resize viewport when size or agent count changes.
-    let layout_key = egui::Id::new(session_id).with("layout");
-    let applied: (u32, u32, u32) = ctx.data(|d| d.get_temp(layout_key).unwrap_or((0, 0, 0)));
-    let current = (current_size as u32, cols as u32, rows as u32);
-    if applied != current {
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
-        ctx.data_mut(|d| d.insert_temp(layout_key, current));
+    for (i, uri) in agent_uris.iter().enumerate() {
+        if let Some(&cell) = rects.get(i) {
+            ui.put(
+                cell,
+                egui::Image::new(uri).fit_to_exact_size(egui::vec2(current_size, current_size)),
+            );
+        }
     }
 
-    // Right-click → open size picker
-    if ctx.input(|i| i.pointer.secondary_released()) {
-        let win_origin = ctx
-            .input(|i| i.viewport().outer_rect.map(|r| r.min))
-            .unwrap_or_default();
-        let cursor = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
-        ctx.data_mut(|d| {
-            d.insert_temp(
-                egui::Id::new(MENU_POS_KEY),
-                [win_origin.x + cursor.x, win_origin.y + cursor.y],
-            );
-            d.insert_temp(egui::Id::new(MENU_OPEN_KEY), true);
-        });
-    }
+    let label_h = (current_size * 0.15).clamp(13.0, 30.0);
+    let font_size = (current_size * 0.09).clamp(9.0, 13.0);
+    let strip =
+        egui::Rect::from_min_size(egui::pos2(0.0, win_h - label_h), egui::vec2(win_w, label_h));
+    ui.painter()
+        .rect_filled(strip, 0.0, egui::Color32::from_black_alpha(185));
 
-    // Drag
-    if ctx.input(|i| i.pointer.primary_down()) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-    }
-
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::none()
-                .fill(egui::Color32::TRANSPARENT)
-                .inner_margin(egui::Margin::ZERO),
-        )
-        .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-            let rects = cell_rects(n, cols, rows, current_size);
-
-            for (i, uri) in uris.iter().enumerate() {
-                if let Some(&cell) = rects.get(i) {
-                    ui.put(cell, egui::Image::new(uri).fit_to_exact_size(egui::vec2(current_size, current_size)));
-                }
-            }
-
-            // Project label — overlaid on bottom strip of the window
-            let label_h = (current_size * 0.15).clamp(13.0, 30.0);
-            let font_size = (current_size * 0.09).clamp(9.0, 13.0);
-            let full_rect = egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(win_w, win_h),
-            );
-            let strip = egui::Rect::from_min_size(
-                egui::pos2(0.0, win_h - label_h),
-                egui::vec2(win_w, label_h),
-            );
-            ui.painter()
-                .rect_filled(strip, 0.0, egui::Color32::from_black_alpha(185));
-
-            let fid = egui::FontId::proportional(font_size);
-            let label = fit_text(ctx, &project, &fid, win_w - 10.0);
-            ui.painter().text(
-                egui::pos2(full_rect.center().x, strip.center().y),
-                egui::Align2::CENTER_CENTER,
-                &label,
-                fid,
-                egui::Color32::WHITE,
-            );
-        });
-
-    ctx.request_repaint_after(Duration::from_millis(50));
+    let fid = egui::FontId::proportional(font_size);
+    let label = fit_text(ctx, &project, &fid, win_w - 10.0);
+    ui.painter().text(
+        strip.center(),
+        egui::Align2::CENTER_CENTER,
+        &label,
+        fid,
+        egui::Color32::WHITE,
+    );
 }
 
 fn render_size_picker(ctx: &egui::Context) {
-    let size: f32 = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
-    let frames_key = egui::Id::new("menu_frames");
-    let frames: u32 = ctx.data(|d| d.get_temp(frames_key).unwrap_or(0));
-    ctx.data_mut(|d| d.insert_temp(frames_key, frames + 1));
-
-    let close = ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        || (frames > 1 && !ctx.input(|i| i.focused));
-
-    if close {
-        ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-            d.insert_temp(frames_key, 0u32);
-        });
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    let open: bool = ctx.data(|d| d.get_temp(egui::Id::new(MENU_OPEN_KEY)).unwrap_or(false));
+    if !open {
         return;
     }
 
-    egui::CentralPanel::default()
-        .frame(
+    let pos: [f32; 2] = ctx.data(|d| {
+        d.get_temp(egui::Id::new(MENU_POS_KEY))
+            .unwrap_or([20.0, 20.0])
+    });
+    let size: f32 = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
+
+    egui::Area::new(egui::Id::new("size_picker"))
+        .fixed_pos(egui::pos2(pos[0], pos[1]))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
             egui::Frame::none()
                 .fill(egui::Color32::from_rgb(28, 28, 28))
-                .inner_margin(egui::Margin::same(8.0)),
-        )
-        .show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new("Window size")
-                    .size(11.0)
-                    .color(egui::Color32::from_rgb(160, 160, 160)),
-            );
-            ui.add_space(4.0);
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(70)))
+                .inner_margin(egui::Margin::same(8.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Window size")
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(160, 160, 160)),
+                    );
+                    ui.add_space(4.0);
 
-            for (label, preset) in SIZE_PRESETS {
-                let active = (size - preset).abs() < 0.5;
-                let text = if active {
-                    egui::RichText::new(*label).size(12.0).strong().color(egui::Color32::WHITE)
-                } else {
-                    egui::RichText::new(*label)
-                        .size(12.0)
-                        .color(egui::Color32::from_rgb(200, 200, 200))
-                };
-                if ui
-                    .add_sized([144.0, 20.0], egui::Button::new(text).frame(false))
-                    .clicked()
-                {
-                    ctx.data_mut(|d| {
-                        d.insert_temp(egui::Id::new(SIZE_KEY), *preset);
-                        d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-                        d.insert_temp(frames_key, 0u32);
-                    });
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
+                    for (label, preset) in SIZE_PRESETS {
+                        let active = (size - preset).abs() < 0.5;
+                        let text = if active {
+                            egui::RichText::new(*label)
+                                .size(12.0)
+                                .strong()
+                                .color(egui::Color32::WHITE)
+                        } else {
+                            egui::RichText::new(*label)
+                                .size(12.0)
+                                .color(egui::Color32::from_rgb(200, 200, 200))
+                        };
+                        if ui
+                            .add_sized([144.0, 20.0], egui::Button::new(text).frame(false))
+                            .clicked()
+                        {
+                            ctx.data_mut(|d| {
+                                d.insert_temp(egui::Id::new(SIZE_KEY), *preset);
+                                d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
+                            });
+                        }
+                    }
 
-            ui.add_space(4.0);
-            ui.separator();
-            ui.add_space(2.0);
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(2.0);
 
-            if ui
-                .add_sized(
-                    [144.0, 20.0],
-                    egui::Button::new(
-                        egui::RichText::new("Close companion")
-                            .size(12.0)
-                            .color(egui::Color32::from_rgb(220, 100, 100)),
-                    )
-                    .frame(false),
-                )
-                .clicked()
-            {
-                ctx.data_mut(|d| {
-                    d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-                    d.insert_temp(frames_key, 0u32);
-                    d.insert_temp(egui::Id::new("companion_quit"), true);
+                    if ui
+                        .add_sized(
+                            [144.0, 20.0],
+                            egui::Button::new(
+                                egui::RichText::new("Close companion")
+                                    .size(12.0)
+                                    .color(egui::Color32::from_rgb(220, 100, 100)),
+                            )
+                            .frame(false),
+                        )
+                        .clicked()
+                    {
+                        ctx.data_mut(|d| {
+                            d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
+                            d.insert_temp(egui::Id::new("companion_quit"), true);
+                        });
+                    }
                 });
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
         });
 }
 
@@ -495,4 +420,56 @@ fn is_pid_alive(pid: u32) -> bool {
 #[cfg(not(unix))]
 fn is_pid_alive(_pid: u32) -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{choose_session, SessionInfo};
+
+    fn session(id: &str, status: &str, agents: &[&str]) -> SessionInfo {
+        SessionInfo {
+            session_id: id.to_string(),
+            cwd: format!("/{id}"),
+            active_agents: agents.iter().map(|s| s.to_string()).collect(),
+            status: status.to_string(),
+            pid: Some(1),
+            active_agent: None,
+        }
+    }
+
+    #[test]
+    fn waiting_input_wins() {
+        let sessions = vec![
+            session("idle", "idle", &["intro"]),
+            session("waiting", "waiting-input", &["input"]),
+        ];
+        assert_eq!(choose_session(&sessions), Some(1));
+    }
+
+    #[test]
+    fn non_intro_active_agents_win_over_idle_intro() {
+        let sessions = vec![
+            session("idle", "idle", &["intro"]),
+            session("busy-agent", "idle", &["designer"]),
+        ];
+        assert_eq!(choose_session(&sessions), Some(1));
+    }
+
+    #[test]
+    fn busy_wins_when_no_active_agents() {
+        let sessions = vec![
+            session("idle", "idle", &["intro"]),
+            session("busy", "busy", &["orchestrator"]),
+        ];
+        assert_eq!(choose_session(&sessions), Some(1));
+    }
+
+    #[test]
+    fn falls_back_to_first_retained_session() {
+        let sessions = vec![
+            session("first", "idle", &["intro"]),
+            session("second", "idle", &["intro"]),
+        ];
+        assert_eq!(choose_session(&sessions), Some(0));
+    }
 }

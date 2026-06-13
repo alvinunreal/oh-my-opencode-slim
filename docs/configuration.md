@@ -140,6 +140,20 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` |
 | `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) |
 
+> **niri note:** `companion-v0.1.1` is the fixed native companion release.
+> To make it open as a bottom-right overlay, add a niri rule matching its stable
+> `app-id`/title (`oh-my-opencode-slim-companion`), for example:
+>
+> ```kdl
+> window-rule {
+>     match app-id=r"^oh-my-opencode-slim-companion$"
+>     match title=r"^oh-my-opencode-slim-companion$"
+>     open-floating true
+>     open-focused false
+>     default-floating-position x=16 y=16 relative-to="bottom-right"
+> }
+> ```
+
 ### Council configuration note
 
 - The **Council agent model** is configured like any other agent, for example in

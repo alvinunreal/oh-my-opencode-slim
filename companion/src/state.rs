@@ -33,26 +33,6 @@ pub struct SessionInfo {
     pub pid: Option<u32>,
 }
 
-impl SessionInfo {
-    pub fn agents(&self) -> &[String] {
-        if self.active_agents.is_empty() {
-            &[]
-        } else {
-            &self.active_agents
-        }
-    }
-}
-
-impl SessionInfo {
-    pub fn project_name(&self) -> String {
-        std::path::Path::new(&self.cwd)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string()
-    }
-}
-
 pub fn state_file_path() -> PathBuf {
     let base = std::env::var("XDG_DATA_HOME")
         .ok()

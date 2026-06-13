@@ -37,6 +37,8 @@ During interactive installation, the installer asks whether to download and
 enable the native Companion binary. The prompt defaults to `yes`, so pressing
 Enter installs it.
 
+On niri, the prompt installs normally now that the native companion is fixed.
+
 Companion installation is best-effort. If the binary cannot be downloaded or
 installed, the installer prints a warning and continues installing the core
 plugin without Companion enabled.
@@ -48,6 +50,34 @@ bunx oh-my-opencode-slim install --companion=yes
 ```
 
 Pass `--companion=no` to skip the native binary and omit the config block.
+
+## niri support status
+
+The native `companion-v0.1.1` binary now works on niri and exposes a stable
+Wayland app-id/title: `oh-my-opencode-slim-companion`.
+
+niri users who want the Companion to behave like an overlay should add a window
+rule to their niri config, for example:
+
+```kdl
+window-rule {
+    match app-id=r"^oh-my-opencode-slim-companion$"
+    match title=r"^oh-my-opencode-slim-companion$"
+    open-floating true
+    open-focused false
+    default-floating-position x=16 y=16 relative-to="bottom-right"
+}
+```
+
+The rule is optional, but without `open-floating true` niri may tile the
+Companion like any other regular xdg-toplevel window. Adjust the `x`/`y` gap or
+`relative-to` corner if you prefer a different placement.
+
+Run diagnostics with:
+
+```bash
+oh-my-opencode-slim doctor
+```
 
 ---
 
@@ -75,7 +105,7 @@ For the desktop companion app, the release workflow follows the V2 distribution
 plan:
 
 1. **GitHub Release Assets**: companion binaries are uploaded to the
-   `companion-v0.1.0` GitHub release.
+   `companion-v0.1.1` GitHub release.
 2. **Separate Companion Versioning**: the companion uses its own version so the
    plugin can ship beta updates without rebuilding native binaries every time.
 3. **OS/Arch Detection**: `--companion=yes` selects the archive for the current
@@ -86,11 +116,11 @@ plan:
 Current release assets are named:
 
 ```text
-oh-my-opencode-slim-companion-v0.1.0-aarch64-apple-darwin.tar.gz
-oh-my-opencode-slim-companion-v0.1.0-x86_64-apple-darwin.tar.gz
-oh-my-opencode-slim-companion-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-oh-my-opencode-slim-companion-v0.1.0-aarch64-unknown-linux-gnu.tar.gz
-oh-my-opencode-slim-companion-v0.1.0-x86_64-pc-windows-msvc.zip
+oh-my-opencode-slim-companion-v0.1.1-aarch64-apple-darwin.tar.gz
+oh-my-opencode-slim-companion-v0.1.1-x86_64-apple-darwin.tar.gz
+oh-my-opencode-slim-companion-v0.1.1-x86_64-unknown-linux-gnu.tar.gz
+oh-my-opencode-slim-companion-v0.1.1-aarch64-unknown-linux-gnu.tar.gz
+oh-my-opencode-slim-companion-v0.1.1-x86_64-pc-windows-msvc.zip
 ```
 
 Supported installer targets:
@@ -114,13 +144,13 @@ protocol expected by the plugin changes.
 The first companion release is:
 
 ```text
-0.1.0
+0.1.1
 ```
 
 The matching GitHub release tag is:
 
 ```text
-companion-v0.1.0
+companion-v0.1.1
 ```
 
 The installer currently downloads from that tag.
@@ -132,7 +162,7 @@ you are testing the release path:
 
 ```bash
 gh workflow run companion-release.yml \
-  -f version=0.1.0 \
+  -f version=0.1.1 \
   -f targets=macos-arm64
 ```
 
@@ -140,7 +170,7 @@ Build multiple targets by passing a comma-separated list:
 
 ```bash
 gh workflow run companion-release.yml \
-  -f version=0.1.0 \
+  -f version=0.1.1 \
   -f targets=macos-arm64,macos-x64,linux-x64,windows-x64
 ```
 
@@ -161,7 +191,7 @@ the selected archives.
 After the workflow finishes:
 
 ```bash
-gh release view companion-v0.1.0
+gh release view companion-v0.1.1
 ```
 
 Confirm the release contains the archive names expected by the installer for the
@@ -176,7 +206,7 @@ bunx oh-my-opencode-slim@beta install --companion=yes
 ```
 
 The installer detects the user's OS/architecture, downloads the matching archive
-from `companion-v0.1.0`, installs it to the runtime binary path, and writes the
+from `companion-v0.1.1`, installs it to the runtime binary path, and writes the
 companion config block. If the companion install fails, the core plugin install
 continues without enabling Companion.
 

@@ -233,7 +233,9 @@ export async function configureBackgroundSubagents(
 export async function shouldInstallCompanion(
   config: InstallConfig,
 ): Promise<boolean> {
-  if (config.companion === 'yes') return true;
+  if (config.companion === 'yes') {
+    return true;
+  }
   if (config.companion === 'no') return false;
 
   if (config.dryRun) {
