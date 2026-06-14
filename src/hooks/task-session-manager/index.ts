@@ -11,6 +11,7 @@ import {
   parseTaskStatusOutput,
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
+import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import type { MessagePart, MessageWithParts } from '../types';
 
@@ -109,10 +110,6 @@ function createOccurrenceId(
 
 function isAgentName(value: unknown): value is AgentName {
   return typeof value === 'string' && AGENT_NAME_SET.has(value as AgentName);
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function extractPath(output: string): string | undefined {

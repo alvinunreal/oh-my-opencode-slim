@@ -16,7 +16,10 @@
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import { log } from '../../utils/logger';
-import { abortSessionWithTimeout } from '../../utils/session';
+import {
+  abortSessionWithTimeout,
+  parseModelReference,
+} from '../../utils/session';
 
 type OpencodeClient = PluginInput['client'];
 
@@ -58,14 +61,6 @@ export function isRateLimitError(error: unknown): boolean {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function parseModel(
-  model: string,
-): { providerID: string; modelID: string } | null {
-  const slash = model.indexOf('/');
-  if (slash <= 0 || slash >= model.length - 1) return null;
-  return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
-}
 
 /** Prevent re-triggering within this window for the same session. */
 const DEDUP_WINDOW_MS = 5_000;
@@ -255,7 +250,7 @@ export class ForegroundFallbackManager {
       }
       tried.add(nextModel);
 
-      const ref = parseModel(nextModel);
+      const ref = parseModelReference(nextModel);
       if (!ref) {
         log('[foreground-fallback] invalid model format', {
           sessionID,

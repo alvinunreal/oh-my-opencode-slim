@@ -37,11 +37,7 @@ describe('CouncillorConfigSchema', () => {
 
     if (result.success) {
       // Deprecated fields are stripped but reported via _deprecated
-      expect(result.data._deprecated).toEqual([
-        'master',
-        'master_timeout',
-        'master_fallback',
-      ]);
+      expect(result.data._deprecated).toEqual(['master']);
       // Core fields still work normally
       expect(result.data.timeout).toBe(180000);
       expect(Object.keys(result.data.presets.default)).toEqual(['alpha']);
@@ -147,11 +143,7 @@ test('deprecated master with non-standard model ID still parses', () => {
   expect(result.success).toBe(true);
 
   if (result.success) {
-    expect(result.data._deprecated).toEqual([
-      'master',
-      'master_timeout',
-      'master_fallback',
-    ]);
+    expect(result.data._deprecated).toEqual(['master']);
     // Even non-standard model IDs are extracted as-is for backward compat
     expect(result.data._legacyMasterModel).toBe('claude-opus-4-6');
   }

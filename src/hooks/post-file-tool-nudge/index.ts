@@ -5,8 +5,6 @@
 
 import { PHASE_REMINDER_TEXT } from '../../config/constants';
 
-const POST_FILE_TOOL_NUDGE = PHASE_REMINDER_TEXT;
-
 interface ToolExecuteAfterInput {
   tool: string;
   sessionID?: string;
@@ -31,7 +29,7 @@ export function createPostFileToolNudgeHook(
       return;
     }
 
-    if (output.output.includes(POST_FILE_TOOL_NUDGE)) {
+    if (output.output.includes(PHASE_REMINDER_TEXT)) {
       return;
     }
 
@@ -39,7 +37,7 @@ export function createPostFileToolNudgeHook(
       output.output,
       '',
       '<internal_reminder>',
-      POST_FILE_TOOL_NUDGE,
+      PHASE_REMINDER_TEXT,
       '</internal_reminder>',
     ].join('\n');
   }

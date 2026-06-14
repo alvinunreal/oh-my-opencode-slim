@@ -151,21 +151,11 @@ export const CouncilConfigSchema = z
       .unknown()
       .optional()
       .describe('DEPRECATED — ignored. Council agent synthesizes directly.'),
-    master_timeout: z
-      .unknown()
-      .optional()
-      .describe('DEPRECATED — ignored. Use "timeout" instead.'),
-    master_fallback: z
-      .unknown()
-      .optional()
-      .describe('DEPRECATED — ignored. No separate master session.'),
   })
   .transform((data) => {
     // Detect deprecated fields and attach warning for consumers
     const deprecated: string[] = [];
     if (data.master !== undefined) deprecated.push('master');
-    if (data.master_timeout !== undefined) deprecated.push('master_timeout');
-    if (data.master_fallback !== undefined) deprecated.push('master_fallback');
 
     // Backward compat: extract master.model so the council agent can use it
     // as a fallback when no explicit council entry exists in the active preset.
@@ -193,26 +183,6 @@ export type CouncilConfig = z.infer<typeof CouncilConfigSchema>;
 export type CouncillorExecutionMode = z.infer<
   typeof CouncillorExecutionModeSchema
 >;
-
-/**
- * A sensible default council configuration that users can copy into their
- * opencode.jsonc. Provides a 3-councillor preset using common models.
- *
- * Users should replace models with ones they have access to.
- *
- * ```jsonc
- * "council": DEFAULT_COUNCIL_CONFIG
- * ```
- */
-export const DEFAULT_COUNCIL_CONFIG: z.input<typeof CouncilConfigSchema> = {
-  presets: {
-    default: {
-      alpha: { model: 'openai/gpt-5.4-mini' },
-      beta: { model: 'openai/gpt-5.3-codex' },
-      gamma: { model: 'google/gemini-3-pro' },
-    },
-  },
-};
 
 /**
  * Result of a council session.
