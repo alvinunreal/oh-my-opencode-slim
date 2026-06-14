@@ -12,6 +12,7 @@ import {
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
 import { log } from '../../utils/logger';
+import type { MessagePart, MessageWithParts } from '../types';
 
 interface TaskArgs {
   description?: unknown;
@@ -48,22 +49,6 @@ interface PendingContextFile {
   lastReadAt: number;
 }
 
-interface ChatMessagePart {
-  type: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-interface ChatMessage {
-  info: {
-    role: string;
-    agent?: string;
-    sessionID?: string;
-    id?: string;
-  };
-  parts: ChatMessagePart[];
-}
-
 const BACKGROUND_JOB_BOARD_SENTINEL = 'SENTINEL: background-job-board-v2';
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
@@ -88,8 +73,8 @@ function djb2Hash(str: string): string {
  * Prefers part.id, then message.info.id + partIndex, then content-derived hash.
  */
 function createOccurrenceId(
-  part: ChatMessagePart,
-  message: ChatMessage,
+  part: MessagePart,
+  message: MessageWithParts,
   partIndex: number,
 ): string {
   // Prefer explicit part.id if available
@@ -314,8 +299,8 @@ export function createTaskSessionManagerHook(
   }
 
   function updateFromInjectedCompletion(
-    part: ChatMessagePart,
-    message: ChatMessage,
+    part: MessagePart,
+    message: MessageWithParts,
     _messageIndex: number,
     partIndex: number,
   ): BackgroundJobRecord | undefined {
@@ -668,7 +653,7 @@ export function createTaskSessionManagerHook(
 
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
-      output: { messages: ChatMessage[] },
+      output: { messages: MessageWithParts[] },
     ): Promise<void> => {
       for (const [messageIndex, message] of output.messages.entries()) {
         if (message.info.role !== 'user') continue;

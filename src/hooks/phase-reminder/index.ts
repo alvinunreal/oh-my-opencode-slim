@@ -7,25 +7,9 @@
  */
 import { PHASE_REMINDER_TEXT } from '../../config/constants';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
+import type { MessageWithParts } from '../types';
 
 export const PHASE_REMINDER = `<internal_reminder>${PHASE_REMINDER_TEXT}</internal_reminder>`;
-
-interface MessageInfo {
-  role: string;
-  agent?: string;
-  sessionID?: string;
-}
-
-interface MessagePart {
-  type: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-interface MessageWithParts {
-  info: MessageInfo;
-  parts: MessagePart[];
-}
 
 /**
  * Creates the experimental.chat.messages.transform hook for phase reminder injection.

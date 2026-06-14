@@ -31,6 +31,7 @@ import {
   ForegroundFallbackManager,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
+import type { MessageWithParts } from './hooks/types';
 import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
 import {
@@ -997,18 +998,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       input: Record<string, never>,
       output: { messages: unknown[] },
     ): Promise<void> => {
-      // Type assertion since we know the structure matches
-      // MessageWithParts[]
-      const typedOutput = output as {
-        messages: Array<{
-          info: { role: string; agent?: string; sessionID?: string };
-          parts: Array<{
-            type: string;
-            text?: string;
-            [key: string]: unknown;
-          }>;
-        }>;
-      };
+      const typedOutput = output as { messages: MessageWithParts[] };
 
       for (const message of typedOutput.messages) {
         if (message.info.role !== 'user') {
