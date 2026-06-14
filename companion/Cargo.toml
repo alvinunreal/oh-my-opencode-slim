@@ -1,6 +1,6 @@
 [package]
 name = "oh-my-opencode-slim-companion"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Desktop companion for oh-my-opencode-slim — shows active agent GIFs per session"
 

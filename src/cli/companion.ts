@@ -12,8 +12,8 @@ import { homedir, tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { ConfigMergeResult, InstallConfig } from './types';
 
-const COMPANION_VERSION = '0.1.0';
-const COMPANION_TAG = 'companion-v0.1.0';
+const COMPANION_VERSION = '0.1.1';
+const COMPANION_TAG = 'companion-v0.1.1';
 const GITHUB_REPO = 'alvinunreal/oh-my-opencode-slim';
 
 export function getCompanionTarget(): string | null {

@@ -16,12 +16,13 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_title("oh-my-opencode-slim-companion")
+            .with_app_id("oh-my-opencode-slim-companion")
             .with_decorations(false)
             .with_transparent(true)
-            .with_inner_size([1.0, 1.0])
-            // Offscreen so the "coordinator" window is invisible
-            .with_position([-500.0, -500.0])
-            .with_active(false),
+            .with_always_on_top()
+            .with_active(false)
+            .with_inner_size([120.0, 120.0]),
         // Run as a macOS accessory app: no Dock icon, never steals focus
         // from the terminal when the windows appear.
         event_loop_builder: Some(Box::new(|builder| {

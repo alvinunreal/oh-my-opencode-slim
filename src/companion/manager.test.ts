@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CompanionManager, stateFilePath } from './manager';
@@ -7,7 +7,6 @@ import { CompanionManager, stateFilePath } from './manager';
 // Point writes at a temp dir so tests don't touch the real state file.
 const TEST_DIR = path.join(os.tmpdir(), `companion-test-${process.pid}`);
 const XDG_DIR = path.join(TEST_DIR, 'xdg');
-
 function readState() {
   return JSON.parse(readFileSync(stateFilePath(), 'utf8'));
 }
@@ -297,5 +296,73 @@ describe('CompanionManager', () => {
     m.onInputResolved();
     m.onSessionDeleted('ses_a');
     expect(() => readState()).toThrow();
+  });
+
+  it('writes state and allows spawn normally', () => {
+    const m = make('test-enabled');
+    m.onLoad();
+
+    expect(readState().sessions[0].session_id).toBe('test-enabled');
+  });
+
+  it('starts companion normally when enabled', () => {
+    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
+    writeFileSync(
+      stateFilePath(),
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            session_id: 'test-enabled',
+            cwd: '/old',
+            active_agents: [],
+            status: 'idle',
+            pid: 1,
+          },
+        ],
+        config: { enabled: true, position: 'bottom-right', size: 'medium' },
+      }),
+    );
+
+    const m = make('test-enabled');
+    m.onLoad();
+
+    const state = readState();
+    expect(state.sessions[0].session_id).toBe('test-enabled');
+    expect(state.config.enabled).toBe(true);
+  });
+
+  it('removes disabled session entries on load', () => {
+    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
+    writeFileSync(
+      stateFilePath(),
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            session_id: 'test-disabled',
+            cwd: '/old',
+            active_agents: ['intro'],
+            status: 'idle',
+            pid: 1,
+          },
+        ],
+        config: { enabled: false, position: 'bottom-right', size: 'medium' },
+      }),
+    );
+
+    const m = new CompanionManager('test-disabled', '/path', {
+      enabled: false,
+      position: 'bottom-right',
+      size: 'medium',
+    });
+    m.onLoad();
+
+    expect(readState().sessions).toEqual([]);
+    expect(readState().config).toEqual({
+      enabled: false,
+      position: 'bottom-right',
+      size: 'medium',
+    });
   });
 });
