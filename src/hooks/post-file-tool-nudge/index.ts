@@ -3,7 +3,7 @@
  * Catches the "inspect/edit files → implement myself" anti-pattern.
  */
 
-import { PHASE_REMINDER_TEXT } from '../../config/constants';
+import { PHASE_REMINDER } from '../../config/constants';
 
 interface ToolExecuteAfterInput {
   tool: string;
@@ -29,17 +29,11 @@ export function createPostFileToolNudgeHook(
       return;
     }
 
-    if (output.output.includes(PHASE_REMINDER_TEXT)) {
+    if (output.output.includes(PHASE_REMINDER)) {
       return;
     }
 
-    output.output = [
-      output.output,
-      '',
-      '<internal_reminder>',
-      PHASE_REMINDER_TEXT,
-      '</internal_reminder>',
-    ].join('\n');
+    output.output = `${output.output}\n\n${PHASE_REMINDER}`;
   }
 
   return {

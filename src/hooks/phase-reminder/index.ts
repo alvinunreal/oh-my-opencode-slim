@@ -5,11 +5,11 @@
  * mutating the cached system prompt or prepending request-local content ahead
  * of the user's actual turn.
  */
-import { PHASE_REMINDER_TEXT } from '../../config/constants';
+import { PHASE_REMINDER } from '../../config/constants';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
 import type { MessageWithParts } from '../types';
 
-export const PHASE_REMINDER = `<internal_reminder>${PHASE_REMINDER_TEXT}</internal_reminder>`;
+export { PHASE_REMINDER };
 
 /**
  * Creates the experimental.chat.messages.transform hook for phase reminder injection.
