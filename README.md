@@ -165,6 +165,10 @@ verification while specialists do the work in their own lanes.
   agents are currently active, including parallel background specialists.
 - **[Deepwork](#deepwork)** — a structured workflow for large, multi-file, risky,
   or phased coding work using persistent plan files and Oracle review gates.
+- **[Reflect](#reflect)** — reviews repeated work patterns and suggests reusable skills,
+  agents, commands, config rules, prompt rules, or project playbooks.
+- **[Worktrees](#worktrees)** — manages Git worktrees as isolated coding lanes
+  with safety protocols for complex, risky, or parallel tasks.
 - **[oh-my-opencode-slim skill](#oh-my-opencode-slim-skill)** — a bundled
   configuration skill that helps tune models, prompts, custom agents, MCP access,
   presets, and plugin behavior safely.
@@ -214,6 +218,36 @@ Start it with:
 
 See **[Skills](docs/skills.md#deepwork)** for when to use it and how the workflow
 runs.
+
+#### Reflect
+
+Reflect helps the Orchestrator learn from repeated workflow friction. It reviews
+recent work and existing assets, then recommends the smallest useful improvement:
+a skill, custom agent, command, config rule, prompt rule, MCP permission change,
+or project playbook. If there is not enough evidence, it should recommend
+creating nothing.
+
+Use it directly with:
+
+```text
+/reflect
+/reflect release workflow and checks
+```
+
+Or with natural prompts like:
+
+```text
+reflect on my recent workflows
+find repeated work worth turning into reusable instructions
+```
+
+See **[Skills](docs/skills.md#reflect)** for the full workflow and guardrails.
+
+#### Worktrees
+
+Worktrees manages Git worktrees as safe, isolated coding lanes under `.slim/worktrees/<slug>/`. The Orchestrator manages the lifecycle of these lanes, tracks state in `.slim/worktrees.json`, dispatches specialist agents inside them, and requires explicit confirmation before mutating git state.
+
+See **[Skills](docs/skills.md#worktrees)** for the safety protocol.
 
 #### oh-my-opencode-slim Skill
 
@@ -588,6 +622,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux or Zellij panes |
 | **[Codemap](docs/codemap.md)** | Generate hierarchical codemaps to understand large codebases faster |
 | **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
+| **[Worktrees](docs/worktrees.md)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
@@ -600,7 +635,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
-| **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, and `oh-my-opencode-slim` |
+| **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `gh_grep`, and how MCP permissions work per agent |
 | **[Tools](docs/tools.md)** | Built-in tool capabilities like `webfetch`, LSP tools, code search, and formatters |
 

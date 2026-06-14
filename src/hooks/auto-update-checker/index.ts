@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
@@ -10,6 +11,7 @@ import {
   getLocalDevVersion,
 } from './checker';
 import { CACHE_DIR, PACKAGE_NAME } from './constants';
+import { syncBundledSkillsFromPackage } from './skill-sync';
 import type { AutoUpdateCheckerOptions } from './types';
 
 /**
@@ -163,13 +165,31 @@ async function runBackgroundUpdateCheck(
   const installSuccess = await runBunInstallSafe(installDir);
 
   if (installSuccess) {
-    showToast(
-      ctx,
-      'OMO-Slim Updated!',
-      `v${currentVersion} → v${latestVersion}\nRestart OpenCode to apply.`,
-      'success',
-      8000,
-    );
+    let installedSkills: string[] = [];
+    try {
+      const packageRoot = path.join(installDir, 'node_modules', PACKAGE_NAME);
+      const syncResult = syncBundledSkillsFromPackage(packageRoot);
+      installedSkills = syncResult.installed;
+      if (syncResult.failed.length > 0) {
+        log(
+          `[auto-update-checker] Skill sync warnings/failures: ${syncResult.failed.join(', ')}`,
+        );
+      }
+      if (syncResult.skippedExisting.length > 0) {
+        log(
+          `[auto-update-checker] Skill sync skipped existing: ${syncResult.skippedExisting.join(', ')}`,
+        );
+      }
+    } catch (err) {
+      log('[auto-update-checker] Skill sync failed silently:', err);
+    }
+
+    let message = `v${currentVersion} → v${latestVersion}\nRestart OpenCode to apply.`;
+    if (installedSkills.length > 0) {
+      message = `v${currentVersion} → v${latestVersion}\nAdded bundled skills: ${installedSkills.join(', ')}\nRestart OpenCode to apply.`;
+    }
+
+    showToast(ctx, 'OMO-Slim Updated!', message, 'success', 8000);
     log(
       `[auto-update-checker] Update installed: ${currentVersion} → ${latestVersion}`,
     );

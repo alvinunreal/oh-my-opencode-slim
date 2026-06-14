@@ -54,11 +54,25 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     sourcePath: 'src/skills/deepwork',
   },
   {
+    name: 'reflect',
+    description:
+      'Review repeated work and suggest reusable workflow improvements',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/reflect',
+  },
+  {
     name: 'oh-my-opencode-slim',
     description:
       'Configure, customize, and safely improve oh-my-opencode-slim setups',
     allowedAgents: ['orchestrator'],
     sourcePath: 'src/skills/oh-my-opencode-slim',
+  },
+  {
+    name: 'worktrees',
+    description:
+      'Manage Git worktrees as OMO safe isolated coding lanes for complex/risky/parallel work',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/worktrees',
   },
 ];
 
