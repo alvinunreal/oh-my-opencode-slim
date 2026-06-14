@@ -18,6 +18,8 @@ const EXPECTED_RELEASE_TARGETS = [
   ['x86_64-pc-windows-msvc', 'zip'],
 ] as const;
 
+const CURRENT_COMPANION_TARGET = getCompanionTarget();
+
 function expectedArchiveName(target: string, ext: string): string {
   return `oh-my-opencode-slim-companion-v${COMPANION_VERSION}-${target}.${ext}`;
 }
@@ -46,7 +48,7 @@ describe('companion release metadata', () => {
     const cargoLock = readFileSync(
       join(import.meta.dir, '..', '..', 'companion', 'Cargo.lock'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     expect(cargoLock).toContain(
       `name = "oh-my-opencode-slim-companion"\nversion = "${COMPANION_VERSION}"`,
     );
@@ -72,23 +74,28 @@ describe('companion release metadata', () => {
     }
   });
 
-  test('dry-run downloads the current companion release asset', async () => {
-    const target = getCompanionTarget();
-    if (!target) return;
+  test.skipIf(!CURRENT_COMPANION_TARGET)(
+    'dry-run downloads the current companion release asset',
+    async () => {
+      const target = CURRENT_COMPANION_TARGET;
+      if (!target) {
+        throw new Error('unsupported companion target was not skipped');
+      }
 
-    const log = spyOn(console, 'log').mockImplementation(() => undefined);
-    try {
-      await expect(installCompanion(dryRunConfig())).resolves.toMatchObject({
-        success: true,
-      });
+      const log = spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        await expect(installCompanion(dryRunConfig())).resolves.toMatchObject({
+          success: true,
+        });
 
-      const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
-      const expectedUrl =
-        `https://github.com/alvinunreal/oh-my-opencode-slim/releases/download/` +
-        `${COMPANION_TAG}/${expectedArchiveName(target, ext)}`;
-      expect(log.mock.calls.flat().join('\n')).toContain(expectedUrl);
-    } finally {
-      log.mockRestore();
-    }
-  });
+        const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
+        const expectedUrl =
+          `https://github.com/alvinunreal/oh-my-opencode-slim/releases/download/` +
+          `${COMPANION_TAG}/${expectedArchiveName(target, ext)}`;
+        expect(log.mock.calls.flat().join('\n')).toContain(expectedUrl);
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 });
