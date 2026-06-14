@@ -38,11 +38,11 @@ Recommended release note sections:
 Pick versions independently:
 
 ```text
-plugin: 2.0.2
-plugin tag: v2.0.2
+plugin: 2.0.3
+plugin tag: v2.0.3
 
-companion: 0.1.2
-companion tag: companion-v0.1.2
+companion: 0.1.3
+companion tag: companion-v0.1.3
 ```
 
 Use a plugin patch release for ordinary bug fixes and release-process fixes.
@@ -55,15 +55,15 @@ When releasing a new companion binary, update the installer constants:
 
 ```ts
 // src/cli/companion.ts
-const COMPANION_VERSION = '0.1.2';
-const COMPANION_TAG = 'companion-v0.1.2';
+const COMPANION_VERSION = '0.1.3';
+const COMPANION_TAG = 'companion-v0.1.3';
 ```
 
 Also update the Rust crate version:
 
 ```toml
 # companion/Cargo.toml
-version = "0.1.2"
+version = "0.1.3"
 ```
 
 Regenerate or update `companion/Cargo.lock` so the package entry matches.
@@ -82,13 +82,13 @@ linux-arm64
 windows-x64
 ```
 
-Expected release asset names for companion `0.1.2`:
+Expected release asset names for companion `0.1.3`:
 
 ```text
-oh-my-opencode-slim-companion-v0.1.2-aarch64-apple-darwin.tar.gz
-oh-my-opencode-slim-companion-v0.1.2-x86_64-unknown-linux-gnu.tar.gz
-oh-my-opencode-slim-companion-v0.1.2-aarch64-unknown-linux-gnu.tar.gz
-oh-my-opencode-slim-companion-v0.1.2-x86_64-pc-windows-msvc.zip
+oh-my-opencode-slim-companion-v0.1.3-aarch64-apple-darwin.tar.gz
+oh-my-opencode-slim-companion-v0.1.3-x86_64-unknown-linux-gnu.tar.gz
+oh-my-opencode-slim-companion-v0.1.3-aarch64-unknown-linux-gnu.tar.gz
+oh-my-opencode-slim-companion-v0.1.3-x86_64-pc-windows-msvc.zip
 ```
 
 ## 4. Build and publish companion assets
@@ -97,7 +97,7 @@ Trigger the manual workflow:
 
 ```bash
 gh workflow run companion-release.yml \
-  -f version=0.1.2 \
+  -f version=0.1.3 \
   -f targets=macos-arm64,linux-x64,linux-arm64,windows-x64
 ```
 
@@ -111,15 +111,15 @@ gh run watch <run-id>
 Verify the companion release:
 
 ```bash
-gh release view companion-v0.1.2
+gh release view companion-v0.1.3
 ```
 
 Download assets for a local sanity check:
 
 ```bash
-mkdir -p /tmp/companion-v0.1.2-assets
-gh release download companion-v0.1.2 \
-  --dir /tmp/companion-v0.1.2-assets
+mkdir -p /tmp/companion-v0.1.3-assets
+gh release download companion-v0.1.3 \
+  --dir /tmp/companion-v0.1.3-assets
 ```
 
 Confirm the asset list matches the installer targets before publishing the
@@ -132,26 +132,26 @@ download the workflow artifacts and upload them manually:
 
 ```bash
 gh run download <run-id> \
-  --dir /tmp/companion-v0.1.2-assets
+  --dir /tmp/companion-v0.1.3-assets
 
-gh release create companion-v0.1.2 \
-  --title "Companion v0.1.2" \
+gh release create companion-v0.1.3 \
+  --title "Companion v0.1.3" \
   --notes "Manual companion binary release for oh-my-opencode-slim." \
-  /tmp/companion-v0.1.2-assets/*
+  /tmp/companion-v0.1.3-assets/*
 ```
 
 If the release already exists, upload with clobber:
 
 ```bash
-gh release upload companion-v0.1.2 \
-  /tmp/companion-v0.1.2-assets/* \
+gh release upload companion-v0.1.3 \
+  /tmp/companion-v0.1.3-assets/* \
   --clobber
 ```
 
 Then verify:
 
 ```bash
-gh release view companion-v0.1.2
+gh release view companion-v0.1.3
 ```
 
 ## 5. Bump the plugin package
@@ -160,7 +160,7 @@ For a stable patch, update `package.json`:
 
 ```json
 {
-  "version": "2.0.2"
+  "version": "2.0.3"
 }
 ```
 
@@ -184,6 +184,8 @@ bun run check:ci
 bun run typecheck
 bun test
 bun run build
+bun run verify:release
+cd companion && cargo fmt --all --check && cargo check && cargo test && cargo build --release
 ```
 
 Before committing or tagging, inspect:
@@ -206,13 +208,14 @@ docs/companion.md
 docs/configuration.md
 package.json
 src/cli/companion.ts
+src/cli/companion.test.ts
 ```
 
 Commit and push:
 
 ```bash
 git add <intended-files>
-git commit -m "chore: prepare companion 0.1.2 release"
+git commit -m "chore: prepare companion 0.1.3 release"
 git push
 ```
 
@@ -227,14 +230,14 @@ git push --follow-tags
 If the package version was edited manually, create and push the tag yourself:
 
 ```bash
-git tag -a v2.0.2 -m "v2.0.2"
-git push origin v2.0.2
+git tag -a v2.0.3 -m "v2.0.3"
+git push origin v2.0.3
 ```
 
 Verify the tag exists remotely:
 
 ```bash
-git ls-remote --tags origin v2.0.2
+git ls-remote --tags origin v2.0.3
 ```
 
 ## 9. Create the GitHub plugin release
@@ -242,23 +245,23 @@ git ls-remote --tags origin v2.0.2
 Use release notes based on the actual git diff.
 
 ```bash
-gh release create v2.0.2 \
-  --title "v2.0.2" \
-  --notes-file /tmp/oh-my-opencode-slim-v2.0.2-notes.md
+gh release create v2.0.3 \
+  --title "v2.0.3" \
+  --notes-file /tmp/oh-my-opencode-slim-v2.0.3-notes.md
 ```
 
 If a release already exists, update it:
 
 ```bash
-gh release edit v2.0.2 \
-  --title "v2.0.2" \
-  --notes-file /tmp/oh-my-opencode-slim-v2.0.2-notes.md
+gh release edit v2.0.3 \
+  --title "v2.0.3" \
+  --notes-file /tmp/oh-my-opencode-slim-v2.0.3-notes.md
 ```
 
 Verify:
 
 ```bash
-gh release view v2.0.2
+gh release view v2.0.3
 ```
 
 ## 10. Publish npm
@@ -276,15 +279,15 @@ After publishing, verify the package version:
 npm view oh-my-opencode-slim version
 ```
 
-## 11. Current v2.0.2 release checklist
+## 11. Current v2.0.3 release checklist
 
-For the `2.0.2` / `companion-v0.1.2` release, the completed state should be:
+For the `2.0.3` / `companion-v0.1.3` release, the completed state should be:
 
-- `package.json` version is `2.0.2`.
-- `src/cli/companion.ts` points to `companion-v0.1.2`.
-- Git tag `v2.0.2` exists on origin.
-- GitHub release `v2.0.2` exists.
-- GitHub release `companion-v0.1.2` exists with the expected assets.
+- `package.json` version is `2.0.3`.
+- `src/cli/companion.ts` points to `companion-v0.1.3`.
+- Git tag `v2.0.3` exists on origin.
+- GitHub release `v2.0.3` exists.
+- GitHub release `companion-v0.1.3` exists with the expected assets.
 - Working tree is clean.
 - `bun run check:ci`, `bun run typecheck`, `bun test`, and `bun run build` pass.
 - npm publish is run only after the GitHub release and companion assets are ready.

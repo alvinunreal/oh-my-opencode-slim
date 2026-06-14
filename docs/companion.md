@@ -53,7 +53,7 @@ Pass `--companion=no` to skip the native binary and omit the config block.
 
 ## niri support status
 
-The native `companion-v0.1.2` binary now works on niri and exposes a stable
+The native `companion-v0.1.3` binary now works on niri and exposes a stable
 Wayland app-id/title: `oh-my-opencode-slim-companion`.
 
 niri users who want the Companion to behave like an overlay should add a window
@@ -105,7 +105,7 @@ For the desktop companion app, the release workflow follows the V2 distribution
 plan:
 
 1. **GitHub Release Assets**: companion binaries are uploaded to the
-   `companion-v0.1.2` GitHub release.
+   `companion-v0.1.3` GitHub release.
 2. **Separate Companion Versioning**: the companion uses its own version so the
    plugin can ship beta updates without rebuilding native binaries every time.
 3. **OS/Arch Detection**: `--companion=yes` selects the archive for the current
@@ -116,10 +116,10 @@ plan:
 Current release assets are named:
 
 ```text
-oh-my-opencode-slim-companion-v0.1.2-aarch64-apple-darwin.tar.gz
-oh-my-opencode-slim-companion-v0.1.2-x86_64-unknown-linux-gnu.tar.gz
-oh-my-opencode-slim-companion-v0.1.2-aarch64-unknown-linux-gnu.tar.gz
-oh-my-opencode-slim-companion-v0.1.2-x86_64-pc-windows-msvc.zip
+oh-my-opencode-slim-companion-v0.1.3-aarch64-apple-darwin.tar.gz
+oh-my-opencode-slim-companion-v0.1.3-x86_64-unknown-linux-gnu.tar.gz
+oh-my-opencode-slim-companion-v0.1.3-aarch64-unknown-linux-gnu.tar.gz
+oh-my-opencode-slim-companion-v0.1.3-x86_64-pc-windows-msvc.zip
 ```
 
 Supported installer targets:
@@ -139,16 +139,16 @@ protocol expected by the plugin changes.
 
 ### 1. Choose the companion version
 
-The first companion release is:
+The current companion release is:
 
 ```text
-0.1.2
+0.1.3
 ```
 
 The matching GitHub release tag is:
 
 ```text
-companion-v0.1.2
+companion-v0.1.3
 ```
 
 The installer currently downloads from that tag.
@@ -160,7 +160,7 @@ you are testing the release path:
 
 ```bash
 gh workflow run companion-release.yml \
-  -f version=0.1.2 \
+  -f version=0.1.3 \
   -f targets=macos-arm64
 ```
 
@@ -168,7 +168,7 @@ Build multiple targets by passing a comma-separated list:
 
 ```bash
 gh workflow run companion-release.yml \
-  -f version=0.1.2 \
+  -f version=0.1.3 \
   -f targets=macos-arm64,linux-x64,linux-arm64,windows-x64
 ```
 
@@ -189,7 +189,7 @@ the selected archives.
 After the workflow finishes:
 
 ```bash
-gh release view companion-v0.1.2
+gh release view companion-v0.1.3
 ```
 
 Confirm the release contains the archive names expected by the installer for the
@@ -204,7 +204,7 @@ bunx oh-my-opencode-slim@beta install --companion=yes
 ```
 
 The installer detects the user's OS/architecture, downloads the matching archive
-from `companion-v0.1.2`, installs it to the runtime binary path, and writes the
+from `companion-v0.1.3`, installs it to the runtime binary path, and writes the
 companion config block. If the companion install fails, the core plugin install
 continues without enabling Companion.
 

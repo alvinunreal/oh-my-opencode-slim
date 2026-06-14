@@ -139,7 +139,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` |
 | `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) |
 
-> **niri note:** `companion-v0.1.2` is the fixed native companion release.
+> **niri note:** `companion-v0.1.3` is the fixed native companion release.
 > To make it open as a bottom-right overlay, add a niri rule matching its stable
 > `app-id`/title (`oh-my-opencode-slim-companion`), for example:
 >
