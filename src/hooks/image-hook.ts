@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, extname, join } from 'node:path';
+import type { MessageWithParts } from './types';
 
 // Debounce: only run cleanup every 10 minutes per directory
 const lastCleanupByDir = new Map<string, number>();
@@ -21,15 +22,6 @@ interface ImagePart {
   filename?: string;
   name?: string;
   [key: string]: unknown;
-}
-
-interface MessageWithParts {
-  info: { role: string; agent?: string; sessionID?: string };
-  parts: Array<{
-    type: string;
-    text?: string;
-    [key: string]: unknown;
-  }>;
 }
 
 function isImagePart(p: ImagePart): boolean {

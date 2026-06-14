@@ -30,8 +30,3 @@ export function setActiveRuntimePresetWithPrevious(name: string | null): void {
   previousRuntimePreset = activeRuntimePreset;
   activeRuntimePreset = name;
 }
-
-export function rollbackRuntimePreset(previous: string | null): void {
-  activeRuntimePreset = previous;
-  previousRuntimePreset = null;
-}

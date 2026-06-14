@@ -11,6 +11,7 @@ export type MessageInfo = {
   role: string;
   agent?: string;
   sessionID?: string;
+  id?: string;
 };
 
 export type MessagePart = {

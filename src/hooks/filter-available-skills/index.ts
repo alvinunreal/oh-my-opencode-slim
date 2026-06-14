@@ -6,22 +6,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { getSkillPermissionsForAgent } from '../../cli/skills';
 import { getAgentOverride, type PluginConfig } from '../../config';
-
-interface MessageInfo {
-  role: string;
-  agent?: string;
-}
-
-interface MessagePart {
-  type: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-interface MessageWithParts {
-  info: MessageInfo;
-  parts: MessagePart[];
-}
+import type { MessageWithParts } from '../types';
 
 const AVAILABLE_SKILLS_BLOCK_REGEX =
   /<available_skills>\s*([\s\S]*?)\s*<\/available_skills>/g;

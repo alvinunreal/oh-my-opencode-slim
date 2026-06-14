@@ -264,9 +264,6 @@ When user's approach seems problematic:
 `;
 }
 
-/** @deprecated Use buildOrchestratorPrompt() instead */
-export const ORCHESTRATOR_PROMPT = buildOrchestratorPrompt();
-
 export function createOrchestratorAgent(
   model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,

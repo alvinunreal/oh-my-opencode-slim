@@ -1,9 +1,7 @@
+import { isRecord } from './guards';
+
 export const SLIM_INTERNAL_INITIATOR_MARKER =
   '<!-- SLIM_INTERNAL_INITIATOR -->';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 export function createInternalAgentTextPart(text: string): {
   type: 'text';

@@ -19,7 +19,7 @@
 - Startup:
   - `loadPluginConfig` builds effective config from user/project presets.
   - `createAgents` + `getAgentConfigs` construct final agent registry and resolved prompts.
-  - Runtime model chains are built from configured arrays plus fallback chains.
+  - Runtime model chains are built from `_modelArray` entries (when users configure `model` as an array in `agents.<name>`).
   - `SubagentDepthTracker`, shared `BackgroundJobBoard`, `MultiplexerSessionManager`, `CouncilManager`, `ForegroundFallbackManager`, and hook factories are initialized before registration.
 - Plugin registration: `index.ts` merges/overlays agent configs into OpenCode's config, registers tools (`council`, `webfetch`, `ast_grep_*`, todo tools), MCPs (`createBuiltinMcps`), and all hook handlers (`event`, `tool.execute.before/after`, `experimental.chat.system/messages.transform`, `command.execute.before`, etc.).
 - Runtime event flow (`event`): updates depth tree, multiplexer pane state, auto-update checks, interview/preset state, and task-session cleanup for deleted sessions.

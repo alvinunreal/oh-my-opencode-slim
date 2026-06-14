@@ -2,8 +2,6 @@ import type { ChildProcess } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { writeFile as fsWriteFile } from 'node:fs/promises';
 
-export const isBun = typeof globalThis.Bun !== 'undefined';
-
 export interface CrossSpawnResult {
   proc: ChildProcess;
   /** Collects all stdout into a string */

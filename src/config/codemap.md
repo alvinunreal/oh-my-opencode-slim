@@ -65,7 +65,7 @@ resolution, and helper APIs used by agents, council, and runtime subsystems.
   - `CouncilConfigSchema` now normalizes deprecated `master*` fields into
     `_legacyMasterModel` metadata for compatibility
   - supports presets + timeout/retry/execution mode.
-- Fallback config supports per-agent chain arrays and retry/backoff values.
+- Fallback config supports retry/backoff values and toggles.
 
 ## Control flow and dependencies
 

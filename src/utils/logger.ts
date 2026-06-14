@@ -76,6 +76,8 @@ export function initLogger(sessionId: string): void {
   cleanupOldLogs(dir);
 }
 
+export { getLogDir };
+
 /** @internal Reset logger state for testing */
 export function resetLogger(): void {
   logFile = null;
@@ -86,9 +88,6 @@ export function resetLogger(): void {
 export async function flushLoggerForTesting(): Promise<void> {
   await writeChain;
 }
-
-export { getLogDir };
-
 export function log(message: string, data?: unknown): void {
   const target = logFile;
   if (!target) return; // Uninitialized — silently no-op

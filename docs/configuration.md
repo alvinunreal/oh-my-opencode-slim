@@ -118,10 +118,9 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) |
 | `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
-| `fallback.enabled` | boolean | `false` | Enable model failover on timeout/error |
+| `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
 | `fallback.retryDelayMs` | number | `500` | Delay between retry attempts |
-| `fallback.chains.<agent>` | string[] | — | Ordered fallback model IDs for an agent |
 | `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
 | `council.presets` | object | — | **Required if using council.** Named councillor presets |
 | `council.presets.<name>.<councillor>.model` | string | — | Councillor model |
