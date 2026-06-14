@@ -2,6 +2,7 @@
 
 mod app;
 mod gifs;
+mod niri;
 mod screen;
 mod singleton;
 mod state;

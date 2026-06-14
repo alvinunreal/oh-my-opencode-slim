@@ -1,11 +1,16 @@
 use std::sync::mpsc::Receiver;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use eframe::egui;
 
 use crate::gifs::Gifs;
+use crate::niri;
 use crate::screen::primary_size;
-use crate::state::{read_state, start_watcher, SessionInfo};
+use crate::state::{read_state, start_watcher, CompanionConfigState, SessionInfo};
 
 const DEFAULT_SIZE: f32 = 120.0;
 const GAP: f32 = 10.0;
@@ -21,6 +26,23 @@ const SIZE_KEY: &str = "companion_size";
 const MENU_OPEN_KEY: &str = "companion_menu_open";
 const MENU_POS_KEY: &str = "companion_menu_pos";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WindowGeometryKey {
+    session_id: String,
+    position: String,
+    size_px: u32,
+    cols: u32,
+    rows: u32,
+    screen_w: u32,
+    screen_h: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConfigKey {
+    position: String,
+    size: String,
+}
+
 fn grid_cols(n: usize) -> usize {
     match n {
         0 | 1 => 1,
@@ -34,6 +56,51 @@ fn grid_dims(n: usize) -> (usize, usize) {
     let cols = grid_cols(n);
     let rows = (n + cols - 1) / cols;
     (cols, rows)
+}
+
+fn size_from_config(size: &str) -> f32 {
+    match size {
+        "small" => 80.0,
+        "medium" => 120.0,
+        "large" => 160.0,
+        "xl" | "xlarge" => 200.0,
+        _ => DEFAULT_SIZE,
+    }
+}
+
+fn config_key(config: Option<&CompanionConfigState>) -> Option<ConfigKey> {
+    config.map(|cfg| ConfigKey {
+        position: cfg.position.clone(),
+        size: cfg.size.clone(),
+    })
+}
+
+fn apply_config(key: Option<&ConfigKey>, position: &mut String, size: &mut f32) {
+    if let Some(cfg) = key {
+        *position = cfg.position.clone();
+        *size = size_from_config(&cfg.size);
+    } else {
+        *position = "bottom-right".to_string();
+        *size = DEFAULT_SIZE;
+    }
+}
+
+fn window_size(cell: f32, cols: usize, rows: usize) -> [f32; 2] {
+    [cell * cols as f32, cell * rows as f32]
+}
+
+pub(crate) fn place_window(position: &str, screen: [f32; 2], win: [f32; 2]) -> [f32; 2] {
+    let (screen_w, screen_h) = (screen[0], screen[1]);
+    let (win_w, win_h) = (win[0], win[1]);
+    let (x, y) = match position {
+        "bottom-left" => (GAP, screen_h - win_h - GAP),
+        "top-right" => (screen_w - win_w - GAP, GAP),
+        "top-left" => (GAP, GAP),
+        _ => (screen_w - win_w - GAP, screen_h - win_h - GAP),
+    };
+    let x_max = (screen_w - win_w - GAP).max(GAP);
+    let y_max = (screen_h - win_h - GAP).max(GAP);
+    [x.clamp(GAP, x_max), y.clamp(GAP, y_max)]
 }
 
 fn cell_rects(agents: usize, cols: usize, rows: usize, cell: f32) -> Vec<egui::Rect> {
@@ -87,12 +154,6 @@ fn choose_session(sessions: &[SessionInfo]) -> Option<usize> {
         .or_else(|| sessions.first().map(|_| 0))
 }
 
-fn clamp_viewport_pos(pos: egui::Pos2, win_w: f32, win_h: f32, screen: [f32; 2]) -> egui::Pos2 {
-    let x_max = (screen[0] - win_w - GAP).max(GAP);
-    let y_max = (screen[1] - win_h - GAP).max(GAP);
-    egui::pos2(pos.x.clamp(GAP, x_max), pos.y.clamp(GAP, y_max))
-}
-
 pub struct CompanionApp {
     state_path: std::path::PathBuf,
     sessions: Vec<SessionInfo>,
@@ -103,8 +164,9 @@ pub struct CompanionApp {
     screen: [f32; 2],
     position: String,
     has_modern_config: bool,
-    applied_size: Option<(String, f32, u32, u32)>,
-    applied_position: Option<(String, String)>,
+    applied_config: Option<ConfigKey>,
+    applied_geometry: Option<WindowGeometryKey>,
+    niri_generation: Arc<AtomicU64>,
 }
 
 impl CompanionApp {
@@ -116,15 +178,8 @@ impl CompanionApp {
         let mut initial_size = DEFAULT_SIZE;
         let mut position = "bottom-right".to_string();
         let has_modern_config = state.config.is_some();
-        if let Some(ref cfg) = state.config {
-            initial_size = match cfg.size.as_str() {
-                "small" => 80.0,
-                "medium" => 120.0,
-                "large" => 160.0,
-                _ => 120.0,
-            };
-            position = cfg.position.clone();
-        }
+        let applied_config = config_key(state.config.as_ref());
+        apply_config(applied_config.as_ref(), &mut position, &mut initial_size);
 
         let rx = start_watcher(state_path.clone());
 
@@ -138,27 +193,31 @@ impl CompanionApp {
             screen: primary_size(),
             position,
             has_modern_config,
-            applied_size: None,
-            applied_position: None,
+            applied_config,
+            applied_geometry: None,
+            niri_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    fn poll(&mut self) {
+    fn poll(&mut self) -> bool {
         if self.rx.try_recv().is_ok() {
             while self.rx.try_recv().is_ok() {}
             let state = read_state(&self.state_path);
             self.sessions = state.sessions;
             self.has_modern_config = state.config.is_some();
-            if let Some(ref cfg) = state.config {
-                self.position = cfg.position.clone();
-            } else {
-                self.position = "bottom-right".to_string();
+            let next_config = config_key(state.config.as_ref());
+            let config_changed = self.applied_config != next_config;
+            if config_changed {
+                apply_config(next_config.as_ref(), &mut self.position, &mut self.size);
+                self.applied_config = next_config;
             }
+            return config_changed;
         }
 
         let has_modern = self.has_modern_config;
         self.sessions
             .retain(|s| s.pid.map(is_pid_alive).unwrap_or(!has_modern));
+        false
     }
 
     fn update_screen_from_ctx(&mut self, ctx: &egui::Context) {
@@ -168,23 +227,11 @@ impl CompanionApp {
             }
         }
     }
-
-    fn initial_pos(&self, win_w: f32, win_h: f32) -> [f32; 2] {
-        let (x, y) = match self.position.as_str() {
-            "bottom-left" => (GAP, self.screen[1] - win_h - GAP),
-            "top-right" => (self.screen[0] - win_w - GAP, GAP),
-            "top-left" => (GAP, GAP),
-            _ => (self.screen[0] - win_w - GAP, self.screen[1] - win_h - GAP),
-        };
-        let x_max = (self.screen[0] - win_w - GAP).max(GAP);
-        let y_max = (self.screen[1] - win_h - GAP).max(GAP);
-        [x.clamp(GAP, x_max), y.clamp(GAP, y_max)]
-    }
 }
 
 impl eframe::App for CompanionApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll();
+        let config_changed = self.poll();
         self.update_screen_from_ctx(ctx);
 
         let quit = ctx.data(|d| {
@@ -200,9 +247,13 @@ impl eframe::App for CompanionApp {
             self.gifs.register(ctx);
             ctx.data_mut(|d| d.insert_temp(egui::Id::new(SIZE_KEY), self.size));
             self.registered = true;
+        } else if config_changed {
+            // Config/state changes are the source of truth. A right-click picker
+            // selection remains local until the config tuple changes.
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new(SIZE_KEY), self.size));
         }
 
-        self.size = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
+        self.size = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(self.size));
 
         let Some(selected_idx) = choose_session(&self.sessions) else {
             egui::CentralPanel::default()
@@ -228,38 +279,25 @@ impl eframe::App for CompanionApp {
         };
         let n = agent_uris.len().max(1);
         let (cols, rows) = grid_dims(n);
-        let win_w = self.size * cols as f32;
-        let win_h = self.size * rows as f32;
+        let [win_w, win_h] = window_size(self.size, cols, rows);
 
-        let size_layout = (
-            session.session_id.clone(),
-            self.size,
-            cols as u32,
-            rows as u32,
-        );
-        if self.applied_size.as_ref() != Some(&size_layout) {
-            let old_outer_rect = ctx.input(|i| i.viewport().outer_rect);
-            let monitor_size = ctx.input(|i| i.viewport().monitor_size);
-            let screen = monitor_size
-                .filter(|size| 1.0 < size.x && 1.0 < size.y)
-                .map(|size| [size.x, size.y])
-                .unwrap_or(self.screen);
+        let geometry = WindowGeometryKey {
+            session_id: session.session_id.clone(),
+            position: self.position.clone(),
+            size_px: self.size.round() as u32,
+            cols: cols as u32,
+            rows: rows as u32,
+            screen_w: self.screen[0].round() as u32,
+            screen_h: self.screen[1].round() as u32,
+        };
+        if self.applied_geometry.as_ref() != Some(&geometry) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
-            if let Some(rect) = old_outer_rect {
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(clamp_viewport_pos(
-                    rect.min, win_w, win_h, screen,
-                )));
-            }
-            self.applied_size = Some(size_layout);
-        }
-
-        let position_layout = (session.session_id.clone(), self.position.clone());
-        if self.applied_position.as_ref() != Some(&position_layout) {
-            let pos = self.initial_pos(win_w, win_h);
+            let pos = place_window(&self.position, self.screen, [win_w, win_h]);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
                 pos[0], pos[1],
             )));
-            self.applied_position = Some(position_layout);
+            self.applied_geometry = Some(geometry);
+            self.spawn_niri_fallback([win_w, win_h]);
         }
 
         if ctx.input(|i| i.pointer.primary_down()) {
@@ -287,6 +325,34 @@ impl eframe::App for CompanionApp {
 
         render_size_picker(ctx);
         ctx.request_repaint_after(Duration::from_millis(50));
+    }
+}
+
+impl CompanionApp {
+    fn spawn_niri_fallback(&self, win_size: [f32; 2]) {
+        let socket = match std::env::var("NIRI_SOCKET") {
+            Ok(socket) if !socket.is_empty() => socket,
+            _ => return,
+        };
+        let desired = place_window(&self.position, self.screen, win_size);
+        if !desired[0].is_finite() || !desired[1].is_finite() {
+            return;
+        }
+        let generation = self.niri_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let position = self.position.clone();
+        let screen = self.screen;
+        let niri_generation = Arc::clone(&self.niri_generation);
+        std::thread::spawn(move || {
+            niri::retry_move_current_window(
+                socket,
+                std::process::id(),
+                generation,
+                niri_generation,
+                position,
+                screen,
+                win_size,
+            );
+        });
     }
 }
 
@@ -472,7 +538,11 @@ fn is_pid_alive(_pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_session, SessionInfo};
+    use super::{
+        apply_config, choose_session, config_key, grid_dims, place_window, size_from_config,
+        window_size, ConfigKey, SessionInfo, WindowGeometryKey, GAP,
+    };
+    use crate::state::CompanionConfigState;
 
     fn session(id: &str, status: &str, agents: &[&str]) -> SessionInfo {
         SessionInfo {
@@ -519,5 +589,187 @@ mod tests {
             session("second", "idle", &["intro"]),
         ];
         assert_eq!(choose_session(&sessions), Some(0));
+    }
+
+    #[test]
+    fn config_size_defaults_and_presets_work() {
+        assert_eq!(size_from_config("small"), 80.0);
+        assert_eq!(size_from_config("medium"), 120.0);
+        assert_eq!(size_from_config("large"), 160.0);
+        assert_eq!(size_from_config("xl"), 200.0);
+        assert_eq!(size_from_config("unknown"), 120.0);
+    }
+
+    #[test]
+    fn top_left_is_gap_gap() {
+        assert_eq!(
+            place_window("top-left", [1440.0, 900.0], [240.0, 240.0]),
+            [GAP, GAP]
+        );
+    }
+
+    #[test]
+    fn bottom_right_stays_anchored_when_height_grows() {
+        let small = place_window("bottom-right", [1440.0, 900.0], [240.0, 240.0]);
+        let tall = place_window("bottom-right", [1440.0, 900.0], [240.0, 480.0]);
+        assert!(tall[1] < small[1]);
+        assert!((tall[1] + 480.0 + GAP - 900.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn top_right_moves_left_when_width_grows() {
+        let small = place_window("top-right", [1440.0, 900.0], [240.0, 240.0]);
+        let wide = place_window("top-right", [1440.0, 900.0], [480.0, 240.0]);
+        assert!(wide[0] < small[0]);
+    }
+
+    #[test]
+    fn bottom_right_stays_anchored_when_width_grows() {
+        let small = place_window("bottom-right", [1440.0, 900.0], [240.0, 240.0]);
+        let wide = place_window("bottom-right", [1440.0, 900.0], [480.0, 240.0]);
+        assert!(wide[0] < small[0]);
+        assert!((wide[0] + 480.0 + GAP - 1440.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn bottom_left_stays_anchored_when_height_grows() {
+        let small = place_window("bottom-left", [1440.0, 900.0], [240.0, 240.0]);
+        let tall = place_window("bottom-left", [1440.0, 900.0], [240.0, 480.0]);
+        assert_eq!(tall[0], GAP);
+        assert!(tall[1] < small[1]);
+        assert!((tall[1] + 480.0 + GAP - 900.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn oversized_window_uses_best_effort_gap_anchor() {
+        assert_eq!(
+            place_window("bottom-right", [300.0, 300.0], [500.0, 500.0]),
+            [GAP, GAP]
+        );
+    }
+
+    #[test]
+    fn geometry_key_changes_with_layout_inputs() {
+        let base = WindowGeometryKey {
+            session_id: "a".into(),
+            position: "bottom-right".into(),
+            size_px: 120,
+            cols: 1,
+            rows: 1,
+            screen_w: 1440,
+            screen_h: 900,
+        };
+        assert_ne!(
+            base,
+            WindowGeometryKey {
+                cols: 2,
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            base,
+            WindowGeometryKey {
+                rows: 2,
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            base,
+            WindowGeometryKey {
+                size_px: 160,
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            base,
+            WindowGeometryKey {
+                screen_w: 1600,
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            base,
+            WindowGeometryKey {
+                position: "top-left".into(),
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            base.clone(),
+            WindowGeometryKey {
+                session_id: "b".into(),
+                ..base
+            }
+        );
+    }
+
+    #[test]
+    fn grid_dims_remains_stable() {
+        assert_eq!(grid_dims(1), (1, 1));
+        assert_eq!(grid_dims(4), (2, 2));
+    }
+
+    #[test]
+    fn window_size_scales_with_grid() {
+        assert_eq!(window_size(120.0, 2, 3), [240.0, 360.0]);
+    }
+
+    #[test]
+    fn config_key_tracks_only_config_position_and_size() {
+        let cfg = CompanionConfigState {
+            enabled: true,
+            position: "top-left".into(),
+            size: "large".into(),
+        };
+        assert_eq!(
+            config_key(Some(&cfg)),
+            Some(ConfigKey {
+                position: "top-left".into(),
+                size: "large".into(),
+            })
+        );
+        assert_eq!(config_key(None), None);
+    }
+
+    #[test]
+    fn config_tuple_change_detection_preserves_local_picker_on_session_updates() {
+        let previous = Some(ConfigKey {
+            position: "bottom-right".into(),
+            size: "medium".into(),
+        });
+        let unchanged = Some(ConfigKey {
+            position: "bottom-right".into(),
+            size: "medium".into(),
+        });
+        let moved = Some(ConfigKey {
+            position: "top-left".into(),
+            size: "medium".into(),
+        });
+        let resized = Some(ConfigKey {
+            position: "bottom-right".into(),
+            size: "large".into(),
+        });
+
+        assert_eq!(previous, unchanged);
+        assert_ne!(previous, moved);
+        assert_ne!(previous, resized);
+    }
+
+    #[test]
+    fn apply_config_updates_size_only_for_config_changes() {
+        let mut position = "bottom-right".to_string();
+        let mut size = 200.0;
+        let cfg = ConfigKey {
+            position: "top-left".into(),
+            size: "small".into(),
+        };
+
+        apply_config(Some(&cfg), &mut position, &mut size);
+        assert_eq!(position, "top-left");
+        assert_eq!(size, 80.0);
+
+        apply_config(None, &mut position, &mut size);
+        assert_eq!(position, "bottom-right");
+        assert_eq!(size, 120.0);
     }
 }
