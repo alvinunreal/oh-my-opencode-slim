@@ -1,3 +1,5 @@
+import type { CompanionConfig } from '../../config/schema';
+
 export interface NpmDistTags {
   latest: string;
   [key: string]: string;
@@ -28,6 +30,7 @@ export interface PackageJson {
 
 export interface AutoUpdateCheckerOptions {
   autoUpdate?: boolean;
+  companion?: CompanionConfig;
 }
 
 export interface PluginEntryInfo {

@@ -18,6 +18,7 @@ interface CompanionSession {
   active_agents: string[];
   status: string;
   pid: number;
+  config?: CompanionState['config'];
 }
 
 interface CompanionState {
@@ -28,6 +29,10 @@ interface CompanionState {
     enabled: boolean;
     position: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
     size: 'small' | 'medium' | 'large';
+    gifPack: 'default';
+    loopStyle: 'classic' | 'smooth';
+    speed: number;
+    debug: boolean;
   };
 }
 
@@ -46,7 +51,7 @@ export function stateFilePath(): string {
   );
 }
 
-function binaryPath(): string | null {
+function defaultBinaryPath(): string {
   const xdg = process.env.XDG_DATA_HOME?.trim();
   const base =
     xdg && path.isAbsolute(xdg)
@@ -56,7 +61,7 @@ function binaryPath(): string | null {
     os.platform() === 'win32'
       ? 'oh-my-opencode-slim-companion.exe'
       : 'oh-my-opencode-slim-companion';
-  const bin = path.join(
+  return path.join(
     base,
     'opencode',
     'storage',
@@ -64,6 +69,13 @@ function binaryPath(): string | null {
     'bin',
     binaryName,
   );
+}
+
+export function resolveCompanionBinaryPath(
+  config?: CompanionConfig,
+): string | null {
+  const configured = config?.binaryPath?.trim();
+  const bin = configured || defaultBinaryPath();
   return existsSync(bin) ? bin : null;
 }
 
@@ -234,6 +246,17 @@ export class CompanionManager {
         active_agents: this.activeAgents(),
         status: this.status,
         pid: process.pid,
+        config: this.config
+          ? {
+              enabled: this.config.enabled ?? false,
+              position: this.config.position ?? 'bottom-right',
+              size: this.config.size ?? 'medium',
+              gifPack: this.config.gifPack ?? 'default',
+              loopStyle: this.config.loopStyle ?? 'classic',
+              speed: this.config.speed ?? 1,
+              debug: this.config.debug ?? false,
+            }
+          : undefined,
       };
       writeState((state) => {
         const idx = state.sessions.findIndex((s) => s.session_id === this.id);
@@ -247,6 +270,10 @@ export class CompanionManager {
             enabled: this.config.enabled ?? false,
             position: this.config.position ?? 'bottom-right',
             size: this.config.size ?? 'medium',
+            gifPack: this.config.gifPack ?? 'default',
+            loopStyle: this.config.loopStyle ?? 'classic',
+            speed: this.config.speed ?? 1,
+            debug: this.config.debug ?? false,
           };
         }
       });
@@ -257,30 +284,35 @@ export class CompanionManager {
 
   private spawnIfAvailable(): void {
     if (this.config?.enabled !== true) return;
-    const bin = binaryPath();
+    const bin = resolveCompanionBinaryPath(this.config);
     if (!bin) {
-      const xdg = process.env.XDG_DATA_HOME?.trim();
-      const base =
-        xdg && path.isAbsolute(xdg)
-          ? xdg
-          : path.join(os.homedir(), '.local', 'share');
-      const expected = path.join(
-        base,
-        'o‍pencode',
-        'storage',
-        'oh-my-o‍pencode-slim',
-        'bin',
-        'oh-my-o‍pencode-slim-companion',
-      );
+      const expected = this.config.binaryPath?.trim() || defaultBinaryPath();
       log(
         `[companion] enabled but companion binary not found at expected path: ${expected}. Please install/download the companion binary separately.`,
       );
       return;
     }
     try {
-      const child = spawn(bin, [], { detached: true, stdio: 'ignore' });
+      const child = spawn(bin, [], {
+        detached: true,
+        env: {
+          ...process.env,
+          OH_MY_OPENCODE_SLIM_COMPANION_SESSION_ID: this.id,
+          ...(this.config.debug === true
+            ? { OH_MY_OPENCODE_SLIM_COMPANION_DEBUG: '1' }
+            : {}),
+        },
+        stdio: 'ignore',
+      });
       child.unref();
-      log('[companion] spawned', bin);
+      log(
+        '[companion] spawned',
+        JSON.stringify({
+          bin,
+          sessionId: this.id,
+          debug: this.config.debug === true,
+        }),
+      );
     } catch (err) {
       log('[companion] spawn failed', String(err));
     }

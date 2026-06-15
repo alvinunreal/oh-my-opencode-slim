@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { CompanionManager, stateFilePath } from './manager';
+import {
+  CompanionManager,
+  resolveCompanionBinaryPath,
+  stateFilePath,
+} from './manager';
 
 // Point writes at a temp dir so tests don't touch the real state file.
 const TEST_DIR = path.join(os.tmpdir(), `companion-test-${process.pid}`);
@@ -262,14 +266,22 @@ describe('CompanionManager', () => {
       enabled: true,
       position: 'bottom-right',
       size: 'medium',
+      gifPack: 'default',
+      loopStyle: 'classic',
+      speed: 1,
+      debug: false,
     });
   });
 
-  it('supports custom position and size', () => {
+  it('supports custom position, size, and animation settings', () => {
     const m = make('test-custom', '/path', {
       enabled: true,
       position: 'top-left',
       size: 'large',
+      gifPack: 'default',
+      loopStyle: 'smooth',
+      speed: 1.5,
+      debug: true,
     });
     m.onLoad();
     const state = readState();
@@ -277,7 +289,28 @@ describe('CompanionManager', () => {
       enabled: true,
       position: 'top-left',
       size: 'large',
+      gifPack: 'default',
+      loopStyle: 'smooth',
+      speed: 1.5,
+      debug: true,
     });
+  });
+
+  it('resolves a configured companion binary path', () => {
+    const customBin = path.join(TEST_DIR, 'custom-companion');
+    writeFileSync(customBin, '#!/bin/sh\n');
+
+    expect(resolveCompanionBinaryPath({ binaryPath: customBin })).toBe(
+      customBin,
+    );
+  });
+
+  it('returns null when configured companion binary path does not exist', () => {
+    expect(
+      resolveCompanionBinaryPath({
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      }),
+    ).toBeNull();
   });
 
   it('methods are no-ops when disabled', () => {

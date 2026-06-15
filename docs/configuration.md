@@ -146,6 +146,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) |
 | `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence |
 | `companion.enabled` | boolean | `false` | Enable/disable the floating window Rust companion |
+| `companion.binaryPath` | string | — | Optional path to a custom companion binary to launch instead of the default install path |
 | `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` |
 | `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) |
 

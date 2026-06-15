@@ -11,6 +11,24 @@ pub struct CompanionConfigState {
     pub enabled: bool,
     pub position: String,
     pub size: String,
+    #[serde(default = "default_gif_pack", rename = "gifPack")]
+    pub gif_pack: String,
+    #[serde(default = "default_loop_style", rename = "loopStyle")]
+    pub loop_style: String,
+    #[serde(default = "default_speed")]
+    pub speed: f32,
+}
+
+fn default_gif_pack() -> String {
+    "default".to_string()
+}
+
+fn default_loop_style() -> String {
+    "classic".to_string()
+}
+
+fn default_speed() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -42,6 +60,8 @@ pub struct SessionInfo {
     pub status: String,
     #[serde(default)]
     pub pid: Option<u32>,
+    #[serde(default)]
+    pub config: Option<CompanionConfigState>,
 }
 
 pub fn state_file_path() -> PathBuf {

@@ -1,0 +1,11 @@
+{
+  "version": "0.1.2",
+  "tag": "companion-v0.1.2",
+  "repo": "alvinunreal/oh-my-opencode-slim",
+  "checksums": {
+    "oh-my-opencode-slim-companion-v0.1.2-aarch64-apple-darwin.tar.gz": "6f66fdfe895ab39b96ddf1f395c4547cb428cfe68c94a1a3a9f11c1ab46863c2",
+    "oh-my-opencode-slim-companion-v0.1.2-aarch64-unknown-linux-gnu.tar.gz": "af979907a429904db4449a79e0d8d99edf994ce373d298284b440549d1eb507b",
+    "oh-my-opencode-slim-companion-v0.1.2-x86_64-pc-windows-msvc.zip": "fca87451bcc3a3f5eb5ab6dcd83999bb35e2a4f30d5a666c427b7bb892ac1eb0",
+    "oh-my-opencode-slim-companion-v0.1.2-x86_64-unknown-linux-gnu.tar.gz": "e6352a4e6c71773617ca2831af2102b011d3114c0fb8d40635b6af8076b757bc"
+  }
+}

@@ -1,5 +1,9 @@
 import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
+import {
+  ensureCompanionVersion,
+  loadCompanionManifestFromPackageRoot,
+} from '../../companion/updater';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import { preparePackageUpdate, resolveInstallContext } from './cache';
@@ -24,7 +28,7 @@ export function createAutoUpdateCheckerHook(
   ctx: PluginInput,
   options: AutoUpdateCheckerOptions = {},
 ) {
-  const { autoUpdate = true } = options;
+  const { autoUpdate = true, companion } = options;
 
   let hasChecked = false;
 
@@ -48,7 +52,7 @@ export function createAutoUpdateCheckerHook(
           return;
         }
 
-        runBackgroundUpdateCheck(ctx, autoUpdate).catch((err) => {
+        runBackgroundUpdateCheck(ctx, autoUpdate, companion).catch((err) => {
           log('[auto-update-checker] Background update check failed:', err);
         });
       }, 0);
@@ -64,6 +68,7 @@ export function createAutoUpdateCheckerHook(
 async function runBackgroundUpdateCheck(
   ctx: PluginInput,
   autoUpdate: boolean,
+  companion: AutoUpdateCheckerOptions['companion'],
 ): Promise<void> {
   const pluginInfo = findPluginEntry(ctx.directory);
   if (!pluginInfo) {
@@ -166,8 +171,10 @@ async function runBackgroundUpdateCheck(
 
   if (installSuccess) {
     let installedSkills: string[] = [];
+    let companionUpdated = false;
+    let companionWillRetry = false;
+    const packageRoot = path.join(installDir, 'node_modules', PACKAGE_NAME);
     try {
-      const packageRoot = path.join(installDir, 'node_modules', PACKAGE_NAME);
       const syncResult = syncBundledSkillsFromPackage(packageRoot);
       installedSkills = syncResult.installed;
       if (syncResult.failed.length > 0) {
@@ -184,12 +191,54 @@ async function runBackgroundUpdateCheck(
       log('[auto-update-checker] Skill sync failed silently:', err);
     }
 
-    let message = `v${currentVersion} → v${latestVersion}\nRestart OpenCode to apply.`;
-    if (installedSkills.length > 0) {
-      message = `v${currentVersion} → v${latestVersion}\nAdded bundled skills: ${installedSkills.join(', ')}\nRestart OpenCode to apply.`;
+    if (companion?.enabled === true) {
+      try {
+        const manifest = loadCompanionManifestFromPackageRoot(packageRoot);
+        const companionResult = await ensureCompanionVersion({
+          config: companion,
+          manifest: manifest ?? undefined,
+        });
+        if (companionResult.status === 'installed') {
+          companionUpdated = true;
+        } else if (companionResult.status === 'failed') {
+          companionWillRetry = true;
+          log(
+            '[auto-update-checker] Companion update failed; will retry on restart:',
+            companionResult.error,
+          );
+        } else if (companionResult.status === 'skipped') {
+          log(
+            '[auto-update-checker] Companion update skipped:',
+            companionResult.reason,
+          );
+        }
+      } catch (err) {
+        companionWillRetry = true;
+        log(
+          '[auto-update-checker] Companion update failed silently; will retry on restart:',
+          err,
+        );
+      }
     }
 
-    showToast(ctx, 'OMO-Slim Updated!', message, 'success', 8000);
+    const messageLines = [`v${currentVersion} → v${latestVersion}`];
+    if (installedSkills.length > 0) {
+      messageLines.push(`Added bundled skills: ${installedSkills.join(', ')}`);
+    }
+    if (companionUpdated) {
+      messageLines.push('Companion updated.');
+    } else if (companionWillRetry) {
+      messageLines.push('Companion update will retry on restart.');
+    }
+    messageLines.push('Restart OpenCode to apply.');
+
+    showToast(
+      ctx,
+      'OMO-Slim Updated!',
+      messageLines.join('\n'),
+      'success',
+      8000,
+    );
     log(
       `[auto-update-checker] Update installed: ${currentVersion} → ${latestVersion}`,
     );

@@ -150,6 +150,10 @@ export function generateLiteConfig(
       enabled: true,
       position: 'bottom-right',
       size: 'medium',
+      gifPack: 'default',
+      loopStyle: 'classic',
+      speed: 1,
+      debug: false,
     };
   }
 

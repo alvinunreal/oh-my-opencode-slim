@@ -416,6 +416,11 @@
         "enabled": {
           "type": "boolean"
         },
+        "binaryPath": {
+          "description": "Path to a custom companion binary to launch.",
+          "type": "string",
+          "minLength": 1
+        },
         "position": {
           "type": "string",
           "enum": [
@@ -432,6 +437,31 @@
             "medium",
             "large"
           ]
+        },
+        "gifPack": {
+          "description": "Bundled companion animation pack to use.",
+          "type": "string",
+          "enum": [
+            "default"
+          ]
+        },
+        "loopStyle": {
+          "description": "Companion animation playback style: classic loops or smooth ping-pong playback.",
+          "type": "string",
+          "enum": [
+            "classic",
+            "smooth"
+          ]
+        },
+        "speed": {
+          "description": "Companion animation playback speed multiplier. Defaults to 1.",
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4
+        },
+        "debug": {
+          "description": "Enable verbose native companion debug logs.",
+          "type": "boolean"
         }
       }
     },
