@@ -9,7 +9,7 @@ on:
         type: string
       targets:
         description: >-
-          Comma-separated targets to build: macos-arm64,linux-x64,linux-arm64,windows-x64
+          Comma-separated targets to build: macos-arm64,macos-x64,linux-x64,linux-arm64,windows-x64
         required: true
         default: macos-arm64
         type: string
@@ -42,6 +42,32 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: companion-macos-arm64
+          path: '*.tar.gz'
+
+  macos-x64:
+    name: macOS x64
+    if: contains(github.event.inputs.targets, 'macos-x64')
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - name: Build companion
+        working-directory: companion
+        run: cargo build --release --target x86_64-apple-darwin
+      - name: Package companion
+        run: |
+          set -euo pipefail
+          version='${{ github.event.inputs.version }}'
+          target='x86_64-apple-darwin'
+          name="oh-my-opencode-slim-companion-v${version}-${target}"
+          mkdir -p dist
+          cp "companion/target/${target}/release/oh-my-opencode-slim-companion" dist/oh-my-opencode-slim-companion
+          tar -C dist -czf "${name}.tar.gz" oh-my-opencode-slim-companion
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-macos-x64
           path: '*.tar.gz'
 
   linux-x64:
@@ -134,6 +160,7 @@ jobs:
     name: Publish companion release
     needs:
       - macos-arm64
+      - macos-x64
       - linux-x64
       - linux-arm64
       - windows-x64
