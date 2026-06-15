@@ -156,6 +156,55 @@ function isUsableSecondaryText(text: string) {
   return true;
 }
 
+const SESSION_DELETE_RETRIES = 3;
+const SESSION_DELETE_RETRY_DELAY_MS = 500;
+const SECONDARY_MODEL_TIMEOUT_MS = 30_000;
+
+/**
+ * Exposed for tests so they can avoid real wall-clock sleeps.
+ * Not part of the public API.
+ */
+export const _testConfig = {
+  deleteRetryDelayMs: SESSION_DELETE_RETRY_DELAY_MS,
+};
+
+/**
+ * Delete a temporary secondary-model session with retry.
+ *
+ * The previous implementation swallowed all errors silently via
+ * `.catch(() => undefined)`, which left orphaned sessions in the database
+ * whenever the delete failed (e.g. during an OpenCode instance dispose/reload
+ * cycle). This retries transient failures and logs persistent ones so the
+ * issue is visible instead of silently leaking sessions.
+ */
+async function deleteSessionSafely(
+  client: OpenCodeClient,
+  sessionId: string,
+  directory: string,
+): Promise<void> {
+  for (let attempt = 1; attempt <= SESSION_DELETE_RETRIES; attempt++) {
+    try {
+      await client.session.delete({
+        path: { id: sessionId },
+        query: { directory },
+      });
+      return;
+    } catch (error) {
+      if (attempt >= SESSION_DELETE_RETRIES) {
+        console.warn(
+          `[smartfetch] Failed to clean up secondary session ${sessionId} ` +
+            `after ${SESSION_DELETE_RETRIES} attempts: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+        return;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, _testConfig.deleteRetryDelayMs),
+      );
+    }
+  }
+}
+
 async function runSecondaryModel(
   client: OpenCodeClient,
   directory: string,
@@ -199,24 +248,32 @@ async function runSecondaryModel(
       (toolIDs || []).map((id: string) => [id, false]),
     );
 
-    const result = await client.session.prompt({
-      responseStyle: 'data',
-      throwOnError: true,
-      path: { id: sessionId },
-      query: { directory },
-      body: {
-        model,
-        system:
-          'Answer only from the supplied content. Do not use tools or outside knowledge.',
-        tools: disabledTools,
-        parts: [
-          {
-            type: 'text',
-            text: buildPrompt(truncatedContent, effectivePrompt),
-          },
-        ],
-      },
-    });
+    const result = await Promise.race([
+      client.session.prompt({
+        responseStyle: 'data',
+        throwOnError: true,
+        path: { id: sessionId },
+        query: { directory },
+        body: {
+          model,
+          system:
+            'Answer only from the supplied content. Do not use tools or outside knowledge.',
+          tools: disabledTools,
+          parts: [
+            {
+              type: 'text',
+              text: buildPrompt(truncatedContent, effectivePrompt),
+            },
+          ],
+        },
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Secondary model timed out')),
+          SECONDARY_MODEL_TIMEOUT_MS,
+        ),
+      ),
+    ]);
 
     const parts =
       (result as { data?: { parts?: Array<{ type?: string; text?: string }> } })
@@ -235,12 +292,7 @@ async function runSecondaryModel(
       sourceChars,
     };
   } finally {
-    await client.session
-      .delete({
-        path: { id: sessionId },
-        query: { directory },
-      })
-      .catch(() => undefined);
+    await deleteSessionSafely(client, sessionId, directory);
   }
 }
 
