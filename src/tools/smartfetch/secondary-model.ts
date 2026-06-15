@@ -158,6 +158,7 @@ function isUsableSecondaryText(text: string) {
 
 const SESSION_DELETE_RETRIES = 3;
 const SESSION_DELETE_RETRY_DELAY_MS = 500;
+const SECONDARY_MODEL_TIMEOUT_MS = 30_000;
 
 /**
  * Delete a temporary secondary-model session with retry.
@@ -239,24 +240,32 @@ async function runSecondaryModel(
       (toolIDs || []).map((id: string) => [id, false]),
     );
 
-    const result = await client.session.prompt({
-      responseStyle: 'data',
-      throwOnError: true,
-      path: { id: sessionId },
-      query: { directory },
-      body: {
-        model,
-        system:
-          'Answer only from the supplied content. Do not use tools or outside knowledge.',
-        tools: disabledTools,
-        parts: [
-          {
-            type: 'text',
-            text: buildPrompt(truncatedContent, effectivePrompt),
-          },
-        ],
-      },
-    });
+    const result = await Promise.race([
+      client.session.prompt({
+        responseStyle: 'data',
+        throwOnError: true,
+        path: { id: sessionId },
+        query: { directory },
+        body: {
+          model,
+          system:
+            'Answer only from the supplied content. Do not use tools or outside knowledge.',
+          tools: disabledTools,
+          parts: [
+            {
+              type: 'text',
+              text: buildPrompt(truncatedContent, effectivePrompt),
+            },
+          ],
+        },
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Secondary model timed out')),
+          SECONDARY_MODEL_TIMEOUT_MS,
+        ),
+      ),
+    ]);
 
     const parts =
       (result as { data?: { parts?: Array<{ type?: string; text?: string }> } })

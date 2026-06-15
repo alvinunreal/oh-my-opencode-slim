@@ -147,4 +147,38 @@ describe('smartfetch/secondary-model', () => {
       console.warn = originalWarn;
     }
   });
+
+  test('falls back to next model when prompt times out', async () => {
+    const client = {
+      session: {
+        create: mock(async () => ({ id: 'session-timeout' })),
+        prompt: mock(async (opts: any) => {
+          const model = opts.body.model;
+          if (model.modelID === 'small') {
+            throw new Error('Secondary model timed out');
+          }
+          return {
+            data: {
+              parts: [{ type: 'text', text: 'Fallback answer' }],
+            },
+          };
+        }),
+        delete: mock(async () => ({})),
+      },
+      tool: {
+        ids: mock(async () => ({ data: ['read'] })),
+      },
+    } as any;
+
+    const result = await runSecondaryModelWithFallback(
+      client,
+      '/tmp/project',
+      models,
+      'Summarize',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    expect(result.text).toBe('Fallback answer');
+    expect(result.model).toEqual(models[1]);
+  });
 });
