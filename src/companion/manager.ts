@@ -141,6 +141,7 @@ export class CompanionManager {
   onLoad(): void {
     if (this.config?.enabled !== true) {
       try {
+        if (!existsSync(stateFilePath())) return;
         writeState((state) => {
           state.sessions = state.sessions.filter(
             (s) => s.session_id !== this.id,
