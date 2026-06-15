@@ -115,7 +115,19 @@ fn clamp_window_position(pos: [f32; 2], screen: [f32; 2], win: [f32; 2]) -> [f32
     [pos[0].clamp(GAP, x_max), pos[1].clamp(GAP, y_max)]
 }
 
-fn project_key(cwd: &str) -> String {
+fn restore_window_position(pos: [f32; 2], screen: [f32; 2], win: [f32; 2]) -> [f32; 2] {
+    // egui 0.29 exposes monitor size but not monitor origin. If a saved native
+    // position is outside origin-zero bounds, it may be on a secondary monitor
+    // with a positive or negative origin. Preserve it instead of snapping it
+    // back to the primary monitor.
+    if 0.0 <= pos[0] && pos[0] < screen[0] && 0.0 <= pos[1] && pos[1] < screen[1] {
+        clamp_window_position(pos, screen, win)
+    } else {
+        pos
+    }
+}
+
+fn canonical_project_key(cwd: &str) -> String {
     std::path::Path::new(cwd)
         .canonicalize()
         .ok()
@@ -187,6 +199,7 @@ pub struct CompanionApp {
     applied_config: Option<ConfigKey>,
     applied_geometry: Option<WindowGeometryKey>,
     window_positions: std::collections::BTreeMap<String, WindowPositionState>,
+    project_keys: std::collections::BTreeMap<String, String>,
     drag_project_key: Option<String>,
     niri_generation: Arc<AtomicU64>,
 }
@@ -219,6 +232,7 @@ impl CompanionApp {
             applied_config,
             applied_geometry: None,
             window_positions,
+            project_keys: std::collections::BTreeMap::new(),
             drag_project_key: None,
             niri_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -230,6 +244,8 @@ impl CompanionApp {
             let state = read_state(&self.state_path);
             self.sessions = state.sessions;
             self.window_positions = state.window_positions;
+            self.project_keys
+                .retain(|cwd, _| self.sessions.iter().any(|session| &session.cwd == cwd));
             self.has_modern_config = state.config.is_some();
             let next_config = config_key(state.config.as_ref());
             let config_changed = self.applied_config != next_config;
@@ -252,6 +268,15 @@ impl CompanionApp {
                 self.screen = [size.x, size.y];
             }
         }
+    }
+
+    fn project_key_for(&mut self, cwd: &str) -> String {
+        if let Some(key) = self.project_keys.get(cwd) {
+            return key.clone();
+        }
+        let key = canonical_project_key(cwd);
+        self.project_keys.insert(cwd.to_string(), key.clone());
+        key
     }
 }
 
@@ -294,7 +319,7 @@ impl eframe::App for CompanionApp {
         };
 
         let session = self.sessions[selected_idx].clone();
-        let project_key = project_key(&session.cwd);
+        let project_key = self.project_key_for(&session.cwd);
         let saved_position = self.window_positions.get(&project_key).copied();
         let agent_uris: Vec<String> = if session.active_agents.is_empty() {
             vec![self.gifs.uri("intro")]
@@ -324,7 +349,7 @@ impl eframe::App for CompanionApp {
         if self.applied_geometry.as_ref() != Some(&geometry) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
             let pos = saved_position
-                .map(|pos| clamp_window_position([pos.x, pos.y], self.screen, [win_w, win_h]))
+                .map(|pos| restore_window_position([pos.x, pos.y], self.screen, [win_w, win_h]))
                 .unwrap_or_else(|| place_window(&self.position, self.screen, [win_w, win_h]));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
                 pos[0], pos[1],
@@ -391,7 +416,7 @@ impl CompanionApp {
             _ => return,
         };
         let desired = saved_position
-            .map(|pos| clamp_window_position([pos.x, pos.y], self.screen, win_size))
+            .map(|pos| restore_window_position([pos.x, pos.y], self.screen, win_size))
             .unwrap_or_else(|| place_window(&self.position, self.screen, win_size));
         if !desired[0].is_finite() || !desired[1].is_finite() {
             return;
@@ -599,8 +624,8 @@ fn is_pid_alive(_pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_config, choose_session, config_key, grid_dims, place_window, size_from_config,
-        window_size, ConfigKey, SessionInfo, WindowGeometryKey, GAP,
+        apply_config, choose_session, config_key, grid_dims, place_window, restore_window_position,
+        size_from_config, window_size, ConfigKey, SessionInfo, WindowGeometryKey, GAP,
     };
     use crate::state::CompanionConfigState;
 
@@ -705,6 +730,30 @@ mod tests {
         assert_eq!(
             place_window("bottom-right", [300.0, 300.0], [500.0, 500.0]),
             [GAP, GAP]
+        );
+    }
+
+    #[test]
+    fn restore_clamps_origin_zero_positions() {
+        assert_eq!(
+            restore_window_position([1400.0, 850.0], [1440.0, 900.0], [120.0, 120.0]),
+            [1310.0, 770.0]
+        );
+    }
+
+    #[test]
+    fn restore_preserves_negative_origin_monitor_positions() {
+        assert_eq!(
+            restore_window_position([-900.0, 40.0], [1440.0, 900.0], [120.0, 120.0]),
+            [-900.0, 40.0]
+        );
+    }
+
+    #[test]
+    fn restore_preserves_positive_offset_secondary_monitor_positions() {
+        assert_eq!(
+            restore_window_position([2200.0, 80.0], [1440.0, 900.0], [120.0, 120.0]),
+            [2200.0, 80.0]
         );
     }
 

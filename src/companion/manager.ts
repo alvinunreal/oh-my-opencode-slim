@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import * as os from 'node:os';
@@ -77,16 +78,42 @@ function readState(): CompanionState {
   return { version: 1, sessions: [] };
 }
 
-function writeState(state: CompanionState): void {
+function writeState(mutator: (state: CompanionState) => void): void {
   const file = stateFilePath();
   try {
     mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(state));
-    renameSync(tmp, file);
+    const release = acquireStateLock(file);
+    try {
+      const state = readState();
+      mutator(state);
+      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(tmp, JSON.stringify(state));
+      renameSync(tmp, file);
+    } finally {
+      release();
+    }
   } catch (err) {
     log('[companion] write failed', String(err));
   }
+}
+
+function acquireStateLock(file: string): () => void {
+  const lock = `${file}.lock`;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      mkdirSync(lock);
+      return () => {
+        try {
+          rmSync(lock, { recursive: true, force: true });
+        } catch {}
+      };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  throw new Error('timed out waiting for companion state lock');
 }
 
 /**
@@ -114,12 +141,11 @@ export class CompanionManager {
   onLoad(): void {
     if (this.config?.enabled !== true) {
       try {
-        const state = readState();
-        const filtered = state.sessions.filter((s) => s.session_id !== this.id);
-        if (filtered.length !== state.sessions.length) {
-          state.sessions = filtered;
-          writeState(state);
-        }
+        writeState((state) => {
+          state.sessions = state.sessions.filter(
+            (s) => s.session_id !== this.id,
+          );
+        });
       } catch {}
       return;
     }
@@ -184,9 +210,9 @@ export class CompanionManager {
 
   onExit(): void {
     if (this.config?.enabled !== true) return;
-    const state = readState();
-    state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
-    writeState(state);
+    writeState((state) => {
+      state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
+    });
   }
 
   /** One entry per running agent instance (two fixers → two cells). */
@@ -201,7 +227,6 @@ export class CompanionManager {
   private flush(): void {
     if (this.config?.enabled !== true) return;
     try {
-      const state = readState();
       const entry: CompanionSession = {
         session_id: this.id,
         cwd: this.cwd,
@@ -209,20 +234,21 @@ export class CompanionManager {
         status: this.status,
         pid: process.pid,
       };
-      const idx = state.sessions.findIndex((s) => s.session_id === this.id);
-      if (idx >= 0) {
-        state.sessions[idx] = entry;
-      } else {
-        state.sessions.push(entry);
-      }
-      if (this.config) {
-        state.config = {
-          enabled: this.config.enabled ?? false,
-          position: this.config.position ?? 'bottom-right',
-          size: this.config.size ?? 'medium',
-        };
-      }
-      writeState(state);
+      writeState((state) => {
+        const idx = state.sessions.findIndex((s) => s.session_id === this.id);
+        if (idx >= 0) {
+          state.sessions[idx] = entry;
+        } else {
+          state.sessions.push(entry);
+        }
+        if (this.config) {
+          state.config = {
+            enabled: this.config.enabled ?? false,
+            position: this.config.position ?? 'bottom-right',
+            size: this.config.size ?? 'medium',
+          };
+        }
+      });
     } catch (err) {
       log('[companion] flush failed', String(err));
     }

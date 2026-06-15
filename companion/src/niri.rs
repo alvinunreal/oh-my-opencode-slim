@@ -118,9 +118,15 @@ fn resolve_move_from_json(
     let windows: Vec<NiriWindow> = serde_json::from_slice(windows_json).ok()?;
     let win = windows.into_iter().find(|w| matches_window(w, pid))?;
     let current = win.layout?.tile_pos_in_workspace_view?;
-    let output = outputs_json
-        .and_then(parse_outputs)
-        .and_then(|outputs| output_for_position(&outputs, current))
+    let outputs = outputs_json.and_then(parse_outputs);
+    let output = outputs
+        .as_deref()
+        .and_then(|outputs| {
+            target_position
+                .map(|pos| [pos[0] as f64, pos[1] as f64])
+                .and_then(|pos| output_containing_position(outputs, pos))
+                .or_else(|| output_for_position(outputs, current))
+        })
         .unwrap_or(NiriOutputLogical {
             x: 0.0,
             y: 0.0,
@@ -173,16 +179,19 @@ fn parse_outputs(json: &[u8]) -> Option<Vec<NiriOutputLogical>> {
 }
 
 fn output_for_position(outputs: &[NiriOutputLogical], pos: [f64; 2]) -> Option<NiriOutputLogical> {
-    outputs
-        .iter()
-        .copied()
-        .find(|output| {
-            output.x <= pos[0]
-                && pos[0] < output.x + output.width
-                && output.y <= pos[1]
-                && pos[1] < output.y + output.height
-        })
-        .or_else(|| outputs.first().copied())
+    output_containing_position(outputs, pos).or_else(|| outputs.first().copied())
+}
+
+fn output_containing_position(
+    outputs: &[NiriOutputLogical],
+    pos: [f64; 2],
+) -> Option<NiriOutputLogical> {
+    outputs.iter().copied().find(|output| {
+        output.x <= pos[0]
+            && pos[0] < output.x + output.width
+            && output.y <= pos[1]
+            && pos[1] < output.y + output.height
+    })
 }
 
 fn place_window_on_output(
@@ -279,6 +288,11 @@ mod tests {
 
     const OUTPUTS: &str = r#"{
       "HDMI-A-1": {"logical":{"x":0,"y":0,"width":2560,"height":1080,"scale":1,"transform":"Normal"}}
+    }"#;
+
+    const TWO_OUTPUTS: &str = r#"{
+      "left": {"logical":{"x":0,"y":0,"width":1920,"height":1080,"scale":1,"transform":"Normal"}},
+      "right": {"logical":{"x":1920,"y":0,"width":1280,"height":720,"scale":1,"transform":"Normal"}}
     }"#;
 
     #[test]
@@ -410,6 +424,25 @@ mod tests {
                 [360.0, 240.0],
             ),
             Some(("2".into(), [-234, -114]))
+        );
+    }
+
+    #[test]
+    fn custom_position_uses_target_output() {
+        let windows = r#"[
+          {"id":2,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[10,10]}}
+        ]"#;
+        assert_eq!(
+            resolve_move_from_json(
+                windows.as_bytes(),
+                Some(TWO_OUTPUTS.as_bytes()),
+                1234,
+                "top-left",
+                Some([2100.0, 80.0]),
+                [1920.0, 1080.0],
+                [120.0, 120.0],
+            ),
+            Some(("2".into(), [2090, 70]))
         );
     }
 

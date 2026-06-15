@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+const MAX_WINDOW_POSITIONS: usize = 100;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanionConfigState {
     pub enabled: bool,
@@ -72,20 +74,70 @@ pub fn write_project_window_position(
     position: WindowPositionState,
 ) -> std::io::Result<()> {
     if project.trim().is_empty() || !position.x.is_finite() || !position.y.is_finite() {
-        return Ok(());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid companion window position",
+        ));
     }
 
+    let _lock = StateWriteLock::acquire(path)?;
     let mut state = read_state(path);
     state.window_positions.insert(project.to_string(), position);
+    prune_window_positions(&mut state.window_positions, project);
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let json = serde_json::to_string(&state).map_err(std::io::Error::other)?;
     std::fs::write(&tmp, json)?;
     std::fs::rename(tmp, path)?;
     Ok(())
+}
+
+fn prune_window_positions(
+    positions: &mut BTreeMap<String, WindowPositionState>,
+    protected_project: &str,
+) {
+    while positions.len() > MAX_WINDOW_POSITIONS {
+        let Some(key) = positions
+            .keys()
+            .find(|key| key.as_str() != protected_project)
+            .cloned()
+        else {
+            break;
+        };
+        positions.remove(&key);
+    }
+}
+
+struct StateWriteLock {
+    path: PathBuf,
+}
+
+impl StateWriteLock {
+    fn acquire(state_path: &std::path::Path) -> std::io::Result<Self> {
+        let lock_path = state_path.with_extension("json.lock");
+        for _ in 0..40 {
+            match std::fs::create_dir(&lock_path) {
+                Ok(()) => return Ok(Self { path: lock_path }),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "timed out waiting for companion state lock",
+        ))
+    }
+}
+
+impl Drop for StateWriteLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.path);
+    }
 }
 
 /// Starts a background thread that polls the state file for changes.
