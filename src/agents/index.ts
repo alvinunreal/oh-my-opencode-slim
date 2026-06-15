@@ -1,6 +1,7 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
 import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
+  AGENT_ALIASES,
   type AgentOverrideConfig,
   ALL_AGENT_NAMES,
   DEFAULT_DISABLED_AGENTS,
@@ -74,6 +75,16 @@ function buildAcpAgentDefinition(
       temperature: 0,
       prompt,
       permission: {
+        read: 'deny',
+        edit: 'deny',
+        bash: 'deny',
+        task: 'deny',
+        glob: 'deny',
+        grep: 'deny',
+        list: 'deny',
+        webfetch: 'deny',
+        question: 'deny',
+        skill: 'deny',
         acp_run: 'allow',
       },
     },
@@ -339,8 +350,15 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     .map(normalizeCustomAgentName)
     .filter((name) => name.length > 0)
     .filter((name) => {
-      if (!isSafeCustomAgentName(name)) {
-        throw new Error(`Unsafe ACP agent name '${name}'`);
+      if (!SAFE_AGENT_ALIAS_RE.test(name)) {
+        throw new Error(
+          `ACP agent name '${name}' must match /^[a-z][a-z0-9_-]*$/i`,
+        );
+      }
+      if (isKnownAgentName(name) || AGENT_ALIASES[name] !== undefined) {
+        throw new Error(
+          `ACP agent '${name}' conflicts with a built-in agent name or alias`,
+        );
       }
       if (customAgentNames.includes(name)) {
         throw new Error(
@@ -470,7 +488,8 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   for (const displayName of usedDisplayNames) {
     if (
       (ALL_AGENT_NAMES as readonly string[]).includes(displayName) ||
-      customAgentNames.includes(displayName)
+      customAgentNames.includes(displayName) ||
+      acpAgentNames.includes(displayName)
     ) {
       throw new Error(
         `displayName '${displayName}' conflicts with an agent name`,

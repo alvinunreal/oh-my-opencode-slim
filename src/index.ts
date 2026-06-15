@@ -146,7 +146,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let companionManager: CompanionManager;
   let councilTools: Record<string, unknown>;
   let cancelTaskTools: Record<string, unknown>;
-  let acpRunTool: ReturnType<typeof createAcpRunTool>;
+  let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
@@ -233,7 +233,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       : {};
 
     mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
-    acpRunTool = createAcpRunTool(config.acpAgents);
+    acpRunTools =
+      Object.keys(config.acpAgents ?? {}).length > 0
+        ? { acp_run: createAcpRunTool(config.acpAgents) }
+        : {};
     webfetch = createWebfetchTool(ctx);
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
@@ -313,7 +316,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     toolCount =
       Object.keys(councilTools).length +
       Object.keys(cancelTaskTools).length +
-      1 + // acp_run
+      Object.keys(acpRunTools).length +
       1 + // webfetch
       2; // ast_grep_search, ast_grep_replace
   } catch (err) {
@@ -382,7 +385,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     tool: {
       ...councilTools,
       ...cancelTaskTools,
-      acp_run: acpRunTool,
+      ...acpRunTools,
       webfetch,
       ast_grep_search,
       ast_grep_replace,

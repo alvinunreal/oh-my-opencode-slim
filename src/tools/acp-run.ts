@@ -10,7 +10,7 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 interface RpcResponse {
   id: number;
   result?: Json;
-  error?: { message?: string };
+  error?: { code?: number; message?: string; data?: Json };
 }
 
 interface RpcRequest {
@@ -35,6 +35,10 @@ class AcpClient {
   private pending = new Map<number, Pending>();
   private chunks: string[] = [];
   private errors: string[] = [];
+  private sessionId: string | undefined;
+  private lastUpdate = Date.now();
+  private authMethods: Array<Record<string, unknown>> = [];
+  private active = false;
 
   constructor(
     private name: string,
@@ -74,7 +78,7 @@ class AcpClient {
   }
 
   async run(prompt: string): Promise<string> {
-    await this.request('initialize', {
+    const init = await this.request('initialize', {
       protocolVersion: 1,
       clientCapabilities: {},
       clientInfo: {
@@ -82,19 +86,42 @@ class AcpClient {
         title: 'oh-my-opencode-slim ACP bridge',
       },
     });
-    const created = await this.request('session/new', {
-      cwd: this.cwd,
-      mcpServers: [],
-    });
+    this.authMethods = readAuthMethods(init);
+    const created = await this.newSession();
     const sessionId = readSessionId(created);
+    this.sessionId = sessionId;
+    this.active = true;
     await this.request('session/prompt', {
       sessionId,
       prompt: [{ type: 'text', text: prompt }],
     });
+    await this.drain();
+    this.active = false;
     return this.output();
   }
 
+  private async newSession(): Promise<Json | undefined> {
+    try {
+      return await this.request('session/new', {
+        cwd: this.cwd,
+        mcpServers: [],
+      });
+    } catch (error) {
+      if (!isAuthError(error) || this.authMethods.length === 0) throw error;
+      const method = this.authMethods[0];
+      if (typeof method.id !== 'string') throw error;
+      await this.request('authenticate', { methodId: method.id });
+      return await this.request('session/new', {
+        cwd: this.cwd,
+        mcpServers: [],
+      });
+    }
+  }
+
   close(): void {
+    if (this.active && this.sessionId && !this.child.killed) {
+      this.notify('session/cancel', { sessionId: this.sessionId });
+    }
     if (!this.child.killed) this.child.kill('SIGTERM');
   }
 
@@ -114,6 +141,18 @@ class AcpClient {
     });
   }
 
+  private notify(method: string, params: Record<string, unknown>): void {
+    this.child.stdin.write(
+      `${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`,
+    );
+  }
+
+  private async drain(): Promise<void> {
+    while (Date.now() - this.lastUpdate < 100) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   private async receive(line: string): Promise<void> {
     if (!line.trim()) return;
     const message = JSON.parse(line) as
@@ -125,9 +164,7 @@ class AcpClient {
       if (!pending) return;
       this.pending.delete(message.id);
       if (message.error) {
-        pending.reject(
-          new Error(message.error.message ?? 'ACP request failed'),
-        );
+        pending.reject(rpcError(message.error));
         return;
       }
       pending.resolve(message.result);
@@ -143,14 +180,29 @@ class AcpClient {
   private async handleRequest(message: RpcRequest): Promise<void> {
     if (message.method === 'session/request_permission') {
       const title = readPermissionTitle(message.params);
-      if (this.config.permissionMode === 'ask') {
-        await this.ask(title, message.params ?? {});
+      try {
+        if (this.config.permissionMode === 'ask') {
+          await this.ask(title, message.params ?? {});
+        }
+        const optionId = selectPermissionOption(
+          message.params,
+          this.config.permissionMode,
+        );
+        if (!optionId)
+          throw new Error('ACP permission request had no usable option');
+        this.reply(message.id, {
+          outcome: { outcome: 'selected', optionId },
+        });
+      } catch {
+        const optionId = selectPermissionOption(message.params, 'reject');
+        if (optionId) {
+          this.reply(message.id, {
+            outcome: { outcome: 'selected', optionId },
+          });
+          return;
+        }
+        this.reply(message.id, { outcome: { outcome: 'cancelled' } });
       }
-      const optionId = selectPermissionOption(
-        message.params,
-        this.config.permissionMode,
-      );
-      this.reply(message.id, { outcome: { outcome: 'selected', optionId } });
       return;
     }
     this.replyError(
@@ -161,6 +213,7 @@ class AcpClient {
 
   private handleNotification(message: RpcNotification): void {
     if (message.method !== 'session/update') return;
+    this.lastUpdate = Date.now();
     const update = message.params?.update;
     if (!isRecord(update)) return;
     collectText(update, this.chunks);
@@ -208,6 +261,11 @@ export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
         .describe('Optional timeout override in milliseconds'),
     },
     async execute(args, ctx) {
+      if (ctx.agent !== args.agent) {
+        throw new Error(
+          `acp_run for '${args.agent}' can only be used by @${args.agent}`,
+        );
+      }
       const config = agents[args.agent];
       if (!config) {
         throw new Error(
@@ -277,6 +335,34 @@ function readSessionId(value: Json | undefined): string {
   return value.sessionId;
 }
 
+function readAuthMethods(
+  value: Json | undefined,
+): Array<Record<string, unknown>> {
+  if (!isRecord(value) || !Array.isArray(value.authMethods)) return [];
+  const methods: unknown[] = value.authMethods;
+  return methods.filter(isRecord);
+}
+
+function rpcError(error: NonNullable<RpcResponse['error']>): Error {
+  const err = new Error(error.message ?? 'ACP request failed') as Error & {
+    code?: number;
+    data?: Json;
+  };
+  err.code = error.code;
+  err.data = error.data;
+  return err;
+}
+
+function isAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const meta = error as Error & { code?: number; data?: Json };
+  return (
+    meta.code === -32001 ||
+    error.message.toLowerCase().includes('auth_required') ||
+    error.message.toLowerCase().includes('auth required')
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -293,22 +379,23 @@ function readPermissionTitle(
 function selectPermissionOption(
   params: Record<string, unknown> | undefined,
   mode: AcpAgentConfig['permissionMode'],
-): string {
+): string | undefined {
   const options = Array.isArray(params?.options) ? params.options : [];
-  const ids = options
+  const choices = options
     .filter(isRecord)
-    .map((item) => item.optionId)
-    .filter((item): item is string => typeof item === 'string');
-  if (mode === 'reject')
-    return ids.find((id) => id.includes('reject')) ?? 'reject';
-  return (
-    ids.find((id) => id.includes('allow') || id === 'once') ??
-    ids.find((id) => !id.includes('reject')) ??
-    'allow'
+    .filter((item) => typeof item.optionId === 'string');
+  const reject = choices.find(
+    (item) => typeof item.kind === 'string' && item.kind.startsWith('reject'),
   );
+  if (mode === 'reject') return reject?.optionId as string | undefined;
+  const allow = choices.find(
+    (item) => typeof item.kind === 'string' && item.kind.startsWith('allow'),
+  );
+  return (allow?.optionId ?? reject?.optionId) as string | undefined;
 }
 
 function collectText(update: Record<string, unknown>, chunks: string[]): void {
+  if (update.sessionUpdate !== 'agent_message_chunk') return;
   for (const key of ['content', 'delta']) {
     const value = update[key];
     if (typeof value === 'string') chunks.push(value);

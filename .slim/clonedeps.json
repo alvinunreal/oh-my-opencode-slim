@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-05-25T00:00:00.000Z",
+  "updatedAt": "2026-06-15T00:00:00.000Z",
   "dependencies": [
     {
       "name": "@opencode-ai/plugin",
@@ -37,6 +37,15 @@
       "path": ".slim/clonedeps/repos/opencode",
       "packagePath": "packages/opencode",
       "reason": "Latest OpenCode TypeScript runtime source with experimental background subagent support."
+    },
+    {
+      "name": "agentclientprotocol/agent-client-protocol",
+      "resolvedVersion": "main",
+      "repoUrl": "https://github.com/agentclientprotocol/agent-client-protocol.git",
+      "ref": "main@8110fde4e8283b4bef1329d1ef7b074fd14cee1e",
+      "path": ".slim/clonedeps/repos/agentclientprotocol__agent-client-protocol",
+      "packagePath": ".",
+      "reason": "Authoritative ACP specification and schema source for implementing ACP client/server compatibility."
     }
   ]
 }

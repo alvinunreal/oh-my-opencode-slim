@@ -108,7 +108,10 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `acpAgents.<name>.command` | string | — | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command |
 | `acpAgents.<name>.env` | object | `{}` | Extra environment variables for the ACP subprocess |
+| `acpAgents.<name>.cwd` | string | session directory | Working directory override for this ACP subprocess; protocol paths should be absolute |
 | `acpAgents.<name>.description` | string | — | Description shown to OpenCode and injected into the orchestrator routing prompt |
+| `acpAgents.<name>.prompt` | string | generated wrapper prompt | Optional full prompt for the lightweight wrapper subagent |
+| `acpAgents.<name>.orchestratorPrompt` | string | generated routing block | Optional exact routing block injected into the orchestrator prompt |
 | `acpAgents.<name>.wrapperModel` | string | fixer default | Cheap OpenCode model used by the wrapper subagent that calls `acp_run` |
 | `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` |
 | `acpAgents.<name>.timeoutMs` | integer | `300000` | Timeout for a single ACP run in milliseconds |
@@ -166,6 +169,7 @@ Use `acpAgents` to expose external Agent Client Protocol servers as optional
 OpenCode subagents. The plugin creates a lightweight wrapper agent for each
 entry. The wrapper calls the built-in `acp_run` tool, which starts the ACP
 process, creates a session, sends the task, and returns the streamed result.
+`command` is only the executable; put flags and subcommands in `args`.
 
 ```jsonc
 {

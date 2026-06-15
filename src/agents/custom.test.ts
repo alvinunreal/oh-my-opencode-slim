@@ -172,4 +172,22 @@ describe('custom-agent creation', () => {
       "ACP agent 'bridge' conflicts with a custom agent of the same name",
     );
   });
+
+  test('rejects acpAgents that conflict with built-in agents', () => {
+    const config: PluginConfig = {
+      acpAgents: {
+        fixer: {
+          command: 'fixer-acp',
+          args: [],
+          env: {},
+          timeoutMs: 300000,
+          permissionMode: 'ask',
+        },
+      },
+    };
+
+    expect(() => createAgents(config)).toThrow(
+      "ACP agent 'fixer' conflicts with a built-in agent name or alias",
+    );
+  });
 });
