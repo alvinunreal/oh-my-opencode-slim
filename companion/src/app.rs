@@ -18,16 +18,16 @@ use crate::state::{
 const DEFAULT_SIZE: f32 = 120.0;
 const GAP: f32 = 10.0;
 
-const SIZE_PRESETS: &[(&str, f32)] = &[
-    ("S  ·  80px", 80.0),
-    ("M  ·  120px", 120.0),
-    ("L  ·  160px", 160.0),
-    ("XL  ·  200px", 200.0),
-];
+const SIZE_PRESETS: &[(&str, f32)] = &[("S", 80.0), ("M", 120.0), ("L", 160.0), ("XL", 200.0)];
+
+const MENU_W: f32 = 76.0;
+const MENU_H: f32 = 58.0;
+const MENU_PAD: f32 = 2.0;
 
 const SIZE_KEY: &str = "companion_size";
 const MENU_OPEN_KEY: &str = "companion_menu_open";
 const MENU_POS_KEY: &str = "companion_menu_pos";
+const MENU_JUST_OPENED_KEY: &str = "companion_menu_just_opened";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WindowGeometryKey {
@@ -512,6 +512,10 @@ impl eframe::App for CompanionApp {
         let n = agent_frames.len().max(1);
         let (cols, rows) = grid_dims(n);
         let [win_w, win_h] = window_size(self.size, cols, rows);
+        let menu_open = ctx.data(|d| {
+            d.get_temp::<bool>(egui::Id::new(MENU_OPEN_KEY))
+                .unwrap_or(false)
+        });
 
         let geometry = WindowGeometryKey {
             session_id: session.session_id.clone(),
@@ -556,10 +560,6 @@ impl eframe::App for CompanionApp {
             self.spawn_niri_fallback([win_w, win_h], saved_position);
         }
 
-        let menu_open = ctx.data(|d| {
-            d.get_temp::<bool>(egui::Id::new(MENU_OPEN_KEY))
-                .unwrap_or(false)
-        });
         if !menu_open && ctx.input(|i| i.pointer.primary_pressed()) {
             self.drag_project_key = Some(project_key.clone());
         }
@@ -588,6 +588,7 @@ impl eframe::App for CompanionApp {
             ctx.data_mut(|d| {
                 d.insert_temp(egui::Id::new(MENU_POS_KEY), [cursor.x, cursor.y]);
                 d.insert_temp(egui::Id::new(MENU_OPEN_KEY), true);
+                d.insert_temp(egui::Id::new(MENU_JUST_OPENED_KEY), true);
             });
         }
 
@@ -602,7 +603,7 @@ impl eframe::App for CompanionApp {
                 render_session(ui, ctx, &session, &agent_frames, self.size, win_w, win_h);
             });
 
-        render_size_picker(ctx);
+        render_size_picker(ctx, win_w, win_h);
         ctx.request_repaint_after(Duration::from_millis(16));
     }
 }
@@ -685,7 +686,7 @@ fn render_session(
     );
 }
 
-fn render_size_picker(ctx: &egui::Context) {
+fn render_size_picker(ctx: &egui::Context, win_w: f32, win_h: f32) {
     let open: bool = ctx.data(|d| d.get_temp(egui::Id::new(MENU_OPEN_KEY)).unwrap_or(false));
     if !open {
         return;
@@ -701,80 +702,101 @@ fn render_size_picker(ctx: &egui::Context) {
             .unwrap_or([20.0, 20.0])
     });
     let size: f32 = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
+    let x = pos[0].clamp(MENU_PAD, (win_w - MENU_W - MENU_PAD).max(MENU_PAD));
+    let y = pos[1].clamp(MENU_PAD, (win_h - MENU_H - MENU_PAD).max(MENU_PAD));
 
-    let response = egui::Area::new(egui::Id::new("size_picker"))
-        .fixed_pos(egui::pos2(pos[0], pos[1]))
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            egui::Frame::none()
-                .fill(egui::Color32::from_rgb(28, 28, 28))
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(70)))
-                .inner_margin(egui::Margin::same(8.0))
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new("Window size")
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(160, 160, 160)),
-                    );
-                    ui.add_space(4.0);
+    let response =
+        egui::Area::new(egui::Id::new("size_picker"))
+            .fixed_pos(egui::pos2(x, y))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgba_premultiplied(22, 22, 24, 245))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(82)))
+                    .inner_margin(egui::Margin::symmetric(4.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(MENU_W - MENU_PAD * 2.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(1.0, 2.0);
+                        ui.label(
+                            egui::RichText::new("Size")
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(165, 165, 170)),
+                        );
 
-                    for (label, preset) in SIZE_PRESETS {
-                        let active = (size - preset).abs() < 0.5;
-                        let text = if active {
-                            egui::RichText::new(*label)
-                                .size(12.0)
-                                .strong()
-                                .color(egui::Color32::WHITE)
-                        } else {
-                            egui::RichText::new(*label)
-                                .size(12.0)
-                                .color(egui::Color32::from_rgb(200, 200, 200))
-                        };
+                        ui.horizontal(|ui| {
+                            for (label, preset) in SIZE_PRESETS {
+                                let active = (size - preset).abs() < 0.5;
+                                let fill = if active {
+                                    egui::Color32::from_rgb(78, 92, 122)
+                                } else {
+                                    egui::Color32::from_rgb(38, 38, 42)
+                                };
+                                let text = egui::RichText::new(*label).size(11.0).strong().color(
+                                    if active {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        egui::Color32::from_rgb(210, 210, 214)
+                                    },
+                                );
+                                if ui
+                                    .add_sized(
+                                        [17.0, 18.0],
+                                        egui::Button::new(text)
+                                            .fill(fill)
+                                            .stroke(egui::Stroke::NONE),
+                                    )
+                                    .clicked()
+                                {
+                                    ctx.data_mut(|d| {
+                                        d.insert_temp(egui::Id::new(SIZE_KEY), *preset);
+                                        d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
+                                    });
+                                }
+                            }
+                        });
+
+                        ui.add_space(1.0);
+
                         if ui
-                            .add_sized([144.0, 20.0], egui::Button::new(text).frame(false))
+                            .add_sized(
+                                [MENU_W - MENU_PAD * 2.0, 17.0],
+                                egui::Button::new(
+                                    egui::RichText::new("Close")
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgb(235, 120, 120)),
+                                )
+                                .fill(egui::Color32::from_rgb(42, 32, 34))
+                                .stroke(egui::Stroke::NONE),
+                            )
                             .clicked()
                         {
                             ctx.data_mut(|d| {
-                                d.insert_temp(egui::Id::new(SIZE_KEY), *preset);
                                 d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
+                                d.insert_temp(egui::Id::new("companion_quit"), true);
                             });
                         }
-                    }
+                    });
+            });
 
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(2.0);
+    let just_opened = ctx.data_mut(|d| {
+        let id = egui::Id::new(MENU_JUST_OPENED_KEY);
+        let just_opened = d.get_temp::<bool>(id).unwrap_or(false);
+        d.insert_temp(id, false);
+        just_opened
+    });
+    if !just_opened && clicked_outside_menu(ctx, response.response.rect) {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false));
+    }
+}
 
-                    if ui
-                        .add_sized(
-                            [144.0, 20.0],
-                            egui::Button::new(
-                                egui::RichText::new("Close companion")
-                                    .size(12.0)
-                                    .color(egui::Color32::from_rgb(220, 100, 100)),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
-                        ctx.data_mut(|d| {
-                            d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-                            d.insert_temp(egui::Id::new("companion_quit"), true);
-                        });
-                    }
-                });
-        });
-
-    let clicked_outside = ctx.input(|i| {
+fn clicked_outside_menu(ctx: &egui::Context, menu_rect: egui::Rect) -> bool {
+    ctx.input(|i| {
         (i.pointer.primary_released() || i.pointer.secondary_released())
             && i.pointer
                 .interact_pos()
-                .map(|pos| !response.response.rect.contains(pos))
+                .map(|pos| !menu_rect.contains(pos))
                 .unwrap_or(false)
-    });
-    if clicked_outside {
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false));
-    }
+    })
 }
 
 fn fit_text(ctx: &egui::Context, text: &str, font_id: &egui::FontId, max_width: f32) -> String {
