@@ -46,18 +46,20 @@ const STALE_LOCK_MS = 5 * 60_000;
 const FIRST_METADATA_VERSION = '0.1.2';
 
 export const COMPANION_MANIFEST: CompanionManifest = {
-  version: '0.1.2',
-  tag: 'companion-v0.1.2',
+  version: '0.1.3',
+  tag: 'companion-v0.1.3',
   repo: 'alvinunreal/oh-my-opencode-slim',
   checksums: {
-    'oh-my-opencode-slim-companion-v0.1.2-aarch64-apple-darwin.tar.gz':
-      '6f66fdfe895ab39b96ddf1f395c4547cb428cfe68c94a1a3a9f11c1ab46863c2',
-    'oh-my-opencode-slim-companion-v0.1.2-aarch64-unknown-linux-gnu.tar.gz':
-      'af979907a429904db4449a79e0d8d99edf994ce373d298284b440549d1eb507b',
-    'oh-my-opencode-slim-companion-v0.1.2-x86_64-pc-windows-msvc.zip':
-      'fca87451bcc3a3f5eb5ab6dcd83999bb35e2a4f30d5a666c427b7bb892ac1eb0',
-    'oh-my-opencode-slim-companion-v0.1.2-x86_64-unknown-linux-gnu.tar.gz':
-      'e6352a4e6c71773617ca2831af2102b011d3114c0fb8d40635b6af8076b757bc',
+    'oh-my-opencode-slim-companion-v0.1.3-aarch64-apple-darwin.tar.gz':
+      'b4885f9b1900c02376e5f8f5ae6f3b8a89d26f7514b03f836d7e3d618164a0ed',
+    'oh-my-opencode-slim-companion-v0.1.3-aarch64-unknown-linux-gnu.tar.gz':
+      'ed7cffc583e1eaa78c9bea702e6b6aa3bbc5bb4d881713fb2050237ba6b7aca5',
+    'oh-my-opencode-slim-companion-v0.1.3-x86_64-apple-darwin.tar.gz':
+      '98d8ea7c7bc4415b18e0d4c524adb4eb9a84c872919840fdc021f0f50c61f808',
+    'oh-my-opencode-slim-companion-v0.1.3-x86_64-pc-windows-msvc.zip':
+      '9316a49bf01f3b4fb1ce2d62edfc46094e73bb153d6ce023fb7df085afcf77bd',
+    'oh-my-opencode-slim-companion-v0.1.3-x86_64-unknown-linux-gnu.tar.gz':
+      '33f5fd4b6c80155a019391e5efb13904ca9531ba8dd8c6cba30a161f1b07b764',
   },
 };
 
