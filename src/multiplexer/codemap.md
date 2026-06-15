@@ -56,9 +56,8 @@
   - `respawnIfKnown` handles busy sessions that reappear after being closed.
   - Polling fallback (`pollSessions`) is enabled when event coverage is incomplete.
     It handles:
-    - idle detection,
-    - missing status grace period,
-    - max session lifetime timeout.
+    - idle detection.
+    - A session missing from `/session/status` is not treated as a close signal.
 
 - `index.ts`
   - Re-exports factory, manager, and implementations for external import.

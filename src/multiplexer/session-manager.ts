@@ -18,8 +18,6 @@ interface TrackedSession {
   ownerInstanceId: string;
   createdAt: number;
   lastSeenAt: number;
-  seenInStatus: boolean;
-  missingSince?: number;
 }
 
 interface KnownSession {
@@ -49,9 +47,7 @@ interface SessionEvent {
   };
 }
 
-type CloseReason = 'idle' | 'deleted' | 'missing';
-
-const SESSION_MISSING_GRACE_MS = POLL_INTERVAL_BACKGROUND_MS * 3;
+type CloseReason = 'idle' | 'deleted';
 const SHARED_STATE_KEY = Symbol.for(
   'oh-my-opencode-slim.multiplexer-session-manager.state',
 );
@@ -228,7 +224,6 @@ export class MultiplexerSessionManager {
         ownerInstanceId: this.instanceId,
         createdAt: now,
         lastSeenAt: now,
-        seenInStatus: false,
       });
 
       log('[multiplexer-session-manager] pane spawned', {
@@ -360,40 +355,29 @@ export class MultiplexerSessionManager {
         }
 
         const status = allStatuses[sessionId];
-        const isIdle = status?.type === 'idle';
-
-        if (status) {
-          tracked.lastSeenAt = now;
-          tracked.seenInStatus = true;
-          tracked.missingSince = undefined;
-        } else if (!tracked.missingSince) {
-          tracked.missingSince = now;
+        if (!status) {
+          continue;
         }
 
-        const missingTooLong =
-          !!tracked.missingSince &&
-          now - tracked.missingSince >= SESSION_MISSING_GRACE_MS;
-        const shouldKeepRunningBackgroundJob =
-          (isIdle || missingTooLong) && this.isRunningBackgroundJob(sessionId);
-        if (isIdle || missingTooLong) {
-          if (shouldKeepRunningBackgroundJob) {
-            log(
-              '[multiplexer-session-manager] keeping running background pane',
-              {
-                instanceId: this.instanceId,
-                sessionId,
-                paneId: tracked.paneId,
-                seenInStatus: tracked.seenInStatus,
-              },
-            );
-            continue;
-          }
+        tracked.lastSeenAt = now;
 
-          sessionsToClose.push({
+        if (status.type !== 'idle') {
+          continue;
+        }
+
+        if (this.isRunningBackgroundJob(sessionId)) {
+          log('[multiplexer-session-manager] keeping running background pane', {
+            instanceId: this.instanceId,
             sessionId,
-            reason: isIdle ? 'idle' : 'missing',
+            paneId: tracked.paneId,
           });
+          continue;
         }
+
+        sessionsToClose.push({
+          sessionId,
+          reason: 'idle',
+        });
       }
 
       for (const { sessionId, reason } of sessionsToClose) {
@@ -600,7 +584,6 @@ export class MultiplexerSessionManager {
         ownerInstanceId: this.instanceId,
         createdAt: now,
         lastSeenAt: now,
-        seenInStatus: false,
       });
 
       log('[multiplexer-session-manager] pane respawned on busy', {
