@@ -147,6 +147,7 @@ class AcpClient {
   }
 
   private async drain(): Promise<void> {
+    this.lastUpdate = Date.now();
     while (Date.now() - this.lastUpdate < 100) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
