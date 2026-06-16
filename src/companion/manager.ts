@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -143,6 +143,7 @@ export class CompanionManager {
   /** sessionId → agent name, for sessions currently busy. */
   private readonly busyAgentSessions = new Map<string, string>();
   private readonly config?: CompanionConfig;
+  private companionProcess: ChildProcess | null = null;
 
   constructor(sessionId: string, cwd: string, config?: CompanionConfig) {
     this.id = sessionId;
@@ -223,6 +224,12 @@ export class CompanionManager {
 
   onExit(): void {
     if (this.config?.enabled !== true) return;
+    if (this.companionProcess) {
+      try {
+        this.companionProcess.kill();
+      } catch {}
+      this.companionProcess = null;
+    }
     writeState((state) => {
       state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
     });
@@ -304,6 +311,7 @@ export class CompanionManager {
         },
         stdio: 'ignore',
       });
+      this.companionProcess = child;
       child.unref();
       log(
         '[companion] spawned',
