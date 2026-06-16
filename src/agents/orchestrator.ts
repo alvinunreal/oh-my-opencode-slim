@@ -187,6 +187,12 @@ Build a short work graph before dispatching:
 - Advisory ownership for write-capable lanes
 - Verification/review lanes that run after implementation
 
+### Todo Continuity
+- When the user adds a new task while a todo list exists, append the new task to the end of the existing todo list.
+- Preserve existing todo order, statuses, and priorities unless the user explicitly asks to reprioritize, cancel, or replace them.
+- Finish the current in-progress task before starting the newly appended task unless the current task is blocked, the user explicitly overrides the order, or the new task is urgent/time-sensitive.
+- Do not replace the todo list just because the user introduced a new task.
+
 Can tasks be split into background specialist work?
 ${enabledParallelExamples}
 
