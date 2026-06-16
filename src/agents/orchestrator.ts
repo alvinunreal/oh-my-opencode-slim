@@ -194,7 +194,7 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 
 ### Background Task Discipline
 - Prefer \`task(..., background: true)\` for delegated work that can run independently.
-- Always prefer background specialist launches; use blocking foreground runs only when the very next step cannot proceed without that result.
+- Launch specialist agents in the background by default so the orchestrator stays unblocked and can reconcile results when they return.
 - Track each task's specialist, objective, task/session ID, and file/topic ownership.
 - Continue orchestration only on non-overlapping work; otherwise briefly report what was launched and stop.
 - Before local edits or another writer task, compare against running task scopes.
