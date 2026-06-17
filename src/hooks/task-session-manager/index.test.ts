@@ -1169,7 +1169,7 @@ describe('task-session-manager hook', () => {
     });
 
     const resume = {
-      args: { subagent_type: 'not-an-agent', task_id: 'exp-1' },
+      args: { subagent_type: 123, task_id: 'exp-1' },
     };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
@@ -1177,6 +1177,43 @@ describe('task-session-manager hook', () => {
     );
 
     expect(resume.args.task_id).toBeUndefined();
+  });
+
+  test('custom subagent raw session task_id is preserved', async () => {
+    const { hook } = createHook();
+    const resume = {
+      args: { subagent_type: 'repro-helper', task_id: 'ses_custom123' },
+    };
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+      resume,
+    );
+
+    expect(resume.args.task_id).toBe('ses_custom123');
+  });
+
+  test('custom subagent aliases resolve for the same custom agent', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'repro-helper',
+      description: 'ask secret letter',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'completed' });
+    board.markReconciled('child-1');
+
+    const resume = {
+      args: { subagent_type: 'repro-helper', task_id: 'rep-1' },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+      resume,
+    );
+
+    expect(resume.args.task_id).toBe('child-1');
   });
 
   test('wrong parent or wrong agent alias does not resolve', async () => {

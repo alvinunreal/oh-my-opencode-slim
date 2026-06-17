@@ -34,6 +34,19 @@ function isString(value: unknown): value is string {
   return typeof value === 'string';
 }
 
+function getModelIds(model: unknown): string[] {
+  if (isString(model)) return [model];
+  if (!Array.isArray(model)) return [];
+
+  return model.flatMap((entry) => {
+    if (isString(entry)) return [entry];
+    if (entry && typeof entry === 'object' && isString(entry.id)) {
+      return [entry.id];
+    }
+    return [];
+  });
+}
+
 function getPlugins(config: OpenCodeConfig): unknown[] {
   return Array.isArray(config.plugin) ? config.plugin : [];
 }
@@ -669,22 +682,22 @@ export function detectCurrentConfig(): DetectedConfig {
     const presetName = configObj.preset as string;
     const presets = configObj.presets as Record<string, unknown>;
     const agents = presets?.[presetName] as
-      | Record<string, { model?: string }>
+      | Record<string, { model?: unknown }>
       | undefined;
 
-    if (agents) {
+    if (agents && typeof agents === 'object') {
       const models = Object.values(agents)
-        .map((a) => a?.model)
-        .filter(Boolean);
-      result.hasOpenAI = models.some((m) => m?.startsWith('openai/'));
-      result.hasAnthropic = models.some((m) => m?.startsWith('anthropic/'));
-      result.hasCopilot = models.some((m) => m?.startsWith('github-copilot/'));
-      result.hasZaiPlan = models.some((m) => m?.startsWith('zai-coding-plan/'));
-      result.hasOpencodeZen = models.some((m) => m?.startsWith('opencode/'));
-      if (models.some((m) => m?.startsWith('google/'))) {
+        .filter((a) => a && typeof a === 'object')
+        .flatMap((a) => getModelIds(a.model));
+      result.hasOpenAI ||= models.some((m) => m.startsWith('openai/'));
+      result.hasAnthropic ||= models.some((m) => m.startsWith('anthropic/'));
+      result.hasCopilot ||= models.some((m) => m.startsWith('github-copilot/'));
+      result.hasZaiPlan ||= models.some((m) => m.startsWith('zai-coding-plan/'));
+      result.hasOpencodeZen ||= models.some((m) => m.startsWith('opencode/'));
+      if (models.some((m) => m.startsWith('google/'))) {
         result.hasAntigravity = true;
       }
-      if (models.some((m) => m?.startsWith('chutes/'))) {
+      if (models.some((m) => m.startsWith('chutes/'))) {
         result.hasChutes = true;
       }
     }

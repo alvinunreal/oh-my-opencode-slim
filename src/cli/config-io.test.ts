@@ -580,6 +580,31 @@ describe('config-io', () => {
     expect(detected.hasTmux).toBe(true);
   });
 
+  test('detectCurrentConfig detects provider models in arrays', () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+
+    writeFileSync(configPath, JSON.stringify({ plugin: ['oh-my-opencode-slim'] }));
+    writeFileSync(
+      litePath,
+      JSON.stringify({
+        preset: 'dev',
+        presets: {
+          dev: {
+            orchestrator: {
+              model: ['openai/gpt-5.4-mini', { id: 'anthropic/claude-opus-4-6' }],
+            },
+          },
+        },
+      }),
+    );
+
+    const detected = detectCurrentConfig();
+    expect(detected.hasOpenAI).toBe(true);
+    expect(detected.hasAnthropic).toBe(true);
+  });
+
   test('detectCurrentConfig treats local repo path entries as installed', () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     const packageRoot = join(tmpDir, 'repo');

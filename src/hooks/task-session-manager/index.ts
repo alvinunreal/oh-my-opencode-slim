@@ -1,6 +1,5 @@
 import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
-import type { AgentName } from '../../config';
 import {
   BackgroundJobBoard,
   type BackgroundJobRecord,
@@ -25,22 +24,10 @@ interface TaskArgs {
 interface PendingTaskCall {
   callId: string;
   parentSessionId: string;
-  agentType: AgentName;
+  agentType: string;
   label: string;
   resumedTaskId?: string;
 }
-
-const AGENT_NAME_SET = new Set<AgentName>([
-  'orchestrator',
-  'oracle',
-  'designer',
-  'explorer',
-  'librarian',
-  'fixer',
-  'observer',
-  'council',
-  'councillor',
-]);
 
 const MAX_PENDING_TASK_CALLS = 100;
 
@@ -106,10 +93,6 @@ function createOccurrenceId(
   // Fallback to hashing the full content if parsing fails
   const hash = djb2Hash(`${sessionID}:${content}`);
   return `anon:${hash}`;
-}
-
-function isAgentName(value: unknown): value is AgentName {
-  return typeof value === 'string' && AGENT_NAME_SET.has(value as AgentName);
 }
 
 function extractPath(output: string): string | undefined {
@@ -492,18 +475,23 @@ export function createTaskSessionManagerHook(
       if (!isObjectRecord(output.args)) return;
 
       const args = output.args as TaskArgs;
-      if (!isAgentName(args.subagent_type)) {
+      if (
+        typeof args.subagent_type !== 'string' ||
+        args.subagent_type.trim() === ''
+      ) {
         if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
           delete args.task_id;
         }
         return;
       }
 
+      const agentType = args.subagent_type.trim();
+
       const label = deriveTaskSessionLabel({
         description:
           typeof args.description === 'string' ? args.description : undefined,
         prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
-        agentType: args.subagent_type,
+        agentType,
       });
 
       const pendingCall: PendingTaskCall = {
@@ -512,7 +500,7 @@ export function createTaskSessionManagerHook(
           sessionID: input.sessionID,
         }),
         parentSessionId: input.sessionID,
-        agentType: args.subagent_type,
+        agentType,
         label,
       };
       rememberPendingCall(pendingCall);
@@ -525,7 +513,7 @@ export function createTaskSessionManagerHook(
       const remembered = backgroundJobBoard.resolveReusable(
         input.sessionID,
         requested,
-        args.subagent_type,
+        agentType,
       );
 
       if (!remembered) {
