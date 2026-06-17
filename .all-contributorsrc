@@ -560,6 +560,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "andrescastane",
+      "name": "Andres Castañeda",
+      "avatar_url": "https://avatars.githubusercontent.com/u/13487870?v=4",
+      "profile": "https://github.com/andrescastane",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
