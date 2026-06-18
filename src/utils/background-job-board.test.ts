@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from './background-job-board';
 
 describe('BackgroundJobBoard', () => {
@@ -366,6 +366,57 @@ describe('BackgroundJobBoard', () => {
       terminalUnreconciled: true,
       timedOut: false,
     });
+  });
+
+  test('notifies terminal listener on updateStatus terminal transition', () => {
+    const board = new BackgroundJobBoard();
+    const listener = mock(() => {});
+    board.setTerminalStateListener(listener);
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+
+    board.updateStatus({ taskID: 'ses_1', state: 'completed' });
+
+    expect(listener).toHaveBeenCalledWith('ses_1');
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  test('notifies terminal listener on markCancelled mutation', () => {
+    const board = new BackgroundJobBoard();
+    const listener = mock(() => {});
+    board.setTerminalStateListener(listener);
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+
+    board.markCancelled('ses_1');
+
+    expect(listener).toHaveBeenCalledWith('ses_1');
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not notify terminal listener for running or stale updates', () => {
+    const board = new BackgroundJobBoard();
+    const listener = mock(() => {});
+    board.setTerminalStateListener(listener);
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+
+    board.updateStatus({ taskID: 'ses_1', state: 'running' });
+    board.updateStatus({ taskID: 'ses_1', state: 'completed' });
+    listener.mockClear();
+    board.updateStatus({ taskID: 'ses_1', state: 'running' });
+    board.markCancelled('ses_1');
+
+    expect(listener).not.toHaveBeenCalled();
   });
 
   test('cancelled jobs ignore late non-cancelled terminal statuses', () => {

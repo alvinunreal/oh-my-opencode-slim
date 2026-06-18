@@ -410,6 +410,267 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
+    test('deferred idle closes retry on terminal status updates', async () => {
+      for (const state of ['completed', 'error', 'cancelled'] as const) {
+        resetMultiplexerSessionManagerState();
+        mockMultiplexer.spawnPane.mockClear();
+        mockMultiplexer.closePane.mockClear();
+        const ctx = createMockContext();
+        const board = new BackgroundJobBoard();
+        const sessionId = `deferred-${state}`;
+        board.registerLaunch({
+          taskID: sessionId,
+          parentSessionID: 'parent-1',
+          agent: 'explorer',
+        });
+        mockMultiplexer.spawnPane.mockResolvedValueOnce({
+          success: true,
+          paneId: `p-${state}`,
+        });
+        const manager = new MultiplexerSessionManager(
+          ctx,
+          defaultMultiplexerConfig,
+          board,
+        );
+        board.setTerminalStateListener((taskID) => {
+          void manager.retryDeferredIdleClose(taskID);
+        });
+
+        await manager.onSessionCreated({
+          type: 'session.created',
+          properties: { info: { id: sessionId, parentID: 'parent-1' } },
+        });
+        await manager.onSessionStatus({
+          type: 'session.status',
+          properties: { sessionID: sessionId, status: { type: 'idle' } },
+        });
+
+        expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+        board.updateStatus({ taskID: sessionId, state });
+        await Promise.resolve();
+
+        expect(mockMultiplexer.closePane).toHaveBeenCalledWith(`p-${state}`);
+      }
+    });
+
+    test('deferred idle close retries on markCancelled', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'deferred-cancel',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-deferred-cancel',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+      board.setTerminalStateListener((taskID) => {
+        void manager.retryDeferredIdleClose(taskID);
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'deferred-cancel', parentID: 'parent-1' } },
+      });
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'deferred-cancel',
+          status: { type: 'idle' },
+        },
+      });
+      board.markCancelled('deferred-cancel');
+      await Promise.resolve();
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-deferred-cancel',
+      );
+    });
+
+    test('terminal status without deferred idle close does not close pane', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'terminal-without-defer',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-terminal-without-defer',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+      board.setTerminalStateListener((taskID) => {
+        void manager.retryDeferredIdleClose(taskID);
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'terminal-without-defer', parentID: 'parent-1' },
+        },
+      });
+      board.updateStatus({
+        taskID: 'terminal-without-defer',
+        state: 'completed',
+      });
+      await Promise.resolve();
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
+    test('deleted clears deferred idle close and later terminal update is no-op', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'deleted-deferred',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-deleted-deferred',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+      board.setTerminalStateListener((taskID) => {
+        void manager.retryDeferredIdleClose(taskID);
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'deleted-deferred', parentID: 'parent-1' } },
+      });
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: { sessionID: 'deleted-deferred', status: { type: 'idle' } },
+      });
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'deleted-deferred' },
+      });
+      board.updateStatus({ taskID: 'deleted-deferred', state: 'completed' });
+      await Promise.resolve();
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-deleted-deferred',
+      );
+    });
+
+    test('retry while still running keeps deferred idle close', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'still-running-deferred',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-still-running-deferred',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+      board.setTerminalStateListener((taskID) => {
+        void manager.retryDeferredIdleClose(taskID);
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'still-running-deferred', parentID: 'parent-1' },
+        },
+      });
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'still-running-deferred',
+          status: { type: 'idle' },
+        },
+      });
+
+      await manager.retryDeferredIdleClose('still-running-deferred');
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+
+      board.updateStatus({
+        taskID: 'still-running-deferred',
+        state: 'completed',
+      });
+      await Promise.resolve();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-still-running-deferred',
+      );
+    });
+
+    test('explicit non-idle poll clears stale deferred idle close', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'resumed-deferred',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-resumed-deferred',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+      board.setTerminalStateListener((taskID) => {
+        void manager.retryDeferredIdleClose(taskID);
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'resumed-deferred', parentID: 'parent-1' } },
+      });
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'resumed-deferred',
+          status: { type: 'idle' },
+        },
+      });
+      setMockSessionStatuses({ 'resumed-deferred': { type: 'busy' } });
+      await (manager as any).pollSessions();
+
+      board.updateStatus({ taskID: 'resumed-deferred', state: 'completed' });
+      await Promise.resolve();
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'resumed-deferred',
+          status: { type: 'idle' },
+        },
+      });
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-resumed-deferred',
+      );
+    });
+
     test('does not close on transient status absence', async () => {
       const ctx = createMockContext();
       const manager = new MultiplexerSessionManager(
@@ -468,66 +729,7 @@ describe('MultiplexerSessionManager', () => {
       );
     });
 
-    test('does not close long-running pane based on age alone', async () => {
-      const ctx = createMockContext();
-      mockMultiplexer.spawnPane.mockResolvedValue({
-        success: true,
-        paneId: 'p-long-running',
-      });
-      const manager = new MultiplexerSessionManager(
-        ctx,
-        defaultMultiplexerConfig,
-      );
-
-      await manager.onSessionCreated({
-        type: 'session.created',
-        properties: { info: { id: 'long-running', parentID: 'p1' } },
-      });
-
-      const tracked = (manager as any).sessions.get('long-running');
-      tracked.createdAt = Date.now() - 11 * 60 * 1000;
-
-      setMockSessionStatuses({ 'long-running': { type: 'running' } });
-      await (manager as any).pollSessions();
-
-      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
-    });
-
-    test('keeps missing running background job pane open', async () => {
-      const ctx = createMockContext();
-      const board = new BackgroundJobBoard();
-      board.registerLaunch({
-        taskID: 'running-background-job',
-        parentSessionID: 'parent-1',
-        agent: 'explorer',
-      });
-      mockMultiplexer.spawnPane.mockResolvedValue({
-        success: true,
-        paneId: 'p-running-background-job',
-      });
-      const manager = new MultiplexerSessionManager(
-        ctx,
-        defaultMultiplexerConfig,
-        board,
-      );
-
-      await manager.onSessionCreated({
-        type: 'session.created',
-        properties: {
-          info: { id: 'running-background-job', parentID: 'parent-1' },
-        },
-      });
-
-      const tracked = (manager as any).sessions.get('running-background-job');
-      tracked.missingSince = Date.now() - 60_000;
-
-      setMockSessionStatuses({});
-      await (manager as any).pollSessions();
-
-      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
-    });
-
-    test('closes never-seen pane when no running background job exists', async () => {
+    test('missing status does not close never-seen pane', async () => {
       const ctx = createMockContext();
       mockMultiplexer.spawnPane.mockResolvedValue({
         success: true,
@@ -543,15 +745,10 @@ describe('MultiplexerSessionManager', () => {
         properties: { info: { id: 'never-seen-orphan', parentID: 'p1' } },
       });
 
-      const tracked = (manager as any).sessions.get('never-seen-orphan');
-      tracked.missingSince = Date.now() - 60_000;
-
       setMockSessionStatuses({});
       await (manager as any).pollSessions();
 
-      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
-        'p-never-seen-orphan',
-      );
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
     test('ignores empty session status response without closing panes', async () => {
@@ -570,9 +767,6 @@ describe('MultiplexerSessionManager', () => {
         properties: { info: { id: 'empty-status', parentID: 'p1' } },
       });
 
-      const tracked = (manager as any).sessions.get('empty-status');
-      tracked.seenInStatus = true;
-      tracked.missingSince = Date.now() - 60_000;
       mockFetch.mockImplementationOnce(
         async () => new Response('', { status: 200 }),
       );
@@ -582,7 +776,7 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
-    test('keeps missing cleanup for sessions previously seen in status', async () => {
+    test('previously seen then missing does not close pane', async () => {
       const ctx = createMockContext();
       mockMultiplexer.spawnPane.mockResolvedValue({
         success: true,
@@ -601,15 +795,40 @@ describe('MultiplexerSessionManager', () => {
       setMockSessionStatuses({ 'seen-before-missing': { type: 'busy' } });
       await (manager as any).pollSessions();
 
-      const tracked = (manager as any).sessions.get('seen-before-missing');
-      tracked.missingSince = Date.now() - 60_000;
-
       setMockSessionStatuses({});
       await (manager as any).pollSessions();
 
-      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
-        'p-seen-before-missing',
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
+    test('missing then busy does not duplicate respawn', async () => {
+      const ctx = createMockContext();
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-missing-then-busy',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
       );
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'missing-then-busy', parentID: 'p1' } },
+      });
+
+      setMockSessionStatuses({});
+      await (manager as any).pollSessions();
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'missing-then-busy',
+          status: { type: 'busy' },
+        },
+      });
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
     });
 
     test('polls the actual serverUrl instead of the plugin SDK default URL', async () => {

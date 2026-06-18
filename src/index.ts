@@ -254,6 +254,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       multiplexerConfig,
       backgroundJobBoard,
     );
+    backgroundJobBoard.setTerminalStateListener((taskID) => {
+      void multiplexerSessionManager.retryDeferredIdleClose(taskID);
+    });
 
     // Initialize auto-update checker hook
     autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {

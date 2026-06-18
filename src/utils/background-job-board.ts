@@ -58,6 +58,8 @@ export interface BackgroundJobStatusInput {
   now?: number;
 }
 
+type TerminalStateListener = (taskID: string) => void;
+
 const TERMINAL_STATES = new Set<BackgroundJobState>([
   'completed',
   'error',
@@ -77,6 +79,7 @@ const AGENT_PREFIX: Record<string, string> = {
 export class BackgroundJobBoard {
   private readonly jobs = new Map<string, BackgroundJobRecord>();
   private readonly counters = new Map<string, number>();
+  private terminalStateListener?: TerminalStateListener;
 
   private readonly maxReusablePerAgent: number;
   private readonly readContextMinLines: number;
@@ -86,6 +89,10 @@ export class BackgroundJobBoard {
     this.maxReusablePerAgent = options.maxReusablePerAgent ?? 2;
     this.readContextMinLines = options.readContextMinLines ?? 10;
     this.readContextMaxFiles = options.readContextMaxFiles ?? 8;
+  }
+
+  setTerminalStateListener(listener?: TerminalStateListener): void {
+    this.terminalStateListener = listener;
   }
 
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord {
@@ -157,6 +164,7 @@ export class BackgroundJobBoard {
 
     const now = input.now ?? Date.now();
     const terminal = TERMINAL_STATES.has(input.state);
+    const notifyTerminal = terminal && !TERMINAL_STATES.has(existing.state);
     const updated: BackgroundJobRecord = {
       ...existing,
       state: input.state,
@@ -174,6 +182,7 @@ export class BackgroundJobBoard {
 
     this.jobs.set(input.taskID, updated);
     this.trimReusable(input.taskID);
+    if (notifyTerminal) this.terminalStateListener?.(input.taskID);
     return updated;
   }
 
@@ -274,6 +283,7 @@ export class BackgroundJobBoard {
     };
 
     this.jobs.set(taskID, updated);
+    this.terminalStateListener?.(taskID);
     return updated;
   }
 

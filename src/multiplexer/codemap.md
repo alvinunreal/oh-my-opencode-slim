@@ -54,11 +54,10 @@
     - known sessions (`knownSessions`),
     - in-flight spawns (`spawningSessions`).
   - `respawnIfKnown` handles busy sessions that reappear after being closed.
-  - Polling fallback (`pollSessions`) is enabled when event coverage is incomplete.
-    It handles:
-    - idle detection,
-    - missing status grace period,
-    - max session lifetime timeout.
+  - Polling fallback (`pollSessions`) handles explicit idle detection only.
+    Missing from `/session/status` is not a close signal.
+  - Deferred idle closes keep panes open while `BackgroundJobBoard` says the
+    task is running, then complete via the hook-driven terminal-state callback.
 
 - `index.ts`
   - Re-exports factory, manager, and implementations for external import.
