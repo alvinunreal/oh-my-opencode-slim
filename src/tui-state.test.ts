@@ -34,6 +34,10 @@ describe('tui-state persistence', () => {
         explorer: 'openai/gpt-5.4-mini',
         fixer: 'openai/gpt-5.4-mini',
       },
+      agentVariants: {
+        explorer: 'low',
+        fixer: 'high',
+      },
     });
 
     const snapshot = readTuiSnapshot();
@@ -41,6 +45,10 @@ describe('tui-state persistence', () => {
     expect(snapshot.agentModels).toEqual({
       explorer: 'openai/gpt-5.4-mini',
       fixer: 'openai/gpt-5.4-mini',
+    });
+    expect(snapshot.agentVariants).toEqual({
+      explorer: 'low',
+      fixer: 'high',
     });
   });
 
@@ -62,6 +70,30 @@ describe('tui-state persistence', () => {
       explorer: 'openai/gpt-5.4-mini',
     });
   });
+
+  test('updates a single live agent variant without dropping others', () => {
+    recordTuiAgentModels({
+      agentModels: {
+        orchestrator: 'default',
+        explorer: 'openai/gpt-5.4-mini',
+      },
+      agentVariants: {
+        explorer: 'low',
+      },
+    });
+
+    recordTuiAgentModel({
+      agentName: 'orchestrator',
+      model: 'openai/gpt-5.5',
+      variant: 'high',
+    });
+
+    expect(readTuiSnapshot().agentVariants).toEqual({
+      orchestrator: 'high',
+      explorer: 'low',
+    });
+  });
+
   test('ignores legacy config status fields in old snapshots', () => {
     const filePath = path.join(
       tempDir,
@@ -86,5 +118,6 @@ describe('tui-state persistence', () => {
     expect(snapshot.agentModels).toEqual({
       explorer: 'openai/gpt-5.4-mini',
     });
+    expect(snapshot.agentVariants).toEqual({});
   });
 });

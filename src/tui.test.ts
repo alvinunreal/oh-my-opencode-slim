@@ -3,9 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  formatSidebarModelName,
   getSidebarAgentNames,
   readConfigInvalid,
+  splitSidebarModelId,
 } from './tui';
 import type { TuiSnapshot } from './tui-state';
 
@@ -14,6 +14,7 @@ function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
     version: 1,
     updatedAt: 0,
     agentModels: {},
+    agentVariants: {},
     ...overrides,
   };
 }
@@ -45,18 +46,24 @@ describe('tui sidebar agents', () => {
   });
 });
 
-describe('formatSidebarModelName', () => {
-  test('keeps only the segment after the last slash', () => {
-    expect(formatSidebarModelName('openai/gpt-5.5-fast')).toBe('gpt-5.5-fast');
+describe('splitSidebarModelId', () => {
+  test('splits provider from model at the first slash', () => {
+    expect(splitSidebarModelId('openai/gpt-5.5-fast')).toEqual({
+      provider: 'openai',
+      model: 'gpt-5.5-fast',
+    });
     expect(
-      formatSidebarModelName(
+      splitSidebarModelId(
         'fireworks-ai/accounts/fireworks/routers/kimi-k2p5-turbo',
       ),
-    ).toBe('kimi-k2p5-turbo');
+    ).toEqual({
+      provider: 'fireworks-ai',
+      model: 'accounts/fireworks/routers/kimi-k2p5-turbo',
+    });
   });
 
-  test('leaves model names without slashes unchanged', () => {
-    expect(formatSidebarModelName('pending')).toBe('pending');
+  test('keeps slashless names as model only', () => {
+    expect(splitSidebarModelId('pending')).toEqual({ model: 'pending' });
   });
 });
 
