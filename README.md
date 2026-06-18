@@ -650,6 +650,26 @@ Use this section as a map: start with installation, then jump to features, confi
 
 ---
 
+## 🏛️ Support
+
+My sponsorship goal is **$200/month**.
+
+That covers my Codex subscription, so I can keep building and testing oh-my-opencode-slim without worrying about token costs.
+
+<p align="center">
+  <a href="https://github.com/sponsors/alvinunreal">Sponsor this project</a>
+</p>
+
+## ✨ Sponsors
+
+<p align="center">
+  <a href="https://github.com/sponsors/alvinunreal">
+    <img src="./sponsors.svg" alt="Sponsors" width="800">
+  </a>
+</p>
+
+---
+
 ## 🏛️ Contributors
 
 <div align="center">
