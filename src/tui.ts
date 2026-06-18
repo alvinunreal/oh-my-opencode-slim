@@ -62,19 +62,25 @@ function box(props: Record<string, unknown>, children: Child[] = []) {
   return element('box', props, children);
 }
 
-function truncate(value: string, max = 24): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
-}
-
 function getTuiDirectory(api: {
   state?: { path?: { directory?: string } };
 }): string {
   return api.state?.path?.directory ?? process.cwd();
 }
 
-export function formatSidebarModelName(model: string): string {
-  const lastSlash = model.lastIndexOf('/');
-  return lastSlash === -1 ? model : model.slice(lastSlash + 1);
+export function splitSidebarModelId(model: string): {
+  provider?: string;
+  model: string;
+} {
+  const slashIndex = model.indexOf('/');
+  if (slashIndex === -1) {
+    return { model };
+  }
+
+  return {
+    provider: model.slice(0, slashIndex),
+    model: model.slice(slashIndex + 1),
+  };
 }
 
 export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
@@ -84,19 +90,38 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
-function row(
+function agentRow(
+  label: string,
+  model: string,
+  variant: string | undefined,
+  theme: { textMuted: unknown; text: unknown },
+): JSX.Element {
+  const modelParts = splitSidebarModelId(model);
+  const detailRows: JSX.Element[] = [];
+
+  if (modelParts.provider) {
+    detailRows.push(agentDetailRow('provider', modelParts.provider, theme));
+  }
+  detailRows.push(agentDetailRow('model', modelParts.model, theme));
+  if (variant) {
+    detailRows.push(agentDetailRow('variant', variant, theme));
+  }
+
+  return box({ width: '100%', flexDirection: 'column', marginBottom: 1 }, [
+    text({ fg: theme.textMuted }, [label]),
+    ...detailRows,
+  ]);
+}
+
+function agentDetailRow(
   label: string,
   value: string,
-  theme: { textMuted: unknown; text: unknown },
-  valueColor?: unknown,
+  theme: { textMuted: unknown },
 ): JSX.Element {
-  return box(
-    { width: '100%', flexDirection: 'row', justifyContent: 'space-between' },
-    [
-      text({ fg: theme.textMuted }, [label]),
-      text({ fg: valueColor ?? theme.text }, [value]),
-    ],
-  );
+  return box({ width: '100%', flexDirection: 'row', paddingLeft: 2 }, [
+    text({ fg: theme.textMuted, width: 9 }, [label]),
+    text({ fg: theme.textMuted }, [value]),
+  ]);
 }
 
 function renderSidebar(
@@ -146,12 +171,8 @@ function renderSidebar(
       ]),
       ...getSidebarAgentNames(snapshot).map((agentName) => {
         const model = snapshot.agentModels[agentName] ?? 'pending';
-        return row(
-          agentName,
-          truncate(formatSidebarModelName(model), 26),
-          theme,
-          theme.textMuted,
-        );
+        const variant = snapshot.agentVariants[agentName];
+        return agentRow(agentName, model, variant, theme);
       }),
     ],
   );

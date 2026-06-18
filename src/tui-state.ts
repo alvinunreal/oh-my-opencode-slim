@@ -6,6 +6,7 @@ export interface TuiSnapshot {
   version: 1;
   updatedAt: number;
   agentModels: Record<string, string>;
+  agentVariants: Record<string, string>;
 }
 
 const STATE_DIR = 'oh-my-opencode-slim';
@@ -26,6 +27,7 @@ function emptySnapshot(): TuiSnapshot {
     version: 1,
     updatedAt: Date.now(),
     agentModels: {},
+    agentVariants: {},
   };
 }
 
@@ -38,6 +40,7 @@ function parseSnapshot(value: string): TuiSnapshot {
     updatedAt:
       typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     agentModels: parsed.agentModels ?? {},
+    agentVariants: parsed.agentVariants ?? {},
   };
 }
 
@@ -76,17 +79,23 @@ function updateSnapshot(mutator: (snapshot: TuiSnapshot) => void): void {
 
 export function recordTuiAgentModels(input: {
   agentModels: Record<string, string>;
+  agentVariants?: Record<string, string>;
 }): void {
   updateSnapshot((snapshot) => {
     snapshot.agentModels = { ...input.agentModels };
+    snapshot.agentVariants = { ...(input.agentVariants ?? {}) };
   });
 }
 
 export function recordTuiAgentModel(input: {
   agentName: string;
   model: string;
+  variant?: string;
 }): void {
   updateSnapshot((snapshot) => {
     snapshot.agentModels[input.agentName] = input.model;
+    if (input.variant !== undefined) {
+      snapshot.agentVariants[input.agentName] = input.variant;
+    }
   });
 }

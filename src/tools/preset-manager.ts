@@ -179,13 +179,19 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
 
     const snapshot = readTuiSnapshot();
     const agentModels = { ...snapshot.agentModels };
+    const agentVariants = { ...snapshot.agentVariants };
     for (const [agentName, agentConfig] of Object.entries(agentUpdates)) {
       if (typeof agentConfig.model === 'string') {
         agentModels[agentName] = agentConfig.model;
       }
+      if (typeof agentConfig.variant === 'string') {
+        agentVariants[agentName] = agentConfig.variant;
+      } else {
+        delete agentVariants[agentName];
+      }
     }
 
-    recordTuiAgentModels({ agentModels });
+    recordTuiAgentModels({ agentModels, agentVariants });
 
     activePreset = presetName;
 

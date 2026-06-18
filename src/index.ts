@@ -611,6 +611,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       const tuiAgentModels: Record<string, string> = {};
+      const tuiAgentVariants: Record<string, string> = {};
       for (const agentDef of agentDefs) {
         if (agentDef.name === 'councillor') continue;
 
@@ -625,10 +626,22 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
               : typeof agentDef.config.model === 'string'
                 ? agentDef.config.model
                 : undefined;
+        const resolvedVariant =
+          typeof entry?.variant === 'string'
+            ? entry.variant
+            : typeof agentDef.config.variant === 'string'
+              ? agentDef.config.variant
+              : undefined;
 
         tuiAgentModels[agentDef.name] = resolvedModel ?? 'default';
+        if (resolvedVariant) {
+          tuiAgentVariants[agentDef.name] = resolvedVariant;
+        }
       }
-      recordTuiAgentModels({ agentModels: tuiAgentModels });
+      recordTuiAgentModels({
+        agentModels: tuiAgentModels,
+        agentVariants: tuiAgentVariants,
+      });
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as
