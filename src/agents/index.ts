@@ -47,9 +47,60 @@ function normalizeDisplayName(displayName: string): string {
   return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
 }
 
+function getPrimaryModelFromOverride(
+  override: AgentOverrideConfig | undefined,
+): string | undefined {
+  const model = override?.model;
+  if (typeof model === 'string') {
+    return model;
+  }
+  if (Array.isArray(model) && model.length > 0) {
+    const first = model[0];
+    return typeof first === 'string' ? first : first?.id;
+  }
+  return undefined;
+}
+
+function getActivePresetPrimaryModel(
+  config: PluginConfig | undefined,
+): string | undefined {
+  const activePreset = config?.preset
+    ? config.presets?.[config.preset]
+    : undefined;
+  if (!activePreset) {
+    return undefined;
+  }
+
+  const orchestratorModel = getPrimaryModelFromOverride(
+    activePreset.orchestrator,
+  );
+  if (orchestratorModel) {
+    return orchestratorModel;
+  }
+
+  for (const override of Object.values(activePreset)) {
+    const model = getPrimaryModelFromOverride(override);
+    if (model) {
+      return model;
+    }
+  }
+
+  return undefined;
+}
+
+function getConfigPrimaryModel(
+  config: PluginConfig | undefined,
+): string | undefined {
+  return (
+    getPrimaryModelFromOverride(getAgentOverride(config, 'orchestrator')) ??
+    getActivePresetPrimaryModel(config)
+  );
+}
+
 function buildAcpAgentDefinition(
   name: string,
   config: NonNullable<PluginConfig['acpAgents']>[string],
+  fallbackModel?: string,
 ): AgentDefinition {
   const description =
     config.description ?? `External ACP agent '${name}' via ${config.command}`;
@@ -67,12 +118,7 @@ function buildAcpAgentDefinition(
     name,
     description,
     config: {
-      model:
-        config.wrapperModel ??
-        DEFAULT_MODELS.fixer ??
-        DEFAULT_MODELS.librarian ??
-        DEFAULT_MODELS.orchestrator ??
-        DEFAULT_MODELS.oracle,
+      model: config.wrapperModel ?? fallbackModel ?? DEFAULT_MODELS.oracle,
       temperature: 0,
       prompt,
       permission: {
@@ -167,14 +213,12 @@ function buildCustomAgentDefinition(
   fileAppendPrompt?: string,
 ): AgentDefinition {
   const basePrompt = override.prompt ?? `You are the ${name} specialist.`;
+  const primaryModel = getPrimaryModelFromOverride(override);
 
   return {
     name,
     config: {
-      model:
-        typeof override.model === 'string'
-          ? override.model
-          : (DEFAULT_MODELS.orchestrator ?? DEFAULT_MODELS.oracle),
+      model: primaryModel ?? DEFAULT_MODELS.oracle,
       temperature: 0.2,
       prompt: resolvePrompt(basePrompt, filePrompt, fileAppendPrompt),
     },
@@ -280,6 +324,8 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     disabled.add('council');
   }
 
+  const primaryModel = getConfigPrimaryModel(config);
+
   // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
   // existing users who don't have fixer in their config yet
   const getModelForAgent = (name: SubagentName): string => {
@@ -292,10 +338,11 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
       } else {
         librarianModel = librarianOverride;
       }
-      return librarianModel ?? (DEFAULT_MODELS.librarian as string);
+      return (
+        librarianModel ?? primaryModel ?? (DEFAULT_MODELS.librarian as string)
+      );
     }
-    // Subagents always have a defined default model; cast is safe here
-    return DEFAULT_MODELS[name] as string;
+    return primaryModel ?? (DEFAULT_MODELS[name] as string);
   };
 
   // 1. Gather all sub-agent definitions with custom prompts
@@ -372,7 +419,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
   const protoAcpAgents = acpAgentNames.map((name) => {
     const acp = config?.acpAgents?.[name];
     if (!acp) throw new Error(`ACP agent '${name}' is missing config`);
-    return buildAcpAgentDefinition(name, acp);
+    return buildAcpAgentDefinition(name, acp, primaryModel);
   });
 
   // 2. Apply overrides and default permissions to built-in subagents

@@ -99,6 +99,51 @@ describe('agent alias backward compatibility', () => {
   });
 });
 
+describe('built-in subagent preset fallback', () => {
+  test('subagents missing from the active preset inherit the preset orchestrator model', () => {
+    const config: PluginConfig = {
+      preset: 'opencode-go',
+      presets: {
+        'opencode-go': {
+          orchestrator: { model: 'opencode-go/glm-5.1' },
+        },
+      },
+      agents: {
+        orchestrator: { model: 'opencode-go/glm-5.1' },
+      },
+      council: councilConfig(),
+      disabled_agents: [],
+    };
+
+    const agents = createAgents(config);
+
+    for (const name of ['observer', 'council', 'councillor'] as const) {
+      expect(agents.find((a) => a.name === name)?.config.model).toBe(
+        'opencode-go/glm-5.1',
+      );
+    }
+  });
+
+  test('subagents missing from the active preset inherit the first preset model when orchestrator is absent', () => {
+    const config: PluginConfig = {
+      preset: 'minimal',
+      presets: {
+        minimal: {
+          oracle: { model: 'anthropic/claude-sonnet-4-6' },
+        },
+      },
+      agents: {
+        oracle: { model: 'anthropic/claude-sonnet-4-6' },
+      },
+      disabled_agents: [],
+    };
+
+    const agents = createAgents(config);
+    const observer = agents.find((a) => a.name === 'observer');
+
+    expect(observer?.config.model).toBe('anthropic/claude-sonnet-4-6');
+  });
+});
 describe('fixer agent fallback', () => {
   test('fixer inherits librarian model when no fixer config provided', () => {
     const config: PluginConfig = {

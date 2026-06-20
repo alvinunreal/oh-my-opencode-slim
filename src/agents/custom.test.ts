@@ -152,6 +152,34 @@ describe('custom-agent creation', () => {
     expect(orchestrator?.config.prompt).toContain('@claude-research');
   });
 
+  test('falls back to active preset primary model for ACP wrappers', () => {
+    const config: PluginConfig = {
+      preset: 'opencode-go',
+      presets: {
+        'opencode-go': {
+          orchestrator: { model: 'opencode-go/glm-5.1' },
+        },
+      },
+      agents: {
+        orchestrator: { model: 'opencode-go/glm-5.1' },
+      },
+      acpAgents: {
+        bridge: {
+          command: 'bridge-acp',
+          args: [],
+          env: {},
+          timeoutMs: 0,
+          permissionMode: 'ask',
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const wrapper = agents.find((agent) => agent.name === 'bridge');
+
+    expect(wrapper?.config.model).toBe('opencode-go/glm-5.1');
+  });
+
   test('falls back to oracle model for ACP wrappers', () => {
     const defaults = {
       fixer: DEFAULT_MODELS.fixer,
