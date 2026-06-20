@@ -210,6 +210,7 @@ function injectDisplayNames(
 function applyDefaultPermissions(
   agent: AgentDefinition,
   configuredSkills?: string[],
+  disabledSkills?: string[],
 ): void {
   const existing = (agent.config.permission ?? {}) as Record<
     string,
@@ -220,6 +221,7 @@ function applyDefaultPermissions(
   const skillPermissions = getSkillPermissionsForAgent(
     agent.name,
     configuredSkills,
+    disabledSkills,
   );
 
   // Respect explicit deny on question (councillor)
@@ -381,7 +383,7 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     if (override) {
       applyOverrides(agent, override);
     }
-    applyDefaultPermissions(agent, override?.skills);
+    applyDefaultPermissions(agent, override?.skills, config?.disabled_skills);
     return agent;
   });
 
@@ -405,12 +407,12 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     if (override) {
       applyOverrides(agent, override);
     }
-    applyDefaultPermissions(agent, override?.skills);
+    applyDefaultPermissions(agent, override?.skills, config?.disabled_skills);
     return agent;
   });
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
-    applyDefaultPermissions(agent);
+    applyDefaultPermissions(agent, undefined, config?.disabled_skills);
     return agent;
   });
 
@@ -433,7 +435,11 @@ export function createAgents(config?: PluginConfig): AgentDefinition[] {
     orchestratorPrompts.appendPrompt,
     disabled,
   );
-  applyDefaultPermissions(orchestrator, orchestratorOverride?.skills);
+  applyDefaultPermissions(
+    orchestrator,
+    orchestratorOverride?.skills,
+    config?.disabled_skills,
+  );
   if (orchestratorOverride) {
     applyOverrides(orchestrator, orchestratorOverride);
   }

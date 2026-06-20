@@ -311,6 +311,18 @@ export const PluginConfigSchema = z
           "By default, 'observer' is disabled. Remove it from this list and configure a vision-capable model to enable.",
       ),
     disabled_mcps: z.array(z.string()).optional(),
+    disabled_tools: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Tool names to disable completely. Disabled tools are not registered with OpenCode and cannot be used by agents.',
+      ),
+    disabled_skills: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Skill names to disable completely. Disabled skills are not granted to agents, even when referenced by presets or agent overrides.',
+      ),
     // Multiplexer config (new unified config - preferred)
     multiplexer: MultiplexerConfigSchema.optional(),
     // Legacy tmux config (for backward compatibility)

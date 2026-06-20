@@ -35,7 +35,10 @@ export const PERMISSION_ONLY_SKILLS: PermissionOnlySkill[] = [
 export function getSkillPermissionsForAgent(
   agentName: string,
   skillList?: string[],
+  disabledSkillNames?: string[],
 ): Record<string, 'allow' | 'ask' | 'deny'> {
+  const disabledSkills = new Set(disabledSkillNames ?? []);
+
   // Orchestrator gets all skills by default, others are restricted
   const permissions: Record<string, 'allow' | 'ask' | 'deny'> = {
     '*': agentName === 'orchestrator' ? 'allow' : 'deny',
@@ -49,9 +52,12 @@ export function getSkillPermissionsForAgent(
         permissions['*'] = 'allow';
       } else if (name.startsWith('!')) {
         permissions[name.slice(1)] = 'deny';
-      } else {
+      } else if (!disabledSkills.has(name)) {
         permissions[name] = 'allow';
       }
+    }
+    for (const name of disabledSkills) {
+      permissions[name] = 'deny';
     }
     return permissions;
   }
@@ -61,7 +67,7 @@ export function getSkillPermissionsForAgent(
     const isAllowed =
       skill.allowedAgents.includes('*') ||
       skill.allowedAgents.includes(agentName);
-    if (isAllowed) {
+    if (isAllowed && !disabledSkills.has(skill.name)) {
       permissions[skill.name] = 'allow';
     }
   }
@@ -71,9 +77,13 @@ export function getSkillPermissionsForAgent(
     const isAllowed =
       skill.allowedAgents.includes('*') ||
       skill.allowedAgents.includes(agentName);
-    if (isAllowed) {
+    if (isAllowed && !disabledSkills.has(skill.name)) {
       permissions[skill.name] = 'allow';
     }
+  }
+
+  for (const name of disabledSkills) {
+    permissions[name] = 'deny';
   }
 
   return permissions;

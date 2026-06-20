@@ -1,4 +1,4 @@
-import type { Plugin } from '@opencode-ai/plugin';
+import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
 import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
@@ -147,10 +147,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
   let companionManager: CompanionManager;
-  let councilTools: Record<string, unknown>;
-  let cancelTaskTools: Record<string, unknown>;
+  let councilTools: ReturnType<typeof createCouncilTool>;
+  let cancelTaskTools: ReturnType<typeof createCancelTaskTool>;
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
+  let tools: Record<string, ToolDefinition>;
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
   >;
@@ -320,12 +321,22 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         sessionAgentMap.get(sessionID) === 'orchestrator',
     });
 
-    toolCount =
-      Object.keys(councilTools).length +
-      Object.keys(cancelTaskTools).length +
-      Object.keys(acpRunTools).length +
-      1 + // webfetch
-      2; // ast_grep_search, ast_grep_replace
+    tools = {
+      ...councilTools,
+      ...cancelTaskTools,
+      ...acpRunTools,
+      webfetch,
+      ast_grep_search,
+      ast_grep_replace,
+    };
+    if (config.disabled_tools && config.disabled_tools.length > 0) {
+      const disabledTools = new Set(config.disabled_tools);
+      tools = Object.fromEntries(
+        Object.entries(tools).filter(([name]) => !disabledTools.has(name)),
+      );
+    }
+
+    toolCount = Object.keys(tools).length;
   } catch (err) {
     // Plugin init failed: log visibly before re-throwing so the user
     // sees something actionable instead of a silent "loaded but empty".
@@ -436,14 +447,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     agent: agents,
 
-    tool: {
-      ...councilTools,
-      ...cancelTaskTools,
-      ...acpRunTools,
-      webfetch,
-      ast_grep_search,
-      ast_grep_replace,
-    },
+    tool: tools,
 
     mcp: mcps,
 
