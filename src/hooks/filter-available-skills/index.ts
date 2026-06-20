@@ -104,6 +104,7 @@ export function createFilterAvailableSkillsHook(
     const permissionRules = getSkillPermissionsForAgent(
       agentName,
       configuredSkills,
+      config.disabled_skills,
     );
     permissionRulesByAgent.set(agentName, permissionRules);
     return permissionRules;

@@ -197,6 +197,18 @@
         "type": "string"
       }
     },
+    "disabled_tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "disabled_skills": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "multiplexer": {
       "type": "object",
       "properties": {
