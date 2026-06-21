@@ -1959,19 +1959,55 @@ export function renderInterviewPage(
       document.getElementById('moreQuestionsBtn').addEventListener('click', () => sendNudge('more-questions'));
       document.getElementById('confirmCompleteBtn').addEventListener('click', () => sendNudge('confirm-complete'));
 
+      // ── Real-time updates via SSE ─────────────────────────────────
+      let sseConnected = false;
+      let pollFallbackTimer = null;
+
+      function connectSse() {
+        const sseUrl = '/api/interviews/' + encodeURIComponent(interviewId) + '/events';
+        const es = new EventSource(sseUrl);
+
+        es.addEventListener('state', (e) => {
+          sseConnected = true;
+          if (pollFallbackTimer) {
+            clearTimeout(pollFallbackTimer);
+            pollFallbackTimer = null;
+          }
+          try {
+            const data = JSON.parse(e.data);
+            render(data);
+          } catch (_) {}
+        });
+
+        es.onerror = () => {
+          sseConnected = false;
+          es.close();
+          // Fallback to polling if SSE drops
+          if (!pollFallbackTimer) schedulePoll();
+        };
+      }
+
       function schedulePoll() {
-        setTimeout(async () => {
+        // Only poll if SSE is not connected
+        if (sseConnected) return;
+        pollFallbackTimer = setTimeout(async () => {
           try { await refresh(); } catch (_) {}
-          // Stop polling for terminal states
-          const terminalModes = ['abandoned', 'completed', 'session-disconnected'];
-          if (!terminalModes.includes(state.data?.mode)) schedulePoll();
+          // Keep polling until SSE reconnects or indefinitely for terminal modes
+          pollFallbackTimer = null;
+          if (!sseConnected) {
+            const terminalModes = ['abandoned', 'completed', 'session-disconnected'];
+            // For terminal modes, do a few more polls to catch final state, then stop
+            if (!terminalModes.includes(state.data?.mode)) {
+              schedulePoll();
+            }
+          }
         }, 2500);
       }
 
       refresh().catch((error) => {
         document.getElementById('submitStatus').textContent = error.message || 'Failed to load interview.';
       });
-      schedulePoll();
+      connectSse();
     </script>
   </body>
 </html>`;

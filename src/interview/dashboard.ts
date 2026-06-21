@@ -204,6 +204,23 @@ export function createDashboardServer(config: DashboardConfig): {
   // Interview state cache
   const stateCache = new Map<string, InterviewStateEntry>();
 
+  // SSE client registry: interviewId → Set<ServerResponse>
+  const sseClients = new Map<string, Set<import('node:http').ServerResponse>>();
+
+  function broadcastSse(interviewId: string, data: unknown) {
+    const clients = sseClients.get(interviewId);
+    if (!clients || clients.size === 0) return;
+    const payload = `event: state\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const res of clients) {
+      try {
+        res.write(payload);
+      } catch {
+        clients.delete(res);
+      }
+    }
+    if (clients.size === 0) sseClients.delete(interviewId);
+  }
+
   // Periodic cleanup: remove terminal entries older than 24h
   const TERMINAL_MODES = new Set([
     'abandoned',
@@ -684,6 +701,61 @@ export function createDashboardServer(config: DashboardConfig): {
       sendJson(response, 200, {
         interviewId,
         url: interviewUrl,
+      });
+      return;
+    }
+
+    // ── API: SSE stream (browser → dashboard, real-time push) ────────
+    if (
+      request.method === 'GET' &&
+      pathname.startsWith('/api/interviews/') &&
+      pathname.endsWith('/events')
+    ) {
+      const interviewId = pathname
+        .replace('/api/interviews/', '')
+        .replace('/events', '');
+      if (!interviewId || !isValidId(interviewId)) {
+        sendJson(response, 400, { error: 'Invalid interview ID' });
+        return;
+      }
+      const entry = stateCache.get(interviewId);
+      if (!entry) {
+        sendJson(response, 404, { error: 'Interview not found' });
+        return;
+      }
+
+      response.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+        'access-control-allow-origin': '*',
+      });
+
+      // Register this client
+      let clients = sseClients.get(interviewId);
+      if (!clients) {
+        clients = new Set();
+        sseClients.set(interviewId, clients);
+      }
+      clients.add(response);
+
+      // Send initial state immediately
+      response.write(`event: state\ndata: ${JSON.stringify(entry)}\n\n`);
+
+      // Heartbeat every 15s to keep connection alive
+      const heartbeat = setInterval(() => {
+        try {
+          response.write(': hb\n\n');
+        } catch {
+          // will be cleaned up on close
+        }
+      }, 15000);
+
+      // Cleanup on disconnect
+      request.on('close', () => {
+        clearInterval(heartbeat);
+        clients?.delete(response);
+        if (clients && clients.size === 0) sseClients.delete(interviewId);
       });
       return;
     }
@@ -1249,6 +1321,7 @@ export function createDashboardServer(config: DashboardConfig): {
       }
       stateCache.set(entry.interviewId, entry);
       dedupRecovered(entry.interviewId, stateCache);
+      broadcastSse(entry.interviewId, entry);
     },
     getState: (id) => stateCache.get(id),
     storeAnswers: (id, answers) => {
