@@ -104,23 +104,25 @@ export function slugify(value: string): string {
 // ─── Markdown Document Operations ────────────────────────────────────
 
 function extractHistorySection(document: string): string {
-  const marker = '## Q&A history\n\n';
-  const index = document.indexOf(marker);
-  return index >= 0 ? document.slice(index + marker.length).trim() : '';
+  const marker = /## Q&A history/i;
+  const match = document.match(marker);
+  if (!match || match.index === undefined) return '';
+  return document.slice(match.index + match[0].length).trim();
 }
 
 export function extractSummarySection(document: string): string {
   const marker = '## Current spec\n\n';
-  const historyMarker = '\n\n## Q&A history';
   const start = document.indexOf(marker);
   if (start < 0) {
     return '';
   }
   const summaryStart = start + marker.length;
-  const summaryEnd = document.indexOf(historyMarker, summaryStart);
-  return document
-    .slice(summaryStart, summaryEnd >= 0 ? summaryEnd : undefined)
-    .trim();
+  const historyMarker = /\n\n## Q&A history/i;
+  const historyMatch = document.slice(summaryStart).match(historyMarker);
+  const summaryEnd = historyMatch?.index
+    ? summaryStart + historyMatch.index
+    : undefined;
+  return document.slice(summaryStart, summaryEnd).trim();
 }
 
 export function extractTitle(document: string): string {

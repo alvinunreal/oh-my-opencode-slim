@@ -383,7 +383,17 @@ export function createInterviewService(
     // Rename file if assistant provided a title (and file hasn't been renamed yet)
     await maybeRenameWithTitle(interview, state.title);
 
-    const document = await rewriteInterviewDocument(interview, state.summary);
+    // Only rewrite the document when we have structured state from the agent.
+    // When parsed.state is null (e.g. after confirm-complete), the agent has
+    // already written the final polished spec directly to the file — rewriting
+    // would clobber it with a rebuild that loses the agent's formatting and
+    // Q&A history (due to case-sensitive marker mismatch).
+    let document: string;
+    if (parsed.state) {
+      document = await rewriteInterviewDocument(interview, state.summary);
+    } else {
+      document = await readInterviewDocument(interview);
+    }
     const blocks = parseSpecBlocks(document);
 
     const interviewState: InterviewState = {
