@@ -1982,8 +1982,9 @@ export function renderInterviewPage(
         es.onerror = () => {
           sseConnected = false;
           es.close();
-          // Fallback to polling if SSE drops
+          // Retry SSE after 3s, fall back to polling in the meantime
           if (!pollFallbackTimer) schedulePoll();
+          setTimeout(() => connectSse(), 3000);
         };
       }
 
@@ -1992,14 +1993,9 @@ export function renderInterviewPage(
         if (sseConnected) return;
         pollFallbackTimer = setTimeout(async () => {
           try { await refresh(); } catch (_) {}
-          // Keep polling until SSE reconnects or indefinitely for terminal modes
           pollFallbackTimer = null;
           if (!sseConnected) {
-            const terminalModes = ['abandoned', 'completed', 'session-disconnected'];
-            // For terminal modes, do a few more polls to catch final state, then stop
-            if (!terminalModes.includes(state.data?.mode)) {
-              schedulePoll();
-            }
+            schedulePoll();
           }
         }, 2500);
       }
