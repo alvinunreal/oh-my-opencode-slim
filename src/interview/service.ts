@@ -403,7 +403,10 @@ export function createInterviewService(
                 ? 'awaiting-user'
                 : parsed.latestAssistantError
                   ? 'error'
-                  : 'awaiting-agent',
+                  : !parsed.state &&
+                      sessionBusy.get(interview.sessionID) === false
+                    ? 'completed'
+                    : 'awaiting-agent',
       lastParseError: parsed.latestAssistantError,
       isBusy: sessionBusy.get(interview.sessionID) === true,
       summary: state.summary,
