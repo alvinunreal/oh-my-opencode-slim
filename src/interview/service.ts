@@ -263,7 +263,6 @@ export function createInterviewService(
   async function loadMessagesWithRetry(
     sessionID: string,
   ): Promise<InterviewMessage[]> {
-    const _lastLength = 0;
     for (let i = 0; i < 8; i++) {
       const messages = await loadMessages(sessionID);
       if (messages.length > 0) {
