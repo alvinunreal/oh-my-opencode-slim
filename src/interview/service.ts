@@ -144,6 +144,7 @@ export function createInterviewService(
     section: string,
     comment: string,
   ) => Promise<void>;
+  submitChat: (interviewId: string, message: string) => Promise<void>;
   handleNudgeAction: (
     interviewId: string,
     action: 'more-questions' | 'confirm-complete',
@@ -802,6 +803,68 @@ export function createInterviewService(
     }
   }
 
+  async function submitChat(
+    interviewId: string,
+    message: string,
+  ): Promise<void> {
+    const interview = getInterviewById(interviewId);
+    if (!interview) {
+      throw new Error('Interview not found');
+    }
+    if (interview.status === 'abandoned') {
+      throw new Error('Interview session is no longer active.');
+    }
+    if (sessionBusy.get(interview.sessionID) === true) {
+      throw new Error(
+        'Interview session is busy. Wait for the current response.',
+      );
+    }
+
+    sessionBusy.set(interview.sessionID, true);
+    let promptSent = false;
+
+    try {
+      const state = await getInterviewState(interviewId);
+      if (state.mode === 'error') {
+        throw new Error('Interview is waiting for a valid agent update.');
+      }
+
+      const relativePath = relativeInterviewPath(
+        ctx.directory,
+        interview.markdownPath,
+      );
+
+      const prompt = [
+        `You are continuing the interview for the specification document at "${relativePath}".`,
+        `The current document content on disk is:`,
+        `\`\`\`markdown`,
+        state.document,
+        `\`\`\``,
+        ``,
+        `The user sent a freeform message via the dashboard chat panel:`,
+        `${message}`,
+        ``,
+        `Process this request — it may be a request to add a new section, revise existing content, ask clarifying questions, or make structural changes.`,
+        `Update the specification document accordingly and include the updated 11-section specification.`,
+        `Ask up to ${maxQuestions} clarifying questions if needed using the same <interview_state> JSON block format as before.`,
+      ].join('\n');
+
+      const model = sessionModel.get(interview.sessionID);
+      await ctx.client.session.promptAsync({
+        path: { id: interview.sessionID },
+        body: {
+          parts: [createInternalAgentTextPart(prompt)],
+          ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
+        },
+      });
+      promptSent = true;
+    } finally {
+      if (!promptSent) {
+        sessionBusy.set(interview.sessionID, false);
+      }
+    }
+  }
+
   async function handleNudgeAction(
     interviewId: string,
     action: 'more-questions' | 'confirm-complete',
@@ -889,6 +952,7 @@ export function createInterviewService(
     listInterviews,
     submitAnswers,
     submitBlockComment,
+    submitChat,
     handleNudgeAction,
   };
 }

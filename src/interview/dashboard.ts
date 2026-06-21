@@ -411,6 +411,7 @@ export function createDashboardServer(config: DashboardConfig): {
           filePath: path.join(interviewDir, entry),
           nudgeAction: null,
           pendingBlockComment: null,
+          pendingChatMessage: null,
         });
 
         // Also register the session directory
@@ -674,6 +675,7 @@ export function createDashboardServer(config: DashboardConfig): {
         filePath: '',
         nudgeAction: null,
         pendingBlockComment: null,
+        pendingChatMessage: null,
       });
       dedupRecovered(interviewId, stateCache);
       fileCache = null;
@@ -734,6 +736,7 @@ export function createDashboardServer(config: DashboardConfig): {
           filePath: state.filePath ?? '',
           nudgeAction: null,
           pendingBlockComment: state.pendingBlockComment ?? null,
+          pendingChatMessage: state.pendingChatMessage ?? null,
         });
       }
 
@@ -948,6 +951,78 @@ export function createDashboardServer(config: DashboardConfig): {
         entry.pendingBlockComment = null;
       }
       sendJson(response, 200, val || {});
+      return;
+    }
+
+    // ── API: submit chat message (browser → dashboard) ──────────────
+    if (
+      request.method === 'POST' &&
+      pathname.startsWith('/api/interviews/') &&
+      pathname.endsWith('/chat')
+    ) {
+      const interviewId = pathname
+        .replace('/api/interviews/', '')
+        .replace('/chat', '');
+      if (!isValidId(interviewId)) {
+        sendJson(response, 400, { error: 'Invalid interview ID' });
+        return;
+      }
+      const entry = stateCache.get(interviewId);
+      if (!entry) {
+        sendJson(response, 404, { error: 'Interview not found' });
+        return;
+      }
+
+      let body: unknown;
+      try {
+        body = await readJsonBody(request);
+      } catch {
+        sendJson(response, 400, { error: 'Invalid JSON' });
+        return;
+      }
+
+      const { message } = body as { message?: string };
+      if (typeof message !== 'string' || !message.trim()) {
+        sendJson(response, 400, {
+          error: 'message must be a non-empty string',
+        });
+        return;
+      }
+
+      entry.pendingChatMessage = message.trim();
+      entry.mode = 'awaiting-agent';
+      entry.lastUpdatedAt = Date.now();
+      sendJson(response, 200, { status: 'ok' });
+      return;
+    }
+
+    // ── API: get pending chat message (session polls, auth required) ─
+    if (
+      request.method === 'GET' &&
+      pathname.startsWith('/api/interviews/') &&
+      pathname.endsWith('/chat')
+    ) {
+      if (!isAuthenticated(request)) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      const interviewId = pathname
+        .replace('/api/interviews/', '')
+        .replace('/chat', '');
+      if (!isValidId(interviewId)) {
+        sendJson(response, 400, { error: 'Invalid interview ID' });
+        return;
+      }
+      const entry = stateCache.get(interviewId);
+      if (!entry) {
+        sendJson(response, 404, { error: 'Interview not found' });
+        return;
+      }
+      const val = entry.pendingChatMessage;
+      if (val) {
+        entry.pendingChatMessage = null;
+      }
+      sendJson(response, 200, { message: val || null });
       return;
     }
 
@@ -1169,6 +1244,8 @@ export function createDashboardServer(config: DashboardConfig): {
         if (existing.nudgeAction) entry.nudgeAction ??= existing.nudgeAction;
         if (existing.pendingBlockComment)
           entry.pendingBlockComment ??= existing.pendingBlockComment;
+        if (existing.pendingChatMessage)
+          entry.pendingChatMessage ??= existing.pendingChatMessage;
       }
       stateCache.set(entry.interviewId, entry);
       dedupRecovered(entry.interviewId, stateCache);

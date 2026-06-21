@@ -939,9 +939,102 @@ export function renderInterviewPage(
         background: rgba(52,211,153,0.05);
       }
       .nudge-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+      /* ── TOC Sidebar ──────────────────────────────────────────────── */
+      .toc-sidebar {
+        position: fixed;
+        top: 0; left: 0; bottom: 0;
+        width: 240px;
+        background: rgba(255,255,255,0.02);
+        border-right: 1px solid rgba(255,255,255,0.06);
+        padding: 24px 0 80px;
+        overflow-y: auto;
+        z-index: 50;
+        display: none;
+      }
+      .toc-sidebar.visible { display: block; }
+      .toc-header {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.28);
+        padding: 0 20px 14px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        margin-bottom: 8px;
+      }
+      .toc-item {
+        display: block;
+        padding: 7px 20px;
+        font-size: 13px;
+        color: rgba(255,255,255,0.5);
+        text-decoration: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        border-left: 2px solid transparent;
+        line-height: 1.4;
+      }
+      .toc-item:hover {
+        color: rgba(255,255,255,0.85);
+        background: rgba(255,255,255,0.03);
+      }
+      .toc-item.active {
+        color: #ffffff;
+        border-left-color: #ffffff;
+        background: rgba(255,255,255,0.04);
+      }
+      body.toc-visible .wrap {
+        margin-left: 240px;
+      }
+
+      /* ── Chat Panel ───────────────────────────────────────────────── */
+      .chat-panel {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        background: rgba(0,0,0,0.92);
+        backdrop-filter: blur(12px);
+        border-top: 1px solid rgba(255,255,255,0.08);
+        padding: 12px 20px;
+        z-index: 60;
+        display: none;
+        gap: 10px;
+        align-items: center;
+      }
+      .chat-panel.visible { display: flex; }
+      body.chat-visible .wrap { padding-bottom: 72px; }
+      body.toc-visible .chat-panel { left: 240px; }
+      .chat-input {
+        flex: 1;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px;
+        color: #ffffff;
+        font-family: inherit;
+        font-size: 14px;
+        padding: 10px 14px;
+        outline: none;
+        transition: border-color 0.2s ease;
+      }
+      .chat-input:focus { border-color: rgba(255,255,255,0.35); }
+      .chat-input::placeholder { color: rgba(255,255,255,0.3); }
+      .chat-send {
+        flex-shrink: 0;
+        background: #ffffff;
+        color: #000000;
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.2s ease;
+      }
+      .chat-send:hover:not(:disabled) { opacity: 0.85; }
+      .chat-send:disabled { opacity: 0.3; cursor: not-allowed; }
     </style>
   </head>
   <body>
+    <nav id="tocSidebar" class="toc-sidebar"></nav>
     <div class="wrap">
       <a href="/" class="back-link">← All Interviews</a>
       <div class="brand-header">
@@ -980,6 +1073,11 @@ export function renderInterviewPage(
     
     <div class="loading-overlay" id="loadingOverlay">
       <div class="status-text" id="loadingText">Processing...</div>
+    </div>
+
+    <div class="chat-panel" id="chatPanel">
+      <input type="text" id="chatInput" class="chat-input" placeholder="Send a message to the agent — add a section, revise content, ask questions..." autocomplete="off" />
+      <button class="chat-send" id="chatSendBtn" type="button" disabled>Send</button>
     </div>
 
     <script>
@@ -1496,6 +1594,103 @@ export function renderInterviewPage(
         container.replaceChildren(frag);
       }
 
+      // ── TOC Sidebar ──────────────────────────────────────────────
+      function updateTocSidebar(data) {
+        const sidebar = document.getElementById('tocSidebar');
+        const blocks = data.blocks || [];
+        const isDone = ['completed', 'session-disconnected'].includes(data.mode);
+        if (!isDone || !blocks.length) {
+          sidebar.classList.remove('visible');
+          document.body.classList.remove('toc-visible');
+          return;
+        }
+        sidebar.classList.add('visible');
+        document.body.classList.add('toc-visible');
+        sidebar.innerHTML = '';
+        const header = document.createElement('div');
+        header.className = 'toc-header';
+        header.textContent = 'Sections';
+        sidebar.appendChild(header);
+        blocks.forEach((block) => {
+          const item = document.createElement('a');
+          item.className = 'toc-item';
+          item.textContent = block.title;
+          item.addEventListener('click', () => {
+            const cards = document.querySelectorAll('.spec-block-card h3');
+            for (const h3 of cards) {
+              if (h3.textContent === block.title) {
+                h3.closest('.spec-block-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                break;
+              }
+            }
+            document.querySelectorAll('.toc-item').forEach((el) => el.classList.remove('active'));
+            item.classList.add('active');
+          });
+          sidebar.appendChild(item);
+        });
+      }
+
+      // ── Chat Panel ───────────────────────────────────────────────
+      function updateChatPanel(data) {
+        const panel = document.getElementById('chatPanel');
+        const input = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('chatSendBtn');
+        const isDone = ['completed', 'session-disconnected'].includes(data.mode);
+        if (!isDone) {
+          panel.classList.remove('visible');
+          document.body.classList.remove('chat-visible');
+          return;
+        }
+        panel.classList.add('visible');
+        document.body.classList.add('chat-visible');
+        const busy = data.isBusy || false;
+        sendBtn.disabled = busy;
+        input.disabled = busy;
+        if (busy) {
+          input.placeholder = 'Agent is processing...';
+        } else {
+          input.placeholder = 'Send a message to the agent — add a section, revise content, ask questions...';
+        }
+      }
+
+      async function sendChatMessage() {
+        const input = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('chatSendBtn');
+        const message = input.value.trim();
+        if (!message) return;
+        sendBtn.disabled = true;
+        input.value = '';
+        const submitStatus = document.getElementById('submitStatus');
+        submitStatus.textContent = '';
+        try {
+          const res = await fetch('/api/interviews/' + encodeURIComponent(interviewId) + '/chat', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ message }),
+          });
+          const payload = await res.json();
+          if (res.ok) {
+            submitStatus.textContent = 'Chat message sent to agent.';
+            refresh().catch(() => {});
+            schedulePoll();
+          } else {
+            submitStatus.textContent = payload.message || payload.error || 'Failed to send chat message.';
+            sendBtn.disabled = false;
+          }
+        } catch (_err) {
+          submitStatus.textContent = 'Network error sending chat message.';
+          sendBtn.disabled = false;
+        }
+      }
+
+      document.getElementById('chatSendBtn').addEventListener('click', sendChatMessage);
+      document.getElementById('chatInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendChatMessage();
+        }
+      });
+
       function renderQuestions(questions) {
         const sig = JSON.stringify([questions, state.data?.mode]);
         const container = document.getElementById('questions');
@@ -1652,6 +1847,8 @@ export function renderInterviewPage(
         
         renderQuestions(data.questions || []);
         updateSubmitButton();
+        updateTocSidebar(data);
+        updateChatPanel(data);
       }
 
       async function refresh() {

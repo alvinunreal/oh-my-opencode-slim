@@ -132,4 +132,5 @@ export interface InterviewStateEntry {
     section: string;
     comment: string;
   } | null;
+  pendingChatMessage: string | null;
 }

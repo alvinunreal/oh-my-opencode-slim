@@ -61,6 +61,8 @@ export function createInterviewManager(
         service.submitAnswers(interviewId, answers),
       submitBlockComment: async (interviewId, section, comment) =>
         service.submitBlockComment(interviewId, section, comment),
+      submitChat: async (interviewId, message) =>
+        service.submitChat(interviewId, message),
       handleNudgeAction: async (interviewId, action) =>
         service.handleNudgeAction(interviewId, action),
       outputFolder: resolvedOutputPath,
@@ -105,6 +107,7 @@ export function createInterviewManager(
         pollPendingAnswers(sessionID).catch(() => {});
         pollNudgeAction(sessionID).catch(() => {});
         pollBlockComment(sessionID).catch(() => {});
+        pollChat(sessionID).catch(() => {});
       }
     }, FALLBACK_POLL_INTERVAL);
     fallbackTimer?.unref();
@@ -146,6 +149,7 @@ export function createInterviewManager(
             filePath: interview.markdownPath,
             nudgeAction: null,
             pendingBlockComment: null,
+            pendingChatMessage: null,
           });
           // Register session directory for file scanning
           dashboard?.registerSession({
@@ -245,6 +249,8 @@ export function createInterviewManager(
           service.submitAnswers(interviewId, answers),
         submitBlockComment: async (interviewId, section, comment) =>
           service.submitBlockComment(interviewId, section, comment),
+        submitChat: async (interviewId, message) =>
+          service.submitChat(interviewId, message),
         handleNudgeAction: async (interviewId, action) =>
           service.handleNudgeAction(interviewId, action),
         outputFolder: resolvedOutputPath,
@@ -342,6 +348,31 @@ export function createInterviewManager(
       }
     } catch (err) {
       log('[interview] failed polling block comment:', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function pollChat(sessionID: string) {
+    const interviewId = service.getActiveInterviewId(sessionID);
+    if (!interviewId) return;
+
+    try {
+      const res = await fetch(
+        `${dashboardBaseUrl}/api/interviews/${interviewId}/chat?token=${authToken}`,
+        { signal: AbortSignal.timeout(3000) },
+      );
+      const body = (await res.json()) as {
+        message?: string | null;
+      };
+      if (res.ok && body.message) {
+        log('[interview] delivering chat message (HTTP poll)', {
+          interviewId,
+        });
+        await service.submitChat(interviewId, body.message);
+      }
+    } catch (err) {
+      log('[interview] failed polling chat message:', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -456,6 +487,7 @@ function stateToEntry(
     filePath: state.interview.markdownPath,
     nudgeAction: null,
     pendingBlockComment: null,
+    pendingChatMessage: null,
   };
 }
 
@@ -498,6 +530,7 @@ async function registerInterviewViaHttp(
       filePath: interview.markdownPath,
       nudgeAction: null,
       pendingBlockComment: null,
+      pendingChatMessage: null,
     }),
     signal: AbortSignal.timeout(3000),
   }).catch((err) => {
