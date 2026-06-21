@@ -631,7 +631,21 @@ export function createInterviewService(
       const sessionID = properties.sessionID as string | undefined;
       const status = properties.status as { type?: string } | undefined;
       if (sessionID) {
+        const wasBusy = sessionBusy.get(sessionID) === true;
         sessionBusy.set(sessionID, status?.type === 'busy');
+
+        // When session transitions from busy → idle, sync state so the
+        // browser gets the final push (e.g. after confirm-complete or
+        // chat message processing). Without this, the browser stays
+        // stuck on "Agent Thinking" because no poll triggers syncInterview.
+        if (wasBusy && status?.type !== 'busy') {
+          const activeId = activeInterviewIds.get(sessionID);
+          const interview = activeId ? interviewsById.get(activeId) : null;
+          if (interview && interview.status === 'active') {
+            // Fire-and-forget — syncInterview pushes state via onStateChange
+            syncInterview(interview).catch(() => {});
+          }
+        }
       }
       return;
     }
