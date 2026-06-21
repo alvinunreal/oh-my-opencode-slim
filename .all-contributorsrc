@@ -596,6 +596,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "SisyphusZheng",
+      "name": "Zhi",
+      "avatar_url": "https://avatars.githubusercontent.com/u/146103794?v=4",
+      "profile": "https://github.com/SisyphusZheng",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
