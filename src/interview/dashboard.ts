@@ -15,6 +15,7 @@ import {
   extractSummarySection,
   extractTitle,
   parseFrontmatter,
+  parseSpecBlocks,
   slugify,
 } from './document';
 import {
@@ -816,6 +817,7 @@ export function createDashboardServer(config: DashboardConfig): {
         document,
         lastUpdatedAt: entry.lastUpdatedAt,
         nudgeAction: entry.nudgeAction,
+        blocks: parseSpecBlocks(document),
       });
       return;
     }
