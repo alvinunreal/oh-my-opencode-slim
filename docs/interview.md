@@ -65,9 +65,10 @@ Example:
 interview/kanban-design-tool.md
 ```
 
-The file contains two sections:
+The file contains three sections:
 
-- `Current spec` — rewritten as the interview becomes clearer
+- `Frontmatter` — session meta data for recovery
+- `Current spec` — 11-section structured specification doc (Introduction, Purpose, Requirements, Data Contracts, Acceptance Criteria, etc.)
 - `Q&A history` — append-only question/answer record
 
 Example:
@@ -77,7 +78,11 @@ Example:
 
 ## Current spec
 
-A collaborative kanban tool for design teams with shared boards, comments, and web-first workflows.
+# Introduction
+...
+
+## 1. Purpose & Scope
+...
 
 ## Q&A history
 

@@ -59,6 +59,8 @@ export function createInterviewManager(
       listInterviews: () => service.listInterviews(),
       submitAnswers: async (interviewId, answers) =>
         service.submitAnswers(interviewId, answers),
+      submitBlockComment: async (interviewId, section, comment) =>
+        service.submitBlockComment(interviewId, section, comment),
       handleNudgeAction: async (interviewId, action) =>
         service.handleNudgeAction(interviewId, action),
       outputFolder: resolvedOutputPath,
@@ -102,6 +104,7 @@ export function createInterviewManager(
         if (!interviewId) continue;
         pollPendingAnswers(sessionID).catch(() => {});
         pollNudgeAction(sessionID).catch(() => {});
+        pollBlockComment(sessionID).catch(() => {});
       }
     }, FALLBACK_POLL_INTERVAL);
     fallbackTimer?.unref();
@@ -142,6 +145,7 @@ export function createInterviewManager(
             lastUpdatedAt: Date.now(),
             filePath: interview.markdownPath,
             nudgeAction: null,
+            pendingBlockComment: null,
           });
           // Register session directory for file scanning
           dashboard?.registerSession({
@@ -177,167 +181,167 @@ export function createInterviewManager(
           const retry = await probeDashboard(dashboardPort);
           if (!retry.alive) {
             log(
-              '[interview] dashboard mode: no dashboard found, falling back to per-session server',
-              {
-                port: dashboardPort,
-              },
+              '[interview] dashboard probe failed twice, falling back to local server',
             );
-            // Fall back to per-session mode — start our own server
-            const perSessionServer = createInterviewServer({
-              getState: async (interviewId) =>
-                service.getInterviewState(interviewId),
-              listInterviewFiles: async () => service.listInterviewFiles(),
-              listInterviews: () => service.listInterviews(),
-              submitAnswers: async (interviewId, answers) =>
-                service.submitAnswers(interviewId, answers),
-              handleNudgeAction: async (interviewId, action) =>
-                service.handleNudgeAction(interviewId, action),
-              outputFolder: path.join(ctx.directory, outputFolder),
-              port: 0, // random port
-            });
-            service.setBaseUrlResolver(() => perSessionServer.ensureStarted());
-            isDashboard = false;
-            initDone = true;
-            return;
+            throw new Error('Dashboard not reachable');
           }
         }
 
+        const creds = await readDashboardAuthFile(dashboardPort);
+        if (!creds) {
+          throw new Error('Dashboard credentials file missing');
+        }
+
         dashboardBaseUrl = `http://127.0.0.1:${dashboardPort}`;
-        const auth = await readDashboardAuthFile(dashboardPort);
-        authToken = auth?.token ?? '';
+        authToken = creds.token;
 
         service.setBaseUrlResolver(() => Promise.resolve(dashboardBaseUrl));
 
-        // State push: HTTP to dashboard
+        // State push: across HTTP to the dashboard process
         service.setStatePushCallback((id, state) => {
-          pushStateViaHttp(dashboardBaseUrl, authToken, id, state).catch(
-            (err) => {
-              log('[interview] failed to push state to dashboard', {
-                error: err instanceof Error ? err.message : String(err),
-              });
-            },
-          );
+          if (dashboardBaseUrl && authToken) {
+            pushStateViaHttp(dashboardBaseUrl, authToken, id, state).catch(
+              (err) => {
+                log('[interview] failed to push state to dashboard:', {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              },
+            );
+          }
         });
 
         // Interview created: POST to dashboard so it appears immediately
         service.setOnInterviewCreated((interview) => {
-          registerInterviewViaHttp(
-            dashboardBaseUrl,
-            authToken,
-            interview,
-          ).catch((err) => {
-            log('[interview] failed to register interview with dashboard', {
-              error: err instanceof Error ? err.message : String(err),
+          if (dashboardBaseUrl && authToken) {
+            registerInterviewViaHttp(
+              dashboardBaseUrl,
+              authToken,
+              interview,
+            ).catch((err) => {
+              log('[interview] failed to register interview with dashboard:', {
+                error: err instanceof Error ? err.message : String(err),
+              });
             });
-          });
+          }
         });
 
-        log('[interview] dashboard mode: we are a session', {
-          port: dashboardPort,
+        log('[interview] dashboard mode: registered as session client', {
+          dashboardUrl: dashboardBaseUrl,
         });
-
-        // Start fallback poll timer now that we know we're in session mode
-        startFallbackTimer();
       }
     } catch (err) {
-      log('[interview] dashboard mode init failed', {
-        error: err instanceof Error ? err.message : String(err),
+      log(
+        '[interview] dashboard election failed or unreachable. Falling back to per-session server.',
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      // Fallback: spawn a per-session server exactly like non-dashboard mode
+      isDashboard = false;
+      const resolvedOutputPath = path.join(ctx.directory, outputFolder);
+      const server = createInterviewServer({
+        getState: async (interviewId) => service.getInterviewState(interviewId),
+        listInterviewFiles: async () => service.listInterviewFiles(),
+        listInterviews: () => service.listInterviews(),
+        submitAnswers: async (interviewId, answers) =>
+          service.submitAnswers(interviewId, answers),
+        submitBlockComment: async (interviewId, section, comment) =>
+          service.submitBlockComment(interviewId, section, comment),
+        handleNudgeAction: async (interviewId, action) =>
+          service.handleNudgeAction(interviewId, action),
+        outputFolder: resolvedOutputPath,
+        port: 0,
       });
+      service.setBaseUrlResolver(() => server.ensureStarted());
+      service.setStatePushCallback(() => {}); // no-op on fallback
     } finally {
       initDone = true;
     }
   })();
 
-  async function ensureInit(): Promise<void> {
-    if (!initDone) await initPromise;
-  }
-
-  // ── Lazy session registration ──────────────────────────────────
-  // Register with dashboard on first hook call that includes a
-  // session ID. Dashboard needs our directory for file scanning.
-  async function registerSessionIfNeeded(sessionID: string): Promise<void> {
-    if (registeredSessions.has(sessionID)) return;
-    registeredSessions.add(sessionID);
-    if (isDashboard) return;
-
-    try {
-      await fetch(`${dashboardBaseUrl}/api/register?token=${authToken}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionID,
-          directory: ctx.directory,
-          pid: process.pid,
-        }),
-        signal: AbortSignal.timeout(3000),
-      });
-    } catch (err) {
-      log('[interview] failed to register session with dashboard', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+  async function ensureInitialized() {
+    if (!initDone) {
+      await initPromise;
     }
   }
 
-  // ── Answer polling ─────────────────────────────────────────────
-  // When LLM finishes responding (session goes idle), check if the
-  // user submitted answers via the dashboard UI while we were busy.
-  async function pollPendingAnswers(sessionID: string): Promise<void> {
+  // ── Client Poll Implementations (polls dashboard server) ──────────
+  async function pollPendingAnswers(sessionID: string) {
     const interviewId = service.getActiveInterviewId(sessionID);
     if (!interviewId) return;
 
     try {
-      const response = await fetch(
+      const res = await fetch(
         `${dashboardBaseUrl}/api/interviews/${interviewId}/pending?token=${authToken}`,
         { signal: AbortSignal.timeout(3000) },
       );
-      if (!response.ok) return;
-
-      const data = (await response.json()) as {
-        answers: Array<{ questionId: string; answer: string }> | null;
+      const body = (await res.json()) as {
+        answers?: Array<{ questionId: string; answer: string }> | null;
       };
-      if (!data.answers || data.answers.length === 0) return;
-
-      log('[interview] delivering pending answers from dashboard', {
-        interviewId,
-        count: data.answers.length,
-      });
-
-      // submitAnswers reads answers, injects prompt locally, and
-      // the resulting state push updates the dashboard cache
-      await service.submitAnswers(interviewId, data.answers);
+      if (res.ok && body.answers && body.answers.length > 0) {
+        log('[interview] delivering pending answers (HTTP poll)', {
+          interviewId,
+          count: body.answers.length,
+        });
+        await service.submitAnswers(interviewId, body.answers);
+      }
     } catch (err) {
-      log('[interview] failed to poll pending answers', {
+      log('[interview] failed polling pending answers:', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
-  // ── Nudge polling ──────────────────────────────────────────────
-  // Check if the user nudged the agent from the dashboard UI.
-  async function pollNudgeAction(sessionID: string): Promise<void> {
+  async function pollNudgeAction(sessionID: string) {
     const interviewId = service.getActiveInterviewId(sessionID);
     if (!interviewId) return;
 
     try {
-      const response = await fetch(
+      const res = await fetch(
         `${dashboardBaseUrl}/api/interviews/${interviewId}/nudge?token=${authToken}`,
         { signal: AbortSignal.timeout(3000) },
       );
-      if (!response.ok) return;
-
-      const data = (await response.json()) as {
-        action: 'more-questions' | 'confirm-complete' | null;
+      const body = (await res.json()) as {
+        action?: 'more-questions' | 'confirm-complete' | null;
       };
-      if (!data.action) return;
-
-      log('[interview] delivering nudge action from dashboard', {
-        interviewId,
-        action: data.action,
-      });
-
-      await service.handleNudgeAction(interviewId, data.action);
+      if (res.ok && body.action) {
+        log('[interview] delivering nudge action (HTTP poll)', {
+          interviewId,
+          action: body.action,
+        });
+        await service.handleNudgeAction(interviewId, body.action);
+      }
     } catch (err) {
-      log('[interview] failed to poll nudge action', {
+      log('[interview] failed polling nudge action:', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function pollBlockComment(sessionID: string) {
+    const interviewId = service.getActiveInterviewId(sessionID);
+    if (!interviewId) return;
+
+    try {
+      const res = await fetch(
+        `${dashboardBaseUrl}/api/interviews/${interviewId}/block-comment?token=${authToken}`,
+        { signal: AbortSignal.timeout(3000) },
+      );
+      const body = (await res.json()) as {
+        section?: string;
+        comment?: string;
+      };
+      if (res.ok && body.section && body.comment) {
+        log('[interview] delivering block comment (HTTP poll)', {
+          interviewId,
+          section: body.section,
+        });
+        await service.submitBlockComment(
+          interviewId,
+          body.section,
+          body.comment,
+        );
+      }
+    } catch (err) {
+      log('[interview] failed polling block comment:', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -345,38 +349,45 @@ export function createInterviewManager(
 
   return {
     registerCommand: (c) => service.registerCommand(c),
-
     handleCommandExecuteBefore: async (input, output) => {
-      await ensureInit();
-      await service.handleCommandExecuteBefore(input, output);
-      if (input.sessionID) {
-        await registerSessionIfNeeded(input.sessionID);
+      await ensureInitialized();
+
+      // Register session in our registry so dashboard/fallback timers track it.
+      // Send a session-connect HTTP ping to the dashboard if we're a client.
+      const sessionID = input.sessionID;
+      registeredSessions.add(sessionID);
+
+      if (!isDashboard && dashboardBaseUrl) {
+        fetch(`${dashboardBaseUrl}/api/sessions?token=${authToken}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionID,
+            directory: ctx.directory,
+            pid: process.pid,
+          }),
+          signal: AbortSignal.timeout(3000),
+        }).catch(() => {});
+        startFallbackTimer();
       }
+
+      await service.handleCommandExecuteBefore(input, output);
     },
-
     handleEvent: async (input) => {
-      await ensureInit();
-      await service.handleEvent(input);
-
+      await ensureInitialized();
       const { event } = input;
       const properties = event.properties ?? {};
-      const sessionID = properties.sessionID as string | undefined;
+      const sessionID = (properties.sessionID as string | undefined) ?? null;
 
-      // Register session on first sighting
-      if (sessionID) {
-        await registerSessionIfNeeded(sessionID);
-      }
+      await service.handleEvent(input);
 
-      // When LLM finishes responding, push updated state + poll for pending answers
-      if (event.type === 'session.status' && sessionID) {
+      // Event hook: Session is idle. Check for any pending user submissions
+      // queued on the dashboard and deliver them to OpenCode.
+      if (event.type === 'session.status') {
         const status = properties.status as { type?: string } | undefined;
-        if (status?.type === 'idle') {
+        if (sessionID && status?.type === 'idle') {
           const interviewId = service.getActiveInterviewId(sessionID);
-
-          // Process pending nudges/answers BEFORE refreshing state.
-          // handleNudgeAction sets sessionBusy=true, so the state refresh
-          // below correctly pushes 'awaiting-agent' instead of 'completed'.
-          if (!isDashboard) {
+          if (!isDashboard && dashboardBaseUrl) {
             // Session mode: HTTP poll the dashboard
             await pollPendingAnswers(sessionID);
             await pollNudgeAction(sessionID);
@@ -444,6 +455,7 @@ function stateToEntry(
     lastUpdatedAt: Date.now(),
     filePath: state.interview.markdownPath,
     nudgeAction: null,
+    pendingBlockComment: null,
   };
 }
 
@@ -477,7 +489,20 @@ async function registerInterviewViaHttp(
       interviewId: interview.id,
       sessionID: interview.sessionID,
       idea: interview.idea,
+      mode: 'awaiting-agent',
+      summary: 'Interview created.',
+      title: interview.idea,
+      questions: [],
+      pendingAnswers: null,
+      lastUpdatedAt: Date.now(),
+      filePath: interview.markdownPath,
+      nudgeAction: null,
+      pendingBlockComment: null,
     }),
     signal: AbortSignal.timeout(3000),
+  }).catch((err) => {
+    log('[interview] failed to register interview with dashboard via HTTP:', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   });
 }

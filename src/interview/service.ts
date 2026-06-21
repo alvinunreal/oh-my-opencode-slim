@@ -18,6 +18,7 @@ import {
   extractSummarySection,
   extractTitle,
   normalizeOutputFolder,
+  parseSpecBlocks,
   readInterviewDocument,
   relativeInterviewPath,
   resolveExistingInterviewPath,
@@ -137,6 +138,11 @@ export function createInterviewService(
   submitAnswers: (
     interviewId: string,
     answers: InterviewAnswer[],
+  ) => Promise<void>;
+  submitBlockComment: (
+    interviewId: string,
+    section: string,
+    comment: string,
   ) => Promise<void>;
   handleNudgeAction: (
     interviewId: string,
@@ -360,6 +366,7 @@ export function createInterviewService(
     await maybeRenameWithTitle(interview, state.title);
 
     const document = await rewriteInterviewDocument(interview, state.summary);
+    const blocks = parseSpecBlocks(document);
 
     const interviewState: InterviewState = {
       interview,
@@ -385,6 +392,7 @@ export function createInterviewService(
       summary: state.summary,
       questions: state.questions,
       document,
+      blocks,
     };
 
     // Push state to dashboard if callback is set (dashboard mode)
@@ -710,6 +718,59 @@ export function createInterviewService(
     return sorted;
   }
 
+  async function submitBlockComment(
+    interviewId: string,
+    sectionTitle: string,
+    comment: string,
+  ): Promise<void> {
+    const interview = getInterviewById(interviewId);
+    if (!interview) {
+      throw new Error('Interview not found');
+    }
+    if (interview.status === 'abandoned') {
+      throw new Error('Interview session is no longer active.');
+    }
+    if (sessionBusy.get(interview.sessionID) === true) {
+      throw new Error(
+        'Interview session is busy. Wait for the current response.',
+      );
+    }
+
+    sessionBusy.set(interview.sessionID, true);
+    let promptSent = false;
+
+    try {
+      const state = await getInterviewState(interviewId);
+      if (state.mode === 'error') {
+        throw new Error('Interview is waiting for a valid agent update.');
+      }
+
+      const prompt = [
+        `The user submitted specific feedback/comments for the section "${sectionTitle}".`,
+        `Feedback: ${comment}`,
+        ``,
+        `Update the specification summary (focusing heavily on making changes to the "${sectionTitle}" section) to address this feedback.`,
+        `If this feedback implies other parts of the spec should change, update them too.`,
+        `Include the updated 11-section specification and ask the next highest-value clarifying questions as questions (up to ${maxQuestions} questions) if needed.`,
+        `Return the same <interview_state> JSON block format as before.`,
+      ].join('\n');
+
+      const model = sessionModel.get(interview.sessionID);
+      await ctx.client.session.promptAsync({
+        path: { id: interview.sessionID },
+        body: {
+          parts: [createInternalAgentTextPart(prompt)],
+          ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
+        },
+      });
+      promptSent = true;
+    } finally {
+      if (!promptSent) {
+        sessionBusy.set(interview.sessionID, false);
+      }
+    }
+  }
+
   async function handleNudgeAction(
     interviewId: string,
     action: 'more-questions' | 'confirm-complete',
@@ -783,6 +844,7 @@ export function createInterviewService(
     listInterviewFiles,
     listInterviews,
     submitAnswers,
+    submitBlockComment,
     handleNudgeAction,
   };
 }

@@ -515,6 +515,65 @@ export function renderInterviewPage(
     <style>
       ${sharedStyles()}
       .brand-mark { width: 144px; height: 144px; }
+      .spec-block-card {
+        background: rgba(255,255,255,0.01);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 8px;
+        padding: 24px;
+        margin-bottom: 20px;
+        text-align: left;
+        transition: all 0.2s ease;
+      }
+      .spec-block-card:hover {
+        border-color: rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.02);
+      }
+      .spec-block-card h3 {
+        margin-top: 0;
+        font-size: 18px;
+        color: #ffffff;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        padding-bottom: 8px;
+        margin-bottom: 14px;
+      }
+      .spec-block-content {
+        font-size: 15px;
+        line-height: 1.6;
+        color: rgba(255,255,255,0.8);
+      }
+      .spec-block-comment-box {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px dashed rgba(255,255,255,0.08);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .spec-block-comment-input {
+        min-height: 60px !important;
+        font-size: 14px !important;
+        padding: 10px !important;
+      }
+      .comment-submit-btn {
+        align-self: flex-end;
+        background: transparent;
+        border: 1px solid rgba(255,255,255,0.2);
+        color: rgba(255,255,255,0.8);
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .comment-submit-btn:hover:not(:disabled) {
+        border-color: #34d399;
+        color: #34d399;
+        background: rgba(52,211,153,0.05);
+      }
+      .comment-submit-btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
       h1 { font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 12px; line-height: 1.2; }
       h2 { font-size: 18px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px; }
       h3 { font-size: 18px; font-weight: 500; margin-bottom: 16px; line-height: 1.4; }
@@ -1292,21 +1351,94 @@ export function renderInterviewPage(
         return paragraphs.map(p => \`<p>\${p.replace(/\\n/g, '<br>')}</p>\`).join('');
       }
 
+      async function submitBlockComment(sectionTitle, commentText, button) {
+        if (!commentText.trim()) return;
+        button.disabled = true;
+        const submitStatus = document.getElementById('submitStatus');
+        submitStatus.textContent = '';
+        
+        try {
+          const res = await fetch('/api/interviews/' + encodeURIComponent(interviewId) + '/block-comment', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ section: sectionTitle, comment: commentText }),
+          });
+          const payload = await res.json();
+          if (res.ok) {
+            submitStatus.textContent = 'Feedback queued for block: ' + sectionTitle;
+            const input = button.previousElementSibling;
+            if (input) input.value = '';
+            refresh().catch(() => {});
+          } else {
+            submitStatus.textContent = payload.error || 'Failed to submit comment.';
+          }
+        } catch (err) {
+          submitStatus.textContent = 'Error submitting block connection feedback.';
+        } finally {
+          button.disabled = false;
+        }
+      }
+
       function renderCompletedView(data) {
         const container = document.getElementById('questions');
-        const { spec, qaPairs } = parseDocument(data.document);
         const frag = document.createDocumentFragment();
 
-        // Spec section
-        if (spec) {
+        const blocks = data.blocks || [];
+        if (blocks.length > 0) {
           const specLabel = document.createElement('div');
           specLabel.className = 'section-label';
-          specLabel.textContent = 'Current Spec';
+          specLabel.textContent = 'Interactive Specifications (11 Sections)';
           frag.appendChild(specLabel);
-          const specBlock = document.createElement('div');
-          specBlock.className = 'spec-block';
-          specBlock.innerHTML = simpleMarkdown(spec);
-          frag.appendChild(specBlock);
+
+          for (const block of blocks) {
+            const card = document.createElement('div');
+            card.className = 'spec-block-card';
+
+            const header = document.createElement('h3');
+            header.textContent = block.title;
+            card.appendChild(header);
+
+            const content = document.createElement('div');
+            content.className = 'spec-block-content';
+            content.innerHTML = simpleMarkdown(block.content);
+            card.appendChild(content);
+
+            // Per-block comment integration for micro annotations
+            const commentBox = document.createElement('div');
+            commentBox.className = 'spec-block-comment-box';
+
+            const textarea = document.createElement('textarea');
+            textarea.className = 'spec-block-comment-input';
+            textarea.placeholder = 'Provide review comment/revision for ' + block.title + '...';
+            commentBox.appendChild(textarea);
+
+            const sendBtn = document.createElement('button');
+            sendBtn.className = 'comment-submit-btn';
+            sendBtn.type = 'button';
+            sendBtn.textContent = 'Revise Section';
+            sendBtn.addEventListener('click', () => {
+              submitBlockComment(block.title, textarea.value, sendBtn);
+            });
+            commentBox.appendChild(sendBtn);
+
+            card.appendChild(commentBox);
+            frag.appendChild(card);
+          }
+        } else {
+          // Fallback legacy parse if blocks array isn't populated
+          const { spec, qaPairs } = parseDocument(data.document);
+
+          // Spec section
+          if (spec) {
+            const specLabel = document.createElement('div');
+            specLabel.className = 'section-label';
+            specLabel.textContent = 'Current Spec';
+            frag.appendChild(specLabel);
+            const specBlock = document.createElement('div');
+            specBlock.className = 'spec-block';
+            specBlock.innerHTML = simpleMarkdown(spec);
+            frag.appendChild(specBlock);
+          }
         }
 
         // Q&A section
@@ -1315,6 +1447,7 @@ export function renderInterviewPage(
         qaLabel.textContent = 'Q&A History';
         frag.appendChild(qaLabel);
 
+        const { qaPairs } = parseDocument(data.document);
         if (!qaPairs.length) {
           const empty = document.createElement('p');
           empty.className = 'qa-empty';

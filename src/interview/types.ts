@@ -76,6 +76,12 @@ export interface InterviewFileItem {
   directory?: string;
 }
 
+export interface SpecBlock {
+  id: string;
+  title: string;
+  content: string;
+}
+
 export interface InterviewState {
   interview: InterviewRecord;
   url: string;
@@ -92,6 +98,7 @@ export interface InterviewState {
   summary: string;
   questions: InterviewQuestion[];
   document: string;
+  blocks: SpecBlock[];
 }
 
 /** Wire format for dashboard state cache entries. */
@@ -121,4 +128,8 @@ export interface InterviewStateEntry {
   lastUpdatedAt: number;
   filePath: string;
   nudgeAction: 'more-questions' | 'confirm-complete' | null;
+  pendingBlockComment: {
+    section: string;
+    comment: string;
+  } | null;
 }

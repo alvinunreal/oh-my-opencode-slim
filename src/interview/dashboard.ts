@@ -181,6 +181,9 @@ export function createDashboardServer(config: DashboardConfig): {
   consumeNudgeAction: (
     interviewId: string,
   ) => 'more-questions' | 'confirm-complete' | null;
+  consumeBlockComment: (
+    interviewId: string,
+  ) => { section: string; comment: string } | null;
   authToken: string;
   discoverSessionDirectories: () => Promise<void>;
   addManualFolder: (dir: string) => void;
@@ -406,6 +409,7 @@ export function createDashboardServer(config: DashboardConfig): {
             : Date.now(),
           filePath: path.join(interviewDir, entry),
           nudgeAction: null,
+          pendingBlockComment: null,
         });
 
         // Also register the session directory
@@ -668,6 +672,7 @@ export function createDashboardServer(config: DashboardConfig): {
         lastUpdatedAt: Date.now(),
         filePath: '',
         nudgeAction: null,
+        pendingBlockComment: null,
       });
       dedupRecovered(interviewId, stateCache);
       fileCache = null;
@@ -727,6 +732,7 @@ export function createDashboardServer(config: DashboardConfig): {
           lastUpdatedAt: Date.now(),
           filePath: state.filePath ?? '',
           nudgeAction: null,
+          pendingBlockComment: state.pendingBlockComment ?? null,
         });
       }
 
@@ -865,6 +871,81 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 200, { status: 'ok' });
+      return;
+    }
+
+    // ── API: submit block comment (browser → dashboard) ────────────
+    if (
+      request.method === 'POST' &&
+      pathname.startsWith('/api/interviews/') &&
+      pathname.endsWith('/block-comment')
+    ) {
+      const interviewId = pathname
+        .replace('/api/interviews/', '')
+        .replace('/block-comment', '');
+      if (!isValidId(interviewId)) {
+        sendJson(response, 400, { error: 'Invalid interview ID' });
+        return;
+      }
+      const entry = stateCache.get(interviewId);
+      if (!entry) {
+        sendJson(response, 404, { error: 'Interview not found' });
+        return;
+      }
+
+      let body: unknown;
+      try {
+        body = await readJsonBody(request);
+      } catch {
+        sendJson(response, 400, { error: 'Invalid JSON' });
+        return;
+      }
+
+      const { section, comment } = body as {
+        section?: string;
+        comment?: string;
+      };
+      if (typeof section !== 'string' || typeof comment !== 'string') {
+        sendJson(response, 400, {
+          error: 'section and comment must be strings',
+        });
+        return;
+      }
+
+      entry.pendingBlockComment = { section, comment };
+      entry.mode = 'awaiting-agent';
+      entry.lastUpdatedAt = Date.now();
+      sendJson(response, 200, { status: 'ok' });
+      return;
+    }
+
+    // ── API: get pending block comment (session polls, auth required) ─
+    if (
+      request.method === 'GET' &&
+      pathname.startsWith('/api/interviews/') &&
+      pathname.endsWith('/block-comment')
+    ) {
+      if (!isAuthenticated(request)) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      const interviewId = pathname
+        .replace('/api/interviews/', '')
+        .replace('/block-comment', '');
+      if (!isValidId(interviewId)) {
+        sendJson(response, 400, { error: 'Invalid interview ID' });
+        return;
+      }
+      const entry = stateCache.get(interviewId);
+      if (!entry) {
+        sendJson(response, 404, { error: 'Interview not found' });
+        return;
+      }
+      const val = entry.pendingBlockComment;
+      if (val) {
+        entry.pendingBlockComment = null;
+      }
+      sendJson(response, 200, val || {});
       return;
     }
 
@@ -1084,6 +1165,8 @@ export function createDashboardServer(config: DashboardConfig): {
         if (existing.pendingAnswers)
           entry.pendingAnswers ??= existing.pendingAnswers;
         if (existing.nudgeAction) entry.nudgeAction ??= existing.nudgeAction;
+        if (existing.pendingBlockComment)
+          entry.pendingBlockComment ??= existing.pendingBlockComment;
       }
       stateCache.set(entry.interviewId, entry);
       dedupRecovered(entry.interviewId, stateCache);
@@ -1111,6 +1194,13 @@ export function createDashboardServer(config: DashboardConfig): {
       const action = entry.nudgeAction;
       entry.nudgeAction = null;
       return action;
+    },
+    consumeBlockComment: (id: string) => {
+      const entry = stateCache.get(id);
+      if (!entry?.pendingBlockComment) return null;
+      const comment = entry.pendingBlockComment;
+      entry.pendingBlockComment = null;
+      return comment;
     },
     authToken,
     discoverSessionDirectories,

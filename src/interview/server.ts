@@ -78,6 +78,11 @@ export function createInterviewServer(deps: {
     interviewId: string,
     answers: InterviewAnswer[],
   ) => Promise<void>;
+  submitBlockComment: (
+    interviewId: string,
+    section: string,
+    comment: string,
+  ) => Promise<void>;
   handleNudgeAction: (
     interviewId: string,
     action: 'more-questions' | 'confirm-complete',
@@ -191,6 +196,44 @@ export function createInterviewServer(deps: {
           ok: false,
           message,
         });
+      }
+      return;
+    }
+
+    const blockCommentMatch = pathname.match(
+      /^\/api\/interviews\/([^/]+)\/block-comment$/,
+    );
+    if (request.method === 'POST' && blockCommentMatch) {
+      try {
+        const body = (await readJsonBody(request)) as {
+          section?: string;
+          comment?: string;
+        };
+        if (
+          typeof body.section !== 'string' ||
+          typeof body.comment !== 'string'
+        ) {
+          sendJson(response, 400, {
+            error: 'section and comment must be strings',
+          });
+          return;
+        }
+        await deps.submitBlockComment(
+          decodeURIComponent(blockCommentMatch[1]),
+          body.section,
+          body.comment,
+        );
+        sendJson(response, 200, {
+          ok: true,
+          message: 'Block feedback forwarded.',
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to submit block comment.';
+        const status = getSubmissionStatus(error);
+        sendJson(response, status, { ok: false, message });
       }
       return;
     }

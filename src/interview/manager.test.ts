@@ -639,6 +639,17 @@ describe('interview manager - integration with real dashboard', () => {
       );
       expect(state1Response.status).toBe(200);
 
+      // Trigger active event poll to register session2/interviewId2 explicitly in dashboard
+      await manager2.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'session-2',
+            status: { type: 'idle' },
+          },
+        },
+      });
+
       const state2Response = await fetch(
         `http://127.0.0.1:${freePort}/api/interviews/${interviewId2}/state?token=${auth?.token}`,
       );

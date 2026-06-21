@@ -5,6 +5,7 @@ import type {
   InterviewAnswer,
   InterviewQuestion,
   InterviewRecord,
+  SpecBlock,
 } from './types';
 
 // ─── Path Utilities ──────────────────────────────────────────────────
@@ -253,4 +254,56 @@ export async function appendInterviewAnswers(
     }),
     'utf8',
   );
+}
+
+export function parseSpecBlocks(markdown: string): SpecBlock[] {
+  const blocks: SpecBlock[] = [];
+  const lines = markdown.split('\n');
+
+  let currentBlockId: string | null = null;
+  let currentBlockTitle: string | null = null;
+  let currentBlockLines: string[] = [];
+
+  const flush = () => {
+    if (currentBlockId) {
+      blocks.push({
+        id: currentBlockId,
+        title: currentBlockTitle || currentBlockId,
+        content: currentBlockLines.join('\n').trim(),
+      });
+    }
+  };
+
+  for (const line of lines) {
+    const headerMatch = line.match(/^##\s+(\d+)\.\s+(.+)$/);
+    if (headerMatch) {
+      flush();
+      const num = headerMatch[1];
+      const name = headerMatch[2].trim();
+      currentBlockId = `section-${num}`;
+      currentBlockTitle = `${num}. ${name}`;
+      currentBlockLines = [];
+    } else if (line.startsWith('# ') && !line.startsWith('## ')) {
+      // Intro section before ## 1.
+      if (currentBlockId === null) {
+        currentBlockId = 'section-0';
+        currentBlockTitle = 'Introduction';
+        currentBlockLines = [];
+      }
+    } else if (line.startsWith('## ') && !headerMatch) {
+      // Any other H2
+      flush();
+      const name = line.replace(/^##\s+/, '').trim();
+      currentBlockId = `section-${slugify(name)}`;
+      currentBlockTitle = name;
+      currentBlockLines = [];
+    }
+
+    if (currentBlockId !== null) {
+      currentBlockLines.push(line);
+    }
+  }
+
+  flush();
+  return blocks;
 }
