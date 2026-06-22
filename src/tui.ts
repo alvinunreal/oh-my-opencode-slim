@@ -8,6 +8,7 @@ import {
   readTuiSnapshotAsync,
   type TuiSnapshot,
 } from './tui-state';
+import { isPluginDisabledByEnv } from './utils/env';
 
 const PLUGIN_NAME = 'oh-my-opencode-slim';
 const CONFIG_WARNING_COLOR = 'orange';
@@ -212,6 +213,8 @@ export function readConfigInvalid(directory: string): boolean {
 const plugin: TuiPluginModule & { id: string } = {
   id: `${PLUGIN_NAME}:tui`,
   tui: async (api, _options, meta) => {
+    if (isPluginDisabledByEnv()) return;
+
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
     let configDirectory = getTuiDirectory(api);
     let configInvalid = readConfigInvalid(configDirectory);

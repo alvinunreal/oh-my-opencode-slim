@@ -18,6 +18,14 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 Set `OPENCODE_CONFIG_DIR` to use a custom user config directory instead of
 `~/.config/opencode`; install and runtime config discovery both honor it.
 
+Set `OH_MY_OPENCODE_SLIM_DISABLE` to `1`, `true`, `yes`, or `on` to make
+oh-my-opencode-slim return during startup without registering agents, tools,
+MCPs, hooks, Companion, or the TUI sidebar. This is a temporary escape hatch:
+
+```bash
+OH_MY_OPENCODE_SLIM_DISABLE=1 opencode
+```
+
 If OmO-slim detects an invalid plugin config for the current project, the TUI sidebar shows a warning. Run `oh-my-opencode-slim doctor` from your project root for full diagnostics.
 
 ---

@@ -44,24 +44,6 @@ To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)*
   <a href="https://github.com/alvinunreal/lazyskills"><b>Explore LazySkills →</b></a>
 </p>
 
-### 🏛️ Support
-
-My sponsorship goal is **$200/month**.
-
-That covers my Codex subscription, so I can keep building and testing oh-my-opencode-slim without worrying about token costs.
-
-<p align="center">
-  <a href="https://github.com/sponsors/alvinunreal">Sponsor this project</a>
-</p>
-
-### ✨ Sponsors
-
-<p align="center">
-  <a href="https://github.com/sponsors/alvinunreal">
-    <img src="./sponsors.svg" alt="Sponsors" width="800">
-  </a>
-</p>
-
 ### What Users Say
 
 > “Task management went from 5/10 to 8-9/10 easily. The Orchestrator sends
@@ -160,6 +142,18 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 ### For Alternative Providers
 
 To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
+
+### Temporarily Disable the Plugin
+
+Set `OH_MY_OPENCODE_SLIM_DISABLE=1` when starting OpenCode to make the plugin
+return without registering agents, tools, MCPs, hooks, Companion, or the TUI
+sidebar:
+
+```bash
+OH_MY_OPENCODE_SLIM_DISABLE=1 opencode
+```
+
+Truthy values are `1`, `true`, `yes`, and `on`.
 
 ### ✅ Verify Your Setup
 

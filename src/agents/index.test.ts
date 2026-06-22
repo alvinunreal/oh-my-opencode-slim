@@ -501,9 +501,9 @@ describe('getAgentConfigs', () => {
     const configs = getAgentConfigs();
     expect(configs.orchestrator).toBeDefined();
     expect(configs.explorer).toBeDefined();
-    // orchestrator has no hardcoded default model; resolved at runtime via
-    // chat.message hook when _modelArray is configured, or left to the user
-    expect(configs.explorer.model).toBeDefined();
+    // Agents have no hardcoded default model; OpenCode resolves them from the
+    // global/session model unless users override per-agent models.
+    expect(configs.explorer.model).toBeUndefined();
   });
 
   test('includes description in SDK config', () => {

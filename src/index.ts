@@ -55,6 +55,7 @@ import {
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
+import { isPluginDisabledByEnv } from './utils/env';
 import { initLogger, log } from './utils/logger';
 import { SubagentDepthTracker } from './utils/subagent-depth';
 import { collapseSystemInPlace } from './utils/system-collapse';
@@ -114,6 +115,11 @@ async function probeJSDOM(): Promise<string | null> {
 const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   initLogger(sessionId);
+
+  if (isPluginDisabledByEnv()) {
+    log('[plugin] disabled by OH_MY_OPENCODE_SLIM_DISABLE');
+    return {};
+  }
 
   // Declare variables that must survive the try/catch for the return
   // closure. These are set inside the try block.

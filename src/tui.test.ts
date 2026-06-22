@@ -6,6 +6,7 @@ import {
   getSidebarAgentNames,
   readConfigInvalid,
   splitSidebarModelId,
+  default as tuiPlugin,
 } from './tui';
 import type { TuiSnapshot } from './tui-state';
 
@@ -117,5 +118,51 @@ describe('readConfigInvalid', () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('tui plugin env disable', () => {
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  test('does not perform setup when plugin is disabled by env', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_DISABLE = '1';
+
+    let disposeRegistered = false;
+    let renderRequested = false;
+    let registered = false;
+    await tuiPlugin.tui(
+      {
+        lifecycle: {
+          onDispose: () => {
+            disposeRegistered = true;
+          },
+        },
+        renderer: {
+          requestRender: () => {
+            renderRequested = true;
+          },
+        },
+        slots: {
+          register: () => {
+            registered = true;
+          },
+        },
+        theme: { current: {} },
+      } as unknown as Parameters<typeof tuiPlugin.tui>[0],
+      {},
+      { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
+    );
+
+    expect(registered).toBe(false);
+    expect(disposeRegistered).toBe(false);
+    expect(renderRequested).toBe(false);
   });
 });

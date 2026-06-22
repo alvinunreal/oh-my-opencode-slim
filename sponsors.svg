@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="120" viewBox="0 0 800 120" role="img" aria-labelledby="title desc">
-  <title id="title">Sponsors</title>
-  <desc id="desc">Sponsor avatars will appear here.</desc>
-  <rect width="800" height="120" rx="18" fill="#0d1117" />
-  <text x="400" y="54" text-anchor="middle" fill="#f0f6fc" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="700">Sponsors will appear here</text>
-  <text x="400" y="82" text-anchor="middle" fill="#8b949e" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="14">github.com/sponsors/alvinunreal</text>
-</svg>
