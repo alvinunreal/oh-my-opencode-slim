@@ -1000,6 +1000,10 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/block-comment')
     ) {
+      if (!isAuthenticated(request)) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
       const interviewId = pathname
         .replace('/api/interviews/', '')
         .replace('/block-comment', '');
@@ -1075,6 +1079,10 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/chat')
     ) {
+      if (!isAuthenticated(request)) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
       const interviewId = pathname
         .replace('/api/interviews/', '')
         .replace('/chat', '');

@@ -293,6 +293,10 @@ export function parseSpecBlocks(markdown: string): SpecBlock[] {
   };
 
   for (const line of lines) {
+    if (/^##\s+Q&A history\s*$/i.test(line)) {
+      break;
+    }
+
     const headerMatch = line.match(/^##\s+(\d+)\.\s+(.+)$/);
     if (headerMatch) {
       flush();
