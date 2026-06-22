@@ -367,6 +367,30 @@ export class BackgroundJobBoard {
     return this.list(parentSessionID).some((job) => job.terminalUnreconciled);
   }
 
+  /**
+   * True when the given parent/orchestrator session still has at least one
+   * background job that is non-terminal. Non-terminal means the job is
+   * either still running, queued, or has just become terminal but has not
+   * yet been reconciled by the parent (e.g. a background agent's result
+   * is in flight and the parent's turn will wake up naturally once the
+   * reconciliation completes).
+   *
+   * Reconciled jobs are not considered active — they have already been
+   * "consumed" by the orchestrator in a prior turn.
+   *
+   * Used by the todo-continuation hook to defer auto-continue prompts
+   * while background work is still in flight (issue #587).
+   */
+  hasActiveBackgroundTasks(parentSessionID: string): boolean {
+    const jobs = this.list(parentSessionID);
+    for (const job of jobs) {
+      if (job.state === 'reconciled') continue;
+      if (job.state === 'running') return true;
+      if (job.terminalUnreconciled) return true;
+    }
+    return false;
+  }
+
   formatForPrompt(
     parentSessionID: string,
     now = Date.now(),

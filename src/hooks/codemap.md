@@ -50,12 +50,12 @@ and managers for all hook-based runtime behaviors used by
 |---|---|---|
 | `tool.execute.before` | Pre-process tool inputs | `apply-patch`, `task-session-manager` |
 | `tool.execute.after` | Post-process tool outputs | `delegate-task-retry`, `json-error-recovery`, `post-file-tool-nudge`, `task-session-manager` |
-| `experimental.chat.messages.transform` | Rewrite outbound user content | `filter-available-skills`, `phase-reminder` |
+| `experimental.chat.messages.transform` | Rewrite outbound user content | `filter-available-skills`, `phase-reminder`, `todo-continuation` |
 | `experimental.chat.system.transform` | Inject system-level directives | `post-file-tool-nudge`, `task-session-manager` |
 | `chat.headers` | Mutate request headers | `chat-headers` |
 | `chat.message` | Track runtime session/agent mapping | `src/index.ts` session map |
 | `command.execute.before` | Handle slash-command UX | `interview`, `preset-manager`, `deepwork` |
-| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers, `task-session-manager` |
+| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers, `task-session-manager`, `todo-continuation` |
 
 ## Implementation Notes
 

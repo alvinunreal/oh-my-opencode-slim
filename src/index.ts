@@ -29,6 +29,7 @@ import {
   createPostFileToolNudgeHook,
   createReflectCommandHook,
   createTaskSessionManagerHook,
+  createTodoContinuationHook,
   ForegroundFallbackManager,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
@@ -143,6 +144,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
+  let todoContinuationHook: ReturnType<typeof createTodoContinuationHook>;
   let backgroundJobBoard: BackgroundJobBoard;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
@@ -303,6 +305,16 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       maxSessionsPerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
       readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
       readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
+      backgroundJobBoard,
+      shouldManageSession: (sessionID) =>
+        sessionAgentMap.get(sessionID) === 'orchestrator',
+    });
+    // Defer OpenCode's built-in todo auto-continue while background
+    // agents are still active. Without this, the orchestrator can be
+    // woken unnecessarily while it is only idle because it is waiting
+    // on background results, leading to duplicate work and race
+    // conditions (issue #587).
+    todoContinuationHook = createTodoContinuationHook({
       backgroundJobBoard,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
@@ -826,6 +838,19 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
       );
 
+      await todoContinuationHook.event(
+        input as {
+          event: {
+            type: string;
+            properties?: {
+              info?: { id?: string };
+              sessionID?: string;
+              status?: { type?: string };
+            };
+          };
+        },
+      );
+
       if (
         event.type === 'permission.asked' ||
         event.type === 'question.asked'
@@ -1053,6 +1078,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         log,
       });
 
+      await todoContinuationHook['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
       await taskSessionManagerHook['experimental.chat.messages.transform'](
         input,
         typedOutput,

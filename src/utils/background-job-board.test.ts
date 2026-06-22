@@ -698,4 +698,97 @@ describe('BackgroundJobBoard', () => {
     const prompt = board.formatForPrompt('parent-1', 9_000);
     expect(prompt).toContain('running [resumed, 4s ago]');
   });
+
+  describe('hasActiveBackgroundTasks (issue #587)', () => {
+    test('returns false when the parent session has no jobs', () => {
+      const board = new BackgroundJobBoard();
+      expect(board.hasActiveBackgroundTasks('parent-1')).toBe(false);
+    });
+
+    test('returns true when a job is running', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      expect(board.hasActiveBackgroundTasks('parent-1')).toBe(true);
+    });
+
+    test('returns true when a job is terminal but unreconciled', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+      });
+      board.updateStatus({
+        taskID: 'ses_1',
+        state: 'completed',
+        resultSummary: 'done',
+      });
+      // Job is terminal but the orchestrator has not consumed it yet.
+      expect(board.hasActiveBackgroundTasks('parent-1')).toBe(true);
+    });
+
+    test('returns true when a job is cancelled and unreconciled', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      board.markCancelled('ses_1', 'obsolete');
+      expect(board.hasActiveBackgroundTasks('parent-1')).toBe(true);
+    });
+
+    test('returns false once all jobs are reconciled', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+      });
+      board.updateStatus({
+        taskID: 'ses_1',
+        state: 'completed',
+        resultSummary: 'done',
+      });
+      board.markReconciled('ses_1');
+      // Reconciled jobs are no longer "active" — they have been
+      // consumed by the orchestrator in a prior turn.
+      expect(board.hasActiveBackgroundTasks('parent-1')).toBe(false);
+    });
+
+    test('returns false when the only jobs belong to a different parent', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      expect(board.hasActiveBackgroundTasks('parent-2')).toBe(false);
+    });
+
+    test('returns true when at least one job under the parent is still active', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+      });
+      board.registerLaunch({
+        taskID: 'ses_2',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      board.updateStatus({
+        taskID: 'ses_1',
+        state: 'completed',
+      });
+      board.markReconciled('ses_1');
+      // ses_2 is still running under parent-1.
+      expect(board.hasActiveBackgroundTasks('parent-1')).toBe(true);
+    });
+  });
 });

@@ -313,6 +313,28 @@ multiplexer panes attached while the parent orchestrator continues scheduling.
 
 ---
 
+## Auto-Continue Deferral
+
+OpenCode's built-in todo auto-continue wakes the orchestrator session as soon
+as it becomes idle with incomplete todos, by injecting a synthetic user
+message into the prompt pipeline.
+
+The `todo-continuation` hook (issue #587) defers that wake-up when the
+orchestrator is idle only because it is waiting for background work. On
+`session.idle`, the hook consults
+`BackgroundJobBoard.hasActiveBackgroundTasks(parentSessionID)`. If at least
+one job under the parent is in a non-terminal state (still `running`, or
+terminal but `terminalUnreconciled`), the session is marked deferred. The
+next synthetic wake-up targeting that session is then removed from the
+outbound message array before the request reaches the LLM, so the
+orchestrator is not woken unnecessarily. The deferral is cleared on
+`session.status` `busy`, on `session.deleted`, and immediately after the
+synthetic wake-up is removed; the next idle cycle re-evaluates the board.
+Auto-continue itself remains enabled — only the specific wake-up is
+skipped.
+
+---
+
 ## Startup Behavior
 
 The installer and docs configure background subagents as a requirement for the
