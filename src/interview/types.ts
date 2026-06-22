@@ -133,4 +133,6 @@ export interface InterviewStateEntry {
     comment: string;
   } | null;
   pendingChatMessage: string | null;
+  document?: string;
+  blocks?: SpecBlock[];
 }

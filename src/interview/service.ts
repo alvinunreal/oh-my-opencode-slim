@@ -161,6 +161,7 @@ export function createInterviewService(
   const browserOpener = deps?.openBrowser ?? openBrowser;
   const activeInterviewIds = new Map<string, string>();
   const interviewsById = new Map<string, InterviewRecord>();
+  const activeSyncs = new Map<string, Promise<InterviewState>>();
   const sessionBusy = new Map<string, boolean>();
   const sessionModel = new Map<string, string>();
   const browserOpened = new Set<string>(); // Track interviews that have opened browser
@@ -364,7 +365,20 @@ export function createInterviewService(
     return record;
   }
 
-  async function syncInterview(
+  function syncInterview(interview: InterviewRecord): Promise<InterviewState> {
+    const existing = activeSyncs.get(interview.id);
+    if (existing) {
+      return existing;
+    }
+
+    const sync = performSyncInterview(interview).finally(() => {
+      activeSyncs.delete(interview.id);
+    });
+    activeSyncs.set(interview.id, sync);
+    return sync;
+  }
+
+  async function performSyncInterview(
     interview: InterviewRecord,
   ): Promise<InterviewState> {
     const allMessages = await loadMessagesWithRetry(interview.sessionID);
@@ -636,24 +650,7 @@ export function createInterviewService(
       const sessionID = properties.sessionID as string | undefined;
       const status = properties.status as { type?: string } | undefined;
       if (sessionID) {
-        const wasBusy = sessionBusy.get(sessionID) === true;
         sessionBusy.set(sessionID, status?.type === 'busy');
-
-        // Sync state on busy → idle so the browser gets the final push
-        if (wasBusy && status?.type !== 'busy') {
-          const activeId = activeInterviewIds.get(sessionID);
-          const interview = activeId ? interviewsById.get(activeId) : null;
-          if (interview && interview.status === 'active') {
-            syncInterview(interview).catch((err) => {
-              log(
-                '[interview] failed to sync interview state in event handler:',
-                {
-                  error: err instanceof Error ? err.message : String(err),
-                },
-              );
-            });
-          }
-        }
       }
       return;
     }

@@ -208,10 +208,43 @@ export function createDashboardServer(config: DashboardConfig): {
   // SSE client registry: interviewId → Set<ServerResponse>
   const sseClients = new Map<string, Set<import('node:http').ServerResponse>>();
 
-  function broadcastSse(interviewId: string, data: unknown) {
+  function formatSseState(entry: InterviewStateEntry) {
+    const markdownPath = entry.filePath;
+    const displayPath = markdownPath
+      ? markdownPath.split('/').pop() || markdownPath
+      : 'interview.md';
+    const document = entry.document ?? '';
+
+    return {
+      interview: {
+        id: entry.interviewId,
+        sessionID: entry.sessionID,
+        idea: entry.idea,
+        markdownPath: displayPath,
+        createdAt: new Date(entry.lastUpdatedAt).toISOString(),
+        status:
+          entry.mode === 'session-disconnected'
+            ? ('abandoned' as const)
+            : ('active' as const),
+        baseMessageCount: 0,
+      },
+      url: `${baseUrl}/interview/${entry.interviewId}`,
+      markdownPath,
+      mode: entry.mode,
+      isBusy: entry.mode === 'awaiting-agent',
+      summary: entry.summary,
+      questions: entry.questions,
+      document,
+      lastUpdatedAt: entry.lastUpdatedAt,
+      nudgeAction: entry.nudgeAction,
+      blocks: entry.blocks ?? parseSpecBlocks(document),
+    };
+  }
+
+  function broadcastSse(interviewId: string, entry: InterviewStateEntry) {
     const clients = sseClients.get(interviewId);
     if (!clients || clients.size === 0) return;
-    const payload = `event: state\ndata: ${JSON.stringify(data)}\n\n`;
+    const payload = `event: state\ndata: ${JSON.stringify(formatSseState(entry))}\n\n`;
     for (const res of clients) {
       try {
         res.write(payload);
@@ -741,7 +774,9 @@ export function createDashboardServer(config: DashboardConfig): {
       clients.add(response);
 
       // Send initial state immediately
-      response.write(`event: state\ndata: ${JSON.stringify(entry)}\n\n`);
+      response.write(
+        `event: state\ndata: ${JSON.stringify(formatSseState(entry))}\n\n`,
+      );
 
       // Heartbeat every 15s to keep connection alive
       const heartbeat = setInterval(() => {
@@ -792,11 +827,14 @@ export function createDashboardServer(config: DashboardConfig): {
         if (state.title) existing.title = state.title;
         if (state.questions) existing.questions = state.questions;
         if (state.filePath) existing.filePath = state.filePath;
+        if (state.document !== undefined) existing.document = state.document;
+        if (state.blocks !== undefined) existing.blocks = state.blocks;
         existing.lastUpdatedAt = Date.now();
         dedupRecovered(interviewId, stateCache);
+        broadcastSse(interviewId, existing);
       } else {
         // New entry
-        stateCache.set(interviewId, {
+        const entry: InterviewStateEntry = {
           interviewId,
           sessionID: state.sessionID ?? '',
           idea: state.idea ?? '',
@@ -810,7 +848,11 @@ export function createDashboardServer(config: DashboardConfig): {
           nudgeAction: null,
           pendingBlockComment: state.pendingBlockComment ?? null,
           pendingChatMessage: state.pendingChatMessage ?? null,
-        });
+          document: state.document,
+          blocks: state.blocks,
+        };
+        stateCache.set(interviewId, entry);
+        broadcastSse(interviewId, entry);
       }
 
       sendJson(response, 200, { status: 'ok' });
@@ -1319,6 +1361,12 @@ export function createDashboardServer(config: DashboardConfig): {
           entry.pendingBlockComment ??= existing.pendingBlockComment;
         if (existing.pendingChatMessage)
           entry.pendingChatMessage ??= existing.pendingChatMessage;
+        if (entry.document === undefined && existing.document !== undefined) {
+          entry.document = existing.document;
+        }
+        if (entry.blocks === undefined && existing.blocks !== undefined) {
+          entry.blocks = existing.blocks;
+        }
       }
       stateCache.set(entry.interviewId, entry);
       dedupRecovered(entry.interviewId, stateCache);

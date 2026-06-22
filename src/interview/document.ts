@@ -119,9 +119,10 @@ export function extractSummarySection(document: string): string {
   const summaryStart = start + marker.length;
   const historyMarker = /\n\n## Q&A history/i;
   const historyMatch = document.slice(summaryStart).match(historyMarker);
-  const summaryEnd = historyMatch?.index
-    ? summaryStart + historyMatch.index
-    : undefined;
+  const summaryEnd =
+    historyMatch?.index !== undefined
+      ? summaryStart + historyMatch.index
+      : undefined;
   return document.slice(summaryStart, summaryEnd).trim();
 }
 

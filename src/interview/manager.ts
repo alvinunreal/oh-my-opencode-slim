@@ -509,6 +509,8 @@ function stateToEntry(
     nudgeAction: null,
     pendingBlockComment: null,
     pendingChatMessage: null,
+    document: state.document,
+    blocks: state.blocks,
   };
 }
 
