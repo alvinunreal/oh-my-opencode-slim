@@ -369,11 +369,11 @@ export class BackgroundJobBoard {
 
   /**
    * True when the given parent/orchestrator session still has at least one
-   * background job that is non-terminal. Non-terminal means the job is
-   * either still running, queued, or has just become terminal but has not
-   * yet been reconciled by the parent (e.g. a background agent's result
-   * is in flight and the parent's turn will wake up naturally once the
-   * reconciliation completes).
+   * background job that is non-terminal. A job is considered non-terminal
+   * when it is still `running`, or when it has just become terminal but
+   * has not yet been reconciled by the parent (e.g. a background agent's
+   * result is in flight and the parent's turn will wake up naturally once
+   * the reconciliation completes).
    *
    * Reconciled jobs are not considered active — they have already been
    * "consumed" by the orchestrator in a prior turn.
