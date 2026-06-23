@@ -299,6 +299,12 @@ export const PluginConfigSchema = z
       .describe(
         'Disable automatic installation of plugin updates when false. Defaults to true.',
       ),
+    compactSidebar: z
+      .boolean()
+      .optional()
+      .describe(
+        'Render each agent on a single line in the TUI sidebar instead of the default multi-line layout. Default false.',
+      ),
     presets: z.record(z.string(), PresetSchema).optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
     disabled_agents: z

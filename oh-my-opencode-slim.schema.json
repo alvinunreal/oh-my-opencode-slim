@@ -12,6 +12,10 @@
       "description": "Disable automatic installation of plugin updates when false. Defaults to true.",
       "type": "boolean"
     },
+    "compactSidebar": {
+      "description": "Render each agent on a single line in the TUI sidebar instead of the default multi-line layout. Default false.",
+      "type": "boolean"
+    },
     "presets": {
       "type": "object",
       "propertyNames": {
