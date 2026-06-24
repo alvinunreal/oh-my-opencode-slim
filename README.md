@@ -205,7 +205,7 @@ V2 makes background specialists the default mental model: the Orchestrator plans
 the work graph, launches the right agents, avoids overlapping write ownership,
 and waits for terminal task results before acting on them.
 
-See **[Background Orchestration](docs/v2-background-orchestration.md)** for the
+See **[Background Orchestration](docs/background-orchestration.md)** for the
 full scheduler model.
 
 #### Companion
