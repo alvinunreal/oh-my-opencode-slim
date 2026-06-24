@@ -432,6 +432,22 @@ describe('BackgroundJobBoard', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  test('notifies terminal listener when running job times out', () => {
+    const board = new BackgroundJobBoard();
+    const listener = mock(() => {});
+    board.setTerminalStateListener(listener);
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+
+    board.updateStatus({ taskID: 'ses_1', state: 'running', timedOut: true });
+
+    expect(listener).toHaveBeenCalledWith('ses_1');
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   test('notifies terminal listener on markCancelled mutation', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});

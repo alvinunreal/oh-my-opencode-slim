@@ -192,6 +192,8 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     const now = input.now ?? Date.now();
     const terminal = TERMINAL_STATES.has(input.state);
     const notifyTerminal = terminal && !TERMINAL_STATES.has(existing.state);
+    const notifyTimedOut =
+      input.state === 'running' && input.timedOut && !existing.timedOut;
     const updated: BackgroundJobRecord = {
       ...existing,
       state: input.state,
@@ -226,7 +228,8 @@ export class BackgroundJobBoard implements BackgroundJobStore {
 
     this.jobs.set(input.taskID, updated);
     this.trimReusable(input.taskID);
-    if (notifyTerminal) this.notifyTerminalStateListeners(input.taskID);
+    if (notifyTerminal || notifyTimedOut)
+      this.notifyTerminalStateListeners(input.taskID);
     return updated;
   }
 
