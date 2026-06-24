@@ -614,6 +614,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "mhenke",
+      "name": "Mike Henke",
+      "avatar_url": "https://avatars.githubusercontent.com/u/119844?v=4",
+      "profile": "http://mikehenke.com/",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
