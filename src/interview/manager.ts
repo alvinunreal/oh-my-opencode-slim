@@ -97,6 +97,11 @@ export function createInterviewManager(
   // we're in session mode. References poll functions defined below.
   const FALLBACK_POLL_INTERVAL = 10_000;
   let fallbackTimer: ReturnType<typeof setInterval> | null = null;
+  const stopFallbackTimer = () => {
+    if (!fallbackTimer) return;
+    clearInterval(fallbackTimer);
+    fallbackTimer = null;
+  };
   const startFallbackTimer = () => {
     if (fallbackTimer) return;
     fallbackTimer = setInterval(() => {
@@ -478,6 +483,9 @@ export function createInterviewManager(
       // Clean up when a session is deleted
       if (event.type === 'session.deleted' && sessionID) {
         registeredSessions.delete(sessionID);
+        if (registeredSessions.size === 0) {
+          stopFallbackTimer();
+        }
         dashboard?.removeSession(sessionID);
       }
     },
