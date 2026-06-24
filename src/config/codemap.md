@@ -59,7 +59,7 @@ resolution, and helper APIs used by agents, council, and runtime subsystems.
   - `temperature`, `variant`, `options`, `skills`, `mcps`, `displayName`
   - custom agent prompts (`prompt`, `orchestratorPrompt`) only.
 - Multiplexer:
-  - new unified `multiplexer` schema (`auto|tmux|zellij|none`)
+  - new unified `multiplexer` schema (`auto|tmux|zellij|herdr|none`)
   - legacy `tmux` schema retained and migrated at load time.
 - Council:
   - `CouncilConfigSchema` now normalizes deprecated `master*` fields into

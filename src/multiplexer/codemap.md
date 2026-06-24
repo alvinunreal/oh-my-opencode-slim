@@ -4,7 +4,7 @@
 
 - Provide multiplexer-backed visualization for spawned subagent sessions.
 - Select and instantiate terminal backend based on config/env:
-  `auto`, `tmux`, `zellij`, or `none`.
+  `auto`, `tmux`, `zellij`, `herdr`, or `none`.
 - Manage lifecycle of child session panes with lifecycle hooks from OpenCode
   events plus health/polling fallback.
 - Keep pane cleanup safe and graceful (best-effort interrupt + kill).
@@ -42,6 +42,22 @@
   - Layout configuration maps `main-vertical` to right and `main-horizontal` to
     down; `tiled`/`even-horizontal`/`even-vertical` use Zellij native placement
     and `main_pane_size` remains a no-op.
+
+- `herdr/index.ts` (`HerdrMultiplexer`)
+  - Implements `Multiplexer` using `HerdrSocketClient` — JSON-RPC over AF_UNIX.
+    The herdr daemon closes the socket after each response, so the client opens
+    a fresh connection per call (still cheaper than per-op `crossSpawn`).
+  - Detection via `process.env.HERDR_ENV === '1'`.
+  - Pane lifecycle mirrors tmux: `pane.split` (down, cwd+label) → 400ms wait →
+    `pane.send_text` with `opencode attach ...`. Close sends Ctrl+C, waits 250ms,
+    then `pane.close` (tolerates already-closed panes).
+  - `applyLayout` rebalances via `pane.resize` (in-place). Layout-aware:
+    `spawnPane` splits `right` for side-by-side layouts (`main-vertical`,
+    `even-horizontal`) and `down` for stacked layouts (`main-horizontal`,
+    `even-vertical`, `tiled`); `applyLayout` resizes along the matching axis.
+    All 5 presets work natively (tiled approximates as even-vertical).
+    Debounced 150ms.
+  - Requires herdr v0.7.0+.
 
 - `session-manager.ts` (`MultiplexerSessionManager`)
   - Initialized once from plugin context and config.
@@ -84,8 +100,8 @@
 - Integrates with OpenCode session events and server URL from plugin input.
 - Uses helper endpoints defined by `src/config` multiplexer settings:
   `type`, `layout`, `main_pane_size`.
-- Implementations in `src/multiplexer/tmux` and `src/multiplexer/zellij` are used
-  through the shared abstraction.
+- Implementations in `src/multiplexer/tmux`, `src/multiplexer/zellij`, and
+  `src/multiplexer/herdr` are used through the shared abstraction.
 - Validation coverage:
   - `src/multiplexer/factory.test.ts`
   - `src/multiplexer/session-manager.test.ts`

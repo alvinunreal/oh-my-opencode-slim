@@ -1,6 +1,6 @@
 # Multiplexer Integration Guide
 
-Use tmux or Zellij to watch subagents work in live panes while OpenCode keeps running in your main session.
+Use tmux, Zellij, or Herdr to watch subagents work in live panes while OpenCode keeps running in your main session.
 
 ## Table of Contents
 
@@ -83,7 +83,17 @@ Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 }
 ```
 
-### 2. Start OpenCode inside tmux or Zellij
+**Herdr only:**
+
+```jsonc
+{
+  "multiplexer": {
+    "type": "herdr"
+  }
+}
+```
+
+### 2. Start OpenCode inside tmux, Zellij, or Herdr
 
 **Tmux:**
 
@@ -98,6 +108,15 @@ opencode --port 4096
 zellij
 opencode --port 4096
 ```
+
+**Herdr:**
+
+```bash
+herdr
+opencode --port 4096
+```
+
+Install herdr from [herdr.dev](https://herdr.dev/). Config-compatible with tmux — same `layout` and `main_pane_size` values work. Requires herdr v0.7.0+.
 
 ### 3. Trigger delegated work
 
@@ -127,7 +146,7 @@ Please analyze this codebase and create a documentation structure.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, or `"none"` |
+| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, or `"none"` |
 | `layout` | string | `"main-vertical"` | Layout preset for tmux; mapped to Zellij pane directions where possible |
 | `main_pane_size` | number | `60` | Main pane size percentage for tmux only (`20`-`80`) |
 | `zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `"agent-tab"` creates/reuses a dedicated tab; `"current-tab"` opens panes in the tab containing the parent OpenCode pane |

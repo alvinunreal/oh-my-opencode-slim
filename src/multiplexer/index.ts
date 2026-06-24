@@ -7,6 +7,7 @@ export {
   getMultiplexer,
   startAvailabilityCheck,
 } from './factory';
+export { HerdrMultiplexer } from './herdr';
 export {
   MultiplexerSessionManager,
   TmuxSessionManager,

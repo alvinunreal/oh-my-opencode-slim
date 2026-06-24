@@ -71,7 +71,7 @@ oh-my-opencode-slim/
 │   ├── council/      # Council manager (multi-LLM session orchestration)
 │   ├── hooks/        # OpenCode lifecycle hooks
 │   ├── mcp/          # MCP server definitions
-│   ├── multiplexer/  # Tmux/Zellij pane integration for child sessions
+│   ├── multiplexer/  # Tmux/Zellij/Herdr pane integration for child sessions
 │   ├── skills/       # Skill definitions (included in package publish)
 │   ├── tools/        # Tool definitions (council, webfetch, AST-grep, etc.)
 │   └── utils/        # Shared utilities (tmux, session helpers)
@@ -250,7 +250,7 @@ OpenCode has a built-in `/review` command that automatically performs comprehens
 - The main plugin export is `src/index.ts`
 - Agent factories are in `src/agents/` — each agent has its own file + optional `.test.ts`
 - Skills are located in `src/skills/` (included in package publish)
-- Multiplexer session management is in `src/multiplexer/`
+- Multiplexer session management is in `src/multiplexer/` — backends: `tmux/`, `zellij/`, `herdr/`
 - Council manager (multi-LLM orchestration) is in `src/council/`
 - Tmux utilities are in `src/utils/tmux.ts`
 - 468 tests across 35 files — run `bun test` to verify

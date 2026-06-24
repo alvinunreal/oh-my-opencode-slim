@@ -47,6 +47,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 | `src/multiplexer/` | Terminal multiplexer abstraction layer with backend selection, session mirroring, polling fallback, and shutdown lifecycle orchestration. | [View Map](src/multiplexer/codemap.md) |
 | `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
 | `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
+| `src/multiplexer/herdr/` | herdr backend implementation; JSON-RPC socket client + pane lifecycle. | [View Map](src/multiplexer/herdr/codemap.md) |
 | `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
 | `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
 | `src/skills/clonedeps/` | Workflow-only dependency source mirroring skill that routes discovery/ref resolution through librarian and direct orchestrator git operations. | [View Map](src/skills/clonedeps/codemap.md) |
@@ -75,7 +76,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 3. **Delegated execution**
    - Native OpenCode background tasks are parsed from `task` output and injected completion messages and tracked in the shared background job board.
    - `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and injects background/reusable job context into the orchestrator prompt.
-   - `src/multiplexer/` optionally mirrors those sessions into tmux/zellij panes.
+   - `src/multiplexer/` optionally mirrors those sessions into tmux/zellij/herdr panes.
    - Results flow back into the parent session through notifications/output polling.
 
 4. **Install/release path**
