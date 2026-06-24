@@ -7,6 +7,7 @@ function createHook(options?: {
   readContextMinLines?: number;
   readContextMaxFiles?: number;
   backgroundJobBoard?: BackgroundJobBoard;
+  managedTaskSessionIDs?: Set<string>;
   sessionStatus?: unknown;
 }) {
   const hook = createTaskSessionManagerHook(
@@ -24,6 +25,7 @@ function createHook(options?: {
       readContextMinLines: options?.readContextMinLines,
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
+      managedTaskSessionIDs: options?.managedTaskSessionIDs,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
     },
   );
@@ -1667,6 +1669,53 @@ describe('task-session-manager hook', () => {
     expect(prompt).toContain('src/large.ts (12 lines)');
     expect(prompt).not.toContain('src/large.ts (18 lines)');
     expect(prompt).toContain('(+1 more)');
+  });
+
+  test('tracks managed child sessions before task launch output registers', async () => {
+    const managedTaskSessionIDs = new Set<string>();
+    const { hook } = createHook({ managedTaskSessionIDs });
+
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
+      },
+    });
+
+    expect(managedTaskSessionIDs.has('child-1')).toBe(true);
+  });
+
+  test('clears managed child sessions when child or parent is deleted', async () => {
+    const board = new BackgroundJobBoard();
+    const managedTaskSessionIDs = new Set<string>();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      managedTaskSessionIDs,
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-2',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'architecture review',
+    });
+    managedTaskSessionIDs.add('child-2');
+
+    await hook.event({
+      event: { type: 'session.deleted', properties: { sessionID: 'child-1' } },
+    });
+    expect(managedTaskSessionIDs.has('child-1')).toBe(false);
+
+    await hook.event({
+      event: { type: 'session.deleted', properties: { sessionID: 'parent-1' } },
+    });
+    expect(managedTaskSessionIDs.has('child-2')).toBe(false);
   });
 
   test('reusable cap evicts only old reusable jobs, not active jobs', async () => {

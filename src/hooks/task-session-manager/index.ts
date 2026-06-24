@@ -83,6 +83,7 @@ export function createTaskSessionManagerHook(
     readContextMinLines?: number;
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobBoard;
+    managedTaskSessionIDs?: Set<string>;
     shouldManageSession: (sessionID: string) => boolean;
   },
 ) {
@@ -562,6 +563,7 @@ export function createTaskSessionManagerHook(
           options.shouldManageSession(info.parentID)
         ) {
           taskContextTracker.pendingManagedTaskIds.add(info.id);
+          options.managedTaskSessionIDs?.add(info.id);
         }
         return;
       }
@@ -671,12 +673,21 @@ export function createTaskSessionManagerHook(
         },
       );
 
+      const childJobs = backgroundJobBoard.list(sessionId);
       backgroundJobBoard.drop(sessionId);
       backgroundJobBoard.clearParent(sessionId);
       terminalJobsInjectedByParent.delete(sessionId);
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);
       pendingCallTracker.clearSession(sessionId);
+      options.managedTaskSessionIDs?.delete(sessionId);
+      // INVARIANT: background task jobID === sessionID (set via session.created).
+      // If OpenCode ever creates sessions where taskID differs from sessionID,
+      // this cleanup will silently leave stale entries in managedTaskSessionIDs,
+      // permanently excluding those session IDs from foreground fallback.
+      for (const childJob of childJobs) {
+        options.managedTaskSessionIDs?.delete(childJob.taskID);
+      }
     },
   };
 

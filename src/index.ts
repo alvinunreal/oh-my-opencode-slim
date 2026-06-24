@@ -152,6 +152,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let backgroundJobBoard: BackgroundJobBoard;
+  let managedBackgroundTaskSessionIDs: Set<string>;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
   let companionManager: CompanionManager;
@@ -255,6 +256,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
       readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
     });
+    managedBackgroundTaskSessionIDs = new Set<string>();
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
@@ -303,6 +305,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       runtimeChains,
       config.fallback?.enabled !== false &&
         Object.keys(runtimeChains).length > 0,
+      {
+        shouldHandleSession: (sessionID) =>
+          !backgroundJobBoard.get(sessionID) &&
+          !managedBackgroundTaskSessionIDs.has(sessionID),
+      },
     );
 
     deepworkCommandHook = createDeepworkCommandHook();
@@ -313,6 +320,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
       readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
       backgroundJobBoard,
+      managedTaskSessionIDs: managedBackgroundTaskSessionIDs,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
     });

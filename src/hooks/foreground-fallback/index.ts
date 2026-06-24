@@ -25,6 +25,16 @@ import { isUserMessageWithParts } from '../types';
 
 type OpencodeClient = PluginInput['client'];
 
+interface ForegroundFallbackOptions {
+  /**
+   * Return false for sessions whose execution lifecycle is owned elsewhere.
+   * Background task child sessions are owned by OpenCode's task/background
+   * runner; aborting and re-prompting them here detaches fallback work from the
+   * parent task completion notification.
+   */
+  shouldHandleSession?: (sessionID: string) => boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Rate-limit detection
 // ---------------------------------------------------------------------------
@@ -109,6 +119,7 @@ export class ForegroundFallbackManager {
      */
     private readonly chains: Record<string, string[]>,
     private readonly enabled: boolean,
+    private readonly options: ForegroundFallbackOptions = {},
   ) {}
 
   /**
@@ -229,6 +240,12 @@ export class ForegroundFallbackManager {
 
   private async tryFallback(sessionID: string): Promise<void> {
     if (!sessionID) return;
+    if (this.options.shouldHandleSession?.(sessionID) === false) {
+      log('[foreground-fallback] skipped externally owned session', {
+        sessionID,
+      });
+      return;
+    }
     if (this.inProgress.has(sessionID)) return;
 
     // Deduplicate: multiple events can fire for a single rate-limit event.
