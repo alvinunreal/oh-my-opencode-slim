@@ -51,15 +51,11 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
    */
   private handleTerminalState(taskID: string): void {
     // Re-check board state to handle races
-    const state = this.board.getState(taskID);
-    if (state === undefined) return; // Job was already cleaned up
+    if (this.board.getState(taskID) === undefined) return;
 
-    // Check if this session should now close
-    if (this.retryDeferredClose(taskID)) {
-      // Notify listeners that session should close
-      for (const listener of this.terminalStateListeners) {
-        listener(taskID);
-      }
+    // Notify listeners on any terminal/timeout state
+    for (const listener of this.terminalStateListeners) {
+      listener(taskID);
     }
   }
 
