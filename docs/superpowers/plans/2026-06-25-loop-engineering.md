@@ -354,9 +354,24 @@ Add this method to the `BackgroundJobBoard` class (after `hasTerminalUnreconcile
  * Counts consecutive error/cancelled states from the most recent job backward.
  * Stops counting when it hits a completed state.
  *
+ * Relies on:
+ * - `this.list()` which sorts by `launchedAt` ascending (oldest first).
+ *   Reverse iteration therefore visits most-recent first.
+ * - `terminalStateOf()` (existing helper at line 469) which returns the state
+ *   for terminal states ('completed', 'error', 'cancelled') and `undefined`
+ *   for non-terminal states ('running', 'reconciled'). This means non-terminal
+ *   jobs are correctly skipped — they don't break or extend the streak.
+ *
  * This is different from per-job totalErrors: a single job can have totalErrors > 1
  * if updateStatus was called multiple times, but consecutiveErrors counts distinct
  * jobs that ended in error.
+ *
+ * Design note: The count includes reconciled error jobs. The warning text
+ * includes an active/reconciled breakdown: "5 consecutive failures
+ * (1 active, 4 reconciled)". The orchestrator has already processed the
+ * reconciled events, but including them in the total streak is intentional:
+ * it signals that the current active error continues a longer pattern.
+ * If this proves noisy, scope the count to active/unreconciled only.
  */
 getConsecutiveErrors(
   parentSessionID: string,
@@ -377,6 +392,7 @@ getConsecutiveErrors(
       break; // success breaks the streak
     }
     // running/reconciled jobs don't break or extend the streak
+    // (terminalStateOf returns undefined for these, so neither if-branch fires)
   }
   return consecutive;
 }
