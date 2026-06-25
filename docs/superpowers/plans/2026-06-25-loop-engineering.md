@@ -107,8 +107,8 @@ export interface BackgroundJobRecord {
   lastUsedAt: number;
   terminalState?: TaskOutputState;
   contextFiles: ContextFile[];
-  errorCount: number;    // NEW: consecutive errors (increment on error/cancel, reset on completed)
-  timeoutCount: number;  // NEW: consecutive timeouts (increment on timeout, reset on completed)
+  errorCount: number;    // NEW: cumulative errors for this job across re-launches (display only)
+  timeoutCount: number;  // NEW: cumulative timeouts for this job across re-launches (display only)
 }
 ```
 
@@ -662,7 +662,42 @@ formatForPrompt(
         ? ` (${activeCount} active, ${consecutiveErrors - activeCount} reconciled)`
         : '';
     agentWarnings.push(
-      `⚠ @${agent} has ${consecutiveErrors} consecutive failures${totalNote}${errorSnippet}. Consider: different approach, @oracle review, or escalate to human.`,
+      `⚠ @${agent}: ${consecutiveErrors} consecutive failures${totalNote}${errorSnippet}. Change approach or escalate.`,
+    );
+  }
+
+  // NEW: Collect agent-level consecutive timeout warnings (cap at 3)
+  // Timeouts indicate decomposition issues — task too large, context too large, wrong model.
+  // Surface as a separate warning with distinct guidance.
+  const agentsWithTimeouts = [...new Set(active.map((j) => j.agent))]
+    .map((agent) => {
+      const agentJobs = this.list(parentSessionID).filter(
+        (j) => j.agent === agent,
+      );
+      const consecutiveTimeouts = (() => {
+        let count = 0;
+        for (let i = agentJobs.length - 1; i >= 0; i--) {
+          const job = agentJobs[i];
+          const terminal = job.terminalState ?? terminalStateOf(job.state);
+          if (terminal === 'error' && job.timedOut) {
+            count++;
+          } else if (terminal === 'completed') {
+            break;
+          }
+        }
+        return count;
+      })();
+      return { agent, consecutiveTimeouts };
+    })
+    .filter((a) => a.consecutiveTimeouts >= this.errorWarningThreshold)
+    .sort((a, b) => b.consecutiveTimeouts - a.consecutiveTimeouts)
+    .slice(0, 3);
+
+  for (const { agent, consecutiveTimeouts } of agentsWithTimeouts) {
+    // Skip if already warned for consecutive errors (timeout is subset of error)
+    if (agentsWithErrors.some((a) => a.agent === agent)) continue;
+    agentWarnings.push(
+      `⚠ @${agent}: ${consecutiveTimeouts} consecutive timeouts. Break into smaller tasks or switch models.`,
     );
   }
 
@@ -1043,10 +1078,11 @@ convergence signals — use them to decide when to stop, escalate, or change app
 ### Signals to Watch
 
 - **⚠ Consecutive failures warning:** If the board shows
-  `⚠ @agent has N consecutive failures`, the current approach is not working.
-  Do not retry a third time with the same approach.
-- **Timeout count:** If a job shows `Timeouts: N`, the task is too
-  large or the model is too slow. Break it into smaller pieces or switch models.
+  `⚠ @agent: N consecutive failures`, the current approach is not working.
+  Change approach or escalate.
+- **⚠ Consecutive timeouts warning:** If the board shows
+  `⚠ @agent: N consecutive timeouts`, the task is too large or the model
+  is too slow. Break into smaller tasks or switch models.
 - **No progress after 2 iterations:** If 2 iterations produce no meaningful
   progress, summarize what's done and what's blocked, then stop.
 
@@ -1139,9 +1175,9 @@ git commit -m "fix: address review feedback for loop engineering"
 ## Summary
 
 **What ships:**
-- `errorCount` + `timeoutCount` fields on `BackgroundJobRecord` — tracks consecutive failures per job, persists across re-launches
-- `getConsecutiveErrors()` method — scans job history for consecutive error/cancelled streaks, breaks on completed
-- `formatForPrompt()` warnings — `⚠ @fixer has 2 consecutive failures: "TypeError..."` injected into orchestrator context (capped at 3 agents)
+- `errorCount` + `timeoutCount` fields on `BackgroundJobRecord` — cumulative per-job failure counts, persist across re-launches (display signal)
+- `getConsecutiveErrors()` method — scans job history for consecutive error/cancelled streaks, breaks on completed (primary convergence signal)
+- `formatForPrompt()` warnings — `⚠ @fixer: 2 consecutive failures: "TypeError...". Change approach or escalate.` + dedicated timeout warnings, injected into orchestrator context (capped at 3 agents)
 - `loopEngineering` config — always-on with configurable `errorWarningThreshold` (default 2)
 - Deepwork skill updates — stopping guidance, escalation ladder, context compaction guidance
 
@@ -1157,3 +1193,47 @@ git commit -m "fix: address review feedback for loop engineering"
 **Files touched:** 6 files modified, 0 files created
 
 **Error state semantics:** Explicit — `error`/`cancelled` increment, `completed` resets, `running`/`reconciled` no change
+
+---
+
+## Future Enhancements
+
+These are out of scope for the initial implementation but worth considering:
+
+### Progress Tracking
+
+The current design measures **failure** but not **progress**. A loop can be stuck without any errors:
+
+```
+Iteration 1: modified 2 files, tests fail
+Iteration 2: modified same 2 files, tests fail
+Iteration 3: modified same 2 files, tests fail
+```
+
+No errors occurred, but the loop is clearly stuck. A future enhancement could track:
+
+- `lastMeaningfulUpdateAt` — timestamp of last file change or test improvement
+- `progressEvents` — count of distinct files modified, tests passing/failing changes
+- Warning: `⚠ @fixer: no observable progress after N iterations`
+
+This is often a better convergence signal than failure counts.
+
+### Per-Agent Thresholds
+
+The current design uses a global `errorWarningThreshold`. But agents have different retry profiles:
+
+- `explorer` → threshold 1 (exploration rarely needs retries)
+- `fixer` → threshold 2 (bounded implementation, one retry is normal)
+- `oracle` → threshold 3 (reasoning agent, revisits are expected)
+
+A single threshold may generate noise for some agents and miss others. Future config:
+
+```typescript
+loopEngineering: {
+  errorWarningThreshold: 2,  // global default
+  agentThresholds: {
+    explorer: 1,
+    oracle: 3,
+  },
+}
+```
