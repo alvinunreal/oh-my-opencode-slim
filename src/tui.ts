@@ -162,8 +162,26 @@ function renderSidebar(
   },
   configInvalid: boolean,
   compactSidebar: boolean,
+  agentsExpanded: boolean,
+  setAgentsExpanded: (expanded: boolean) => void,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
+  const agentNames = getSidebarAgentNames(snapshot);
+  const hasAgents = agentNames.length > 0;
+  const formatAgentsHeader = (expanded: boolean) =>
+    `${hasAgents ? (expanded ? '▼ ' : '▶ ') : ''}Agents`;
+  let expanded = agentsExpanded;
+  const agentRows = agentNames.map((agentName) => {
+    const model = snapshot.agentModels[agentName] ?? 'pending';
+    const variant = snapshot.agentVariants[agentName];
+    const row = compactSidebar
+      ? compactAgentRow(agentName, model, variant, theme)
+      : agentRow(agentName, model, variant, theme);
+
+    setProp(row, 'visible', expanded);
+    return row;
+  });
+  const agentsHeader = text({ fg: theme.text }, [formatAgentsHeader(expanded)]);
 
   return box(
     {
@@ -193,17 +211,25 @@ function renderSidebar(
         ],
       ),
       configStatusRow,
-      box({ width: '100%', marginTop: 1 }, [
-        text({ fg: theme.text }, ['Agents']),
-      ]),
-      ...getSidebarAgentNames(snapshot).map((agentName) => {
-        const model = snapshot.agentModels[agentName] ?? 'pending';
-        const variant = snapshot.agentVariants[agentName];
-        if (compactSidebar) {
-          return compactAgentRow(agentName, model, variant, theme);
-        }
-        return agentRow(agentName, model, variant, theme);
-      }),
+      box(
+        {
+          width: '100%',
+          flexDirection: 'row',
+          marginTop: 1,
+          onMouseDown: hasAgents
+            ? () => {
+                expanded = !expanded;
+                setAgentsExpanded(expanded);
+                setProp(agentsHeader, 'content', formatAgentsHeader(expanded));
+                for (const row of agentRows) {
+                  setProp(row, 'visible', expanded);
+                }
+              }
+            : undefined,
+        },
+        [agentsHeader],
+      ),
+      ...agentRows,
     ],
   );
 }
@@ -254,6 +280,7 @@ const plugin: TuiPluginModule & { id: string } = {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
     let configDirectory = getTuiDirectory(api);
     let { configInvalid, compactSidebar } = readConfigState(configDirectory);
+    let agentsExpanded = true;
     let snapshot = readTuiSnapshot();
     const renderTimer = setInterval(async () => {
       try {
@@ -284,6 +311,11 @@ const plugin: TuiPluginModule & { id: string } = {
             api.theme.current,
             configInvalid,
             compactSidebar,
+            agentsExpanded,
+            (expanded) => {
+              agentsExpanded = expanded;
+              api.renderer.requestRender();
+            },
           );
         },
       },
