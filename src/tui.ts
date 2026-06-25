@@ -181,7 +181,10 @@ function renderSidebar(
     setProp(row, 'visible', expanded);
     return row;
   });
-  const agentsHeader = text({ fg: theme.text }, [formatAgentsHeader(expanded)]);
+  const agentsHeader = text(
+    { fg: theme.text, content: formatAgentsHeader(expanded) },
+    [],
+  );
 
   return box(
     {
