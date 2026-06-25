@@ -511,11 +511,17 @@ export function createTaskSessionManagerHook(
       }
 
       const requested = args.task_id.trim();
-      const remembered = backgroundJobBoard.resolveReusable(
-        input.sessionID,
-        requested,
-        agentType,
-      );
+      const remembered =
+        backgroundJobBoard.resolveReusable(
+          input.sessionID,
+          requested,
+          agentType,
+        ) ??
+        backgroundJobBoard.resolveRecoverable(
+          input.sessionID,
+          requested,
+          agentType,
+        );
 
       if (!remembered) {
         if (RAW_SESSION_ID_PATTERN.test(requested)) {

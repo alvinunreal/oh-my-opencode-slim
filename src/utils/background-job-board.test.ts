@@ -164,7 +164,7 @@ describe('BackgroundJobBoard', () => {
     expect(board.resolveReusable('parent-1', 'ses_error')).toBeUndefined();
   });
 
-  test('prompt tells orchestrator to reuse completed sessions only', () => {
+  test('prompt distinguishes reusable and recoverable sessions', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -174,10 +174,24 @@ describe('BackgroundJobBoard', () => {
     });
     board.updateStatus({ taskID: 'ses_1', state: 'completed' });
     board.markReconciled('ses_1');
+    board.registerLaunch({
+      taskID: 'ses_2',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'recover timed out task',
+    });
+    board.updateStatus({ taskID: 'ses_2', state: 'running', timedOut: true });
 
-    expect(board.formatForPrompt('parent-1')).toContain(
-      'Reuse only completed sessions',
+    const prompt = board.formatForPrompt('parent-1');
+
+    expect(prompt).toContain(
+      'Completed or reconciled sessions are reusable by alias',
     );
+    expect(prompt).toContain(
+      'Timed-out running sessions are recoverable by alias for safe resume after a live busy signal.',
+    );
+    expect(prompt).toContain('Cancelled or errored sessions are not reusable.');
+    expect(prompt).toContain('exp-1 / ses_2 / explorer / running, timed out');
   });
 
   test('does not reconcile running jobs', () => {
@@ -568,6 +582,62 @@ describe('BackgroundJobBoard', () => {
       lastLiveBusyAt: 200,
     });
     expect(updated?.completedAt).toBeDefined();
+  });
+
+  test('live busy recovery clears timeout state on running jobs', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'running',
+      timedOut: true,
+      statusUncertain: true,
+      now: 150,
+    });
+
+    const updated = board.markRunningFromLiveSession('ses_1', 200);
+
+    expect(updated).toMatchObject({
+      state: 'running',
+      timedOut: false,
+      statusUncertain: false,
+      lastLiveBusyAt: 200,
+      updatedAt: 200,
+      alias: 'exp-1',
+    });
+  });
+
+  test('resolves timed-out running jobs for safe recovery only', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'running',
+      timedOut: true,
+    });
+
+    expect(
+      board.resolveReusable('parent-1', 'exp-1', 'explorer'),
+    ).toBeUndefined();
+    expect(
+      board.resolveRecoverable('parent-1', 'exp-1', 'explorer'),
+    ).toMatchObject({
+      taskID: 'ses_1',
+      state: 'running',
+      timedOut: true,
+    });
+    expect(
+      board.resolveRecoverable('parent-1', 'exp-1', 'oracle'),
+    ).toBeUndefined();
   });
 
   test('stale status updates cannot reopen already reconciled jobs', () => {

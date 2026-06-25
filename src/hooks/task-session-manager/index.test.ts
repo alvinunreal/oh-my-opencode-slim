@@ -207,6 +207,108 @@ describe('task-session-manager hook', () => {
     );
   });
 
+  test('reuses timed-out running aliases for safe recovery', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          description: 'map timed out session',
+        },
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        output: [
+          'task_id: child-1',
+          'state: running',
+          '',
+          '<task_result>',
+          'Timed out after 120000ms while waiting for task completion.',
+          '</task_result>',
+        ].join('\n'),
+      },
+    );
+
+    expect(
+      board.resolveRecoverable('parent-1', 'exp-1', 'explorer')?.taskID,
+    ).toBe('child-1');
+
+    const resume = {
+      args: { subagent_type: 'explorer', task_id: 'exp-1' },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+      resume,
+    );
+
+    expect(resume.args.task_id).toBe('child-1');
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      timedOut: true,
+    });
+  });
+
+  test('busy timeout recovery clears timeout overlay from prompt', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          description: 'recover timed out child',
+        },
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        output: [
+          'task_id: child-1',
+          'state: running',
+          '',
+          '<task_result>',
+          'Timed out after 120000ms while waiting for task completion.',
+          '</task_result>',
+        ].join('\n'),
+      },
+    );
+
+    const beforeMessages = createMessages('parent-1', 'before busy');
+    await hook['experimental.chat.messages.transform']({}, beforeMessages);
+    expect(beforeMessages.messages[0].parts[0].text).toContain(
+      'running, timed out',
+    );
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-1',
+          status: { type: 'busy' },
+        },
+      },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      timedOut: false,
+      statusUncertain: false,
+    });
+
+    const afterMessages = createMessages('parent-1', 'after busy');
+    await hook['experimental.chat.messages.transform']({}, afterMessages);
+    expect(afterMessages.messages[0].parts[0].text).not.toContain(
+      'running, timed out',
+    );
+  });
+
   test('updates background job board from injected completion messages', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });

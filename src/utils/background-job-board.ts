@@ -220,6 +220,8 @@ export class BackgroundJobBoard {
       ...existing,
       updatedAt: now,
       lastLiveBusyAt: now,
+      timedOut: false,
+      statusUncertain: false,
     };
 
     this.jobs.set(taskID, updated);
@@ -314,6 +316,18 @@ export class BackgroundJobBoard {
     return job;
   }
 
+  resolveRecoverable(
+    parentSessionID: string,
+    taskIDOrAlias: string,
+    agent?: string,
+  ): BackgroundJobRecord | undefined {
+    const job = this.resolve(parentSessionID, taskIDOrAlias);
+    if (!job) return undefined;
+    if (agent && job.agent !== agent) return undefined;
+    if (job.state !== 'running' || !job.timedOut) return undefined;
+    return job;
+  }
+
   markUsed(parentSessionID: string, key: string, now = Date.now()): void {
     const job = this.resolve(parentSessionID, key);
     if (!job) return;
@@ -381,7 +395,10 @@ export class BackgroundJobBoard {
     return [
       '### Background Job Board',
       'SENTINEL: background-job-board-v2',
-      'Do not poll running jobs. Wait for hook-driven completion, or use cancel_task only for explicit cancellation. Reconcile terminal jobs before final response. Reuse only completed sessions for the same specialist/context; never reuse cancelled or errored sessions.',
+      'Do not poll running jobs. Wait for hook-driven completion, or use cancel_task only for explicit cancellation. Reconcile terminal jobs before final response.',
+      'Completed or reconciled sessions are reusable by alias for the same specialist/context.',
+      'Timed-out running sessions are recoverable by alias for safe resume after a live busy signal.',
+      'Cancelled or errored sessions are not reusable.',
       '',
       '#### Active / Unreconciled',
       ...(active.length > 0
