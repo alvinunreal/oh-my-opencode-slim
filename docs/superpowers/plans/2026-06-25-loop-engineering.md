@@ -21,7 +21,7 @@
 
 Explicit definition of which `TaskOutputState` values trigger increment vs reset:
 
-| State | Effect on errorCount | Rationale |
+| State | Effect on totalErrors | Rationale |
 |-------|---------------------|-----------|
 | `error` | **Increment** | Agent failed — this is the primary signal |
 | `completed` | **Reset to 0** | Success — consecutive error streak broken |
@@ -45,16 +45,16 @@ Additionally, track `timeoutCount` separately — timeouts are a distinct failur
 | "LLM is branching logic" vs constraints | Provide signals, not constraints — LLM decides based on warnings |
 | Concurrent deepwork sessions | BackgroundJobBoard already filters by parentSessionID |
 | Orchestrator can ignore termination | Signals + skill guidance, not hard blocks (same as phase-reminder) |
-| registerLaunch resets errorCount | **FIXED:** errorCount does NOT reset on re-launch — persists across attempts |
+| registerLaunch resets totalErrors | **FIXED:** totalErrors does NOT reset on re-launch — persists across attempts |
 | getConsecutiveErrors doesn't check consecutive | **FIXED:** Scans job history for consecutive error streak |
 | No error state definition | **FIXED:** Explicit table above defining increment/reset per state |
 | "Hard stops" vs "signals not constraints" | **FIXED:** Renamed to "soft stops" (guidance, not enforcement) |
-| errorCount misses timeouts | **FIXED:** Added timeoutCount tracking |
+| totalErrors misses timeouts | **FIXED:** Added timeoutCount tracking |
 | Config is always-on not opt-in | **FIXED:** Updated language to "always-on, configurable" |
 | formatForPrompt token inflation | **FIXED:** Cap warnings at top 3 agents |
-| markCancelled bypasses errorCount | **FIXED:** Added errorCount increment to markCancelled() |
+| markCancelled bypasses totalErrors | **FIXED:** Added totalErrors increment to markCancelled() |
 | "consecutive" label on per-job count | **FIXED:** Removed "consecutive" from per-job formatJob display |
-| Missing errorCount preservation test | **FIXED:** Added dedicated test for re-launch preservation |
+| Missing totalErrors preservation test | **FIXED:** Added dedicated test for re-launch preservation |
 | timeoutCount increments on non-terminal | **FIXED:** Tightened to terminal timeout states only |
 | Active-only warnings undocumented | **FIXED:** Added comment explaining intentional behavior |
 
@@ -64,7 +64,7 @@ Additionally, track `timeoutCount` separately — timeouts are a distinct failur
 
 | File | Responsibility |
 |------|---------------|
-| `src/utils/background-job-board.ts` | Add `errorCount` + `timeoutCount` fields, `getConsecutiveErrors()` method, extend `formatForPrompt()` with warnings |
+| `src/utils/background-job-board.ts` | Add `totalErrors` + `timeoutCount` fields, `getConsecutiveErrors()` method, extend `formatForPrompt()` with warnings |
 | `src/utils/background-job-board.test.ts` | Tests for error counting, consecutive error detection, timeout tracking, formatForPrompt warnings |
 | `src/config/schema.ts` | Add `loopEngineering` config block to `PluginConfigSchema` |
 | `src/config/constants.ts` | Add default constants for error thresholds |
@@ -80,9 +80,9 @@ Additionally, track `timeoutCount` separately — timeouts are a distinct failur
 
 **Interfaces:**
 - Consumes: existing `BackgroundJobRecord` type
-- Produces: extended `BackgroundJobRecord` with `errorCount` and `timeoutCount` fields
+- Produces: extended `BackgroundJobRecord` with `totalErrors` and `timeoutCount` fields
 
-- [ ] **Step 1: Add `errorCount` and `timeoutCount` fields to `BackgroundJobRecord`**
+- [ ] **Step 1: Add `totalErrors` and `timeoutCount` fields to `BackgroundJobRecord`**
 
 ```typescript
 export interface BackgroundJobRecord {
@@ -107,7 +107,7 @@ export interface BackgroundJobRecord {
   lastUsedAt: number;
   terminalState?: TaskOutputState;
   contextFiles: ContextFile[];
-  errorCount: number;    // NEW: cumulative errors for this job across re-launches (display only)
+  totalErrors: number;   // NEW: cumulative errors for this job across re-launches (display signal)
   timeoutCount: number;  // NEW: cumulative timeouts for this job across re-launches (display only)
 }
 ```
@@ -116,24 +116,24 @@ export interface BackgroundJobRecord {
 
 In `src/utils/background-job-board.ts`, the `registerLaunch` method creates new records (line 126-147) and updates existing records (line 103-123).
 
-**Critical:** `errorCount` and `timeoutCount` must NOT be reset when re-launching an existing task. The whole point is detecting repeated failures across attempts. If the orchestrator re-launches `fix-1` after it failed, the error count should persist.
+**Critical:** `totalErrors` and `timeoutCount` must NOT be reset when re-launching an existing task. The whole point is detecting repeated failures across attempts. If the orchestrator re-launches `fix-1` after it failed, the error count should persist.
 
 For new records (around line 126):
 ```typescript
 const record: BackgroundJobRecord = {
   // ... existing fields ...
   contextFiles: [],
-  errorCount: 0,    // NEW: starts at 0 for new tasks
+  totalErrors: 0,    // NEW: starts at 0 for new tasks
   timeoutCount: 0,  // NEW: starts at 0 for new tasks
 };
 ```
 
-For existing record updates (around line 103) — **add errorCount and timeoutCount from existing record** (NOT reset to 0):
+For existing record updates (around line 103) — **add totalErrors and timeoutCount from existing record** (NOT reset to 0):
 ```typescript
 const updated = {
   ...existing,
   // ... existing reset fields (state, timedOut, etc.) ...
-  // errorCount and timeoutCount are NOT reset — they persist across re-launches
+  // totalErrors and timeoutCount are NOT reset — they persist across re-launches
   // This is intentional: repeated failures should accumulate
 };
 ```
@@ -144,17 +144,17 @@ In `src/utils/background-job-board.ts`, the `updateStatus` method (line 150-187)
 
 ```typescript
 // After the existing state update logic, before building `updated`:
-const errorCount =
+const totalErrors =
   input.state === 'error' || input.state === 'cancelled'
-    ? existing.errorCount + 1
+    ? existing.totalErrors + 1
     : input.state === 'completed'
       ? 0  // reset on success
-      : existing.errorCount;
+      : existing.totalErrors;
 
 // Only increment timeoutCount on terminal timeout (not non-terminal timedOut flag).
 // Assumption: timeouts arrive as { state: 'error', timedOut: true } in a single update.
 // If a running+timedOut job later errors without timedOut, the timeout is not counted.
-// This is acceptable — the primary signal is errorCount, timeoutCount is supplementary.
+// This is acceptable — the primary signal is totalErrors, timeoutCount is supplementary.
 const isTerminal = TERMINAL_STATES.has(input.state);
 const timeoutCount =
   input.timedOut && isTerminal
@@ -166,14 +166,14 @@ const timeoutCount =
 const updated: BackgroundJobRecord = {
   ...existing,
   // ... existing fields ...
-  errorCount,
+  totalErrors,
   timeoutCount,
 };
 ```
 
-- [ ] **Step 4: Increment `errorCount` in `markCancelled`**
+- [ ] **Step 4: Increment `totalErrors` in `markCancelled`**
 
-**Critical:** `markCancelled()` (line 257-290) sets `state: 'cancelled'` directly without calling `updateStatus()`. The errorCount increment logic in Step 3 won't fire. Add errorCount increment to `markCancelled`. Note: errorCount also increments in updateStatus() for 'error' and 'cancelled' states. This path handles direct cancellations that bypass updateStatus(). Each state transition = one failure event.
+**Critical:** `markCancelled()` (line 257-290) sets `state: 'cancelled'` directly without calling `updateStatus()`. The totalErrors increment logic in Step 3 won't fire. Add totalErrors increment to `markCancelled`. Note: totalErrors also increments in updateStatus() for 'error' and 'cancelled' states. This path handles direct cancellations that bypass updateStatus(). Each state transition = one failure event.
 
 ```typescript
 markCancelled(
@@ -205,10 +205,10 @@ markCancelled(
     resultSummary: summary,
     lastStatusError: undefined,
     // Don't penalize already-completed jobs with force-cancel cleanup
-    errorCount:
+    totalErrors:
       existing.state === 'completed'
-        ? existing.errorCount
-        : existing.errorCount + 1,
+        ? existing.totalErrors
+        : existing.totalErrors + 1,
   };
 
   this.jobs.set(taskID, updated);
@@ -217,13 +217,13 @@ markCancelled(
 }
 ```
 
-- [ ] **Step 5: Add test for errorCount preservation across re-launch**
+- [ ] **Step 5: Add test for totalErrors preservation across re-launch**
 
 Add to `src/utils/background-job-board.test.ts`:
 
 ```typescript
-describe('errorCount persistence', () => {
-  it('preserves errorCount across re-launch of same taskID', () => {
+describe('totalErrors persistence', () => {
+  it('preserves totalErrors across re-launch of same taskID', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'fix-1',
@@ -231,19 +231,19 @@ describe('errorCount persistence', () => {
       agent: 'fixer',
     });
     board.updateStatus({ taskID: 'fix-1', state: 'error' });
-    expect(board.get('fix-1')?.errorCount).toBe(1);
+    expect(board.get('fix-1')?.totalErrors).toBe(1);
 
-    // Re-launch same taskID — errorCount should persist
+    // Re-launch same taskID — totalErrors should persist
     board.registerLaunch({
       taskID: 'fix-1',
       parentSessionID: 'session-1',
       agent: 'fixer',
     });
-    expect(board.get('fix-1')?.errorCount).toBe(1); // preserved, not reset
+    expect(board.get('fix-1')?.totalErrors).toBe(1); // preserved, not reset
 
     // Another error increments further
     board.updateStatus({ taskID: 'fix-1', state: 'error' });
-    expect(board.get('fix-1')?.errorCount).toBe(2);
+    expect(board.get('fix-1')?.totalErrors).toBe(2);
   });
 
   it('preserves timeoutCount across re-launch', () => {
@@ -276,7 +276,7 @@ describe('errorCount persistence', () => {
     expect(board.get('fix-1')?.timeoutCount).toBe(0);
   });
 
-  it('increments errorCount in markCancelled', () => {
+  it('increments totalErrors in markCancelled', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'fix-1',
@@ -284,7 +284,7 @@ describe('errorCount persistence', () => {
       agent: 'fixer',
     });
     board.markCancelled('fix-1', 'user cancelled');
-    expect(board.get('fix-1')?.errorCount).toBe(1);
+    expect(board.get('fix-1')?.totalErrors).toBe(1);
   });
 
   it('resets counts on completed state', () => {
@@ -296,13 +296,13 @@ describe('errorCount persistence', () => {
     });
     board.updateStatus({ taskID: 'fix-1', state: 'error' });
     board.updateStatus({ taskID: 'fix-1', state: 'error' });
-    expect(board.get('fix-1')?.errorCount).toBe(2);
+    expect(board.get('fix-1')?.totalErrors).toBe(2);
 
     board.updateStatus({ taskID: 'fix-1', state: 'completed' });
-    expect(board.get('fix-1')?.errorCount).toBe(0);
+    expect(board.get('fix-1')?.totalErrors).toBe(0);
   });
 
-  it('does not inflate errorCount when force-cancelling a completed job', () => {
+  it('does not inflate totalErrors when force-cancelling a completed job', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'fix-1',
@@ -310,11 +310,11 @@ describe('errorCount persistence', () => {
       agent: 'fixer',
     });
     board.updateStatus({ taskID: 'fix-1', state: 'completed' });
-    expect(board.get('fix-1')?.errorCount).toBe(0);
+    expect(board.get('fix-1')?.totalErrors).toBe(0);
 
     // Force-cancel a completed job — should not penalize it
     board.markCancelled('fix-1', 'cleanup', Date.now(), { force: true });
-    expect(board.get('fix-1')?.errorCount).toBe(0);
+    expect(board.get('fix-1')?.totalErrors).toBe(0);
   });
 });
 ```
@@ -322,13 +322,13 @@ describe('errorCount persistence', () => {
 - [ ] **Step 6: Run existing tests to verify no regressions**
 
 Run: `bun test src/utils/background-job-board.test.ts`
-Expected: All existing tests pass (errorCount/timeoutCount default to 0, no behavior change)
+Expected: All existing tests pass (totalErrors/timeoutCount default to 0, no behavior change)
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/utils/background-job-board.ts src/utils/background-job-board.test.ts
-git commit -m "feat: add errorCount and timeoutCount to BackgroundJobRecord"
+git commit -m "feat: add totalErrors and timeoutCount to BackgroundJobRecord"
 ```
 
 ---
@@ -339,7 +339,7 @@ git commit -m "feat: add errorCount and timeoutCount to BackgroundJobRecord"
 - Modify: `src/utils/background-job-board.ts` (add method to `BackgroundJobBoard` class)
 
 **Interfaces:**
-- Consumes: `BackgroundJobRecord` with `errorCount` field
+- Consumes: `BackgroundJobRecord` with `totalErrors` field
 - Produces: `getConsecutiveErrors(parentSessionID, agent)` method returning number
 
 - [ ] **Step 1: Add `getConsecutiveErrors` method**
@@ -354,7 +354,7 @@ Add this method to the `BackgroundJobBoard` class (after `hasTerminalUnreconcile
  * Counts consecutive error/cancelled states from the most recent job backward.
  * Stops counting when it hits a completed state.
  *
- * This is different from per-job errorCount: a single job can have errorCount > 1
+ * This is different from per-job totalErrors: a single job can have totalErrors > 1
  * if updateStatus was called multiple times, but consecutiveErrors counts distinct
  * jobs that ended in error.
  */
@@ -393,7 +393,7 @@ describe('getConsecutiveErrors', () => {
     expect(board.getConsecutiveErrors('session-1', 'fixer')).toBe(0);
   });
 
-  it('counts consecutive error jobs (not just one job errorCount)', () => {
+  it('counts consecutive error jobs (not just one job totalErrors)', () => {
     const board = new BackgroundJobBoard();
     // Job 1: 1 error
     board.registerLaunch({
@@ -595,12 +595,12 @@ function formatJob(job: BackgroundJobRecord, now = Date.now()): string {
   }
 
   // NEW: Show error/timeout counts for failed jobs
-  // Note: per-job errorCount is cumulative for that job, not a streak.
+  // Note: per-job totalErrors is cumulative for that job, not a streak.
   // Agent-level consecutive streak is computed by getConsecutiveErrors().
-  // Show errors for any job with errorCount > 0 (not just state='error'),
+  // Show errors for any job with totalErrors > 0 (not just state='error'),
   // so cancelled jobs that errored before cancellation also display their count.
-  if (job.errorCount > 0) {
-    lines.push(`  Errors: ${job.errorCount}`);
+  if (job.totalErrors > 0) {
+    lines.push(`  Errors: ${job.totalErrors}`);
   }
   // Show timeout count whenever it's > 0, regardless of current timedOut flag,
   // so re-launched jobs that timed out in a prior attempt still show the history.
@@ -662,7 +662,7 @@ formatForPrompt(
         ? ` (${activeCount} active, ${consecutiveErrors - activeCount} reconciled)`
         : '';
     agentWarnings.push(
-      `⚠ @${agent}: ${consecutiveErrors} consecutive failures${totalNote}${errorSnippet}. Change approach or escalate.`,
+      `⚠ @${agent}: ${consecutiveErrors} consecutive failures${totalNote}${errorSnippet}. Change approach, consult @oracle, or escalate to human.`,
     );
   }
 
@@ -1153,10 +1153,10 @@ git diff
 Verify:
 - No unintended changes
 - All new code has tests
-- errorCount does NOT reset on re-launch (critical)
+- totalErrors does NOT reset on re-launch (critical)
 - getConsecutiveErrors scans job history, not just most recent job
 - Error state semantics are explicit (error/cancelled increment, completed resets)
-- markCancelled increments errorCount
+- markCancelled increments totalErrors
 - formatForPrompt warnings are capped at 3 agents
 - Per-job formatJob shows "Errors: N" (not "consecutive")
 - timeoutCount only increments on terminal timeout
@@ -1175,9 +1175,9 @@ git commit -m "fix: address review feedback for loop engineering"
 ## Summary
 
 **What ships:**
-- `errorCount` + `timeoutCount` fields on `BackgroundJobRecord` — cumulative per-job failure counts, persist across re-launches (display signal)
+- `totalErrors` + `timeoutCount` fields on `BackgroundJobRecord` — cumulative per-job failure counts, persist across re-launches (display signal)
 - `getConsecutiveErrors()` method — scans job history for consecutive error/cancelled streaks, breaks on completed (primary convergence signal)
-- `formatForPrompt()` warnings — `⚠ @fixer: 2 consecutive failures: "TypeError...". Change approach or escalate.` + dedicated timeout warnings, injected into orchestrator context (capped at 3 agents)
+- `formatForPrompt()` warnings — `⚠ @fixer: 2 consecutive failures: "TypeError...". Change approach, consult @oracle, or escalate to human.` + dedicated timeout warnings, injected into orchestrator context (capped at 3 agents)
 - `loopEngineering` config — always-on with configurable `errorWarningThreshold` (default 2)
 - Deepwork skill updates — stopping guidance, escalation ladder, context compaction guidance
 
