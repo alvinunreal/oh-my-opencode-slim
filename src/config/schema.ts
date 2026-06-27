@@ -66,7 +66,7 @@ const PermissionRuleSchema = z.union([
 ]);
 
 // Known keys are typed for typo protection; .catchall() types the index
-// signature to match the opencode SDK's PermissionConfig, so no cast is needed at
+// signature to match the SDK's PermissionConfig, so no cast is needed at
 // the assignment site. Unknown tool keys are still validated as rules.
 const PermissionObjectSchema = z
   .object({
@@ -87,7 +87,7 @@ const PermissionObjectSchema = z
     codesearch: PermissionActionSchema.optional(),
     doom_loop: PermissionActionSchema.optional(),
   })
-  .catchall(z.union([PermissionRuleSchema, z.array(z.string())]));
+  .catchall(PermissionRuleSchema);
 
 export const PermissionConfigSchema = z.union([
   PermissionActionSchema,

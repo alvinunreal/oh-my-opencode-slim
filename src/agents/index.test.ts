@@ -1107,4 +1107,14 @@ describe('AgentOverrideConfigSchema permission validation', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  test('rejects array value for unknown permission key', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: {
+        custom_tool: ['foo', 'bar'],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });

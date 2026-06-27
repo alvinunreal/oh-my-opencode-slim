@@ -452,3 +452,55 @@ describe('custom-agent permission passthrough', () => {
     ).toBeUndefined();
   });
 });
+
+describe('permission edge cases', () => {
+  test('shorthand string permission is not corrupted by applyDefaultPermissions', () => {
+    const config: PluginConfig = {
+      agents: {
+        planner: {
+          model: 'openai/gpt-5.5',
+          permission: 'ask',
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const planner = agents.find((a) => a.name === 'planner');
+
+    expect(planner).toBeDefined();
+    // The shorthand string should be preserved as-is, not spread into
+    // character keys like { "0": "a", "1": "s", "2": "k" }
+    expect(planner?.config.permission).toBe('ask');
+  });
+
+  test('orchestrator permission override does not replace plugin gates', () => {
+    const config: PluginConfig = {
+      agents: {
+        orchestrator: {
+          model: 'openai/gpt-5.5',
+          permission: { edit: 'deny' },
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+
+    expect(orchestrator).toBeDefined();
+    // User-supplied key survives
+    expect(orchestrator?.config.permission).toMatchObject({
+      edit: 'deny',
+    });
+    // Plugin-generated gates are NOT dropped by the override
+    expect(
+      (orchestrator?.config.permission as Record<string, unknown>)?.question,
+    ).toBeDefined();
+    expect(
+      (orchestrator?.config.permission as Record<string, unknown>)
+        ?.council_session,
+    ).toBeDefined();
+    expect(
+      (orchestrator?.config.permission as Record<string, unknown>)?.cancel_task,
+    ).toBeDefined();
+  });
+});
