@@ -240,6 +240,58 @@ The missing piece is the outer loop itself: the scheduler that runs on a timer, 
 
 ---
 
+## Case Study: Andrej Karpathy's autoresearch
+
+[autoresearch](https://github.com/karpathy/autoresearch) (March 2026) is the purest real-world implementation of loop engineering. It's a minimalist autonomous AI research framework: one Python file to edit (`train.py`), one fixed evaluation harness (`prepare.py`), and one Markdown "skill" file (`program.md`) that drives an AI agent to run an infinite experiment loop.
+
+### How It Works
+
+1. The agent reads `program.md` which defines a `LOOP FOREVER` construct
+2. It modifies `train.py` with an experimental idea
+3. Runs a 5-minute training experiment on a single GPU
+4. Evaluates validation bits-per-byte (BPB)
+5. If improved: keeps the commit, advances the branch
+6. If same or worse: git resets to previous state
+7. Repeats indefinitely (~12 experiments/hour, ~100 per night)
+
+### Mapping to the 5 Building Blocks
+
+| Building Block | autoresearch | Notes |
+|---|---|---|
+| **Automations** | The agent IS the scheduler | `LOOP FOREVER` in program.md, no external cron |
+| **Worktrees** | Not used | Single-agent, single-file system |
+| **Skills** | `program.md` IS the skill | Explicitly called "a super lightweight skill" |
+| **Connectors** | Not used | Agent's native tools only (git, python) |
+| **Sub-agents** | Not used | Single-agent system |
+
+### Comparison to Ralph and Full Loop Engineering
+
+| Aspect | autoresearch | Ralph | Full Loop Engineering |
+|---|---|---|---|
+| Agent lifetime | Continuous (one session) | Fresh per iteration | Continuous with sub-agents |
+| Context | Grows within session | Reset each iteration | Persistent + fresh sub-agent contexts |
+| Memory | Git + results.tsv | Git + progress.txt + prd.json | Durable state files + skills |
+| Verification | Automated (val_bpb check) | Manual (human reviews diffs) | Maker/checker split |
+| Scheduling | Agent self-schedules | Manual trigger | Cron/events |
+| Parallelism | None | None | Parallel sub-agents |
+| Complexity | ~100 lines (program.md) | ~50 lines (Bash loop) | Hundreds of lines across 5 blocks |
+
+### Key Lessons
+
+1. **The skill file is the most important piece.** `program.md` defines the loop, success criteria, and failure handling. Without it, the agent has no idea what to do.
+
+2. **Git is sufficient memory for many loops.** No need for complex state management. The commit history IS the state.
+
+3. **A fixed time budget makes experiments comparable.** Every experiment runs for exactly 5 minutes, regardless of what the agent changes. This is critical for fair evaluation.
+
+4. **Fast-fail prevents wasted compute.** NaN or exploding loss (>100) causes immediate exit. No point running 5 minutes of garbage.
+
+5. **The agent can be its own scheduler.** For simple loops, no external cron is needed. The agent follows the loop instructions and keeps going.
+
+6. **Minimum viable loop = skill + git + evaluation.** You don't need the full 5-block stack to get value from loop engineering. Start simple, add complexity when the task demands it.
+
+---
+
 ## Key Takeaways
 
 1. **The shift is real.** The people building the most-used coding agents have stopped prompting by hand. The leverage moved from the model to the loop around it.
@@ -254,6 +306,8 @@ The missing piece is the outer loop itself: the scheduler that runs on a timer, 
 
 6. **OpenCode is 60% there.** Skills, connectors, and sub-agents are mature. The loop engine and automations are designed but unimplemented. The sub-agent infrastructure is the strongest piece of the stack.
 
+7. **autoresearch proves the minimum viable loop.** You don't need the full 5-block stack. A skill file + git + evaluation metric is enough to run autonomous experiments overnight. Start simple, add complexity when the task demands it.
+
 ---
 
-*Sources: Addy Osmani (addyosmani.com), Peter Steinberger (@steipete), Boris Cherny (Anthropic), Matt Van Horn (techtwitter.com), Geoffrey Huntley (ghuntley.com/ralph), snarktank/ralph (GitHub), awesomeclaude.ai, lushbinary.com, StationX, The Register, The New Stack, Business Insider, and 100+ Reddit/X/YouTube/TikTok threads.*
+*Sources: Addy Osmani (addyosmani.com), Peter Steinberger (@steipete), Boris Cherny (Anthropic), Matt Van Horn (techtwitter.com), Geoffrey Huntley (ghuntley.com/ralph), snarktank/ralph (GitHub), Andrej Karpathy (autoresearch), awesomeclaude.ai, lushbinary.com, StationX, The Register, The New Stack, Business Insider, and 100+ Reddit/X/YouTube/TikTok threads.*
