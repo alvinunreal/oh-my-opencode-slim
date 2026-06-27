@@ -1027,3 +1027,84 @@ describe('observer agent', () => {
     expect(DEFAULT_DISABLED_AGENTS).toContain('observer');
   });
 });
+
+describe('AgentOverrideConfigSchema permission validation', () => {
+  test('accepts object-form permission', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: { edit: 'deny', bash: 'ask' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.permission).toEqual({
+        edit: 'deny',
+        bash: 'ask',
+      });
+    }
+  });
+
+  test('accepts shorthand string permission', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: 'ask',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.permission).toBe('ask');
+    }
+  });
+
+  test('rejects invalid action value', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: { edit: 'alow' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects object value on action-only key', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: { webfetch: { '*': 'allow' } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('accepts unknown permission key (passthrough)', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: { custom_tool_name: 'ask' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(
+        (result.data.permission as Record<string, unknown>).custom_tool_name,
+      ).toBe('ask');
+    }
+  });
+
+  test('accepts pattern-based bash rule', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: {
+        bash: { 'git status*': 'allow', '*': 'ask' },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.permission).toEqual({
+        bash: { 'git status*': 'allow', '*': 'ask' },
+      });
+    }
+  });
+
+  test('rejects invalid action in pattern map', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.5',
+      permission: {
+        bash: { 'git status*': 'alow' },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});

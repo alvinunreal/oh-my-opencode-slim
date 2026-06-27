@@ -343,3 +343,112 @@ describe('custom-agent creation', () => {
     );
   });
 });
+
+describe('custom-agent permission passthrough', () => {
+  test('passes user permission through to agent config', () => {
+    const config: PluginConfig = {
+      agents: {
+        planner: {
+          model: 'openai/gpt-5.5',
+          permission: { edit: 'deny', bash: 'ask' },
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const planner = agents.find((a) => a.name === 'planner');
+
+    expect(planner).toBeDefined();
+    expect(planner?.config.permission).toMatchObject({
+      edit: 'deny',
+      bash: 'ask',
+    });
+  });
+
+  test('applies permission to built-in agent overrides', () => {
+    const config: PluginConfig = {
+      agents: {
+        explorer: {
+          model: 'openai/gpt-5.5',
+          permission: { edit: 'deny' },
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const explorer = agents.find((a) => a.name === 'explorer');
+
+    expect(explorer).toBeDefined();
+    expect(explorer?.config.permission).toMatchObject({
+      edit: 'deny',
+    });
+  });
+
+  test('user edit/bash survive merge with skills config', () => {
+    const config: PluginConfig = {
+      agents: {
+        planner: {
+          model: 'openai/gpt-5.5',
+          skills: ['my-skill'],
+          permission: { edit: 'deny', bash: 'ask' },
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const planner = agents.find((a) => a.name === 'planner');
+
+    expect(planner).toBeDefined();
+    // User-supplied keys survive
+    expect(planner?.config.permission).toMatchObject({
+      edit: 'deny',
+      bash: 'ask',
+    });
+    // Plugin generates skill rule (overrides any user skill key)
+    expect(
+      (planner?.config.permission as Record<string, unknown>)?.skill,
+    ).toBeDefined();
+  });
+
+  test('passes permission through unchanged without skills or mcps', () => {
+    const config: PluginConfig = {
+      agents: {
+        researcher: {
+          model: 'openai/gpt-5.5',
+          permission: { edit: 'deny', webfetch: 'allow' },
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const researcher = agents.find((a) => a.name === 'researcher');
+
+    expect(researcher).toBeDefined();
+    expect(researcher?.config.permission).toMatchObject({
+      edit: 'deny',
+      webfetch: 'allow',
+    });
+  });
+
+  test('no permission field means no regression', () => {
+    const config: PluginConfig = {
+      agents: {
+        reviewer: {
+          model: 'openai/gpt-5.5',
+          prompt: 'You are a reviewer.',
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const reviewer = agents.find((a) => a.name === 'reviewer');
+
+    expect(reviewer).toBeDefined();
+    // Plugin still generates its own permission keys (question, etc.)
+    expect(reviewer?.config.permission).toBeDefined();
+    // But no edit/bash keys since user didn't set them
+    expect(
+      (reviewer?.config.permission as Record<string, unknown>)?.edit,
+    ).toBeUndefined();
+  });
+});

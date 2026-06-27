@@ -54,6 +54,46 @@ export type ManualAgentName = (typeof MANUAL_AGENT_NAMES)[number];
 export type ManualAgentPlan = z.infer<typeof ManualAgentPlanSchema>;
 export type ManualPlan = z.infer<typeof ManualPlanSchema>;
 
+// Permission schemas — mirror the SDK's PermissionConfig type with shallow
+// validation. Action values are validated; unknown tool keys pass through.
+const PermissionActionSchema = z.enum(['ask', 'allow', 'deny']);
+
+// A rule key accepts either a single action (whole-tool default) or a
+// pattern→action map (e.g. bash: { "git status*": "allow", "*": "ask" })
+const PermissionRuleSchema = z.union([
+  PermissionActionSchema,
+  z.record(z.string(), PermissionActionSchema),
+]);
+
+// Known keys are typed for typo protection; .catchall() types the index
+// signature to match the opencode SDK's PermissionConfig, so no cast is needed at
+// the assignment site. Unknown tool keys are still validated as rules.
+const PermissionObjectSchema = z
+  .object({
+    read: PermissionRuleSchema.optional(),
+    edit: PermissionRuleSchema.optional(),
+    glob: PermissionRuleSchema.optional(),
+    grep: PermissionRuleSchema.optional(),
+    list: PermissionRuleSchema.optional(),
+    bash: PermissionRuleSchema.optional(),
+    task: PermissionRuleSchema.optional(),
+    external_directory: PermissionRuleSchema.optional(),
+    lsp: PermissionRuleSchema.optional(),
+    skill: PermissionRuleSchema.optional(),
+    todowrite: PermissionActionSchema.optional(),
+    question: PermissionActionSchema.optional(),
+    webfetch: PermissionActionSchema.optional(),
+    websearch: PermissionActionSchema.optional(),
+    codesearch: PermissionActionSchema.optional(),
+    doom_loop: PermissionActionSchema.optional(),
+  })
+  .catchall(z.union([PermissionRuleSchema, z.array(z.string())]));
+
+export const PermissionConfigSchema = z.union([
+  PermissionActionSchema,
+  PermissionObjectSchema,
+]);
+
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const AgentOverrideConfigSchema = z
   .object({
@@ -81,6 +121,7 @@ export const AgentOverrideConfigSchema = z
     orchestratorPrompt: z.string().min(1).optional(),
     options: z.record(z.string(), z.unknown()).optional(), // provider-specific model options (e.g., textVerbosity, thinking budget)
     displayName: z.string().min(1).optional(),
+    permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })
   .strict();
 
