@@ -42,6 +42,9 @@ const RATE_LIMIT_PATTERNS = [
   /insufficient.?(quota|balance)/i,
   /high concurrency/i,
   /reduce concurrency/i,
+  /monthly usage limit/i,
+  /5-hour usage limit/i,
+  /weekly usage limit/i,
 ];
 
 export function isRateLimitError(error: unknown): boolean {
