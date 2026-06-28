@@ -35,9 +35,8 @@ become the basis for pattern detection.
 
 Use available evidence in this order:
 
-1. **OpenCode logs** — Read `~/.local/share/opencode/log/opencode.log` to discover
-   repos. Look for lines containing `message="creating instance"` and extract
-   the `directory=<path>` value. Collect unique repo paths.
+1. **OpenCode logs** — Read the OpenCode log file (default: `~/.local/share/opencode/log/opencode.log` on Linux/macOS) to discover repos. Look for lines containing `message="creating instance"` and extract the `directory=<path>` value. Collect unique repo paths. If the exact pattern isn't found, fall back to searching for `directory=` in any nearby context line.
+   **Note:** The log format (`message="creating instance"` with `directory=`) is an internal OpenCode detail that may change upstream. If this pattern stops matching, update the search accordingly.
 2. **Per-repo project files** — For each discovered repo that still exists on disk,
    read `AGENTS.md` (or just its headings if the file is long) and list the
    contents of `.opencode/` (and `.slim/` if present).
@@ -45,6 +44,8 @@ Use available evidence in this order:
    `.opencode/`, and `.slim/` are the baseline for comparison.
 4. **Existing assets** — Same as local mode: skills, commands, agents, prompt
    overrides, MCP permissions, config.
+
+Before synthesizing, cap the number of repos to analyze. By default, limit to the 10 most recent repos by log timestamp. Announce the cap to the user: "Examining the most recent N repos (use --max-repos M to scan more or fewer)." If the user specified `--max-repos M` in their command, use M instead of 10.
 
 Synthesize cross-repo patterns: which configs repeat, which skills are duplicated,
 which workflows are re-invented per-repo instead of shared. Return the same compact
