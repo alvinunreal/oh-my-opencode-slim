@@ -643,9 +643,11 @@ export function createTaskSessionManagerHook(
 
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
-      output: { messages: MessageWithParts[] },
+      output: { messages?: unknown },
     ): Promise<void> => {
-      for (const [messageIndex, message] of output.messages.entries()) {
+      const messages = Array.isArray(output.messages) ? output.messages : [];
+
+      for (const [messageIndex, message] of messages.entries()) {
         if (!isUserMessageWithParts(message)) continue;
         if (message.info.agent && message.info.agent !== 'orchestrator') {
           continue;
@@ -662,8 +664,8 @@ export function createTaskSessionManagerHook(
         }
       }
 
-      for (let i = output.messages.length - 1; i >= 0; i -= 1) {
-        const message = output.messages[i];
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
         if (!isUserMessageWithParts(message)) continue;
         if (message.info.agent && message.info.agent !== 'orchestrator') return;
         if (

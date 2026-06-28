@@ -121,6 +121,17 @@ describe('createPhaseReminderHook', () => {
     expect(output.messages).toEqual([]);
   });
 
+  test('handles missing or non-array messages', async () => {
+    const hook = createPhaseReminderHook();
+
+    await expect(
+      hook['experimental.chat.messages.transform']({}, {}),
+    ).resolves.toBeUndefined();
+    await expect(
+      hook['experimental.chat.messages.transform']({}, { messages: {} }),
+    ).resolves.toBeUndefined();
+  });
+
   test('handles no user messages', async () => {
     const hook = createPhaseReminderHook();
     const output = {
@@ -135,5 +146,28 @@ describe('createPhaseReminderHook', () => {
     await hook['experimental.chat.messages.transform']({}, output);
 
     expect(output.messages[0].parts[0].text).toBe('Hi');
+  });
+
+  test('skips malformed messages while still appending to latest valid user message', async () => {
+    const hook = createPhaseReminderHook();
+    const output = {
+      messages: [
+        {},
+        { info: { role: 'assistant' } },
+        { parts: [{ type: 'text', text: 'missing info' }] },
+        {
+          info: { role: 'user', agent: 'orchestrator' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    };
+
+    await expect(
+      hook['experimental.chat.messages.transform']({}, output as never),
+    ).resolves.toBeUndefined();
+
+    expect(output.messages[3].parts.length).toBe(2);
+    expect(output.messages[3].parts[0].text).toBe('hello');
+    expect(output.messages[3].parts[1].text).toBe(PHASE_REMINDER);
   });
 });

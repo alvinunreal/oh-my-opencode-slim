@@ -1035,9 +1035,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // API (doesn't show in UI)
     'experimental.chat.messages.transform': async (
       input: Record<string, never>,
-      output: { messages: unknown[] },
+      output: { messages?: unknown },
     ): Promise<void> => {
-      const messages = output.messages.filter(isMessageWithParts);
+      const messages = (Array.isArray(output.messages) ? output.messages : []).filter(
+        isMessageWithParts,
+      );
 
       for (const message of messages) {
         if (!isUserMessageWithParts(message)) {
