@@ -68,6 +68,13 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     sourcePath: 'src/skills/oh-my-opencode-slim',
   },
   {
+    name: 'release-smoke-test',
+    description:
+      'Validate packed release candidates and bugfixes before public publish',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/release-smoke-test',
+  },
+  {
     name: 'worktrees',
     description:
       'Manage Git worktrees as OMO safe isolated coding lanes for complex/risky/parallel work',

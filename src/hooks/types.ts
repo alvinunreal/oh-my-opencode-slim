@@ -25,7 +25,9 @@ export type MessageWithParts = {
   parts: MessagePart[];
 };
 
-export function isMessageWithParts(message: unknown): message is MessageWithParts {
+export function isMessageWithParts(
+  message: unknown,
+): message is MessageWithParts {
   if (!message || typeof message !== 'object') {
     return false;
   }

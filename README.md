@@ -198,6 +198,8 @@ verification while specialists do the work in their own lanes.
 - **[oh-my-opencode-slim skill](#oh-my-opencode-slim-skill)** — a bundled
   configuration skill that helps tune models, prompts, custom agents, MCP access,
   presets, and plugin behavior safely.
+- **Release Smoke Test** — validates packed release candidates and bugfixes
+  before public publish with isolated OpenCode runtime smokes.
 
 #### Background Agents
 
@@ -662,7 +664,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
-| **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
+| **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `reflect`, `worktrees`, `release-smoke-test`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `gh_grep`, and how MCP permissions work per agent |
 | **[Tools](docs/tools.md)** | Built-in tool capabilities like `webfetch`, LSP tools, code search, and formatters |
 

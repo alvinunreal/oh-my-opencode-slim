@@ -55,7 +55,9 @@ describe('task-session-manager hook', () => {
     const messages = {
       messages: [
         {},
-        { info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' } },
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+        },
         { parts: [{ type: 'text', text: 'missing info' }] },
         {
           info: { role: 'assistant' },
