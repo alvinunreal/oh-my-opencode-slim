@@ -91,10 +91,6 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
-function truncate(str: string, maxLen: number): string {
-  return str.length > maxLen ? `${str.slice(0, maxLen - 1)}…` : str;
-}
-
 function agentRow(
   label: string,
   model: string,
@@ -104,12 +100,19 @@ function agentRow(
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
 
-  if (modelParts.provider) {
-    detailRows.push(agentDetailRow('provider', modelParts.provider, theme));
+  function detailRow(fieldLabel: string, value: string) {
+    return box({ width: '100%', flexDirection: 'row', paddingLeft: 2 }, [
+      text({ fg: theme.textMuted, width: 9 }, [fieldLabel]),
+      text({ fg: theme.textMuted }, [value]),
+    ]);
   }
-  detailRows.push(agentDetailRow('model', modelParts.model, theme));
+
+  if (modelParts.provider) {
+    detailRows.push(detailRow('provider', modelParts.provider));
+  }
+  detailRows.push(detailRow('model', modelParts.model));
   if (variant) {
-    detailRows.push(agentDetailRow('variant', variant, theme));
+    detailRows.push(detailRow('variant', variant));
   }
 
   return box({ width: '100%', flexDirection: 'column', marginBottom: 1 }, [
@@ -124,30 +127,18 @@ function compactAgentRow(
   variant: string | undefined,
   theme: { textMuted: unknown },
 ): JSX.Element {
-  const value = variant ? `${model}  ${variant}` : model;
+  const value = variant ? `${model} (${variant})` : model;
   return box(
     {
       width: '100%',
       flexDirection: 'row',
       justifyContent: 'space-between',
-      marginBottom: 0,
     },
     [
-      text({ fg: theme.textMuted }, [label]),
-      text({ fg: theme.textMuted }, [truncate(value, 40)]),
+      text({ fg: theme.textMuted, width: 14 }, [label]),
+      text({ fg: theme.textMuted }, [value]),
     ],
   );
-}
-
-function agentDetailRow(
-  label: string,
-  value: string,
-  theme: { textMuted: unknown },
-): JSX.Element {
-  return box({ width: '100%', flexDirection: 'row', paddingLeft: 2 }, [
-    text({ fg: theme.textMuted, width: 9 }, [label]),
-    text({ fg: theme.textMuted }, [value]),
-  ]);
 }
 
 function renderSidebar(
@@ -164,7 +155,6 @@ function renderSidebar(
   compactSidebar: boolean,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
-
   return box(
     {
       width: '100%',
@@ -239,7 +229,8 @@ function readConfigState(directory: string): {
       configInvalid = true;
     },
   });
-  return { configInvalid, compactSidebar: config.compactSidebar ?? false };
+  const compactSidebar = config.compactSidebar ?? false;
+  return { configInvalid, compactSidebar };
 }
 
 export function readConfigInvalid(directory: string): boolean {
