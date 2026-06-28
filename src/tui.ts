@@ -140,7 +140,7 @@ function compactAgentRow(
     },
     [
       text({ fg: theme.textMuted, width: 14 }, [label]),
-      text({ fg: theme.textMuted }, [truncate(value, 40)]),
+      text({ fg: theme.textMuted }, [value]),
     ],
   );
 }
