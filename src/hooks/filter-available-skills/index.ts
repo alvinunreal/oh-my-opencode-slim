@@ -117,9 +117,11 @@ export function createFilterAvailableSkillsHook(
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
-      output: { messages: MessageWithParts[] },
+      output: { messages?: unknown },
     ): Promise<void> => {
-      const messages = output.messages.filter(isMessageWithParts);
+      const messages = (Array.isArray(output.messages) ? output.messages : []).filter(
+        isMessageWithParts,
+      );
       if (messages.length === 0) {
         return;
       }
