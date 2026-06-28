@@ -1,31 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { TuiSnapshot } from './tui-state';
-
-type TestNode = {
-  tag: string;
-  props: Record<string, unknown>;
-  children: Array<TestNode | string | number>;
-};
-
-mock.module('@opentui/solid', () => ({
-  createElement: (tag: string): TestNode => ({ tag, props: {}, children: [] }),
-  insert: (node: TestNode, child: TestNode | string | number) => {
-    node.children.push(child);
-  },
-  setProp: (node: TestNode, key: string, value: unknown) => {
-    node.props[key] = value;
-  },
-}));
-
-const {
+import {
   getSidebarAgentNames,
   readConfigInvalid,
   splitSidebarModelId,
-  default: tuiPlugin,
-} = await import('./tui');
+  default as tuiPlugin,
+} from './tui';
+import type { TuiSnapshot } from './tui-state';
 
 function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
   return {
@@ -138,115 +121,7 @@ describe('readConfigInvalid', () => {
   });
 });
 
-function nodeText(node: TestNode | string | number): string {
-  if (typeof node !== 'object') return String(node);
-  return `${node.props.content ?? ''}${node.children.map(nodeText).join('')}`;
-}
 
-function findNode(
-  node: TestNode,
-  predicate: (node: TestNode) => boolean,
-): TestNode | undefined {
-  if (predicate(node)) return node;
-
-  for (const child of node.children) {
-    if (typeof child !== 'object') continue;
-    const match = findNode(child, predicate);
-    if (match) return match;
-  }
-}
-
-describe('tui agents dropdown', () => {
-  let originalEnv: typeof process.env;
-  let tempDir: string;
-
-  beforeEach(() => {
-    originalEnv = { ...process.env };
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-tui-dropdown-'));
-    process.env.XDG_DATA_HOME = path.join(tempDir, 'data');
-    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'config');
-
-    const stateFile = path.join(
-      process.env.XDG_DATA_HOME,
-      'opencode/storage/oh-my-opencode-slim/tui-state.json',
-    );
-    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-    fs.writeFileSync(
-      stateFile,
-      JSON.stringify({
-        version: 1,
-        updatedAt: 0,
-        agentModels: { explorer: 'openai/gpt-5.5' },
-        agentVariants: {},
-      }),
-    );
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    process.env = originalEnv;
-  });
-
-  test('clicking agents header hides and shows mounted agent rows', async () => {
-    let dispose = () => {};
-    let sidebarContent: (() => TestNode) | undefined;
-
-    await tuiPlugin.tui(
-      {
-        state: { path: { directory: tempDir } },
-        lifecycle: { onDispose: (fn: () => void) => (dispose = fn) },
-        renderer: {
-          requestRender: () => {},
-        },
-        slots: {
-          register: (registration: {
-            slots: { sidebar_content: () => TestNode };
-          }) => {
-            sidebarContent = registration.slots.sidebar_content;
-          },
-        },
-        theme: { current: {} },
-      } as unknown as Parameters<typeof tuiPlugin.tui>[0],
-      {},
-      { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
-    );
-
-    const sidebar = sidebarContent?.();
-    if (!sidebar) throw new Error('sidebar content was not registered');
-
-    const header = findNode(
-      sidebar,
-      (node) => node.tag === 'text' && nodeText(node) === '▼ Agents',
-    );
-    const toggle = findNode(
-      sidebar,
-      (node) => typeof node.props.onMouseDown === 'function',
-    );
-    const row = findNode(
-      sidebar,
-      (node) =>
-        node.tag === 'box' &&
-        node.props.visible !== undefined &&
-        nodeText(node).includes('explorer'),
-    );
-    const onMouseDown = toggle?.props.onMouseDown;
-    if (!header || typeof onMouseDown !== 'function' || !row) {
-      throw new Error('agents dropdown nodes were not rendered');
-    }
-
-    expect(row.props.visible).toBe(true);
-
-    onMouseDown();
-    expect(header.props.content).toBe('▶ Agents');
-    expect(row.props.visible).toBe(false);
-
-    onMouseDown();
-    expect(header.props.content).toBe('▼ Agents');
-    expect(row.props.visible).toBe(true);
-
-    dispose();
-  });
-});
 
 describe('tui plugin env disable', () => {
   let originalEnv: typeof process.env;

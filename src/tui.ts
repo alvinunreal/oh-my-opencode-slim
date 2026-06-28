@@ -104,12 +104,19 @@ function agentRow(
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
 
-  if (modelParts.provider) {
-    detailRows.push(agentDetailRow('provider', modelParts.provider, theme));
+  function detailRow(fieldLabel: string, value: string) {
+    return box({ width: '100%', flexDirection: 'row', paddingLeft: 2 }, [
+      text({ fg: theme.textMuted, width: 9 }, [fieldLabel]),
+      text({ fg: theme.textMuted }, [value]),
+    ]);
   }
-  detailRows.push(agentDetailRow('model', modelParts.model, theme));
+
+  if (modelParts.provider) {
+    detailRows.push(detailRow('provider', modelParts.provider));
+  }
+  detailRows.push(detailRow('model', modelParts.model));
   if (variant) {
-    detailRows.push(agentDetailRow('variant', variant, theme));
+    detailRows.push(detailRow('variant', variant));
   }
 
   return box({ width: '100%', flexDirection: 'column', marginBottom: 1 }, [
@@ -124,30 +131,18 @@ function compactAgentRow(
   variant: string | undefined,
   theme: { textMuted: unknown },
 ): JSX.Element {
-  const value = variant ? `${model}  ${variant}` : model;
+  const value = variant ? `${model} (${variant})` : model;
   return box(
     {
       width: '100%',
       flexDirection: 'row',
       justifyContent: 'space-between',
-      marginBottom: 0,
     },
     [
-      text({ fg: theme.textMuted }, [label]),
+      text({ fg: theme.textMuted, width: 14 }, [label]),
       text({ fg: theme.textMuted }, [truncate(value, 40)]),
     ],
   );
-}
-
-function agentDetailRow(
-  label: string,
-  value: string,
-  theme: { textMuted: unknown },
-): JSX.Element {
-  return box({ width: '100%', flexDirection: 'row', paddingLeft: 2 }, [
-    text({ fg: theme.textMuted, width: 9 }, [label]),
-    text({ fg: theme.textMuted }, [value]),
-  ]);
 }
 
 function renderSidebar(
@@ -162,30 +157,8 @@ function renderSidebar(
   },
   configInvalid: boolean,
   compactSidebar: boolean,
-  agentsExpanded: boolean,
-  setAgentsExpanded: (expanded: boolean) => void,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
-  const agentNames = getSidebarAgentNames(snapshot);
-  const hasAgents = agentNames.length > 0;
-  const formatAgentsHeader = (expanded: boolean) =>
-    `${hasAgents ? (expanded ? '▼ ' : '▶ ') : ''}Agents`;
-  let expanded = agentsExpanded;
-  const agentRows = agentNames.map((agentName) => {
-    const model = snapshot.agentModels[agentName] ?? 'pending';
-    const variant = snapshot.agentVariants[agentName];
-    const row = compactSidebar
-      ? compactAgentRow(agentName, model, variant, theme)
-      : agentRow(agentName, model, variant, theme);
-
-    setProp(row, 'visible', expanded);
-    return row;
-  });
-  const agentsHeader = text(
-    { fg: theme.text, content: formatAgentsHeader(expanded) },
-    [],
-  );
-
   return box(
     {
       width: '100%',
@@ -214,25 +187,17 @@ function renderSidebar(
         ],
       ),
       configStatusRow,
-      box(
-        {
-          width: '100%',
-          flexDirection: 'row',
-          marginTop: 1,
-          onMouseDown: hasAgents
-            ? () => {
-                expanded = !expanded;
-                setAgentsExpanded(expanded);
-                setProp(agentsHeader, 'content', formatAgentsHeader(expanded));
-                for (const row of agentRows) {
-                  setProp(row, 'visible', expanded);
-                }
-              }
-            : undefined,
-        },
-        [agentsHeader],
-      ),
-      ...agentRows,
+      box({ width: '100%', marginTop: 1 }, [
+        text({ fg: theme.text }, ['Agents']),
+      ]),
+      ...getSidebarAgentNames(snapshot).map((agentName) => {
+        const model = snapshot.agentModels[agentName] ?? 'pending';
+        const variant = snapshot.agentVariants[agentName];
+        if (compactSidebar) {
+          return compactAgentRow(agentName, model, variant, theme);
+        }
+        return agentRow(agentName, model, variant, theme);
+      }),
     ],
   );
 }
@@ -268,7 +233,8 @@ function readConfigState(directory: string): {
       configInvalid = true;
     },
   });
-  return { configInvalid, compactSidebar: config.compactSidebar ?? false };
+  const compactSidebar = config.compactSidebar ?? false;
+  return { configInvalid, compactSidebar };
 }
 
 export function readConfigInvalid(directory: string): boolean {
@@ -283,7 +249,6 @@ const plugin: TuiPluginModule & { id: string } = {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
     let configDirectory = getTuiDirectory(api);
     let { configInvalid, compactSidebar } = readConfigState(configDirectory);
-    let agentsExpanded = true;
     let snapshot = readTuiSnapshot();
     const renderTimer = setInterval(async () => {
       try {
@@ -314,11 +279,6 @@ const plugin: TuiPluginModule & { id: string } = {
             api.theme.current,
             configInvalid,
             compactSidebar,
-            agentsExpanded,
-            (expanded) => {
-              agentsExpanded = expanded;
-              api.renderer.requestRender();
-            },
           );
         },
       },
