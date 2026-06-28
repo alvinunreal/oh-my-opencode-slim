@@ -24,3 +24,23 @@ export type MessageWithParts = {
   info: MessageInfo;
   parts: MessagePart[];
 };
+
+export function isMessageWithParts(message: unknown): message is MessageWithParts {
+  if (!message || typeof message !== 'object') {
+    return false;
+  }
+
+  const candidate = message as Partial<MessageWithParts>;
+  return (
+    !!candidate.info &&
+    typeof candidate.info === 'object' &&
+    typeof candidate.info.role === 'string' &&
+    Array.isArray(candidate.parts)
+  );
+}
+
+export function isUserMessageWithParts(
+  message: unknown,
+): message is MessageWithParts {
+  return isMessageWithParts(message) && message.info.role === 'user';
+}

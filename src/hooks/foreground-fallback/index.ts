@@ -21,6 +21,7 @@ import {
   abortSessionWithTimeout,
   parseModelReference,
 } from '../../utils/session';
+import { isUserMessageWithParts } from '../types';
 
 type OpencodeClient = PluginInput['client'];
 
@@ -284,13 +285,11 @@ export class ForegroundFallbackManager {
       const result = await this.client.session.messages({
         path: { id: sessionID },
       });
-      const messages = (result.data ?? []) as Array<{
-        info: { role: string };
-        parts: unknown[];
-      }>;
-      const lastUser = [...messages]
-        .reverse()
-        .find((m) => m.info.role === 'user');
+      // result.data may contain partial/streaming messages whose `info` is
+      // undefined at runtime (OpenCode violates its own declared type), so
+      // guard each entry instead of dereferencing `info` directly.
+      const messages = (result.data ?? []) as unknown[];
+      const lastUser = [...messages].reverse().find(isUserMessageWithParts);
       if (!lastUser) {
         log('[foreground-fallback] no user message found', { sessionID });
         return;

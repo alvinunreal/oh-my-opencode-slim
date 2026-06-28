@@ -43,6 +43,42 @@ function createMessages(sessionID: string, text = 'user message') {
 }
 
 describe('task-session-manager hook', () => {
+  test('ignores messages without OpenCode info or parts', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map scheduler hooks',
+    });
+    const { hook } = createHook({ backgroundJobBoard: board });
+    const messages = {
+      messages: [
+        {},
+        { info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' } },
+        { parts: [{ type: 'text', text: 'missing info' }] },
+        {
+          info: { role: 'assistant' },
+          parts: [{ type: 'text', text: 'assistant response' }],
+        },
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [{ type: 'text', text: 'valid user message' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages as never);
+
+    expect(messages.messages).toHaveLength(5);
+    expect(messages.messages[4].parts[0].text).toContain(
+      '### Background Job Board',
+    );
+    expect(messages.messages[4].parts[0].text).toContain(
+      'exp-1 / child-1 / explorer / running',
+    );
+  });
+
   test('stores background task launches in job board prompt context', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });

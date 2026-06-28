@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, extname, join } from 'node:path';
-import type { MessageWithParts } from './types';
+import { isUserMessageWithParts, type MessageWithParts } from './types';
 
 // Debounce: only run cleanup every 10 minutes per directory
 const lastCleanupByDir = new Map<string, number>();
@@ -170,7 +170,7 @@ export function processImageAttachments(args: {
   }> = [];
 
   for (const msg of messages) {
-    if (msg.info.role !== 'user') continue;
+    if (!isUserMessageWithParts(msg)) continue;
     const imageParts = msg.parts.filter(isImagePart);
     if (imageParts.length > 0) {
       messagesWithImages.push({ msg, imageParts });
