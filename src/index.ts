@@ -32,11 +32,7 @@ import {
   ForegroundFallbackManager,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
-import {
-  isMessageWithParts,
-  isUserMessageWithParts,
-  type MessageWithParts,
-} from './hooks/types';
+import { isMessageWithParts, isUserMessageWithParts } from './hooks/types';
 import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
 import {
@@ -1037,9 +1033,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       input: Record<string, never>,
       output: { messages?: unknown },
     ): Promise<void> => {
-      const messages = (Array.isArray(output.messages) ? output.messages : []).filter(
-        isMessageWithParts,
-      );
+      const messages = (
+        Array.isArray(output.messages) ? output.messages : []
+      ).filter(isMessageWithParts);
 
       for (const message of messages) {
         if (!isUserMessageWithParts(message)) {
@@ -1069,10 +1065,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input,
         { messages },
       );
-      await phaseReminderHook['experimental.chat.messages.transform'](
-        input,
-        { messages },
-      );
+      await phaseReminderHook['experimental.chat.messages.transform'](input, {
+        messages,
+      });
       await filterAvailableSkillsHook['experimental.chat.messages.transform'](
         input,
         { messages },

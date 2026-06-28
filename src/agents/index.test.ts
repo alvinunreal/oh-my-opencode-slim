@@ -296,6 +296,7 @@ describe('skill permissions', () => {
     // CUSTOM_SKILLS loop must also add a named codemap entry for orchestrator
     expect(skillPerm?.codemap).toBe('allow');
     expect(skillPerm?.clonedeps).toBe('allow');
+    expect(skillPerm?.['release-smoke-test']).toBe('allow');
   });
 
   test('fixer does not get codemap skill allowed by default', () => {

@@ -119,9 +119,9 @@ export function createFilterAvailableSkillsHook(
       _input: Record<string, never>,
       output: { messages?: unknown },
     ): Promise<void> => {
-      const messages = (Array.isArray(output.messages) ? output.messages : []).filter(
-        isMessageWithParts,
-      );
+      const messages = (
+        Array.isArray(output.messages) ? output.messages : []
+      ).filter(isMessageWithParts);
       if (messages.length === 0) {
         return;
       }

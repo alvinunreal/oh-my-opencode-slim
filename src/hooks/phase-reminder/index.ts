@@ -7,7 +7,7 @@
  */
 import { PHASE_REMINDER } from '../../config/constants';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
-import { isUserMessageWithParts, type MessageWithParts } from '../types';
+import { isUserMessageWithParts } from '../types';
 
 export { PHASE_REMINDER };
 
