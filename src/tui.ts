@@ -91,10 +91,6 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
-function truncate(str: string, maxLen: number): string {
-  return str.length > maxLen ? `${str.slice(0, maxLen - 1)}…` : str;
-}
-
 function agentRow(
   label: string,
   model: string,

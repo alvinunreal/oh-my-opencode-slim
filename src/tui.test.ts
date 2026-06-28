@@ -121,8 +121,6 @@ describe('readConfigInvalid', () => {
   });
 });
 
-
-
 describe('tui plugin env disable', () => {
   let originalEnv: typeof process.env;
 
