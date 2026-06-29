@@ -632,6 +632,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "s-shank",
+      "name": "Shank",
+      "avatar_url": "https://avatars.githubusercontent.com/u/241541918?v=4",
+      "profile": "https://github.com/s-shank",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
