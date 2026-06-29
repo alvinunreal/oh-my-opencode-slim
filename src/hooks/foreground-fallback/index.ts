@@ -43,6 +43,9 @@ const RATE_LIMIT_PATTERNS = [
   /insufficient.?(quota|balance)/i,
   /high concurrency/i,
   /reduce concurrency/i,
+  // ponytail: transient server errors mixed in; rename to isRetryableError
+  // and split from rate-limit detection when this list grows further
+  /service unavailable/i,
 ];
 
 export function isRateLimitError(error: unknown): boolean {
