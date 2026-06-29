@@ -89,6 +89,33 @@ describe('isRateLimitError', () => {
     expect(isRateLimitError({ message: 'Insufficient balance.' })).toBe(true);
   });
 
+  test('returns true for "Monthly usage limit reached"', () => {
+    expect(
+      isRateLimitError({
+        message:
+          'Monthly usage limit reached. Resets in X days.',
+      }),
+    ).toBe(true);
+  });
+
+  test('returns true for "5-hour usage limit reached"', () => {
+    expect(
+      isRateLimitError({
+        message:
+          '5-hour usage limit reached. Resets in 36min.',
+      }),
+    ).toBe(true);
+  });
+
+  test('returns true for "Weekly usage limit reached"', () => {
+    expect(
+      isRateLimitError({
+        message:
+          'Weekly usage limit reached. Resets in 2 days.',
+      }),
+    ).toBe(true);
+  });
+
   test('returns false for non-rate-limit error', () => {
     expect(isRateLimitError({ message: 'invalid API key' })).toBe(false);
   });
