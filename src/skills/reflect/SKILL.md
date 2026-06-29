@@ -35,9 +35,10 @@ become the basis for pattern detection.
 
 Use available evidence in this order:
 
-1. **OpenCode logs** — Read the OpenCode log file (default: `~/.local/share/opencode/log/opencode.log` on Linux/macOS) to discover repos. Look for lines containing `message="creating instance"` and extract the `directory=<path>` value. Collect unique repo paths. If the exact pattern isn't found, fall back to searching for `directory=` in any nearby context line.
-   **Note:** The log format (`message="creating instance"` with `directory=`) is an internal OpenCode detail that may change upstream. If this pattern stops matching, update the search accordingly.
-2. **Per-repo project files** — For each discovered repo that still exists on disk,
+1. **OpenCode logs** — Read the OpenCode log file (default: `~/.local/share/opencode/log/opencode.log` on Linux/macOS, `%USERPROFILE%\.local\share\opencode\log\opencode.log` on Windows) to discover repos. Look for lines containing `message="creating instance"` and extract the `directory=<path>` value. Collect unique repo paths. If the exact pattern isn't found, fall back to searching for `directory=` in any nearby context line.
+
+If the log file does not exist, is empty, or contains no repo discoveries, inform the user that --global mode requires prior OpenCode usage across repos and suggest running /reflect in individual repos first to generate evidence.
+2. **Per-repo project files** — For each discovered repo that still exists on disk, skip any paths that do not exist on the filesystem with a warning message. Then,
    read `AGENTS.md` (or just its headings if the file is long) and list the
    contents of `.opencode/` (and `.slim/` if present).
 3. **Current project files** — The repo where reflect was invoked. Its AGENTS.md,
@@ -53,6 +54,22 @@ report format (Findings / Recommended changes / Skipped / Needs more evidence).
 
 Respect privacy: read only AGENTS.md, `.opencode/`, and `.slim/`. Do not read
 source code files, commit history, or personal documents.
+
+Example output:
+Examining the most recent 10 repos (use --max-repos M to scan more or fewer).
+Findings
+- [pattern] duplicated across N repos: [details]
+- [command/tool] re-invented in N repos with [details]
+- [usage pattern] consistent: N/10 repos use it for [purpose]
+
+Recommended changes
+- [actionable recommendation]
+
+Skipped
+- [intentionally different per-project items]
+
+Needs more evidence
+- [patterns seen in too few repos to generalize]
 
 ## Core Contract
 
