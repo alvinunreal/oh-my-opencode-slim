@@ -396,13 +396,20 @@ export class BackgroundJobBoard {
   }
 
   clearParent(parentSessionID: string): void {
+    const agents = new Set<string>();
     for (const job of this.list(parentSessionID)) {
+      agents.add(job.agent);
       this.jobs.delete(job.taskID);
+    }
+    for (const agent of agents) {
+      this.pruneCounter(parentSessionID, agent);
     }
   }
 
   drop(taskID: string): void {
+    const job = this.jobs.get(taskID);
     this.jobs.delete(taskID);
+    if (job) this.pruneCounter(job.parentSessionID, job.agent);
   }
 
   private trimReusable(taskID: string): void {
@@ -415,6 +422,7 @@ export class BackgroundJobBoard {
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
     for (const stale of reusable.slice(this.maxReusablePerAgent)) {
       this.jobs.delete(stale.taskID);
+      this.pruneCounter(stale.parentSessionID, stale.agent);
     }
   }
 
@@ -436,13 +444,35 @@ export class BackgroundJobBoard {
   }
 
   private nextAlias(parentSessionID: string, agent: string): string {
-    const prefix = AGENT_PREFIX[agent] ?? (agent.slice(0, 3) || 'job');
+    const prefix = aliasPrefix(agent);
     const key = `${parentSessionID}:${prefix}`;
     const next = (this.counters.get(key) ?? 0) + 1;
     this.counters.set(key, next);
 
     return `${prefix}-${next}`;
   }
+
+  /**
+   * Release the alias counter for a parent/prefix once no jobs remain that
+   * could collide with a reset count. Without this, every (parent session ×
+   * agent prefix) pair leaks one counter entry for the life of the process,
+   * even after all its jobs have been dropped or cleared. Resetting the
+   * count is safe because aliases only need to stay unique among jobs that
+   * still exist for the parent.
+   */
+  private pruneCounter(parentSessionID: string, agent: string): void {
+    const prefix = aliasPrefix(agent);
+    const stillUsed = [...this.jobs.values()].some(
+      (job) =>
+        job.parentSessionID === parentSessionID &&
+        aliasPrefix(job.agent) === prefix,
+    );
+    if (!stillUsed) this.counters.delete(`${parentSessionID}:${prefix}`);
+  }
+}
+
+function aliasPrefix(agent: string): string {
+  return AGENT_PREFIX[agent] ?? (agent.slice(0, 3) || 'job');
 }
 
 export function deriveTaskSessionLabel(input: {

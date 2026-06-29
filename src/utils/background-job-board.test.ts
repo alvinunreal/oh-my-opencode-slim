@@ -698,4 +698,82 @@ describe('BackgroundJobBoard', () => {
     const prompt = board.formatForPrompt('parent-1', 9_000);
     expect(prompt).toContain('running [resumed, 4s ago]');
   });
+
+  test('resets the alias counter after the last job for a prefix is dropped', () => {
+    const board = new BackgroundJobBoard();
+    const first = board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    expect(first.alias).toBe('exp-1');
+
+    board.drop('ses_1');
+
+    // No explorer jobs remain for parent-1, so the counter is released and
+    // the next alias restarts at 1 instead of leaking to exp-2.
+    const second = board.registerLaunch({
+      taskID: 'ses_2',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    expect(second.alias).toBe('exp-1');
+  });
+
+  test('keeps the alias counter while another job of the same prefix remains', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    board.registerLaunch({
+      taskID: 'ses_2',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+
+    // Dropping exp-1 while exp-2 is still live must NOT reset the counter,
+    // otherwise the next alias would collide with the live exp-2.
+    board.drop('ses_1');
+
+    const third = board.registerLaunch({
+      taskID: 'ses_3',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    expect(third.alias).toBe('exp-3');
+  });
+
+  test('clearParent releases alias counters for that parent only', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    board.registerLaunch({
+      taskID: 'ses_2',
+      parentSessionID: 'parent-2',
+      agent: 'explorer',
+    });
+
+    board.clearParent('parent-1');
+
+    // parent-1's counter is released → restarts at exp-1.
+    const reused = board.registerLaunch({
+      taskID: 'ses_3',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    expect(reused.alias).toBe('exp-1');
+
+    // parent-2 is untouched → continues from exp-2.
+    const other = board.registerLaunch({
+      taskID: 'ses_4',
+      parentSessionID: 'parent-2',
+      agent: 'explorer',
+    });
+    expect(other.alias).toBe('exp-2');
+  });
 });
