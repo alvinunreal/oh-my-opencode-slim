@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cli-review": {
+      "source": "greptileai/skills",
+      "sourceType": "github",
+      "skillPath": "cli-review/SKILL.md",
+      "computedHash": "1b1fe57c18746de2a85068770ec01fa7ac26471f5c9cb8047553ca433fea1acd"
+    }
+  }
+}
