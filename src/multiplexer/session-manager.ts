@@ -233,7 +233,11 @@ export class MultiplexerSessionManager {
         paneId: paneResult.paneId,
       });
 
-      this.startPolling();
+      await this.retryDeferredIdleClose(sessionId);
+
+      if (this.sessions.has(sessionId)) {
+        this.startPolling();
+      }
     } finally {
       this.spawningSessions.delete(sessionId);
     }
@@ -584,7 +588,11 @@ export class MultiplexerSessionManager {
         paneId: paneResult.paneId,
       });
 
-      this.startPolling();
+      await this.retryDeferredIdleClose(sessionId);
+
+      if (this.sessions.has(sessionId)) {
+        this.startPolling();
+      }
     } finally {
       this.spawningSessions.delete(sessionId);
     }
@@ -607,12 +615,24 @@ export class MultiplexerSessionManager {
   }
 
   private isRunningBackgroundJob(sessionId: string): boolean {
-    return this.backgroundJobBoard?.get(sessionId)?.state === 'running';
+    const job = this.backgroundJobBoard?.get(sessionId);
+    return job?.state === 'running' && !job.timedOut;
   }
 
   async retryDeferredIdleClose(sessionId: string): Promise<void> {
     if (!this.enabled) return;
-    if (!this.deferredIdleCloses.has(sessionId)) return;
+    if (!this.sessions.has(sessionId)) return;
+
+    const job = this.backgroundJobBoard?.get(sessionId);
+    const hasDeferredIdleClose = this.deferredIdleCloses.has(sessionId);
+
+    if (
+      !hasDeferredIdleClose &&
+      (!job || (job.state === 'running' && !job.timedOut))
+    ) {
+      return;
+    }
+
     await this.closeSession(sessionId, 'idle');
   }
 

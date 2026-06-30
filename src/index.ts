@@ -261,7 +261,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       multiplexerConfig,
       backgroundJobBoard,
     );
-    backgroundJobBoard.setTerminalStateListener((taskID) => {
+    backgroundJobBoard.setActionableStateListener((taskID) => {
       void multiplexerSessionManager.retryDeferredIdleClose(taskID);
     });
 

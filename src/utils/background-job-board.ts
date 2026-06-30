@@ -58,7 +58,7 @@ export interface BackgroundJobStatusInput {
   now?: number;
 }
 
-type TerminalStateListener = (taskID: string) => void;
+type ActionableStateListener = (taskID: string) => void;
 
 const TERMINAL_STATES = new Set<BackgroundJobState>([
   'completed',
@@ -79,7 +79,7 @@ const AGENT_PREFIX: Record<string, string> = {
 export class BackgroundJobBoard {
   private readonly jobs = new Map<string, BackgroundJobRecord>();
   private readonly counters = new Map<string, number>();
-  private terminalStateListener?: TerminalStateListener;
+  private actionableStateListener?: ActionableStateListener;
 
   private readonly maxReusablePerAgent: number;
   private readonly readContextMinLines: number;
@@ -91,8 +91,8 @@ export class BackgroundJobBoard {
     this.readContextMaxFiles = options.readContextMaxFiles ?? 8;
   }
 
-  setTerminalStateListener(listener?: TerminalStateListener): void {
-    this.terminalStateListener = listener;
+  setActionableStateListener(listener?: ActionableStateListener): void {
+    this.actionableStateListener = listener;
   }
 
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord {
@@ -165,6 +165,8 @@ export class BackgroundJobBoard {
     const now = input.now ?? Date.now();
     const terminal = TERMINAL_STATES.has(input.state);
     const notifyTerminal = terminal && !TERMINAL_STATES.has(existing.state);
+    const notifyTimedOut =
+      input.state === 'running' && input.timedOut && !existing.timedOut;
     const updated: BackgroundJobRecord = {
       ...existing,
       state: input.state,
@@ -182,7 +184,9 @@ export class BackgroundJobBoard {
 
     this.jobs.set(input.taskID, updated);
     this.trimReusable(input.taskID);
-    if (notifyTerminal) this.terminalStateListener?.(input.taskID);
+    if (notifyTerminal || notifyTimedOut) {
+      this.actionableStateListener?.(input.taskID);
+    }
     return updated;
   }
 
@@ -285,7 +289,7 @@ export class BackgroundJobBoard {
     };
 
     this.jobs.set(taskID, updated);
-    if (notifyTerminal) this.terminalStateListener?.(taskID);
+    if (notifyTerminal) this.actionableStateListener?.(taskID);
     return updated;
   }
 
