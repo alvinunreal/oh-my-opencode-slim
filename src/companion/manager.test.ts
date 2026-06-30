@@ -210,6 +210,21 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].active_agents).toEqual(['fixer', 'fixer']);
   });
 
+  it('keeps at most one process exit listener across reloads', () => {
+    const baseline = process.listenerCount('exit');
+    const managers: CompanionManager[] = [];
+    for (let i = 0; i < 5; i++) {
+      const m = make(`reload-${i}`);
+      m.onLoad();
+      managers.push(m);
+    }
+    // Re-inits must dedup the exit listener rather than stacking one each time.
+    expect(process.listenerCount('exit')).toBeLessThanOrEqual(baseline + 1);
+    // onExit releases the live listener again.
+    managers.at(-1)?.onExit();
+    expect(process.listenerCount('exit')).toBeLessThanOrEqual(baseline);
+  });
+
   it('removes its entry on exit', () => {
     const m = make('sess-a', '/a');
     const m2 = make('sess-b', '/b');

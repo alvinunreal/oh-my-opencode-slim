@@ -12,6 +12,14 @@ import * as path from 'node:path';
 import type { CompanionConfig } from '../config/schema';
 import { log } from '../utils/logger';
 
+// Only one companion `process.on('exit')` listener should be live per process.
+// The plugin function can re-run (config.update() → Instance.dispose()),
+// constructing a fresh CompanionManager each time; without deduping, every
+// re-init would leak another exit listener and retain the previous manager
+// (and its detached child reference). Module-level state survives re-inits
+// because the module itself is not re-evaluated.
+let activeExitListener: (() => void) | null = null;
+
 interface CompanionSession {
   session_id: string;
   cwd: string;
@@ -144,6 +152,7 @@ export class CompanionManager {
   private readonly busyAgentSessions = new Map<string, string>();
   private readonly config?: CompanionConfig;
   private companionProcess: ChildProcess | null = null;
+  private exitListener: (() => void) | null = null;
 
   constructor(sessionId: string, cwd: string, config?: CompanionConfig) {
     this.id = sessionId;
@@ -163,9 +172,26 @@ export class CompanionManager {
       } catch {}
       return;
     }
-    process.on('exit', () => this.onExit());
+    this.registerExitListener();
     this.flush();
     this.spawnIfAvailable();
+  }
+
+  /**
+   * Register a single process `exit` listener, replacing any previously
+   * registered companion listener so re-inits don't stack listeners (and so
+   * the prior manager + its child reference become collectable).
+   */
+  private registerExitListener(): void {
+    if (activeExitListener) {
+      try {
+        process.removeListener('exit', activeExitListener);
+      } catch {}
+    }
+    const listener = () => this.onExit();
+    process.on('exit', listener);
+    activeExitListener = listener;
+    this.exitListener = listener;
   }
 
   /**
@@ -224,6 +250,13 @@ export class CompanionManager {
 
   onExit(): void {
     if (this.config?.enabled !== true) return;
+    if (this.exitListener) {
+      try {
+        process.removeListener('exit', this.exitListener);
+      } catch {}
+      if (activeExitListener === this.exitListener) activeExitListener = null;
+      this.exitListener = null;
+    }
     if (this.companionProcess) {
       try {
         this.companionProcess.kill();
