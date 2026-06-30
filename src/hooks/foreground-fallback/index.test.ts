@@ -270,6 +270,37 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
+  test('does not detach fallback for externally owned sessions', async () => {
+    const ownedSessionIDs = new Set(['background-child-session']);
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, {
+      shouldHandleSession: (sessionID) => !ownedSessionIDs.has(sessionID),
+    });
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'background-child-session',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'background-child-session',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.messages).not.toHaveBeenCalled();
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
   test('does not abort when promptAsync is unavailable', async () => {
     const { client, mocks } = createMockClient({ includePromptAsync: false });
     const mgr = new ForegroundFallbackManager(client, makeChains(), true);
