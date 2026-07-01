@@ -517,9 +517,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             | Record<string, unknown>
             | undefined;
           if (entry) {
-            entry.model = chosen.id;
-            if (chosen.variant) {
-              entry.variant = chosen.variant;
+            // Only apply model array resolution if no user-selected model
+            // exists. A user-selected model (via /model command) takes
+            // precedence over the config's fallback chain to preserve
+            // runtime selections and avoid breaking provider cache.
+            if (entry.model === undefined) {
+              entry.model = chosen.id;
+              if (chosen.variant) {
+                entry.variant = chosen.variant;
+              }
             }
           } else {
             // Agent exists in slim but not in opencodeConfig.agent —
