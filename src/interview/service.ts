@@ -43,6 +43,14 @@ import type {
 const COMMAND_NAME = 'interview';
 const DEFAULT_MAX_QUESTIONS = 2;
 
+/**
+ * Cap on retained abandoned interview records. Abandoned interviews are kept
+ * briefly so a still-open browser tab can render their final state, but
+ * without a bound the `interviewsById` and `browserOpened` collections grow
+ * for the life of a long-running session/dashboard process.
+ */
+const MAX_RETAINED_ABANDONED = 50;
+
 function isTruthyEnvFlag(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -287,6 +295,33 @@ export function createInterviewService(
     return interviewsById.get(interviewId) ?? null;
   }
 
+  /**
+   * Mark an interview abandoned and prune the oldest abandoned records so the
+   * in-memory registry (and its browser-open tracking) stays bounded.
+   */
+  function abandonInterview(interview: InterviewRecord): void {
+    interview.status = 'abandoned';
+    pruneAbandonedInterviews();
+  }
+
+  function pruneAbandonedInterviews(): void {
+    const abandoned = [...interviewsById.values()].filter(
+      (record) => record.status === 'abandoned',
+    );
+    const overflow = abandoned.length - MAX_RETAINED_ABANDONED;
+    if (overflow <= 0) return;
+    abandoned
+      .sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      )
+      .slice(0, overflow)
+      .forEach((record) => {
+        interviewsById.delete(record.id);
+        browserOpened.delete(record.id);
+      });
+  }
+
   async function createInterview(
     sessionID: string,
     idea: string,
@@ -300,7 +335,7 @@ export function createInterviewService(
           return active;
         }
 
-        active.status = 'abandoned';
+        abandonInterview(active);
       }
     }
 
@@ -338,7 +373,7 @@ export function createInterviewService(
           return active;
         }
 
-        active.status = 'abandoned';
+        abandonInterview(active);
       }
     }
 
@@ -695,7 +730,7 @@ export function createInterviewService(
         return;
       }
 
-      interview.status = 'abandoned';
+      abandonInterview(interview);
       fileCache = null;
       activeInterviewIds.delete(deletedSessionId);
       log('[interview] session deleted, interview marked abandoned', {

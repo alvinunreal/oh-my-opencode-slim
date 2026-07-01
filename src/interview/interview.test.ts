@@ -1892,3 +1892,82 @@ describe('InterviewConfigSchema port validation', () => {
     expect(() => InterviewConfigSchema.parse({ port: 3.5 })).toThrow();
   });
 });
+
+describe('interview service abandoned-record retention', () => {
+  // Mirrors MAX_RETAINED_ABANDONED in service.ts.
+  const RETENTION_CAP = 50;
+
+  async function createInterviewOnSession(
+    service: ReturnType<typeof createInterviewService>,
+    ctx: ReturnType<typeof createMockContext>,
+    index: number,
+  ): Promise<string> {
+    const output = { parts: [] as Array<{ type: string; text?: string }> };
+    await service.handleCommandExecuteBefore(
+      {
+        command: 'interview',
+        sessionID: `session-${index}`,
+        arguments: `Idea ${index}`,
+      },
+      output,
+    );
+    return requireInterviewId(
+      extractInterviewIdFromLastPrompt(ctx.client.session.prompt),
+    );
+  }
+
+  test('evicts oldest abandoned records once the retention cap is exceeded', async () => {
+    const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+    const ctx = createMockContext({ directory: tempDir });
+    const service = createInterviewService(ctx);
+    service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+    const ids: string[] = [];
+    for (let i = 0; i < RETENTION_CAP + 2; i++) {
+      ids.push(await createInterviewOnSession(service, ctx, i));
+      // Deleting the session abandons the interview, triggering pruning.
+      await service.handleEvent({
+        event: {
+          type: 'session.deleted',
+          properties: { sessionID: `session-${i}` },
+        },
+      });
+    }
+
+    // The two oldest abandoned records are evicted from the registry.
+    await expect(service.getInterviewState(ids[0])).rejects.toThrow(
+      'Interview not found',
+    );
+    await expect(service.getInterviewState(ids[1])).rejects.toThrow(
+      'Interview not found',
+    );
+
+    // The most recent abandoned record is retained and still renders.
+    const retained = await service.getInterviewState(ids[ids.length - 1]);
+    expect(retained.mode).toBe('abandoned');
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  test('retains abandoned records that stay within the cap', async () => {
+    const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+    const ctx = createMockContext({ directory: tempDir });
+    const service = createInterviewService(ctx);
+    service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+    const id = await createInterviewOnSession(service, ctx, 0);
+    await service.handleEvent({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'session-0' },
+      },
+    });
+
+    // Below the cap, the abandoned record is kept so an open tab can still
+    // render its final state.
+    const state = await service.getInterviewState(id);
+    expect(state.mode).toBe('abandoned');
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+});
