@@ -1,3 +1,5 @@
+[![Listed on TakoAPI](https://takoapi.com/api/badge/alvinunreal-oh-my-opencode-slim)](https://takoapi.com/agents/alvinunreal-oh-my-opencode-slim)
+
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
     <img src="img/v2.webp" alt="oh-my-opencode-slim V2 Release" style="border-radius: 10px;">
