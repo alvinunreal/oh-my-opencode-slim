@@ -236,7 +236,7 @@ describe('orchestrator agent', () => {
       { id: 'github-copilot/claude-3.5-haiku' },
       { id: 'openai/gpt-4' },
     ]);
-    expect(orchestrator?.config.model).toBeUndefined();
+    expect(orchestrator?.config.model).toBe('google/gemini-3-pro');
   });
 });
 
@@ -258,7 +258,7 @@ describe('per-model variant in array config', () => {
       { id: 'google/gemini-3-flash', variant: 'low' },
       { id: 'openai/gpt-4o-mini' },
     ]);
-    expect(explorer?.config.model).toBeUndefined();
+    expect(explorer?.config.model).toBe('google/gemini-3-flash');
   });
 
   test('top-level variant preserved alongside per-model variants', () => {

@@ -226,7 +226,7 @@ export class ForegroundFallbackManager {
 
     this.inProgress.add(sessionID);
     try {
-      const currentModel = this.sessionModel.get(sessionID);
+      let currentModel = this.sessionModel.get(sessionID);
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
       if (!chain.length) {
@@ -235,6 +235,15 @@ export class ForegroundFallbackManager {
           agentName,
         });
         return;
+      }
+
+      // When the agent is known but no model was captured (common for
+      // subagent error events that fire before message.updated), infer
+      // the current model as the chain's first entry. Without this, the
+      // fallback would incorrectly re-select the primary model as the
+      // "next" fallback target.
+      if (!currentModel && agentName && chain.length > 0) {
+        currentModel = chain[0];
       }
 
       if (!this.sessionTried.has(sessionID)) {

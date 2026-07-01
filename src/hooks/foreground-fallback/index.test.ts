@@ -579,7 +579,7 @@ describe('ForegroundFallbackManager deduplication', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager subagent.session.created', () => {
-  test('records agent name from subagent.session.created when agentName provided', async () => {
+  test('records agent name from subagent.session.created and falls back correctly', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true);
 
@@ -602,9 +602,10 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
       },
     ];
     // explorer chain: ['openai/gpt-4o-mini', 'anthropic/claude-haiku']
-    // no current model tracked → first untried = openai/gpt-4o-mini
-    expect(call[0].body.model.providerID).toBe('openai');
-    expect(call[0].body.model.modelID).toBe('gpt-4o-mini');
+    // agentName known → currentModel inferred as chain[0] (primary)
+    // primary is tried → fallback picks claude-haiku
+    expect(call[0].body.model.providerID).toBe('anthropic');
+    expect(call[0].body.model.modelID).toBe('claude-haiku');
   });
 });
 

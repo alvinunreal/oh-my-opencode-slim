@@ -160,7 +160,10 @@ function applyOverrides(
       agent._modelArray = override.model.map((m) =>
         typeof m === 'string' ? { id: m } : m,
       );
-      agent.config.model = undefined; // cleared; runtime hook resolves from _modelArray
+      // Set config.model to the primary entry so the subagent has a valid
+      // model at launch time. ForegroundFallbackManager handles runtime
+      // failover to the remaining entries in _modelArray.
+      agent.config.model = agent._modelArray[0].id;
     } else {
       agent.config.model = override.model;
     }
