@@ -410,6 +410,69 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
+    test('timed out running jobs still close after safe recovery and completion', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'timedout-child',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      board.updateStatus({
+        taskID: 'timedout-child',
+        state: 'running',
+        timedOut: true,
+        now: 100,
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-timedout-child',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        board,
+      );
+      board.setTerminalStateListener((taskID) => {
+        void manager.retryDeferredIdleClose(taskID);
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'timedout-child', parentID: 'parent-1' },
+        },
+      });
+
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'timedout-child',
+          status: { type: 'idle' },
+        },
+      });
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+
+      board.markRunningFromLiveSession('timedout-child', 200);
+      expect(board.get('timedout-child')).toMatchObject({
+        state: 'running',
+        timedOut: false,
+        lastLiveBusyAt: 200,
+      });
+
+      board.updateStatus({
+        taskID: 'timedout-child',
+        state: 'completed',
+        resultSummary: 'done',
+      });
+      await Promise.resolve();
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-timedout-child',
+      );
+    });
+
     test('deferred idle closes retry on terminal status updates', async () => {
       for (const state of ['completed', 'error', 'cancelled'] as const) {
         resetMultiplexerSessionManagerState();
