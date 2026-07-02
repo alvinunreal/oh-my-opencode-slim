@@ -236,7 +236,7 @@ export function createTaskSessionManagerHook(
       log('[task-session-manager] suppressed late cancelled task error', {
         taskID: status.taskID,
         alias: existing?.alias,
-        state: existing?.state,
+        state: status.state,
         terminalState: existing?.terminalState,
         result: status.result,
       });
@@ -311,12 +311,12 @@ export function createTaskSessionManagerHook(
     if (isFailed && isLateCancelledTaskError(existing, status.state)) {
       part.text = formatCancelledTaskStatusOutput(
         status.taskID,
-        existing?.resultSummary,
+        backgroundJobBoard.getResultSummary(status.taskID),
       );
       log('[task-session-manager] normalized late cancelled injected failure', {
         taskID: status.taskID,
         alias: existing?.alias,
-        state: existing?.state,
+        state: status.state,
         terminalState: existing?.terminalState,
         result: status.result,
       });
@@ -764,15 +764,20 @@ export function createTaskSessionManagerHook(
         const updated = sessionId
           ? backgroundJobBoard.markRunningFromLiveSession(sessionId)
           : undefined;
-        if (before?.cancellationRequested) {
+        if (
+          before &&
+          sessionId &&
+          backgroundJobBoard.wasCancellationRequested(sessionId)
+        ) {
           log('[task-session-manager] busy observed after cancel request', {
             sessionID: sessionId,
             previousState: before.state,
             previousTerminalState: before.terminalState,
-            terminalUnreconciled: before.terminalUnreconciled,
-            resultSummary: before.resultSummary,
-            updatedState: updated?.state,
-            updatedCancellationRequested: updated?.cancellationRequested,
+            terminalUnreconciled:
+              backgroundJobBoard.isTerminalUnreconciled(sessionId),
+            resultSummary:
+              backgroundJobBoard.getResultSummary(sessionId) ??
+              before.resultSummary,
           });
         }
         log('[task-session-manager] busy/status busy observed', {
@@ -782,11 +787,21 @@ export function createTaskSessionManagerHook(
             : false,
           previousState: before?.state,
           previousTerminalState: before?.terminalState,
-          previousCancellationRequested: before?.cancellationRequested,
-          previousLastLiveBusyAt: before?.lastLiveBusyAt,
+          previousCancellationRequested: sessionId
+            ? backgroundJobBoard.wasCancellationRequested(sessionId)
+            : false,
+          previousLastLiveBusyAt: sessionId
+            ? (backgroundJobBoard.getLastLiveBusyAt(sessionId) ??
+              before?.lastLiveBusyAt)
+            : undefined,
           updatedState: updated?.state,
-          updatedCancellationRequested: updated?.cancellationRequested,
-          updatedLastLiveBusyAt: updated?.lastLiveBusyAt,
+          updatedCancellationRequested: sessionId
+            ? backgroundJobBoard.wasCancellationRequested(sessionId)
+            : false,
+          updatedLastLiveBusyAt: sessionId
+            ? (backgroundJobBoard.getLastLiveBusyAt(sessionId) ??
+              updated?.lastLiveBusyAt)
+            : undefined,
         });
         return;
       }
@@ -859,6 +874,7 @@ function isLateCancelledTaskError(
   job: BackgroundJobRecord | undefined,
   state: string,
 ): boolean {
+  // ponytail: kept as-is per spec - uses multiple fields for complex check
   if (state !== 'error') return false;
   if (!job?.cancellationRequested) return false;
   return job.state === 'cancelled' || job.terminalState === 'cancelled';

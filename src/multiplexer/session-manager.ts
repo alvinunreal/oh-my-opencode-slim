@@ -607,7 +607,7 @@ export class MultiplexerSessionManager {
   }
 
   private isRunningBackgroundJob(sessionId: string): boolean {
-    return this.backgroundJobBoard?.get(sessionId)?.state === 'running';
+    return this.backgroundJobBoard?.isRunning(sessionId) ?? false; // ponytail: intent-revealing query
   }
 
   async retryDeferredIdleClose(sessionId: string): Promise<void> {
