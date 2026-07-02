@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { BackgroundJobBoard, ContextFile } from '../../utils';
 
-export interface PendingContextFile {
+interface PendingContextFile {
   path: string;
   lines: Set<number>;
   lastReadAt: number;
@@ -9,7 +9,6 @@ export interface PendingContextFile {
 
 export interface TaskContextTracker {
   addContext(taskId: string, files: ContextFile[]): void;
-  getContext(taskId: string): Map<string, PendingContextFile> | undefined;
   canTrack(taskId: string, backgroundJobBoard: BackgroundJobBoard): boolean;
   prune(backgroundJobBoard: BackgroundJobBoard): void;
   clearSession(sessionId: string): void;
@@ -45,10 +44,6 @@ export function createTaskContextTracker(): TaskContextTracker {
         pending.lastReadAt = Math.max(pending.lastReadAt, file.lastReadAt);
         context.set(file.path, pending);
       }
-    },
-
-    getContext(taskId: string) {
-      return contextByTask.get(taskId);
     },
 
     canTrack(taskId: string, backgroundJobBoard: BackgroundJobBoard) {
@@ -94,11 +89,11 @@ export function createTaskContextTracker(): TaskContextTracker {
 }
 
 // Pure helpers — only used by task-context-tracker
-export function extractPath(output: string): string | undefined {
+function extractPath(output: string): string | undefined {
   return /<path>([^<]+)<\/path>/.exec(output)?.[1];
 }
 
-export function normalizePath(root: string, file: string): string {
+function normalizePath(root: string, file: string): string {
   const relative = path.relative(root, file);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     return file;
@@ -124,7 +119,7 @@ export function extractReadFiles(
   ];
 }
 
-export function countReadLines(output: string): number[] {
+function countReadLines(output: string): number[] {
   const lines = new Set<number>();
   for (const match of output.matchAll(/^([0-9]+):/gm)) {
     lines.add(Number(match[1]));
