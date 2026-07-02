@@ -61,10 +61,14 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         parentSessionID,
         requested,
         resolvedTaskID: job?.taskID,
-        alias: job?.alias,
+        alias: job?.taskID
+          ? options.backgroundJobBoard.getAlias(job.taskID)
+          : undefined,
         state: job?.state,
         terminalState: job?.terminalState,
-        cancellationRequested: job?.cancellationRequested,
+        cancellationRequested: job?.taskID
+          ? options.backgroundJobBoard.wasCancellationRequested(job.taskID)
+          : undefined,
       });
       if (!job) {
         if (isSessionID(requested)) {
@@ -118,7 +122,9 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
       try {
         await abortAndVerifySession(options, job.taskID);
       } catch (error) {
-        const stillRunning = error instanceof SessionStillRunningError;
+        const stillRunning =
+          error instanceof SessionStillRunningError ||
+          options.backgroundJobBoard.isRunning(job.taskID); // ponytail: intent-revealing query
         log('[cancel-task] abort failed', {
           taskID: job.taskID,
           stillRunning,
@@ -149,10 +155,11 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
       );
       log('[cancel-task] marked job cancelled after verified abort', {
         taskID: job.taskID,
-        alias: job.alias,
+        alias: options.backgroundJobBoard.getAlias(job.taskID),
         previousState: job.state,
         state: cancelled?.state,
-        cancellationRequested: cancelled?.cancellationRequested,
+        cancellationRequested:
+          options.backgroundJobBoard.wasCancellationRequested(job.taskID),
       });
 
       return [
@@ -177,7 +184,9 @@ async function cancelSessionByID(
   try {
     await abortAndVerifySession(options, taskID);
   } catch (error) {
-    const stillRunning = error instanceof SessionStillRunningError;
+    const stillRunning =
+      error instanceof SessionStillRunningError ||
+      options.backgroundJobBoard.isRunning(taskID); // ponytail: intent-revealing query
     log('[cancel-task] raw session abort failed', {
       taskID,
       stillRunning,
@@ -257,12 +266,11 @@ async function abortAndVerifySession(
       stableStoppedForMs: stableStoppedSince
         ? Date.now() - stableStoppedSince
         : 0,
-      boardState: options.backgroundJobBoard.get(taskID)?.state,
-      boardLastLiveBusyAt:
-        options.backgroundJobBoard.get(taskID)?.lastLiveBusyAt,
+      boardState: options.backgroundJobBoard.isRunning(taskID), // ponytail: intent-revealing query
+      boardLastLiveBusyAt: options.backgroundJobBoard.getLastLiveBusyAt(taskID),
     });
     const boardLastLiveBusyAt =
-      options.backgroundJobBoard.get(taskID)?.lastLiveBusyAt;
+      options.backgroundJobBoard.getLastLiveBusyAt(taskID);
     if (boardLastLiveBusyAt && boardLastLiveBusyAt >= abortStartedAt) {
       log('[cancel-task] abort verification saw board busy after abort', {
         taskID,
