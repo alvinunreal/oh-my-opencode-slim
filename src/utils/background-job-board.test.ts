@@ -832,5 +832,73 @@ describe('BackgroundJobBoard', () => {
       expect(board.getLastLiveBusyAt('job-1')).toBe(200);
       expect(board.getLastLiveBusyAt('unknown-1')).toBeUndefined();
     });
+
+    test('getParentSessionID: returns parentSessionID after registerLaunch', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.getParentSessionID('job-1')).toBe('parent-1');
+      expect(board.getParentSessionID('unknown-1')).toBeUndefined();
+    });
+
+    test('getTerminalState: returns terminal state after updateStatus to terminal', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.getTerminalState('job-1')).toBeUndefined();
+      board.updateStatus({ taskID: 'job-1', state: 'completed', now: 200 });
+      expect(board.getTerminalState('job-1')).toBe('completed');
+      expect(board.getTerminalState('unknown-1')).toBeUndefined();
+    });
+
+    test('isTimedOut: true after updateStatus with timedOut: true', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.isTimedOut('job-1')).toBe(false);
+      board.updateStatus({
+        taskID: 'job-1',
+        state: 'running',
+        timedOut: true,
+        now: 200,
+      });
+      expect(board.isTimedOut('job-1')).toBe(true);
+      expect(board.isTimedOut('unknown-1')).toBe(false);
+    });
+
+    test('isStatusUncertain: true after updateStatus with statusUncertain: true', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.isStatusUncertain('job-1')).toBe(false);
+      board.updateStatus({
+        taskID: 'job-1',
+        state: 'running',
+        statusUncertain: true,
+        now: 200,
+      });
+      expect(board.isStatusUncertain('job-1')).toBe(true);
+      expect(board.isStatusUncertain('unknown-1')).toBe(false);
+    });
   });
 });

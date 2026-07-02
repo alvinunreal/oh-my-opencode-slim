@@ -252,7 +252,7 @@ export class MultiplexerSessionManager {
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
         ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-        backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        backgroundJobState: this.backgroundJobBoard?.getState(sessionId),
       });
 
       await this.closeSession(sessionId, 'idle');
@@ -273,7 +273,7 @@ export class MultiplexerSessionManager {
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
         ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-        backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        backgroundJobState: this.backgroundJobBoard?.getState(sessionId),
       });
       await this.closeSession(sessionId, 'idle');
       return;
@@ -290,7 +290,7 @@ export class MultiplexerSessionManager {
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
         ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-        backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        backgroundJobState: this.backgroundJobBoard?.getState(sessionId),
       });
       await this.respawnIfKnown(sessionId);
     }
@@ -309,7 +309,7 @@ export class MultiplexerSessionManager {
       tracked: this.sessions.has(sessionId),
       known: this.knownSessions.has(sessionId),
       ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-      backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+      backgroundJobState: this.backgroundJobBoard?.getState(sessionId),
     });
 
     this.deferredIdleCloses.delete(sessionId);
@@ -456,7 +456,7 @@ export class MultiplexerSessionManager {
           sessionId,
           paneId: tracked.paneId,
           reason,
-          backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+          backgroundJobState: this.backgroundJobBoard?.getState(sessionId),
         },
       );
       return;
@@ -470,7 +470,7 @@ export class MultiplexerSessionManager {
       sessionId,
       paneId: tracked.paneId,
       reason,
-      backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+      backgroundJobState: this.backgroundJobBoard?.getState(sessionId),
       parentId: tracked.parentId,
       title: tracked.title,
     });

@@ -352,6 +352,46 @@ export class BackgroundJobBoard {
     return job?.lastLiveBusyAt;
   }
 
+  /**
+   * Get the parent session ID for a job, or undefined if not found.
+   */
+  getParentSessionID(taskID: string): string | undefined {
+    const job = this.get(taskID);
+    return job?.parentSessionID;
+  }
+
+  /**
+   * Get the terminal state for a job, or undefined if not found or not terminal.
+   */
+  getTerminalState(taskID: string): TaskOutputState | undefined {
+    const job = this.get(taskID);
+    return job?.terminalState;
+  }
+
+  /**
+   * Get the timedOut flag for a job, or false if not found.
+   */
+  isTimedOut(taskID: string): boolean {
+    const job = this.get(taskID);
+    return !!job?.timedOut;
+  }
+
+  /**
+   * Get the statusUncertain flag for a job, or false if not found.
+   */
+  isStatusUncertain(taskID: string): boolean {
+    const job = this.get(taskID);
+    return !!job?.statusUncertain;
+  }
+
+  /**
+   * Get the current state of a job, or undefined if not found.
+   */
+  getState(taskID: string): BackgroundJobState | undefined {
+    const job = this.get(taskID);
+    return job?.state;
+  }
+
   resolve(
     parentSessionID: string,
     taskIDOrAlias: string,

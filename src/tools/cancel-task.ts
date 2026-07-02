@@ -64,8 +64,12 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         alias: job?.taskID
           ? options.backgroundJobBoard.getAlias(job.taskID)
           : undefined,
-        state: job?.state,
-        terminalState: job?.terminalState,
+        state: job?.taskID
+          ? options.backgroundJobBoard.getState(job.taskID)
+          : undefined,
+        terminalState: job?.taskID
+          ? options.backgroundJobBoard.getTerminalState(job.taskID)
+          : undefined,
         cancellationRequested: job?.taskID
           ? options.backgroundJobBoard.wasCancellationRequested(job.taskID)
           : undefined,
@@ -81,11 +85,16 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
           }
 
           const knownJob = options.backgroundJobBoard.get(requested);
-          if (knownJob && knownJob.parentSessionID !== parentSessionID) {
+          if (
+            knownJob &&
+            options.backgroundJobBoard.getParentSessionID(requested) !==
+              parentSessionID
+          ) {
             log('[cancel-task] rejected unowned tracked raw session', {
               parentSessionID,
               taskID: requested,
-              ownerParentSessionID: knownJob.parentSessionID,
+              ownerParentSessionID:
+                options.backgroundJobBoard.getParentSessionID(requested),
             });
             return unknownTaskOutput(
               requested,
@@ -147,7 +156,7 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         ].join('\n');
       }
 
-      const cancelled = options.backgroundJobBoard.markCancelled(
+      options.backgroundJobBoard.markCancelled(
         job.taskID,
         args.reason,
         Date.now(),
@@ -156,18 +165,18 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
       log('[cancel-task] marked job cancelled after verified abort', {
         taskID: job.taskID,
         alias: options.backgroundJobBoard.getAlias(job.taskID),
-        previousState: job.state,
-        state: cancelled?.state,
+        previousState: options.backgroundJobBoard.getState(job.taskID),
+        state: options.backgroundJobBoard.getState(job.taskID),
         cancellationRequested:
           options.backgroundJobBoard.wasCancellationRequested(job.taskID),
       });
 
       return [
         `task_id: ${job.taskID}`,
-        `state: ${cancelled?.state ?? 'cancelled'}`,
+        `state: ${options.backgroundJobBoard.getState(job.taskID) ?? 'cancelled'}`,
         '',
         '<task_error>',
-        cancelled?.resultSummary ?? 'cancelled',
+        options.backgroundJobBoard.getResultSummary(job.taskID) ?? 'cancelled',
         '</task_error>',
       ].join('\n');
     },

@@ -235,9 +235,9 @@ export function createTaskSessionManagerHook(
     if (isLateCancelledTaskError(existing, status.state)) {
       log('[task-session-manager] suppressed late cancelled task error', {
         taskID: status.taskID,
-        alias: existing?.alias,
+        alias: backgroundJobBoard.getAlias(status.taskID),
         state: status.state,
-        terminalState: existing?.terminalState,
+        terminalState: backgroundJobBoard.getTerminalState(status.taskID),
         result: status.result,
       });
       return existing;
@@ -259,14 +259,16 @@ export function createTaskSessionManagerHook(
 
     log('[task-session-manager] background job status updated', {
       taskID: updated.taskID,
-      alias: updated.alias,
-      parentSessionID: updated.parentSessionID,
+      alias: backgroundJobBoard.getAlias(updated.taskID),
+      parentSessionID: backgroundJobBoard.getParentSessionID(updated.taskID),
       state: updated.state,
-      terminalUnreconciled: updated.terminalUnreconciled,
-      timedOut: updated.timedOut,
+      terminalUnreconciled: backgroundJobBoard.isTerminalUnreconciled(
+        updated.taskID,
+      ),
+      timedOut: backgroundJobBoard.isTimedOut(updated.taskID),
     });
 
-    if (updated.terminalUnreconciled) {
+    if (backgroundJobBoard.isTerminalUnreconciled(updated.taskID)) {
       pendingManagedTaskIds.delete(updated.taskID);
       backgroundJobBoard.addContext(
         updated.taskID,
@@ -315,9 +317,9 @@ export function createTaskSessionManagerHook(
       );
       log('[task-session-manager] normalized late cancelled injected failure', {
         taskID: status.taskID,
-        alias: existing?.alias,
+        alias: backgroundJobBoard.getAlias(status.taskID),
         state: status.state,
-        terminalState: existing?.terminalState,
+        terminalState: backgroundJobBoard.getTerminalState(status.taskID),
         result: status.result,
       });
       rememberProcessedInjectedCompletion(occurrenceId);
@@ -339,8 +341,8 @@ export function createTaskSessionManagerHook(
 
     log('[task-session-manager] processed injected background completion', {
       taskID: updated.taskID,
-      alias: updated.alias,
-      parentSessionID: updated.parentSessionID,
+      alias: backgroundJobBoard.getAlias(updated.taskID),
+      parentSessionID: backgroundJobBoard.getParentSessionID(updated.taskID),
       state: updated.state,
       occurrenceId,
     });
@@ -761,9 +763,9 @@ export function createTaskSessionManagerHook(
         const before = sessionId
           ? backgroundJobBoard.get(sessionId)
           : undefined;
-        const updated = sessionId
-          ? backgroundJobBoard.markRunningFromLiveSession(sessionId)
-          : undefined;
+        if (sessionId) {
+          backgroundJobBoard.markRunningFromLiveSession(sessionId);
+        }
         if (
           before &&
           sessionId &&
@@ -771,13 +773,12 @@ export function createTaskSessionManagerHook(
         ) {
           log('[task-session-manager] busy observed after cancel request', {
             sessionID: sessionId,
-            previousState: before.state,
-            previousTerminalState: before.terminalState,
+            previousState: backgroundJobBoard.getState(sessionId),
+            previousTerminalState:
+              backgroundJobBoard.getTerminalState(sessionId),
             terminalUnreconciled:
               backgroundJobBoard.isTerminalUnreconciled(sessionId),
-            resultSummary:
-              backgroundJobBoard.getResultSummary(sessionId) ??
-              before.resultSummary,
+            resultSummary: backgroundJobBoard.getResultSummary(sessionId),
           });
         }
         log('[task-session-manager] busy/status busy observed', {
@@ -785,22 +786,26 @@ export function createTaskSessionManagerHook(
           managesSession: sessionId
             ? options.shouldManageSession(sessionId)
             : false,
-          previousState: before?.state,
-          previousTerminalState: before?.terminalState,
+          previousState: sessionId
+            ? backgroundJobBoard.getState(sessionId)
+            : undefined,
+          previousTerminalState: sessionId
+            ? backgroundJobBoard.getTerminalState(sessionId)
+            : undefined,
           previousCancellationRequested: sessionId
             ? backgroundJobBoard.wasCancellationRequested(sessionId)
             : false,
           previousLastLiveBusyAt: sessionId
-            ? (backgroundJobBoard.getLastLiveBusyAt(sessionId) ??
-              before?.lastLiveBusyAt)
+            ? backgroundJobBoard.getLastLiveBusyAt(sessionId)
             : undefined,
-          updatedState: updated?.state,
+          updatedState: sessionId
+            ? backgroundJobBoard.getState(sessionId)
+            : undefined,
           updatedCancellationRequested: sessionId
             ? backgroundJobBoard.wasCancellationRequested(sessionId)
             : false,
           updatedLastLiveBusyAt: sessionId
-            ? (backgroundJobBoard.getLastLiveBusyAt(sessionId) ??
-              updated?.lastLiveBusyAt)
+            ? backgroundJobBoard.getLastLiveBusyAt(sessionId)
             : undefined,
         });
         return;
@@ -817,10 +822,10 @@ export function createTaskSessionManagerHook(
           sessionID: sessionId,
           deletedJob: backgroundJobBoard.get(sessionId)
             ? {
-                state: backgroundJobBoard.get(sessionId)?.state,
+                state: backgroundJobBoard.getState(sessionId),
                 parentSessionID:
-                  backgroundJobBoard.get(sessionId)?.parentSessionID,
-                alias: backgroundJobBoard.get(sessionId)?.alias,
+                  backgroundJobBoard.getParentSessionID(sessionId),
+                alias: backgroundJobBoard.getAlias(sessionId),
               }
             : undefined,
           childJobCount: backgroundJobBoard.list(sessionId).length,
@@ -855,14 +860,14 @@ export function createTaskSessionManagerHook(
     if (!isLateCancelledTaskError(existing, status.state)) return;
     log('[task-session-manager] normalized late cancelled task output', {
       taskID: status.taskID,
-      alias: existing?.alias,
-      state: existing?.state,
-      terminalState: existing?.terminalState,
+      alias: backgroundJobBoard.getAlias(status.taskID),
+      state: backgroundJobBoard.getState(status.taskID),
+      terminalState: backgroundJobBoard.getTerminalState(status.taskID),
       result: status.result,
     });
     output.output = formatCancelledTaskStatusOutput(
       status.taskID,
-      existing?.resultSummary,
+      backgroundJobBoard.getResultSummary(status.taskID),
     );
     if (isObjectRecord(output) && isObjectRecord(output.metadata)) {
       output.metadata.state = 'cancelled';
