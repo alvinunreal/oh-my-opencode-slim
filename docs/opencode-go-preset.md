@@ -3,9 +3,9 @@
 `opencode-go` is a bundled generated preset for users who want to run the
 Pantheon agents through OpenCode Go models instead of the default OpenAI setup.
 
-The installer generates both `openai` and `opencode-go` presets. OpenAI stays
-active by default unless you select OpenCode Go during install or switch to it
-later.
+The installer generates the bundled `openai`, `opencode-go`, `claude`,
+`oss-openai`, and `oss-claude` presets. OpenAI stays active by default unless
+you select OpenCode Go during install or switch to it later.
 
 Because the `opencode-go` preset uses GLM-5.1 for Orchestrator and GLM is not
 multimodal, installing with `--preset=opencode-go` also enables the Observer

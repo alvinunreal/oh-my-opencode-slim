@@ -115,7 +115,7 @@ Then:
 > [!TIP]
 > Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, or Herdr pane, so you can watch specialists work live while the Orchestrator continues coordinating the session.
 
-The default generated configuration includes both `openai` and `opencode-go` presets.
+The default generated configuration includes the bundled `openai`, `opencode-go`, `claude`, `oss-openai`, and `oss-claude` presets.
 
 ```jsonc
 {
