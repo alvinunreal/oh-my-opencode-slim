@@ -235,9 +235,10 @@ export function createTaskSessionManagerHook(
     if (isLateCancelledTaskError(existing, status.state)) {
       log('[task-session-manager] suppressed late cancelled task error', {
         taskID: status.taskID,
-        alias: backgroundJobBoard.getAlias(status.taskID),
-        state: status.state,
-        terminalState: backgroundJobBoard.getTerminalState(status.taskID),
+        alias: existing?.alias,
+        parsedState: status.state,
+        boardState: existing?.state,
+        terminalState: existing?.terminalState,
         result: status.result,
       });
       return existing;
@@ -317,9 +318,10 @@ export function createTaskSessionManagerHook(
       );
       log('[task-session-manager] normalized late cancelled injected failure', {
         taskID: status.taskID,
-        alias: backgroundJobBoard.getAlias(status.taskID),
-        state: status.state,
-        terminalState: backgroundJobBoard.getTerminalState(status.taskID),
+        alias: existing?.alias,
+        parsedState: status.state,
+        boardState: existing?.state,
+        terminalState: existing?.terminalState,
         result: status.result,
       });
       rememberProcessedInjectedCompletion(occurrenceId);
@@ -763,22 +765,16 @@ export function createTaskSessionManagerHook(
         const before = sessionId
           ? backgroundJobBoard.get(sessionId)
           : undefined;
-        if (sessionId) {
-          backgroundJobBoard.markRunningFromLiveSession(sessionId);
-        }
-        if (
-          before &&
-          sessionId &&
-          backgroundJobBoard.wasCancellationRequested(sessionId)
-        ) {
+        const updated = sessionId
+          ? backgroundJobBoard.markRunningFromLiveSession(sessionId)
+          : undefined;
+        if (before?.cancellationRequested) {
           log('[task-session-manager] busy observed after cancel request', {
             sessionID: sessionId,
-            previousState: backgroundJobBoard.getState(sessionId),
-            previousTerminalState:
-              backgroundJobBoard.getTerminalState(sessionId),
-            terminalUnreconciled:
-              backgroundJobBoard.isTerminalUnreconciled(sessionId),
-            resultSummary: backgroundJobBoard.getResultSummary(sessionId),
+            previousState: before.state,
+            previousTerminalState: before.terminalState,
+            terminalUnreconciled: before.terminalUnreconciled,
+            resultSummary: before.resultSummary,
           });
         }
         log('[task-session-manager] busy/status busy observed', {
@@ -786,27 +782,13 @@ export function createTaskSessionManagerHook(
           managesSession: sessionId
             ? options.shouldManageSession(sessionId)
             : false,
-          previousState: sessionId
-            ? backgroundJobBoard.getState(sessionId)
-            : undefined,
-          previousTerminalState: sessionId
-            ? backgroundJobBoard.getTerminalState(sessionId)
-            : undefined,
-          previousCancellationRequested: sessionId
-            ? backgroundJobBoard.wasCancellationRequested(sessionId)
-            : false,
-          previousLastLiveBusyAt: sessionId
-            ? backgroundJobBoard.getLastLiveBusyAt(sessionId)
-            : undefined,
-          updatedState: sessionId
-            ? backgroundJobBoard.getState(sessionId)
-            : undefined,
-          updatedCancellationRequested: sessionId
-            ? backgroundJobBoard.wasCancellationRequested(sessionId)
-            : false,
-          updatedLastLiveBusyAt: sessionId
-            ? backgroundJobBoard.getLastLiveBusyAt(sessionId)
-            : undefined,
+          previousState: before?.state,
+          previousTerminalState: before?.terminalState,
+          previousCancellationRequested: before?.cancellationRequested ?? false,
+          previousLastLiveBusyAt: before?.lastLiveBusyAt,
+          updatedState: updated?.state,
+          updatedCancellationRequested: updated?.cancellationRequested ?? false,
+          updatedLastLiveBusyAt: updated?.lastLiveBusyAt,
         });
         return;
       }
