@@ -162,7 +162,10 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         taskID: job.taskID,
         alias: options.backgroundJobBoard.field(job.taskID, 'alias'),
         state,
-        cancellationRequested: job.cancellationRequested,
+        cancellationRequested: options.backgroundJobBoard.field(
+          job.taskID,
+          'cancellationRequested',
+        ),
       });
 
       return [
