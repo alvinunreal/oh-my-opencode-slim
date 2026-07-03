@@ -35,13 +35,6 @@ export function createTaskContextTracker() {
       }
     },
 
-    canTrack(taskId: string, backgroundJobBoard: { taskIDs(): Set<string> }) {
-      return (
-        pendingManagedTaskIds.has(taskId) ||
-        backgroundJobBoard.taskIDs().has(taskId)
-      );
-    },
-
     prune(backgroundJobBoard: { taskIDs(): Set<string> }) {
       const remembered = backgroundJobBoard.taskIDs();
       for (const taskId of contextByTask.keys()) {

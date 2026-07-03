@@ -1,112 +1,112 @@
 # src/utils/
 
-Cross-cutting runtime utilities used by orchestration, hooks, and plugin I/O.
-
 ## Responsibility
 
-- **background-job-board.ts**: Tracks V2 background jobs by parent session,
-  assigns aliases, records read context, and exposes reusable completed /
-  reconciled sessions with prompt rendering and reusable LRU caps.
-- **tmux.ts**: Multiplexer-safe pane lifecycle helpers (`spawnPane`, `closePane`)
-  used by tmux and zellij adapters.
-- **subagent-depth.ts**: Tracks delegated session depth and enforces max nested
-  delegation depth.
-- **agent-variant.ts**: Normalizes agent names and applies optional variant
-  labels without overriding existing body configuration.
-- **env.ts**: Unified environment lookup across Bun/Node with empty-string
-  filtering.
-- **session.ts**: Session extraction helpers for multi-turn synthesis and
-  prompt/result post-processing.
-- **polling.ts**: Shared polling with stability thresholds and abort-signal
-  support.
-- **zip-extractor.ts**: Cross-platform zip/tar extraction with Windows fallback
-  tooling.
-- **task.ts**: Parses native `task` output and injected background completion text.
-- **system-collapse.ts**: Collapses multiple system prompt fragments into one
-  array element while mutating the original array reference.
-- **logger.ts**: Structured JSON logging to temporary files.
-- **internal-initiator.ts**: Marker utilities for internal orchestrator text-part
-  tagging.
-- **compat.ts**: Backward compatibility helpers.
-- **index.ts**: Public re-export barrel for utility modules.
+Centralized utilities and shared abstractions used across the oh-my-opencode-slim plugin. This folder provides:
+- Background job lifecycle management via BackgroundJobBoard
+- Environment and configuration utilities
+- Type guards and validation helpers
+- Session and timeout utilities for council/council-manager
+- Logging infrastructure with automatic rotation
+- Task output parsing utilities
+- System message utilities
 
 ## Design
 
-- **Parent-scoped background job board**: `BackgroundJobBoard` tracks
-  active/unreconciled jobs separately from completed/reconciled reusable
-  sessions; reusable entries are LRU-capped per parent+agent.
-- **Deterministic lifecycle tracking**: `SubagentDepthTracker` maps session IDs to
-  depth and is cleaned on session deletion.
-- **Provider-safe env access**: `getEnv` falls back from `Bun.env` to
-  `process.env` and normalizes blank values.
-- **Graceful shutdown protocol**: Multiplexer pane close path sends Ctrl+C before
-  kill, then rebalances layout state.
-- **Session extraction model**: `extractSessionResult`/`parseModelReference`
-  helpers are centralized under `session.ts`.
-- **In-place system normalization**: `collapseSystemInPlace` mutates `system` to
-  preserve references held by OpenCode internals.
-- **Resilient polling**: `pollUntilStable` requires consecutive confirmations
-  before success.
+### Core Abstractions
+
+- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks spawned by sub-agents. Implements a reusable session pool pattern with automatic cleanup and reconciliation hooks. Tracks task state (running, completed, error, cancelled), maintains context files, and provides prompt-ready summaries for agent coordination.
+
+- **Logger** (`logger.ts`): File-based logging with 7-day retention, automatic directory creation, and write queuing. Logs are written to `~/.local/share/opencode/log/oh-my-opencode-slim.<sessionId>.log` and cleaned up on initialization.
+
+- **Session Utilities** (`session.ts`): Timeout handling, session abort coordination, model reference parsing, and session content extraction. Provides `promptWithTimeout` and `extractSessionResult` for safe session operations.
+
+- **Task Utilities** (`task.ts`): XML-inspired task output parsing for extracting task IDs, states, and results from tool output strings. Used for resumption and status tracking.
+
+- **Type Guards** (`guards.ts`): Simple type checking utilities (`isRecord`) for runtime validation.
+
+- **Environment Utilities** (`env.ts`): Environment variable parsing and plugin disable flag checking.
+
+- **Internal Initiator** (`internal-initiator.ts`): Marker system for identifying internally-initiated agent messages to prevent infinite loops.
+
+- **System Collapse** (`system-collapse.ts`): Utility for collapsing multiple system messages into a single entry by joining with double-newlines.
+
+### Design Patterns
+
+- **Singleton**: BackgroundJobBoard is a singleton registry with global state for all background tasks
+- **Strategy**: Task parsing adapts to multiple output formats (XML tags, plain text headers)
+- **Observer**: Logger uses write queuing to avoid blocking the main thread
+- **Utility**: Each utility module provides focused, composable functions
 
 ## Flow
 
-### `background-job-board.ts`
+### Background Job Lifecycle
+1. Agent launches a background task via BackgroundJobBoard.registerLaunch()
+2. Task runs and updates status via BackgroundJobBoard.updateStatus()
+3. On completion/error/cancellation, task is marked terminal and added to reusable pool
+4. Subsequent tasks from same agent/session can reuse completed sessions via aliases
+5. Unused reusable sessions are automatically trimmed based on maxReusablePerAgent
 
-- `deriveTaskSessionLabel` computes a deterministic prompt hint from
-  `description`, the first non-empty `prompt` line, or a fallback agent label.
-- `registerLaunch` creates/reopens running jobs and assigns monotonic aliases
-  within each parent+agent (`exp-1`, `lib-2`, etc.).
-- `updateStatus` marks terminal jobs unreconciled; `markReconciled` makes only
-  completed terminal jobs reusable.
-- `resolveReusable`, `markUsed`, `drop`, and `clearParent`
-  keep job aliases consistent on polling, reuse, and teardown.
-- `formatForPrompt` returns the unified `### Background Job Board` prompt section
-  with Active / Unreconciled and Reusable Sessions subsections.
+### Logging Flow
+1. Plugin initializes logger with session ID via initLogger(sessionId)
+2. Logs are appended to `~/.local/share/opencode/log/oh-my-opencode-slim.<sessionId>.log`
+3. Old logs (>7 days) are automatically cleaned up on initialization
+4. Log writes are queued to avoid blocking, with errors silently ignored
 
-### `tmux.ts`
-
-- `spawnPane` flow: validate enabled state → check multiplexer availability →
-  resolve binary → execute attach command with layout handling.
-- `closePane` flow: send SIGINT-equivalent key sequence → delay → terminate pane
-  → rebalance layout if needed.
-- `isServerRunning` flow: bounded `/health` checks with retries and caching.
-
-### `polling.ts`
-
-- `pollUntilStable(fn, options)` repeatedly calls async predicate and tracks
-  consecutive true states.
-- Returns once stable threshold is met, timeout elapses, or abort signal is
-  raised.
-
-### `session.ts`
-
-- Composes prompt parts and extracts normalized session output for text/call/result
-  flows.
-- Hosts shared parsing/formatting utilities used by council and tool execution
-  layers.
-
-### `task.ts`
-
-- Scans task output line-by-line and extracts `task_id`, state, timeout, and
-  result summary fields.
-
-### `system-collapse.ts`
-
-- `collapseSystemInPlace(system: string[])` joins system entries with `\n\n`,
-  clears and repopulates the same array reference, and preserves empty-array
-  behavior.
+### Session Operations
+1. Council manager uses `promptWithTimeout()` to send prompts with configurable timeout
+2. On timeout, session is aborted and OperationTimeoutError is thrown
+3. Results are extracted via `extractSessionResult()` which collects all assistant message text
 
 ## Integration
 
-- **Consumers**
-  - `src/multiplexer/*`: `SubagentDepthTracker` and `tmux.ts` integration.
-  - `src/council/council-manager.ts`: depth control and session extraction
-    helpers.
-  - `src/hooks/*`: marker detection, polling, and session-aware state helpers.
-  - `src/hooks/task-session-manager`: `BackgroundJobBoard`, task-output parsing,
-    and `deriveTaskSessionLabel` provide V2 background job polling/reuse workflow
-    through message-transform prompt injection.
-- **Dependencies**
-  - Pulls constants from `../config` (`DEFAULT_MAX_SUBAGENT_DEPTH`, polling
-    intervals/timeouts).
-  - `index.ts` re-exports utility API.
+### Consumers
+
+- **Council/Council Manager** (`src/council/`):
+  - Uses BackgroundJobBoard for background task management
+  - Uses session utilities for prompt timeout and session extraction
+  - Uses logger for debug and audit logging
+
+- **Multiplexer** (`src/multiplexer/`):
+  - Uses session utilities for session operations
+  - Uses logger for session lifecycle events
+
+- **Agents** (`src/agents/`):
+  - BackgroundJobBoard for launching and tracking background tasks
+  - Logger for agent-specific logging
+
+- **Main Plugin** (`src/index.ts`):
+  - Exports all utilities via `src/utils/index.ts`
+  - Uses logger for plugin lifecycle events
+
+### Dependencies
+
+- **Node.js built-ins**: `fs`, `fs/promises`, `os`, `path` for logging and file operations
+- **@opencode-ai/sdk**: PluginInput type for session utilities
+
+### Export Chain
+
+`src/utils/index.ts` re-exports all utilities, providing a single entry point:
+```typescript
+export * from './background-job-board';
+export * from './internal-initiator';
+export { getLogDir, initLogger, log } from './logger';
+export * from './session';
+export * from './task';
+```
+
+This allows consumers to import from `src/utils` rather than individual files.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `index.ts` | Public API re-exporting all utilities |
+| `background-job-board.ts` | Background task registry and lifecycle manager |
+| `env.ts` | Environment variable utilities |
+| `guards.ts` | Type guard utilities |
+| `internal-initiator.ts` | Internal agent message marker system |
+| `logger.ts` | File-based logging with rotation |
+| `session.ts` | Session timeout, abort, and extraction utilities |
+| `system-collapse.ts` | System message collapsing utility |
+| `task.ts` | Task output parsing utilities |

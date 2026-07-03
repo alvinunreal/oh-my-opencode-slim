@@ -823,5 +823,34 @@ describe('BackgroundJobBoard', () => {
       expect(board.getParentSessionID('job-1')).toBe('parent-1');
       expect(board.getParentSessionID('unknown-1')).toBeUndefined();
     });
+
+    test('getState: returns state after mutation, undefined for unknown taskID', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.getState('job-1')).toBe('running');
+      board.updateStatus({ taskID: 'job-1', state: 'completed', now: 200 });
+      expect(board.getState('job-1')).toBe('completed');
+      expect(board.getState('unknown-1')).toBeUndefined();
+    });
+
+    test('field<K>: returns specific field for valid taskID, undefined for unknown', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+        now: 100,
+      });
+
+      expect(board.field('job-1', 'alias')).toBe('ora-1');
+      expect(board.field('job-1', 'parentSessionID')).toBe('parent-1');
+      expect(board.field('unknown-1', 'alias')).toBeUndefined();
+    });
   });
 });

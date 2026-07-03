@@ -2,16 +2,16 @@
 
 ## Project Responsibility
 
-`oh-my-opencode-slim` is an OpenCode plugin that adds a specialist-agent operating model on top of the host runtime. Its core job is to:
+`oh-my-opencode-slim` is an OpenCode plugin that implements a specialist-agent operating model on top of the host runtime. Its core responsibilities include:
 
-- define orchestrator and specialist agents,
-- load layered plugin configuration and per-agent permissions,
-- expose additional tools and MCP integrations,
-- manage background job-board orchestration and terminal multiplexer visualization,
-- inject workflow-enforcement hooks plus runtime command handlers,
-- ship install-time skills and a bootstrap CLI.
+- Defining orchestrator and specialist agent factories with permission policies
+- Loading layered plugin configuration and per-agent permissions
+- Exposing additional tools and MCP integrations
+- Managing background job-board orchestration and terminal multiplexer visualization
+- Injecting workflow-enforcement hooks plus runtime command handlers
+- Shipping install-time skills and a bootstrap CLI
 
-This codemap intentionally covers the plugin repository itself and excludes the nested `opencode/` upstream checkout.
+This codemap covers the plugin repository itself and excludes the nested `opencode/` upstream checkout.
 
 ## System Entry Points
 
@@ -103,6 +103,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 - `biome.json`: formatting/lint policy.
 - `tsconfig.json`: TypeScript compiler settings.
 - `.slim/codemap.json`: codemap change-detection state for this repository.
+- `scripts/verify-release-artifact.ts`: release artifact validation script.
 
 ## Recommended Reading Order
 
