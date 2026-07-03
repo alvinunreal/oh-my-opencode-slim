@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { AGENT_ALIASES, ALL_AGENT_NAMES } from './constants';
 import { CouncilConfigSchema } from './council-schema';
 
 const MANUAL_AGENT_NAMES = [
@@ -86,7 +85,13 @@ export const AgentOverrideConfigSchema = z
   .strict();
 
 // Multiplexer type options
-export const MultiplexerTypeSchema = z.enum(['auto', 'tmux', 'zellij', 'none']);
+export const MultiplexerTypeSchema = z.enum([
+  'auto',
+  'tmux',
+  'zellij',
+  'herdr',
+  'none',
+]);
 export type MultiplexerType = z.infer<typeof MultiplexerTypeSchema>;
 
 // Layout options (shared across multiplexers)
@@ -257,33 +262,18 @@ export type AcpAgentPermissionMode = z.infer<
 export type AcpAgentConfig = z.infer<typeof AcpAgentConfigSchema>;
 export type AcpAgentsConfig = z.infer<typeof AcpAgentsConfigSchema>;
 
-function validateCustomOnlyPromptFields(
+function rejectOrchestratorPromptOnOrchestrator(
   overrides: Record<string, z.infer<typeof AgentOverrideConfigSchema>>,
   ctx: z.RefinementCtx,
   pathPrefix: Array<string | number>,
 ): void {
   for (const [name, override] of Object.entries(overrides)) {
-    const isBuiltInOrAlias =
-      (ALL_AGENT_NAMES as readonly string[]).includes(name) ||
-      AGENT_ALIASES[name] !== undefined;
-
-    if (!isBuiltInOrAlias) {
-      continue;
-    }
-
-    if (override.prompt !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...pathPrefix, name, 'prompt'],
-        message: 'prompt is only supported for custom agents',
-      });
-    }
-
-    if (override.orchestratorPrompt !== undefined) {
+    if (name === 'orchestrator' && override.orchestratorPrompt !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [...pathPrefix, name, 'orchestratorPrompt'],
-        message: 'orchestratorPrompt is only supported for custom agents',
+        message:
+          'orchestratorPrompt is not supported for the orchestrator agent',
       });
     }
   }
@@ -293,17 +283,15 @@ export const PluginConfigSchema = z
   .object({
     preset: z.string().optional(),
     setDefaultAgent: z.boolean().optional(),
+    compactSidebar: z
+      .boolean()
+      .optional()
+      .describe('Use the compact TUI sidebar layout when enabled.'),
     autoUpdate: z
       .boolean()
       .optional()
       .describe(
         'Disable automatic installation of plugin updates when false. Defaults to true.',
-      ),
-    compactSidebar: z
-      .boolean()
-      .optional()
-      .describe(
-        'Render each agent on a single line in the TUI sidebar instead of the default multi-line layout. Default false.',
       ),
     presets: z.record(z.string(), PresetSchema).optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
@@ -344,12 +332,15 @@ export const PluginConfigSchema = z
   })
   .superRefine((value, ctx) => {
     if (value.agents) {
-      validateCustomOnlyPromptFields(value.agents, ctx, ['agents']);
+      rejectOrchestratorPromptOnOrchestrator(value.agents, ctx, ['agents']);
     }
 
     if (value.presets) {
       for (const [presetName, preset] of Object.entries(value.presets)) {
-        validateCustomOnlyPromptFields(preset, ctx, ['presets', presetName]);
+        rejectOrchestratorPromptOnOrchestrator(preset, ctx, [
+          'presets',
+          presetName,
+        ]);
       }
     }
   });

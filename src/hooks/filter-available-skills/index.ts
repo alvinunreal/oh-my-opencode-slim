@@ -6,7 +6,11 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { getSkillPermissionsForAgent } from '../../cli/skills';
 import { getAgentOverride, type PluginConfig } from '../../config';
-import type { MessageWithParts } from '../types';
+import {
+  isMessageWithParts,
+  isUserMessageWithParts,
+  type MessageWithParts,
+} from '../types';
 
 const AVAILABLE_SKILLS_BLOCK_REGEX =
   /<available_skills>\s*([\s\S]*?)\s*<\/available_skills>/g;
@@ -22,7 +26,7 @@ interface SkillEntry {
 function getCurrentAgent(messages: MessageWithParts[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.info.role === 'user') {
+    if (isUserMessageWithParts(message)) {
       return message.info.agent ?? 'orchestrator';
     }
   }
@@ -113,9 +117,11 @@ export function createFilterAvailableSkillsHook(
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
-      output: { messages: MessageWithParts[] },
+      output: { messages?: unknown },
     ): Promise<void> => {
-      const { messages } = output;
+      const messages = (
+        Array.isArray(output.messages) ? output.messages : []
+      ).filter(isMessageWithParts);
       if (messages.length === 0) {
         return;
       }

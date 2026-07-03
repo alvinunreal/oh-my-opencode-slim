@@ -2,16 +2,16 @@
 
 ## Project Responsibility
 
-`oh-my-opencode-slim` is an OpenCode plugin that adds a specialist-agent operating model on top of the host runtime. Its core job is to:
+`oh-my-opencode-slim` is an OpenCode plugin that implements a specialist-agent operating model on top of the host runtime. Its core responsibilities include:
 
-- define orchestrator and specialist agents,
-- load layered plugin configuration and per-agent permissions,
-- expose additional tools and MCP integrations,
-- manage background job-board orchestration and terminal multiplexer visualization,
-- inject workflow-enforcement hooks plus runtime command handlers,
-- ship install-time skills and a bootstrap CLI.
+- Defining orchestrator and specialist agent factories with permission policies
+- Loading layered plugin configuration and per-agent permissions
+- Exposing additional tools and MCP integrations
+- Managing background job-board orchestration and terminal multiplexer visualization
+- Injecting workflow-enforcement hooks plus runtime command handlers
+- Shipping install-time skills and a bootstrap CLI
 
-This codemap intentionally covers the plugin repository itself and excludes the nested `opencode/` upstream checkout.
+This codemap covers the plugin repository itself and excludes the nested `opencode/` upstream checkout.
 
 ## System Entry Points
 
@@ -47,6 +47,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 | `src/multiplexer/` | Terminal multiplexer abstraction layer with backend selection, session mirroring, polling fallback, and shutdown lifecycle orchestration. | [View Map](src/multiplexer/codemap.md) |
 | `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
 | `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
+| `src/multiplexer/herdr/` | herdr backend implementation for pane lifecycle. | [View Map](src/multiplexer/herdr/codemap.md) |
 | `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
 | `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
 | `src/skills/clonedeps/` | Workflow-only dependency source mirroring skill that routes discovery/ref resolution through librarian and direct orchestrator git operations. | [View Map](src/skills/clonedeps/codemap.md) |
@@ -102,6 +103,7 @@ This codemap intentionally covers the plugin repository itself and excludes the 
 - `biome.json`: formatting/lint policy.
 - `tsconfig.json`: TypeScript compiler settings.
 - `.slim/codemap.json`: codemap change-detection state for this repository.
+- `scripts/verify-release-artifact.ts`: release artifact validation script.
 
 ## Recommended Reading Order
 

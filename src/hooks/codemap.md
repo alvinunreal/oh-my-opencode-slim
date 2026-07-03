@@ -1,79 +1,83 @@
 # src/hooks/
 
-This directory is the plugin-level hook composition surface. It exports factories
-and managers for all hook-based runtime behaviors used by
-`src/index.ts` (tool transforms, event listeners, and command hooks).
-
 ## Responsibility
-
-- Own the stable exports for hook modules so `src/index.ts` can register features
-  without depending on subfolder internals.
-- Describe lifecycle boundaries between OpenCode hook surfaces and internal state
-  machines that coordinate retries, timers, and session tracking.
-- Centralize all hook feature entry points used by orchestrator tooling,
-  delegation/task workflows, and session lifecycle handlers.
+Implements OpenCode lifecycle hooks that transform, process, and manage chat messages and attachments during the plugin's message pipeline. These hooks are invoked by OpenCode's `experimental.chat.messages.transform` API to modify message content before it reaches models or after responses are generated.
 
 ## Design
 
-- `src/hooks/index.ts` re-exports per-feature factories and managers.
-- Most features implement the `create*Hook(ctx, config?)` factory pattern and
-  return lifecycle callbacks.
-- Foreground fallback is provided as a manager class (`ForegroundFallbackManager`)
-  with an explicit `handleEvent` method.
-- `task-session-manager` persists resumable task sessions per parent session and
-  per agent, with bounded history and aliasing.
-- Side effects are limited to exported handlers and dedicated utility functions
-  to keep hook behavior deterministic.
-- Runtime integration depends on `PluginInput.client` for session APIs and shared
-  utilities (`log`, marker constants, prompt helpers).
+### Core Architecture
+- **Factory Pattern**: Each hook is created via a factory function (e.g., `createApplyPatchHook()`, `createAutoUpdateCheckerHook()`) that returns a hook function matching the OpenCode hook signature.
+- **Stateful Factories**: Hook factories may maintain closure state between invocations (e.g., `createAutoUpdateCheckerHook` guards with `hasChecked`; `createTaskSessionManagerHook` manages session lifecycle). Other hooks remain stateless — each factory decides based on its needs.
+- **Message Transformation Pipeline**: Hooks operate on the `MessageWithParts[]` type, allowing transformation of user messages, assistant responses, and system messages.
+
+### Key Types & Interfaces
+- `MessageInfo`: Metadata about a message (role, agent, sessionID, id)
+- `MessagePart`: Individual content part of a message (text, file, image, tool use, etc.)
+- `MessageWithParts`: Complete message with metadata and array of parts
+
+### Hook Categories
+1. **Attachment Processing**: `processImageAttachments` - Extracts image data URLs from messages, saves them to `.opencode/images/` directory, and replaces image parts with text references containing file paths.
+2. **State Management**: Hooks like `createTaskSessionManagerHook` that manage session state and lifecycle.
+3. **Error Recovery**: Hooks like `createJsonErrorRecoveryHook` that detect and recover from JSON parsing errors.
+4. **UI/UX Enhancement**: Hooks like `createPhaseReminderHook` that add contextual reminders to messages.
+5. **Task Management**: Hooks like `createDelegateTaskRetryHook` that handle task retry logic.
 
 ## Flow
 
-1. `src/index.ts` imports each hook symbol from this folder.
-2. The plugin creates hook instances during startup and registers callbacks in
-   these surfaces:
-   - `tool.execute.before`
-   - `tool.execute.after`
-   - `experimental.chat.messages.transform`
-   - `experimental.chat.system.transform`
-   - `chat.headers`
-   - `chat.message`
-   - `command.execute.before`
-   - `event`
-3. Implementations either mutate OpenCode payloads (for in-band guidance or
-   prompt/system injection) or call session APIs (`todo`, `messages`, `prompt`,
-   `promptAsync`, `abort`, and event/status flows).
+### Message Processing Pipeline
+```
+1. OpenCode receives chat messages
+2. Plugin's `experimental.chat.messages.transform` hook is invoked
+3. Each registered hook receives the message array sequentially
+4. Hooks transform messages (e.g., extract images, add metadata, validate structure)
+5. Transformed messages are sent to the model
+6. Model responses are transformed by hooks in reverse order
+7. Final messages are returned to OpenCode
+```
 
-## Hook Points
+### Image Attachment Flow (processImageAttachments)
+```
+1. Hook receives messages with image parts (type='image' or type='file' with image/* mime)
+2. For each user message with images:
+   a. Decode data URLs to binary data
+   b. Generate SHA1 hash of image data for unique identification
+   c. Save image to `.opencode/images/[sessionID]/` directory
+   d. Create unique filename with hash to prevent collisions
+   e. Replace image parts with text reference containing file paths
+   f. Add informational text about image attachment for model context
+3. Cleanup old images older than 60 minutes (debounced every 10 minutes)
+```
 
-| Hook Point | Purpose | Implementations |
-|---|---|---|
-| `tool.execute.before` | Pre-process tool inputs | `apply-patch`, `task-session-manager` |
-| `tool.execute.after` | Post-process tool outputs | `delegate-task-retry`, `json-error-recovery`, `post-file-tool-nudge`, `task-session-manager` |
-| `experimental.chat.messages.transform` | Rewrite outbound user content | `filter-available-skills`, `phase-reminder` |
-| `experimental.chat.system.transform` | Inject system-level directives | `post-file-tool-nudge`, `task-session-manager` |
-| `chat.headers` | Mutate request headers | `chat-headers` |
-| `chat.message` | Track runtime session/agent mapping | `src/index.ts` session map |
-| `command.execute.before` | Handle slash-command UX | `interview`, `preset-manager`, `deepwork` |
-| `event` | React to session lifecycle and runtime failures | `foreground-fallback`, `post-file-tool-nudge`, `auto-update-checker`, multiplexer managers, `task-session-manager` |
-
-## Implementation Notes
-
-- `createDelegateTaskRetryHook` (`tool.execute.after`) is a narrow guard around
-  `task` tool failure strings and appends structured retry guidance inline.
-- `ForegroundFallbackManager` listens to event traffic and remediates
-  foreground rate-limit failures by aborting the current prompt and re-queuing the
-  latest user message on the next model in a per-agent chain.
-- `createTaskSessionManagerHook` tracks V2 background jobs and reusable completed sessions: generates
-  user-facing aliases, resolves alias/task IDs before delegation, remembers fresh
-  task IDs after completion, and drops stale entries on missing-session failure,
-  renamed task IDs, or session deletion.
+### Hook Registration
+```
+1. Plugin initializes (src/index.ts)
+2. Hook factories are called to create hook instances
+3. Hooks are registered with OpenCode via `experimental.chat.messages.transform`
+4. OpenCode invokes hooks during message lifecycle
+```
 
 ## Integration
 
-- `src/index.ts` is the sole runtime consumer and determines final registration
-  order so composed transforms (system joins, reminder insertion, hygiene) stay
-  deterministic.
-- `taskSessionManager` is registered in `tool.execute.before`, `tool.execute.after`,
-  `experimental.chat.system.transform`, and `event`, with parent/child cleanup.
-- The `src/hooks/*/codemap.md` files document each feature internals.
+### Consumers
+- **Main Plugin**: `src/index.ts` - registers hooks with OpenCode during plugin initialization
+- **OpenCode Runtime**: Invokes hooks during `experimental.chat.messages.transform` API calls
+
+### Dependencies
+- **OpenCode SDK**: Type definitions for `MessageWithParts`, `MessageInfo`, and hook signatures
+- **Node.js FS Module**: For saving image attachments to disk
+- **Crypto Module**: For generating unique image hashes
+- **Observer Agent**: Disabled agents check prevents image processing when observer is unavailable
+
+### Configuration
+- **Disabled Agents**: Hooks check `disabledAgents` set to skip processing when required agents are unavailable
+- **Workspace Directory**: Images are saved to `.opencode/images/` within the project workspace
+
+### Error Handling
+- **File System Errors**: Logged but don't halt processing; hook continues with remaining messages
+- **Collision Handling**: Unique filenames generated via counter suffix when hash collisions occur
+- **Cleanup Failures**: Non-fatal; old images may persist but are periodically cleaned up
+
+### Performance Considerations
+- **Debounced Cleanup**: Image cleanup runs every 10 minutes per directory to avoid frequent filesystem operations
+- **Session Isolation**: Images organized by sessionID to prevent cross-session contamination
+- **Early Returns**: Hooks return immediately when no relevant messages found (e.g., no images to process)

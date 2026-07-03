@@ -632,6 +632,33 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "s-shank",
+      "name": "Shank",
+      "avatar_url": "https://avatars.githubusercontent.com/u/241541918?v=4",
+      "profile": "https://github.com/s-shank",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "rgutzen",
+      "name": "Robin Gutzen",
+      "avatar_url": "https://avatars.githubusercontent.com/u/16289604?v=4",
+      "profile": "https://rgutzen.github.io/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "dragon-Elec",
+      "name": "Yash",
+      "avatar_url": "https://avatars.githubusercontent.com/u/197374270?v=4",
+      "profile": "https://github.com/dragon-Elec",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

@@ -86,7 +86,7 @@ describe('loadPluginConfig', () => {
     expect(loadPluginConfig(projectDir)).toEqual({});
   });
 
-  test('rejects custom-only prompt fields on built-in agents in config files', () => {
+  test('accepts prompt on built-in agents and rejects orchestratorPrompt on orchestrator in config files', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
     fs.mkdirSync(projectConfigDir, { recursive: true });
@@ -97,12 +97,28 @@ describe('loadPluginConfig', () => {
         agents: {
           oracle: {
             model: 'openai/gpt-5.5',
-            prompt: 'This should be rejected for built-in agents.',
+            prompt: 'This is now allowed for built-in agents.',
           },
         },
       }),
     );
 
+    const loaded = loadPluginConfig(projectDir);
+    expect(loaded.agents?.oracle?.prompt).toBe(
+      'This is now allowed for built-in agents.',
+    );
+
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: {
+          orchestrator: {
+            model: 'openai/gpt-5.5',
+            orchestratorPrompt: 'This must be rejected.',
+          },
+        },
+      }),
+    );
     expect(loadPluginConfig(projectDir)).toEqual({});
   });
 

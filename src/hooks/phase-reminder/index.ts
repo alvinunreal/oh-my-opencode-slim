@@ -7,7 +7,7 @@
  */
 import { PHASE_REMINDER } from '../../config/constants';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
-import type { MessageWithParts } from '../types';
+import { isUserMessageWithParts } from '../types';
 
 export { PHASE_REMINDER };
 
@@ -20,9 +20,9 @@ export function createPhaseReminderHook() {
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
-      output: { messages: MessageWithParts[] },
+      output: { messages?: unknown },
     ): Promise<void> => {
-      const { messages } = output;
+      const messages = Array.isArray(output.messages) ? output.messages : [];
 
       if (messages.length === 0) {
         return;
@@ -30,7 +30,7 @@ export function createPhaseReminderHook() {
 
       let lastUserMessageIndex = -1;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].info.role === 'user') {
+        if (isUserMessageWithParts(messages[i])) {
           lastUserMessageIndex = i;
           break;
         }
@@ -41,6 +41,10 @@ export function createPhaseReminderHook() {
       }
 
       const lastUserMessage = messages[lastUserMessageIndex];
+      if (!isUserMessageWithParts(lastUserMessage)) {
+        return;
+      }
+
       const agent = lastUserMessage.info.agent;
       if (agent && agent !== 'orchestrator') {
         return;

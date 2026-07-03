@@ -4,6 +4,7 @@
 
 import type { MultiplexerConfig, MultiplexerType } from '../config/schema';
 import { log } from '../utils/logger';
+import { HerdrMultiplexer } from './herdr';
 import { TmuxMultiplexer } from './tmux';
 import type { Multiplexer } from './types';
 import { ZellijMultiplexer } from './zellij';
@@ -11,9 +12,9 @@ import { ZellijMultiplexer } from './zellij';
 /**
  * Create a multiplexer instance based on config.
  *
- * Do not cache instances: tmux/zellij integrations may depend on
- * per-process environment like TMUX_PANE/ZELLIJ, which should be captured
- * fresh for each plugin context.
+ * Do not cache instances: tmux/zellij/herdr integrations may depend on
+ * per-process environment like TMUX_PANE/ZELLIJ/HERDR_PANE_ID, which should
+ * be captured fresh for each plugin context.
  */
 export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
   const { type } = config;
@@ -39,6 +40,10 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       );
       actualType = 'zellij';
       break;
+    case 'herdr':
+      multiplexer = new HerdrMultiplexer(config.layout, config.main_pane_size);
+      actualType = 'herdr';
+      break;
     case 'auto': {
       // Auto-detect based on environment variables only
       // Note: Does NOT fall back to binary availability checks
@@ -52,6 +57,12 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
           config.zellij_pane_mode,
         );
         actualType = 'zellij';
+      } else if (process.env.HERDR_ENV || process.env.HERDR_PANE_ID) {
+        multiplexer = new HerdrMultiplexer(
+          config.layout,
+          config.main_pane_size,
+        );
+        actualType = 'herdr';
       } else {
         // Not inside any session, disable multiplexer
         log('[multiplexer] auto: not inside any session, disabling');
@@ -78,14 +89,17 @@ export function clearMultiplexerCache(): void {
 
 /**
  * Get the effective multiplexer type for auto mode
- * Returns the actual type that would be used (tmux/zellij/none)
+ * Returns the actual type that would be used (tmux/zellij/herdr/none)
  */
-export function getAutoMultiplexerType(): 'tmux' | 'zellij' | 'none' {
+export function getAutoMultiplexerType(): 'tmux' | 'zellij' | 'herdr' | 'none' {
   if (process.env.TMUX) {
     return 'tmux';
   }
   if (process.env.ZELLIJ) {
     return 'zellij';
+  }
+  if (process.env.HERDR_ENV || process.env.HERDR_PANE_ID) {
+    return 'herdr';
   }
   return 'none';
 }

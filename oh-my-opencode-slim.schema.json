@@ -8,12 +8,12 @@
     "setDefaultAgent": {
       "type": "boolean"
     },
-    "autoUpdate": {
-      "description": "Disable automatic installation of plugin updates when false. Defaults to true.",
+    "compactSidebar": {
+      "description": "Use the compact TUI sidebar layout when enabled.",
       "type": "boolean"
     },
-    "compactSidebar": {
-      "description": "Render each agent on a single line in the TUI sidebar instead of the default multi-line layout. Default false.",
+    "autoUpdate": {
+      "description": "Disable automatic installation of plugin updates when false. Defaults to true.",
       "type": "boolean"
     },
     "presets": {
@@ -225,6 +225,7 @@
             "auto",
             "tmux",
             "zellij",
+            "herdr",
             "none"
           ]
         },

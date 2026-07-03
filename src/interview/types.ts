@@ -43,6 +43,8 @@ export interface InterviewRecord {
   idea: string;
   markdownPath: string;
   createdAt: string;
+  abandonedAt?: string;
+  abandonedOrder?: number;
   status: 'active' | 'abandoned';
   baseMessageCount: number;
 }

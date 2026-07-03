@@ -37,6 +37,8 @@ coverage/
 tmp/
 temp/
 local
+.loop-history-*.md
+.opencode/loop-history/
 
 .sisyphus/
 .hive/
@@ -58,7 +60,6 @@ PR-NOTES.md
 REVIEW.md
 !docs/goal.md
 docs/plans
-docs/superpowers
 
 # Python
 __pycache__/

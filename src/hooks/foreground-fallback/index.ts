@@ -21,6 +21,7 @@ import {
   abortSessionWithTimeout,
   parseModelReference,
 } from '../../utils/session';
+import { isUserMessageWithParts } from '../types';
 
 type OpencodeClient = PluginInput['client'];
 
@@ -42,6 +43,12 @@ const RATE_LIMIT_PATTERNS = [
   /insufficient.?(quota|balance)/i,
   /high concurrency/i,
   /reduce concurrency/i,
+  // ponytail: transient server errors mixed in; rename to isRetryableError
+  // and split from rate-limit detection when this list grows further
+  /service unavailable/i,
+  /monthly usage limit/i,
+  /5-hour usage limit/i,
+  /weekly usage limit/i,
 ];
 
 export function isRateLimitError(error: unknown): boolean {
@@ -222,7 +229,7 @@ export class ForegroundFallbackManager {
 
     this.inProgress.add(sessionID);
     try {
-      const currentModel = this.sessionModel.get(sessionID);
+      let currentModel = this.sessionModel.get(sessionID);
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
       if (!chain.length) {
@@ -231,6 +238,15 @@ export class ForegroundFallbackManager {
           agentName,
         });
         return;
+      }
+
+      // When the agent is known but no model was captured (common for
+      // subagent error events that fire before message.updated), infer
+      // the current model as the chain's first entry. Without this, the
+      // fallback would incorrectly re-select the primary model as the
+      // "next" fallback target.
+      if (!currentModel && agentName && chain.length > 0) {
+        currentModel = chain[0];
       }
 
       if (!this.sessionTried.has(sessionID)) {
@@ -284,13 +300,11 @@ export class ForegroundFallbackManager {
       const result = await this.client.session.messages({
         path: { id: sessionID },
       });
-      const messages = (result.data ?? []) as Array<{
-        info: { role: string };
-        parts: unknown[];
-      }>;
-      const lastUser = [...messages]
-        .reverse()
-        .find((m) => m.info.role === 'user');
+      // result.data may contain partial/streaming messages whose `info` is
+      // undefined at runtime (OpenCode violates its own declared type), so
+      // guard each entry instead of dereferencing `info` directly.
+      const messages = (result.data ?? []) as unknown[];
+      const lastUser = [...messages].reverse().find(isUserMessageWithParts);
       if (!lastUser) {
         log('[foreground-fallback] no user message found', { sessionID });
         return;

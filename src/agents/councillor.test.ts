@@ -48,16 +48,17 @@ describe('createCouncillorAgent', () => {
     expect(agent.config.prompt).toContain('Additional instructions here.');
   });
 
-  test('custom prompt takes priority over append prompt', () => {
+  test('custom prompt and append prompt compose together', () => {
     const customPrompt = 'Custom prompt only.';
-    const customAppendPrompt = 'Should be ignored.';
+    const customAppendPrompt = 'Additional routing context.';
     const agent = createCouncillorAgent(
       'test-model',
       customPrompt,
       customAppendPrompt,
     );
-    expect(agent.config.prompt).toBe(customPrompt);
-    expect(agent.config.prompt).not.toContain(customAppendPrompt);
+    expect(agent.config.prompt).toBe(
+      `${customPrompt}\n\n${customAppendPrompt}`,
+    );
   });
 });
 

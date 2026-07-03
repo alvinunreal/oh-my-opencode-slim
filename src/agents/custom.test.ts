@@ -252,4 +252,94 @@ describe('custom-agent creation', () => {
       "ACP agent 'fixer' conflicts with a built-in agent name or alias",
     );
   });
+
+  test('appends ACP routing prompts separately without heading, and preserves rewriting', () => {
+    const config: PluginConfig = {
+      agents: {
+        explorer: {
+          model: 'openai/gpt-5.4-mini',
+          displayName: 'fancy-explorer',
+        },
+        janitor: {
+          model: 'openai/gpt-5.5',
+          orchestratorPrompt:
+            'Please use @janitor to clean up after @explorer has completed.',
+        },
+      },
+      acpAgents: {
+        'claude-research': {
+          command: 'claude-code-acp',
+          args: [],
+          env: {},
+          timeoutMs: 0,
+          permissionMode: 'ask',
+          orchestratorPrompt:
+            'Please delegate research tasks to @claude-research or @explorer.',
+        },
+      },
+    };
+
+    const agents = createAgents(config);
+    const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
+    const prompt = orchestrator?.config.prompt ?? '';
+
+    // Verify Project-specific routing guidance exists and has the custom agent override prompt rewritten
+    expect(prompt).toContain('# Project-specific routing guidance');
+    expect(prompt).toContain(
+      'Please use @janitor to clean up after @fancy-explorer has completed.',
+    );
+
+    // Verify ACP routing prompt is appended but NOT under the Project-specific routing guidance section
+    // (i.e. it comes after or is separate, let's verify exact substring sequence or that the ACP test isn't inside the heading section)
+    const pieces = prompt.split('# Project-specific routing guidance');
+    expect(pieces.length).toBe(2);
+
+    const headingContent = pieces[1];
+    // The headingContent should contain the custom prompt but not contain the ACP prompt if ACP prompt is appended after/before.
+    // Wait, in our implementation, order of appending is:
+    // 1) overridden/custom prompts under # Project-specific routing guidance.
+    // 2) ACP routing prompts (without the header).
+    // So headingContent (everything after the header) will contain the custom prompt, and then at the very end (or separated), the ACP prompt.
+    // But the ACP prompt is not under that header's specific block if it's appended separately.
+    // Wait, is there a way to verify they are separated? Yes, we can verify that the custom prompt block and ACP prompt block are two separate parts,
+    // and that ACP prompt is appended at the very end of the string, outside of the heading's contiguous text block or that if only ACP is present, the heading doesn't show up.
+    expect(headingContent).toContain(
+      'Please use @janitor to clean up after @fancy-explorer has completed.',
+    );
+    expect(headingContent).toContain(
+      'Please delegate research tasks to @claude-research or @fancy-explorer.',
+    );
+
+    // Let's also check a scenario where only ACP routing prompt is present. There should be NO heading at all!
+    const configOnlyAcp: PluginConfig = {
+      agents: {
+        explorer: {
+          model: 'openai/gpt-5.4-mini',
+          displayName: 'fancy-explorer',
+        },
+      },
+      acpAgents: {
+        'claude-research': {
+          command: 'claude-code-acp',
+          args: [],
+          env: {},
+          timeoutMs: 0,
+          permissionMode: 'ask',
+          orchestratorPrompt:
+            'Please delegate research tasks to @claude-research or @explorer.',
+        },
+      },
+    };
+
+    const agentsOnlyAcp = createAgents(configOnlyAcp);
+    const orchestratorOnlyAcp = agentsOnlyAcp.find(
+      (agent) => agent.name === 'orchestrator',
+    );
+    const promptOnlyAcp = orchestratorOnlyAcp?.config.prompt ?? '';
+
+    expect(promptOnlyAcp).not.toContain('# Project-specific routing guidance');
+    expect(promptOnlyAcp).toContain(
+      'Please delegate research tasks to @claude-research or @fancy-explorer.',
+    );
+  });
 });

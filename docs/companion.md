@@ -71,10 +71,11 @@ after monitor or resolution changes.
 ## Installer Flag
 
 During interactive installation, the installer asks whether to download and
-enable the native Companion binary. The prompt defaults to `yes`, so pressing
-Enter installs it.
+enable the native Companion binary. The prompt defaults to `no`, so pressing
+Enter skips it.
 
-On niri, the prompt installs normally now that the native companion is fixed.
+On niri, Companion can install normally when enabled now that the native binary
+is fixed.
 
 Companion installation is best-effort. If the binary cannot be downloaded or
 installed, the installer prints a warning and continues installing the core

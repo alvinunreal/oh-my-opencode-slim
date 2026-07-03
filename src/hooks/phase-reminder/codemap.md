@@ -1,30 +1,52 @@
 # src/hooks/phase-reminder/
 
 ## Responsibility
-
-Keep orchestrator guidance aligned over long turns by prepending a phase reminder to the latest user message text before the next LLM request.
+Orchestrates phase reminder injection into user messages for the orchestrator agent, ensuring workflow guidance is appended without mutating the original message content or affecting UI display.
 
 ## Design
 
-- `PHASE_REMINDER` constant is composed from `PHASE_REMINDER_TEXT` (`config/constants.ts`).
-- `createPhaseReminderHook()` returns a single `experimental.chat.messages.transform` handler.
-- Message filtering is role/agent-aware:
-  - locates the latest `'user'` role in `output.messages`,
-  - only mutates if no explicit agent or `agent === 'orchestrator'`,
-  - no-op for internal control messages containing `SLIM_INTERNAL_INITIATOR_MARKER`.
-- Mutation target is the first `text` part in that message; replacement is an in-place prefix.
-- Uses `SLIM_INTERNAL_INITIATOR_MARKER` from `../../utils` to avoid feedback loops.
+### Core Abstraction
+- **Hook Factory**: `createPhaseReminderHook()` returns an OpenCode experimental chat message transformer hook
+- **Non-Mutating Strategy**: Appends phase reminder as a separate message part rather than modifying user-authored text
+- **Targeted Injection**: Only processes messages from the orchestrator agent
+
+### Key Components
+- `PHASE_REMINDER` constant (imported from `../../config/constants`)
+- `SLIM_INTERNAL_INITIATOR_MARKER` constant (imported from `../../utils`)
+- Message part type checking and injection logic
+
+### Design Patterns
+- **Observer Pattern**: Intercepts and transforms messages before API transmission without altering source
+- **Guard Clauses**: Multiple preconditions prevent unnecessary processing:
+  - Empty message check
+  - User message existence check
+  - Orchestrator agent check
+  - Duplicate injection prevention
+  - Internal initiator marker check
 
 ## Flow
 
-1. On transform, scan backward through `messages` for last `info.role === 'user'`.
-2. If agent is non-orchestrator, return.
-3. Locate first part where `type === 'text'`.
-4. If marker exists, return.
-5. Prefix `part.text` with `PHASE_REMINDER + '\n\n---\n\n'`.
+1. **Hook Invocation**: OpenCode calls the `experimental.chat.messages.transform` hook before sending messages to API
+2. **Message Analysis**: Iterates backward through messages to find the last user message
+3. **Agent Validation**: Confirms the message is from the orchestrator agent
+4. **Text Part Detection**: Locates the text part in the message
+5. **Duplicate Prevention**: Checks for existing phase reminder injection
+6. **Injection**: Appends phase reminder as a new text message part
+7. **Transmission**: Messages proceed to API with injected reminder (not visible in UI)
 
 ## Integration
 
-- Registered through `src/hooks/index.ts` and plugin-level hook wiring in `src/index.ts`.
-- Consumes `experimental.chat.messages.transform` and mutates the outgoing `messages` payload only.
-- Does not depend on stateful services; no network or client APIs are required.
+### Dependencies
+- **Config**: `PHASE_REMINDER` constant from `../../config/constants`
+- **Utils**: `SLIM_INTERNAL_INITIATOR_MARKER` from `../../utils`
+- **Types**: `MessageWithParts` type from `../types`
+
+### Consumers
+- **OpenCode**: Registers the hook via plugin initialization
+- **Orchestrator Agent**: Receives phase reminders in messages
+- **API Layer**: Receives messages with injected reminders (UI remains unaffected)
+
+### Context
+- **Execution Timing**: Runs right before API transmission (post-UI rendering)
+- **Scope**: Only affects orchestrator agent messages
+- **Persistence**: Reminder is appended as a separate message part, preserving original content

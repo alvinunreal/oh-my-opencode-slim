@@ -197,6 +197,7 @@ export function mergePluginConfigs(
     ...base,
     ...override,
     agents: deepMerge(base.agents, override.agents),
+    presets: deepMerge(base.presets, override.presets),
     tmux: deepMerge(base.tmux, override.tmux),
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
@@ -342,31 +343,58 @@ export function loadPluginConfig(
  * then falls back to the root prompts directory.
  *
  * @param agentName - Name of the agent (e.g., "orchestrator", "explorer")
- * @param preset - Optional preset name for preset-scoped prompt lookup
+ * @param optionsOrPreset - Optional preset name or options configuration
  * @returns Object with prompt and/or appendPrompt if files exist
  */
 export function loadAgentPrompt(
   agentName: string,
-  preset?: string,
+  optionsOrPreset?: string | { preset?: string; projectDirectory?: string },
 ): {
   prompt?: string;
   appendPrompt?: string;
 } {
+  let preset: string | undefined;
+  let projectDirectory: string | undefined;
+
+  if (typeof optionsOrPreset === 'string') {
+    preset = optionsOrPreset;
+  } else if (optionsOrPreset && typeof optionsOrPreset === 'object') {
+    preset = optionsOrPreset.preset;
+    projectDirectory = optionsOrPreset.projectDirectory;
+  }
+
   const presetDirName =
     preset && /^[a-zA-Z0-9_-]+$/.test(preset) ? preset : undefined;
-  const promptSearchDirs = getConfigSearchDirs().flatMap((configDir) => {
-    const promptsDir = path.join(configDir, PROMPTS_DIR_NAME);
-    return presetDirName
-      ? [path.join(promptsDir, presetDirName), promptsDir]
-      : [promptsDir];
-  });
-  const result: { prompt?: string; appendPrompt?: string } = {};
+
+  const searchDirs: string[] = [];
+
+  // Lookup order preference:
+  // 1. Project preset dir
+  if (projectDirectory && presetDirName) {
+    searchDirs.push(
+      path.join(projectDirectory, '.opencode', PROMPTS_DIR_NAME, presetDirName),
+    );
+  }
+  // 2. Project root dir
+  if (projectDirectory) {
+    searchDirs.push(path.join(projectDirectory, '.opencode', PROMPTS_DIR_NAME));
+  }
+  // 3. User preset dirs
+  if (presetDirName) {
+    for (const userDir of getConfigSearchDirs()) {
+      searchDirs.push(path.join(userDir, PROMPTS_DIR_NAME, presetDirName));
+    }
+  }
+  // 4. User root dirs
+  for (const userDir of getConfigSearchDirs()) {
+    searchDirs.push(path.join(userDir, PROMPTS_DIR_NAME));
+  }
 
   const readFirstPrompt = (
     fileName: string,
     errorPrefix: string,
   ): string | undefined => {
-    for (const dir of promptSearchDirs) {
+    for (const dir of searchDirs) {
       const promptPath = path.join(dir, fileName);
       if (!fs.existsSync(promptPath)) {
         continue;
@@ -384,6 +412,8 @@ export function loadAgentPrompt(
 
     return undefined;
   };
+
+  const result: { prompt?: string; appendPrompt?: string } = {};
 
   // Check for replacement prompt
   result.prompt = readFirstPrompt(

@@ -69,6 +69,10 @@ Or let the orchestrator delegate to it when its routing prompt matches the task.
 | `permissionMode` | `ask` \| `allow` \| `reject` | `ask` | How ACP permission requests are answered. |
 | `timeoutMs` | integer | `300000` | Timeout for one ACP run. |
 
+> **`permission` vs `permissionMode`:** These are separate concepts.
+> - **`permission`** (on normal custom, built-in, and preset agents) provides SDK-enforced, expressive per-tool rules with pattern support, accepting `ask`/`allow`/`deny`. See [Agent Permissions](configuration.md#agent-permissions).
+> - **`permissionMode`** (ACP agents only) controls how the plugin answers the external ACP subprocess's permission requests, with simpler `ask`/`allow`/`reject` options.
+
 ## Authentication
 
 ACP agents may advertise `authMethods` during initialization and may require

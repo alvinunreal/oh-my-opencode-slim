@@ -73,6 +73,40 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
+  test('resets timeout convergence when a timed out job completes', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'implement parser',
+    });
+
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'running',
+      timedOut: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'running',
+      timedOut: true,
+    });
+
+    const completed = board.updateStatus({
+      taskID: 'ses_1',
+      state: 'completed',
+      timedOut: true,
+    });
+
+    expect(completed).toMatchObject({
+      state: 'completed',
+      timedOut: true,
+      timeoutCount: 0,
+    });
+    expect(board.hasConvergenceSignals('ses_1')).toBe(false);
+  });
+
   test('formats running and terminal unreconciled jobs for prompt', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
@@ -776,5 +810,126 @@ describe('BackgroundJobBoard', () => {
     // 4 seconds after relaunch — should show [resumed, 4s ago]
     const prompt = board.formatForPrompt('parent-1', 9_000);
     expect(prompt).toContain('running [resumed, 4s ago]');
+  });
+
+  describe('intent-revealing query methods', () => {
+    test('isRunning: true for running jobs, false for terminal/reconciled/unknown', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'running-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+      board.registerLaunch({
+        taskID: 'terminal-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+      board.updateStatus({
+        taskID: 'terminal-1',
+        state: 'completed',
+        now: 200,
+      });
+      board.markReconciled('terminal-1', 300);
+
+      expect(board.isRunning('running-1')).toBe(true);
+      expect(board.isRunning('terminal-1')).toBe(false);
+      expect(board.isRunning('unknown-1')).toBe(false);
+    });
+
+    test('isTerminalUnreconciled: true after updateStatus to terminal, false after markReconciled', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.isTerminalUnreconciled('job-1')).toBe(false);
+      board.updateStatus({ taskID: 'job-1', state: 'completed', now: 200 });
+      expect(board.isTerminalUnreconciled('job-1')).toBe(true);
+      board.markReconciled('job-1', 300);
+      expect(board.isTerminalUnreconciled('job-1')).toBe(false);
+      expect(board.isTerminalUnreconciled('unknown-1')).toBe(false);
+    });
+
+    test('getResultSummary: returns summary after updateStatus with result', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+      board.updateStatus({
+        taskID: 'job-1',
+        state: 'completed',
+        resultSummary: 'all good',
+        now: 200,
+      });
+
+      expect(board.getResultSummary('job-1')).toBe('all good');
+      expect(board.getResultSummary('unknown-1')).toBeUndefined();
+    });
+
+    test('getLastLiveBusyAt: returns timestamp after markRunningFromLiveSession', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.getLastLiveBusyAt('job-1')).toBe(100);
+      board.markRunningFromLiveSession('job-1', 200);
+      expect(board.getLastLiveBusyAt('job-1')).toBe(200);
+      expect(board.getLastLiveBusyAt('unknown-1')).toBeUndefined();
+    });
+
+    test('getParentSessionID: returns parentSessionID after registerLaunch', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.getParentSessionID('job-1')).toBe('parent-1');
+      expect(board.getParentSessionID('unknown-1')).toBeUndefined();
+    });
+
+    test('getState: returns state after mutation, undefined for unknown taskID', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        now: 100,
+      });
+
+      expect(board.getState('job-1')).toBe('running');
+      board.updateStatus({ taskID: 'job-1', state: 'completed', now: 200 });
+      expect(board.getState('job-1')).toBe('completed');
+      expect(board.getState('unknown-1')).toBeUndefined();
+    });
+
+    test('field<K>: returns specific field for valid taskID, undefined for unknown', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'job-1',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+        now: 100,
+      });
+
+      expect(board.field('job-1', 'alias')).toBe('ora-1');
+      expect(board.field('job-1', 'parentSessionID')).toBe('parent-1');
+      expect(board.field('unknown-1', 'alias')).toBeUndefined();
+    });
   });
 });

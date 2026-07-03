@@ -1,6 +1,6 @@
 # Multiplexer Integration Guide
 
-Use tmux or Zellij to watch subagents work in live panes while OpenCode keeps running in your main session.
+Use tmux, Zellij, or Herdr to watch subagents work in live panes while OpenCode keeps running in your main session.
 
 ## Table of Contents
 
@@ -83,7 +83,17 @@ Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 }
 ```
 
-### 2. Start OpenCode inside tmux or Zellij
+**Herdr only:**
+
+```jsonc
+{
+  "multiplexer": {
+    "type": "herdr"
+  }
+}
+```
+
+### 2. Start OpenCode inside tmux, Zellij, or Herdr
 
 **Tmux:**
 
@@ -96,6 +106,13 @@ opencode --port 4096
 
 ```bash
 zellij
+opencode --port 4096
+```
+
+**Herdr:**
+
+```bash
+herdr
 opencode --port 4096
 ```
 
@@ -127,9 +144,9 @@ Please analyze this codebase and create a documentation structure.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, or `"none"` |
-| `layout` | string | `"main-vertical"` | Layout preset for tmux; mapped to Zellij pane directions where possible |
-| `main_pane_size` | number | `60` | Main pane size percentage for tmux only (`20`-`80`) |
+| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, or `"none"` |
+| `layout` | string | `"main-vertical"` | Layout preset for tmux; mapped to Zellij/Herdr pane directions where possible |
+| `main_pane_size` | number | `60` | Main pane size percentage for tmux only (`20`-`80`); ignored by Zellij and Herdr |
 | `zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `"agent-tab"` creates/reuses a dedicated tab; `"current-tab"` opens panes in the tab containing the parent OpenCode pane |
 
 ### Supported Multiplexers
@@ -138,6 +155,7 @@ Please analyze this codebase and create a documentation structure.
 |-------------|--------|-------|
 | **Tmux** | ✅ Supported | Full layout control with `main-vertical`, `main-horizontal`, `tiled`, and more |
 | **Zellij** | ✅ Supported | Creates a dedicated `opencode-agents` tab by default; can open panes in the parent OpenCode tab with `zellij_pane_mode: "current-tab"`; maps `main-*` layouts to pane directions |
+| **Herdr** | ✅ Supported | Splits panes in the current Herdr workspace; maps `main-vertical`/`even-horizontal`/`tiled` layouts to right splits and `main-horizontal`/`even-vertical` to down splits; no layout rebalancing (like Zellij) |
 
 **Example: open Zellij subagents in the parent OpenCode tab**
 
@@ -175,9 +193,9 @@ This is converted automatically to `multiplexer.type: "tmux"`.
 
 ## Layouts
 
-Tmux supports full layout control and main pane sizing. Zellij maps only the
-`main-*` layout settings to pane creation directions; exact `main_pane_size`
-rebalancing is tmux-only.
+Tmux supports full layout control and main pane sizing. Zellij and Herdr map
+only the `main-*` layout settings to pane creation directions; exact
+`main_pane_size` rebalancing is tmux-only.
 
 | Layout | Description |
 |--------|-------------|
@@ -196,6 +214,16 @@ For Zellij:
 | `even-horizontal` | Uses Zellij's native pane placement |
 | `even-vertical` | Uses Zellij's native pane placement |
 | `tiled` | Uses Zellij's native pane placement |
+
+For Herdr:
+
+| Layout | Herdr behavior |
+|--------|-----------------|
+| `main-vertical` | Opens new subagent panes to the right |
+| `main-horizontal` | Opens new subagent panes down |
+| `even-horizontal` | Opens new subagent panes to the right |
+| `even-vertical` | Opens new subagent panes down |
+| `tiled` | Opens new subagent panes to the right |
 
 **Example: wide-screen layout**
 

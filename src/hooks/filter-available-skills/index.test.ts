@@ -47,6 +47,24 @@ describe('filterAvailableSkillsText', () => {
 });
 
 describe('createFilterAvailableSkillsHook', () => {
+  test('ignores messages without OpenCode info or parts', async () => {
+    const hook = createFilterAvailableSkillsHook(mockCtx, {});
+    const output = {
+      messages: [
+        {},
+        { info: { role: 'assistant' } },
+        {
+          info: { role: 'system' },
+          parts: [{ type: 'text', text: availableSkillsBlock('skill1') }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output as never);
+
+    expect(output.messages[2].parts[0].text).toContain('<name>skill1</name>');
+  });
+
   test('filters system prompt skill blocks for explicit agent skills', async () => {
     const config: PluginConfig = {
       agents: {

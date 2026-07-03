@@ -13,16 +13,17 @@ export interface AgentDefinition {
 /**
  * Resolve agent prompt from base/custom/append inputs.
  * If customPrompt is provided, it replaces the base entirely.
- * Otherwise, customAppendPrompt is appended to the base.
+ * If customAppendPrompt is provided, it appends after whichever base won.
  */
 export function resolvePrompt(
   base: string,
   customPrompt?: string,
   customAppendPrompt?: string,
 ): string {
-  if (customPrompt) return customPrompt;
-  if (customAppendPrompt) return `${base}\n\n${customAppendPrompt}`;
-  return base;
+  const effectiveBase = customPrompt !== undefined ? customPrompt : base;
+  return customAppendPrompt !== undefined
+    ? `${effectiveBase}\n\n${customAppendPrompt}`
+    : effectiveBase;
 }
 
 // Agent descriptions for the orchestrator prompt

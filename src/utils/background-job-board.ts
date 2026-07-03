@@ -32,6 +32,9 @@ export interface BackgroundJobRecord {
   lastUsedAt: number;
   terminalState?: TaskOutputState;
   contextFiles: ContextFile[];
+  totalErrors?: number;
+  timeoutCount?: number;
+  lastErrorAt?: number;
 }
 
 export interface BackgroundJobBoardOptions {
@@ -80,7 +83,7 @@ const AGENT_PREFIX: Record<string, string> = {
 export class BackgroundJobBoard {
   private readonly jobs = new Map<string, BackgroundJobRecord>();
   private readonly counters = new Map<string, number>();
-  private terminalStateListener?: TerminalStateListener;
+  private terminalStateListeners: TerminalStateListener[] = [];
 
   private readonly maxReusablePerAgent: number;
   private readonly readContextMinLines: number;
@@ -92,8 +95,24 @@ export class BackgroundJobBoard {
     this.readContextMaxFiles = options.readContextMaxFiles ?? 8;
   }
 
+  addTerminalStateListener(listener: TerminalStateListener): void {
+    this.terminalStateListeners.push(listener);
+  }
+
+  removeTerminalStateListener(listener: TerminalStateListener): void {
+    this.terminalStateListeners = this.terminalStateListeners.filter(
+      (entry) => entry !== listener,
+    );
+  }
+
   setTerminalStateListener(listener?: TerminalStateListener): void {
-    this.terminalStateListener = listener;
+    this.terminalStateListeners = listener ? [listener] : [];
+  }
+
+  private notifyTerminalStateListeners(taskID: string): void {
+    for (const listener of this.terminalStateListeners) {
+      listener(taskID);
+    }
   }
 
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord {
@@ -120,6 +139,8 @@ export class BackgroundJobBoard {
         lastLiveBusyAt: now,
         lastUsedAt: now,
         updatedAt: now,
+        totalErrors: existing.totalErrors ?? 0,
+        timeoutCount: existing.timeoutCount ?? 0,
       } satisfies BackgroundJobRecord;
       this.jobs.set(input.taskID, updated);
       return updated;
@@ -144,6 +165,8 @@ export class BackgroundJobBoard {
       updatedAt: now,
       alias: this.nextAlias(input.parentSessionID, input.agent),
       contextFiles: [],
+      totalErrors: 0,
+      timeoutCount: 0,
     };
 
     this.jobs.set(input.taskID, record);
@@ -189,9 +212,20 @@ export class BackgroundJobBoard {
       lastStatusError: input.lastStatusError,
     };
 
+    if (input.state === 'completed') {
+      updated.timeoutCount = 0;
+    }
+    if (input.state === 'error') {
+      updated.totalErrors = (existing.totalErrors ?? 0) + 1;
+      updated.lastErrorAt = updated.updatedAt;
+    }
+    if (input.timedOut && input.state !== 'completed') {
+      updated.timeoutCount = (existing.timeoutCount ?? 0) + 1;
+    }
+
     this.jobs.set(input.taskID, updated);
     this.trimReusable(input.taskID);
-    if (notifyTerminal) this.terminalStateListener?.(input.taskID);
+    if (notifyTerminal) this.notifyTerminalStateListeners(input.taskID);
     return updated;
   }
 
@@ -299,12 +333,45 @@ export class BackgroundJobBoard {
     };
 
     this.jobs.set(taskID, updated);
-    if (notifyTerminal) this.terminalStateListener?.(taskID);
+    if (notifyTerminal) this.notifyTerminalStateListeners(taskID);
     return updated;
   }
 
   get(taskID: string): BackgroundJobRecord | undefined {
     return this.jobs.get(taskID);
+  }
+
+  field<K extends keyof BackgroundJobRecord>(
+    taskID: string,
+    key: K,
+  ): BackgroundJobRecord[K] | undefined {
+    return this.get(taskID)?.[key];
+  }
+
+  isRunning(taskID: string): boolean {
+    const job = this.get(taskID);
+    return job?.state === 'running';
+  }
+
+  isTerminalUnreconciled(taskID: string): boolean {
+    const job = this.get(taskID);
+    return !!job?.terminalUnreconciled;
+  }
+
+  getResultSummary(taskID: string): string | undefined {
+    return this.field(taskID, 'resultSummary');
+  }
+
+  getLastLiveBusyAt(taskID: string): number | undefined {
+    return this.field(taskID, 'lastLiveBusyAt');
+  }
+
+  getParentSessionID(taskID: string): string | undefined {
+    return this.field(taskID, 'parentSessionID');
+  }
+
+  getState(taskID: string): BackgroundJobState | undefined {
+    return this.field(taskID, 'state');
   }
 
   resolve(
@@ -360,8 +427,11 @@ export class BackgroundJobBoard {
     for (const file of files) {
       const previous = existing.get(file.path);
       if (previous) {
-        previous.lineCount = Math.max(previous.lineCount, file.lineCount);
-        previous.lastReadAt = Math.max(previous.lastReadAt, file.lastReadAt);
+        existing.set(file.path, {
+          ...previous,
+          lineCount: Math.max(previous.lineCount, file.lineCount),
+          lastReadAt: Math.max(previous.lastReadAt, file.lastReadAt),
+        });
       } else {
         existing.set(file.path, { ...file });
       }
@@ -393,6 +463,14 @@ export class BackgroundJobBoard {
 
   hasTerminalUnreconciled(parentSessionID: string): boolean {
     return this.list(parentSessionID).some((job) => job.terminalUnreconciled);
+  }
+
+  hasConvergenceSignals(taskID: string, threshold = 3): boolean {
+    const job = this.jobs.get(taskID);
+    if (!job) return false;
+    const errors = job.totalErrors ?? 0;
+    const timeouts = job.timeoutCount ?? 0;
+    return errors >= threshold || timeouts >= threshold;
   }
 
   formatForPrompt(

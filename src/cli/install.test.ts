@@ -24,12 +24,12 @@ describe('shouldInstallCompanion', () => {
     });
   });
 
-  test('dry-run defaults to install on niri', async () => {
+  test('dry-run defaults to skip on niri', async () => {
     process.env.NIRI_SOCKET = '/run/user/1000/niri.sock';
     const config = { ...baseConfig(), dryRun: true };
 
-    await expect(shouldInstallCompanion(config)).resolves.toBe(true);
-    expect(config.companion).toBe('yes');
+    await expect(shouldInstallCompanion(config)).resolves.toBe(false);
+    expect(config.companion).toBe('no');
   });
 
   test('explicit companion yes still enables companion on niri', async () => {
@@ -39,13 +39,13 @@ describe('shouldInstallCompanion', () => {
     await expect(shouldInstallCompanion(config)).resolves.toBe(true);
   });
 
-  test('dry-run still defaults to install outside niri', async () => {
+  test('dry-run defaults to skip outside niri', async () => {
     delete process.env.NIRI_SOCKET;
     delete process.env.XDG_CURRENT_DESKTOP;
     delete process.env.DESKTOP_SESSION;
     const config = { ...baseConfig(), dryRun: true };
 
-    await expect(shouldInstallCompanion(config)).resolves.toBe(true);
-    expect(config.companion).toBe('yes');
+    await expect(shouldInstallCompanion(config)).resolves.toBe(false);
+    expect(config.companion).toBe('no');
   });
 });

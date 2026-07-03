@@ -1,8 +1,8 @@
 /**
  * Multiplexer abstraction layer
  *
- * Provides a unified interface for terminal multiplexers (tmux, zellij, etc.)
- * to spawn and manage panes for child agent sessions.
+ * Provides a unified interface for terminal multiplexers (tmux, zellij,
+ * herdr, etc.) to spawn and manage panes for child agent sessions.
  */
 
 import type { MultiplexerConfig, MultiplexerLayout } from '../config/schema';
@@ -14,10 +14,10 @@ export interface PaneResult {
 
 /**
  * Core multiplexer interface
- * Implementations: TmuxMultiplexer, ZellijMultiplexer
+ * Implementations: TmuxMultiplexer, ZellijMultiplexer, HerdrMultiplexer
  */
 export interface Multiplexer {
-  readonly type: 'tmux' | 'zellij';
+  readonly type: 'tmux' | 'zellij' | 'herdr';
 
   /**
    * Check if the multiplexer binary is available on the system

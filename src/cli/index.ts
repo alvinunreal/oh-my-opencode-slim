@@ -74,7 +74,7 @@ Usage:
 Options:
   --skills=yes|no        Install bundled skills (default: yes)
   --companion=ask|yes|no Install desktop companion binary and enable config
-                         (default: ask; prompt defaults to yes)
+                         (default: ask; prompt defaults to no)
   --preset=<name>        Active generated config preset (default: openai)
   --background-subagents=ask|yes|no
                           Persist required OpenCode background subagent env

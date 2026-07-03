@@ -11,6 +11,8 @@ import {
 // Point writes at a temp dir so tests don't touch the real state file.
 const TEST_DIR = path.join(os.tmpdir(), `companion-test-${process.pid}`);
 const XDG_DIR = path.join(TEST_DIR, 'xdg');
+const managers: CompanionManager[] = [];
+
 function readState() {
   return JSON.parse(readFileSync(stateFilePath(), 'utf8'));
 }
@@ -21,6 +23,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const manager of managers.splice(0)) {
+    manager.onExit();
+  }
   rmSync(TEST_DIR, { recursive: true, force: true });
   delete process.env.XDG_DATA_HOME;
 });
@@ -30,7 +35,23 @@ function make(
   cwd = '/home/user/myproject',
   config: any = { enabled: true, position: 'bottom-right', size: 'medium' },
 ) {
-  return new CompanionManager(id, cwd, config);
+  const manager = new CompanionManager(id, cwd, config);
+  managers.push(manager);
+  return manager;
+}
+
+function attachFakeChild(manager: CompanionManager): { killed: () => boolean } {
+  let killed = false;
+  (
+    manager as unknown as {
+      companionProcess: { kill: () => void } | null;
+    }
+  ).companionProcess = {
+    kill: () => {
+      killed = true;
+    },
+  };
+  return { killed: () => killed };
 }
 
 describe('CompanionManager', () => {
@@ -208,6 +229,50 @@ describe('CompanionManager', () => {
     m.onSessionStatus({ sessionId: 'ses_a', agent: 'fixer', status: 'busy' });
     m.onSessionStatus({ sessionId: 'ses_b', agent: 'fixer', status: 'busy' });
     expect(readState().sessions[0].active_agents).toEqual(['fixer', 'fixer']);
+  });
+
+  it('keeps at most one process exit listener across reloads', () => {
+    const baseline = process.listenerCount('exit');
+    for (let i = 0; i < 5; i++) {
+      const m = make('reload-session');
+      m.onLoad();
+    }
+    // Re-inits must dedup the exit listener rather than stacking one each time.
+    expect(process.listenerCount('exit')).toBeLessThanOrEqual(baseline + 1);
+    // onExit releases the live listener again.
+    managers.at(-1)?.onExit();
+    expect(process.listenerCount('exit')).toBeLessThanOrEqual(baseline);
+  });
+
+  it('cleans up a superseded manager for the same session on reload', () => {
+    const first = make('reload-session');
+    first.onLoad();
+    const firstChild = attachFakeChild(first);
+
+    const second = make('reload-session');
+    second.onLoad();
+
+    expect(firstChild.killed()).toBe(true);
+    expect(readState().sessions).toHaveLength(1);
+    expect(readState().sessions[0].session_id).toBe('reload-session');
+
+    second.onExit();
+  });
+
+  it('cleans up active managers when companion is disabled on reload', () => {
+    const enabled = make('disable-session');
+    enabled.onLoad();
+    const child = attachFakeChild(enabled);
+
+    const disabled = new CompanionManager('disable-session', '/path', {
+      enabled: false,
+      position: 'bottom-right',
+      size: 'medium',
+    });
+    disabled.onLoad();
+
+    expect(child.killed()).toBe(true);
+    expect(readState().sessions).toEqual([]);
   });
 
   it('removes its entry on exit', () => {

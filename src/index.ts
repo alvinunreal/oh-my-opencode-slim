@@ -25,6 +25,7 @@ import {
   createDelegateTaskRetryHook,
   createFilterAvailableSkillsHook,
   createJsonErrorRecoveryHook,
+  createLoopCommandHook,
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
   createReflectCommandHook,
@@ -148,6 +149,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let foregroundFallback: ForegroundFallbackManager;
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
+  let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let backgroundJobBoard: BackgroundJobBoard;
   let interviewManager: ReturnType<typeof createInterviewManager>;
@@ -188,8 +190,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     disabledAgents = getDisabledAgents(config);
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(config);
-    agentDefs = createAgents(config);
-    agents = getAgentConfigs(config);
+    agentDefs = createAgents(config, { projectDirectory: ctx.directory });
+    agents = getAgentConfigs(config, { projectDirectory: ctx.directory });
 
     // Build model array map and runtime fallback chains from _modelArray
     // entries (when the user configures model as an array in
@@ -261,7 +263,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       multiplexerConfig,
       backgroundJobBoard,
     );
-    backgroundJobBoard.setTerminalStateListener((taskID) => {
+    backgroundJobBoard.addTerminalStateListener((taskID) => {
       void multiplexerSessionManager.retryDeferredIdleClose(taskID);
     });
 
@@ -305,6 +307,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     deepworkCommandHook = createDeepworkCommandHook();
     reflectCommandHook = createReflectCommandHook();
+    loopCommandHook = createLoopCommandHook();
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
       maxSessionsPerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
       readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
@@ -514,9 +517,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             | Record<string, unknown>
             | undefined;
           if (entry) {
-            entry.model = chosen.id;
-            if (chosen.variant) {
-              entry.variant = chosen.variant;
+            // Only apply model array resolution if no user-selected model
+            // exists. A user-selected model (via /model command) takes
+            // precedence over the config's fallback chain to preserve
+            // runtime selections and avoid breaking provider cache.
+            if (entry.model === undefined) {
+              entry.model = chosen.id;
+              if (chosen.variant) {
+                entry.variant = chosen.variant;
+              }
             }
           } else {
             // Agent exists in slim but not in opencodeConfig.agent —
@@ -740,6 +749,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       interviewManager.registerCommand(opencodeConfig);
       deepworkCommandHook.registerCommand(opencodeConfig);
       reflectCommandHook.registerCommand(opencodeConfig);
+      loopCommandHook.registerCommand(opencodeConfig);
       presetManager.registerCommand(opencodeConfig);
     },
 
@@ -936,6 +946,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
 
       await reflectCommandHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
+
+      await loopCommandHook.handleCommandExecuteBefore(
         input as {
           command: string;
           sessionID: string;

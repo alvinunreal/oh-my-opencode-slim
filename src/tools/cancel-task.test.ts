@@ -426,6 +426,36 @@ describe('cancel_task tool', () => {
     });
   });
 
+  test('cancelSessionByID returns state: error when abort throws non-SessionStillRunningError, even if board shows running', async () => {
+    const { board, abort, cancelTask } = createTool({
+      includeDelete: false,
+      abort: async () => {
+        throw new Error('network timeout');
+      },
+    });
+    // Register a running job so that isRunning(taskID) would be true
+    // if the function incorrectly checks it.
+    board.registerLaunch({
+      taskID: 'ses_running',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+    // Override resolve to return undefined, forcing the cancelSessionByID
+    // raw session path instead of the tracked task path.
+    board.resolve = mock(() => undefined);
+
+    const output = await cancelTask.execute(
+      { task_id: 'ses_running', reason: 'regression guard' },
+      context,
+    );
+
+    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_running' } });
+    // cancelSessionByID must return state: error for non-SessionStillRunningError,
+    // NOT state: running (which would happen if || isRunning() were present).
+    expect(String(output)).toContain('state: error');
+    expect(String(output)).not.toContain('state: running');
+  });
+
   test('denies non-orchestrator agents', async () => {
     const { cancelTask } = createTool();
 

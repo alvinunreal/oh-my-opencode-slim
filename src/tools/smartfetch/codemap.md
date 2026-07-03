@@ -15,9 +15,13 @@
 ## Data & Control Flow
 
 1. `createWebfetchTool` normalizes the requested URL, derives permission patterns/allowed origins, asks for `webfetch` permission, and computes the cache key (`tool.ts`, `network.ts`, `cache.ts`).
+
 2. If `prefer_llms_txt` applies, `probeLlmsText` tries `/llms-full.txt` then `/llms.txt`, following only permitted redirects and rejecting HTML/login-wall responses (`network.ts`).
+
 3. When the tool falls back to the page itself, `fetchWithUpgradeFallback` handles HTTPS upgrade fallback, redirect enforcement, conditional headers for revalidation, binary detection, and bounded body reads (`network.ts`, `tool.ts`).
+
 4. Text/HTML payloads are decoded and normalized through `extractFromHtml`, `cleanFetchedMarkdown`, `extractHeadingsFromMarkdown`, `frontmatter`, and `joinRenderedContent`; binary payloads optionally persist via `saveBinary` and return a metadata message (`utils.ts`, `binary.ts`, `tool.ts`).
+
 5. If the caller supplied a prompt and configured secondary models, `runSecondaryModelWithFallback` truncates input to a bounded size, disables tool access for the helper session, retries across configured models, and the tool degrades back to base fetched content if that step fails (`secondary-model.ts`, `tool.ts`).
 
 ## Integration Points

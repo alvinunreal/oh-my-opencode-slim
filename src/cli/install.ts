@@ -240,10 +240,10 @@ export async function shouldInstallCompanion(
 
   if (config.dryRun) {
     printInfo(
-      'Dry run mode - would ask to install the desktop companion (default: yes).',
+      'Dry run mode - would ask to install the desktop companion (default: no).',
     );
-    config.companion = 'yes';
-    return true;
+    config.companion = 'no';
+    return false;
   }
 
   if (!process.stdin.isTTY) {
@@ -258,7 +258,7 @@ export async function shouldInstallCompanion(
   printInfo('The optional desktop companion shows live agent activity.');
   const shouldInstall = await confirm(
     'Install and enable the desktop companion?',
-    true,
+    false,
   );
   config.companion = shouldInstall ? 'yes' : 'no';
 

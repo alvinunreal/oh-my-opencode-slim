@@ -81,6 +81,108 @@ describe('reflect command hook', () => {
     expect(output.parts[0].text).toContain('MCP/tool permission change');
   });
 
+  test('detects --sessions flag and activates session mode', async () => {
+    const hook = createReflectCommandHook();
+    hook.registerCommand({});
+    const output = { parts: [{ type: 'text', text: 'template' }] };
+
+    await hook.handleCommandExecuteBefore(
+      { command: 'reflect', sessionID: 's1', arguments: '--sessions' },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0].text).toContain('Session Reflection Mode:');
+    expect(output.parts[0].text).toContain('Analyze the last 50 sessions');
+    expect(output.parts[0].text).toContain(
+      '- Extract session IDs from OpenCode logs',
+    );
+    expect(output.parts[0].text).toContain(
+      '- Load session content from SQLite database',
+    );
+    expect(output.parts[0].text).toContain(
+      '- Analyze each session for patterns and friction',
+    );
+    expect(output.parts[0].text).toContain(
+      '- Aggregate findings across all sessions',
+    );
+    expect(output.parts[0].text).toContain(
+      '- Report with scope (global/cross-repo/project-specific), confidence, and impact',
+    );
+    // Default focus for session mode
+    expect(output.parts[0].text).toContain(
+      'Analyze recent sessions to find repeated patterns, friction, and improvement opportunities.',
+    );
+  });
+
+  test('parses --last N flag in session mode', async () => {
+    const hook = createReflectCommandHook();
+    hook.registerCommand({});
+    const output = { parts: [{ type: 'text', text: 'template' }] };
+
+    await hook.handleCommandExecuteBefore(
+      {
+        command: 'reflect',
+        sessionID: 's1',
+        arguments: '--sessions --last 20',
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0].text).toContain('Analyze the last 20 sessions');
+  });
+
+  test('caps --last at 100 in session mode', async () => {
+    const hook = createReflectCommandHook();
+    hook.registerCommand({});
+    const output = { parts: [{ type: 'text', text: 'template' }] };
+
+    await hook.handleCommandExecuteBefore(
+      {
+        command: 'reflect',
+        sessionID: 's1',
+        arguments: '--sessions --last 999',
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0].text).toContain('Analyze the last 100 sessions');
+  });
+
+  test('--sessions with focus text includes both session mode and custom focus', async () => {
+    const hook = createReflectCommandHook();
+    hook.registerCommand({});
+    const output = { parts: [{ type: 'text', text: 'template' }] };
+
+    await hook.handleCommandExecuteBefore(
+      {
+        command: 'reflect',
+        sessionID: 's1',
+        arguments: '--sessions feedback on PR reviews',
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0].text).toContain('Session Reflection Mode:');
+    expect(output.parts[0].text).toContain('Focus:\nfeedback on PR reviews');
+  });
+
+  test('defaults to 50 sessions when --last is not provided', async () => {
+    const hook = createReflectCommandHook();
+    hook.registerCommand({});
+    const output = { parts: [{ type: 'text', text: 'template' }] };
+
+    await hook.handleCommandExecuteBefore(
+      { command: 'reflect', sessionID: 's1', arguments: '--sessions' },
+      output,
+    );
+
+    expect(output.parts[0].text).toContain('Analyze the last 50 sessions');
+  });
+
   test('ignores other commands', async () => {
     const hook = createReflectCommandHook();
     hook.registerCommand({});

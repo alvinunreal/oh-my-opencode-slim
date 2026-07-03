@@ -1,9 +1,7 @@
-import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   BackgroundJobBoard,
   type BackgroundJobRecord,
-  type ContextFile,
   deriveTaskSessionLabel,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
@@ -13,7 +11,17 @@ import {
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import { isRateLimitError } from '../foreground-fallback/index';
-import type { MessagePart, MessageWithParts } from '../types';
+import {
+  isUserMessageWithParts,
+  type MessagePart,
+  type MessageWithParts,
+} from '../types';
+import type { PendingTaskCall } from './pending-call-tracker';
+import { createPendingCallTracker } from './pending-call-tracker';
+import {
+  createTaskContextTracker,
+  extractReadFiles,
+} from './task-context-tracker';
 
 interface TaskArgs {
   description?: unknown;
@@ -22,122 +30,50 @@ interface TaskArgs {
   task_id?: unknown;
 }
 
-interface PendingTaskCall {
-  callId: string;
-  parentSessionId: string;
-  agentType: string;
-  label: string;
-  resumedTaskId?: string;
-}
-
-const MAX_PENDING_TASK_CALLS = 100;
-
-interface PendingContextFile {
-  path: string;
-  lines: Set<number>;
-  lastReadAt: number;
-}
-
 const BACKGROUND_JOB_BOARD_SENTINEL = 'SENTINEL: background-job-board-v2';
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;
 const RAW_SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_-]+$/;
 
-/**
- * Simple deterministic string hash for stable occurrence IDs.
- * Uses DJB2 algorithm - fast and good distribution for short strings.
- */
 function djb2Hash(str: string): string {
   let hash = 5381;
   for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) + hash + str.charCodeAt(i); // hash * 33 + char
+    hash = (hash << 5) + hash + str.charCodeAt(i);
   }
-  // Convert to unsigned 32-bit and then to hex
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-/**
- * Create a stable occurrence ID for synthetic completion deduplication.
- * Prefers part.id, then message.info.id + partIndex, then content-derived hash.
- */
 function createOccurrenceId(
   part: MessagePart,
   message: MessageWithParts,
   partIndex: number,
 ): string {
-  // Prefer explicit part.id if available
   if (typeof part.id === 'string') {
     return part.id;
   }
 
-  // Fall back to message.info.id + partIndex
   if (typeof message.info.id === 'string') {
     return `${message.info.id}:${partIndex}`;
   }
 
-  // Final fallback: content-derived hash from sessionID + parsed taskID/state/result
-  // This ensures the same anonymous synthetic completion is deduped
-  // even when its message index changes between transform calls
   const sessionID = message.info.sessionID ?? 'unknown';
   const content = typeof part.text === 'string' ? part.text : '';
 
-  // Parse task status to get stable identifiers
   const status = parseTaskStatusOutput(content);
   if (status) {
-    // Use taskID + state + result for a stable hash
     const stableKey = `${sessionID}:${status.taskID}:${status.state}:${status.result ?? ''}`;
     const hash = djb2Hash(stableKey);
     return `anon:${hash}`;
   }
 
-  // Fallback to hashing the full content if parsing fails
   const hash = djb2Hash(`${sessionID}:${content}`);
   return `anon:${hash}`;
-}
-
-function extractPath(output: string): string | undefined {
-  return /<path>([^<]+)<\/path>/.exec(output)?.[1];
 }
 
 function extractTaskSummary(output: string): string | undefined {
   const summary = /<summary>\s*([\s\S]*?)\s*<\/summary>/i.exec(output)?.[1];
   return summary?.trim() || undefined;
-}
-
-function normalizePath(root: string, file: string): string {
-  const relative = path.relative(root, file);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-    return file;
-  }
-  return relative;
-}
-
-function extractReadFiles(
-  root: string,
-  output: { output: unknown; metadata?: unknown },
-): ContextFile[] {
-  if (typeof output.output !== 'string') return [];
-
-  const file = extractPath(output.output);
-  if (!file) return [];
-
-  return [
-    {
-      path: normalizePath(root, file),
-      lineCount: countReadLines(output.output).length,
-      lineNumbers: countReadLines(output.output),
-      lastReadAt: Date.now(),
-    },
-  ];
-}
-
-function countReadLines(output: string): number[] {
-  const lines = new Set<number>();
-  for (const match of output.matchAll(/^([0-9]+):/gm)) {
-    lines.add(Number(match[1]));
-  }
-  return [...lines];
 }
 
 export function createTaskSessionManagerHook(
@@ -157,65 +93,13 @@ export function createTaskSessionManagerHook(
       readContextMinLines: options.readContextMinLines,
       readContextMaxFiles: options.readContextMaxFiles,
     });
-  const pendingCalls = new Map<string, PendingTaskCall>();
-  const pendingCallOrder: string[] = [];
-  const contextByTask = new Map<string, Map<string, PendingContextFile>>();
-  const pendingManagedTaskIds = new Set<string>();
-  const terminalJobsInjectedByParent = new Map<string, Set<string>>();
+
+  const pendingCallTracker = createPendingCallTracker();
+  const taskContextTracker = createTaskContextTracker();
+
   const processedInjectedCompletions = new Set<string>();
   const processedInjectedCompletionOrder: string[] = [];
-  let anonymousPendingCallId = 0;
-
-  function addTaskContext(taskId: string, files: ContextFile[]): void {
-    if (files.length === 0) return;
-
-    let context = contextByTask.get(taskId);
-    if (!context) {
-      context = new Map();
-      contextByTask.set(taskId, context);
-    }
-    for (const file of files) {
-      const pending = context.get(file.path) ?? {
-        path: file.path,
-        lines: new Set<number>(),
-        lastReadAt: file.lastReadAt,
-      };
-      for (const line of file.lineNumbers ?? []) {
-        pending.lines.add(line);
-      }
-      pending.lastReadAt = Math.max(pending.lastReadAt, file.lastReadAt);
-      context.set(file.path, pending);
-    }
-
-    backgroundJobBoard.addContext(taskId, contextFilesForPrompt(context));
-  }
-
-  function contextFilesForPrompt(
-    context: Map<string, PendingContextFile> | undefined,
-  ): ContextFile[] {
-    if (!context) return [];
-    return [...context.values()].map((file) => ({
-      path: file.path,
-      lineCount: file.lines.size,
-      lastReadAt: file.lastReadAt,
-    }));
-  }
-
-  function canTrackTaskContext(taskId: string): boolean {
-    return (
-      pendingManagedTaskIds.has(taskId) ||
-      backgroundJobBoard.taskIDs().has(taskId)
-    );
-  }
-
-  function pruneContext(): void {
-    const remembered = backgroundJobBoard.taskIDs();
-    for (const taskId of contextByTask.keys()) {
-      if (!pendingManagedTaskIds.has(taskId) && !remembered.has(taskId)) {
-        contextByTask.delete(taskId);
-      }
-    }
-  }
+  const terminalJobsInjectedByParent = new Map<string, Set<string>>();
 
   function updateBackgroundJobFromOutput(
     output: unknown,
@@ -237,7 +121,8 @@ export function createTaskSessionManagerHook(
       log('[task-session-manager] suppressed late cancelled task error', {
         taskID: status.taskID,
         alias: existing?.alias,
-        state: existing?.state,
+        parsedState: status.state,
+        boardState: existing?.state,
         terminalState: existing?.terminalState,
         result: status.result,
       });
@@ -267,13 +152,13 @@ export function createTaskSessionManagerHook(
       timedOut: updated.timedOut,
     });
 
-    if (updated.terminalUnreconciled) {
-      pendingManagedTaskIds.delete(updated.taskID);
+    if (backgroundJobBoard.isTerminalUnreconciled(updated.taskID)) {
+      taskContextTracker.pendingManagedTaskIds.delete(updated.taskID);
       backgroundJobBoard.addContext(
         updated.taskID,
-        contextFilesForPrompt(contextByTask.get(updated.taskID)),
+        taskContextTracker.contextFilesForPrompt(updated.taskID),
       );
-      pruneContext();
+      taskContextTracker.prune(backgroundJobBoard);
     }
 
     return updated;
@@ -312,12 +197,13 @@ export function createTaskSessionManagerHook(
     if (isFailed && isLateCancelledTaskError(existing, status.state)) {
       part.text = formatCancelledTaskStatusOutput(
         status.taskID,
-        existing?.resultSummary,
+        backgroundJobBoard.getResultSummary(status.taskID),
       );
       log('[task-session-manager] normalized late cancelled injected failure', {
         taskID: status.taskID,
         alias: existing?.alias,
-        state: existing?.state,
+        parsedState: status.state,
+        boardState: existing?.state,
         terminalState: existing?.terminalState,
         result: status.result,
       });
@@ -325,14 +211,9 @@ export function createTaskSessionManagerHook(
       return existing;
     }
 
-    // Enforce summary/state consistency when upstream includes a completion
-    // summary. Current upstream renders synthetic completions as task XML with
-    // the completion/failure label inside <summary> rather than as the first
-    // line of text.
     if (isCompleted && status.state !== 'completed') return undefined;
     if (isFailed && status.state !== 'error') return undefined;
 
-    // Dedupe by synthetic message occurrence using stable occurrence ID
     if (processedInjectedCompletions.has(occurrenceId)) return undefined;
 
     const updated = updateBackgroundJobFromOutput(part.text);
@@ -370,61 +251,6 @@ export function createTaskSessionManagerHook(
       firstLine.startsWith('[error]') &&
       firstLine.includes('session') &&
       (firstLine.includes('not found') || firstLine.includes('no session'))
-    );
-  }
-
-  function pendingCallId(input: {
-    callID?: string;
-    sessionID?: string;
-  }): string {
-    return (
-      input.callID ??
-      `${input.sessionID ?? 'unknown'}:anonymous-${++anonymousPendingCallId}`
-    );
-  }
-
-  function rememberPendingCall(call: PendingTaskCall): void {
-    const existingIndex = pendingCallOrder.indexOf(call.callId);
-    if (existingIndex >= 0) {
-      pendingCallOrder.splice(existingIndex, 1);
-    }
-
-    pendingCalls.set(call.callId, call);
-    pendingCallOrder.push(call.callId);
-
-    while (pendingCallOrder.length > MAX_PENDING_TASK_CALLS) {
-      const evictedCallId = pendingCallOrder.shift();
-      if (!evictedCallId) {
-        break;
-      }
-      pendingCalls.delete(evictedCallId);
-    }
-  }
-
-  function takePendingCall(
-    callId?: string,
-    parentSessionId?: string,
-  ): PendingTaskCall | undefined {
-    const resolvedCallId = callId ?? firstPendingCallForParent(parentSessionId);
-    if (!resolvedCallId) return undefined;
-
-    const pending = pendingCalls.get(resolvedCallId);
-    pendingCalls.delete(resolvedCallId);
-
-    const orderIndex = pendingCallOrder.indexOf(resolvedCallId);
-    if (orderIndex >= 0) {
-      pendingCallOrder.splice(orderIndex, 1);
-    }
-
-    return pending;
-  }
-
-  function firstPendingCallForParent(
-    parentSessionId?: string,
-  ): string | undefined {
-    if (!parentSessionId) return undefined;
-    return pendingCallOrder.find(
-      (callId) => pendingCalls.get(callId)?.parentSessionId === parentSessionId,
     );
   }
 
@@ -496,15 +322,12 @@ export function createTaskSessionManagerHook(
       });
 
       const pendingCall: PendingTaskCall = {
-        callId: pendingCallId({
-          callID: input.callID,
-          sessionID: input.sessionID,
-        }),
+        callId: pendingCallTracker.pendingCallId(input.sessionID, input.callID),
         parentSessionId: input.sessionID,
         agentType,
         label,
       };
-      rememberPendingCall(pendingCall);
+      pendingCallTracker.add(pendingCall);
 
       if (typeof args.task_id !== 'string' || args.task_id.trim() === '') {
         return;
@@ -535,7 +358,7 @@ export function createTaskSessionManagerHook(
 
         if (RAW_SESSION_ID_PATTERN.test(requested)) {
           pendingCall.resumedTaskId = requested;
-          rememberPendingCall(pendingCall);
+          pendingCallTracker.add(pendingCall);
           return;
         }
         delete args.task_id;
@@ -543,10 +366,10 @@ export function createTaskSessionManagerHook(
       }
 
       args.task_id = remembered.taskID;
-      pendingManagedTaskIds.add(remembered.taskID);
+      taskContextTracker.pendingManagedTaskIds.add(remembered.taskID);
       backgroundJobBoard.markUsed(input.sessionID, remembered.taskID);
       pendingCall.resumedTaskId = remembered.taskID;
-      rememberPendingCall(pendingCall);
+      pendingCallTracker.add(pendingCall);
     },
 
     'tool.execute.after': async (
@@ -554,18 +377,23 @@ export function createTaskSessionManagerHook(
       output: { output: unknown; metadata?: unknown },
     ): Promise<void> => {
       if (input.tool.toLowerCase() === 'read') {
-        if (input.sessionID && canTrackTaskContext(input.sessionID)) {
-          addTaskContext(
-            input.sessionID,
-            extractReadFiles(_ctx.directory, output),
-          );
+        if (input.sessionID) {
+          const canTrack =
+            taskContextTracker.pendingManagedTaskIds.has(input.sessionID) ||
+            backgroundJobBoard.taskIDs().has(input.sessionID);
+          if (canTrack) {
+            taskContextTracker.addContext(
+              input.sessionID,
+              extractReadFiles(_ctx.directory, output),
+            );
+          }
         }
         return;
       }
 
       if (input.tool.toLowerCase() !== 'task') return;
 
-      const pending = takePendingCall(input.callID, input.sessionID);
+      const pending = pendingCallTracker.take(input.callID, input.sessionID);
 
       if (!pending || typeof output.output !== 'string') return;
       const launch = parseTaskLaunchOutput(output.output);
@@ -585,11 +413,11 @@ export function createTaskSessionManagerHook(
           description: record.description,
           state: record.state,
         });
+        taskContextTracker.pendingManagedTaskIds.add(launch.taskID);
         backgroundJobBoard.addContext(
           launch.taskID,
-          contextFilesForPrompt(contextByTask.get(launch.taskID)),
+          taskContextTracker.contextFilesForPrompt(launch.taskID),
         );
-        pendingManagedTaskIds.add(launch.taskID);
         return;
       }
 
@@ -622,12 +450,12 @@ export function createTaskSessionManagerHook(
         if (pending.resumedTaskId && pending.resumedTaskId !== status.taskID) {
           backgroundJobBoard.drop(pending.resumedTaskId);
         }
-        pendingManagedTaskIds.delete(status.taskID);
-        const contextFiles = contextFilesForPrompt(
-          contextByTask.get(status.taskID),
+        taskContextTracker.pendingManagedTaskIds.delete(status.taskID);
+        backgroundJobBoard.addContext(
+          status.taskID,
+          taskContextTracker.contextFilesForPrompt(status.taskID),
         );
-        backgroundJobBoard.addContext(status.taskID, contextFiles);
-        pruneContext();
+        taskContextTracker.prune(backgroundJobBoard);
         return;
       }
 
@@ -646,18 +474,22 @@ export function createTaskSessionManagerHook(
         backgroundJobBoard.drop(pending.resumedTaskId);
       }
 
-      pendingManagedTaskIds.delete(taskId);
-      const contextFiles = contextFilesForPrompt(contextByTask.get(taskId));
-      backgroundJobBoard.addContext(taskId, contextFiles);
-      pruneContext();
+      taskContextTracker.pendingManagedTaskIds.delete(taskId);
+      backgroundJobBoard.addContext(
+        taskId,
+        taskContextTracker.contextFilesForPrompt(taskId),
+      );
+      taskContextTracker.prune(backgroundJobBoard);
     },
 
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
-      output: { messages: MessageWithParts[] },
+      output: { messages?: unknown },
     ): Promise<void> => {
-      for (const [messageIndex, message] of output.messages.entries()) {
-        if (message.info.role !== 'user') continue;
+      const messages = Array.isArray(output.messages) ? output.messages : [];
+
+      for (const [messageIndex, message] of messages.entries()) {
+        if (!isUserMessageWithParts(message)) continue;
         if (message.info.agent && message.info.agent !== 'orchestrator') {
           continue;
         }
@@ -673,9 +505,9 @@ export function createTaskSessionManagerHook(
         }
       }
 
-      for (let i = output.messages.length - 1; i >= 0; i -= 1) {
-        const message = output.messages[i];
-        if (message.info.role !== 'user') continue;
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (!isUserMessageWithParts(message)) continue;
         if (message.info.agent && message.info.agent !== 'orchestrator') return;
         if (
           !message.info.sessionID ||
@@ -729,7 +561,7 @@ export function createTaskSessionManagerHook(
           info.parentID &&
           options.shouldManageSession(info.parentID)
         ) {
-          pendingManagedTaskIds.add(info.id);
+          taskContextTracker.pendingManagedTaskIds.add(info.id);
         }
         return;
       }
@@ -797,8 +629,6 @@ export function createTaskSessionManagerHook(
             previousTerminalState: before.terminalState,
             terminalUnreconciled: before.terminalUnreconciled,
             resultSummary: before.resultSummary,
-            updatedState: updated?.state,
-            updatedCancellationRequested: updated?.cancellationRequested,
           });
         }
         log('[task-session-manager] busy/status busy observed', {
@@ -808,10 +638,10 @@ export function createTaskSessionManagerHook(
             : false,
           previousState: before?.state,
           previousTerminalState: before?.terminalState,
-          previousCancellationRequested: before?.cancellationRequested,
+          previousCancellationRequested: before?.cancellationRequested ?? false,
           previousLastLiveBusyAt: before?.lastLiveBusyAt,
           updatedState: updated?.state,
-          updatedCancellationRequested: updated?.cancellationRequested,
+          updatedCancellationRequested: updated?.cancellationRequested ?? false,
           updatedLastLiveBusyAt: updated?.lastLiveBusyAt,
         });
         return;
@@ -826,14 +656,16 @@ export function createTaskSessionManagerHook(
         '[task-session-manager] session.deleted observed; clearing job state',
         {
           sessionID: sessionId,
-          deletedJob: backgroundJobBoard.get(sessionId)
-            ? {
-                state: backgroundJobBoard.get(sessionId)?.state,
-                parentSessionID:
-                  backgroundJobBoard.get(sessionId)?.parentSessionID,
-                alias: backgroundJobBoard.get(sessionId)?.alias,
-              }
-            : undefined,
+          deletedJob: (() => {
+            const record = backgroundJobBoard.get(sessionId);
+            return record
+              ? {
+                  state: record.state,
+                  parentSessionID: record.parentSessionID,
+                  alias: record.alias,
+                }
+              : undefined;
+          })(),
           childJobCount: backgroundJobBoard.list(sessionId).length,
           managesSession: options.shouldManageSession(sessionId),
         },
@@ -842,16 +674,9 @@ export function createTaskSessionManagerHook(
       backgroundJobBoard.drop(sessionId);
       backgroundJobBoard.clearParent(sessionId);
       terminalJobsInjectedByParent.delete(sessionId);
-      contextByTask.delete(sessionId);
-      pendingManagedTaskIds.delete(sessionId);
-      pruneContext();
-
-      for (const [callId, pending] of pendingCalls.entries()) {
-        if (pending.parentSessionId !== sessionId) {
-          continue;
-        }
-        takePendingCall(callId);
-      }
+      taskContextTracker.clearSession(sessionId);
+      taskContextTracker.prune(backgroundJobBoard);
+      pendingCallTracker.clearSession(sessionId);
     },
   };
 
@@ -873,7 +698,7 @@ export function createTaskSessionManagerHook(
     });
     output.output = formatCancelledTaskStatusOutput(
       status.taskID,
-      existing?.resultSummary,
+      backgroundJobBoard.getResultSummary(status.taskID),
     );
     if (isObjectRecord(output) && isObjectRecord(output.metadata)) {
       output.metadata.state = 'cancelled';

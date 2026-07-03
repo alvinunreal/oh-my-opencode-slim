@@ -6,7 +6,10 @@ import {
   isServerRunning,
   type Multiplexer,
 } from '../multiplexer';
-import type { BackgroundJobBoard } from '../utils/background-job-board';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobState,
+} from '../utils/background-job-board';
 import { log } from '../utils/logger';
 
 interface TrackedSession {
@@ -252,7 +255,7 @@ export class MultiplexerSessionManager {
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
         ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-        backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        backgroundJobState: this.backgroundJobState(sessionId),
       });
 
       await this.closeSession(sessionId, 'idle');
@@ -273,7 +276,7 @@ export class MultiplexerSessionManager {
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
         ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-        backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        backgroundJobState: this.backgroundJobState(sessionId),
       });
       await this.closeSession(sessionId, 'idle');
       return;
@@ -291,7 +294,7 @@ export class MultiplexerSessionManager {
         tracked: this.sessions.has(sessionId),
         known: this.knownSessions.has(sessionId),
         ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-        backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+        backgroundJobState: this.backgroundJobState(sessionId),
       });
       await this.respawnIfKnown(sessionId);
     }
@@ -310,7 +313,7 @@ export class MultiplexerSessionManager {
       tracked: this.sessions.has(sessionId),
       known: this.knownSessions.has(sessionId),
       ownerInstanceId: this.sessions.get(sessionId)?.ownerInstanceId,
-      backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+      backgroundJobState: this.backgroundJobState(sessionId),
     });
 
     this.deferredIdleCloses.delete(sessionId);
@@ -457,7 +460,7 @@ export class MultiplexerSessionManager {
           sessionId,
           paneId: tracked.paneId,
           reason,
-          backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+          backgroundJobState: this.backgroundJobState(sessionId),
         },
       );
       return;
@@ -471,7 +474,7 @@ export class MultiplexerSessionManager {
       sessionId,
       paneId: tracked.paneId,
       reason,
-      backgroundJobState: this.backgroundJobBoard?.get(sessionId)?.state,
+      backgroundJobState: this.backgroundJobState(sessionId),
       parentId: tracked.parentId,
       title: tracked.title,
     });
@@ -607,8 +610,14 @@ export class MultiplexerSessionManager {
     return event.properties?.info?.id ?? event.properties?.sessionID;
   }
 
+  private backgroundJobState(
+    sessionId: string,
+  ): BackgroundJobState | undefined {
+    return this.backgroundJobBoard?.getState(sessionId);
+  }
+
   private isRunningBackgroundJob(sessionId: string): boolean {
-    return this.backgroundJobBoard?.get(sessionId)?.state === 'running';
+    return this.backgroundJobBoard?.isRunning(sessionId) ?? false; // ponytail: intent-revealing query
   }
 
   async retryDeferredIdleClose(sessionId: string): Promise<void> {

@@ -236,7 +236,7 @@ describe('orchestrator agent', () => {
       { id: 'github-copilot/claude-3.5-haiku' },
       { id: 'openai/gpt-4' },
     ]);
-    expect(orchestrator?.config.model).toBeUndefined();
+    expect(orchestrator?.config.model).toBe('google/gemini-3-pro');
   });
 });
 
@@ -258,7 +258,7 @@ describe('per-model variant in array config', () => {
       { id: 'google/gemini-3-flash', variant: 'low' },
       { id: 'openai/gpt-4o-mini' },
     ]);
-    expect(explorer?.config.model).toBeUndefined();
+    expect(explorer?.config.model).toBe('google/gemini-3-flash');
   });
 
   test('top-level variant preserved alongside per-model variants', () => {
@@ -795,7 +795,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 });
 
 describe('PluginConfigSchema custom-agent-only prompt fields', () => {
-  test('rejects prompt on built-in top-level agent overrides', () => {
+  test('allows prompt on built-in top-level agent overrides', () => {
     const result = PluginConfigSchema.safeParse({
       agents: {
         oracle: {
@@ -805,10 +805,10 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
       },
     });
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
-  test('rejects orchestratorPrompt on built-in top-level agent overrides', () => {
+  test('allows orchestratorPrompt on built-in top-level agent overrides', () => {
     const result = PluginConfigSchema.safeParse({
       agents: {
         explorer: {
@@ -818,10 +818,10 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
       },
     });
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
-  test('rejects custom-only prompt fields on built-in preset agents', () => {
+  test('allows custom-only prompt fields on built-in preset agents', () => {
     const result = PluginConfigSchema.safeParse({
       presets: {
         openai: {
@@ -829,6 +829,19 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
             model: 'openai/gpt-5.5',
             prompt: 'ignored preset built-in prompt override',
           },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects orchestratorPrompt on orchestrator agent overrides', () => {
+    const result = PluginConfigSchema.safeParse({
+      agents: {
+        orchestrator: {
+          model: 'openai/gpt-5.4-mini',
+          orchestratorPrompt: '@orchestrator\n- Role: should be invalid here',
         },
       },
     });

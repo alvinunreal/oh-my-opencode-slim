@@ -17,6 +17,7 @@ The goal is to identify real repeated friction and suggest practical improvement
 Use Reflect when the user asks to:
 
 - run `/reflect` or `/reflect <focus>`;
+- run `/reflect --sessions` for session archaeology;
 - learn from recent sessions or repeated workflows;
 - find work they keep doing manually;
 - improve their oh-my-opencode-slim setup based on actual usage using oh-my-opencode-slim skill;
@@ -25,6 +26,136 @@ Use Reflect when the user asks to:
 
 Do not use Reflect for ordinary implementation work, one-off debugging, broad
 architecture review, or speculative agent creation without workflow evidence.
+
+## Session Mode
+
+When the user includes `--sessions` in their reflect command, shift to session
+archaeology: analyze historical OpenCode sessions across all repos to find
+repeated patterns, friction, and improvement opportunities.
+
+### Session Discovery
+
+1. **Load recent sessions** — Query the SQLite database directly:
+   ```bash
+   bun -e "import Database from 'bun:sqlite'; const db = new Database('/home/mhenke/.local/share/opencode/opencode.db'); console.log(db.query('SELECT id, directory, title, agent, model, time_created, cost, tokens_input, tokens_output FROM session ORDER BY time_created DESC LIMIT 50').all())"
+   ```
+   Adjust `LIMIT 50` to `--last N` if specified.
+
+   **Session table columns:** `id, directory, title, agent, model, time_created, cost, tokens_input, tokens_output`
+
+2. **Load session messages** — For each session ID, query the message table:
+   ```bash
+   bun -e "import Database from 'bun:sqlite'; const db = new Database('/home/mhenke/.local/share/opencode/opencode.db'); console.log(db.query('SELECT data FROM message WHERE session_id = ?').all('ses_14de9c68effegtZtlATm42wnz7'))"
+   ```
+
+   **Message table columns:** `id, session_id, time_created, time_updated, data` (data is JSON with role, agent, model, summary, etc.)
+
+### Per-Session Analysis
+
+For each session, analyze and produce a structured summary:
+
+```json
+{
+  "session": "ses_14de9c68effegtZtlATm42wnz7",
+  "project": "/home/user/Projects/oh-my-opencode-slim",
+  "timestamp": "2026-06-10T15:08:45.427Z",
+  "goal": "Fix CI failure",
+  "success": true,
+  "frictions": [
+    "Repeated grep to find test file",
+    "Three failed test runs before passing"
+  ],
+  "recommendations": [
+    "Create /test-ci command"
+  ],
+  "duration_minutes": 18,
+  "models_used": ["opencode/mimo-v2.5-free"],
+  "agents_used": ["orchestrator", "fixer", "explorer"],
+  "tools_used": ["Read", "Edit", "Bash"],
+  "confidence": 0.85
+}
+```
+
+**Confidence scoring:**
+- 0.9-1.0: Clear success/failure, obvious patterns
+- 0.7-0.9: Likely outcome, patterns inferred from tool usage
+- 0.5-0.7: Uncertain outcome, limited evidence
+- <0.5: Skip or mark as "needs more evidence"
+
+### Storage and Caching
+
+Store session summaries in `~/.config/opencode/oh-my-opencode-slim/reflections/sessions/`.
+
+**Cache logic:**
+1. Check if `<session-id>.json` exists in reflections directory
+2. If yes, load it (saves tokens)
+3. If no, analyze session and save summary
+4. Aggregate across all summaries for final report
+
+### Aggregation
+
+After analyzing all sessions, aggregate findings:
+
+1. **Group by theme** — sessions with similar frictions cluster together
+2. **Count frequency** — "42/50 sessions had repeated grep before editing"
+3. **Rank by impact** — prioritize recommendations that appear most often
+4. **Filter noise** — skip one-off issues, focus on repeated patterns
+5. **Cross-reference** — see if patterns correlate with specific models, agents, or repos
+
+**Scope categories:**
+- **Global** — applies to all repos (pattern seen in >50% of repos)
+- **Cross-repo** — applies to specific repos where pattern appears
+- **Project-specific** — only relevant to one repo
+
+### Output Format
+
+Return a compact report with scope and confidence:
+
+```text
+Session Reflection Report
+Analyzing 50 most recent sessions across 8 repos.
+
+Repos analyzed:
+- <repo> (<N> sessions)
+- ... (M more)
+
+Findings
+- <pattern>: N/50 sessions across M repos.
+  - Scope: global | cross-repo (<repos>) | project-specific (<repo>)
+  - Confidence: 0.95
+  - Impact: High | Medium | Low
+
+Recommended changes
+- <asset>: <purpose>
+  - Scope: global | cross-repo (<repos>) | project-specific (<repo>)
+  - Confidence: 0.97
+  - Estimated time saved: High | Medium | Low
+
+Skipped
+- <candidate>: why not worth packaging now.
+  - Scope: <reason>
+  - Confidence: <score>
+
+Needs more evidence
+- <candidate>: what would make it actionable.
+  - Current scope: <what we've seen>
+  - Required scope: <what would confirm>
+```
+
+### Error Handling
+
+**Log file issues:**
+- Log doesn't exist → "No OpenCode log found at <path>. Run OpenCode in at least one repo first."
+- Log is empty → "OpenCode log is empty. No sessions to analyze."
+
+**Session loading issues:**
+- Session ID not loadable → Skip with warning: "Session <id> could not be loaded, skipping."
+- Session has no messages → Skip: "Session <id> has no messages."
+
+**Recovery pattern:**
+- Log the failure
+- Continue with remaining sessions
+- Report failures at end: "3 sessions skipped due to load errors"
 
 ## Core Contract
 
@@ -66,6 +197,8 @@ Reflect can be triggered directly:
 ```text
 /reflect
 /reflect release workflow and checks
+/reflect --sessions
+/reflect --sessions --last 100
 ```
 
 With no arguments, review recent work broadly. With arguments, focus the review

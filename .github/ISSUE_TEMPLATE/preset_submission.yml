@@ -1,0 +1,95 @@
+name: Community Preset Submission
+description: Submit a tested preset for review and inclusion in the Community Presets gallery.
+title: "[Preset] <preset-name>"
+labels:
+  - community-preset
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing your preset. We review submissions manually for clarity, validity, and usefulness.
+
+        To keep the gallery high quality, include all fields below and keep JSON code blocks valid.
+
+  - type: input
+    id: preset_name
+    attributes:
+      label: Preset name
+      description: A short, descriptive name for the preset.
+      placeholder: "high-recall-coding"
+    validations:
+      required: true
+
+  - type: input
+    id: github_username
+    attributes:
+      label: GitHub username
+      description: Submitter GitHub handle (without @).
+      placeholder: your-handle
+    validations:
+      required: true
+
+  - type: textarea
+    id: config_code
+    attributes:
+      label: Preset config (JSON/code)
+      description: Paste the preset config block exactly as you want it displayed.
+      render: json
+      placeholder: |
+        {
+          "presets": {
+            "your-preset-name": {
+              "orchestrator": { "model": "openai:gpt-4o" }
+            }
+          }
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: providers_models
+    attributes:
+      label: Supported providers and models
+      description: List provider IDs and models used (or recommended).
+      placeholder: |
+        - OpenAI: gpt-4o, gpt-4.1
+        - DeepSeek: deepseek-reasoner
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Intended use case
+      description: Explain the primary goal and when to use this preset.
+      placeholder: "Code review, long-context reasoning, low-cost brainstorming, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost_performance_notes
+    attributes:
+      label: Cost/performance notes
+      description: Share expectations, token cost behavior, latency, and quality tradeoffs.
+      placeholder: "Low cost at 8k context, good completion speed, higher latency under load."
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots_notes
+    attributes:
+      label: Screenshots / notes
+      description: Add screenshots, sample outputs, or extra notes to explain behavior.
+      placeholder: "Optional screenshot links, terminal traces, example prompts, caveats."
+      render: markdown
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: display_consent
+    attributes:
+      label: Display permission
+      description: Confirm you agree to have this preset displayed on the Community Presets page.
+      options:
+        - label: I confirm this preset can be shown publicly on oh-my-opencode-slim.com/community-presets.
+          required: true

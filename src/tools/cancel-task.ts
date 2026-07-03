@@ -61,9 +61,15 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         parentSessionID,
         requested,
         resolvedTaskID: job?.taskID,
-        alias: job?.alias,
-        state: job?.state,
-        terminalState: job?.terminalState,
+        alias: job
+          ? options.backgroundJobBoard.field(job.taskID, 'alias')
+          : undefined,
+        state: job
+          ? options.backgroundJobBoard.field(job.taskID, 'state')
+          : undefined,
+        terminalState: job
+          ? options.backgroundJobBoard.field(job.taskID, 'terminalState')
+          : undefined,
         cancellationRequested: job?.cancellationRequested,
       });
       if (!job) {
@@ -77,11 +83,13 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
           }
 
           const knownJob = options.backgroundJobBoard.get(requested);
-          if (knownJob && knownJob.parentSessionID !== parentSessionID) {
+          const ownerParentSessionID =
+            options.backgroundJobBoard.getParentSessionID(requested);
+          if (knownJob && ownerParentSessionID !== parentSessionID) {
             log('[cancel-task] rejected unowned tracked raw session', {
               parentSessionID,
               taskID: requested,
-              ownerParentSessionID: knownJob.parentSessionID,
+              ownerParentSessionID,
             });
             return unknownTaskOutput(
               requested,
@@ -119,9 +127,11 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         await abortAndVerifySession(options, job.taskID);
       } catch (error) {
         const stillRunning = error instanceof SessionStillRunningError;
+        const boardRunning = options.backgroundJobBoard.isRunning(job.taskID);
         log('[cancel-task] abort failed', {
           taskID: job.taskID,
           stillRunning,
+          boardRunning,
           error: error instanceof Error ? error.message : String(error),
         });
         options.backgroundJobBoard.updateStatus({
@@ -141,26 +151,29 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         ].join('\n');
       }
 
-      const cancelled = options.backgroundJobBoard.markCancelled(
+      options.backgroundJobBoard.markCancelled(
         job.taskID,
         args.reason,
         Date.now(),
         { force: true },
       );
+      const state = options.backgroundJobBoard.getState(job.taskID);
       log('[cancel-task] marked job cancelled after verified abort', {
         taskID: job.taskID,
-        alias: job.alias,
-        previousState: job.state,
-        state: cancelled?.state,
-        cancellationRequested: cancelled?.cancellationRequested,
+        alias: options.backgroundJobBoard.field(job.taskID, 'alias'),
+        state,
+        cancellationRequested: options.backgroundJobBoard.field(
+          job.taskID,
+          'cancellationRequested',
+        ),
       });
 
       return [
         `task_id: ${job.taskID}`,
-        `state: ${cancelled?.state ?? 'cancelled'}`,
+        `state: ${state ?? 'cancelled'}`,
         '',
         '<task_error>',
-        cancelled?.resultSummary ?? 'cancelled',
+        options.backgroundJobBoard.getResultSummary(job.taskID) ?? 'cancelled',
         '</task_error>',
       ].join('\n');
     },
@@ -257,12 +270,11 @@ async function abortAndVerifySession(
       stableStoppedForMs: stableStoppedSince
         ? Date.now() - stableStoppedSince
         : 0,
-      boardState: options.backgroundJobBoard.get(taskID)?.state,
-      boardLastLiveBusyAt:
-        options.backgroundJobBoard.get(taskID)?.lastLiveBusyAt,
+      boardState: options.backgroundJobBoard.getState(taskID),
+      boardLastLiveBusyAt: options.backgroundJobBoard.getLastLiveBusyAt(taskID),
     });
     const boardLastLiveBusyAt =
-      options.backgroundJobBoard.get(taskID)?.lastLiveBusyAt;
+      options.backgroundJobBoard.getLastLiveBusyAt(taskID);
     if (boardLastLiveBusyAt && boardLastLiveBusyAt >= abortStartedAt) {
       log('[cancel-task] abort verification saw board busy after abort', {
         taskID,
