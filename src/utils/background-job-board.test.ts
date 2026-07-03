@@ -605,6 +605,7 @@ describe('BackgroundJobBoard', () => {
     expect(updated).toMatchObject({
       state: 'running',
       timedOut: false,
+      recoverableAfterLiveBusy: true,
       statusUncertain: false,
       lastLiveBusyAt: 200,
       updatedAt: 200,
@@ -612,7 +613,7 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
-  test('resolves timed-out running jobs for safe recovery only', () => {
+  test('resolves timed-out running jobs only after live busy recovery', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -630,10 +631,18 @@ describe('BackgroundJobBoard', () => {
     ).toBeUndefined();
     expect(
       board.resolveRecoverable('parent-1', 'exp-1', 'explorer'),
+    ).toBeUndefined();
+
+    board.markRunningFromLiveSession('ses_1', 200);
+
+    expect(
+      board.resolveRecoverable('parent-1', 'exp-1', 'explorer'),
     ).toMatchObject({
       taskID: 'ses_1',
       state: 'running',
-      timedOut: true,
+      timedOut: false,
+      recoverableAfterLiveBusy: true,
+      lastLiveBusyAt: 200,
     });
     expect(
       board.resolveRecoverable('parent-1', 'exp-1', 'oracle'),

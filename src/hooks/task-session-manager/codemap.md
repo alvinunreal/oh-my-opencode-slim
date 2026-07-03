@@ -24,8 +24,10 @@ sessions by short aliases (`exp-1`, `ora-2`).
 ## Flow
 
 1. `tool.execute.before` receives `task` calls.
-2. `task.task_id` aliases resolve only to completed/reconciled jobs for the same
-   specialist; misses remove `task_id` to force fresh task creation.
+2. `task.task_id` aliases resolve to completed/reconciled jobs for the same
+   specialist, or to timed-out running jobs after a live busy signal confirms
+   they are safe to resume; misses remove `task_id` to force fresh task
+   creation.
 3. `tool.execute.after` registers launches and status transitions from native V2
    output; bare task IDs without state do not create reusable jobs.
 5. Read context from child sessions is attached to board records with line-count

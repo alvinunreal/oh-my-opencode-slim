@@ -454,12 +454,15 @@ describe('MultiplexerSessionManager', () => {
 
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
 
-      board.markRunningFromLiveSession('timedout-child', 200);
-      expect(board.get('timedout-child')).toMatchObject({
-        state: 'running',
-        timedOut: false,
-        lastLiveBusyAt: 200,
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'timedout-child',
+          status: { type: 'busy' },
+        },
       });
+
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
 
       board.updateStatus({
         taskID: 'timedout-child',

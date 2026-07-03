@@ -280,9 +280,10 @@ export class MultiplexerSessionManager {
     }
 
     if (statusType) {
-      this.deferredIdleCloses.delete(sessionId);
-
-      if (statusType !== 'busy') return;
+      if (statusType !== 'busy') {
+        this.deferredIdleCloses.delete(sessionId);
+        return;
+      }
 
       log('[multiplexer-session-manager] session busy event received', {
         instanceId: this.instanceId,

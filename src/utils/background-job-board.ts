@@ -17,6 +17,7 @@ export interface BackgroundJobRecord {
   objective?: string;
   state: BackgroundJobState;
   timedOut: boolean;
+  recoverableAfterLiveBusy: boolean;
   statusUncertain: boolean;
   cancellationRequested: boolean;
   terminalUnreconciled: boolean;
@@ -107,6 +108,7 @@ export class BackgroundJobBoard {
         objective: input.objective ?? existing.objective,
         state: 'running',
         timedOut: false,
+        recoverableAfterLiveBusy: false,
         statusUncertain: false,
         cancellationRequested: false,
         terminalUnreconciled: false,
@@ -131,6 +133,7 @@ export class BackgroundJobBoard {
       objective: input.objective,
       state: 'running',
       timedOut: false,
+      recoverableAfterLiveBusy: false,
       statusUncertain: false,
       cancellationRequested: false,
       terminalUnreconciled: false,
@@ -169,6 +172,12 @@ export class BackgroundJobBoard {
       ...existing,
       state: input.state,
       timedOut: input.timedOut ?? false,
+      recoverableAfterLiveBusy:
+        input.state !== 'running'
+          ? false
+          : input.timedOut === true
+            ? false
+            : existing.recoverableAfterLiveBusy,
       statusUncertain: input.statusUncertain ?? false,
       terminalUnreconciled: terminal ? true : existing.terminalUnreconciled,
       updatedAt: now,
@@ -221,6 +230,8 @@ export class BackgroundJobBoard {
       updatedAt: now,
       lastLiveBusyAt: now,
       timedOut: false,
+      recoverableAfterLiveBusy:
+        existing.recoverableAfterLiveBusy || existing.timedOut,
       statusUncertain: false,
     };
 
@@ -276,6 +287,7 @@ export class BackgroundJobBoard {
       ...existing,
       state: 'cancelled',
       timedOut: false,
+      recoverableAfterLiveBusy: false,
       statusUncertain: false,
       cancellationRequested: true,
       terminalUnreconciled: true,
@@ -324,7 +336,9 @@ export class BackgroundJobBoard {
     const job = this.resolve(parentSessionID, taskIDOrAlias);
     if (!job) return undefined;
     if (agent && job.agent !== agent) return undefined;
-    if (job.state !== 'running' || !job.timedOut) return undefined;
+    if (job.state !== 'running' || !job.recoverableAfterLiveBusy) {
+      return undefined;
+    }
     return job;
   }
 

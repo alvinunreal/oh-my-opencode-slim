@@ -207,7 +207,7 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('reuses timed-out running aliases for safe recovery', async () => {
+  test('reuses timed-out running aliases after live busy recovery', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -236,6 +236,20 @@ describe('task-session-manager hook', () => {
 
     expect(
       board.resolveRecoverable('parent-1', 'exp-1', 'explorer')?.taskID,
+    ).toBeUndefined();
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-1',
+          status: { type: 'busy' },
+        },
+      },
+    });
+
+    expect(
+      board.resolveRecoverable('parent-1', 'exp-1', 'explorer')?.taskID,
     ).toBe('child-1');
 
     const resume = {
@@ -249,8 +263,67 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('child-1');
     expect(board.get('child-1')).toMatchObject({
       state: 'running',
-      timedOut: true,
+      timedOut: false,
+      recoverableAfterLiveBusy: true,
     });
+  });
+
+  test('does not bypass live busy recovery gate for known raw session ids', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          description: 'map timed out session',
+        },
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        output: [
+          'task_id: ses_timeout',
+          'state: running',
+          '',
+          '<task_result>',
+          'Timed out after 120000ms while waiting for task completion.',
+          '</task_result>',
+        ].join('\n'),
+      },
+    );
+
+    const resumeBeforeLiveBusy = {
+      args: { subagent_type: 'explorer', task_id: 'ses_timeout' },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+      resumeBeforeLiveBusy,
+    );
+
+    expect(resumeBeforeLiveBusy.args.task_id).toBeUndefined();
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'ses_timeout',
+          status: { type: 'busy' },
+        },
+      },
+    });
+
+    const resumeAfterLiveBusy = {
+      args: { subagent_type: 'explorer', task_id: 'ses_timeout' },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume-2' },
+      resumeAfterLiveBusy,
+    );
+
+    expect(resumeAfterLiveBusy.args.task_id).toBe('ses_timeout');
   });
 
   test('busy timeout recovery clears timeout overlay from prompt', async () => {
@@ -299,6 +372,7 @@ describe('task-session-manager hook', () => {
     expect(board.get('child-1')).toMatchObject({
       state: 'running',
       timedOut: false,
+      recoverableAfterLiveBusy: true,
       statusUncertain: false,
     });
 
