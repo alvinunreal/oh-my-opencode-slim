@@ -838,6 +838,17 @@ export function syncBundledSkillsFromPackage(
               }
               continue;
             } else {
+              if (entry.stagedPath) {
+                removeManagedStagedPath(
+                  entry.stagedPath,
+                  manifestDir,
+                  skill.name,
+                );
+                delete entry.stagedPath;
+              }
+              const rawEntry = entry as unknown as Record<string, unknown>;
+              delete rawEntry.stagedVersion;
+              delete rawEntry.stagedHash;
               entry.status = 'deleted';
               entry.updatedAt = new Date().toISOString();
               log(
@@ -876,6 +887,9 @@ export function syncBundledSkillsFromPackage(
             if (destHash === entry.lastManagedHash) {
               if (destHash === sourceHash) {
                 entry.packageVersion = packageVersion;
+                entry.sourceHash = sourceHash;
+                entry.lastManagedHash = sourceHash;
+                entry.lastSeenHash = sourceHash;
                 entry.updatedAt = new Date().toISOString();
                 skippedExisting.push(skill.name);
               } else {

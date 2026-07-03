@@ -768,9 +768,9 @@ describe('syncBundledSkillsFromPackage', () => {
       `./skill-sync?test=${importCounter++}`
     );
     const hashVal = computeDirectoryHash(destSkillDir);
-    initialManifest.skills[skillName].sourceHash = hashVal;
+    initialManifest.skills[skillName].sourceHash = 'stale-source-hash';
     initialManifest.skills[skillName].lastManagedHash = hashVal;
-    initialManifest.skills[skillName].lastSeenHash = hashVal;
+    initialManifest.skills[skillName].lastSeenHash = 'stale-seen-hash';
 
     fs.writeFileSync(manifestPath, JSON.stringify(initialManifest, null, 2));
 
@@ -785,6 +785,9 @@ describe('syncBundledSkillsFromPackage', () => {
     expect(result.skippedExisting).toContain(skillName);
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
     expect(manifest.skills[skillName].packageVersion).toBe('1.2.3');
+    expect(manifest.skills[skillName].sourceHash).toBe(hashVal);
+    expect(manifest.skills[skillName].lastManagedHash).toBe(hashVal);
+    expect(manifest.skills[skillName].lastSeenHash).toBe(hashVal);
     expect(manifest.skills[skillName].updatedAt).not.toBe(originalTime);
   });
 
@@ -1119,6 +1122,57 @@ describe('syncBundledSkillsFromPackage', () => {
 
     expect(fs.existsSync(lockDir)).toBe(true);
     expect(fs.existsSync(path.join(lockDir, 'owner.json'))).toBe(true);
+  });
+
+  test('customized to deleted transition: removes staged directory and metadata', async () => {
+    const skillName = 'customized-deleted-skill';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Source');
+
+    const manifestDir = path.join(fakeDestConfigDir, '.oh-my-opencode-slim');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifestPath = path.join(manifestDir, 'skills-manifest.json');
+
+    // Create a mock staged directory for this customized skill
+    const stagedDir = path.join(
+      manifestDir,
+      'skill-updates',
+      '1.0.0',
+      skillName,
+    );
+    fs.mkdirSync(stagedDir, { recursive: true });
+    fs.writeFileSync(path.join(stagedDir, 'SKILL.md'), '# Staged Update');
+
+    const initialManifest = {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      skills: {
+        [skillName]: {
+          status: 'customized',
+          packageVersion: '1.0.0',
+          sourceHash: 'old-source-hash',
+          lastManagedHash: 'old-managed-hash',
+          lastSeenHash: 'user-custom-hash',
+          stagedPath: stagedDir,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(initialManifest, null, 2));
+
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot);
+
+    expect(result.skippedExisting).toContain(skillName);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    const entry = manifest.skills[skillName];
+    expect(entry.status).toBe('deleted');
+    expect(entry.stagedPath).toBeUndefined();
+    expect((entry as any).stagedVersion).toBeUndefined();
+    expect((entry as any).stagedHash).toBeUndefined();
+
+    // The staged directory on-disk must be deleted successfully!
+    expect(fs.existsSync(stagedDir)).toBe(false);
   });
 
   test('crash safe recovery: recovers backup directory when destination directory is missing', async () => {
