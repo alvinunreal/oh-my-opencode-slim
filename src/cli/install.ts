@@ -422,14 +422,22 @@ async function runInstall(config: InstallConfig): Promise<number> {
       try {
         const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
         const result = syncBundledSkillsFromPackage(packageRoot);
+        const categorizedSkipped = new Set([
+          ...result.staged,
+          ...result.adopted,
+          ...result.customized,
+        ]);
+        const preservedSkills = result.skippedExisting.filter(
+          (skill) => !categorizedSkipped.has(skill),
+        );
 
         if (result.installed.length > 0) {
           for (const skill of result.installed) {
             printSuccess(`Installed/Updated: ${skill}`);
           }
         }
-        if (result.skippedExisting.length > 0) {
-          for (const skill of result.skippedExisting) {
+        if (preservedSkills.length > 0) {
+          for (const skill of preservedSkills) {
             printInfo(`Skipped/Preserved: ${skill}`);
           }
         }
@@ -466,7 +474,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
         printSuccess(
           `Skill synchronization complete: ` +
             `${result.installed.length} installed/updated, ` +
-            `${result.skippedExisting.length} skipped/preserved, ` +
+            `${preservedSkills.length} skipped/preserved, ` +
             `${realFailed.length} failed.`,
         );
       } catch (err) {

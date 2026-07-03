@@ -43,6 +43,7 @@ const originalManualBackgroundSubagentsInstructions =
 const originalGetExistingLiteConfigPath = actualPaths.getExistingLiteConfigPath;
 
 let importCounter = 0;
+let mockSkippedResult: string[] = [];
 let mockFailedResult: string[] = [];
 let mockStagedResult: string[] = [];
 let mockAdoptedResult: string[] = [];
@@ -56,7 +57,7 @@ mock.module('../hooks/auto-update-checker/skill-sync', () => {
       enableInstallMocks
         ? {
             installed: [],
-            skippedExisting: [],
+            skippedExisting: mockSkippedResult,
             failed: mockFailedResult,
             staged: mockStagedResult,
             adopted: mockAdoptedResult,
@@ -191,6 +192,7 @@ describe('install skill synchronization error mapping', () => {
 
   beforeEach(() => {
     enableInstallMocks = true;
+    mockSkippedResult = [];
     mockFailedResult = [];
     mockStagedResult = [];
     mockAdoptedResult = [];
@@ -340,5 +342,42 @@ describe('install skill synchronization error mapping', () => {
         msg?.includes('Customized: customized-skill'),
       ),
     ).toBe(true);
+  });
+
+  test('does not double-print categorized skipped skills', async () => {
+    mockSkippedResult = ['staged-skill', 'adopted-skill', 'customized-skill'];
+    mockStagedResult = ['staged-skill'];
+    mockAdoptedResult = ['adopted-skill'];
+    mockCustomizedResult = ['customized-skill'];
+    const { install } = await import(`./install?test=${importCounter++}`);
+
+    await install({
+      skills: 'yes',
+      tui: false,
+      companion: 'no',
+    });
+
+    const calls = logSpy.mock.calls.map((call: any[]) => call[0] as string);
+    expect(
+      calls.some((msg: string) =>
+        msg?.includes('Skipped/Preserved: staged-skill'),
+      ),
+    ).toBe(false);
+    expect(
+      calls.some((msg: string) =>
+        msg?.includes('Skipped/Preserved: adopted-skill'),
+      ),
+    ).toBe(false);
+    expect(
+      calls.some((msg: string) =>
+        msg?.includes('Skipped/Preserved: customized-skill'),
+      ),
+    ).toBe(false);
+
+    const summaryMsg = calls.find((msg: string) =>
+      msg?.includes('Skill synchronization complete'),
+    );
+    expect(summaryMsg).toBeDefined();
+    expect(summaryMsg).toContain('0 skipped/preserved');
   });
 });
