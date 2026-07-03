@@ -299,6 +299,7 @@ describe('auto-update-checker/index', () => {
       skippedExisting: [],
       failed: [],
       staged: ['worktrees'],
+      adopted: [],
       customized: ['my-custom-skill'],
     }));
 
@@ -729,6 +730,7 @@ describe('auto-update-checker/index', () => {
       skippedExisting: [],
       failed: [],
       staged: ['reflect'],
+      adopted: [],
       customized: ['my-custom-skill'],
     }));
 
