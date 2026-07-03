@@ -26,6 +26,9 @@ const skillSyncMocks = {
     installed: [],
     skippedExisting: [],
     failed: [],
+    staged: [],
+    adopted: [],
+    customized: [],
   })),
 };
 

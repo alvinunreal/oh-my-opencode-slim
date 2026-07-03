@@ -709,6 +709,10 @@ export function syncBundledSkillsFromPackage(
           );
           skippedExisting.push(skill.name);
           const sourceHash = computeDirectoryHash(sourcePath);
+          const entry = manifest.skills[skill.name];
+          if (entry?.stagedPath) {
+            removeManagedStagedPath(entry.stagedPath, manifestDir, skill.name);
+          }
           manifest.skills[skill.name] = {
             status: 'conflict',
             packageVersion,
@@ -1086,6 +1090,13 @@ export function syncBundledSkillsFromPackage(
             }
           } else if (entry.status === 'conflict') {
             if (destHash === sourceHash) {
+              if (entry.stagedPath) {
+                removeManagedStagedPath(
+                  entry.stagedPath,
+                  manifestDir,
+                  skill.name,
+                );
+              }
               entry.status = 'managed';
               entry.packageVersion = packageVersion;
               entry.sourceHash = sourceHash;

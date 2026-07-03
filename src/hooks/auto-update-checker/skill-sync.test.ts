@@ -545,6 +545,109 @@ describe('syncBundledSkillsFromPackage', () => {
     );
   });
 
+  test('conflict recovery deletes staged directory when adopted back as managed', async () => {
+    const skillName = 'conflict-adopt-skill';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Bundle Content');
+
+    const manifestDir = path.join(fakeDestConfigDir, '.oh-my-opencode-slim');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifestPath = path.join(manifestDir, 'skills-manifest.json');
+
+    const stagedDir = path.join(
+      manifestDir,
+      'skill-updates',
+      '1.0.0',
+      skillName,
+    );
+    fs.mkdirSync(stagedDir, { recursive: true });
+    fs.writeFileSync(path.join(stagedDir, 'SKILL.md'), '# Staged');
+
+    const initialManifest = {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      skills: {
+        [skillName]: {
+          status: 'conflict',
+          packageVersion: '1.0.0',
+          sourceHash: 'old-source-hash',
+          lastManagedHash: 'old-managed-hash',
+          lastSeenHash: 'old-seen-hash',
+          stagedPath: stagedDir,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(initialManifest, null, 2));
+
+    const destSkillsDir = path.join(fakeDestConfigDir, 'skills');
+    fs.mkdirSync(destSkillsDir, { recursive: true });
+    // Destination matches the incoming source content exactly
+    const destSkillDir = path.join(destSkillsDir, skillName);
+    fs.mkdirSync(destSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(destSkillDir, 'SKILL.md'), '# Bundle Content');
+
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot);
+
+    expect(result.adopted).toContain(skillName);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    expect(manifest.skills[skillName].status).toBe('managed');
+    expect(manifest.skills[skillName].stagedPath).toBeUndefined();
+    expect(fs.existsSync(stagedDir)).toBe(false);
+  });
+
+  test('conflict overwrite deletes staged directory when destination becomes a non-directory file/symlink', async () => {
+    const skillName = 'conflict-file-overwrite-skill';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Bundle Content');
+
+    const manifestDir = path.join(fakeDestConfigDir, '.oh-my-opencode-slim');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifestPath = path.join(manifestDir, 'skills-manifest.json');
+
+    const stagedDir = path.join(
+      manifestDir,
+      'skill-updates',
+      '1.0.0',
+      skillName,
+    );
+    fs.mkdirSync(stagedDir, { recursive: true });
+    fs.writeFileSync(path.join(stagedDir, 'SKILL.md'), '# Staged');
+
+    const initialManifest = {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      skills: {
+        [skillName]: {
+          status: 'customized',
+          packageVersion: '1.0.0',
+          sourceHash: 'old-source-hash',
+          lastManagedHash: 'old-managed-hash',
+          lastSeenHash: 'old-seen-hash',
+          stagedPath: stagedDir,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(initialManifest, null, 2));
+
+    const destSkillsDir = path.join(fakeDestConfigDir, 'skills');
+    fs.mkdirSync(destSkillsDir, { recursive: true });
+    // Destination is a file (conflict)
+    const destSkillPath = path.join(destSkillsDir, skillName);
+    fs.writeFileSync(destSkillPath, 'some conflict file');
+
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot);
+
+    expect(result.skippedExisting).toContain(skillName);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    expect(manifest.skills[skillName].status).toBe('conflict');
+    expect(manifest.skills[skillName].stagedPath).toBeUndefined();
+    expect(fs.existsSync(stagedDir)).toBe(false);
+  });
+
   test('fails closed (only installs missing) when manifest validation fails (schemaVersion mismatch)', async () => {
     const missingSkill = 'missing-skill';
     const existingSkill = 'existing-skill';
