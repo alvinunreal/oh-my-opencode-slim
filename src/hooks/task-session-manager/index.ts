@@ -151,6 +151,7 @@ export function createTaskSessionManagerHook(
     readContextMinLines?: number;
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobBoard;
+    managedTaskSessionIDs?: Set<string>;
     shouldManageSession: (sessionID: string) => boolean;
   },
 ) {
@@ -721,6 +722,7 @@ export function createTaskSessionManagerHook(
           options.shouldManageSession(info.parentID)
         ) {
           pendingManagedTaskIds.add(info.id);
+          options.managedTaskSessionIDs?.add(info.id);
         }
         return;
       }
@@ -830,11 +832,16 @@ export function createTaskSessionManagerHook(
         },
       );
 
+      const childJobs = backgroundJobBoard.list(sessionId);
       backgroundJobBoard.drop(sessionId);
       backgroundJobBoard.clearParent(sessionId);
       terminalJobsInjectedByParent.delete(sessionId);
       contextByTask.delete(sessionId);
       pendingManagedTaskIds.delete(sessionId);
+      options.managedTaskSessionIDs?.delete(sessionId);
+      for (const childJob of childJobs) {
+        options.managedTaskSessionIDs?.delete(childJob.taskID);
+      }
       pruneContext();
 
       for (const [callId, pending] of pendingCalls.entries()) {
