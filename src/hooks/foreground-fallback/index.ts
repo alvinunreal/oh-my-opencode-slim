@@ -74,46 +74,6 @@ export function isRateLimitError(error: unknown): boolean {
 const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
 
-/**
- * Extract a preview of the error field from event properties for diagnostic logging.
- * Handles the different event shapes: session.error, message.updated, session.status.
- */
-function extractErrorPreview(properties: unknown): string | undefined {
-  const p = properties as Record<string, unknown> | undefined;
-  if (!p) return undefined;
-
-  // session.error: { error: ApiError|... }
-  const err = p.error as Record<string, unknown> | undefined;
-  if (err) {
-    const msg =
-      (err.message as string) ??
-      ((err.data as Record<string, unknown> | undefined)?.message as
-        | string
-        | undefined);
-    return msg ?? `[${err.name ?? 'unknown error type'}]`;
-  }
-
-  // message.updated: { info: { error: ... } }
-  const info = p.info as Record<string, unknown> | undefined;
-  if (info?.error) {
-    const infoErr = info.error as Record<string, unknown>;
-    const msg =
-      (infoErr.message as string) ??
-      ((infoErr.data as Record<string, unknown> | undefined)?.message as
-        | string
-        | undefined);
-    return msg ?? `[${infoErr.name ?? 'unknown error type'}]`;
-  }
-
-  // session.status: { status: { message } }
-  const status = p.status as Record<string, unknown> | undefined;
-  if (status?.message) {
-    return status.message as string;
-  }
-
-  return undefined;
-}
-
 // ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
@@ -159,22 +119,6 @@ export class ForegroundFallbackManager {
     if (!this.enabled) return;
     const event = rawEvent as { type: string; properties?: unknown };
     if (!event?.type) return;
-
-    // Diagnostic: log every event reaching the fallback manager
-    {
-      const p = event.properties as Record<string, unknown> | undefined;
-      const sid =
-        (p?.sessionID as string | undefined) ??
-        ((p?.info as Record<string, unknown> | undefined)?.sessionID as
-          | string
-          | undefined);
-      const hasError = extractErrorPreview(event.properties);
-      log('[foreground-fallback] event', {
-        type: event.type,
-        sessionID: sid,
-        error: hasError,
-      });
-    }
 
     switch (event.type) {
       case 'message.updated': {
@@ -284,11 +228,6 @@ export class ForegroundFallbackManager {
   // ---------------------------------------------------------------------------
 
   private async tryFallback(sessionID: string): Promise<void> {
-    log('[foreground-fallback] tryFallback', {
-      sessionID,
-      inProgress: this.inProgress.has(sessionID),
-      dedupMs: Date.now() - (this.lastTrigger.get(sessionID) ?? 0),
-    });
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
 

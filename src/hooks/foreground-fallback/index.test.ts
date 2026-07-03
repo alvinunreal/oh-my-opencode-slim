@@ -600,13 +600,13 @@ describe('ForegroundFallbackManager deduplication', () => {
     });
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call1 = mocks.promptAsync.mock.calls[0] as [
-      {
-        body: { model: { providerID: string; modelID: string } };
-      },
-    ];
-    expect(call1[0].body.model.providerID).toBe('openai');
-    expect(call1[0].body.model.modelID).toBe('gpt-4o');
+    expect(mocks.promptAsync.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'openai', modelID: 'gpt-4o' },
+        }),
+      }),
+    );
 
     // Second error — model B also fails within the 5s dedup window.
     // This is a DIFFERENT incident (new model), so it should NOT be deduped
@@ -623,13 +623,13 @@ describe('ForegroundFallbackManager deduplication', () => {
     // 5-second dedup window, because the lastTrigger was reset after the
     // successful model switch.
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
-    const call2 = mocks.promptAsync.mock.calls[1] as [
-      {
-        body: { model: { providerID: string; modelID: string } };
-      },
-    ];
-    expect(call2[0].body.model.providerID).toBe('google');
-    expect(call2[0].body.model.modelID).toBe('gemini-2.5-pro');
+    expect(mocks.promptAsync.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'google', modelID: 'gemini-2.5-pro' },
+        }),
+      }),
+    );
   });
 });
 
