@@ -390,6 +390,26 @@ function atomicReplaceDir(sourceDir: string, destDir: string): void {
 }
 
 /**
+ * Verifies if an entry matches .backup-${skillName}-${uniqueSuffix} or .staging-${skillName}-${uniqueSuffix}.
+ */
+function matchesArtifactPattern(
+  entry: string,
+  prefix: string,
+  skillName: string,
+): boolean {
+  if (!entry.startsWith(prefix)) return false;
+  const rest = entry.slice(prefix.length);
+  if (!rest.startsWith(`${skillName}-`)) return false;
+
+  const suffix = rest.slice(skillName.length + 1);
+  const firstPart = suffix.split('-')[0];
+  const timestamp = Number(firstPart);
+  if (Number.isNaN(timestamp) || timestamp <= 0) return false;
+
+  return true;
+}
+
+/**
  * Recovers orphan .backup-* and .staging-* directories.
  * Returns true if any were found.
  */
@@ -411,10 +431,10 @@ function recoverOrphanArtifacts(
   const stagings: string[] = [];
 
   for (const entry of entries) {
-    if (entry.startsWith(`.backup-${skillName}-`)) {
+    if (matchesArtifactPattern(entry, '.backup-', skillName)) {
       backups.push(path.join(destSkillsDir, entry));
       hadArtifacts = true;
-    } else if (entry.startsWith(`.staging-${skillName}-`)) {
+    } else if (matchesArtifactPattern(entry, '.staging-', skillName)) {
       stagings.push(path.join(destSkillsDir, entry));
       hadArtifacts = true;
     }
@@ -670,17 +690,15 @@ export function syncBundledSkillsFromPackage(
             `[skill-sync] Skill ${skill.name} destination is a file or symlink (conflict). Skipping.`,
           );
           skippedExisting.push(skill.name);
-          if (!isManifestCorrupt) {
-            const sourceHash = computeDirectoryHash(sourcePath);
-            manifest.skills[skill.name] = {
-              status: 'conflict',
-              packageVersion,
-              sourceHash,
-              lastManagedHash: '',
-              lastSeenHash: '',
-              updatedAt: new Date().toISOString(),
-            };
-          }
+          const sourceHash = computeDirectoryHash(sourcePath);
+          manifest.skills[skill.name] = {
+            status: 'conflict',
+            packageVersion,
+            sourceHash,
+            lastManagedHash: '',
+            lastSeenHash: '',
+            updatedAt: new Date().toISOString(),
+          };
           continue;
         }
 
@@ -691,6 +709,14 @@ export function syncBundledSkillsFromPackage(
             try {
               atomicReplaceDir(sourcePath, destPath);
               installed.push(skill.name);
+              manifest.skills[skill.name] = {
+                status: 'managed',
+                packageVersion,
+                sourceHash,
+                lastManagedHash: sourceHash,
+                lastSeenHash: sourceHash,
+                updatedAt: new Date().toISOString(),
+              };
             } catch (err) {
               log(
                 `[skill-sync] Failed to install missing skill ${skill.name} (corrupt manifest mode):`,
@@ -703,6 +729,26 @@ export function syncBundledSkillsFromPackage(
               `[skill-sync] Skipping existing skill ${skill.name} because manifest is corrupt.`,
             );
             skippedExisting.push(skill.name);
+            const destHash = computeDirectoryHash(destPath);
+            if (destHash === sourceHash) {
+              manifest.skills[skill.name] = {
+                status: 'managed',
+                packageVersion,
+                sourceHash,
+                lastManagedHash: sourceHash,
+                lastSeenHash: sourceHash,
+                updatedAt: new Date().toISOString(),
+              };
+            } else {
+              manifest.skills[skill.name] = {
+                status: 'customized',
+                packageVersion,
+                sourceHash,
+                lastManagedHash: '',
+                lastSeenHash: destHash,
+                updatedAt: new Date().toISOString(),
+              };
+            }
           }
           continue;
         }
@@ -935,6 +981,8 @@ export function syncBundledSkillsFromPackage(
               );
             } else {
               entry.status = 'customized';
+              entry.packageVersion = packageVersion;
+              entry.sourceHash = sourceHash;
               entry.lastSeenHash = destHash;
               entry.updatedAt = new Date().toISOString();
               skippedExisting.push(skill.name);
@@ -1028,25 +1076,23 @@ export function syncBundledSkillsFromPackage(
     }
 
     let manifestWriteFailed = false;
-    if (!isManifestCorrupt) {
-      manifest.updatedAt = new Date().toISOString();
-      const tempManifestPath = `${manifestPath}.${Math.random().toString(36).slice(2, 9)}.tmp`;
+    manifest.updatedAt = new Date().toISOString();
+    const tempManifestPath = `${manifestPath}.${Math.random().toString(36).slice(2, 9)}.tmp`;
+    try {
+      fs.writeFileSync(
+        tempManifestPath,
+        JSON.stringify(manifest, null, 2),
+        'utf-8',
+      );
+      fs.renameSync(tempManifestPath, manifestPath);
+    } catch (err) {
+      log('[skill-sync] Failed to write skills manifest atomically:', err);
+      manifestWriteFailed = true;
       try {
-        fs.writeFileSync(
-          tempManifestPath,
-          JSON.stringify(manifest, null, 2),
-          'utf-8',
-        );
-        fs.renameSync(tempManifestPath, manifestPath);
-      } catch (err) {
-        log('[skill-sync] Failed to write skills manifest atomically:', err);
-        manifestWriteFailed = true;
-        try {
-          if (fs.existsSync(tempManifestPath)) {
-            fs.unlinkSync(tempManifestPath);
-          }
-        } catch {}
-      }
+        if (fs.existsSync(tempManifestPath)) {
+          fs.unlinkSync(tempManifestPath);
+        }
+      } catch {}
     }
 
     if (manifestWriteFailed) {

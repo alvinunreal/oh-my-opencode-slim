@@ -457,7 +457,10 @@ describe('syncBundledSkillsFromPackage', () => {
       fs.readFileSync(path.join(destExistingDir, 'SKILL.md'), 'utf-8'),
     ).toBe('# Existing Dest Original');
 
-    expect(fs.readFileSync(manifestPath, 'utf-8')).toBe('{ corrupt json here');
+    const manifestParsed = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    expect(manifestParsed.schemaVersion).toBe(1);
+    expect(manifestParsed.skills[missingSkill].status).toBe('managed');
+    expect(manifestParsed.skills[existingSkill].status).toBe('customized');
   });
 
   test('prevents reinstall when manifest indicates skill was deleted by user', async () => {
@@ -783,6 +786,132 @@ describe('syncBundledSkillsFromPackage', () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
     expect(manifest.skills[skillName].packageVersion).toBe('1.2.3');
     expect(manifest.skills[skillName].updatedAt).not.toBe(originalTime);
+  });
+
+  test('deleted to customized: refreshes packageVersion and sourceHash', async () => {
+    const skillName = 'recreated-custom-skill';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillSrcDir, 'SKILL.md'),
+      '# Current Bundled Content',
+    );
+
+    const manifestDir = path.join(fakeDestConfigDir, '.oh-my-opencode-slim');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifestPath = path.join(manifestDir, 'skills-manifest.json');
+
+    const initialManifest = {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      skills: {
+        [skillName]: {
+          status: 'deleted',
+          packageVersion: '1.0.0',
+          sourceHash: 'old-source-hash',
+          lastManagedHash: 'old-managed-hash',
+          lastSeenHash: '',
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(initialManifest, null, 2));
+
+    // Create the destination but with customized content (doesn't match current source)
+    const destSkillsDir = path.join(fakeDestConfigDir, 'skills');
+    fs.mkdirSync(destSkillsDir, { recursive: true });
+    const destSkillDir = path.join(destSkillsDir, skillName);
+    fs.mkdirSync(destSkillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(destSkillDir, 'SKILL.md'),
+      '# Customized Content',
+    );
+
+    // Mock version in package.json
+    fs.writeFileSync(
+      path.join(fakePackageRoot, 'package.json'),
+      JSON.stringify({ version: '1.2.3' }),
+    );
+
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot);
+
+    expect(result.skippedExisting).toContain(skillName);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    expect(manifest.skills[skillName].status).toBe('customized');
+    expect(manifest.skills[skillName].packageVersion).toBe('1.2.3');
+    // Content hash of current source from fakePackageRoot
+    const { computeDirectoryHash } = await import(
+      `./skill-sync?test=${importCounter++}`
+    );
+    expect(manifest.skills[skillName].sourceHash).toBe(
+      computeDirectoryHash(skillSrcDir),
+    );
+  });
+
+  test('orphan artifact matching: avoids prefix collisions', async () => {
+    const skillName = 'foo';
+    const otherSkill = 'foo-bar';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Foo Content');
+
+    const destSkillsDir = path.join(fakeDestConfigDir, 'skills');
+    fs.mkdirSync(destSkillsDir, { recursive: true });
+
+    // Staging and backup folders for foo-bar
+    const otherBackup = path.join(
+      destSkillsDir,
+      `.backup-${otherSkill}-1700000000000-asdfasd`,
+    );
+    fs.mkdirSync(otherBackup, { recursive: true });
+    fs.writeFileSync(path.join(otherBackup, 'SKILL.md'), '# Foo Bar Backup');
+
+    // Run sync for foo. Because foo is missing at dest, it would normally trigger orphan recovery.
+    // If it is prefix-collision matching, it would match foo-bar backup and restore it!
+    // But with our delimiter-safe matching, it should ignore foreign backups of foo-bar and install foo fresh.
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot);
+
+    expect(result.installed).toContain(skillName);
+    expect(fs.existsSync(path.join(destSkillsDir, skillName))).toBe(true);
+    expect(
+      fs.readFileSync(path.join(destSkillsDir, skillName, 'SKILL.md'), 'utf-8'),
+    ).toBe('# Foo Content');
+    // foo-bar's backup folder must STILL exist and NOT be deleted or recovered
+    expect(fs.existsSync(otherBackup)).toBe(true);
+  });
+
+  test('corrupt manifest recovery: conservative reconciliation and writing fresh manifest', async () => {
+    const skillName = 'reconciliation-skill';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Bundled Content');
+
+    const manifestDir = path.join(fakeDestConfigDir, '.oh-my-opencode-slim');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifestPath = path.join(manifestDir, 'skills-manifest.json');
+    // Write corrupt manifest content
+    fs.writeFileSync(manifestPath, '{ corrupt json...', 'utf-8');
+
+    // Write mock package.json version
+    fs.writeFileSync(
+      path.join(fakePackageRoot, 'package.json'),
+      JSON.stringify({ version: '1.2.3' }),
+    );
+
+    // Call sync. It should notice it is corrupt, do conservative reconciliation, and replace the corrupt manifest.
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot);
+
+    // Since destination didn't exist, it should install it
+    expect(result.installed).toContain(skillName);
+
+    // The manifest should be successfully reconciled and written as valid JSON
+    expect(fs.existsSync(manifestPath)).toBe(true);
+    const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
+    expect(manifestContent).not.toContain('corrupt json');
+    const parsed = JSON.parse(manifestContent);
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.skills[skillName].status).toBe('managed');
+    expect(parsed.skills[skillName].packageVersion).toBe('1.2.3');
   });
 
   test('staged path safety: does not delete staging directories outside managed root', async () => {
