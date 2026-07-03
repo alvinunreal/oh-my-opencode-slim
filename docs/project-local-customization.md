@@ -4,8 +4,8 @@ This document describes how to configure and customize oh-my-opencode-slim on a 
 
 ## Security & Trust Boundary Warning
 
-> ⚠️ **IMPORTANT SECURITY NOTICE**  
-> Because project-local configuration files (`.opencode/oh-my-opencode-slim.jsonc`) and prompt templates (`.opencode/oh-my-opencode-slim/`) are loaded automatically when you open and work in a project directory, they can modify agent behaviors, enable/disable tools, and grant extra model access permissions.  
+> ⚠️ **IMPORTANT SECURITY NOTICE**
+> Because project-local configuration files (`.opencode/oh-my-opencode-slim.jsonc`) and prompt templates (`.opencode/oh-my-opencode-slim/`) are loaded automatically when you open and work in a project directory, they can modify agent behaviors, enable/disable tools, and grant extra model access permissions.
 > **Only work in and run OpenCode within repositories you explicitly trust.**
 
 ---
@@ -30,7 +30,7 @@ This document describes how to configure and customize oh-my-opencode-slim on a 
 When oh-my-opencode-slim loads, it resolves configuration properties and prompt templates across multiple layers. The inheritance precedence operates strictly as follows:
 
 ```
-[Built-in Defaults] 
+[Built-in Defaults]
        ↓ (overridden by)
 [User Config] (global)
        ↓ (overridden by)
@@ -52,13 +52,13 @@ The root `agents.*` configuration (defined at the top level of user or project c
 
 When looking up markdown prompt template files (such as `<agent>.md` or `<agent>_append.md`), oh-my-opencode-slim searches directories in a strict hierarchical order. Precedence is evaluated for the replacement prompt file and the append prompt file **independently** in the following sequence:
 
-1. **Project Preset Directory**  
+1. **Project Preset Directory**
    `<project>/.opencode/oh-my-opencode-slim/<preset>/<agent>.md` (if preset is active and safe)
-2. **Project Root Directory**  
+2. **Project Root Directory**
    `<project>/.opencode/oh-my-opencode-slim/<agent>.md`
-3. **User Preset Directory (Global)**  
+3. **User Preset Directory (Global)**
    `<user-config-dir>/oh-my-opencode-slim/<preset>/<agent>.md`
-4. **User Root Directory (Global)**  
+4. **User Root Directory (Global)**
    `<user-config-dir>/oh-my-opencode-slim/<agent>.md`
 
 ---

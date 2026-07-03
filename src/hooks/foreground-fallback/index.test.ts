@@ -89,11 +89,14 @@ describe('isRateLimitError', () => {
     expect(isRateLimitError({ message: 'Insufficient balance.' })).toBe(true);
   });
 
+  test('returns true for "Service Unavailable"', () => {
+    expect(isRateLimitError({ message: 'Service Unavailable' })).toBe(true);
+  });
+
   test('returns true for "Monthly usage limit reached"', () => {
     expect(
       isRateLimitError({
-        message:
-          'Monthly usage limit reached. Resets in X days.',
+        message: 'Monthly usage limit reached. Resets in X days.',
       }),
     ).toBe(true);
   });
@@ -101,8 +104,7 @@ describe('isRateLimitError', () => {
   test('returns true for "5-hour usage limit reached"', () => {
     expect(
       isRateLimitError({
-        message:
-          '5-hour usage limit reached. Resets in 36min.',
+        message: '5-hour usage limit reached. Resets in 36min.',
       }),
     ).toBe(true);
   });
@@ -110,8 +112,7 @@ describe('isRateLimitError', () => {
   test('returns true for "Weekly usage limit reached"', () => {
     expect(
       isRateLimitError({
-        message:
-          'Weekly usage limit reached. Resets in 2 days.',
+        message: 'Weekly usage limit reached. Resets in 2 days.',
       }),
     ).toBe(true);
   });
