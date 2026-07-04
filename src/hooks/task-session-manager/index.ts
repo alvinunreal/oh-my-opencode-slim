@@ -36,6 +36,9 @@ const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;
 const RAW_SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_-]+$/;
 
+/** Delay before reconciling idle sessions — gives late injected completions time to arrive. */
+const IDLE_RECONCILE_DELAY_MS = 2_000;
+
 function djb2Hash(str: string): string {
   let hash = 5381;
   for (let i = 0; i < str.length; i++) {
@@ -100,6 +103,10 @@ export function createTaskSessionManagerHook(
   const processedInjectedCompletions = new Set<string>();
   const processedInjectedCompletionOrder: string[] = [];
   const terminalJobsInjectedByParent = new Map<string, Set<string>>();
+  const pendingReconciliations = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   function updateBackgroundJobFromOutput(
     output: unknown,
@@ -272,6 +279,14 @@ export function createTaskSessionManagerHook(
       existing.add(taskID);
     }
     terminalJobsInjectedByParent.set(parentSessionID, existing);
+  }
+
+  function cancelPendingReconciliation(sessionId: string): void {
+    const pending = pendingReconciliations.get(sessionId);
+    if (pending) {
+      clearTimeout(pending);
+      pendingReconciliations.delete(sessionId);
+    }
   }
 
   function reconcileInjectedTerminalJobs(parentSessionID: string): void {
@@ -584,7 +599,14 @@ export function createTaskSessionManagerHook(
             : 0,
         });
         if (sessionId && options.shouldManageSession(sessionId)) {
-          reconcileInjectedTerminalJobs(sessionId);
+          cancelPendingReconciliation(sessionId);
+          pendingReconciliations.set(
+            sessionId,
+            setTimeout(() => {
+              pendingReconciliations.delete(sessionId);
+              reconcileInjectedTerminalJobs(sessionId);
+            }, IDLE_RECONCILE_DELAY_MS),
+          );
         }
         return;
       }
@@ -593,6 +615,8 @@ export function createTaskSessionManagerHook(
         const sessionId =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
         if (sessionId && options.shouldManageSession(sessionId)) {
+          cancelPendingReconciliation(sessionId);
+
           // Only clear injected terminal jobs for fatal errors.
           // Rate-limit errors are recovered by ForegroundFallbackManager
           // (abort + reprompt with fallback model); clearing the injected
@@ -616,6 +640,7 @@ export function createTaskSessionManagerHook(
       ) {
         const sessionId =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
+        if (sessionId) cancelPendingReconciliation(sessionId);
         const before = sessionId
           ? backgroundJobBoard.get(sessionId)
           : undefined;
@@ -651,6 +676,8 @@ export function createTaskSessionManagerHook(
       const sessionId =
         input.event.properties?.info?.id ?? input.event.properties?.sessionID;
       if (!sessionId) return;
+
+      cancelPendingReconciliation(sessionId);
 
       log(
         '[task-session-manager] session.deleted observed; clearing job state',
