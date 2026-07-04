@@ -84,6 +84,12 @@ export function createTaskSessionManagerHook(
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobBoard;
     shouldManageSession: (sessionID: string) => boolean;
+    /** Optional guard: when provided, idle events for a session that is
+     *  currently undergoing a foreground-fallback abort/re-prompt cycle
+     *  will NOT trigger idle reconciliation. Prevents marking a still-
+     *  active child job as completed when the session was aborted for
+     *  model fallback rather than natural completion. */
+    isFallbackInProgress?: (sessionID: string) => boolean;
   },
 ) {
   const backgroundJobBoard =
@@ -574,6 +580,7 @@ export function createTaskSessionManagerHook(
       ) {
         const sessionId =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
+        const job = sessionId ? backgroundJobBoard.get(sessionId) : undefined;
         log('[task-session-manager] idle/status idle observed', {
           sessionID: sessionId,
           managesSession: sessionId
@@ -582,9 +589,7 @@ export function createTaskSessionManagerHook(
           terminalJobsPending: sessionId
             ? (terminalJobsInjectedByParent.get(sessionId)?.size ?? 0)
             : 0,
-          runningJobForSession: sessionId
-            ? backgroundJobBoard.get(sessionId)?.state === 'running' || false
-            : false,
+          runningJobForSession: job?.state === 'running' || false,
         });
         if (sessionId && options.shouldManageSession(sessionId)) {
           reconcileInjectedTerminalJobs(sessionId);
@@ -594,22 +599,33 @@ export function createTaskSessionManagerHook(
         // Fallback: for background child sessions that go idle without
         // an injected completion, reconcile the board entry since the
         // session being idle is itself the completion signal.
-        if (sessionId) {
-          const job = backgroundJobBoard.get(sessionId);
-          if (job && job.state === 'running') {
-            log('[task-session-manager] reconciled running job from idle', {
-              sessionID: sessionId,
-              alias: job.alias,
-              parentSessionID: job.parentSessionID,
-            });
-            backgroundJobBoard.updateStatus({
-              taskID: sessionId,
-              state: 'completed',
-              resultSummary:
-                'Background task completed (reconciled from idle event)',
-            });
-            backgroundJobBoard.markReconciled(sessionId);
-          }
+        // Guard: skip when a foreground-fallback abort/re-prompt is in
+        // flight for this session — the idle is transient, not a real
+        // completion.
+        if (
+          job &&
+          sessionId &&
+          job.state === 'running' &&
+          !options.isFallbackInProgress?.(sessionId)
+        ) {
+          log('[task-session-manager] reconciled running job from idle', {
+            sessionID: sessionId,
+            alias: job.alias,
+            parentSessionID: job.parentSessionID,
+          });
+          backgroundJobBoard.updateStatus({
+            taskID: sessionId,
+            state: 'completed',
+            resultSummary:
+              'Background task completed (reconciled from idle event)',
+          });
+          backgroundJobBoard.markReconciled(sessionId);
+          taskContextTracker.pendingManagedTaskIds.delete(sessionId);
+          backgroundJobBoard.addContext(
+            sessionId,
+            taskContextTracker.contextFilesForPrompt(sessionId),
+          );
+          taskContextTracker.prune(backgroundJobBoard);
         }
         return;
       }

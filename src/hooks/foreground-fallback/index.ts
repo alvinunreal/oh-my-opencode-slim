@@ -100,6 +100,12 @@ export class ForegroundFallbackManager {
    *  new fallback model also fails within the dedup window. */
   private readonly lastTriggerModel = new Map<string, string>();
 
+  /** Exposed for task-session-manager: prevents idle reconciliation
+   *  while a fallback abort/re-prompt is in flight for this session. */
+  isFallbackInProgress(sessionID: string): boolean {
+    return this.inProgress.has(sessionID);
+  }
+
   constructor(
     private readonly client: OpencodeClient,
     /**

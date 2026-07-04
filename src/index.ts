@@ -315,6 +315,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       backgroundJobBoard,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
+      isFallbackInProgress: (sessionID) =>
+        foregroundFallback.isFallbackInProgress(sessionID),
     });
     interviewManager = createInterviewManager(ctx, config);
     presetManager = createPresetManager(ctx, config);

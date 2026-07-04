@@ -8,6 +8,7 @@ function createHook(options?: {
   readContextMaxFiles?: number;
   backgroundJobBoard?: BackgroundJobBoard;
   sessionStatus?: unknown;
+  isFallbackInProgress?: (sessionID: string) => boolean;
 }) {
   const hook = createTaskSessionManagerHook(
     {
@@ -25,6 +26,7 @@ function createHook(options?: {
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
+      isFallbackInProgress: options?.isFallbackInProgress,
     },
   );
 
@@ -1864,6 +1866,159 @@ describe('task-session-manager hook', () => {
 
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'completed',
+    });
+  });
+
+  test('does not reconcile from idle when fallback is in progress', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'fix bug',
+    });
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: (id) => id === 'parent-1',
+      isFallbackInProgress: (id) => id === 'child-1',
+    });
+
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+
+    // Job should still be running — not reconciled
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+  });
+
+  test('reconciles from idle when fallback guard passes', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'fix bug',
+    });
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: (id) => id === 'parent-1',
+      // isFallbackInProgress returns false for child-1
+      isFallbackInProgress: () => false,
+    });
+
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'completed',
+    });
+  });
+
+  test('busy-after-idle from fallback re-prompt leaves job running', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'fix bug',
+    });
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      timedOut: false,
+    });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      isFallbackInProgress: (id) => id === 'child-1',
+    });
+
+    // First idle (abort from fallback) — guarded, no reconciliation
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+
+    // Busy signal (fallback re-prompt) — updates lastLiveBusyAt
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-1', status: { type: 'busy' } },
+      },
+    });
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+
+    // Second idle (real completion) — fallback no longer in progress
+    const hook2 = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => false,
+    });
+    await hook2.hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'completed',
+    });
+  });
+
+  test('cancelled job is not reconciled from idle', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'fix bug',
+    });
+    board.markCancelled('child-1', 'explicit cancel');
+    expect(board.get('child-1')).toMatchObject({ state: 'cancelled' });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+
+    // Should remain cancelled — idle does not override terminal state
+    const job = board.get('child-1');
+    expect(job?.state).toBe('cancelled');
+  });
+
+  test('idle via session.status idle path triggers reconciliation', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'fix bug',
+    });
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: (id) => id === 'parent-1',
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-1', status: { type: 'idle' } },
+      },
     });
 
     expect(board.get('child-1')).toMatchObject({
