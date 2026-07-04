@@ -8,15 +8,36 @@ import {
 
 describe('CouncillorConfigSchema', () => {
   test('validates config with model and optional variant', () => {
-    const goodConfig: CouncillorConfig = {
+    const result = CouncillorConfigSchema.safeParse({
       model: 'openai/gpt-5.4-mini',
       variant: 'low',
-    };
-
-    const result = CouncillorConfigSchema.safeParse(goodConfig);
+    });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).toEqual(goodConfig);
+      expect(result.data.model).toBe('openai/gpt-5.4-mini');
+      expect(result.data.variant).toBe('low');
+      // A single-model config normalizes to a one-entry chain.
+      expect(result.data.models).toEqual([
+        { id: 'openai/gpt-5.4-mini', variant: 'low' },
+      ]);
+    }
+  });
+
+  test('accepts an ordered model fallback chain', () => {
+    const result = CouncillorConfigSchema.safeParse({
+      model: [
+        'openai/gpt-5.4-mini',
+        { id: 'google/gemini-3-pro', variant: 'high' },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Primary model stays on `model` for backward compatibility.
+      expect(result.data.model).toBe('openai/gpt-5.4-mini');
+      expect(result.data.models).toEqual([
+        { id: 'openai/gpt-5.4-mini', variant: undefined },
+        { id: 'google/gemini-3-pro', variant: 'high' },
+      ]);
     }
   });
 
