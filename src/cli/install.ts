@@ -475,6 +475,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
           `Skill synchronization complete: ` +
             `${result.installed.length} installed/updated, ` +
             `${preservedSkills.length} skipped/preserved, ` +
+            `${result.staged.length} staged, ` +
+            `${result.adopted.length} adopted, ` +
+            `${result.customized.length} customized, ` +
             `${realFailed.length} failed.`,
         );
       } catch (err) {

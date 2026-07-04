@@ -233,8 +233,9 @@ describe('install skill synchronization error mapping', () => {
       msg?.includes('Skill synchronization complete'),
     );
     expect(summaryMsg).toBeDefined();
-    expect(summaryMsg).not.toContain('Processed');
-    expect(summaryMsg).toContain('0 failed.');
+    expect(summaryMsg).toContain(
+      '0 staged, 0 adopted, 0 customized, 0 failed.',
+    );
   });
 
   test('maps __manifest__ to manifest write failure', async () => {
@@ -263,8 +264,9 @@ describe('install skill synchronization error mapping', () => {
       msg?.includes('Skill synchronization complete'),
     );
     expect(summaryMsg).toBeDefined();
-    expect(summaryMsg).not.toContain('Processed');
-    expect(summaryMsg).toContain('0 failed.');
+    expect(summaryMsg).toContain(
+      '0 staged, 0 adopted, 0 customized, 0 failed.',
+    );
   });
 
   test('keeps normal skill names prefix as Failed: <name>', async () => {
@@ -288,8 +290,9 @@ describe('install skill synchronization error mapping', () => {
       msg?.includes('Skill synchronization complete'),
     );
     expect(summaryMsg).toBeDefined();
-    expect(summaryMsg).not.toContain('Processed');
-    expect(summaryMsg).toContain('1 failed.');
+    expect(summaryMsg).toContain(
+      '0 staged, 0 adopted, 0 customized, 1 failed.',
+    );
   });
 
   test('prints staged skills during sync', async () => {
@@ -378,6 +381,8 @@ describe('install skill synchronization error mapping', () => {
       msg?.includes('Skill synchronization complete'),
     );
     expect(summaryMsg).toBeDefined();
-    expect(summaryMsg).toContain('0 skipped/preserved');
+    expect(summaryMsg).toContain(
+      '0 skipped/preserved, 1 staged, 1 adopted, 1 customized, 0 failed.',
+    );
   });
 });

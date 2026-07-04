@@ -1023,7 +1023,12 @@ describe('syncBundledSkillsFromPackage', () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
     expect(manifest.skills[skillName].status).toBe('customized');
     expect(manifest.skills[skillName].packageVersion).toBe('1.2.3');
-    expect(manifest.skills[skillName].sourceHash).toBe('');
+    const { computeDirectoryHash } = await import(
+      `./skill-sync?test=${importCounter++}`
+    );
+    expect(manifest.skills[skillName].sourceHash).toBe(
+      computeDirectoryHash(skillSrcDir),
+    );
     const stagedPath = manifest.skills[skillName].stagedPath as string;
     expect(stagedPath).toBeDefined();
     expect(fs.existsSync(stagedPath)).toBe(true);

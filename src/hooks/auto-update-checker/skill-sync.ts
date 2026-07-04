@@ -1080,7 +1080,7 @@ export function syncBundledSkillsFromPackage(
 
                 entry.status = 'customized';
                 entry.packageVersion = packageVersion;
-                entry.sourceHash = '';
+                entry.sourceHash = sourceHash;
                 entry.lastManagedHash = sourceHash;
                 entry.lastSeenHash = destHash;
                 entry.stagedPath = stagedSkillDir;
@@ -1140,7 +1140,7 @@ export function syncBundledSkillsFromPackage(
 
                 entry.status = 'customized';
                 entry.packageVersion = packageVersion;
-                entry.sourceHash = '';
+                entry.sourceHash = sourceHash;
                 entry.lastManagedHash = sourceHash;
                 entry.lastSeenHash = destHash;
                 entry.stagedPath = stagedSkillDir;
