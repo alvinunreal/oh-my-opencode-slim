@@ -415,8 +415,10 @@ export class CompanionManager {
         }),
       );
       try {
-        mkdirSync(path.dirname(pidFile), { recursive: true });
-        writeFileSync(pidFile, String(child.pid));
+        if (child.pid != null) {
+          mkdirSync(path.dirname(pidFile), { recursive: true });
+          writeFileSync(pidFile, String(child.pid));
+        }
       } catch {}
     } catch (err) {
       log('[companion] spawn failed', String(err));
