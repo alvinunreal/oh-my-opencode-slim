@@ -1,4 +1,4 @@
-# Loop Engineering — Implementation Plan (Corrected)
+# Loop Engineering - Implementation Plan (Corrected)
 
 ## Overview
 
@@ -10,7 +10,7 @@ Runtime-first design: the loop engine is orchestration wiring that composes exis
 The runtime decides: what state comes next, when verification occurs, whether success criteria passed, whether another iteration is allowed, when escalation policies apply. The LLM decides: how to solve the problem, how to adapt after feedback, what implementation strategy to try next.
 
 **Core design principle:**
-> **Verification is the center of loop engineering — not execution.**
+> **Verification is the center of loop engineering - not execution.**
 
 Retries, failures, warnings, error counts, timeouts are **escalation signals**, not the loop itself. The loop is `Goal → Execute → Verify → Goal satisfied?` Everything else hangs off that.
 
@@ -18,29 +18,29 @@ Retries, failures, warnings, error counts, timeouts are **escalation signals**, 
 The engine implements `verify()`. It should NOT implement `retry twice then escalate`. Instead, policy (maxAttempts, escalation targets, human gates) is externalized. This keeps the runtime generic and extensible.
 
 **Architectural corrections applied:**
-- Task 2 removed — `BackgroundJobState` stays clean (no loop phases pollute job primitives)
+- Task 2 removed - `BackgroundJobState` stays clean (no loop phases pollute job primitives)
 - Event-driven model, not procedural `for` loop
-- Runtime is the constraint — no "signals not constraints" in Layer 1
-- Context compaction — engine synthesizes history before dispatching
-- Verification parsing fixed — JSON schema, not regex
-- BackgroundJobBoard event plumbing — callback array for multiple listeners (multiplexer + LoopEngine)
-- Binary oscillation `executing` ↔ `verifying` — no planning/improving phase
-- Dispatch failure handling — `try/catch` → `escalated` + system error
+- Runtime is the constraint - no "signals not constraints" in Layer 1
+- Context compaction - engine synthesizes history before dispatching
+- Verification parsing fixed - JSON schema, not regex
+- BackgroundJobBoard event plumbing - callback array for multiple listeners (multiplexer + LoopEngine)
+- Binary oscillation `executing` ↔ `verifying` - no planning/improving phase
+- Dispatch failure handling - `try/catch` → `escalated` + system error
 - Context injection via `.loop-history-{loopID}.md` file, not job description
-- Fleet mapping — executeAgent/verifyAgent expanded for all specialist roles
-- Oracle retry-wrapper — `oracleRetryCount` persisted in session
+- Fleet mapping - executeAgent/verifyAgent expanded for all specialist roles
+- Oracle retry-wrapper - `oracleRetryCount` persisted in session
 - Council restricted to Layer 0 escalation only
-- Cancellation lifecycle — `cancelled` is quiet terminal state, no `onEscalated`
-- Session cleanup — engine manages `.loop-history-{loopID}.md` only, orchestrator owns artifact lifecycle
-- Convergence signal scope — signals apply to `error` and `timeout` only, NOT `cancelled`
+- Cancellation lifecycle - `cancelled` is quiet terminal state, no `onEscalated`
+- Session cleanup - engine manages `.loop-history-{loopID}.md` only, orchestrator owns artifact lifecycle
+- Convergence signal scope - signals apply to `error` and `timeout` only, NOT `cancelled`
 - `totalErrors` (not `errorCount`) consistently used
-- `SuccessCriterion` as first-class type — engine routes by `success.type`
-- Deferred worktree/memory/trigger from core interfaces — Future Extensions section
-- Artifact lifecycle — engine signals `onArtifactWrite`, orchestrator owns filesystem
-- **Dispatch callback** — engine receives `dispatch(agent, prompt, contextFiles)` from orchestrator, no direct SDK access
-- **Manual verification** — no BackgroundJob created, engine manages waiting state in LoopSession
-- **Automated verification** — test/build/lint/command/fileExists dispatched to test-runner agent, not spawnSync
-- **LoopEngine location** — `src/loop/loop-engine.ts` (not src/council/)
+- `SuccessCriterion` as first-class type - engine routes by `success.type`
+- Deferred worktree/memory/trigger from core interfaces - Future Extensions section
+- Artifact lifecycle - engine signals `onArtifactWrite`, orchestrator owns filesystem
+- **Dispatch callback** - engine receives `dispatch(agent, prompt, contextFiles)` from orchestrator, no direct SDK access
+- **Manual verification** - no BackgroundJob created, engine manages waiting state in LoopSession
+- **Automated verification** - test/build/lint/command/fileExists dispatched to test-runner agent, not spawnSync
+- **LoopEngine location** - `src/loop/loop-engine.ts` (not src/council/)
 
 **Phased roadmap:**
 - Phase 1: Runtime loop engine (this PR)
@@ -58,11 +58,11 @@ The engine implements `verify()`. It should NOT implement `retry twice then esca
 **File:** `src/utils/background-job-board.ts`
 
 Add three fields to `BackgroundJobRecord`:
-- `totalErrors: number` — accumulated errors across all attempts (not incremented on `cancelled`)
-- `timeoutCount: number` — consecutive timeouts, resets to 0 on `completed`
-- `lastErrorAt?: number` — timestamp of last error
+- `totalErrors: number` - accumulated errors across all attempts (not incremented on `cancelled`)
+- `timeoutCount: number` - consecutive timeouts, resets to 0 on `completed`
+- `lastErrorAt?: number` - timestamp of last error
 
-**Convergence signal scope:** Signals (`totalErrors`, `timeoutCount`) apply to `error` and `timeout` states only. The `cancelled` state is a quiet terminal state — it does NOT increment error counters. This prevents noisy escalation when users intentionally cancel.
+**Convergence signal scope:** Signals (`totalErrors`, `timeoutCount`) apply to `error` and `timeout` states only. The `cancelled` state is a quiet terminal state - it does NOT increment error counters. This prevents noisy escalation when users intentionally cancel.
 
 **Signal computation:** Convergence signals are computed from `BackgroundJobRecord` state transitions in `updateStatus()`, not explicit flags:
 - When `input.state === 'error'` → increment `totalErrors`, set `lastErrorAt = Date.now()`
@@ -70,11 +70,11 @@ Add three fields to `BackgroundJobRecord`:
 - When `input.state === 'completed'` → reset `timeoutCount = 0`
 - `cancelled` state → no increments
 
-This avoids redundant `isError`/`isTimeout` fields on `BackgroundJobStatusInput` — the state machine already conveys this information.
+This avoids redundant `isError`/`isTimeout` fields on `BackgroundJobStatusInput` - the state machine already conveys this information.
 
 Update:
-- `registerLaunch()` — initialize `totalErrors = 0`, `timeoutCount = 0`
-- `updateStatus()` — compute signals from state transitions as above
+- `registerLaunch()` - initialize `totalErrors = 0`, `timeoutCount = 0`
+- `updateStatus()` - compute signals from state transitions as above
 
 ### Task 2: Add Convergence Helper Methods to BackgroundJobBoard
 
@@ -138,10 +138,10 @@ export type LoopPhase =
 // Fleet mapping: executeAgent is dynamically selected based on task domain
 export type ExecuteAgent = 'fixer' | 'designer' | 'explorer' | 'librarian';
 // Fleet mapping: verifyAgent is dynamically selected based on task domain
-// Note: 'council' is NOT a verifyAgent inside the loop — it is Layer 0 escalation only
+// Note: 'council' is NOT a verifyAgent inside the loop - it is Layer 0 escalation only
 export type VerifyAgent = 'oracle' | 'observer' | 'test';
 
-// Success criteria — first-class runtime type
+// Success criteria - first-class runtime type
 // The runtime evaluates these directly where possible. Only subjective criteria go to Oracle.
 export type SuccessCriterion =
   | { type: 'test'; command: string }                         // exit code 0 = pass
@@ -166,7 +166,7 @@ export interface LoopDefinition {
   contextFiles?: string[];
 }
 
-// Deferred interfaces (NOT in LoopDefinition — added later via extension)
+// Deferred interfaces (NOT in LoopDefinition - added later via extension)
 // See "Future Extensions" section below for: LoopTrigger, LoopWorktreeConfig, LoopMemoryConfig
 
 export interface AttemptRecord {
@@ -206,7 +206,7 @@ escalated  → (terminal)
 cancelled  → (terminal)
 ```
 
-**No `planning` or `improving` phase** — binary oscillation between `executing` and `verifying`. `@oracle` only verifies, `@fixer` self-corrects using `.loop-history-{loopID}.md`. Loop starts in `executing`.
+**No `planning` or `improving` phase** - binary oscillation between `executing` and `verifying`. `@oracle` only verifies, `@fixer` self-corrects using `.loop-history-{loopID}.md`. Loop starts in `executing`.
 
 **`oracleRetryCount` lifecycle:** Reset to `0` on every `executing` transition. Increment on each Oracle retry. If `oracleRetryCount >= 2` and parsing still fails → fail closed (verification = failed).
 
@@ -214,7 +214,7 @@ cancelled  → (terminal)
 
 **Worktree integration:** If `definition.worktree?.enabled = true`, orchestrator creates a dedicated worktree before dispatching. Engine tracks `session.worktreeName`. On `done` → orchestrator merges worktree to main. On `escalated`/`cancelled` → orchestrator abandons worktree. Prevents parallel loops from colliding on the same files. Uses existing `using-git-worktrees` skill via orchestrator.
 
-### Task 5: Worktree Integration (Deferred — MVP uses in-process execution)
+### Task 5: Worktree Integration (Deferred - MVP uses in-process execution)
 
 **Files:** `src/loop/loop-engine.ts` (update), `src/loop/worktree-manager.ts` (new)
 
@@ -252,13 +252,13 @@ Engine dispatches first job (checks session.worktreeReady before dispatching)
 - `done` → engine fires `onWorktreeMerge(loopID, branchName)`. Orchestrator merges to main via skill.
 - `escalated`/`cancelled` → engine fires `onWorktreeAbandon(loopID, branchName)`. Orchestrator abandons via skill.
 
-**Engine does not call git directly** — it delegates to orchestrator via callbacks (`onWorktreeCreate`, `onWorktreeMerge`, `onWorktreeAbandon`).
+**Engine does not call git directly** - it delegates to orchestrator via callbacks (`onWorktreeCreate`, `onWorktreeMerge`, `onWorktreeAbandon`).
 
 **Validation:** `startLoop()` validates that `executeAgent !== verifyAgent`. If equal, throws `Error('executeAgent and verifyAgent must be different')`.
 
 **Note:** In MVP, `worktree.enabled = false` by default. Worktree isolation is opt-in per `LoopDefinition`.
 
-### Task 6: Cross-Loop Memory (Deferred — MVP uses per-session history only)
+### Task 6: Cross-Loop Memory (Deferred - MVP uses per-session history only)
 
 **File:** `src/loop/loop-memory.ts` (new file)
 
@@ -294,7 +294,7 @@ on 'escalated':
   → orchestrator writes file via fs
 ```
 
-**Orchestrator does the actual file I/O** — engine delegates via callback, same pattern as worktree. This keeps the engine purely orchestration logic.
+**Orchestrator does the actual file I/O** - engine delegates via callback, same pattern as worktree. This keeps the engine purely orchestration logic.
 
 **Future:** Memory store could be GitHub Issues (label-based), a database, or a dedicated file. File-based (`.loop-memory.md`) is MVP.
 
@@ -313,9 +313,9 @@ import { BackgroundJobBoard, type BackgroundJobRecord } from '../utils/backgroun
 export interface LoopEngineCallbacks {
   onLoopComplete?: (loopID: string, success: boolean) => void;
   onEscalated?: (loopID: string, reason: string) => void;
-  // Manual verification — orchestrator surfaces review to human, calls resolveManualReview
+  // Manual verification - orchestrator surfaces review to human, calls resolveManualReview
   onManualReview?: (loopID: string, reason: string) => void;
-  // Artifact management — orchestrator owns filesystem, engine only signals
+  // Artifact management - orchestrator owns filesystem, engine only signals
   onArtifactWrite?: (loopID: string, artifactPath: string) => void;
   // Deferred: onWorktreeCreate, onWorktreeMerge, onWorktreeAbandon
   // Deferred: onMemoryRead, onMemoryWrite
@@ -325,7 +325,7 @@ export class LoopEngine {
   private sessions: Map<string, LoopSession> = new Map();
   private jobBoard: BackgroundJobBoard;
   private callbacks: LoopEngineCallbacks;
-  // Dispatch callback provided by orchestrator — engine does not access SDK directly
+  // Dispatch callback provided by orchestrator - engine does not access SDK directly
   private dispatch: (agent: string, prompt: string, contextFiles: string[]) => string;
 
   constructor(jobBoard: BackgroundJobBoard, callbacks: LoopEngineCallbacks, dispatch: (agent: string, prompt: string, contextFiles: string[]) => string);
@@ -350,18 +350,18 @@ export class LoopEngine {
 **Layered architecture:**
 
 ```
-Layer 0: Orchestrator — loads skill, delegates to LoopEngine, listens to callbacks, handles Grill + escalation
-Layer 1: LoopEngine — event-driven state machine, dispatches agents, manages artifacts, enforces circuit breaker
-Layer 2: Specialist agents — do the work
-  - @fixer, @designer, @explorer, @librarian — execute based on task domain
-  - @oracle, @observer, test — verify based on task domain
-  - @council — Layer 0 escalation ONLY, never inside the loop
-Skill — instructs orchestrator, never "does" anything itself
+Layer 0: Orchestrator - loads skill, delegates to LoopEngine, listens to callbacks, handles Grill + escalation
+Layer 1: LoopEngine - event-driven state machine, dispatches agents, manages artifacts, enforces circuit breaker
+Layer 2: Specialist agents - do the work
+  - @fixer, @designer, @explorer, @librarian - execute based on task domain
+  - @oracle, @observer, test - verify based on task domain
+  - @council - Layer 0 escalation ONLY, never inside the loop
+Skill - instructs orchestrator, never "does" anything itself
 ```
 
 **Key design:**
 
-1. `startLoop(definition)` is **non-blocking** — creates session, validates inputs, writes history file, dispatches first job, returns `loopID` immediately. Orchestrator never hangs.
+1. `startLoop(definition)` is **non-blocking** - creates session, validates inputs, writes history file, dispatches first job, returns `loopID` immediately. Orchestrator never hangs.
 
    **Validation:**
    ```typescript
@@ -372,15 +372,15 @@ Skill — instructs orchestrator, never "does" anything itself
    Prevents a single agent from verifying its own output (e.g., fixer checking fixer). The "student marking their own exam" problem is solved by design for code loops, but must be enforced for all loop types.
 
 **SuccessCriterion routing:** The engine routes based on `definition.success.type`:
-    - `'test'`, `'build'`, `'lint'`, `'command'`, `'fileExists'` → dispatch to test-runner agent (or `@fixer` with focused prompt) via BackgroundJobBoard. Agent runs command, evaluates exit code or file existence. Engine evaluates result — no LLM involved.
+    - `'test'`, `'build'`, `'lint'`, `'command'`, `'fileExists'` → dispatch to test-runner agent (or `@fixer` with focused prompt) via BackgroundJobBoard. Agent runs command, evaluates exit code or file existence. Engine evaluates result - no LLM involved.
     - `'oracle'` → dispatch to Oracle, parse JSON verification result
     - `'observer'` → dispatch to Observer, parse JSON verification result
     - `'manual'` → engine fires `onManualReview`, waits for `resolveManualReview`
-    This makes the engine extensible — new success criterion types can be added without changing the engine's core logic.
+    This makes the engine extensible - new success criterion types can be added without changing the engine's core logic.
 
 2. Engine registers as the single terminal state listener on `BackgroundJobBoard`. All job completions route through `handleTerminalJob()`.
 
-3. Session lookup: `findSessionForJob(taskID)` — sessions track `activeJobID`, routes job events to the right session.
+3. Session lookup: `findSessionForJob(taskID)` - sessions track `activeJobID`, routes job events to the right session.
 
 4. Phase transitions driven by job terminal states, not by explicit loop control:
 
@@ -396,11 +396,11 @@ job completed (cancelled) → 'cancelled' → cleanup → onLoopComplete(false)
 job completed (error)     → handleFailure() → may escalate
 ```
 
-5. **No `improving` phase** — `@oracle` strictly verifies (returns `passed: false, reason: "X"`). `@fixer` self-corrects using `compactHistory()` from `.loop-history-{loopID}.md` + failure reason as input. No intermediate strategist.
+5. **No `improving` phase** - `@oracle` strictly verifies (returns `passed: false, reason: "X"`). `@fixer` self-corrects using `compactHistory()` from `.loop-history-{loopID}.md` + failure reason as input. No intermediate strategist.
 
-6. **Context injection** — text history and visual artifacts handled separately:
+6. **Context injection** - text history and visual artifacts handled separately:
 
-   **`.loop-history-{loopID}.md`** — text compaction for all loop types:
+   **`.loop-history-{loopID}.md`** - text compaction for all loop types:
    ```typescript
    private writeHistoryFile(session: LoopSession): void {
      const content = this.compactHistory(session);
@@ -422,17 +422,17 @@ job completed (error)     → handleFailure() → may escalate
     }
    ```
 
-**Observer artifact transfer:** For UI loops, `verifyAgent = 'observer'`, the executing agent writes visual artifacts to paths. The engine signals `onArtifactWrite(loopID, artifactPath)` so orchestrator can manage artifact lifecycle. Engine does not own filesystem artifacts — only signals when they are written.
+**Observer artifact transfer:** For UI loops, `verifyAgent = 'observer'`, the executing agent writes visual artifacts to paths. The engine signals `onArtifactWrite(loopID, artifactPath)` so orchestrator can manage artifact lifecycle. Engine does not own filesystem artifacts - only signals when they are written.
 
 **Manual verification:** When `success.type = 'manual'`, engine transitions to `verifying` but does NOT dispatch a verifyAgent. Instead, fires `onManualReview(loopID, reason)` and stops. Session waits. Orchestrator surfaces review to human. Human responds → orchestrator calls `engine.resolveManualReview(loopID, passed, reason)`. Engine resumes: `passed` → `done`, `!passed` → retry or escalate.
 
-    **No Council inside the loop** — Council with 360s+ latency stalls the rapid `executing ↔ verifying` oscillation. Council is reserved for Layer 0 escalation only.
+    **No Council inside the loop** - Council with 360s+ latency stalls the rapid `executing ↔ verifying` oscillation. Council is reserved for Layer 0 escalation only.
 
 7. Hard circuit breaker: when `attempts >= maxAttempts` && verification fails → `escalated`. Loop stops dispatching. `onEscalated` callback fires.
 
 8. Convergence signals: before dispatching retry, engine checks `jobBoard.hasConvergenceSignals()`. If exceeded → `escalated` regardless of attempt count.
 
-9. **Dispatch failure handling** — `try/catch` around `dispatchPhase()`:
+9. **Dispatch failure handling** - `try/catch` around `dispatchPhase()`:
    ```typescript
    private dispatchPhase(session: LoopSession): void {
      try {
@@ -446,14 +446,14 @@ job completed (error)     → handleFailure() → may escalate
    ```
    If dispatch throws (agent API down, token limit exceeded, etc.) → immediately `escalated` + `onEscalated` with system error. No orphaned session.
 
-10. **Cancellation lifecycle** — `cancelled` is a distinct terminal state, not an error:
+10. **Cancellation lifecycle** - `cancelled` is a distinct terminal state, not an error:
     ```typescript
     private handleTerminalJob(job: BackgroundJobRecord): void {
       const session = this.findSessionForJob(job.taskID);
       if (!session) return;
 
       if (job.state === 'cancelled') {
-        // Quiet shutdown — no escalation, no error increment
+        // Quiet shutdown - no escalation, no error increment
         session.currentPhase = 'cancelled';
         session.activeJobID = undefined;
         this.cleanupSession(session);  // delete artifactDir and historyFile
@@ -462,7 +462,7 @@ job completed (error)     → handleFailure() → may escalate
       }
 
       if (job.state === 'error') {
-        // Treat as verification failure — increment errors, potentially escalate
+        // Treat as verification failure - increment errors, potentially escalate
         this.handleFailure(session, job);
         return;
       }
@@ -473,7 +473,7 @@ job completed (error)     → handleFailure() → may escalate
     ```
     `cancel(loopID)` sets `cancellationRequested` on the job, which emits `cancelled` state. Engine catches it, transitions to `cancelled` terminal state, cleans up, fires `onLoopComplete(false)` (not `onEscalated`).
 
-11. **Oracle retry-wrapper for JSON parsing failures** — `oracleRetryCount` persisted in session:
+11. **Oracle retry-wrapper for JSON parsing failures** - `oracleRetryCount` persisted in session:
     ```typescript
     private evaluateVerification(session: LoopSession, job: BackgroundJobRecord): void {
       const result = this.tryParseVerification(job.resultSummary);
@@ -496,7 +496,7 @@ job completed (error)     → handleFailure() → may escalate
     ```
     `oracleRetryCount` is reset to `0` on every `executing` transition (not on parse success). Max 1 retry (retry if count == 0, i.e. first failure). Handles the 12.5% Oracle error rate without infinite loops.
 
-12. **Session cleanup** — prevents memory leaks:
+12. **Session cleanup** - prevents memory leaks:
     ```typescript
     private cleanupSession(session: LoopSession): void {
        // Delete .loop-history-{loopID}.md
@@ -504,7 +504,7 @@ job completed (error)     → handleFailure() → may escalate
       // Orchestrator handles artifact cleanup via onArtifactWrite tracking
     }
     ```
-    Called on terminal states: `done`, `escalated`, `cancelled`. Also called on `cancel(loopID)`. Engine only manages `.loop-history-{loopID}.md` — orchestrator owns artifact filesystem lifecycle.
+    Called on terminal states: `done`, `escalated`, `cancelled`. Also called on `cancel(loopID)`. Engine only manages `.loop-history-{loopID}.md` - orchestrator owns artifact filesystem lifecycle.
 
     **"Modify definition and retry"** during `escalated`: Human decides to modify and retry → engine does NOT reuse the session. Instead:
     1. Call `cancel(loopID)` → triggers `cancelled` cleanup
@@ -546,32 +546,32 @@ private tryParseVerification(raw: string | undefined): VerificationResult | null
 }
 ```
 
-**No regex matching** — if Oracle returns valid JSON, parsing succeeds. If not, retry once. If still fails, fail closed (not open).
+**No regex matching** - if Oracle returns valid JSON, parsing succeeds. If not, retry once. If still fails, fail closed (not open).
 
 ### Task 8: Create Loop Engineering Skill
 
 **File:** `src/skills/loop-engineering/SKILL.md` (new file)
 
-The skill instructs the orchestrator — it never "does" anything itself. Orchestrator follows the skill's guidance.
+The skill instructs the orchestrator - it never "does" anything itself. Orchestrator follows the skill's guidance.
 
 Two parts:
 
-**Grill (human interview) — orchestrator follows these instructions:**
+**Grill (human interview) - orchestrator follows these instructions:**
 - Conduct conversation to define `LoopDefinition` fields
 - Questions: goal, success criteria, max attempts, preferred agents, context files
 - Output structured JSON passed to `loopEngine.startLoop()`
 
-**Loop Monitor — orchestrator follows these instructions:**
+**Loop Monitor - orchestrator follows these instructions:**
 - Listen to engine callbacks (`onLoopComplete`, `onEscalated`)
 - Display current state, attempt count, verification result to human
-- On `onEscalated` — surface resolution options to human, await instruction
-- On human intervention (cancel, force pass, modify definition) — call appropriate engine method
+- On `onEscalated` - surface resolution options to human, await instruction
+- On human intervention (cancel, force pass, modify definition) - call appropriate engine method
 
 **Skill does NOT:**
-- Call `loopEngine` directly — orchestrator does that
-- Dispatch agents — engine does that
-- Evaluate verification — engine does that (via JSON parsing)
-- Manage state — engine does that
+- Call `loopEngine` directly - orchestrator does that
+- Dispatch agents - engine does that
+- Evaluate verification - engine does that (via JSON parsing)
+- Manage state - engine does that
 
 ### Task 9: Register /loop Command
 
@@ -588,8 +588,8 @@ grep -r "deepwork" src/ --include="*.ts"
 
 **Files:** (new test files alongside implementation)
 
-- `src/loop/loop-session.test.ts` — state machine transitions, transition enforcement, attempt recording
-- `src/loop/loop-engine.test.ts` — event-driven flow, job completion handling, convergence escalation, context compaction, dispatch failure handling
+- `src/loop/loop-session.test.ts` - state machine transitions, transition enforcement, attempt recording
+- `src/loop/loop-engine.test.ts` - event-driven flow, job completion handling, convergence escalation, context compaction, dispatch failure handling
 
 ---
 
@@ -597,16 +597,16 @@ grep -r "deepwork" src/ --include="*.ts"
 
 **Two-PR approach:**
 
-**PR 1 — Convergence Signals (BackgroundJobBoard extension)**
+**PR 1 - Convergence Signals (BackgroundJobBoard extension)**
 - Tasks 1, 2, 3 only
 - Extends `BackgroundJobRecord` with `totalErrors`, `timeoutCount`, `lastErrorAt`
 - Adds convergence helper methods to `BackgroundJobBoard`
 - Upgrades event plumbing to callback array
-- **Naming:** Use `totalErrors` (not `errorCount`) — aligns with LoopEngine spec
-- **Scope rule:** `cancelled` does NOT increment `totalErrors` — quiet terminal state, not an error
+- **Naming:** Use `totalErrors` (not `errorCount`) - aligns with LoopEngine spec
+- **Scope rule:** `cancelled` does NOT increment `totalErrors` - quiet terminal state, not an error
 - Ready to open now
 
-**PR 2 — Loop Engine (full runtime orchestration)**
+**PR 2 - Loop Engine (full runtime orchestration)**
 - Tasks 4, 7, 8, 9, 10
 - `LoopSession` + `LoopEngine` event-driven state machine
 - `SuccessCriterion` routing (test/build/lint evaluated directly, oracle/observer dispatched, manual waits for human)
@@ -615,25 +615,25 @@ grep -r "deepwork" src/ --include="*.ts"
 - Depends on PR 1 merging first
 
 **Not in MVP PRs (deferred but architected):**
-- **Worktree isolation** — architected in Task 5, deferred to post-MVP. Orchestrator uses `using-git-worktrees` skill. Engine delegates worktree lifecycle via callbacks. Prevents parallel loop file collisions.
-- **Cross-loop memory** — architected in Task 6, deferred to post-MVP. `.loop-memory.md` file store (MVP). Future: GitHub Issues, database. Enables learned strategies and tuned convergence thresholds.
+- **Worktree isolation** - architected in Task 5, deferred to post-MVP. Orchestrator uses `using-git-worktrees` skill. Engine delegates worktree lifecycle via callbacks. Prevents parallel loop file collisions.
+- **Cross-loop memory** - architected in Task 6, deferred to post-MVP. `.loop-memory.md` file store (MVP). Future: GitHub Issues, database. Enables learned strategies and tuned convergence thresholds.
 
 **Not architected yet (deferred):**
-- Trigger automation (cron, webhooks) — `LoopTrigger` interface defined but only 'manual' implemented in MVP
-- Fuzzy verification — Oracle returns boolean only; no engagement metrics or content quality scoring
-- MCP connectors (GitHub Issues, Slack, Sentry) — no external integrations
+- Trigger automation (cron, webhooks) - `LoopTrigger` interface defined but only 'manual' implemented in MVP
+- Fuzzy verification - Oracle returns boolean only; no engagement metrics or content quality scoring
+- MCP connectors (GitHub Issues, Slack, Sentry) - no external integrations
 
 These are the remaining delta between MVP loop engineering and full theory compliance (6 building blocks).
 
 ---
 
-## Future Extensions (Deferred — Not in MVP)
+## Future Extensions (Deferred - Not in MVP)
 
 These features are deferred. Interfaces will be defined when implementation begins.
 
-- **Worktree isolation** — opt-in per LoopDefinition, uses `using-git-worktrees` skill. Prevents parallel loop file collisions.
-- **Cross-loop memory** — `.loop-memory.md` file store. Learns from prior loops: successful strategies, failure patterns, tuned convergence thresholds.
-- **Trigger automation** — cron, webhook, event-driven invocation. `LoopTrigger` interface defined in Phase 4.
+- **Worktree isolation** - opt-in per LoopDefinition, uses `using-git-worktrees` skill. Prevents parallel loop file collisions.
+- **Cross-loop memory** - `.loop-memory.md` file store. Learns from prior loops: successful strategies, failure patterns, tuned convergence thresholds.
+- **Trigger automation** - cron, webhook, event-driven invocation. `LoopTrigger` interface defined in Phase 4.
 
 ### LoopMemoryConfig
 ```typescript
@@ -651,16 +651,16 @@ When implemented: Add `memory: LoopMemoryConfig` to `LoopDefinition`, `memoryLoa
 
 | File | Action |
 |------|--------|
-| `src/utils/background-job-board.ts` | Modify — convergence signals, helpers, event plumbing |
-| `src/loop/loop-session.ts` | Create — state machine class (binary oscillation, worktreeName, oracleRetryCount) |
-| `src/loop/loop-engine.ts` | Create — event-driven orchestration |
-| `src/loop/worktree-manager.ts` | Create — worktree lifecycle (create/merge/abandon, deferred) |
-| `src/loop/loop-memory.ts` | Create — cross-loop memory store (read/write patterns, deferred) |
-| `src/skills/loop-engineering/SKILL.md` | Create — Grill + Monitor prompts |
-| `src/tools/loop-command.ts` | Create — command definition |
-| `src/index.ts` | Modify — wire /loop command |
-| `src/loop/loop-session.test.ts` | Create — tests |
-| `src/loop/loop-engine.test.ts` | Create — tests |
+| `src/utils/background-job-board.ts` | Modify - convergence signals, helpers, event plumbing |
+| `src/loop/loop-session.ts` | Create - state machine class (binary oscillation, worktreeName, oracleRetryCount) |
+| `src/loop/loop-engine.ts` | Create - event-driven orchestration |
+| `src/loop/worktree-manager.ts` | Create - worktree lifecycle (create/merge/abandon, deferred) |
+| `src/loop/loop-memory.ts` | Create - cross-loop memory store (read/write patterns, deferred) |
+| `src/skills/loop-engineering/SKILL.md` | Create - Grill + Monitor prompts |
+| `src/tools/loop-command.ts` | Create - command definition |
+| `src/index.ts` | Modify - wire /loop command |
+| `src/loop/loop-session.test.ts` | Create - tests |
+| `src/loop/loop-engine.test.ts` | Create - tests |
 
 ---
 
@@ -677,28 +677,28 @@ bun test
 
 ## Dependencies
 
-- `BackgroundJobBoard` — already exists, extended with convergence signals and event plumbing
-- Agent dispatch — existing patterns in council/
-- Skill infrastructure — existing patterns in src/skills/
-- Oracle structured output tool — new tool definition in `src/tools/` (or reuse existing)
+- `BackgroundJobBoard` - already exists, extended with convergence signals and event plumbing
+- Agent dispatch - existing patterns in council/
+- Skill infrastructure - existing patterns in src/skills/
+- Oracle structured output tool - new tool definition in `src/tools/` (or reuse existing)
 
 ---
 
 ## Out of Scope
 
-- **Worktree isolation** — deferred (would prevent parallel loop file collisions)
-- **Cross-loop persistent memory** — deferred (history dies with session)
-- **Trigger automation** — only manual `/loop` invocation in MVP (no cron/webhooks)
-- **Fuzzy verification** — Oracle returns boolean only (no engagement metrics)
-- **MCP connectors** — no GitHub Issues, Slack, Sentry integration
-- **Persistence** — in-memory only for MVP
-- **New hooks or infrastructure** — beyond orchestration wiring
-- **Visualization** — beyond skill prompts
-- Layer 1 (runtime) always enforces constraints — no "signals not constraints" in the engine layer
+- **Worktree isolation** - deferred (would prevent parallel loop file collisions)
+- **Cross-loop persistent memory** - deferred (history dies with session)
+- **Trigger automation** - only manual `/loop` invocation in MVP (no cron/webhooks)
+- **Fuzzy verification** - Oracle returns boolean only (no engagement metrics)
+- **MCP connectors** - no GitHub Issues, Slack, Sentry integration
+- **Persistence** - in-memory only for MVP
+- **New hooks or infrastructure** - beyond orchestration wiring
+- **Visualization** - beyond skill prompts
+- Layer 1 (runtime) always enforces constraints - no "signals not constraints" in the engine layer
 
 **Signals vs constraints distinction:**
-- `BackgroundJobRecord` convergence signals (`totalErrors`, `timeoutCount`) → "signals not constraints" — warn LLM via `formatForPrompt()`, LLM decides
-- `LoopEngine` circuit breaker → hard constraints — `escalated` state is enforced, not signaled
+- `BackgroundJobRecord` convergence signals (`totalErrors`, `timeoutCount`) → "signals not constraints" - warn LLM via `formatForPrompt()`, LLM decides
+- `LoopEngine` circuit breaker → hard constraints - `escalated` state is enforced, not signaled
 
 ---
 
@@ -706,10 +706,10 @@ bun test
 
 The loop engineering spec and plan were validated against real-world implementations:
 
-- **autoresearch** (Karpathy): Confirms MVP scope — skill + executor + git history is the proven minimum. Our LoopEngine + skill + `.loop-history-{loopID}.md` directly mirrors this pattern.
+- **autoresearch** (Karpathy): Confirms MVP scope - skill + executor + git history is the proven minimum. Our LoopEngine + skill + `.loop-history-{loopID}.md` directly mirrors this pattern.
 - **Claude Code community**: `while True` loops in CLAUDE.md are the most common adoption pattern. Our `/loop` command formalizes what users already do manually.
-- **Ralph (Simon Willison)**: Simplest on-ramp — agent loop in a markdown file. Validates that skill-first approach (not infrastructure-first) is the right entry point.
+- **Ralph (Simon Willison)**: Simplest on-ramp - agent loop in a markdown file. Validates that skill-first approach (not infrastructure-first) is the right entry point.
 
 **Impact on plan:** No changes needed. The 5-phase roadmap (runtime engine → loop skill → routine integration → triggers → persistent memory) matches the proven adoption curve. Phase 1-2 (MVP) is where the value is.
 
-**Risk identified:** autoresearch shows that manual verification (human in the loop) is often "good enough" for autonomous loops. Our spec's automated verification (@oracle/@observer) is a differentiator but should not be a blocker — MVP could ship with manual verification as a fallback SuccessCriterion type.
+**Risk identified:** autoresearch shows that manual verification (human in the loop) is often "good enough" for autonomous loops. Our spec's automated verification (@oracle/@observer) is a differentiator but should not be a blocker - MVP could ship with manual verification as a fallback SuccessCriterion type.

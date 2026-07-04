@@ -158,7 +158,7 @@ export async function promptWithTimeout(
 
 /**
  * Result of extracting session content.
- * `empty` is true when the assistant produced zero text content —
+ * `empty` is true when the assistant produced zero text content -
  * the provider returned an empty response (e.g. rate-limited silently).
  */
 export interface SessionExtractionResult {

@@ -117,7 +117,7 @@ Example:
 Read-only dependency source repositories are available under
 `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
 
-- `.slim/clonedeps/repos/opencode-ai__opencode/` — `opencode-ai/opencode` at
+- `.slim/clonedeps/repos/opencode-ai__opencode/` - `opencode-ai/opencode` at
   `v1.3.17`; inspect `packages/sdk/js` for OpenCode SDK internals.
 ```
 

@@ -3,7 +3,7 @@
  *
  * These types describe the structure of chat messages passed through
  * `experimental.chat.messages.transform` and related hooks. All fields
- * are unioned across the files that previously defined them privately —
+ * are unioned across the files that previously defined them privately -
  * optional extras are harmless under structural typing.
  */
 

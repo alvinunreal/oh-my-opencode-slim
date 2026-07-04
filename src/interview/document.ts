@@ -221,7 +221,7 @@ export async function readInterviewDocument(
   try {
     return await fs.readFile(record.markdownPath, 'utf8');
   } catch {
-    // File missing or unreadable — recreate it
+    // File missing or unreadable - recreate it
   }
   await ensureInterviewFile(record);
   return fs.readFile(record.markdownPath, 'utf8');

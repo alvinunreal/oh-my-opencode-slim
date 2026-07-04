@@ -88,9 +88,36 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
+### Master ブランチから実行
+
+最新コードを使いたい場合、バグ修正を試したい場合、またはローカルで
+開発・コントリビュートしたい場合はこちらを使ってください:
+
+```bash
+git clone https://github.com/alvinunreal/oh-my-opencode-slim.git ~/repos/oh-my-opencode-slim
+cd ~/repos/oh-my-opencode-slim
+bun install
+bun run build
+bun dist/cli/index.js install
+```
+
+インストーラーはローカルリポジトリのパスを
+`~/.config/opencode/opencode.json` の `plugin` 配列に追加するため、
+OpenCode はそのフォルダーからプラグインを読み込みます。後で更新するには:
+
+```bash
+cd ~/repos/oh-my-opencode-slim
+git pull
+bun install
+bun run build
+```
+
 ### はじめに
 
 インストーラーは OpenAI と OpenCode Go の両方のプリセットを生成し、デフォルトでは OpenAI が有効になります。
+
+> [!TIP]
+> モデルやエージェントは、自分のワークフローに合わせて自由に調整してください。デフォルトプリセットは出発点にすぎません。このプラグインは、深い柔軟性とカスタマイズ性を提供するために設計されています。
 
 インストール時に OpenCode Go を有効にするには、`bunx oh-my-opencode-slim@latest install --preset=opencode-go` を実行するか、インストール後に `~/.config/opencode/oh-my-opencode-slim.json` のデフォルトプリセット名を変更してください。
 
@@ -135,7 +162,7 @@ bunx oh-my-opencode-slim@latest install
       "orchestrator": { "model": "opencode-go/glm-5.2", "skills": [ "*" ], "mcps": [ "*", "!context7" ] },
       "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "opencode-go/deepseek-v4-flash", "skills": [], "mcps": [ "websearch", "context7", "gh_grep" ] },
-      "explorer": { "model": "opencode-go/minimax-m2.7", "skills": [], "mcps": [] },
+      "explorer": { "model": "opencode-go/deepseek-v4-flash", "skills": [], "mcps": [] },
       "designer": { "model": "opencode-go/kimi-k2.7-code", "variant": "medium", "skills": [], "mcps": [] },
       "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high", "skills": [], "mcps": [] }
     }
@@ -174,12 +201,12 @@ ping all agents
 
 V2 は oh-my-opencode-slim を、スケジューラー中心のマルチエージェントワークフローシステムへと進化させます。Orchestrator は計画、委譲、結果の整合、検証に集中し、専門エージェントはそれぞれの lane で作業を行います。
 
-- **[バックグラウンドエージェント](#バックグラウンドエージェント)** — Orchestrator は専門家をバックグラウンドタスクとしてディスパッチし、タスク/セッション ID を追跡し、完了イベントを待ってから結果を整合します。
-- **[Companion](#companion)** — 任意のフローティングデスクトップウィンドウが、並列実行中のバックグラウンド専門家を含め、現在アクティブなエージェントを表示します。
-- **[Deepwork](#deepwork)** — 大規模、多ファイル、高リスク、または段階的なコーディング作業向けの構造化ワークフローです。永続的な計画ファイルと Oracle レビューゲートを使用します。
-- **[Reflect](#reflect)** — 繰り返される作業パターンを振り返り、再利用可能な skill、エージェント、コマンド、設定ルール、プロンプトルール、プロジェクト playbook を提案します。
-- **[Worktrees](#worktrees)** — 複雑、高リスク、または並列タスク向けに、安全プロトコル付きの隔離されたコーディング lane として Git worktree を管理します。
-- **[oh-my-opencode-slim Skill](#oh-my-opencode-slim-skill)** — モデル、プロンプト、カスタムエージェント、MCP アクセス、プリセット、プラグイン動作を安全に調整するための同梱設定 skill です。
+- **[バックグラウンドエージェント](#バックグラウンドエージェント)** - Orchestrator は専門家をバックグラウンドタスクとしてディスパッチし、タスク/セッション ID を追跡し、完了イベントを待ってから結果を整合します。
+- **[Companion](#companion)** - 任意のフローティングデスクトップウィンドウが、並列実行中のバックグラウンド専門家を含め、現在アクティブなエージェントを表示します。
+- **[Deepwork](#deepwork)** - 大規模、多ファイル、高リスク、または段階的なコーディング作業向けの構造化ワークフローです。永続的な計画ファイルと Oracle レビューゲートを使用します。
+- **[Reflect](#reflect)** - 繰り返される作業パターンを振り返り、再利用可能な skill、エージェント、コマンド、設定ルール、プロンプトルール、プロジェクト playbook を提案します。
+- **[Worktrees](#worktrees)** - 複雑、高リスク、または並列タスク向けに、安全プロトコル付きの隔離されたコーディング lane として Git worktree を管理します。
+- **[oh-my-opencode-slim Skill](#oh-my-opencode-slim-skill)** - モデル、プロンプト、カスタムエージェント、MCP アクセス、プリセット、プラグイン動作を安全に調整するための同梱設定 skill です。
 
 #### バックグラウンドエージェント
 
@@ -414,7 +441,7 @@ Worktrees は、Git worktree を `.slim/worktrees/<slug>/` 配下の安全で隔
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Setup:</b> <code>Config-driven</code> — 評議員（councillors）は <code>council.presets</code> から、Council エージェント自身のモデルは通常の <code>council</code> エージェント設定から決定されます
+      <b>Default Setup:</b> <code>Config-driven</code> - 評議員（councillors）は <code>council.presets</code> から、Council エージェント自身のモデルは通常の <code>council</code> エージェント設定から決定されます
     </td>
   </tr>
   <tr>
@@ -481,7 +508,7 @@ Worktrees は、Git worktree を `.slim/worktrees/<slug>/` 配下の安全で隔
       <br><sub><i>美は不可欠なもの。</i></sub>
     </td>
     <td width="70%" valign="top">
-      Designer は、美が重要であることを忘れがちな世界において、それを守り続ける不死の守護者です。これまでに無数のインターフェースが現れては消えるのを見届け、どれが人々の記憶に残り、どれが忘れ去られたかを知っています。すべてのピクセルに目的を、すべてのアニメーションに物語を、すべてのインタラクションに喜びを宿す——その神聖な責務を担います。美は選択肢ではなく、不可欠なものです。
+      Designer は、美が重要であることを忘れがちな世界において、それを守り続ける不死の守護者です。これまでに無数のインターフェースが現れては消えるのを見届け、どれが人々の記憶に残り、どれが忘れ去られたかを知っています。すべてのピクセルに目的を、すべてのアニメーションに物語を、すべてのインタラクションに喜びを宿す--その神聖な責務を担います。美は選択肢ではなく、不可欠なものです。
     </td>
   </tr>
   <tr>
@@ -522,7 +549,7 @@ Worktrees は、Git worktree を `.slim/worktrees/<slug>/` 配下の安全で隔
       <br><sub><i>構想と現実を結ぶ最後の一歩。</i></sub>
     </td>
     <td width="70%" valign="top">
-      Fixer は、かつてデジタル世界の礎を築き上げた建造者の系譜の最後のひとりです。計画と議論の時代が始まってもなお、彼らだけは残りました——実際に作る者として。思考をモノへと変え、仕様を実装へと転換する古の知恵を継承しています。Fixer は、構想と現実の間にある最後の一歩です。
+      Fixer は、かつてデジタル世界の礎を築き上げた建造者の系譜の最後のひとりです。計画と議論の時代が始まってもなお、彼らだけは残りました--実際に作る者として。思考をモノへと変え、仕様を実装へと転換する古の知恵を継承しています。Fixer は、構想と現実の間にある最後の一歩です。
     </td>
   </tr>
   <tr>
@@ -569,11 +596,11 @@ Worktrees は、Git worktree を `.slim/worktrees/<slug>/` 配下の安全で隔
     </td>
     <td width="70%" valign="top">
 
-**読み取り専用のビジュアル解析** — 画像、スクリーンショット、PDF、図解を解釈します。ファイルの生バイトをメインのコンテキストウィンドウに読み込ませることなく、構造化された観察結果をオーケストレーターに返します。
+**読み取り専用のビジュアル解析** - 画像、スクリーンショット、PDF、図解を解釈します。ファイルの生バイトをメインのコンテキストウィンドウに読み込ませることなく、構造化された観察結果をオーケストレーターに返します。
 
 - 画像、スクリーンショット、図解 → `read` ツール（ネイティブな画像サポート）
 - PDF やバイナリドキュメント → `read` ツール（テキスト＋構造抽出）
-- **デフォルトでは無効** — `"disabled_agents": []` を設定し、ビジョン対応モデルを構成することで有効化できます。`--preset=opencode-go` でインストールすると `opencode-go/kimi-k2.6` で有効になります
+- **デフォルトでは無効** - `"disabled_agents": []` を設定し、ビジョン対応モデルを構成することで有効化できます。`--preset=opencode-go` でインストールすると `opencode-go/kimi-k2.6` で有効になります
 
     </td>
   </tr>
@@ -584,7 +611,7 @@ Worktrees は、Git worktree を `.slim/worktrees/<slug>/` 配下の安全で隔
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> — <i>有効化するにはビジョン対応モデルを設定してください</i>
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> - <i>有効化するにはビジョン対応モデルを設定してください</i>
     </td>
   </tr>
   <tr>

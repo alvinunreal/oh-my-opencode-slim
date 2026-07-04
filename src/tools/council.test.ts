@@ -17,7 +17,7 @@ function createMockPluginContext() {
   } as any;
 }
 
-// Test mocks can omit 'model' field — it's filled by the manager, not the test
+// Test mocks can omit 'model' field - it's filled by the manager, not the test
 type TestCouncillorResult = {
   name: string;
   model?: string;

@@ -737,7 +737,7 @@ describe('BackgroundJobBoard', () => {
       now: 1_000,
     });
 
-    // 4 seconds after launch — should show age annotation
+    // 4 seconds after launch - should show age annotation
     const prompt = board.formatForPrompt('parent-1', 5_000);
     expect(prompt).toContain('running [just launched, 4s ago]');
   });
@@ -752,7 +752,7 @@ describe('BackgroundJobBoard', () => {
       now: 1_000,
     });
 
-    // 39 seconds after launch — age label should be absent
+    // 39 seconds after launch - age label should be absent
     const prompt = board.formatForPrompt('parent-1', 40_000);
     expect(prompt).not.toContain('just launched');
     expect(prompt).toContain('/ running\n');
@@ -807,7 +807,7 @@ describe('BackgroundJobBoard', () => {
       now: 5_000,
     });
 
-    // 4 seconds after relaunch — should show [resumed, 4s ago]
+    // 4 seconds after relaunch - should show [resumed, 4s ago]
     const prompt = board.formatForPrompt('parent-1', 9_000);
     expect(prompt).toContain('running [resumed, 4s ago]');
   });

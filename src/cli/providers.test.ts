@@ -81,7 +81,7 @@ describe('providers', () => {
     expect(agents.oracle.variant).toBe('max');
     expect(agents.council).toBeUndefined();
     expect(agents.librarian.model).toBe('opencode-go/deepseek-v4-flash');
-    expect(agents.explorer.model).toBe('opencode-go/minimax-m2.7');
+    expect(agents.explorer.model).toBe('opencode-go/deepseek-v4-flash');
     expect(agents.designer.model).toBe('opencode-go/kimi-k2.7-code');
     expect(agents.fixer.model).toBe('opencode-go/deepseek-v4-flash');
     expect(agents.fixer.variant).toBe('high');

@@ -29,7 +29,7 @@ const COMMAND_NAME = 'preset';
  * the agent registry is changing.
  */
 export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
-  // Sync from module-level state in case of plugin re-init — the runtime
+  // Sync from module-level state in case of plugin re-init - the runtime
   // preset persists across dispose()/re-init cycles.
   let activePreset: string | null =
     getActiveRuntimePreset() ?? config.preset ?? null;

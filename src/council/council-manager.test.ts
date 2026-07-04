@@ -720,7 +720,7 @@ describe('CouncilManager', () => {
       );
 
       expect(result.success).toBe(true);
-      // Verify no prompt contamination — councillor gets raw prompt
+      // Verify no prompt contamination - councillor gets raw prompt
       const promptCalls = ctx.client.session.prompt.mock.calls as Array<
         [
           {
@@ -841,7 +841,7 @@ describe('CouncilManager', () => {
       );
 
       expect(result.success).toBe(false);
-      // No retry on timeout — messages should not be called
+      // No retry on timeout - messages should not be called
       expect(messagesCallCount).toBe(0);
       expect(result.councillorResults).toHaveLength(1);
       expect(result.councillorResults[0].status).toBe('timed_out');

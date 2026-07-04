@@ -439,7 +439,7 @@ export function createInterviewService(
     // Rename file if assistant provided a title (and file hasn't been renamed yet)
     await maybeRenameWithTitle(interview, state.title);
 
-    // Skip rewrite when parsed.state is null — agent already wrote the final spec
+    // Skip rewrite when parsed.state is null - agent already wrote the final spec
     let document: string;
     if (parsed.state) {
       document = await rewriteInterviewDocument(interview, state.summary);
@@ -611,7 +611,7 @@ export function createInterviewService(
       await appendInterviewAnswers(interview, state.questions, answers);
       const prompt = buildAnswerPrompt(answers, state.questions, maxQuestions);
 
-      // Use promptAsync for non-blocking — returns immediately, LLM
+      // Use promptAsync for non-blocking - returns immediately, LLM
       // processes in background. State push updates dashboard when done.
       const model = sessionModel.get(interview.sessionID);
       await ctx.client.session.promptAsync({
@@ -906,7 +906,7 @@ export function createInterviewService(
         `The user sent a freeform message via the dashboard chat panel:`,
         `${message}`,
         ``,
-        `Process this request — it may be a request to add a new section, revise existing content, ask clarifying questions, or make structural changes.`,
+        `Process this request - it may be a request to add a new section, revise existing content, ask clarifying questions, or make structural changes.`,
         `Update the specification document accordingly and include the updated 11-section specification.`,
         `Ask up to ${maxQuestions} clarifying questions if needed using the same <interview_state> JSON block format as before.`,
       ].join('\n');
@@ -980,7 +980,7 @@ export function createInterviewService(
           `The user confirmed the interview spec is complete.`,
           ``,
           `Produce a final, polished version of the full spec document.`,
-          `Do NOT include any <interview_state> block — just output the final spec as clean markdown.`,
+          `Do NOT include any <interview_state> block - just output the final spec as clean markdown.`,
           `The spec should be comprehensive, well-structured, and ready for implementation.`,
         ].join('\n');
       }

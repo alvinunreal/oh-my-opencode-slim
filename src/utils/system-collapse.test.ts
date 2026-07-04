@@ -19,7 +19,7 @@ describe('collapseSystemInPlace', () => {
 
     collapseSystemInPlace(output.system);
 
-    // Same reference — callers holding the original array see the change
+    // Same reference - callers holding the original array see the change
     expect(output.system).toBe(system);
     expect(system).toHaveLength(1);
     expect(system[0]).toBe('part one\n\npart two');
@@ -79,7 +79,7 @@ describe('collapseSystemInPlace', () => {
     // The output object sees the new array...
     expect(output.system).toEqual(['a\n\nb']);
 
-    // ...but the original reference is untouched — this is the bug.
+    // ...but the original reference is untouched - this is the bug.
     expect(system).toEqual(['a', 'b']);
     expect(system).not.toBe(output.system);
   });

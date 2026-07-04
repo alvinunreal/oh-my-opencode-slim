@@ -184,7 +184,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const presetAgents = config.presets[runtimePreset];
       config.agents = deepMerge(config.agents, presetAgents);
     } else if (runtimePreset) {
-      // Preset was deleted from config since last switch — clear stale state
+      // Preset was deleted from config since last switch - clear stale state
       setActiveRuntimePreset(null);
     }
 
@@ -471,7 +471,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           'orchestrator';
       }
 
-      // Merge Agent configs — per-agent shallow merge to preserve
+      // Merge Agent configs - per-agent shallow merge to preserve
       // user-supplied fields (e.g. tools, permission) from opencode.json
       if (!opencodeConfig.agent) {
         opencodeConfig.agent = { ...agents };
@@ -506,7 +506,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           if (models.length === 0) continue;
 
           // Use the first model in the model array. Not all providers
-          // require entries in opencodeConfig.provider — some are loaded
+          // require entries in opencodeConfig.provider - some are loaded
           // automatically by opencode (e.g. github-copilot, openrouter).
           // We cannot distinguish these from truly unconfigured providers
           // at config-hook time, so we cannot gate on the provider config
@@ -528,7 +528,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
               }
             }
           } else {
-            // Agent exists in slim but not in opencodeConfig.agent —
+            // Agent exists in slim but not in opencodeConfig.agent -
             // create entry
             (configAgent as Record<string, unknown>)[agentName] = {
               model: chosen.id,

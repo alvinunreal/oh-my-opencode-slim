@@ -131,7 +131,7 @@ describe('isRateLimitError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — disabled
+// ForegroundFallbackManager - disabled
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager (disabled)', () => {
@@ -152,7 +152,7 @@ describe('ForegroundFallbackManager (disabled)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — session.error
+// ForegroundFallbackManager - session.error
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.error', () => {
@@ -309,7 +309,7 @@ describe('ForegroundFallbackManager session.error', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — message.updated
+// ForegroundFallbackManager - message.updated
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager message.updated', () => {
@@ -371,7 +371,7 @@ describe('ForegroundFallbackManager message.updated', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — session.status retry
+// ForegroundFallbackManager - session.status retry
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.status', () => {
@@ -445,7 +445,7 @@ describe('ForegroundFallbackManager session.status', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — chain exhaustion
+// ForegroundFallbackManager - chain exhaustion
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager chain exhaustion', () => {
@@ -471,7 +471,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       },
     });
 
-    // Rate limit fires — only model in chain is already current → nothing to fall back to
+    // Rate limit fires - only model in chain is already current → nothing to fall back to
     await mgr.handleEvent({
       type: 'session.error',
       properties: { sessionID: 's', error: { message: 'rate limit exceeded' } },
@@ -536,7 +536,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — deduplication
+// ForegroundFallbackManager - deduplication
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager deduplication', () => {
@@ -553,7 +553,7 @@ describe('ForegroundFallbackManager deduplication', () => {
     };
 
     await mgr.handleEvent(event);
-    await mgr.handleEvent(event); // immediate second trigger — should be deduped
+    await mgr.handleEvent(event); // immediate second trigger - should be deduped
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
@@ -590,7 +590,7 @@ describe('ForegroundFallbackManager deduplication', () => {
       },
     });
 
-    // First error — model A fails, falls back to model B (openai/gpt-4o)
+    // First error - model A fails, falls back to model B (openai/gpt-4o)
     await mgr.handleEvent({
       type: 'session.error',
       properties: {
@@ -608,7 +608,7 @@ describe('ForegroundFallbackManager deduplication', () => {
       }),
     );
 
-    // Second error — model B also fails within the 5s dedup window.
+    // Second error - model B also fails within the 5s dedup window.
     // This is a DIFFERENT incident (new model), so dedup is bypassed
     // because the current model differs from lastTriggerModel.
     await mgr.handleEvent({
@@ -633,7 +633,7 @@ describe('ForegroundFallbackManager deduplication', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — subagent.session.created
+// ForegroundFallbackManager - subagent.session.created
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager subagent.session.created', () => {
@@ -647,7 +647,7 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
       properties: { sessionID: 'sub-1', agentName: 'explorer' },
     });
 
-    // Now trigger rate limit — should use explorer's chain
+    // Now trigger rate limit - should use explorer's chain
     await mgr.handleEvent({
       type: 'session.error',
       properties: { sessionID: 'sub-1', error: { message: 'rate limit' } },
@@ -668,7 +668,7 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — session.deleted cleanup
+// ForegroundFallbackManager - session.deleted cleanup
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.deleted', () => {
@@ -766,19 +766,19 @@ describe('ForegroundFallbackManager session.deleted', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager — resolveChain correctness
+// ForegroundFallbackManager - resolveChain correctness
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
   test('does not use another agent chain when known agent has no configured chain', async () => {
     // oracle has no chain in runtimeChains; without the fix resolveChain would
     // fall through to the cross-agent "last resort" and pick a model from
-    // orchestrator's chain — re-prompting oracle with an orchestrator model.
+    // orchestrator's chain - re-prompting oracle with an orchestrator model.
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       client,
       {
-        // oracle intentionally absent — no chain configured
+        // oracle intentionally absent - no chain configured
         orchestrator: ['openai/gpt-4o', 'google/gemini-2.5-pro'],
       },
       true,
@@ -811,7 +811,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       true,
     );
 
-    // No agent name tracked, no model tracked — triggers session.error
+    // No agent name tracked, no model tracked - triggers session.error
     await mgr.handleEvent({
       type: 'session.error',
       properties: {

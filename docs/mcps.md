@@ -1,6 +1,6 @@
 # MCP Servers
 
-Built-in Model Context Protocol (MCP) servers ship with oh-my-opencode-slim and give agents access to external tools — web search, library documentation, and code search.
+Built-in Model Context Protocol (MCP) servers ship with oh-my-opencode-slim and give agents access to external tools - web search, library documentation, and code search.
 
 ---
 

@@ -22,7 +22,7 @@ Fetch remote pages with content extraction tuned for docs/static sites.
 
 ## Code Search Tools
 
-Fast, structural code search and refactoring — more powerful than plain text grep.
+Fast, structural code search and refactoring - more powerful than plain text grep.
 
 | Tool | Description |
 |------|-------------|

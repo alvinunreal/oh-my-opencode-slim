@@ -6,7 +6,7 @@
  *   1. Looks up the next untried model in the agent's configured chain
  *   2. Aborts the rate-limited prompt via client.session.abort()
  *   3. Re-queues the last user message via client.session.promptAsync()
- *      with the new model — promptAsync returns immediately so we never
+ *      with the new model - promptAsync returns immediately so we never
  *      block the event handler waiting for a full LLM response.
  *
  * This mirrors the same fallback loop used for delegated sessions, but operates
@@ -171,7 +171,7 @@ export class ForegroundFallbackManager {
         // Check for rate-limit signals in the status message regardless of
         // status type. OpenCode proxies may emit monthly/weekly/5-hour usage
         // limit errors with type 'error' instead of 'retry' on fresh sessions
-        // where no retry is attempted — the retry-type guard would miss them.
+        // where no retry is attempted - the retry-type guard would miss them.
         if (
           msg.includes('rate limit') ||
           msg.includes('usage limit') ||
@@ -203,8 +203,8 @@ export class ForegroundFallbackManager {
         // Clean up all per-session state to prevent unbounded memory growth
         // in long-running instances with many subagent sessions.
         // OpenCode emits two shapes depending on context:
-        //   { properties: { sessionID } }   — subagent / task sessions
-        //   { properties: { info: { id } } } — top-level session deletion
+        //   { properties: { sessionID } }   - subagent / task sessions
+        //   { properties: { info: { id } } } - top-level session deletion
         // Mirror the same dual-shape lookup used elsewhere in the plugin.
         const props = event.properties as
           | { sessionID?: string; info?: { id?: string } }
@@ -232,7 +232,7 @@ export class ForegroundFallbackManager {
     if (this.inProgress.has(sessionID)) return;
 
     // Deduplicate: multiple events can fire for a single rate-limit event.
-    // Bypass dedup when the model changed since the last trigger — the new
+    // Bypass dedup when the model changed since the last trigger - the new
     // model's failure is a separate incident and the cascade should continue.
     const now = Date.now();
     const curModel = this.sessionModel.get(sessionID);
@@ -332,7 +332,7 @@ export class ForegroundFallbackManager {
         return;
       }
 
-      // promptAsync queues the prompt and returns immediately — this avoids
+      // promptAsync queues the prompt and returns immediately - this avoids
       // blocking the event handler while waiting for a full LLM response.
       // Cast required: promptAsync is not in the plugin TypeScript types for
       // oh-my-opencode-slim but IS present on the real OpenCode client at
@@ -413,7 +413,7 @@ export class ForegroundFallbackManager {
       const chain = this.chains[agentName];
       if (chain) return chain;
       // Known omos built-in agent (oracle, librarian, …) without a
-      // configured chain: keep isolation — do NOT bleed into other
+      // configured chain: keep isolation - do NOT bleed into other
       // agents' chains (preserves the cross-agent isolation contract
       // from PR #199).
       if ((ALL_AGENT_NAMES as readonly string[]).includes(agentName)) return [];

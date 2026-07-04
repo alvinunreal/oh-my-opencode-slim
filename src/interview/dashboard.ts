@@ -75,11 +75,11 @@ export async function readDashboardAuthFile(
       pid: number;
       startedAt: number;
     };
-    // Check if the PID is still alive — stale file from crashed dashboard
+    // Check if the PID is still alive - stale file from crashed dashboard
     try {
       process.kill(data.pid, 0); // signal 0 = existence check, no actual signal
     } catch {
-      // PID doesn't exist — stale auth file from crashed dashboard
+      // PID doesn't exist - stale auth file from crashed dashboard
       try {
         fsSync.unlinkSync(getAuthFilePath(port));
       } catch {
@@ -317,7 +317,7 @@ export function createDashboardServer(config: DashboardConfig): {
 
   function getKnownDirectories(): Set<string> {
     const dirs = new Set<string>();
-    // Always scan home directory — interviews may have been created from a
+    // Always scan home directory - interviews may have been created from a
     // session that ran with cwd=$HOME and never registered with the dashboard.
     dirs.add(os.homedir());
     for (const session of sessions.values()) {
@@ -352,7 +352,7 @@ export function createDashboardServer(config: DashboardConfig): {
         discoveredFolders.add(session.directory);
       }
     } catch {
-      // Session list not available — rely on registered sessions
+      // Session list not available - rely on registered sessions
     }
   }
 
@@ -504,7 +504,7 @@ export function createDashboardServer(config: DashboardConfig): {
     );
     const pathname = decodeURIComponent(url.pathname);
 
-    // NOTE: No CORS headers. Same-origin only — dashboard pages and
+    // NOTE: No CORS headers. Same-origin only - dashboard pages and
     // API share the same origin (127.0.0.1:port). Cross-origin POST is
     // blocked by browser preflight since we don't send Access-Control
     // headers. Do NOT add them without also adding CSRF protection.
@@ -1522,7 +1522,7 @@ export async function tryBecomeDashboard(
           await new Promise((resolve) => setTimeout(resolve, jitterMs()));
           continue;
         }
-        return null; // All retries exhausted — treat as session
+        return null; // All retries exhausted - treat as session
       }
       throw error;
     }

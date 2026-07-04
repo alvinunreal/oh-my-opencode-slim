@@ -58,12 +58,12 @@ Feature requests should stay lightweight and focus on:
 
 Only use these labels:
 
-- `bug` — bug report
-- `enhancement` — feature request or improvement
-- `needs-info` — cannot act yet because key details are missing
-- `confirmed` — a maintainer confirmed the issue or agrees the request is valid
-- `P0` — highest priority
-- `Share Your Thoughts` — open-ended feedback from the community
+- `bug` - bug report
+- `enhancement` - feature request or improvement
+- `needs-info` - cannot act yet because key details are missing
+- `confirmed` - a maintainer confirmed the issue or agrees the request is valid
+- `P0` - highest priority
+- `Share Your Thoughts` - open-ended feedback from the community
 
 If a label does not help triage or prioritization, do not add it.
 

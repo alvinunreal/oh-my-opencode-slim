@@ -30,10 +30,6 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 
 To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
 
-### Submit Your Preset
-
-Using a model mix that works well? Share it with the community through the **[preset submission form](https://github.com/alvinunreal/oh-my-opencode-slim/issues/new?template=preset_submission.yml)**. Accepted presets are reviewed and displayed in the **[Community Presets gallery](https://ohmyopencodeslim.com/community-presets)** with attribution.
-
 ### Manage Agent Skills with LazySkills
 
 <p align="center">
@@ -87,9 +83,37 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
+### Run from Master
+
+Use this if you want the latest code, easier bug fixes, or a local setup for
+development and contributions:
+
+```bash
+git clone https://github.com/alvinunreal/oh-my-opencode-slim.git ~/repos/oh-my-opencode-slim
+cd ~/repos/oh-my-opencode-slim
+bun install
+bun run build
+bun dist/cli/index.js install
+```
+
+The installer adds the local repo path to the `plugin` array in
+`~/.config/opencode/opencode.json`, so OpenCode loads the plugin from that
+folder. To update later:
+
+```bash
+cd ~/repos/oh-my-opencode-slim
+git pull
+bun install
+bun run build
+```
+
 ### Getting Started
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
+
+> [!TIP]
+> Tune the models and agents for your own workflow. The defaults are only a
+> starting point; the plugin is designed for deep flexibility and customization.
 
 To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
 
@@ -134,7 +158,7 @@ The default generated configuration includes both `openai` and `opencode-go` pre
       "orchestrator": { "model": "opencode-go/glm-5.2", "skills": [ "*" ], "mcps": [ "*", "!context7" ] },
       "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max", "skills": ["simplify"], "mcps": [] },
       "librarian": { "model": "opencode-go/deepseek-v4-flash", "skills": [], "mcps": [ "websearch", "context7", "gh_grep" ] },
-      "explorer": { "model": "opencode-go/minimax-m2.7", "skills": [], "mcps": [] },
+      "explorer": { "model": "opencode-go/deepseek-v4-flash", "skills": [], "mcps": [] },
       "designer": { "model": "opencode-go/kimi-k2.7-code", "variant": "medium", "skills": [], "mcps": [] },
       "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high", "skills": [], "mcps": [] }
     }
@@ -145,18 +169,6 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 ### For Alternative Providers
 
 To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
-
-### Temporarily Disable the Plugin
-
-Set `OH_MY_OPENCODE_SLIM_DISABLE=1` when starting OpenCode to make the plugin
-return without registering agents, tools, MCPs, hooks, Companion, or the TUI
-sidebar:
-
-```bash
-OH_MY_OPENCODE_SLIM_DISABLE=1 opencode
-```
-
-Truthy values are `1`, `true`, `yes`, and `on`.
 
 ### ✅ Verify Your Setup
 
@@ -187,18 +199,18 @@ V2 turns oh-my-opencode-slim into a scheduler-first multi-agent workflow system.
 The Orchestrator stays focused on planning, delegation, reconciliation, and
 verification while specialists do the work in their own lanes.
 
-- **[Background agents](#background-agents)** — the Orchestrator now dispatches
+- **[Background agents](#background-agents)** - the Orchestrator now dispatches
   specialists as background tasks, tracks task/session IDs, waits for completion
   events, and reconciles results before continuing.
-- **[Companion](#companion)** — an optional floating desktop window shows which
+- **[Companion](#companion)** - an optional floating desktop window shows which
   agents are currently active, including parallel background specialists.
-- **[Deepwork](#deepwork)** — a structured workflow for large, multi-file, risky,
+- **[Deepwork](#deepwork)** - a structured workflow for large, multi-file, risky,
   or phased coding work using persistent plan files and Oracle review gates.
-- **[Reflect](#reflect)** — reviews repeated work patterns and suggests reusable skills,
+- **[Reflect](#reflect)** - reviews repeated work patterns and suggests reusable skills,
   agents, commands, config rules, prompt rules, or project playbooks.
-- **[Worktrees](#worktrees)** — manages Git worktrees as isolated coding lanes
+- **[Worktrees](#worktrees)** - manages Git worktrees as isolated coding lanes
   with safety protocols for complex, risky, or parallel tasks.
-- **[oh-my-opencode-slim skill](#oh-my-opencode-slim-skill)** — a bundled
+- **[oh-my-opencode-slim skill](#oh-my-opencode-slim-skill)** - a bundled
   configuration skill that helps tune models, prompts, custom agents, MCP access,
   presets, and plugin behavior safely.
 
@@ -454,7 +466,7 @@ rules.
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Setup:</b> <code>Config-driven</code> — councillors come from <code>council.presets</code> and the Council agent model comes from your normal <code>council</code> agent config
+      <b>Default Setup:</b> <code>Config-driven</code> - councillors come from <code>council.presets</code> and the Council agent model comes from your normal <code>council</code> agent config
     </td>
   </tr>
   <tr>
@@ -609,11 +621,11 @@ rules.
     </td>
     <td width="70%" valign="top">
 
-**Read-only visual analysis** — interprets images, screenshots, PDFs, and diagrams. Returns structured observations to the orchestrator without loading raw file bytes into the main context window.
+**Read-only visual analysis** - interprets images, screenshots, PDFs, and diagrams. Returns structured observations to the orchestrator without loading raw file bytes into the main context window.
 
 - Images, screenshots, diagrams → `read` tool (native image support)
 - PDFs and binary documents → `read` tool (text + structure extraction)
-- **Disabled by default** — enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/kimi-k2.6`
+- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/kimi-k2.6`
 
     </td>
   </tr>
@@ -624,7 +636,7 @@ rules.
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> — <i>configure a vision-capable model to enable</i>
+      <b>Default Model:</b> <code>openai/gpt-5.4-mini</code> - <i>configure a vision-capable model to enable</i>
     </td>
   </tr>
   <tr>

@@ -3,7 +3,7 @@ import { type AgentDefinition, resolvePrompt } from './orchestrator';
 import { createReadOnlyAgentPermission } from './permissions';
 
 /**
- * Councillor agent — a read-only advisor in the multi-LLM council.
+ * Councillor agent - a read-only advisor in the multi-LLM council.
  *
  * Councillors are spawned by CouncilManager as agent sessions (visible in
  * tmux/UI). They have read-only access to the codebase via tools but CANNOT
@@ -13,7 +13,7 @@ import { createReadOnlyAgentPermission } from './permissions';
  * deny all, then selectively allow read-only tools.
  *
  * The per-councillor model is overridden at session creation time via the
- * `model` field in the prompt body — the agent factory's default model is
+ * `model` field in the prompt body - the agent factory's default model is
  * just a fallback.
  */
 const COUNCILLOR_PROMPT = `You are a councillor in a multi-model council.
@@ -35,13 +35,13 @@ other agents. You are an advisor, not an implementer.
 ${NO_SHELL_READONLY_FILE_OPERATIONS_RULES}
 
 **Behavior**:
-- **Examine the codebase** before answering — your read access is what makes \
+- **Examine the codebase** before answering - your read access is what makes \
   council valuable. Don't guess at code you can see.
 - Analyze the problem thoroughly
 - Provide a complete, well-reasoned response
 - Focus on the quality and correctness of your solution
 - Be direct and concise
-- Don't be influenced by what other councillors might say — you won't see \
+- Don't be influenced by what other councillors might say - you won't see \
   their responses
 
 **Output**:

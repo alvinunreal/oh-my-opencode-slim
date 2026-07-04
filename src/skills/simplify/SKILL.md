@@ -7,7 +7,7 @@ description: Simplifies code for clarity without changing behavior. Use for read
 
 ## Overview
 
-Simplify code by reducing complexity while preserving exact behavior. The goal is not fewer lines — it's code that is easier to read, understand, modify, and debug. Every simplification must pass a simple test: "Would a new team member understand this faster than the original?"
+Simplify code by reducing complexity while preserving exact behavior. The goal is not fewer lines - it's code that is easier to read, understand, modify, and debug. Every simplification must pass a simple test: "Would a new team member understand this faster than the original?"
 
 ## When to Use
 
@@ -20,16 +20,16 @@ Simplify code by reducing complexity while preserving exact behavior. The goal i
 
 **When NOT to use:**
 
-- Code is already clean and readable — don't simplify for the sake of it
-- You don't understand what the code does yet — comprehend before you simplify
+- Code is already clean and readable - don't simplify for the sake of it
+- You don't understand what the code does yet - comprehend before you simplify
 - The code is performance-critical and the "simpler" version would be measurably slower
-- You're about to rewrite the module entirely — simplifying throwaway code wastes effort
+- You're about to rewrite the module entirely - simplifying throwaway code wastes effort
 
 ## The Five Principles
 
 ### 1. Preserve Behavior Exactly
 
-Don't change what the code does — only how it expresses it. All inputs, outputs, side effects, error behavior, and edge cases must remain identical. If you're not sure a simplification preserves behavior, don't make it.
+Don't change what the code does - only how it expresses it. All inputs, outputs, side effects, error behavior, and edge cases must remain identical. If you're not sure a simplification preserves behavior, don't make it.
 
 Before every change, ask:
 
@@ -48,7 +48,7 @@ Before simplifying:
 2. Study how neighboring code handles similar patterns
 3. Match the project's style for imports, naming, function style, error handling, and type annotations
 
-Simplification that breaks project consistency is not simplification — it's churn.
+Simplification that breaks project consistency is not simplification - it's churn.
 
 ### 3. Prefer Clarity Over Cleverness
 

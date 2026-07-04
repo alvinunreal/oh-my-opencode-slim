@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Provides an OpenCode hook implementation for managing deepwork sessions — heavy, multi-phase coding tasks that require structured planning, phased execution, and continuous validation.
+Provides an OpenCode hook implementation for managing deepwork sessions - heavy, multi-phase coding tasks that require structured planning, phased execution, and continuous validation.
 
 This hook enables developers to:
 - Initiate deepwork sessions via `/deepwork <task>` command

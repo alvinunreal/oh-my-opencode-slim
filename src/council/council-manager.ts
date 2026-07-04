@@ -125,7 +125,7 @@ export class CouncilManager {
       log(`[council-manager] Preset "${resolvedPreset}" has no councillors`);
       return {
         success: false,
-        error: `Preset "${resolvedPreset}" has no councillors configured. Note: the reserved key "master" is ignored — use councillor names as keys`,
+        error: `Preset "${resolvedPreset}" has no councillors configured. Note: the reserved key "master" is ignored - use councillor names as keys`,
         councillorResults: [],
       };
     }
@@ -203,7 +203,7 @@ export class CouncilManager {
     councillorCount: number,
   ): Promise<void> {
     const message = [
-      `⎔ Council starting — ${councillorCount} councillors launching — ctrl+x ↓ to watch`,
+      `⎔ Council starting - ${councillorCount} councillors launching - ctrl+x ↓ to watch`,
       '',
       '[system status: continue without acknowledging this notification]',
     ].join('\n');

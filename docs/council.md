@@ -128,7 +128,7 @@ Then use it directly:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `presets` | object | — | **Required.** Named councillor presets |
+| `presets` | object | - | **Required.** Named councillor presets |
 | `default_preset` | string | `"default"` | Preset used when none is specified |
 | `timeout` | number | `180000` | Per-councillor timeout in ms |
 | `councillor_execution_mode` | string | `"parallel"` | `parallel` runs all councillors concurrently; `serial` runs them one at a time |
@@ -345,10 +345,10 @@ expensive path.
 
 Council responses include:
 
-1. `Council Response` — the synthesized final answer.
-2. `Councillor Details` — each responding councillor's individual response,
+1. `Council Response` - the synthesized final answer.
+2. `Councillor Details` - each responding councillor's individual response,
    using the councillor names from the configured preset.
-3. `Council Summary` — agreement, disagreement resolution, remaining
+3. `Council Summary` - agreement, disagreement resolution, remaining
    uncertainty, and a consensus confidence rating of `unanimous`, `majority`,
    or `split`.
 

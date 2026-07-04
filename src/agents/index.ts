@@ -650,7 +650,7 @@ export function getAgentConfigs(
       // and as a subagent (orchestrator can delegate to it)
       sdkConfig.mode = 'all';
     } else if (name === 'councillor') {
-      // Internal agent — subagent mode, hidden from @ autocomplete
+      // Internal agent - subagent mode, hidden from @ autocomplete
       sdkConfig.mode = 'subagent';
       sdkConfig.hidden = true;
     } else if (isSubagent(name)) {

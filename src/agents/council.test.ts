@@ -81,10 +81,10 @@ describe('formatCouncillorResults', () => {
     );
     expect(formatted).toContain('**Failed/Timed-out Councillors**:');
     expect(formatted).toContain(
-      '**beta**: timed_out — Request timed out after 180000ms',
+      '**beta**: timed_out - Request timed out after 180000ms',
     );
     expect(formatted).toContain(
-      '**gamma**: failed — Provider returned empty response',
+      '**gamma**: failed - Provider returned empty response',
     );
     expect(formatted).not.toContain('**beta** (gpt-5.5):');
     expect(formatted).not.toContain('**gamma** (gemini-pro):');

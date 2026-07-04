@@ -422,7 +422,7 @@
           "maximum": 5
         },
         "master": {
-          "description": "DEPRECATED — ignored. Council agent synthesizes directly."
+          "description": "DEPRECATED - ignored. Council agent synthesizes directly."
         }
       },
       "required": [

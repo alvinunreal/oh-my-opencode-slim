@@ -2,7 +2,7 @@
 name = "oh-my-opencode-slim-companion"
 version = "0.1.3"
 edition = "2021"
-description = "Desktop companion for oh-my-opencode-slim — shows active agent GIFs per session"
+description = "Desktop companion for oh-my-opencode-slim - shows active agent GIFs per session"
 
 [[bin]]
 name = "oh-my-opencode-slim-companion"

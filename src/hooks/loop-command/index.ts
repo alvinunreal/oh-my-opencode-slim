@@ -14,7 +14,7 @@ function activationPrompt(text: string): string {
   return [
     'The user ran `/loop`. From the text below, extract: goal, successCriteria, maxAttempts.',
     '',
-    'If ANY are missing or unclear — push back and ask the user to clarify.',
+    'If ANY are missing or unclear - push back and ask the user to clarify.',
     'Do not assume or guess. All three must be explicit.',
     '',
     'Once all three are clear, run the loop:',

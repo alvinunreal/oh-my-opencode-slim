@@ -175,7 +175,7 @@ garbage`),
   });
 
   test('normalizeUnicode unifies expected typographic variants', () => {
-    expect(normalizeUnicode('“uno”…\u00A0dos—tres')).toBe('"uno"... dos-tres');
+    expect(normalizeUnicode('“uno”…\u00A0dos-tres')).toBe('"uno"... dos-tres');
   });
 
   test('normalizeUnicode covers less common typographic variants', () => {

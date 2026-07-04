@@ -375,8 +375,8 @@ export function renderDashboardPage(
         <p class="muted">${totalCount} item${totalCount === 1 ? '' : 's'}</p>
       </div>
       <div class="info-box">
-        <strong>Interviews</strong> — live sessions and recovered files. State is pushed from OpenCode sessions to this dashboard.<br>
-        <strong>Files without session</strong> — <code>.md</code> files in <code>${escapeHtml(outputFolder)}</code> with no frontmatter. Resume with <code>/interview &lt;name&gt;</code>.
+        <strong>Interviews</strong> - live sessions and recovered files. State is pushed from OpenCode sessions to this dashboard.<br>
+        <strong>Files without session</strong> - <code>.md</code> files in <code>${escapeHtml(outputFolder)}</code> with no frontmatter. Resume with <code>/interview &lt;name&gt;</code>.
       </div>
       <details style="margin-bottom:24px">
         <summary style="cursor:pointer;font-size:13px;color:rgba(255,255,255,0.4);user-select:none">Settings</summary>
@@ -404,7 +404,7 @@ export function renderDashboardPage(
       ${fileSection}
       <div class="footer">OH MY OPENCODE SLIM</div>
     </div>
-    <div class="update-banner" id="updateBanner">Dashboard updated — tap to refresh</div>
+    <div class="update-banner" id="updateBanner">Dashboard updated - tap to refresh</div>
     <script>
       ${clipboardHelperJs()}
       document.querySelectorAll('.copy-btn').forEach(btn => {
@@ -1076,7 +1076,7 @@ export function renderInterviewPage(
     </div>
 
     <div class="chat-panel" id="chatPanel">
-      <input type="text" id="chatInput" class="chat-input" placeholder="Send a message to the agent — add a section, revise content, ask questions..." autocomplete="off" />
+      <input type="text" id="chatInput" class="chat-input" placeholder="Send a message to the agent - add a section, revise content, ask questions..." autocomplete="off" />
       <button class="chat-send" id="chatSendBtn" type="button" disabled>Send</button>
     </div>
 
@@ -1435,7 +1435,7 @@ export function renderInterviewPage(
 
       // simpleMarkdown: safe because escaping happens BEFORE markdown
       // processing. Adding raw HTML output from user content would break
-      // this safety — always use textContent for user data.
+      // this safety - always use textContent for user data.
       function simpleMarkdown(text) {
         if (!text) return '';
         const escaped = text
@@ -1581,7 +1581,7 @@ export function renderInterviewPage(
             aBadge.textContent = 'A';
             const aText = document.createElement('span');
             aText.className = 'qa-text qa-text-a';
-            aText.textContent = pair.a || '—';
+            aText.textContent = pair.a || '-';
             aRow.appendChild(aBadge);
             aRow.appendChild(aText);
             card.appendChild(aRow);
@@ -1649,7 +1649,7 @@ export function renderInterviewPage(
         if (busy) {
           input.placeholder = 'Agent is processing...';
         } else {
-          input.placeholder = 'Send a message to the agent — add a section, revise content, ask questions...';
+          input.placeholder = 'Send a message to the agent - add a section, revise content, ask questions...';
         }
       }
 
@@ -1807,7 +1807,7 @@ export function renderInterviewPage(
         statusEl.textContent = data.mode.toUpperCase();
         statusEl.className = isDone ? 'status-completed' : '';
         
-        // Render Markdown Path — always visible in completed mode
+        // Render Markdown Path - always visible in completed mode
         const pathContainer = document.getElementById('filePathContainer');
         const pathElement = document.getElementById('markdownPath');
         const mdPath = data.markdownPath || (data.interview && data.interview.markdownPath);
@@ -1825,7 +1825,7 @@ export function renderInterviewPage(
           pathContainer.style.display = 'none';
         }
 
-        // Resume command — only in session-disconnected mode
+        // Resume command - only in session-disconnected mode
         var resumeRow = document.getElementById('resumeRow');
         if (resumeRow) {
           var showResume = data.mode === 'session-disconnected';
@@ -1835,7 +1835,7 @@ export function renderInterviewPage(
           }
         }
 
-        // Nudge actions — only for completed (live session)
+        // Nudge actions - only for completed (live session)
         // session-disconnected can't nudge (no session to receive it)
         const nudgeActions = document.getElementById('nudgeActions');
         const moreBtn = document.getElementById('moreQuestionsBtn');
@@ -1958,7 +1958,7 @@ export function renderInterviewPage(
             if (confirmBtn) confirmBtn.disabled = false;
           } else {
             try { await refresh(); } catch (_) {}
-            schedulePoll(); // Restart polling — nudge may reactivate interview
+            schedulePoll(); // Restart polling - nudge may reactivate interview
           }
         } catch (_err) {
           document.getElementById('submitStatus').textContent = 'Network error.';

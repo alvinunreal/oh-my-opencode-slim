@@ -73,7 +73,7 @@ export const NO_SHELL_READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules*
 - Use glob/grep/ast_grep_search for discovery and read for file contents.
 - Do not use bash or shell commands.`;
 
-// Tmux pane spawn delay (ms) — gives TmuxSessionManager time to create pane
+// Tmux pane spawn delay (ms) - gives TmuxSessionManager time to create pane
 export const TMUX_SPAWN_DELAY_MS = 500;
 
 // Stagger delay (ms) between parallel councillor launches to avoid tmux collisions

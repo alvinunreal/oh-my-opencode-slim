@@ -277,7 +277,7 @@ describe('readJsonBody', () => {
         } catch (error) {
           caughtError =
             error instanceof Error ? error : new Error(String(error));
-          // Socket already destroyed — can't send response
+          // Socket already destroyed - can't send response
         }
       },
     );
@@ -295,7 +295,7 @@ describe('readJsonBody', () => {
     });
 
     try {
-      // Send a body larger than 64KB — connection will reset
+      // Send a body larger than 64KB - connection will reset
       const bigPayload = { data: 'x'.repeat(65 * 1024) };
       try {
         await fetch(`http://127.0.0.1:${port}/`, {

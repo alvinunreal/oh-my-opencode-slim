@@ -33,7 +33,7 @@ export function createDashboardManager(
   const interviewConfig = config.interview;
   const service = createInterviewService(ctx, interviewConfig);
 
-  // Async init — resolves once we know our role (dashboard or session)
+  // Async init - resolves once we know our role (dashboard or session)
   let initDone = false;
   let isDashboard = false;
   let dashboardBaseUrl = '';
@@ -132,7 +132,7 @@ export function createDashboardManager(
         // ── We're a SESSION ─────────────────────────────────────────
         const probe = await probeDashboard(dashboardPort);
         if (!probe.alive) {
-          // Brief retry — dashboard may still be starting
+          // Brief retry - dashboard may still be starting
           await new Promise((r) => setTimeout(r, 500));
           const retry = await probeDashboard(dashboardPort);
           if (!retry.alive) {

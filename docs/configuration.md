@@ -9,7 +9,7 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 | File | Purpose |
 |------|---------|
 | `~/.config/opencode/opencode.json` | OpenCode core settings (plugin registration, providers) |
-| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings — agents, multiplexer, MCPs, council |
+| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings - agents, multiplexer, MCPs, council |
 | `~/.config/opencode/oh-my-opencode-slim.jsonc` | Same, but with JSONC (comments + trailing commas). Takes precedence over `.json` if both exist |
 | `.opencode/oh-my-opencode-slim.json` | Project-local overrides (optional, higher precedence than user config) |
 
@@ -54,7 +54,7 @@ When a `preset` is active, the plugin checks preset directories before falling b
   └── ...
 ```
 
-Both `{agent}.md` and `{agent}_append.md` can coexist — the full replacement takes effect first, then the append. If neither exists, the built-in default prompt is used.
+Both `{agent}.md` and `{agent}_append.md` can coexist - the full replacement takes effect first, then the append. If neither exists, the built-in default prompt is used.
 
 ---
 
@@ -94,30 +94,30 @@ All config files support **JSONC** (JSON with Comments):
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `preset` | string | — | Active preset name (e.g. `"openai"`, `"best"`) |
+| `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 
 ### Runtime Preset Switching
 
 Presets can also be switched at runtime without restarting using the `/preset` command. See [Preset Switching](preset-switching.md) for details.
 
-| `presets` | object | — | Named preset configurations |
+| `presets` | object | - | Named preset configurations |
 |-----------|--------|---|-----------------------------|
-| `presets.<name>.<agent>.model` | string | — | Model ID in `provider/model` format |
-| `presets.<name>.<agent>.temperature` | number | — | Temperature (0–2) |
-| `presets.<name>.<agent>.variant` | string | — | Reasoning effort: `"low"`, `"medium"`, `"high"` |
-| `presets.<name>.<agent>.displayName` | string | — | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
-| `presets.<name>.<agent>.skills` | string[] | — | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
-| `presets.<name>.<agent>.mcps` | string[] | — | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
-| `presets.<name>.<agent>.options` | object | — | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
-| `agents.<customAgent>.model` | string\|array | — | Required for custom agents inferred from unknown `agents` keys |
-| `agents.<customAgent>.prompt` | string | — | Full execution prompt for a custom agent |
-| `agents.<customAgent>.orchestratorPrompt` | string | — | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
-| `agents.<agent>.displayName` | string | — | Custom user-facing alias for the agent in the active config |
-| `acpAgents.<name>.command` | string | — | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` |
+| `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
+| `presets.<name>.<agent>.temperature` | number | - | Temperature (0–2) |
+| `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"` |
+| `presets.<name>.<agent>.displayName` | string | - | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
+| `presets.<name>.<agent>.skills` | string[] | - | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
+| `presets.<name>.<agent>.mcps` | string[] | - | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
+| `presets.<name>.<agent>.options` | object | - | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
+| `agents.<customAgent>.model` | string\|array | - | Required for custom agents inferred from unknown `agents` keys |
+| `agents.<customAgent>.prompt` | string | - | Full execution prompt for a custom agent |
+| `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
+| `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
+| `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command |
 | `acpAgents.<name>.env` | object | `{}` | Extra environment variables for the ACP subprocess |
 | `acpAgents.<name>.cwd` | string | session directory | Working directory override for this ACP subprocess; protocol paths should be absolute |
-| `acpAgents.<name>.description` | string | — | Description shown to OpenCode and injected into the orchestrator routing prompt |
+| `acpAgents.<name>.description` | string | - | Description shown to OpenCode and injected into the orchestrator routing prompt |
 | `acpAgents.<name>.prompt` | string | generated wrapper prompt | Optional full prompt for the lightweight wrapper subagent |
 | `acpAgents.<name>.orchestratorPrompt` | string | generated routing block | Optional exact routing block injected into the orchestrator prompt |
 | `acpAgents.<name>.wrapperModel` | string | fixer default | Cheap OpenCode model used by the wrapper subagent that calls `acp_run` |
@@ -140,10 +140,10 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
 | `fallback.retryDelayMs` | number | `500` | Delay between retry attempts |
 | `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
-| `council.presets` | object | — | **Required if using council.** Named councillor presets |
-| `council.presets.<name>.<councillor>.model` | string | — | Councillor model |
-| `council.presets.<name>.<councillor>.variant` | string | — | Councillor variant |
-| `council.presets.<name>.<councillor>.prompt` | string | — | Optional role guidance for the councillor |
+| `council.presets` | object | - | **Required if using council.** Named councillor presets |
+| `council.presets.<name>.<councillor>.model` | string | - | Councillor model |
+| `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant |
+| `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor |
 | `council.default_preset` | string | `"default"` | Default preset when none is specified |
 | `council.timeout` | number | `180000` | Per-councillor timeout (ms) |
 | `council.councillor_execution_mode` | string | `"parallel"` | Run councillors in `parallel` or `serial`; use `serial` for single-model setups |
@@ -154,7 +154,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) |
 | `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence |
 | `companion.enabled` | boolean | `false` | Enable/disable the floating window Rust companion |
-| `companion.binaryPath` | string | — | Optional path to a custom companion binary to launch instead of the default install path |
+| `companion.binaryPath` | string | - | Optional path to a custom companion binary to launch instead of the default install path |
 | `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` |
 | `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) |
 

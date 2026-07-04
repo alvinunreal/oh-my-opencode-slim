@@ -48,7 +48,7 @@ export const MODEL_MAPPINGS = {
     orchestrator: { model: 'opencode-go/glm-5.2' },
     oracle: { model: 'opencode-go/qwen3.7-max', variant: 'max' },
     librarian: { model: 'opencode-go/deepseek-v4-flash' },
-    explorer: { model: 'opencode-go/minimax-m2.7' },
+    explorer: { model: 'opencode-go/deepseek-v4-flash' },
     designer: { model: 'opencode-go/kimi-k2.7-code', variant: 'medium' },
     fixer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
     observer: { model: 'opencode-go/kimi-k2.6' },

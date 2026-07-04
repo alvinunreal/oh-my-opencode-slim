@@ -7,7 +7,7 @@ Implements OpenCode lifecycle hooks that transform, process, and manage chat mes
 
 ### Core Architecture
 - **Factory Pattern**: Each hook is created via a factory function (e.g., `createApplyPatchHook()`, `createAutoUpdateCheckerHook()`) that returns a hook function matching the OpenCode hook signature.
-- **Stateful Factories**: Hook factories may maintain closure state between invocations (e.g., `createAutoUpdateCheckerHook` guards with `hasChecked`; `createTaskSessionManagerHook` manages session lifecycle). Other hooks remain stateless — each factory decides based on its needs.
+- **Stateful Factories**: Hook factories may maintain closure state between invocations (e.g., `createAutoUpdateCheckerHook` guards with `hasChecked`; `createTaskSessionManagerHook` manages session lifecycle). Other hooks remain stateless - each factory decides based on its needs.
 - **Message Transformation Pipeline**: Hooks operate on the `MessageWithParts[]` type, allowing transformation of user messages, assistant responses, and system messages.
 
 ### Key Types & Interfaces

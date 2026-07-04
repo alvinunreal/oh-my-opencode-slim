@@ -105,14 +105,14 @@ Returns the councillor responses with a summary footer.`,
         const parts: string[] = [];
         if (hasMaster && legacyMasterModel) {
           parts.push(
-            `\`council.master\` is deprecated and will be removed in a future version. Its \`model\` is currently used as a fallback for the council agent — add a \`council\` entry to your preset to make this explicit.`,
+            `\`council.master\` is deprecated and will be removed in a future version. Its \`model\` is currently used as a fallback for the council agent - add a \`council\` entry to your preset to make this explicit.`,
           );
         }
         if (trulyIgnored.length > 0) {
           parts.push(
             `${trulyIgnored.map((f) => `\`council.${f}\``).join(', ')} ${
               trulyIgnored.length === 1 ? 'is' : 'are'
-            } deprecated and ignored — remove ${
+            } deprecated and ignored - remove ${
               trulyIgnored.length === 1 ? 'it' : 'them'
             } from your config.`,
           );

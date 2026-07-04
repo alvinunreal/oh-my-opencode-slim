@@ -35,7 +35,7 @@ function cleanupOldLogs(logDir: string): void {
       }
     }
   } catch {
-    // Directory may not exist yet — that's fine
+    // Directory may not exist yet - that's fine
   }
 
   // Apply the same 7-day retention to persisted background task files
@@ -56,7 +56,7 @@ function cleanupOldLogs(logDir: string): void {
       }
     }
   } catch {
-    // bg-tasks dir may not exist yet — that's fine
+    // bg-tasks dir may not exist yet - that's fine
   }
 }
 
@@ -65,13 +65,13 @@ export function initLogger(sessionId: string): void {
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {
-    // Directory creation failed — logging will silently fail
+    // Directory creation failed - logging will silently fail
   }
   logFile = path.join(dir, `${LOG_PREFIX}${sessionId}${LOG_SUFFIX}`);
   try {
     fs.closeSync(fs.openSync(logFile, 'a'));
   } catch {
-    // File creation failed — later writes will silently fail
+    // File creation failed - later writes will silently fail
   }
   cleanupOldLogs(dir);
 }
@@ -90,7 +90,7 @@ export async function flushLoggerForTesting(): Promise<void> {
 }
 export function log(message: string, data?: unknown): void {
   const target = logFile;
-  if (!target) return; // Uninitialized — silently no-op
+  if (!target) return; // Uninitialized - silently no-op
   try {
     const timestamp = new Date().toISOString();
     let dataStr = '';

@@ -20,7 +20,7 @@ export interface InterviewAssistantState {
 
 // ─── Zod Schemas (for validating untrusted LLM output) ─────────────
 
-/** Raw question object from LLM output — loose, everything optional. */
+/** Raw question object from LLM output - loose, everything optional. */
 export const RawQuestionSchema = z.object({
   id: z.string().optional(),
   question: z.string().optional(),

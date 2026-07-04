@@ -58,7 +58,7 @@ Or let the orchestrator delegate to it when its routing prompt matches the task.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `command` | string | — | ACP executable. Put flags in `args`, not here. |
+| `command` | string | - | ACP executable. Put flags in `args`, not here. |
 | `args` | string[] | `[]` | Arguments for the ACP command. |
 | `env` | object | `{}` | Extra environment variables for the subprocess. |
 | `cwd` | string | current session directory | Working directory override. ACP paths should be absolute. |

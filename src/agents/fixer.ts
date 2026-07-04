@@ -20,7 +20,7 @@ ${WRITABLE_FILE_OPERATIONS_RULES}
 - NO external research (no websearch, context7, gh_grep)
 - NO delegation or spawning subagents
 - No multi-step research/planning; minimal execution sequence ok
-- If context is insufficient: use grep/glob/read directly — do not delegate
+- If context is insufficient: use grep/glob/read directly - do not delegate
 - Only ask for missing inputs you truly cannot retrieve yourself
 - Do not act as the primary reviewer; implement requested changes and surface obvious issues briefly
 

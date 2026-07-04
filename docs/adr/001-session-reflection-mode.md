@@ -23,7 +23,7 @@ Current `/reflect` only looks at the current conversation and project files. The
 **Rationale:**
 - Consistent with how `/reflect` currently works (prompt-based guidance)
 - The LLM already has tools (Read, Write, Bash) to do everything needed
-- Smallest useful form — no code changes required
+- Smallest useful form - no code changes required
 - YAGNI: Start simple, add code if prompt-only proves insufficient
 
 **Alternatives considered:**
@@ -129,7 +129,7 @@ OpenCode logs
 **Decision:** LLM manages its own cache using Read/Write tools.
 
 **Rationale:**
-- No new code needed — LLM already has file tools
+- No new code needed - LLM already has file tools
 - Avoids re-analyzing expensive sessions
 - Enables incremental updates (only analyze new sessions)
 
@@ -182,7 +182,7 @@ OpenCode logs
 
 ## Consequences
 
-- No code changes needed — purely skill instruction updates
+- No code changes needed - purely skill instruction updates
 - All OMOS persistent data lives in one directory tree
 - Reflections are available across all projects (global)
 - LLM manages file I/O, cache, and aggregation

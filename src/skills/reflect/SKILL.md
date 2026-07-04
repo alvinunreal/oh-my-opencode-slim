@@ -35,7 +35,7 @@ repeated patterns, friction, and improvement opportunities.
 
 ### Session Discovery
 
-1. **Load recent sessions** — Query the SQLite database directly:
+1. **Load recent sessions** - Query the SQLite database directly:
    ```bash
    bun -e "import Database from 'bun:sqlite'; const db = new Database('/home/mhenke/.local/share/opencode/opencode.db'); console.log(db.query('SELECT id, directory, title, agent, model, time_created, cost, tokens_input, tokens_output FROM session ORDER BY time_created DESC LIMIT 50').all())"
    ```
@@ -43,7 +43,7 @@ repeated patterns, friction, and improvement opportunities.
 
    **Session table columns:** `id, directory, title, agent, model, time_created, cost, tokens_input, tokens_output`
 
-2. **Load session messages** — For each session ID, query the message table:
+2. **Load session messages** - For each session ID, query the message table:
    ```bash
    bun -e "import Database from 'bun:sqlite'; const db = new Database('/home/mhenke/.local/share/opencode/opencode.db'); console.log(db.query('SELECT data FROM message WHERE session_id = ?').all('ses_14de9c68effegtZtlATm42wnz7'))"
    ```
@@ -96,16 +96,16 @@ Store session summaries in `~/.config/opencode/oh-my-opencode-slim/reflections/s
 
 After analyzing all sessions, aggregate findings:
 
-1. **Group by theme** — sessions with similar frictions cluster together
-2. **Count frequency** — "42/50 sessions had repeated grep before editing"
-3. **Rank by impact** — prioritize recommendations that appear most often
-4. **Filter noise** — skip one-off issues, focus on repeated patterns
-5. **Cross-reference** — see if patterns correlate with specific models, agents, or repos
+1. **Group by theme** - sessions with similar frictions cluster together
+2. **Count frequency** - "42/50 sessions had repeated grep before editing"
+3. **Rank by impact** - prioritize recommendations that appear most often
+4. **Filter noise** - skip one-off issues, focus on repeated patterns
+5. **Cross-reference** - see if patterns correlate with specific models, agents, or repos
 
 **Scope categories:**
-- **Global** — applies to all repos (pattern seen in >50% of repos)
-- **Cross-repo** — applies to specific repos where pattern appears
-- **Project-specific** — only relevant to one repo
+- **Global** - applies to all repos (pattern seen in >50% of repos)
+- **Cross-repo** - applies to specific repos where pattern appears
+- **Project-specific** - only relevant to one repo
 
 ### Output Format
 

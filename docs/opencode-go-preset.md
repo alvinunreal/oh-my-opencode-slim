@@ -51,7 +51,7 @@ role:
 | Orchestrator | `opencode-go/glm-5.2` |
 | Oracle | `opencode-go/qwen3.7-max` (`max`) |
 | Librarian | `opencode-go/deepseek-v4-flash` |
-| Explorer | `opencode-go/minimax-m2.7` |
+| Explorer | `opencode-go/deepseek-v4-flash` |
 | Designer | `opencode-go/kimi-k2.7-code` (`medium`) |
 | Fixer | `opencode-go/deepseek-v4-flash` (`high`) |
 | Observer | `opencode-go/kimi-k2.6` |
@@ -73,7 +73,7 @@ setting the top-level `preset` field:
         "variant": "max"
       },
       "librarian": { "model": "opencode-go/deepseek-v4-flash" },
-      "explorer": { "model": "opencode-go/minimax-m2.7" },
+      "explorer": { "model": "opencode-go/deepseek-v4-flash" },
       "designer": {
         "model": "opencode-go/kimi-k2.7-code",
         "variant": "medium"

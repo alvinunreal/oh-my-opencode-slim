@@ -146,7 +146,7 @@ This ensures councillors provide guidance without side effects.
 
 ### Notifications
 - Sends immediate feedback to parent session on council start
-- Message format: `⎔ Council starting — ${count} councillors launching — ctrl+x ↓ to watch`
+- Message format: `⎔ Council starting - ${count} councillors launching - ctrl+x ↓ to watch`
 
 ## Performance Considerations
 

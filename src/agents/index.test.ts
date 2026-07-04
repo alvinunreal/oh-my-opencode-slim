@@ -530,7 +530,7 @@ describe('council agent model resolution', () => {
 
   test('council falls back to legacy master.model when no preset override', () => {
     // Simulates a pre-1.0.0 config with council.master.model but no council
-    // entry in the agent preset — the exact scenario from issue #369.
+    // entry in the agent preset - the exact scenario from issue #369.
     const config: PluginConfig = {
       agents: {
         oracle: { model: 'openai/gpt-5.5' },
@@ -546,7 +546,7 @@ describe('council agent model resolution', () => {
   });
 
   test('council preset override takes precedence over legacy master.model', () => {
-    // If user has explicit council in preset, that wins — legacy is ignored.
+    // If user has explicit council in preset, that wins - legacy is ignored.
     const config: PluginConfig = {
       agents: {
         council: { model: 'google/gemini-3-pro' },

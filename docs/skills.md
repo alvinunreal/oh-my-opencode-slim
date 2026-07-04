@@ -1,6 +1,6 @@
 # Skills
 
-Skills are specialized capabilities you can assign to agents. Unlike MCPs (which are running servers), skills are **prompt-based tool configurations** — instructions injected into an agent's system prompt that describe how to use a particular tool.
+Skills are specialized capabilities you can assign to agents. Unlike MCPs (which are running servers), skills are **prompt-based tool configurations** - instructions injected into an agent's system prompt that describe how to use a particular tool.
 
 Bundled skills are installed by the `oh-my-opencode-slim` installer and safely
 reconciled on plugin startup/auto-update. Local customizations are preserved;
@@ -47,10 +47,10 @@ Source: adapted from Addy Osmani's `code-simplification` skill and bundled local
 **How to use:** Ask the Orchestrator to `run codemap`. It automatically detects whether to initialize a new map or update an existing one.
 
 **Why it's useful:**
-- **Instant onboarding** — understand unfamiliar codebases in seconds
-- **Efficient context** — agents read architectural summaries, saving tokens and improving accuracy
-- **Change detection** — only modified folders are re-analyzed
-- **Timeless documentation** — focuses on high-level design, not implementation details
+- **Instant onboarding** - understand unfamiliar codebases in seconds
+- **Efficient context** - agents read architectural summaries, saving tokens and improving accuracy
+- **Change detection** - only modified folders are re-analyzed
+- **Timeless documentation** - focuses on high-level design, not implementation details
 
 See **[Codemap Skill](codemap.md)** for full documentation including manual commands and technical details.
 
@@ -129,7 +129,7 @@ Start it directly with:
 `reflect` is an orchestrator-only workflow skill for reviewing recent work,
 finding repeated workflow friction, and recommending the smallest useful reusable
 asset. It may suggest a skill, custom agent, command, config rule, prompt rule,
-MCP permission change, or project playbook — but only when there is enough
+MCP permission change, or project playbook - but only when there is enough
 evidence.
 
 Use it directly with:

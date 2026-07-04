@@ -72,7 +72,7 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Permissions: read_files, write_files
 - Stats: 2x faster code edits, 1/2 cost of orchestrator
 - Weakness: design, taste
-- Tools/Constraints: Execution-focused—no research, no architectural decisions
+- Tools/Constraints: Execution-focused-no research, no architectural decisions
 - **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixers for each folder.
 - **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to fixer > doing • Tight integration with your current work • Requires design taste, visual hierarchy, interaction polish, responsive layout decisions, animation/motion, component feel, or UI copy/design trade-offs
 - **Rule of thumb:** Headless/mechanical implementation → @fixer. User-visible design or polish → @designer. If @designer already set direction, @fixer may only do bounded mechanical follow-up that preserves that design exactly.`,
@@ -93,12 +93,12 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - Lane: Visual/media analysis isolated from orchestrator context
 - Role: Visual analysis specialist for images, PDFs, and diagrams
 - Permissions: Read files
-- Stats: Saves main context tokens — Observer processes raw files, returns structured observations
+- Stats: Saves main context tokens - Observer processes raw files, returns structured observations
 - Capabilities: Interprets images, screenshots, PDFs, and diagrams via native read tool; extracts UI elements, layouts, text, relationships
 - **Delegate when:** Need to analyze a multimedia file• Extract information
 - **Don't delegate when:** Plain text files that Read can handle directly • Files that need editing afterward (need literal content from Read)
-- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer — it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for routing? → Read only the minimal context yourself.
-- **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png — describe the UI elements and error messages."`,
+- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer - it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for routing? → Read only the minimal context yourself.
+- **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png - describe the UI elements and error messages."`,
 };
 
 // Validation routing lines that reference agents
@@ -130,14 +130,14 @@ export function buildOrchestratorPrompt(disabledAgents?: Set<string>): string {
     .map(([, desc]) => desc)
     .join('\n\n');
 
-  // Filter validation routing lines — remove lines mentioning any disabled agent
+  // Filter validation routing lines - remove lines mentioning any disabled agent
   const enabledValidationRouting = VALIDATION_ROUTING.filter((line) => {
     const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);
     if (mentions.length === 0) return true;
     return mentions.every((name) => !disabledAgents?.has(name));
   }).join('\n');
 
-  // Filter parallel delegation examples — remove lines mentioning any disabled agent
+  // Filter parallel delegation examples - remove lines mentioning any disabled agent
   const enabledParallelExamples = PARALLEL_DELEGATION_EXAMPLES.filter(
     (line) => {
       const mentions = [...line.matchAll(/@(\w+)/g)].map((m) => m[1]);

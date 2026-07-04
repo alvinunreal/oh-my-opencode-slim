@@ -23,8 +23,8 @@
 
 | Doc | Contents |
 |-----|----------|
-| [Skills](skills.md) | `simplify`, `codemap`, `clonedeps` — skills assignment syntax |
-| [MCPs](mcps.md) | `websearch`, `context7`, `gh_grep` — permissions per agent, global disable |
+| [Skills](skills.md) | `simplify`, `codemap`, `clonedeps` - skills assignment syntax |
+| [MCPs](mcps.md) | `websearch`, `context7`, `gh_grep` - permissions per agent, global disable |
 | [Tools](tools.md) | Background tasks, LSP, code search (`ast_grep`), formatters |
 | [Configuration](configuration.md) | Config files, prompt overriding, JSONC, full option reference table |
 
@@ -32,4 +32,4 @@
 
 | Doc | Contents |
 |-----|----------|
-| [Author's Preset](authors-preset.md) | The exact config the author runs daily — OpenAI + Fireworks AI + GitHub Copilot |
+| [Author's Preset](authors-preset.md) | The exact config the author runs daily - OpenAI + Fireworks AI + GitHub Copilot |

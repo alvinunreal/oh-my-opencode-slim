@@ -86,7 +86,7 @@ export const CouncilPresetSchema = z
     const councillors: Record<string, CouncillorConfig> = {};
 
     for (const [key, raw] of Object.entries(entries)) {
-      // Silently skip the legacy "master" key — no longer parsed as a
+      // Silently skip the legacy "master" key - no longer parsed as a
       // councillor. Old configs with per-preset master overrides won't
       // error, but the override has no effect.
       if (key === 'master') continue;
@@ -182,14 +182,14 @@ export const CouncilConfigSchema = z
         'Number of retry attempts for councillors that return empty responses ' +
           '(e.g. due to provider rate limiting). Default: 3 retries.',
       ),
-    // Deprecated fields — accepted for backward compatibility but ignored.
+    // Deprecated fields - accepted for backward compatibility but ignored.
     // The council agent now synthesizes directly; no separate master session.
-    // Uses permissive schemas since the values are discarded — strict
+    // Uses permissive schemas since the values are discarded - strict
     // validation would break old configs with non-standard model IDs.
     master: z
       .unknown()
       .optional()
-      .describe('DEPRECATED — ignored. Council agent synthesizes directly.'),
+      .describe('DEPRECATED - ignored. Council agent synthesizes directly.'),
   })
   .transform((data) => {
     // Detect deprecated fields and attach warning for consumers

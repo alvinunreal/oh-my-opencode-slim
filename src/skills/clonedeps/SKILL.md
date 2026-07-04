@@ -217,9 +217,9 @@ sentence so future agents do not need an extra read just to know what is there:
 Read-only dependency source repositories are available under
 `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
 
-- `.slim/clonedeps/repos/<safe-name>/` — `<repo>` at `<ref>`; <one sentence on
+- `.slim/clonedeps/repos/<safe-name>/` - `<repo>` at `<ref>`; <one sentence on
   why this source is useful>.
-- `.slim/clonedeps/repos/<safe-name-2>/` — `<repo>` at `<ref>`; <one sentence on
+- `.slim/clonedeps/repos/<safe-name-2>/` - `<repo>` at `<ref>`; <one sentence on
   why this source is useful>.
 ```
 

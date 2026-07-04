@@ -248,12 +248,12 @@ OpenCode has a built-in `/review` command that automatically performs comprehens
 - This is an OpenCode plugin - most functionality lives in `src/`
 - The CLI entry point is `src/cli/index.ts`
 - The main plugin export is `src/index.ts`
-- Agent factories are in `src/agents/` — each agent has its own file + optional `.test.ts`
+- Agent factories are in `src/agents/` - each agent has its own file + optional `.test.ts`
 - Skills are located in `src/skills/` (included in package publish)
 - Multiplexer session management is in `src/multiplexer/`
 - Council manager (multi-LLM orchestration) is in `src/council/`
 - Tmux utilities are in `src/utils/tmux.ts`
-- 468 tests across 35 files — run `bun test` to verify
+- 468 tests across 35 files - run `bun test` to verify
 
 ## Repository Map
 
@@ -281,7 +281,7 @@ You can set the log level with the --log-level command-line option to get more d
 Read-only dependency source repositories are available under
 `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
 
-- `.slim/clonedeps/repos/opencode-ai__opencode/` — `https://github.com/opencode-ai/opencode.git` at `main@73ee493265acf15fcd8caab2bc8cd3bd375b63cb`; inspect `packages/plugin` and `packages/sdk/js` for OpenCode plugin and SDK internals.
-- `.slim/clonedeps/repos/opencode/` — `https://github.com/anomalyco/opencode.git` at `dev@356f6841865d68adf6d0123c37357ad50814497a`; inspect `packages/opencode` for latest TypeScript runtime internals and experimental background subagent support.
-- `.slim/clonedeps/repos/modelcontextprotocol__typescript-sdk/` — `https://github.com/modelcontextprotocol/typescript-sdk.git` at `v1.29.0@e12cbd7078db388152f6e839abdbe09ba01f3f32`; inspect it for MCP protocol and server integration internals.
-- `.slim/clonedeps/repos/agentclientprotocol__agent-client-protocol/` — `https://github.com/agentclientprotocol/agent-client-protocol.git` at `main@8110fde4e8283b4bef1329d1ef7b074fd14cee1e`; inspect it for ACP protocol specification and schema details.
+- `.slim/clonedeps/repos/opencode-ai__opencode/` - `https://github.com/opencode-ai/opencode.git` at `main@73ee493265acf15fcd8caab2bc8cd3bd375b63cb`; inspect `packages/plugin` and `packages/sdk/js` for OpenCode plugin and SDK internals.
+- `.slim/clonedeps/repos/opencode/` - `https://github.com/anomalyco/opencode.git` at `dev@356f6841865d68adf6d0123c37357ad50814497a`; inspect `packages/opencode` for latest TypeScript runtime internals and experimental background subagent support.
+- `.slim/clonedeps/repos/modelcontextprotocol__typescript-sdk/` - `https://github.com/modelcontextprotocol/typescript-sdk.git` at `v1.29.0@e12cbd7078db388152f6e839abdbe09ba01f3f32`; inspect it for MCP protocol and server integration internals.
+- `.slim/clonedeps/repos/agentclientprotocol__agent-client-protocol/` - `https://github.com/agentclientprotocol/agent-client-protocol.git` at `main@8110fde4e8283b4bef1329d1ef7b074fd14cee1e`; inspect it for ACP protocol specification and schema details.
