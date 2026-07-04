@@ -16,6 +16,7 @@ import {
   TMUX_SPAWN_DELAY_MS,
 } from '../config/constants';
 import type { CouncillorConfig, CouncilResult } from '../config/council-schema';
+import { normalizeCouncillorModels } from '../utils/councillor-models';
 import { log } from '../utils/logger';
 import {
   extractSessionResult,
@@ -405,9 +406,13 @@ export class CouncilManager {
   }
 
   /**
-   * Run a single councillor with retry logic for empty responses.
-   * Only retries on "Empty response from provider" errors - timeouts
-   * and other failures are returned immediately.
+   * Run a single councillor across its configured model chain.
+   *
+   * For each model in the chain, empty responses are retried up to
+   * `maxRetries` times (providers that silently rate-limit). Any other
+   * failure or timeout advances to the next model in the chain. The
+   * councillor only fails once every model has been exhausted; the reported
+   * `model` and `error` reflect the last model tried.
    */
   private async runCouncillorWithRetry(
     name: string,
@@ -423,60 +428,68 @@ export class CouncilManager {
     result?: string;
     error?: string;
   }> {
-    const modelLabel = shortModelLabel(config.model);
+    // Prefer the normalized chain from the schema transform. When configs are
+    // built without the transform (e.g. tests), derive it from the raw model.
+    const models =
+      config.models ?? normalizeCouncillorModels(config.model, config.variant);
     const totalAttempts = 1 + maxRetries;
 
-    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
-      if (attempt > 1) {
-        log(
-          `[council-manager] Retrying councillor "${name}" (${modelLabel}), attempt ${attempt}/${totalAttempts}`,
-        );
-      }
+    let lastModel = models[0].id;
+    let lastStatus: 'failed' | 'timed_out' = 'failed';
+    let lastError = `Councillor "${name}": no model responded`;
 
-      try {
-        const result = await this.runAgentSession({
-          parentSessionId,
-          title: `Council ${name} (${modelLabel})`,
-          agent: 'councillor',
-          model: config.model,
-          promptText: formatCouncillorPrompt(prompt, config.prompt),
-          variant: config.variant,
-          timeout,
-          includeReasoning: false,
-        });
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+      const entry = models[modelIndex];
+      const modelLabel = shortModelLabel(entry.id);
+      lastModel = entry.id;
 
-        return {
-          name,
-          model: config.model,
-          status: 'completed' as const,
-          result,
-        };
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+      for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+        if (attempt > 1) {
+          log(
+            `[council-manager] Retrying councillor "${name}" (${modelLabel}), attempt ${attempt}/${totalAttempts}`,
+          );
+        } else if (modelIndex > 0) {
+          log(
+            `[council-manager] Councillor "${name}" falling back to ${modelLabel} (model ${modelIndex + 1}/${models.length})`,
+          );
+        }
 
-        // Only retry on empty responses (provider silently rate-limited)
-        const isEmptyResponse = msg.includes('Empty response from provider');
-        const canRetry = attempt < totalAttempts && isEmptyResponse;
+        try {
+          const result = await this.runAgentSession({
+            parentSessionId,
+            title: `Council ${name} (${modelLabel})`,
+            agent: 'councillor',
+            model: entry.id,
+            promptText: formatCouncillorPrompt(prompt, config.prompt),
+            variant: entry.variant,
+            timeout,
+            includeReasoning: false,
+          });
 
-        if (!canRetry) {
           return {
             name,
-            model: config.model,
-            status: msg.includes('timed out')
-              ? ('timed_out' as const)
-              : ('failed' as const),
-            error: `Councillor "${name}": ${msg}`,
+            model: entry.id,
+            status: 'completed' as const,
+            result,
           };
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          lastStatus = msg.includes('timed out') ? 'timed_out' : 'failed';
+          lastError = `Councillor "${name}": ${msg}`;
+
+          // Retry the same model only on empty responses (silent rate-limit);
+          // any other error moves on to the next model in the chain.
+          const isEmptyResponse = msg.includes('Empty response from provider');
+          if (!(attempt < totalAttempts && isEmptyResponse)) break;
         }
       }
     }
 
-    // Unreachable, but satisfies TypeScript
     return {
       name,
-      model: config.model,
-      status: 'failed' as const,
-      error: `Councillor "${name}": max retries exhausted`,
+      model: lastModel,
+      status: lastStatus,
+      error: lastError,
     };
   }
 }

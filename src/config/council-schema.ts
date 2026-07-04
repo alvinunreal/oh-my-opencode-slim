@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  type CouncillorModelEntry,
+  normalizeCouncillorModels,
+} from '../utils/councillor-models';
+
+export type { CouncillorModelEntry };
 
 /**
  * Validates model IDs in "provider/model" format.
@@ -11,6 +17,27 @@ const ModelIdSchema = z
     'Expected provider/model format (e.g. "openai/gpt-5.4-mini")',
   );
 
+const CouncillorModelEntrySchema = z.object({
+  id: ModelIdSchema,
+  variant: z.string().optional(),
+});
+
+/**
+ * A councillor's model: either a single "provider/model" string, or an
+ * ordered fallback chain (array of strings and/or { id, variant } entries)
+ * tried in order until one responds.
+ */
+const CouncillorModelSchema = z
+  .union([
+    ModelIdSchema,
+    z.array(z.union([ModelIdSchema, CouncillorModelEntrySchema])).min(1),
+  ])
+  .describe(
+    'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini"), or an ' +
+      'ordered fallback chain (array of model IDs or { id, variant } entries) ' +
+      'tried in order until one responds.',
+  );
+
 /**
  * Configuration for a single councillor within a preset.
  * Each councillor is an independent LLM that processes the same prompt.
@@ -18,19 +45,31 @@ const ModelIdSchema = z
  * Councillors run as agent sessions with read-only codebase access
  * (read, glob, grep, lsp, list). They can examine the codebase but
  * cannot modify files or spawn subagents.
+ *
+ * `model` accepts a single ID or an ordered fallback chain. The parsed config
+ * exposes `models` (the normalized chain) plus `model` (the primary, for
+ * backward compatibility).
  */
-export const CouncillorConfigSchema = z.object({
-  model: ModelIdSchema.describe(
-    'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini")',
-  ),
-  variant: z.string().optional(),
-  prompt: z
-    .string()
-    .optional()
-    .describe(
-      'Optional role/guidance injected into the councillor user prompt',
-    ),
-});
+export const CouncillorConfigSchema = z
+  .object({
+    model: CouncillorModelSchema,
+    variant: z.string().optional(),
+    prompt: z
+      .string()
+      .optional()
+      .describe(
+        'Optional role/guidance injected into the councillor user prompt',
+      ),
+  })
+  .transform((c) => {
+    const models = normalizeCouncillorModels(c.model, c.variant);
+    return {
+      model: models[0].id,
+      variant: c.variant,
+      prompt: c.prompt,
+      models,
+    };
+  });
 
 export type CouncillorConfig = z.infer<typeof CouncillorConfigSchema>;
 

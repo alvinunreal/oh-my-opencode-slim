@@ -140,9 +140,37 @@ Each entry inside a preset is one councillor:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `model` | string | Yes | Model ID in `provider/model` format |
-| `variant` | string | No | Optional variant/reasoning setting |
+| `model` | string \| array | Yes | A `provider/model` string, or an ordered fallback chain tried until one responds |
+| `variant` | string | No | Optional variant/reasoning setting (applies to chain entries without their own) |
 | `prompt` | string | No | Optional role guidance prepended to the user prompt |
+
+#### Councillor model fallback
+
+`model` also accepts an ordered chain. When the primary model fails or times
+out, the councillor advances to the next model instead of dropping out of the
+council. Entries are `provider/model` strings or `{ "id", "variant" }` objects:
+
+```jsonc
+{
+  "council": {
+    "presets": {
+      "review": {
+        "reviewer": {
+          "model": [
+            "openai/gpt-5.5",
+            { "id": "google/gemini-3-pro", "variant": "high" },
+            "anthropic/claude-opus-4-6"
+          ],
+          "prompt": "Focus on bugs, edge cases, and failure modes."
+        }
+      }
+    }
+  }
+}
+```
+
+Empty-response retries (`councillor_retries`) apply per model before the chain
+advances. A single string keeps the previous single-model behavior.
 
 ### Council agent config
 
@@ -343,6 +371,13 @@ Council responses include a footer like:
 - timed-out councillors are marked `timed_out`
 - council still synthesizes from successful results
 
+### Model chain fallback
+
+When a councillor's `model` is an array, the councillors walks the chain in
+order. Empty-response retries apply per model; any other failure or timeout
+advances to the next model. The councillor only fails once every model in the
+chain is exhausted, and the reported model reflects the one that responded.
+
 ### Empty response retries
 
 Some providers silently return zero tokens. Council treats that as a retryable
@@ -350,7 +385,8 @@ failure.
 
 - `councillor_retries` defaults to `3`
 - retries only happen for **empty provider responses**
-- normal failures and timeouts are returned immediately
+- normal failures and timeouts are returned immediately (they advance to the
+  next model in the chain, if any)
 
 ### Failure behavior
 
