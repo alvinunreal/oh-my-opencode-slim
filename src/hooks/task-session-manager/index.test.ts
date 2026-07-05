@@ -1,10 +1,12 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils';
-import { createTaskSessionManagerHook } from './index';
+import { createTaskSessionManagerHook, IDLE_RECONCILE_DELAY_MS } from './index';
 
 /** Wait for the idle reconciliation delay (2s + margin) to flush. */
 function flushIdleReconcileDelay() {
-  return new Promise((resolve) => setTimeout(resolve, 2_100));
+  return new Promise((resolve) =>
+    setTimeout(resolve, IDLE_RECONCILE_DELAY_MS + 100),
+  );
 }
 
 function createHook(options?: {
@@ -1255,6 +1257,43 @@ describe('task-session-manager hook', () => {
       state: 'completed',
       terminalUnreconciled: true,
     });
+  });
+
+  test('completion arriving after idle reconciliation delay is still dropped', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    setupCompletedJob(board);
+
+    const messages = createMessages('parent-1', 'continue');
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    // Fire idle event (starts 2s reconciliation timer)
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'parent-1', status: { type: 'idle' } },
+      },
+    });
+
+    // Wait for reconciliation to complete
+    await flushIdleReconcileDelay();
+
+    // Job is now reconciled
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+    });
+
+    // Late completion arrives after reconciliation — should be silently dropped
+    const lateUpdate = board.updateStatus({
+      taskID: 'child-1',
+      state: 'error',
+      resultSummary: 'late completion after reconciliation',
+    });
+
+    // updateStatus returns existing record without modification
+    expect(lateUpdate).toBeDefined();
+    expect(lateUpdate?.state).toBe('reconciled');
   });
 
   test('does not reconcile terminal jobs before they are injected into a prompt', async () => {

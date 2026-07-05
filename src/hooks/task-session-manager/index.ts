@@ -36,8 +36,14 @@ const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;
 const RAW_SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_-]+$/;
 
-/** Delay before reconciling idle sessions — gives late injected completions time to arrive. */
-const IDLE_RECONCILE_DELAY_MS = 2_000;
+/**
+ * Delay before reconciling idle sessions.
+ * Gives late injected completions time to arrive within this window.
+ * Completions arriving after the window are still dropped (the race is reduced, not eliminated).
+ * ponytail: fixed timeout — event-driven confirmation would fully close the race but adds
+ * significant complexity for a case that rarely exceeds this window in practice.
+ */
+export const IDLE_RECONCILE_DELAY_MS = 2_000;
 
 function djb2Hash(str: string): string {
   let hash = 5381;
