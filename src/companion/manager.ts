@@ -5,6 +5,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import * as os from 'node:os';
@@ -59,6 +60,84 @@ export function stateFilePath(): string {
     'oh-my-opencode-slim',
     'companion-state.json',
   );
+}
+
+function pidFilePath(): string {
+  const xdg = process.env.XDG_DATA_HOME?.trim();
+  const base =
+    xdg && path.isAbsolute(xdg)
+      ? xdg
+      : path.join(os.homedir(), '.local', 'share');
+  return path.join(
+    base,
+    'opencode',
+    'storage',
+    'oh-my-opencode-slim',
+    'companion.pid',
+  );
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function parsePidFile(raw: string): number | null {
+  const pid = Number(raw.trim());
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return pid;
+}
+
+function acquirePidFileLock(file: string): (() => void) | null {
+  const lock = `${file}.lock`;
+  mkdirSync(path.dirname(lock), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      mkdirSync(lock);
+      writeFileSync(path.join(lock, 'owner'), String(process.pid));
+      return () => {
+        try {
+          rmSync(lock, { recursive: true, force: true });
+        } catch {}
+      };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') throw err;
+      if (pidFileLockHasLiveOwner(lock)) return null;
+      log('[companion] removing stale PID file lock for dead process');
+      rmSync(lock, { recursive: true, force: true });
+    }
+  }
+  return null;
+}
+
+function acquirePidFileLockWithRetry(
+  file: string,
+  attempts: number,
+): (() => void) | null {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const release = acquirePidFileLock(file);
+    if (release) return release;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return null;
+}
+
+function pidFileLockHasLiveOwner(lock: string): boolean {
+  try {
+    const owner = parsePidFile(readFileSync(path.join(lock, 'owner'), 'utf8'));
+    if (owner !== null) return isProcessAlive(owner);
+  } catch {
+    try {
+      return Date.now() - statSync(lock).mtimeMs < 5000;
+    } catch {}
+  }
+  return false;
 }
 
 function defaultBinaryPath(): string {
@@ -154,6 +233,8 @@ export class CompanionManager {
   private readonly busyAgentSessions = new Map<string, string>();
   private readonly config?: CompanionConfig;
   private companionProcess: ChildProcess | null = null;
+  private wasSpawner = false;
+  private spawnedCompanionPid: number | null = null;
 
   constructor(sessionId: string, cwd: string, config?: CompanionConfig) {
     this.id = sessionId;
@@ -261,12 +342,6 @@ export class CompanionManager {
 
   onExit(): void {
     activeManagers.delete(this);
-    if (this.companionProcess) {
-      try {
-        this.companionProcess.kill();
-      } catch {}
-      this.companionProcess = null;
-    }
     if (activeManagers.size === 0 && activeExitListener) {
       try {
         process.removeListener('exit', activeExitListener);
@@ -277,6 +352,37 @@ export class CompanionManager {
     writeState((state) => {
       state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
     });
+    if (this.wasSpawner && this.removeOwnedPidFileIfNoSessionsRemain()) {
+      if (this.companionProcess) {
+        try {
+          this.companionProcess.kill();
+        } catch {}
+      }
+    }
+    this.companionProcess = null;
+  }
+
+  private removeOwnedPidFileIfNoSessionsRemain(): boolean {
+    if (this.spawnedCompanionPid == null) return true;
+    const file = pidFilePath();
+    const release = acquirePidFileLockWithRetry(file, 80);
+    if (!release) {
+      log('[companion] PID file lock busy during exit; leaving guard intact');
+      return false;
+    }
+    try {
+      if (readState().sessions.length > 0) return false;
+      if (!existsSync(file)) return true;
+      const parsed = parsePidFile(readFileSync(file, 'utf8'));
+      if (parsed === this.spawnedCompanionPid) {
+        rmSync(file, { force: true });
+      }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      release();
+    }
   }
 
   /** One entry per running agent instance (two fixers → two cells). */
@@ -335,15 +441,37 @@ export class CompanionManager {
 
   private spawnIfAvailable(): void {
     if (this.config?.enabled !== true) return;
-    const bin = resolveCompanionBinaryPath(this.config);
-    if (!bin) {
-      const expected = this.config.binaryPath?.trim() || defaultBinaryPath();
-      log(
-        `[companion] enabled but companion binary not found at expected path: ${expected}. Please install/download the companion binary separately.`,
-      );
+    const pidFile = pidFilePath();
+    let releasePidFileLock: (() => void) | null = null;
+    try {
+      releasePidFileLock = acquirePidFileLockWithRetry(pidFile, 80);
+      if (releasePidFileLock === null) {
+        log('[companion] another instance already running, skipping spawn');
+        return;
+      }
+    } catch (err) {
+      log('[companion] PID file lock failed', String(err));
       return;
     }
+    let spawnedChild: ChildProcess | null = null;
     try {
+      if (existsSync(pidFile)) {
+        const existingPid = parsePidFile(readFileSync(pidFile, 'utf8'));
+        if (existingPid !== null && isProcessAlive(existingPid)) {
+          log('[companion] another instance already running, skipping spawn');
+          return;
+        }
+        log('[companion] removing stale PID file for dead process');
+        rmSync(pidFile, { force: true });
+      }
+      const bin = resolveCompanionBinaryPath(this.config);
+      if (!bin) {
+        const expected = this.config.binaryPath?.trim() || defaultBinaryPath();
+        log(
+          `[companion] enabled but companion binary not found at expected path: ${expected}. Please install/download the companion binary separately.`,
+        );
+        return;
+      }
       const child = spawn(bin, [], {
         detached: true,
         env: {
@@ -355,8 +483,19 @@ export class CompanionManager {
         },
         stdio: 'ignore',
       });
+      spawnedChild = child;
+      child.once('error', (err) => {
+        log('[companion] spawn failed', String(err));
+      });
       this.companionProcess = child;
       child.unref();
+      if (child.pid == null) {
+        log('[companion] spawn returned without a child PID, skipping guard');
+        return;
+      }
+      writeFileSync(pidFile, String(child.pid));
+      this.wasSpawner = true;
+      this.spawnedCompanionPid = child.pid;
       log(
         '[companion] spawned',
         JSON.stringify({
@@ -366,7 +505,14 @@ export class CompanionManager {
         }),
       );
     } catch (err) {
-      log('[companion] spawn failed', String(err));
+      if (spawnedChild && !this.wasSpawner) {
+        try {
+          spawnedChild.kill();
+        } catch {}
+      }
+      log('[companion] spawn guard failed', String(err));
+    } finally {
+      releasePidFileLock?.();
     }
   }
 }

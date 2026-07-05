@@ -261,9 +261,12 @@ fn choose_session(sessions: &[SessionInfo]) -> Option<usize> {
 
 fn choose_owned_session(sessions: &[SessionInfo], owner_session_id: Option<&str>) -> Option<usize> {
     if let Some(owner_session_id) = owner_session_id {
-        return sessions
+        if let Some(index) = sessions
             .iter()
-            .position(|session| session.session_id == owner_session_id);
+            .position(|session| session.session_id == owner_session_id)
+        {
+            return Some(index);
+        }
     }
 
     choose_session(sessions)
@@ -856,8 +859,9 @@ fn is_pid_alive(_pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_config, choose_session, config_key, grid_dims, place_window, restore_window_position,
-        size_from_config, window_size, ConfigKey, SessionInfo, WindowGeometryKey, GAP,
+        apply_config, choose_owned_session, choose_session, config_key, grid_dims, place_window,
+        restore_window_position, size_from_config, window_size, ConfigKey, SessionInfo,
+        WindowGeometryKey, GAP,
     };
     use crate::state::CompanionConfigState;
 
@@ -907,6 +911,24 @@ mod tests {
             session("second", "idle", &["intro"]),
         ];
         assert_eq!(choose_session(&sessions), Some(1));
+    }
+
+    #[test]
+    fn owned_session_wins_when_present() {
+        let sessions = vec![
+            session("first", "waiting-input", &["input"]),
+            session("owner", "idle", &["intro"]),
+        ];
+        assert_eq!(choose_owned_session(&sessions, Some("owner")), Some(1));
+    }
+
+    #[test]
+    fn missing_owner_falls_back_to_active_session() {
+        let sessions = vec![
+            session("idle", "idle", &["intro"]),
+            session("active", "busy", &["fixer"]),
+        ];
+        assert_eq!(choose_owned_session(&sessions, Some("gone")), Some(1));
     }
 
     #[test]
