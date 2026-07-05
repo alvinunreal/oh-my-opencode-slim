@@ -258,7 +258,7 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('does nothing when no chain configured for session', async () => {
+  test('aborts session when no chain configured (no fallback model to swap to)', async () => {
     const emptyMgr = new ForegroundFallbackManager(client, {}, true);
     await emptyMgr.handleEvent({
       type: 'session.error',
@@ -268,6 +268,7 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 

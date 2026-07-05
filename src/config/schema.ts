@@ -180,6 +180,16 @@ export const FailoverConfigSchema = z
     enabled: z.boolean().default(true),
     timeoutMs: z.number().min(0).default(15000),
     retryDelayMs: z.number().min(0).default(500),
+    maxRetries: z
+      .number()
+      .int()
+      .min(0)
+      .default(3)
+      .describe(
+        'Number of consecutive 429/rate-limit responses tolerated on the ' +
+          'same model before aborting (or swapping to the next fallback ' +
+          'model when a chain is configured).',
+      ),
     retry_on_empty: z
       .boolean()
       .default(true)

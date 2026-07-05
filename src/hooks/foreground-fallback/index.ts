@@ -99,6 +99,9 @@ export class ForegroundFallbackManager {
    *  when the model has changed, allowing the cascade to continue when a
    *  new fallback model also fails within the dedup window. */
   private readonly lastTriggerModel = new Map<string, string>();
+  /** sessionID → consecutive 429 count for the current model.
+   *  Reset on model swap or session deletion. */
+  private readonly sessionRetries = new Map<string, number>();
 
   constructor(
     private readonly client: OpencodeClient,
@@ -109,6 +112,8 @@ export class ForegroundFallbackManager {
      */
     private readonly chains: Record<string, string[]>,
     private readonly enabled: boolean,
+    /** Consecutive 429s tolerated on the same model before swap/abort. */
+    private readonly maxRetries: number = 3,
   ) {}
 
   /**
@@ -163,7 +168,7 @@ export class ForegroundFallbackManager {
         const props = event.properties as
           | {
               sessionID?: string;
-              status?: { type?: string; message?: string };
+              status?: { type?: string; message?: string; attempt?: number };
             }
           | undefined;
         if (!props?.sessionID || !props.status?.message) break;
@@ -183,6 +188,27 @@ export class ForegroundFallbackManager {
           msg.includes('high concurrency') ||
           msg.includes('reduce concurrency')
         ) {
+          // When OpenCode retries internally (type: "retry"), track
+          // attempts and only intervene after maxRetries consecutive
+          // failures. This lets OpenCode's own backoff handle transient
+          // spikes while preventing infinite freezes.
+          if (
+            props.status.type === 'retry' &&
+            typeof props.status.attempt === 'number'
+          ) {
+            const tried = this.sessionRetries.get(props.sessionID) ?? 0;
+            if (tried < this.maxRetries - 1) {
+              this.sessionRetries.set(props.sessionID, tried + 1);
+              log('[foreground-fallback] rate-limit retry', {
+                sessionID: props.sessionID,
+                attempt: props.status.attempt,
+                remaining: this.maxRetries - tried - 1,
+              });
+              break;
+            }
+            // Exhausted retries: intervene
+            this.sessionRetries.delete(props.sessionID);
+          }
           await this.tryFallback(props.sessionID);
         }
         break;
@@ -217,6 +243,7 @@ export class ForegroundFallbackManager {
           this.inProgress.delete(id);
           this.lastTrigger.delete(id);
           this.lastTriggerModel.delete(id);
+          this.sessionRetries.delete(id);
         }
         break;
       }
@@ -255,10 +282,11 @@ export class ForegroundFallbackManager {
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
       if (!chain.length) {
-        log('[foreground-fallback] no chain configured', {
+        log('[foreground-fallback] no chain configured, aborting session', {
           sessionID,
           agentName,
         });
+        await abortSessionWithTimeout(this.client, sessionID);
         return;
       }
 

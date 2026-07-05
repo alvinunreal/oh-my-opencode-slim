@@ -297,12 +297,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Initialize JSON parse error recovery hook
     jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
 
-    // Initialize foreground fallback manager for runtime model switching
+    // Initialize foreground fallback manager for runtime model switching.
+    // Enabled by default even without fallback chains — the manager can still
+    // abort rate-limited sessions after maxRetries to prevent infinite freezes.
     foregroundFallback = new ForegroundFallbackManager(
       ctx.client,
       runtimeChains,
-      config.fallback?.enabled !== false &&
-        Object.keys(runtimeChains).length > 0,
+      config.fallback?.enabled !== false,
+      config.fallback?.maxRetries ?? 3,
     );
 
     deepworkCommandHook = createDeepworkCommandHook();
