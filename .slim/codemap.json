@@ -1,7 +1,7 @@
 {
   "metadata": {
     "version": "1.0.0",
-    "last_run": "2026-07-06T19:32:37.816Z",
+    "last_run": "2026-07-06T20:45:08.996Z",
     "root": "/home/mhenke/Projects/oh-my-opencode-slim",
     "include_patterns": [
       "src/**/*.ts",
@@ -129,7 +129,7 @@
     "src/multiplexer/factory.ts": "f46b52b6269d4a1e97a4822ab354a7c0",
     "src/multiplexer/herdr/index.ts": "150a0b0f255ff05ab8c129cf53b4b17c",
     "src/multiplexer/index.ts": "7c3ac610930726ff8d1d12aee025752b",
-    "src/multiplexer/session-manager.ts": "dfe1ae2182ec1b784d7ba068f2cc9bf2",
+    "src/multiplexer/session-manager.ts": "777ac4f5735cfcc6f0e0dabeda8741fa",
     "src/multiplexer/shared.ts": "ea19d777dd58300a8a73a26887c7178d",
     "src/multiplexer/tmux/index.ts": "6a917050c75fa34fea61035b51bbc46c",
     "src/multiplexer/types.ts": "8aa8ffcdbaf33dbacd0725d98f0a3b68",
@@ -182,7 +182,7 @@
   "folder_hashes": {
     ".": "f4a663f6aac32f8ce0db004493bf6297",
     "scripts": "362e9fb6832c103e1434719916be283d",
-    "src": "bbda92f4046d08603b8247143a520429",
+    "src": "16dc1432229b76196351cdf95a9eb37f",
     "src/agents": "14bf78ef0216501e70602f12d62e9839",
     "src/cli": "68e0366396ce0091fbfc8693500ef242",
     "src/companion": "489154aba4297da2a659a31bd91beb15",
@@ -204,7 +204,7 @@
     "src/interview": "316bcd76b235d932872172a6891f1b68",
     "src/loop": "366bf2141b605deb1849f9783c993810",
     "src/mcp": "1db30ec46ae0b577ec22b74e2b4d19ea",
-    "src/multiplexer": "c6c6cb68ceb84e71162ccd7d0345fadb",
+    "src/multiplexer": "f986597a7a3089758339324e68593fc7",
     "src/multiplexer/herdr": "e9ca0fd14736da1ea49ccca1a1736733",
     "src/multiplexer/tmux": "f98f01b8553bf556ec302744cf61bf45",
     "src/multiplexer/zellij": "d01383270dbd0f1fad6b67d85a69fe30",
