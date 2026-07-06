@@ -518,7 +518,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   // ── Lifecycle policy (board = no policy, always close) ───────────
 
   deferIfRunning(_sessionId: string): boolean {
-    return true; // No deferral policy at board level
+    return false; // ponytail: safe default - don't close
   }
 
   retryDeferredClose(_sessionId: string): boolean {

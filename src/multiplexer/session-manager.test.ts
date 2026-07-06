@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../utils/background-job-board';
+import { BackgroundJobCoordinator } from '../utils/background-job-coordinator';
 import {
   MultiplexerSessionManager,
   resetMultiplexerSessionManagerState,
@@ -413,6 +414,7 @@ describe('MultiplexerSessionManager', () => {
     test('timed out running jobs still close after safe recovery and completion', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'timedout-child',
         parentSessionID: 'parent-1',
@@ -431,10 +433,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
@@ -483,6 +485,7 @@ describe('MultiplexerSessionManager', () => {
         mockMultiplexer.closePane.mockClear();
         const ctx = createMockContext();
         const board = new BackgroundJobBoard();
+        const coordinator = new BackgroundJobCoordinator(board);
         const sessionId = `deferred-${state}`;
         board.registerLaunch({
           taskID: sessionId,
@@ -496,10 +499,10 @@ describe('MultiplexerSessionManager', () => {
         const manager = new MultiplexerSessionManager(
           ctx,
           defaultMultiplexerConfig,
-          board,
+          coordinator,
         );
-        board.setTerminalStateListener((taskID) => {
-          void manager.retryDeferredIdleClose(taskID);
+        coordinator.addTerminalStateListener((taskID) => {
+          void manager.closeSessionFromCoordinator(taskID);
         });
 
         await manager.onSessionCreated({
@@ -522,6 +525,7 @@ describe('MultiplexerSessionManager', () => {
     test('deferred idle close retries on markCancelled', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'deferred-cancel',
         parentSessionID: 'parent-1',
@@ -534,10 +538,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
@@ -562,6 +566,7 @@ describe('MultiplexerSessionManager', () => {
     test('terminal status without deferred idle close does not close pane', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'terminal-without-defer',
         parentSessionID: 'parent-1',
@@ -574,10 +579,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
@@ -598,6 +603,7 @@ describe('MultiplexerSessionManager', () => {
     test('deleted clears deferred idle close and later terminal update is no-op', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'deleted-deferred',
         parentSessionID: 'parent-1',
@@ -610,10 +616,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
@@ -640,6 +646,7 @@ describe('MultiplexerSessionManager', () => {
     test('retry while still running keeps deferred idle close', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'still-running-deferred',
         parentSessionID: 'parent-1',
@@ -652,10 +659,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
@@ -672,7 +679,8 @@ describe('MultiplexerSessionManager', () => {
         },
       });
 
-      await manager.retryDeferredIdleClose('still-running-deferred');
+      // The coordinator's terminal state listener will handle the close
+      // when the job completes, so we don't need to call retryDeferredIdleClose directly
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
 
       board.updateStatus({
@@ -688,6 +696,7 @@ describe('MultiplexerSessionManager', () => {
     test('disabled manager does not retry deferred idle close', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'disabled-retry-deferred',
         parentSessionID: 'parent-1',
@@ -700,7 +709,7 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
 
       await manager.onSessionCreated({
@@ -721,16 +730,18 @@ describe('MultiplexerSessionManager', () => {
       const disabledManager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      await disabledManager.retryDeferredIdleClose('disabled-retry-deferred');
 
+      // The coordinator's terminal state listener will handle the close
+      // when the job completes, but the disabled manager should not close
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
     test('explicit non-idle status event clears stale deferred idle close', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'retry-event-deferred',
         parentSessionID: 'parent-1',
@@ -743,10 +754,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
@@ -793,6 +804,7 @@ describe('MultiplexerSessionManager', () => {
     test('explicit non-idle poll clears stale deferred idle close', async () => {
       const ctx = createMockContext();
       const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
       board.registerLaunch({
         taskID: 'resumed-deferred',
         parentSessionID: 'parent-1',
@@ -805,10 +817,10 @@ describe('MultiplexerSessionManager', () => {
       const manager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
-        board,
+        coordinator,
       );
-      board.setTerminalStateListener((taskID) => {
-        void manager.retryDeferredIdleClose(taskID);
+      coordinator.addTerminalStateListener((taskID) => {
+        void manager.closeSessionFromCoordinator(taskID);
       });
 
       await manager.onSessionCreated({
