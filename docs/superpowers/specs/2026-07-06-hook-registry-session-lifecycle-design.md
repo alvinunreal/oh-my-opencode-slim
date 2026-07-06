@@ -10,7 +10,7 @@
 
 Four verified problems in the hooks architecture of `oh-my-opencode-slim`:
 
-1. **Manual wiring friction.** Adding a new hook requires touching 6-10 locations: export from `src/hooks/index.ts`, import in `src/index.ts`, variable declaration, factory call, and a dispatch call for each hook point. Verified at `src/index.ts:6-34` (imports), `138-153` (declarations), `271-322` (factory calls), `820-1186` (dispatch sites).
+1. **Manual wiring friction.** Adding a new hook requires touching 6-10 locations: export from `src/hooks/index.ts`, import in `src/index.ts`, variable declaration, factory call, and a dispatch call for each hook point. Verified at `src/index.ts:6-34` (imports), `138-153` (declarations), `271-322` (factory calls), `820-1186` (dispatch sites). 13 hooks currently exist; this friction scales linearly.
 
 2. **Scattered session.deleted cleanup.** Three hooks each implement their own cleanup:
    - `task-session-manager`: 6 ops at `src/hooks/task-session-manager/index.ts:715-720`
@@ -35,7 +35,7 @@ export function extractSessionId(
   info: { id?: string } | undefined | null,
   sessionID: string | undefined | null,
 ): string | undefined {
-  return info?.id ?? sessionID ?? undefined;
+  return info?.id ?? sessionID;
 }
 ```
 
@@ -48,7 +48,7 @@ export function extractSessionId(
 
 Two responsibilities:
 
-**Cleanup callback registry.** Stateful hooks register a callback instead of implementing their own `session.deleted` handler. The coordinator runs all registered callbacks when `dispatchSessionDeleted(sessionId)` is called.
+**Cleanup callback registry.** Stateful hooks register a callback instead of implementing their own `session.deleted` handler. The coordinator runs all registered callbacks when `dispatchSessionDeleted(sessionId)` is called. If a callback throws, the error is logged and the remaining callbacks still run — one failure does not block others.
 
 ```typescript
 class SessionLifecycle {
@@ -64,9 +64,18 @@ class SessionLifecycle {
   dispatchSessionDeleted(sessionId: string): void;
 
   // -- Signaling API --
+  /** Mark sessionId as having pending file-tool state. */
   markPending(sessionId: string): void;
+  /**
+   * Atomically consume pending state for sessionId.
+   * Returns true if this call consumed the pending state,
+   * false if it was already consumed or never pending.
+   * Only one caller will get true per markPending call.
+   */
   consumePending(sessionId: string): boolean;
-  hasPendingSession(sessionId: string): boolean;  // lazy TTL check on read
+  /** True if sessionId had pending state that was consumed (checked with TTL). */
+  hasPendingSession(sessionId: string): boolean;
+  /** Remove all state for sessionId (called on session.deleted). */
   clearSession(sessionId: string): void;
 }
 ```
@@ -81,15 +90,26 @@ hasPendingSession(sessionId: string): boolean {
     this.#pendingSessionIds.delete(sessionId);
     return false;
   }
-  return this.#everPendingSessionIds.has(sessionId) && !this.#pendingSessionIds.has(sessionId);
+  return this.#everPendingSessionIds.has(sessionId)
+    && !this.#pendingSessionIds.has(sessionId);
+}
+
+dispatchSessionDeleted(sessionId: string): void {
+  for (const callback of this.#cleanupCallbacks) {
+    try {
+      callback(sessionId);
+    } catch (error) {
+      log.error(`cleanup callback failed for session ${sessionId}`, error);
+    }
+  }
 }
 ```
 
 Hooks that use it:
 - `task-session-manager`: registers 6 cleanup ops as one callback
 - `foreground-fallback`: registers 7 cleanup ops as one callback
-- `post-file-tool-nudge`: registers cleanup of pending state; imports `markPending`, `consumePending`, `hasPendingSession` from coordinator
-- `phase-reminder`: imports `hasPendingSession` from coordinator instead of `../post-file-tool-nudge`
+- `post-file-tool-nudge`: registers cleanup of pending state; imports `markPending`, `consumePending` from coordinator
+- `phase-reminder`: imports `hasPendingSession` from coordinator instead of `../post-file-tool-nudge` — and nothing else. No need for `markPending` or `consumePending`.
 
 The coordinator is instantiated in `src/index.ts` before hook factories that need it, passed as a parameter.
 
@@ -100,16 +120,28 @@ Simple ordered handler registry:
 ```typescript
 class HookRegistry {
   #handlers = new Map<string, Array<(input: unknown, output: unknown) => Promise<void>>>();
+  #firedHookPoints = new Set<string>();
 
-  register(hookPoint: string, handler: (input: unknown, output: unknown) => Promise<void>): void;
+  register(
+    hookPoint: string,
+    handler: (input: unknown, output: unknown) => Promise<void>,
+  ): void {
+    if (this.#firedHookPoints.has(hookPoint)) {
+      log.warn(`hook "${hookPoint}" already dispatched; late registration may miss events`);
+    }
+    // ...
+  }
+
   dispatch(hookPoint: string, input: unknown, output: unknown): Promise<void>;
   getHandlers(hookPoint: string): ReadonlyArray<...>;
 }
 ```
 
+Loose typing (`(input: unknown, output: unknown)`) is intentional — typed wrappers per hook point would add ceremony without proportional value for a codebase where call sites are already close to the cast. If typing becomes painful, add typed wrapper methods.
+
 - Registration order = dispatch order.
 - All async hook points dispatch through the registry.
-- `chat.headers` at `src/index.ts:980` stays manual (sync property, not async).
+- `chat.headers` at `src/index.ts:980` stays manual (sync property, not async). A comment at the dispatch site explains why.
 - Non-hook event handling (multiplexer, companion, interview, preset, depthTracker) stays manual.
 
 Touch-point reduction for adding a new hook:
@@ -120,9 +152,13 @@ Touch-point reduction for adding a new hook:
 - Registration: **added** (`registry.register(hookPoint, handler)`)
 - Dispatch-site wiring: **removed**
 
-Net: ~3 touch points eliminated. More importantly, the dispatch code shrinks from ~121 lines of per-hook calls to a few `registry.dispatch()` calls.
+Net: ~3 touch points eliminated. Dispatch code shrinks from ~121 lines to a few `registry.dispatch()` calls.
 
 ## Changes by file
+
+### Phase 0: Baseline
+
+Run `bun test` and record the output. This ensures regressions in Phase 3 can be bisected.
 
 ### Phase 1: `src/utils/extract-session-id.ts` (new)
 
@@ -155,7 +191,7 @@ Net: ~3 touch points eliminated. More importantly, the dispatch code shrinks fro
 - Instantiate `HookRegistry` after all factories.
 - Register each hook's handlers with the registry.
 - Replace manual dispatch in `event` handler, `tool.execute.before`, `command.execute.before`, `tool.execute.after`, `experimental.chat.system.transform`, `experimental.chat.messages.transform` with `registry.dispatch()`.
-- Keep `chat.headers` manual (sync).
+- Keep `chat.headers` manual (sync). Add comment explaining why so maintainers don't try to "fix" it.
 - Keep non-hook dispatch manual (multiplexer, companion, interview, preset, depthTracker).
 - Deduplicate the two `session.deleted` blocks using `extractSessionId`.
 
@@ -169,13 +205,17 @@ Net: ~3 touch points eliminated. More importantly, the dispatch code shrinks fro
 ## Acceptance criteria
 
 - [ ] `extractSessionId` replaces all 8 instances, priority is always `info?.id ?? sessionID`
+- [ ] `extractSessionId` does not append redundant `?? undefined`
 - [ ] `post-file-tool-nudge` uses the same priority as all other locations
 - [ ] `SessionLifecycle.dispatchSessionDeleted` runs all registered cleanup callbacks
+- [ ] Cleanup callback errors are caught and logged, remaining callbacks still run
+- [ ] `consumePending` is atomic — only one caller gets `true` per `markPending` call
 - [ ] `SessionLifecycle.hasPendingSession` respects TTL and doesn't return stale entries
 - [ ] `SessionLifecycle.clearSession` cleans up pending state and timers
+- [ ] `HookRegistry` warns when a handler is registered after its hook point has dispatched
 - [ ] `HookRegistry.dispatch` runs handlers in registration order
 - [ ] Adding a new hook requires registering with the registry — no manual dispatch-site wiring
-- [ ] `chat.headers` still works (manual sync dispatch unchanged)
+- [ ] `chat.headers` still works (manual sync dispatch unchanged, with explanatory comment)
 - [ ] All 1367 existing tests pass
 - [ ] `bun run check:ci` passes
 - [ ] `bun run typecheck` passes
@@ -188,3 +228,5 @@ Net: ~3 touch points eliminated. More importantly, the dispatch code shrinks fro
 - Non-hook event handling (multiplexer, companion, interview, preset, depthTracker)
 - Sync hook points like `chat.headers`
 - Configurable TTL (keep as static constant, YAGNI)
+- Dynamic hook registration after dispatch (runtime guard logs a warning, not an error)
+- Typed dispatch wrappers per hook point (YAGNI; add if casts become painful)

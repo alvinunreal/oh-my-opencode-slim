@@ -366,6 +366,13 @@
           "type": "number",
           "minimum": 0
         },
+        "maxRetries": {
+          "default": 3,
+          "description": "Number of consecutive 429/rate-limit responses tolerated on the same model before aborting (or swapping to the next fallback model when a chain is configured).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
         "retry_on_empty": {
           "default": true,
           "description": "When true (default), empty provider responses are treated as failures, triggering fallback/retry. Set to false to treat them as successes.",
