@@ -341,7 +341,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 3. Re-enable default agents (optional):
 
-   In `~/.config/opencode/opencode.json`, remove the `disable: true` entries the installer added under `agent.explore` and `agent.general`.
+   In `~/.config/opencode/opencode.json`, remove the `disable: true` entries the installer added under `agent.explore` and `agent.general`. Also remove `"lsp": true` if the installer added it and you don't want LSP integration.
 
 4. Remove the environment variable (optional):
 
@@ -363,7 +363,12 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
    rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
    ```
 
-7. Remove skills (optional):
+7. Remove companion binary (optional):
+   ```bash
+   rm -f ~/.local/share/opencode/storage/oh-my-opencode-slim/bin/oh-my-opencode-slim-companion
+   ```
+
+8. Remove skills (optional):
    ```bash
    rm -rf ~/.config/opencode/skills/simplify
    rm -rf ~/.config/opencode/skills/codemap
