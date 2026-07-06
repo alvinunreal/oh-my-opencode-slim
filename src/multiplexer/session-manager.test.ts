@@ -727,7 +727,7 @@ describe('MultiplexerSessionManager', () => {
       });
 
       mockMultiplexer.isInsideSession.mockReturnValue(false);
-      const disabledManager = new MultiplexerSessionManager(
+      const _disabledManager = new MultiplexerSessionManager(
         ctx,
         defaultMultiplexerConfig,
         coordinator,

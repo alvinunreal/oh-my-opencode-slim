@@ -69,8 +69,7 @@ describe('BackgroundJobCoordinator', () => {
     board.isRunning.mockReturnValue(false);
 
     // Trigger handleTerminalState via board's listener callback
-    const boardListener =
-      board.addTerminalStateListener.mock.calls[0]?.[0];
+    const boardListener = board.addTerminalStateListener.mock.calls[0]?.[0];
     boardListener?.('ses_123');
 
     expect(listener).toHaveBeenCalledWith('ses_123');
@@ -85,8 +84,7 @@ describe('BackgroundJobCoordinator', () => {
 
     // Simulate terminal state notification without deferring first
     board.getState.mockReturnValue('completed');
-    const boardListener =
-      board.addTerminalStateListener.mock.calls[0]?.[0];
+    const boardListener = board.addTerminalStateListener.mock.calls[0]?.[0];
     boardListener?.('ses_123');
 
     expect(listener).not.toHaveBeenCalled();
