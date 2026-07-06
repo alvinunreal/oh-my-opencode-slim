@@ -331,17 +331,39 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 ## Uninstallation
 
-1. **Remove the plugin from your OpenCode config**:
+1. Remove the plugin from your OpenCode config:
 
    Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
 
-2. **Remove configuration files (optional)**:
+2. Remove the TUI badge:
+
+   Edit `~/.config/opencode/tui.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
+
+3. Re-enable default agents (optional):
+
+   In `~/.config/opencode/opencode.json`, remove the `disable: true` entries the installer added under `agent.explore` and `agent.general`.
+
+4. Remove the environment variable (optional):
+
+   The installer may have added an export to your shell startup file. Remove the `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` line from your shell config:
+   - `~/.zshrc` (Zsh)
+   - `~/.bashrc` (Bash)
+   - `~/.config/fish/config.fish` (Fish) where you'll also remove `set -gx OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS true`
+
+   Restart your terminal or `source` the file.
+
+5. Clear the plugin cache (optional):
+   ```bash
+   rm -rf ~/.cache/opencode/packages/oh-my-opencode-slim@latest
+   ```
+
+6. Remove configuration files (optional):
    ```bash
    rm -f ~/.config/opencode/oh-my-opencode-slim.json
    rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
    ```
 
-3. **Remove skills (optional)**:
+7. Remove skills (optional):
    ```bash
    rm -rf ~/.config/opencode/skills/simplify
    rm -rf ~/.config/opencode/skills/codemap
