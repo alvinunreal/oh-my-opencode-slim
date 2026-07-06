@@ -31,6 +31,7 @@ import {
   createReflectCommandHook,
   createTaskSessionManagerHook,
   ForegroundFallbackManager,
+  HookRegistry,
   SessionLifecycle,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
@@ -138,16 +139,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let depthTracker: SubagentDepthTracker;
   let multiplexerSessionManager: MultiplexerSessionManager;
   let autoUpdateChecker: ReturnType<typeof createAutoUpdateCheckerHook>;
-  let phaseReminderHook: ReturnType<typeof createPhaseReminderHook>;
-  let filterAvailableSkillsHook: ReturnType<
-    typeof createFilterAvailableSkillsHook
-  >;
   let sessionAgentMap: Map<string, string>;
-  let postFileToolNudgeHook: ReturnType<typeof createPostFileToolNudgeHook>;
+  let sessionLifecycle: SessionLifecycle;
+  let hookRegistry: HookRegistry;
   let chatHeadersHook: ReturnType<typeof createChatHeadersHook>;
-  let delegateTaskRetryHook: ReturnType<typeof createDelegateTaskRetryHook>;
-  let applyPatchHook: ReturnType<typeof createApplyPatchHook>;
-  let jsonErrorRecoveryHook: ReturnType<typeof createJsonErrorRecoveryHook>;
   let foregroundFallback: ForegroundFallbackManager;
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
@@ -269,7 +264,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       void multiplexerSessionManager.retryDeferredIdleClose(taskID);
     });
 
-    const sessionLifecycle = new SessionLifecycle(log);
+    sessionLifecycle = new SessionLifecycle(log);
 
     // Initialize auto-update checker hook
     autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
@@ -277,30 +272,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       companion: config.companion,
     });
 
-    // Initialize phase reminder hook for workflow compliance
-    phaseReminderHook = createPhaseReminderHook(sessionLifecycle);
-
-    // Initialize available skills filter hook
-    filterAvailableSkillsHook = createFilterAvailableSkillsHook(ctx, config);
-
     // Track session → agent mapping for serve-mode system prompt injection
     sessionAgentMap = new Map<string, string>();
 
-    // Initialize post-file-tool nudge hook
-    postFileToolNudgeHook = createPostFileToolNudgeHook({
-      shouldInject: (sessionID) =>
-        sessionAgentMap.get(sessionID) === 'orchestrator',
-      coordinator: sessionLifecycle,
-    });
-
     chatHeadersHook = createChatHeadersHook(ctx);
-
-    // Initialize delegate-task retry guidance hook
-    delegateTaskRetryHook = createDelegateTaskRetryHook(ctx);
-
-    applyPatchHook = createApplyPatchHook(ctx);
-    // Initialize JSON parse error recovery hook
-    jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
 
     // Initialize foreground fallback manager for runtime model switching.
     // Enabled by default even without fallback chains — the manager can still
@@ -327,6 +302,68 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         foregroundFallback.isFallbackInProgress(sessionID),
       coordinator: sessionLifecycle,
     });
+
+    // Initialize hooks and register them with the registry
+    hookRegistry = new HookRegistry();
+
+    const phaseReminder = createPhaseReminderHook(sessionLifecycle);
+    hookRegistry.register('experimental.chat.messages.transform', (i, o) =>
+      phaseReminder['experimental.chat.messages.transform'](
+        i as never,
+        o as never,
+      ),
+    );
+
+    const filterAvailableSkills = createFilterAvailableSkillsHook(ctx, config);
+    hookRegistry.register('experimental.chat.messages.transform', (i, o) =>
+      filterAvailableSkills['experimental.chat.messages.transform'](
+        i as never,
+        o as never,
+      ),
+    );
+
+    const postFileToolNudge = createPostFileToolNudgeHook({
+      shouldInject: (sessionID) =>
+        sessionAgentMap.get(sessionID) === 'orchestrator',
+      coordinator: sessionLifecycle,
+    });
+    hookRegistry.register('experimental.chat.system.transform', (i, o) =>
+      postFileToolNudge['experimental.chat.system.transform'](
+        i as never,
+        o as never,
+      ),
+    );
+    hookRegistry.register('tool.execute.after', (i, o) =>
+      postFileToolNudge['tool.execute.after'](i as never, o as never),
+    );
+
+    const delegateTaskRetry = createDelegateTaskRetryHook(ctx);
+    hookRegistry.register('tool.execute.after', (i, o) =>
+      delegateTaskRetry['tool.execute.after'](i as never, o as never),
+    );
+
+    const applyPatch = createApplyPatchHook(ctx);
+    hookRegistry.register('tool.execute.before', (i, o) =>
+      applyPatch['tool.execute.before'](i as never, o as never),
+    );
+
+    const jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
+    hookRegistry.register('tool.execute.after', (i, o) =>
+      jsonErrorRecovery['tool.execute.after'](i as never, o as never),
+    );
+
+    hookRegistry.register('tool.execute.before', (i, o) =>
+      taskSessionManagerHook['tool.execute.before'](i as never, o as never),
+    );
+    hookRegistry.register('experimental.chat.messages.transform', (i, o) =>
+      taskSessionManagerHook['experimental.chat.messages.transform'](
+        i as never,
+        o as never,
+      ),
+    );
+    hookRegistry.register('tool.execute.after', (i, o) =>
+      taskSessionManagerHook['tool.execute.after'](i as never, o as never),
+    );
     interviewManager = createInterviewManager(ctx, config);
     presetManager = createPresetManager(ctx, config);
     companionManager = new CompanionManager(
@@ -899,29 +936,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    // Best-effort rescue only for stale apply_patch input before native
-    // execution
     'tool.execute.before': async (input, output) => {
-      await applyPatchHook['tool.execute.before'](
-        input as {
-          tool: string;
-          directory?: string;
-        },
-        output as {
-          args?: { patchText?: unknown; [key: string]: unknown };
-        },
-      );
-
-      await taskSessionManagerHook['tool.execute.before'](
-        input as {
-          tool: string;
-          sessionID?: string;
-          callID?: string;
-        },
-        output as { args?: unknown },
-      );
-
-      // No-op for divoom
+      await hookRegistry.dispatch('tool.execute.before', input, output);
     },
 
     'command.execute.before': async (input, output) => {
@@ -1046,7 +1062,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       // Inject ephemeral post-file-tool-nudge reminder
-      await postFileToolNudgeHook['experimental.chat.system.transform'](
+      await hookRegistry.dispatch(
+        'experimental.chat.system.transform',
         input,
         output,
       );
@@ -1091,92 +1108,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         log,
       });
 
-      await taskSessionManagerHook['experimental.chat.messages.transform'](
-        input,
-        typedOutput,
-      );
-      await phaseReminderHook['experimental.chat.messages.transform'](
-        input,
-        typedOutput,
-      );
-      await filterAvailableSkillsHook['experimental.chat.messages.transform'](
+      await hookRegistry.dispatch(
+        'experimental.chat.messages.transform',
         input,
         typedOutput,
       );
     },
 
-    // Post-tool hooks: retry guidance for delegation errors + file-tool
-    // nudge
     'tool.execute.after': async (input, output) => {
-      const meta = input as {
-        tool?: string;
-        sessionID?: string;
-        callID?: string;
-      };
-      const runPostToolHook = async (
-        name: string,
-        fn: () => Promise<void>,
-      ): Promise<void> => {
-        try {
-          await fn();
-        } catch (error) {
-          log('[plugin] post-tool hook failed open', {
-            hook: name,
-            tool: meta.tool,
-            sessionID: meta.sessionID,
-            callID: meta.callID,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      };
-
-      await runPostToolHook('delegate-task-retry', () =>
-        delegateTaskRetryHook['tool.execute.after'](
-          input as { tool: string },
-          output as { output: unknown },
-        ),
-      );
-
-      await runPostToolHook('json-error-recovery', () =>
-        jsonErrorRecoveryHook['tool.execute.after'](
-          input as {
-            tool: string;
-            sessionID: string;
-            callID: string;
-          },
-          output as {
-            title: string;
-            output: unknown;
-            metadata: unknown;
-          },
-        ),
-      );
-
-      await runPostToolHook('post-file-tool-nudge', () =>
-        postFileToolNudgeHook['tool.execute.after'](
-          input as {
-            tool: string;
-            sessionID?: string;
-            callID?: string;
-          },
-          output as {
-            title: string;
-            output: string;
-            metadata: Record<string, unknown>;
-          },
-        ),
-      );
-
-      await runPostToolHook('task-session-manager', () =>
-        taskSessionManagerHook['tool.execute.after'](
-          input as {
-            tool: string;
-            sessionID?: string;
-            callID?: string;
-          },
-          output as { output: unknown },
-        ),
-      );
+      await hookRegistry.dispatch('tool.execute.after', input, output);
     },
   };
 };
