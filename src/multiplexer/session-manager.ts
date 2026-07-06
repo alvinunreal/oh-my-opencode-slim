@@ -6,7 +6,6 @@ import {
   isServerRunning,
   type Multiplexer,
 } from '../multiplexer';
-import { extractSessionId } from '../utils';
 import type {
   BackgroundJobBoard,
   BackgroundJobState,
@@ -608,10 +607,7 @@ export class MultiplexerSessionManager {
   }
 
   private getSessionId(event: SessionEvent): string | undefined {
-    return extractSessionId(
-      event.properties?.info,
-      event.properties?.sessionID,
-    );
+    return event.properties?.info?.id || event.properties?.sessionID;
   }
 
   private backgroundJobState(

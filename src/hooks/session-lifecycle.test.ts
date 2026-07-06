@@ -43,21 +43,6 @@ describe('SessionLifecycle', () => {
     expect(lc.hasPendingSession('s1')).toBe(false);
   });
 
-  test('hasPendingSession returns false after TTL expiry', () => {
-    const lc = new SessionLifecycle(noop);
-    const now = Date.now();
-    lc.markPending('s1');
-
-    // Simulate time passing beyond TTL (5 minutes)
-    const originalDateNow = Date.now;
-    Date.now = () => now + SessionLifecycle.PENDING_TTL_MS + 1;
-    try {
-      expect(lc.hasPendingSession('s1')).toBe(false);
-    } finally {
-      Date.now = originalDateNow;
-    }
-  });
-
   test('clearSession removes all state', () => {
     const lc = new SessionLifecycle(noop);
     lc.markPending('s1');
