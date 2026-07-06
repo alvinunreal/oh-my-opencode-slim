@@ -7,6 +7,7 @@
  */
 
 import { PHASE_REMINDER } from '../../config/constants';
+import { extractSessionId } from '../../utils';
 
 interface ToolExecuteAfterInput {
   tool: string;
@@ -73,8 +74,10 @@ export function createPostFileToolNudgeHook(
       };
     }): Promise<void> => {
       if (input.event.type !== 'session.deleted') return;
-      const sid =
-        input.event.properties?.sessionID ?? input.event.properties?.info?.id;
+      const sid = extractSessionId(
+        input.event.properties?.info,
+        input.event.properties?.sessionID,
+      );
       if (sid) {
         pendingSessionIds.delete(sid);
         everPendingSessionIds.delete(sid);

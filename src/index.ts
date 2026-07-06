@@ -54,6 +54,7 @@ import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
   BackgroundJobBoard,
   createDisplayNameMentionRewriter,
+  extractSessionId,
   resolveRuntimeAgentName,
 } from './utils';
 import { isPluginDisabledByEnv } from './utils/env';
@@ -886,16 +887,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const props = input.event.properties as
           | { info?: { id?: string }; sessionID?: string }
           | undefined;
-        const sessionID = props?.info?.id ?? props?.sessionID;
+        const sessionID = extractSessionId(props?.info, props?.sessionID);
+
         companionManager.onSessionDeleted(sessionID);
-      }
-
-      if (input.event.type === 'session.deleted') {
-        const props = input.event.properties as
-          | { info?: { id?: string }; sessionID?: string }
-          | undefined;
-        const sessionID = props?.info?.id ?? props?.sessionID;
-
         if (depthTracker && sessionID) {
           depthTracker.cleanup(sessionID);
         }

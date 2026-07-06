@@ -16,6 +16,7 @@
 
 import type { PluginInput } from '@opencode-ai/plugin';
 import { ALL_AGENT_NAMES } from '../../config/constants';
+import { extractSessionId } from '../../utils';
 import { log } from '../../utils/logger';
 import {
   abortSessionWithTimeout,
@@ -233,7 +234,7 @@ export class ForegroundFallbackManager {
         const props = event.properties as
           | { sessionID?: string; info?: { id?: string } }
           | undefined;
-        const id = props?.info?.id ?? props?.sessionID;
+        const id = extractSessionId(props?.info, props?.sessionID);
         if (id) {
           this.sessionModel.delete(id);
           this.sessionAgent.delete(id);
