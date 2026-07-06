@@ -12,6 +12,8 @@ Provides a unified abstraction layer for terminal multiplexers (tmux and zellij)
 - **Concrete Implementations**:
   - `TmuxMultiplexer`: tmux-specific implementation using `tmux` CLI commands
   - `ZellijMultiplexer`: zellij-specific implementation using zellij plugin API
+  - `HerdrMultiplexer`: herdr-specific implementation using `herdr` CLI commands
+- **Shared Utilities** (`shared.ts`): `quoteShellArg`, `buildOpencodeAttachCommand`, and `findBinary` — extracted from the three adapters to eliminate copy-paste duplication.
 - **Session Manager** (`session-manager.ts`): Tracks child session lifecycle and coordinates pane operations via event-driven architecture.
 - **Factory** (`factory.ts`): Creates appropriate multiplexer instance based on configuration and environment detection.
 
@@ -164,7 +166,9 @@ interface MultiplexerConfig {
 |------|---------|
 | `index.ts` | Public API exports |
 | `types.ts` | Core interfaces and shared utilities |
+| `shared.ts` | Shared infrastructure (quoteShellArg, buildOpencodeAttachCommand, findBinary) |
 | `factory.ts` | Multiplexer instance creation |
 | `session-manager.ts` | Session lifecycle management |
-| `tmux.ts` | tmux-specific implementation |
-| `zellij.ts` | zellij-specific implementation |
+| `tmux/index.ts` | tmux-specific implementation |
+| `zellij/index.ts` | zellij-specific implementation |
+| `herdr/index.ts` | herdr-specific implementation |
