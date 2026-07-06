@@ -117,5 +117,6 @@ describe('BackgroundJobCoordinator', () => {
     });
 
     expect(listener).toHaveBeenCalledWith('full-chain-test');
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });
