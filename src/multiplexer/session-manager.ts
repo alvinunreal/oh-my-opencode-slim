@@ -623,6 +623,8 @@ export class MultiplexerSessionManager {
   async closeSessionFromCoordinator(sessionId: string): Promise<void> {
     if (!this.enabled) return;
     // Coordinator already vetted lifecycle policy; skip re-check
+    // ponytail: theoretical race if new job starts between coordinator's
+    // retryDeferredClose() and this call, but session IDs are unique per launch
     await this.closeSession(sessionId, 'idle', true);
   }
 
