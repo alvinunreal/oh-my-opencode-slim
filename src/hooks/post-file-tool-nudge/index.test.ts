@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 
 import { PHASE_REMINDER } from '../../config/constants';
+import { SessionLifecycle } from '../session-lifecycle';
 import { createPostFileToolNudgeHook } from './index';
 
 describe('post-file-tool-nudge hook', () => {
   test('records pending session on Read tool', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
     const output = { system: [] };
 
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
@@ -18,7 +20,8 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('records pending session on Write tool', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
     const output = { system: [] };
 
     await hook['tool.execute.after']({ tool: 'Write', sessionID: 's1' }, {});
@@ -31,7 +34,8 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('does not mutate tool output', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
     const toolOutput = { output: 'real content' };
 
     await hook['tool.execute.after'](
@@ -43,7 +47,8 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('deduplicates multiple Read/Write calls in same session', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
 
     await hook['tool.execute.after']({ tool: 'read', sessionID: 's1' }, {});
     await hook['tool.execute.after']({ tool: 'write', sessionID: 's1' }, {});
@@ -59,7 +64,8 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('consumes pending marker after injection', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
 
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
     await hook['experimental.chat.system.transform'](
@@ -78,7 +84,8 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('ignores non-file tools', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
     const output = { system: [] };
 
     await hook['tool.execute.after']({ tool: 'bash', sessionID: 's1' }, {});
@@ -91,7 +98,11 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('skips injection when shouldInject returns false', async () => {
-    const hook = createPostFileToolNudgeHook({ shouldInject: () => false });
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({
+      shouldInject: () => false,
+      coordinator,
+    });
     const output = { system: [] };
 
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
@@ -104,7 +115,8 @@ describe('post-file-tool-nudge hook', () => {
   });
 
   test('ignores Read/Write without sessionID', async () => {
-    const hook = createPostFileToolNudgeHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
     const output = { system: [] };
 
     await hook['tool.execute.after']({ tool: 'read' }, {});
@@ -116,13 +128,12 @@ describe('post-file-tool-nudge hook', () => {
     expect(output.system).toHaveLength(0);
   });
 
-  test('cleans up pending marker on session.deleted', async () => {
-    const hook = createPostFileToolNudgeHook();
+  test('cleans up pending marker on session.deleted via coordinator', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
 
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    await hook.event({
-      event: { type: 'session.deleted', properties: { sessionID: 's1' } },
-    });
+    coordinator.dispatchSessionDeleted('s1');
 
     const output = { system: [] };
     await hook['experimental.chat.system.transform'](
@@ -133,13 +144,12 @@ describe('post-file-tool-nudge hook', () => {
     expect(output.system).toHaveLength(0);
   });
 
-  test('cleans up on session.deleted with info.id shape', async () => {
-    const hook = createPostFileToolNudgeHook();
+  test('cleans up pending marker via coordinator with info.id shape', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
 
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    await hook.event({
-      event: { type: 'session.deleted', properties: { info: { id: 's1' } } },
-    });
+    coordinator.dispatchSessionDeleted('s1');
 
     const output = { system: [] };
     await hook['experimental.chat.system.transform'](
@@ -152,8 +162,9 @@ describe('post-file-tool-nudge hook', () => {
 
   test('composed: phase-reminder skips when post-file-tool-nudge handles system', async () => {
     const { createPhaseReminderHook } = await import('../phase-reminder/index');
-    const nudgeHook = createPostFileToolNudgeHook();
-    const phaseHook = createPhaseReminderHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const nudgeHook = createPostFileToolNudgeHook({ coordinator });
+    const phaseHook = createPhaseReminderHook(coordinator);
 
     // Simulate Read tool call
     await nudgeHook['tool.execute.after'](
