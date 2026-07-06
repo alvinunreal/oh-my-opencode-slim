@@ -9,7 +9,6 @@ export {
   ForegroundFallbackManager,
   isRateLimitError,
 } from './foreground-fallback';
-export { HookRegistry } from './hook-registry';
 export { processImageAttachments } from './image-hook';
 export { createJsonErrorRecoveryHook } from './json-error-recovery/hook';
 export { createLoopCommandHook } from './loop-command';

@@ -3,7 +3,6 @@ import {
   BackgroundJobBoard,
   type BackgroundJobRecord,
   deriveTaskSessionLabel,
-  extractSessionId,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
   parseTaskStatusOutput,
@@ -592,10 +591,8 @@ export function createTaskSessionManagerHook(
           (input.event.properties as { status?: { type?: string } } | undefined)
             ?.status?.type === 'idle')
       ) {
-        const sessionId = extractSessionId(
-          input.event.properties?.info,
-          input.event.properties?.sessionID,
-        );
+        const sessionId =
+          input.event.properties?.info?.id || input.event.properties?.sessionID;
         const job = sessionId ? backgroundJobBoard.get(sessionId) : undefined;
         log('[task-session-manager] idle/status idle observed', {
           sessionID: sessionId,
@@ -647,10 +644,8 @@ export function createTaskSessionManagerHook(
       }
 
       if (input.event.type === 'session.error') {
-        const sessionId = extractSessionId(
-          input.event.properties?.info,
-          input.event.properties?.sessionID,
-        );
+        const sessionId =
+          input.event.properties?.info?.id || input.event.properties?.sessionID;
         if (sessionId && options.shouldManageSession(sessionId)) {
           // Only clear injected terminal jobs for fatal errors.
           // Rate-limit errors are recovered by ForegroundFallbackManager
@@ -673,10 +668,8 @@ export function createTaskSessionManagerHook(
         (input.event.properties as { status?: { type?: string } } | undefined)
           ?.status?.type === 'busy'
       ) {
-        const sessionId = extractSessionId(
-          input.event.properties?.info,
-          input.event.properties?.sessionID,
-        );
+        const sessionId =
+          input.event.properties?.info?.id || input.event.properties?.sessionID;
         const before = sessionId
           ? backgroundJobBoard.get(sessionId)
           : undefined;
@@ -709,10 +702,8 @@ export function createTaskSessionManagerHook(
       }
 
       if (input.event.type !== 'session.deleted') return;
-      const sessionId = extractSessionId(
-        input.event.properties?.info,
-        input.event.properties?.sessionID,
-      );
+      const sessionId =
+        input.event.properties?.info?.id || input.event.properties?.sessionID;
       if (!sessionId) return;
 
       log('[task-session-manager] session.deleted observed', {

@@ -31,7 +31,6 @@ import {
   createReflectCommandHook,
   createTaskSessionManagerHook,
   ForegroundFallbackManager,
-  HookRegistry,
   SessionLifecycle,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
@@ -56,7 +55,6 @@ import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
   BackgroundJobBoard,
   createDisplayNameMentionRewriter,
-  extractSessionId,
   resolveRuntimeAgentName,
 } from './utils';
 import { isPluginDisabledByEnv } from './utils/env';
@@ -141,13 +139,23 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let autoUpdateChecker: ReturnType<typeof createAutoUpdateCheckerHook>;
   let sessionAgentMap: Map<string, string>;
   let sessionLifecycle: SessionLifecycle;
-  let hookRegistry: HookRegistry;
+
   let chatHeadersHook: ReturnType<typeof createChatHeadersHook>;
   let foregroundFallback: ForegroundFallbackManager;
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
+  let phaseReminder: ReturnType<typeof createPhaseReminderHook>;
+  let filterAvailableSkills: ReturnType<typeof createFilterAvailableSkillsHook>;
+  let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
+  let delegateTaskRetry: ReturnType<typeof createDelegateTaskRetryHook>;
+  let applyPatch: ReturnType<typeof createApplyPatchHook>;
+  let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
+  let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
+  let delegateTaskRetryAfter: (i: unknown, o: unknown) => Promise<void>;
+  let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
+  let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
@@ -303,8 +311,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       coordinator: sessionLifecycle,
     });
 
-    // Initialize hooks and register them with the registry
-    hookRegistry = new HookRegistry();
+    // Initialize hooks and wrapPostToolHook helper for error isolation
 
     // Wrap tool.execute.after handlers with per-hook error isolation.
     // Preserves the old runPostToolHook behavior: one failing hook doesn't
@@ -333,75 +340,34 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       };
     };
 
-    const phaseReminder = createPhaseReminderHook(sessionLifecycle);
-    hookRegistry.register('experimental.chat.messages.transform', (i, o) =>
-      phaseReminder['experimental.chat.messages.transform'](
-        i as never,
-        o as never,
-      ),
-    );
+    phaseReminder = createPhaseReminderHook(sessionLifecycle);
 
-    const filterAvailableSkills = createFilterAvailableSkillsHook(ctx, config);
-    hookRegistry.register('experimental.chat.messages.transform', (i, o) =>
-      filterAvailableSkills['experimental.chat.messages.transform'](
-        i as never,
-        o as never,
-      ),
-    );
+    filterAvailableSkills = createFilterAvailableSkillsHook(ctx, config);
 
-    const postFileToolNudge = createPostFileToolNudgeHook({
+    postFileToolNudge = createPostFileToolNudgeHook({
       shouldInject: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
       coordinator: sessionLifecycle,
     });
-    hookRegistry.register('experimental.chat.system.transform', (i, o) =>
-      postFileToolNudge['experimental.chat.system.transform'](
-        i as never,
-        o as never,
-      ),
-    );
-    hookRegistry.register(
-      'tool.execute.after',
-      wrapPostToolHook('post-file-tool-nudge', (i, o) =>
-        postFileToolNudge['tool.execute.after'](i as never, o as never),
-      ),
-    );
 
-    const delegateTaskRetry = createDelegateTaskRetryHook(ctx);
-    hookRegistry.register(
-      'tool.execute.after',
-      wrapPostToolHook('delegate-task-retry', (i, o) =>
-        delegateTaskRetry['tool.execute.after'](i as never, o as never),
-      ),
-    );
+    delegateTaskRetry = createDelegateTaskRetryHook(ctx);
 
-    const applyPatch = createApplyPatchHook(ctx);
-    hookRegistry.register('tool.execute.before', (i, o) =>
-      applyPatch['tool.execute.before'](i as never, o as never),
-    );
+    applyPatch = createApplyPatchHook(ctx);
 
-    const jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
-    hookRegistry.register(
-      'tool.execute.after',
-      wrapPostToolHook('json-error-recovery', (i, o) =>
-        jsonErrorRecovery['tool.execute.after'](i as never, o as never),
-      ),
-    );
+    jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
 
-    hookRegistry.register('tool.execute.before', (i, o) =>
-      taskSessionManagerHook['tool.execute.before'](i as never, o as never),
+    // Pre-created wrapped handlers for tool.execute.after (error-isolated)
+    postFileToolNudgeAfter = wrapPostToolHook('post-file-tool-nudge', (i, o) =>
+      postFileToolNudge['tool.execute.after'](i as never, o as never),
     );
-    hookRegistry.register('experimental.chat.messages.transform', (i, o) =>
-      taskSessionManagerHook['experimental.chat.messages.transform'](
-        i as never,
-        o as never,
-      ),
+    delegateTaskRetryAfter = wrapPostToolHook('delegate-task-retry', (i, o) =>
+      delegateTaskRetry['tool.execute.after'](i as never, o as never),
     );
-    hookRegistry.register(
-      'tool.execute.after',
-      wrapPostToolHook('task-session-manager', (i, o) =>
-        taskSessionManagerHook['tool.execute.after'](i as never, o as never),
-      ),
+    jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
+      jsonErrorRecovery['tool.execute.after'](i as never, o as never),
+    );
+    taskSessionManagerAfter = wrapPostToolHook('task-session-manager', (i, o) =>
+      taskSessionManagerHook['tool.execute.after'](i as never, o as never),
     );
     interviewManager = createInterviewManager(ctx, config);
     presetManager = createPresetManager(ctx, config);
@@ -960,7 +926,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const props = input.event.properties as
           | { info?: { id?: string }; sessionID?: string }
           | undefined;
-        const sessionID = extractSessionId(props?.info, props?.sessionID);
+        const sessionID = props?.info?.id || props?.sessionID;
 
         if (sessionID) {
           sessionLifecycle.dispatchSessionDeleted(sessionID);
@@ -976,7 +942,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.before': async (input, output) => {
-      await hookRegistry.dispatch('tool.execute.before', input, output);
+      await applyPatch['tool.execute.before'](input as never, output as never);
+      await taskSessionManagerHook['tool.execute.before'](
+        input as never,
+        output as never,
+      );
     },
 
     'command.execute.before': async (input, output) => {
@@ -1101,10 +1071,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       // Inject ephemeral post-file-tool-nudge reminder
-      await hookRegistry.dispatch(
-        'experimental.chat.system.transform',
-        input,
-        output,
+      await postFileToolNudge['experimental.chat.system.transform'](
+        input as never,
+        output as never,
       );
 
       // Collapse to single system message for provider compatibility.
@@ -1147,15 +1116,25 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         log,
       });
 
-      await hookRegistry.dispatch(
-        'experimental.chat.messages.transform',
-        input,
-        typedOutput,
+      await phaseReminder['experimental.chat.messages.transform'](
+        input as never,
+        typedOutput as never,
+      );
+      await filterAvailableSkills['experimental.chat.messages.transform'](
+        input as never,
+        typedOutput as never,
+      );
+      await taskSessionManagerHook['experimental.chat.messages.transform'](
+        input as never,
+        typedOutput as never,
       );
     },
 
     'tool.execute.after': async (input, output) => {
-      await hookRegistry.dispatch('tool.execute.after', input, output);
+      await postFileToolNudgeAfter(input, output);
+      await delegateTaskRetryAfter(input, output);
+      await jsonErrorRecoveryAfter(input, output);
+      await taskSessionManagerAfter(input, output);
     },
   };
 };
