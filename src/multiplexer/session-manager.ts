@@ -7,17 +7,13 @@ import {
   type Multiplexer,
 } from '../multiplexer';
 import type { BackgroundJobState } from '../utils/background-job-board';
+import type { BackgroundJobStore } from '../utils/background-job-store';
 import { log } from '../utils/logger';
 
-/**
- * Minimal interface for reading background job state.
- * Both BackgroundJobBoard and BackgroundJobCoordinator satisfy this.
- */
-interface BackgroundJobReader {
-  getState(sessionId: string): BackgroundJobState | undefined;
-  deferIfRunning(sessionId: string): boolean;
-  clearDeferredClose(sessionId: string): void;
-}
+type BackgroundJobReader = Pick<
+  BackgroundJobStore,
+  'getState' | 'deferIfRunning' | 'clearDeferredClose'
+>;
 
 interface TrackedSession {
   sessionId: string;
@@ -411,6 +407,7 @@ export class MultiplexerSessionManager {
   private async closeSession(
     sessionId: string,
     reason: CloseReason,
+    skipPolicyCheck = false,
   ): Promise<void> {
     if (reason === 'deleted') {
       this.knownSessions.delete(sessionId);
@@ -452,7 +449,11 @@ export class MultiplexerSessionManager {
       });
     }
 
-    if (reason === 'idle' && !this.shouldCloseNow(sessionId)) {
+    if (
+      reason === 'idle' &&
+      !skipPolicyCheck &&
+      !this.shouldCloseNow(sessionId)
+    ) {
       log(
         '[multiplexer-session-manager] close skipped; background job running',
         {
@@ -621,7 +622,8 @@ export class MultiplexerSessionManager {
 
   async closeSessionFromCoordinator(sessionId: string): Promise<void> {
     if (!this.enabled) return;
-    await this.closeSession(sessionId, 'idle');
+    // Coordinator already vetted lifecycle policy; skip re-check
+    await this.closeSession(sessionId, 'idle', true);
   }
 
   async cleanup(): Promise<void> {

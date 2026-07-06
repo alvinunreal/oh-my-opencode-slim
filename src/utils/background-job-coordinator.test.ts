@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { BackgroundJobBoard } from './background-job-board';
 import { BackgroundJobCoordinator } from './background-job-coordinator';
 
 function createMockBoard(isRunning = false) {
@@ -7,7 +8,6 @@ function createMockBoard(isRunning = false) {
     getState: mock(() => (isRunning ? 'running' : 'completed')),
     addTerminalStateListener: mock(() => {}),
     removeTerminalStateListener: mock(() => {}),
-    // ... other methods as needed
   } as any;
 }
 
@@ -88,5 +88,34 @@ describe('BackgroundJobCoordinator', () => {
     boardListener?.('ses_123');
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  test('full chain: board terminal → coordinator → listener for deferred job', () => {
+    const board = new BackgroundJobBoard();
+    const coordinator = new BackgroundJobCoordinator(board);
+    const listener = mock(() => {});
+    coordinator.addTerminalStateListener(listener);
+
+    // Register and start a job
+    board.registerLaunch({
+      taskID: 'full-chain-test',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    board.updateStatus({
+      taskID: 'full-chain-test',
+      state: 'running',
+    });
+
+    // Defer close while job is running
+    expect(coordinator.deferIfRunning('full-chain-test')).toBe(false);
+
+    // Transition to completed — board fires listener, coordinator re-checks
+    board.updateStatus({
+      taskID: 'full-chain-test',
+      state: 'completed',
+    });
+
+    expect(listener).toHaveBeenCalledWith('full-chain-test');
   });
 });
