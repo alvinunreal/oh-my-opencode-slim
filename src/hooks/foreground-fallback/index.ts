@@ -21,6 +21,7 @@ import {
   abortSessionWithTimeout,
   parseModelReference,
 } from '../../utils/session';
+import type { SessionLifecycle } from '../session-lifecycle';
 import { isUserMessageWithParts } from '../types';
 
 type OpencodeClient = PluginInput['client'];
@@ -120,7 +121,20 @@ export class ForegroundFallbackManager {
     private readonly enabled: boolean,
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
-  ) {}
+    coordinator?: SessionLifecycle,
+  ) {
+    if (coordinator) {
+      coordinator.onSessionDeleted((id) => {
+        this.sessionModel.delete(id);
+        this.sessionAgent.delete(id);
+        this.sessionTried.delete(id);
+        this.inProgress.delete(id);
+        this.lastTrigger.delete(id);
+        this.lastTriggerModel.delete(id);
+        this.sessionRetries.delete(id);
+      });
+    }
+  }
 
   /**
    * Process an OpenCode plugin event.
@@ -224,24 +238,14 @@ export class ForegroundFallbackManager {
       }
 
       case 'session.deleted': {
-        // Clean up all per-session state to prevent unbounded memory growth
-        // in long-running instances with many subagent sessions.
-        // OpenCode emits two shapes depending on context:
-        //   { properties: { sessionID } }   - subagent / task sessions
-        //   { properties: { info: { id } } } - top-level session deletion
-        // Mirror the same dual-shape lookup used elsewhere in the plugin.
         const props = event.properties as
           | { sessionID?: string; info?: { id?: string } }
           | undefined;
-        const id = props?.info?.id ?? props?.sessionID;
+        const id = props?.info?.id || props?.sessionID;
         if (id) {
-          this.sessionModel.delete(id);
-          this.sessionAgent.delete(id);
-          this.sessionTried.delete(id);
-          this.inProgress.delete(id);
-          this.lastTrigger.delete(id);
-          this.lastTriggerModel.delete(id);
-          this.sessionRetries.delete(id);
+          log('[foreground-fallback] session.deleted observed', {
+            sessionID: id,
+          });
         }
         break;
       }

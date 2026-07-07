@@ -607,7 +607,7 @@ export class MultiplexerSessionManager {
   }
 
   private getSessionId(event: SessionEvent): string | undefined {
-    return event.properties?.info?.id ?? event.properties?.sessionID;
+    return event.properties?.info?.id || event.properties?.sessionID;
   }
 
   private backgroundJobState(

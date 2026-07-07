@@ -7,7 +7,7 @@
  */
 import { PHASE_REMINDER } from '../../config/constants';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils';
-import { hasPendingSession } from '../post-file-tool-nudge';
+import type { SessionLifecycle } from '../session-lifecycle';
 import { isUserMessageWithParts } from '../types';
 
 export { PHASE_REMINDER };
@@ -17,7 +17,7 @@ export { PHASE_REMINDER };
  * This hook runs right before sending to API, so it doesn't affect UI display.
  * Only injects for the orchestrator agent.
  */
-export function createPhaseReminderHook() {
+export function createPhaseReminderHook(coordinator?: SessionLifecycle) {
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
@@ -55,7 +55,7 @@ export function createPhaseReminderHook() {
       // injection via system prompt — skip message-level injection.
       const sessionId = (lastUserMessage as { info?: { sessionID?: string } })
         ?.info?.sessionID;
-      if (sessionId && hasPendingSession(sessionId)) {
+      if (sessionId && coordinator?.hasPendingSession(sessionId)) {
         return;
       }
 

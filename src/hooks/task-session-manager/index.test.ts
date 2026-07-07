@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import { BackgroundJobBoard } from '../../utils';
 import { createTaskSessionManagerHook } from './index';
 
@@ -9,6 +10,7 @@ function createHook(options?: {
   backgroundJobBoard?: BackgroundJobBoard;
   sessionStatus?: unknown;
   isFallbackInProgress?: (sessionID: string) => boolean;
+  coordinator?: SessionLifecycle;
 }) {
   const hook = createTaskSessionManagerHook(
     {
@@ -27,6 +29,7 @@ function createHook(options?: {
       backgroundJobBoard: options?.backgroundJobBoard,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       isFallbackInProgress: options?.isFallbackInProgress,
+      coordinator: options?.coordinator,
     },
   );
 
@@ -1743,7 +1746,8 @@ describe('task-session-manager hook', () => {
   });
 
   test('cleans up background jobs when parent or child is deleted', async () => {
-    const { hook } = createHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const { hook } = createHook({ coordinator });
 
     await hook['tool.execute.before'](
       {
@@ -1770,12 +1774,7 @@ describe('task-session-manager hook', () => {
       },
     );
 
-    await hook.event({
-      event: {
-        type: 'session.deleted',
-        properties: { sessionID: 'child-1' },
-      },
-    });
+    coordinator.dispatchSessionDeleted('child-1');
 
     const messages = createMessages('parent-1', 'do something');
     await hook['experimental.chat.messages.transform']({}, messages);
@@ -1784,7 +1783,8 @@ describe('task-session-manager hook', () => {
   });
 
   test('cleans pending calls when parent session is deleted', async () => {
-    const { hook } = createHook();
+    const coordinator = new SessionLifecycle(() => {});
+    const { hook } = createHook({ coordinator });
 
     await hook['tool.execute.before'](
       {
@@ -1800,12 +1800,7 @@ describe('task-session-manager hook', () => {
       },
     );
 
-    await hook.event({
-      event: {
-        type: 'session.deleted',
-        properties: { sessionID: 'parent-1' },
-      },
-    });
+    coordinator.dispatchSessionDeleted('parent-1');
 
     await hook['tool.execute.after'](
       {
@@ -2028,8 +2023,9 @@ describe('task-session-manager hook', () => {
   });
 
   test('parent deletion clears jobs and pending calls', async () => {
+    const coordinator = new SessionLifecycle(() => {});
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({ backgroundJobBoard: board, coordinator });
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       { args: { subagent_type: 'oracle', description: 'architecture review' } },
@@ -2041,9 +2037,7 @@ describe('task-session-manager hook', () => {
       description: 'architecture review',
     });
 
-    await hook.event({
-      event: { type: 'session.deleted', properties: { sessionID: 'parent-1' } },
-    });
+    coordinator.dispatchSessionDeleted('parent-1');
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       { output: ['task_id: child-2', 'state: running'].join('\n') },

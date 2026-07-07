@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { SessionLifecycle } from '../session-lifecycle';
 import { ForegroundFallbackManager, isRateLimitError } from './index';
 
 type ForegroundFallbackClient = ConstructorParameters<
@@ -735,9 +736,16 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.deleted', () => {
-  test('cleans up session state on session.deleted preventing memory leaks', async () => {
+  test('cleans up session state on session.deleted via coordinator', async () => {
+    const coordinator = new SessionLifecycle(() => {});
     const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains(),
+      true,
+      3,
+      coordinator,
+    );
 
     // Populate all maps for this session
     await mgr.handleEvent({
@@ -752,11 +760,8 @@ describe('ForegroundFallbackManager session.deleted', () => {
       },
     });
 
-    // Delete the session
-    await mgr.handleEvent({
-      type: 'session.deleted',
-      properties: { sessionID: 'sess-del' },
-    });
+    // Cleanup via coordinator
+    coordinator.dispatchSessionDeleted('sess-del');
 
     // After deletion, a new rate-limit on the same ID should behave as a fresh
     // session (no prior model known → uses chain from start, dedup cleared)
@@ -789,11 +794,16 @@ describe('ForegroundFallbackManager session.deleted', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('cleans up state using info.id shape (top-level session deletion)', async () => {
-    // OpenCode emits { properties: { info: { id } } } for top-level sessions
-    // and { properties: { sessionID } } for subagent sessions. Both must clean up.
+  test('cleans up state using info.id shape via coordinator', async () => {
+    const coordinator = new SessionLifecycle(() => {});
     const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains(),
+      true,
+      3,
+      coordinator,
+    );
 
     // Seed state for the session
     await mgr.handleEvent({
@@ -808,11 +818,8 @@ describe('ForegroundFallbackManager session.deleted', () => {
       },
     });
 
-    // Delete via the info.id shape
-    await mgr.handleEvent({
-      type: 'session.deleted',
-      properties: { info: { id: 'sess-info-del' } },
-    });
+    // Cleanup via coordinator
+    coordinator.dispatchSessionDeleted('sess-info-del');
 
     // State is cleared: a new rate-limit on same ID should behave as fresh session
     await mgr.handleEvent({

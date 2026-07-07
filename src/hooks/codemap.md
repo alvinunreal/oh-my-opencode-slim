@@ -7,6 +7,8 @@ Implements OpenCode lifecycle hooks that transform, process, and manage chat mes
 
 ### Core Architecture
 - **Factory Pattern**: Each hook is created via a factory function (e.g., `createApplyPatchHook()`, `createAutoUpdateCheckerHook()`) that returns a hook function matching the OpenCode hook signature.
+- **HookRegistry**: Central ordered dispatcher (`src/hooks/hook-registry.ts`). Hooks register handlers via `registry.register(hookPoint, handler)`; `src/index.ts` dispatches through `registry.dispatch()` instead of calling each hook directly.
+- **SessionLifecycle**: Coordinator (`src/hooks/session-lifecycle.ts`) that owns cleanup callback registration and pending-session signaling channel with timestamp TTL. Stateful hooks register cleanup callbacks instead of implementing their own `session.deleted` handlers.
 - **Stateful Factories**: Hook factories may maintain closure state between invocations (e.g., `createAutoUpdateCheckerHook` guards with `hasChecked`; `createTaskSessionManagerHook` manages session lifecycle). Other hooks remain stateless - each factory decides based on its needs.
 - **Message Transformation Pipeline**: Hooks operate on the `MessageWithParts[]` type, allowing transformation of user messages, assistant responses, and system messages.
 
@@ -51,9 +53,10 @@ Implements OpenCode lifecycle hooks that transform, process, and manage chat mes
 ### Hook Registration
 ```
 1. Plugin initializes (src/index.ts)
-2. Hook factories are called to create hook instances
-3. Hooks are registered with OpenCode via `experimental.chat.messages.transform`
-4. OpenCode invokes hooks during message lifecycle
+2. Hook factories are called, returning handler maps
+3. Handlers are registered with HookRegistry via `hookRegistry.register(hookPoint, handler)`
+4. `src/index.ts` dispatches via `hookRegistry.dispatch()` per hook point
+5. OpenCode invokes hooks during message lifecycle
 ```
 
 ## Integration

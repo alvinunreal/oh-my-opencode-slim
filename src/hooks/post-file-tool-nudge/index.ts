@@ -7,78 +7,43 @@
  */
 
 import { PHASE_REMINDER } from '../../config/constants';
-
-interface ToolExecuteAfterInput {
-  tool: string;
-  sessionID?: string;
-  callID?: string;
-}
-
-interface PostFileToolNudgeOptions {
-  shouldInject?: (sessionID: string) => boolean;
-}
+import type { SessionLifecycle } from '../session-lifecycle';
 
 const FILE_TOOLS = new Set(['Read', 'read', 'Write', 'write']);
 
-// Module-scoped for coordination with phase-reminder hook.
-const pendingSessionIds = new Set<string>();
-const everPendingSessionIds = new Set<string>();
-
-/** Check if a session was marked pending by a file tool AND has not yet been
- *  consumed by system.transform. Allows phase-reminder to skip injection
- *  when post-file-tool-nudge already handles it. */
-export function hasPendingSession(sessionId: string): boolean {
-  return (
-    everPendingSessionIds.has(sessionId) && !pendingSessionIds.has(sessionId)
-  );
+interface PostFileToolNudgeOptions {
+  shouldInject?: (sessionID: string) => boolean;
+  coordinator?: SessionLifecycle;
 }
 
 export function createPostFileToolNudgeHook(
   options: PostFileToolNudgeOptions = {},
 ) {
+  const { coordinator } = options;
+
+  if (coordinator) {
+    coordinator.onSessionDeleted((sid) => coordinator.clearSession(sid));
+  }
+
   return {
     'tool.execute.after': async (
-      input: ToolExecuteAfterInput,
+      input: { tool: string; sessionID?: string; callID?: string },
       _output: unknown,
     ): Promise<void> => {
-      if (!FILE_TOOLS.has(input.tool) || !input.sessionID) {
-        return;
-      }
-
-      pendingSessionIds.add(input.sessionID);
-      everPendingSessionIds.add(input.sessionID);
+      if (!FILE_TOOLS.has(input.tool) || !input.sessionID) return;
+      coordinator?.markPending(input.sessionID);
     },
     'experimental.chat.system.transform': async (
       input: { sessionID?: string },
       output: { system: string[] },
     ): Promise<void> => {
-      if (!input.sessionID || !pendingSessionIds.delete(input.sessionID)) {
+      if (!input.sessionID || !coordinator?.consumePending(input.sessionID)) {
         return;
       }
-
-      // Track consumption so phase-reminder can check without consuming.
-      // (already tracked via everPendingSessionIds — delete from pending is
-      // sufficient signal)
-
       if (options.shouldInject && !options.shouldInject(input.sessionID)) {
         return;
       }
-
       output.system.push(PHASE_REMINDER);
-    },
-    event: async (input: {
-      event: {
-        type: string;
-        properties?: { info?: { id?: string }; sessionID?: string };
-      };
-    }): Promise<void> => {
-      if (input.event.type !== 'session.deleted') return;
-      const sid =
-        input.event.properties?.sessionID ?? input.event.properties?.info?.id;
-      if (sid) {
-        pendingSessionIds.delete(sid);
-        everPendingSessionIds.delete(sid);
-      }
     },
   };
 }
