@@ -564,18 +564,43 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             | undefined;
           if (!entry) continue;
 
-          if (typeof override.model === 'string') {
-            entry.model = override.model;
-          } else if (
-            Array.isArray(override.model) &&
-            override.model.length > 0
-          ) {
-            const first = override.model[0];
-            entry.model = typeof first === 'string' ? first : first.id;
-            // Extract inline variant from array-form model entry
-            if (typeof first !== 'string' && first.variant) {
-              entry.variant = first.variant;
+          // Guard: skip model override if the entry's model was explicitly
+          // set by the user via /model (or similar). Detection: the current
+          // value differs from what the model-array resolution (above) would
+          // have set. This preserves a deliberate runtime model pick across
+          // preset re-application on subagent dispatch. Limitation: if the
+          // user picks the same model the preset would set, this guard cannot
+          // distinguish it from the preset's own prior write.
+          const existingModel = entry.model;
+          const chainModel = runtimeChains[resolvedName]?.[0];
+          const modelExplicitlySet =
+            existingModel !== undefined && existingModel !== chainModel;
+
+          if (!modelExplicitlySet) {
+            if (typeof override.model === 'string') {
+              entry.model = override.model;
+            } else if (
+              Array.isArray(override.model) &&
+              override.model.length > 0
+            ) {
+              const first = override.model[0];
+              entry.model = typeof first === 'string' ? first : first.id;
+              // Extract inline variant from array-form model entry
+              if (typeof first !== 'string' && first.variant) {
+                entry.variant = first.variant;
+              }
             }
+          } else {
+            log('[plugin] runtime preset override skipped model (user override detected)', {
+              preset: runtimePresetName,
+              agent: agentName,
+              existingModel: existingModel as string,
+              presetModel: typeof override.model === 'string'
+                ? override.model
+                : Array.isArray(override.model) && override.model.length > 0
+                  ? (typeof override.model[0] === 'string' ? override.model[0] : override.model[0].id)
+                  : undefined,
+            });
           }
           // Explicitly set or clear scalar fields so switching from
           // Preset A (which sets a field) to Preset B (which doesn't)
@@ -632,7 +657,17 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             const prevOverride = prevPreset[agentName] as
               | AgentOverrideConfig
               | undefined;
-            if (typeof baseline?.model === 'string') {
+            // Guard: same user-override detection as above — skip model
+            // reset if the current value was explicitly set by /model.
+            const existingBaselineModel = entry.model;
+            const baselineChainModel = runtimeChains[resolvedName]?.[0];
+            const baselineModelExplicitlySet =
+              existingBaselineModel !== undefined &&
+              existingBaselineModel !== baselineChainModel;
+            if (
+              typeof baseline?.model === 'string' &&
+              !baselineModelExplicitlySet
+            ) {
               entry.model = baseline.model;
             }
             if (typeof baseline?.variant === 'string') {
