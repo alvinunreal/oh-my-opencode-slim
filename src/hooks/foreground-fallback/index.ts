@@ -350,12 +350,15 @@ export class ForegroundFallbackManager {
         currentModel &&
         !chain.includes(currentModel)
       ) {
-        log('[foreground-fallback] current model not in chain, skipping fallback (runtimeOverride=false)', {
-          sessionID,
-          agentName,
-          currentModel,
-          chain,
-        });
+        log(
+          '[foreground-fallback] current model not in chain, skipping fallback (runtimeOverride=false)',
+          {
+            sessionID,
+            agentName,
+            currentModel,
+            chain,
+          },
+        );
         // Abort the session so the rate-limit error surfaces to the user
         // instead of leaving the session in a silent retry loop.
         await abortSessionWithTimeout(this.client, sessionID);

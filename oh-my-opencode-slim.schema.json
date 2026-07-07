@@ -377,6 +377,11 @@
           "default": true,
           "description": "When true (default), empty provider responses are treated as failures, triggering fallback/retry. Set to false to treat them as successes.",
           "type": "boolean"
+        },
+        "runtimeOverride": {
+          "default": true,
+          "description": "When true (default), a runtime model selected via /model that is outside the configured fallback chain will still trigger the chain on rate-limit errors. When false, out-of-chain runtime picks are respected and the error surfaces instead of silently falling back to the chain. Models that are members of the chain always fall back regardless of this setting.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false

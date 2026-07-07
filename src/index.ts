@@ -313,6 +313,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       backgroundJobBoard: backgroundJobCoordinator,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
+      registerSessionAsOrchestrator: (sessionID) => {
+        if (!sessionAgentMap.has(sessionID)) {
+          sessionAgentMap.set(sessionID, 'orchestrator');
+        }
+      },
       isFallbackInProgress: (sessionID) =>
         foregroundFallback.isFallbackInProgress(sessionID),
       coordinator: sessionLifecycle,

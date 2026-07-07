@@ -86,6 +86,9 @@ export function createTaskSessionManagerHook(
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobStore;
     shouldManageSession: (sessionID: string) => boolean;
+    /** Register a session as orchestrator when the transform hook detects
+     *  an orchestrator message but the session isn't in the agent map yet. */
+    registerSessionAsOrchestrator?: (sessionID: string) => void;
     /** Optional guard: when provided, idle events for a session that is
      *  currently undergoing a foreground-fallback abort/re-prompt cycle
      *  will NOT trigger idle reconciliation. prevents marking a still-
@@ -194,10 +197,23 @@ export function createTaskSessionManagerHook(
       return undefined;
     }
 
-    if (part.synthetic !== true) return undefined;
+    if (part.synthetic !== true) {
+      log('[task-session-manager] skipping non-synthetic part', {
+        partType: part.type,
+        hasText: typeof part.text === 'string',
+        textPreview:
+          typeof part.text === 'string' ? part.text.slice(0, 80) : undefined,
+      });
+      return undefined;
+    }
 
     const status = parseTaskStatusOutput(part.text);
-    if (!status) return undefined;
+    if (!status) {
+      log('[task-session-manager] synthetic part missing task status', {
+        textPreview: part.text.slice(0, 120),
+      });
+      return undefined;
+    }
     if (status.state !== 'completed' && status.state !== 'error') {
       return undefined;
     }
@@ -348,6 +364,17 @@ export function createTaskSessionManagerHook(
         label,
       };
       pendingCallTracker.add(pendingCall);
+      log(
+        '[task-session-manager] tool.execute.before task — pending call created',
+        {
+          callId: pendingCall.callId,
+          parentSessionId: pendingCall.parentSessionId,
+          agentType: pendingCall.agentType,
+          label: pendingCall.label,
+          inputCallID: input.callID,
+          inputSessionID: input.sessionID,
+        },
+      );
 
       if (typeof args.task_id !== 'string' || args.task_id.trim() === '') {
         return;
@@ -414,6 +441,16 @@ export function createTaskSessionManagerHook(
       if (input.tool.toLowerCase() !== 'task') return;
 
       const pending = pendingCallTracker.take(input.callID, input.sessionID);
+      log('[task-session-manager] tool.execute.after task', {
+        callID: input.callID,
+        sessionID: input.sessionID,
+        hasPending: !!pending,
+        outputType: typeof output.output,
+        outputPreview:
+          typeof output.output === 'string'
+            ? output.output.slice(0, 120)
+            : undefined,
+      });
 
       if (!pending || typeof output.output !== 'string') return;
       const launch = parseTaskLaunchOutput(output.output);
@@ -517,10 +554,32 @@ export function createTaskSessionManagerHook(
           !message.info.sessionID ||
           !options.shouldManageSession(message.info.sessionID)
         ) {
-          continue;
+          // Fallback: if the message explicitly declares orchestrator agent
+          // but the session isn't in the agent map yet (chat.message hasn't
+          // fired), register it so completion notifications aren't dropped.
+          if (message.info.sessionID && message.info.agent === 'orchestrator') {
+            options.registerSessionAsOrchestrator?.(message.info.sessionID);
+            // Re-check after registration
+            if (options.shouldManageSession(message.info.sessionID)) {
+              // Fall through to process this message
+            } else {
+              continue;
+            }
+          } else {
+            continue;
+          }
         }
 
         for (const [partIndex, part] of message.parts.entries()) {
+          if (part.type === 'text' && typeof part.text === 'string') {
+            log('[task-session-manager] transform scanning part', {
+              messageIndex,
+              partIndex,
+              synthetic: part.synthetic,
+              hasTaskContent: /task_id:|<task[\s>]/i.test(part.text),
+              textPreview: part.text.slice(0, 100),
+            });
+          }
           updateFromInjectedCompletion(part, message, messageIndex, partIndex);
         }
       }
