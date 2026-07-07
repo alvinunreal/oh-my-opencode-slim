@@ -474,6 +474,61 @@ describe('HerdrMultiplexer', () => {
     ]);
   });
 
+  test('main-vertical: fallback to parent when agent area closed', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    const r1 = await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    // Simulate agent area pane being closed externally
+    await herdr.closePane(r1.paneId!);
+
+    // Next spawn should split from parent (w1:p1) → right, not from stale w1:p2
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    // 1st: parent → right (w1:p1)
+    expect(splitCommands[0]).toContain('w1:p1');
+    // 2nd (after close): parent → right again (w1:p1), not w1:p2
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr', 'pane', 'split', 'w1:p1',
+      '--direction', 'right', '--cwd', '/repo', '--no-focus',
+    ]);
+  });
+
+  test('closePane clears agentAreaPaneId when agent area closed', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    const r1 = await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.closePane(r1.paneId!);
+
+    // @ts-expect-error - accessing private for test
+    expect(herdr.agentAreaPaneId).toBeNull();
+  });
+
+  test('closePane does NOT clear agentAreaPaneId for non-agent pane', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    // Close a different pane (simulated)
+    await herdr.closePane('w1:p99');
+
+    // @ts-expect-error
+    expect(herdr.agentAreaPaneId).not.toBeNull();
+  });
+
+  test('applyLayout clears agentAreaPaneId', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.applyLayout('tiled', 50);
+
+    // @ts-expect-error
+    expect(herdr.agentAreaPaneId).toBeNull();
+  });
+
   test('applyLayout is a no-op', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);

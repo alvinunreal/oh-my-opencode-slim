@@ -158,6 +158,10 @@ export class HerdrMultiplexer implements Multiplexer {
   async closePane(paneId: string): Promise<boolean> {
     if (!paneId || paneId === 'unknown') return true;
 
+    if (paneId === this.agentAreaPaneId) {
+      this.agentAreaPaneId = null;
+    }
+
     const herdr = await this.getBinary();
     if (!herdr) {
       log('[herdr] closePane: herdr binary not found');
@@ -206,9 +210,9 @@ export class HerdrMultiplexer implements Multiplexer {
     _layout: MultiplexerLayout,
     _mainPaneSize: number,
   ): Promise<void> {
-    // No-op for herdr. Herdr does not support tmux-like exact main pane
-    // sizing/rebalancing; layout is applied to future pane creation by
-    // mapping configured layouts to pane split directions.
+    // ponytail: herdr has no rebalancing API; clear agent area so a layout
+    // switch starts fresh from the parent pane.
+    this.agentAreaPaneId = null;
   }
 
   private async runSplit(
