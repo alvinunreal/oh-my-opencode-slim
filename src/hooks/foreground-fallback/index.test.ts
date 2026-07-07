@@ -1000,9 +1000,9 @@ describe('ForegroundFallbackManager runtimeOverride', () => {
       },
     });
 
-    // runtimeOverride=false + model not in chain → should NOT fall back
+    // runtimeOverride=false + model not in chain → abort session, no fallback
     expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
-    expect(mocks.abort).toHaveBeenCalledTimes(0);
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
   });
 
   test('always falls back for in-chain model regardless of runtimeOverride=false', async () => {
@@ -1103,5 +1103,98 @@ describe('ForegroundFallbackManager runtimeOverride', () => {
 
     // Model IS in chain (resolved via model matching) → should fall back
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('session.error with runtimeOverride=false and out-of-chain model aborts session', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains(),
+      true,
+      3,
+      undefined,
+      false, // runtimeOverride
+    );
+
+    // Seed session with out-of-chain model
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-err-override',
+          agent: 'orchestrator',
+          providerID: 'custom',
+          modelID: 'expensive-model',
+        },
+      },
+    });
+
+    // Trigger session.error with rate limit
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-err-override',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+  });
+
+  test('session.status with runtimeOverride=false and out-of-chain model aborts after retry budget exhausted', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains(),
+      true,
+      3, // maxRetries
+      undefined,
+      false, // runtimeOverride
+    );
+
+    // Seed session with out-of-chain model
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-status-override',
+          agent: 'orchestrator',
+          providerID: 'custom',
+          modelID: 'expensive-model',
+        },
+      },
+    });
+
+    // First retry (attempt 1) — absorbed by retry budget
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-status-override',
+        status: { type: 'retry', message: 'rate limit, retrying...' },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(0);
+
+    // Second retry (attempt 2) — absorbed
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-status-override',
+        status: { type: 'retry', message: 'rate limit, retrying...' },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(0);
+
+    // Third retry (attempt 3) — budget exhausted, tryFallback runs, guard aborts
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-status-override',
+        status: { type: 'retry', message: 'rate limit, retrying...' },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
   });
 });

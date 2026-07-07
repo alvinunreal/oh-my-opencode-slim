@@ -356,6 +356,9 @@ export class ForegroundFallbackManager {
           currentModel,
           chain,
         });
+        // Abort the session so the rate-limit error surfaces to the user
+        // instead of leaving the session in a silent retry loop.
+        await abortSessionWithTimeout(this.client, sessionID);
         return;
       }
 
