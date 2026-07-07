@@ -331,17 +331,43 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 ## Uninstallation
 
-1. **Remove the plugin from your OpenCode config**:
+### Required
 
-   Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
+1. Remove the plugin from your OpenCode config:
 
-2. **Remove configuration files (optional)**:
+   Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-slim"` from the `plugin` array. If the installer enabled LSP (it only does so when no explicit `lsp` setting exists), set `"lsp": false` or remove the `"lsp"` key.
+
+2. Remove the TUI badge:
+
+   Edit `~/.config/opencode/tui.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
+
+### Optional Cleanup
+
+3. Re-enable default agents:
+
+   In `~/.config/opencode/opencode.json`, remove the `disable: true` entries the installer added under `agent.explore` and `agent.general`.
+
+4. Remove the environment variable:
+
+   The installer may have added an export to your shell startup file. Remove the `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` line from your shell config:
+   - `~/.zshrc` (Zsh)
+   - `~/.bashrc` (Bash)
+   - `~/.config/fish/conf.d/opencode-background-subagents.fish` (Fish) — also remove `set -gx OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS true`
+
+   Restart your terminal or `source` the file.
+
+5. Clear the plugin cache:
+   ```bash
+   rm -rf ~/.cache/opencode/packages/oh-my-opencode-slim@*
+   ```
+
+6. Remove configuration files:
    ```bash
    rm -f ~/.config/opencode/oh-my-opencode-slim.json
    rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
    ```
 
-3. **Remove skills (optional)**:
+7. Remove skills installed by the installer:
    ```bash
    rm -rf ~/.config/opencode/skills/simplify
    rm -rf ~/.config/opencode/skills/codemap
@@ -351,3 +377,16 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
    rm -rf ~/.config/opencode/skills/worktrees
    rm -rf ~/.config/opencode/skills/oh-my-opencode-slim
    ```
+
+   > **Note:** The installer manages these specific skills. If you added others manually, they won't be affected.
+
+8. Remove the desktop companion binary (if installed):
+
+   The companion is optional and not installed by default. If you installed it:
+   ```bash
+   rm -rf ~/.local/share/opencode/storage/oh-my-opencode-slim
+   ```
+
+### Verify
+
+Run `opencode auth status` and confirm oh-my-opencode-slim agents no longer appear.
