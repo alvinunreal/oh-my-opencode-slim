@@ -554,20 +554,12 @@ export function createTaskSessionManagerHook(
           !message.info.sessionID ||
           !options.shouldManageSession(message.info.sessionID)
         ) {
-          // Fallback: if the message explicitly declares orchestrator agent
-          // but the session isn't in the agent map yet (chat.message hasn't
-          // fired), register it so completion notifications aren't dropped.
-          if (message.info.sessionID && message.info.agent === 'orchestrator') {
-            options.registerSessionAsOrchestrator?.(message.info.sessionID);
-            // Re-check after registration
-            if (options.shouldManageSession(message.info.sessionID)) {
-              // Fall through to process this message
-            } else {
-              continue;
-            }
-          } else {
+          const sessionID = message.info.sessionID;
+          if (!sessionID || message.info.agent !== 'orchestrator') {
             continue;
           }
+          options.registerSessionAsOrchestrator?.(sessionID);
+          if (!options.shouldManageSession(sessionID)) continue;
         }
 
         for (const [partIndex, part] of message.parts.entries()) {
