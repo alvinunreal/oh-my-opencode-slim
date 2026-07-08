@@ -561,7 +561,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Runtime failover on API errors (e.g. rate limits
       // mid-conversation) is handled separately by
       // ForegroundFallbackManager via the event hook.
-      log('[plugin] config() hook running (LOCAL BUILD v2.1.0-hotfix)', {
+      log('[plugin] config() hook running', {
         agentKeys: Object.keys(configAgent),
         orchestratorEntry: configAgent.orchestrator,
       });
@@ -723,21 +723,27 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Strip orchestrator's model from the SDK config after ALL
-      // resolution (model array + preset override). OpenCode reads
-      // opencodeConfig.agent.orchestrator.model when resuming the
-      // orchestrator after subagent dispatch. If we leave the resolved
-      // model here, it becomes a stale value that silently overrides
-      // the user's runtime /model pick. By deleting it, OpenCode falls
-      // back to session.model (the user's runtime selection).
-      if (configAgent.orchestrator) {
-        const orch = configAgent.orchestrator as Record<string, unknown>;
-        if (orch.model !== undefined) {
-          log('[plugin] stripping orchestrator model from config', {
-            was: orch.model,
-          });
-          delete orch.model;
-          delete orch.variant;
+      // Optional: strip orchestrator's model from the SDK config.
+      // When stripOrchestratorModel is true, delete orchestrator.model
+      // and orchestrator.variant after ALL resolution (model array +
+      // preset override). This forces OpenCode to fall back to
+      // session.model (the user's runtime /model pick) when resuming
+      // the orchestrator after subagent dispatch, preventing the
+      // silent flip to the config default.
+      //
+      // Off by default. When false, the orchestrator uses its
+      // configured model and runtime /model picks may be silently
+      // overwritten on subagent dispatch.
+      if (config.stripOrchestratorModel === true) {
+        if (configAgent.orchestrator) {
+          const orch = configAgent.orchestrator as Record<string, unknown>;
+          if (orch.model !== undefined) {
+            log('[plugin] stripping orchestrator model from config', {
+              was: orch.model,
+            });
+            delete orch.model;
+            delete orch.variant;
+          }
         }
       }
 

@@ -310,6 +310,17 @@ export const PluginConfigSchema = z
       .describe(
         'Use the compact TUI sidebar layout. Defaults to true; set false to use the expanded layout.',
       ),
+    stripOrchestratorModel: z
+      .boolean()
+      .optional()
+      .describe(
+        'When true, delete orchestrator.model from the SDK config after resolution. ' +
+          'This forces OpenCode to fall back to session.model (the user\'s runtime /model pick) ' +
+          'when resuming the orchestrator after subagent dispatch, preventing the silent ' +
+          'flip to the config default. Defaults to false (off). When false, the orchestrator ' +
+          'uses its configured model and runtime /model picks may be silently overwritten ' +
+          'on subagent dispatch.',
+      ),
     autoUpdate: z
       .boolean()
       .optional()
