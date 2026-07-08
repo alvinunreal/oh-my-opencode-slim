@@ -6,11 +6,13 @@ type SpawnResult = {
   stderr: () => Promise<string>;
 };
 
-const crossSpawnMock = mock((_args: string[]): SpawnResult => ({
-  exited: Promise.resolve(0),
-  stdout: () => Promise.resolve(''),
-  stderr: () => Promise.resolve(''),
-}));
+const crossSpawnMock = mock(
+  (_args: string[]): SpawnResult => ({
+    exited: Promise.resolve(0),
+    stdout: () => Promise.resolve(''),
+    stderr: () => Promise.resolve(''),
+  }),
+);
 
 mock.module('../utils/compat', () => ({
   crossSpawn: crossSpawnMock,

@@ -5,7 +5,11 @@
 import type { MultiplexerLayout } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
-import { buildOpencodeAttachCommand, findBinary, gracefulClosePane } from '../shared';
+import {
+  buildOpencodeAttachCommand,
+  findBinary,
+  gracefulClosePane,
+} from '../shared';
 import type { Multiplexer, PaneResult } from '../types';
 
 const TMUX_LAYOUT_DEBOUNCE_MS = 150;
