@@ -74,9 +74,15 @@ export class HerdrMultiplexer implements Multiplexer {
 
     try {
       let paneId: string | null = null;
+      let lastRawOutput = '';
 
       if (this.layout === 'main-vertical' && this.agentAreaPaneId) {
-        paneId = await this.runSplit([this.agentAreaPaneId], 'down', directory);
+        const result = await this.runSplit(
+          [this.agentAreaPaneId],
+          'down',
+          directory,
+        );
+        paneId = result.paneId;
         if (!paneId) {
           log('[herdr] agent area split failed, falling back to parent', {
             agentAreaPaneId: this.agentAreaPaneId,
@@ -86,15 +92,19 @@ export class HerdrMultiplexer implements Multiplexer {
       }
 
       if (!this.agentAreaPaneId) {
-        paneId = await this.runSplit(
+        const result = await this.runSplit(
           this.targetPaneArg(),
           this.paneDirection,
           directory,
         );
+        paneId = result.paneId;
+        lastRawOutput = result.rawOutput;
       }
 
       if (!paneId) {
-        log('[herdr] spawnPane: could not parse pane_id from output');
+        log('[herdr] spawnPane: could not parse pane_id from output', {
+          stdout: lastRawOutput,
+        });
         return { success: false };
       }
 
@@ -204,9 +214,9 @@ export class HerdrMultiplexer implements Multiplexer {
     target: string[],
     direction: HerdrPaneDirection,
     directory: string,
-  ): Promise<string | null> {
+  ): Promise<{ paneId: string | null; rawOutput: string }> {
     const herdr = await this.getBinary();
-    if (!herdr) return null;
+    if (!herdr) return { paneId: null, rawOutput: '' };
 
     const splitArgs = [
       herdr,
@@ -236,10 +246,10 @@ export class HerdrMultiplexer implements Multiplexer {
         exitCode: splitExitCode,
         stderr: splitStderr.trim(),
       });
-      return null;
+      return { paneId: null, rawOutput: splitStdout.trim() };
     }
 
-    return parsePaneId(splitStdout);
+    return { paneId: parsePaneId(splitStdout), rawOutput: splitStdout.trim() };
   }
 
   private targetPaneArg(): string[] {

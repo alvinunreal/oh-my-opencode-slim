@@ -21,8 +21,8 @@ Track a single `agentAreaPaneId` — the first child pane created in the right c
 ### State Changes (`HerdrMultiplexer`)
 
 ```typescript
-private readonly layout: MultiplexerLayout;        // stored from constructor
-private readonly paneDirection: HerdrPaneDirection; // kept for non-main layouts
+private layout: MultiplexerLayout;                  // mutable — applyLayout writes it
+private paneDirection: HerdrPaneDirection;          // mutable — applyLayout writes it
 private agentAreaPaneId: string | null = null;      // tracks first child in right column
 ```
 
@@ -37,59 +37,68 @@ spawnPane(sessionId, description, serverUrl, directory):
   1. Get herdr binary (existing)
 
   2. Determine split target and direction:
-     let target, direction, wasFirstChild = false
+     let paneId = null
 
      if layout === 'main-vertical' AND agentAreaPaneId is set:
-       target = [agentAreaPaneId]
-       direction = 'down'
-       result = split(target, direction)
-       if result failed:
-         log('[herdr] agent area split failed, falling back to parent', {stderr})
+       paneId = runSplit(target=[agentAreaPaneId], direction='down')
+       if paneId is null:
+         log('[herdr] agent area split failed, falling back to parent', {...})
          agentAreaPaneId = null
 
-     if agentAreaPaneId is null:  // first child OR fallback
-       target = targetPaneArg()   // parentPaneId or --current
-       direction = paneDirection  // 'right' for main-vertical
-       wasFirstChild = true
+     if agentAreaPaneId is null:  // first child OR fallback from failed split
+       paneId = runSplit(target=targetPaneArg(), direction=paneDirection)
 
-   3. If wasFirstChild: split(target, direction)  // 1st child or fallback path
-   4. Parse pane_id from output
-   5. If wasFirstChild AND layout === 'main-vertical':
-       agentAreaPaneId = newPaneId
-   6. Rename pane, run opencode attach (existing)
+     if paneId is null:
+       log('[herdr] spawnPane: could not parse pane_id from output', {stdout})
+       return { success: false }
+
+    3. Rename pane, run opencode attach (existing)
+    4. If layout === 'main-vertical' AND agentAreaPaneId is null:
+        agentAreaPaneId = paneId
 ```
 
 Key properties:
-- **First child** splits parent → right, creating the agent area
-- **Subsequent children** split agent area → down, stacking vertically
+- **First child**: agentAreaPaneId is null → splits parent → right, creating the agent area
+- **Subsequent children**: agentAreaPaneId is set → splits agent area → down, stacking vertically
 - **Stale reference** (agent area pane closed externally): split fails → log → clear → fall through to parent split (re-creates agent area)
-- **Explicit `wasFirstChild` flag** avoids fragile implicit detection
+- **Implicit `!agentAreaPaneId` gate** replaces the `wasFirstChild` flag — the same `null` check handles both first-child and fallback
 - **Gated on `main-vertical` only** — other layouts unchanged
 
 ### `closePane` Change
 
-Placement: after the existing `if (!paneId || paneId === 'unknown') return true;` guard (after guard), before `getBinary()`.
+`agentAreaPaneId` is cleared **inside** the success branch, only after the close command confirms success (exit code 0 or 1).
 
 ```typescript
 async closePane(paneId: string): Promise<boolean> {
   if (!paneId || paneId === 'unknown') return true;
 
-  if (paneId === this.agentAreaPaneId) {
-    this.agentAreaPaneId = null;  // next spawn re-creates from parent
+  const herdr = await this.getBinary();
+  // ... send Ctrl+C, wait, run close ...
+
+  const exitCode = await proc.exited;
+  const stderr = await proc.stderr();
+
+  // Inside the success branch only
+  if (exitCode === 0 || exitCode === 1) {
+    if (paneId === this.agentAreaPaneId) {
+      this.agentAreaPaneId = null;  // next spawn re-creates from parent
+    }
+    return true;
   }
 
-  const herdr = await this.getBinary();
-  // ... existing logic unchanged
+  return false;
 }
 ```
 
 ### `applyLayout` Change
 
 ```typescript
-async applyLayout(_layout: MultiplexerLayout, _mainPaneSize: number): Promise<void> {
+async applyLayout(layout: MultiplexerLayout, _mainPaneSize: number): Promise<void> {
   // ponytail: herdr has no rebalancing API; clear agent area so a layout
   // switch starts fresh from the parent pane.
   this.agentAreaPaneId = null;
+  this.layout = layout;
+  this.paneDirection = getPaneDirection(layout);
 }
 ```
 

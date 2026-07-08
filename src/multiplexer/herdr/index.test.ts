@@ -592,6 +592,88 @@ describe('HerdrMultiplexer', () => {
     ]);
   });
 
+  test('main-vertical: implicit fallback when agent area split fails', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    // First spawn creates agent area (w1:p2)
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+
+    // Mock so split targeting w1:p2 (agent area, direction=down) fails
+    // but split targeting w1:p1 (parent, direction=right) succeeds
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (
+        command.includes('split') &&
+        command.includes('w1:p2') &&
+        command.includes('down')
+      ) {
+        return createSpawnResult(1, '', 'agent area pane gone');
+      }
+      if (command.includes('split')) {
+        return createSpawnResult(0, `${createSplitResponse('w1:p3')}\n`);
+      }
+      return createSpawnResult();
+    });
+
+    // Second spawn: agent area split fails → falls back to parent split
+    const result = await herdr.spawnPane(
+      's2',
+      'A2',
+      'http://localhost:4096',
+      '/repo',
+    );
+
+    expect(result).toEqual({ success: true, paneId: 'w1:p3' });
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+
+    // 1st: parent split → right (first spawn)
+    expect(splitCommands[0]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+
+    // 2nd: agent area split → down (second spawn) — fails
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p2',
+      '--direction',
+      'down',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+
+    // 3rd: parent split → right (fallback from failed agent area split)
+    expect(splitCommands[2]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+
+    // agentAreaPaneId was updated to the new pane from the parent split
+    // @ts-expect-error - accessing private for test
+    expect(herdr.agentAreaPaneId).toBe('w1:p3');
+  });
+
   test('closePane clears agentAreaPaneId when agent area closed', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
