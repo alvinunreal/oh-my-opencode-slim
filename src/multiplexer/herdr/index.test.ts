@@ -346,6 +346,41 @@ describe('HerdrMultiplexer', () => {
     expect(result).toEqual({ success: false });
   });
 
+  test('closes orphaned pane when pane run fails (non-zero exit)', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('split')) {
+        return createSpawnResult(0, `${createSplitResponse('w1:p2')}\n`);
+      }
+      // run returns non-zero; everything else (close, send-keys) succeeds
+      if (command.includes('run')) {
+        return createSpawnResult(1, '', 'run failed');
+      }
+      return createSpawnResult();
+    });
+
+    const result = await herdr.spawnPane(
+      'session-1',
+      'Herdr worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+
+    expect(result).toEqual({ success: false });
+
+    const closeCommands = commands().filter(
+      (c) => c[1] === 'pane' && c[2] === 'close',
+    );
+    expect(closeCommands).toEqual([
+      ['/usr/bin/herdr', 'pane', 'close', 'w1:p2'],
+    ]);
+  });
+
   test('main-horizontal layout opens panes down', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-horizontal', 60);

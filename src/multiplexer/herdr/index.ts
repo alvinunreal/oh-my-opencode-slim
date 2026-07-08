@@ -133,6 +133,17 @@ export class HerdrMultiplexer implements Multiplexer {
           exitCode: runExitCode,
           stderr: runStderr.trim(),
         });
+        // ponytail: split succeeded but attach failed; close the orphaned pane
+        // so it does not linger in the agent column. Session manager gets no
+        // paneId on failure, so we must clean it up here.
+        try {
+          await this.closePane(paneId);
+        } catch (closeErr) {
+          log('[herdr] spawnPane: failed to close orphaned pane', {
+            paneId,
+            error: String(closeErr),
+          });
+        }
         return { success: false };
       }
 
