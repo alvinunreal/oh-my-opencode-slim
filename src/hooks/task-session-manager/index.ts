@@ -197,15 +197,7 @@ export function createTaskSessionManagerHook(
       return undefined;
     }
 
-    if (part.synthetic !== true) {
-      log('[task-session-manager] skipping non-synthetic part', {
-        partType: part.type,
-        hasText: typeof part.text === 'string',
-        textPreview:
-          typeof part.text === 'string' ? part.text.slice(0, 80) : undefined,
-      });
-      return undefined;
-    }
+    if (part.synthetic !== true) return undefined;
 
     const status = parseTaskStatusOutput(part.text);
     if (!status) {
@@ -334,14 +326,15 @@ export function createTaskSessionManagerHook(
       if (toolName !== 'task') return;
       if (!input.sessionID) return;
       if (!options.shouldManageSession(input.sessionID)) {
-        // No agent-type guard here: at tool.execute.before time there's no
-        // message to inspect. The transform hook (messages.transform) has
-        // the message.info.agent guard instead.
+        // ponytail: no agent-identity guard here — at tool.execute.before
+        // time there's no message to inspect. Only orchestrators call `task`
+        // in standard architecture; non-orchestrator false-positives are
+        // accepted because leaf agents don't use this tool.
         options.registerSessionAsOrchestrator?.(input.sessionID);
+        if (!options.shouldManageSession(input.sessionID)) return;
         log('[task-session-manager] recovered stale orchestrator mapping', {
           sessionID: input.sessionID,
         });
-        if (!options.shouldManageSession(input.sessionID)) return;
       }
       if (!isObjectRecord(output.args)) return;
 
@@ -571,15 +564,6 @@ export function createTaskSessionManagerHook(
         }
 
         for (const [partIndex, part] of message.parts.entries()) {
-          if (part.type === 'text' && typeof part.text === 'string') {
-            log('[task-session-manager] transform scanning part', {
-              messageIndex,
-              partIndex,
-              synthetic: part.synthetic,
-              hasTaskContent: /task_id:|<task[\s>]/i.test(part.text),
-              textPreview: part.text.slice(0, 100),
-            });
-          }
           updateFromInjectedCompletion(part, message, messageIndex, partIndex);
         }
       }
