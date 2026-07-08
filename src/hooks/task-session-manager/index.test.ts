@@ -2048,7 +2048,7 @@ describe('task-session-manager hook', () => {
     expect(board.list('parent-1')).toHaveLength(0);
   });
 
-  test('recovers stale orchestrator mapping in executeTool.before', async () => {
+  test('recovers stale orchestrator mapping in tool.execute.before', async () => {
     const agentMap = new Map<string, string>();
     agentMap.set('orchestrator-1', 'explorer'); // stale non-orchestrator value
 
@@ -2106,5 +2106,51 @@ describe('task-session-manager hook', () => {
       parentSessionID: 'orchestrator-1',
       state: 'running',
     });
+  });
+
+  test('recovers stale orchestrator mapping in messages.transform', async () => {
+    const agentMap = new Map<string, string>();
+    agentMap.set('orchestrator-1', 'explorer'); // stale non-orchestrator value
+
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-transform-1',
+      parentSessionID: 'orchestrator-1',
+      agent: 'explorer',
+      description: 'transform recovery test',
+    });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: (id) => agentMap.get(id) === 'orchestrator',
+      registerSessionAsOrchestrator: (id) => {
+        agentMap.set(id, 'orchestrator');
+      },
+    });
+
+    // Before recovery: stale mapping blocks transform processing
+    const messages = {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'orchestrator-1',
+          },
+          parts: [{ type: 'text', text: 'continue working' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, messages as never);
+
+    // After recovery: agentMap corrected, board reminders injected
+    expect(agentMap.get('orchestrator-1')).toBe('orchestrator');
+    expect(messages.messages[0].parts[0].text).toContain(
+      '### Background Job Board',
+    );
+    expect(messages.messages[0].parts[0].text).toContain(
+      'child-transform-1',
+    );
   });
 });
