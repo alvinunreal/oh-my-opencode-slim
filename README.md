@@ -172,6 +172,7 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 - **[OpenCode Go Preset](docs/opencode-go-preset.md)** — runs the agents on OpenCode Go models; enables the Observer agent for visual analysis since its orchestrator model isn't multimodal.
 - **[Author's Preset](docs/authors-preset.md)** — the exact config the author runs day to day, with third-party skills.
 - **[$30 Preset](docs/thirty-dollars-preset.md)** — a mixed-provider setup built around Codex Plus and GitHub Copilot Pro for about $30/month.
+- **[OpenCode Zen Free Preset](docs/opencode-zen-free-preset.md)** — a fully free-tier preset; every agent runs on an \`opencode/...-free\` model, so it costs nothing.
 
 ### For Alternative Providers
 
