@@ -166,16 +166,9 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 }
 ```
 
-## Skill Reference
-
-| Skill | Description | Source |
-| --- | --- | --- |
-| `*` | All installed skills (wildcard) | public |
-| `simplify` | Code simplification | public |
-
 ### For Alternative Providers
 
-To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)** and **[$30 Preset](docs/thirty-dollars-preset.md)** - the `$30` preset is the best cheap setup.
+To use custom providers or a mixed-provider setup, use **[Configuration](docs/configuration.md)** for the full reference. If you want a ready-made starting point, check the **[Author's Preset](docs/authors-preset.md)**, **[$30 Preset](docs/thirty-dollars-preset.md)**, **[OpenAI Preset](docs/openai-preset.md)**, or **[OpenCode Go Preset](docs/opencode-go-preset.md)** - the `$30` preset is the best cheap setup.
 
 ### ✅ Verify Your Setup
 
