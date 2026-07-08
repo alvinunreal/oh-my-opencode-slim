@@ -89,3 +89,49 @@ export async function findBinary(
     return null;
   }
 }
+
+const GRACEFUL_SHUTDOWN_DELAY_MS = 250;
+
+export interface GracefulClosePaneOptions {
+  /** Backend-specific Ctrl+C command args (binary prepended by caller). */
+  ctrlC: string[];
+  /** Backend-specific close/kill command args (binary prepended by caller). */
+  close: string[];
+  /** Accept exit code 1 as success (zellij/herdr treat "already closed" as 1). */
+  acceptExitCode1?: boolean;
+  /** Return true for empty/unknown paneId instead of false (zellij/herdr behavior). */
+  emptyPaneReturnsTrue?: boolean;
+}
+
+export async function gracefulClosePane(
+  binary: string | null,
+  paneId: string,
+  options: GracefulClosePaneOptions,
+): Promise<boolean> {
+  if (!binary) return false;
+
+  const isEmpty = !paneId || paneId === 'unknown';
+  if (isEmpty) return options.emptyPaneReturnsTrue ?? false;
+
+  try {
+    const ctrlCProc = crossSpawn([binary, ...options.ctrlC], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+    });
+    await ctrlCProc.exited;
+
+    await new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS));
+
+    const proc = crossSpawn([binary, ...options.close], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const exitCode = await proc.exited;
+
+    if (exitCode === 0) return true;
+    if (options.acceptExitCode1 && exitCode === 1) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
