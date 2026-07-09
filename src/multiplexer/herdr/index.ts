@@ -83,7 +83,9 @@ export class HerdrMultiplexer implements Multiplexer {
         '--direction',
         this.paneDirection,
         '--cwd',
-        directory,
+        process.platform === 'win32'
+          ? directory.replace(/\\/g, '/')
+          : directory,
         '--no-focus',
       ];
 

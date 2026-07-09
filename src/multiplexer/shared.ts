@@ -17,6 +17,8 @@ export function buildOpencodeAttachCommand(
   serverUrl: string,
   directory: string,
 ): string {
+  const attachDir =
+    process.platform === 'win32' ? directory.replace(/\\/g, '/') : directory;
   return [
     'opencode',
     'attach',
@@ -24,7 +26,7 @@ export function buildOpencodeAttachCommand(
     '--session',
     quoteShellArg(sessionId),
     '--dir',
-    quoteShellArg(directory),
+    quoteShellArg(attachDir),
   ].join(' ');
 }
 
