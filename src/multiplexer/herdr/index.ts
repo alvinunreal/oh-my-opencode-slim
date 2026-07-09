@@ -19,6 +19,7 @@ import {
   buildOpencodeAttachCommand,
   findBinary,
   gracefulClosePane,
+  normalizePathForShell,
 } from '../shared';
 import type { Multiplexer, PaneResult } from '../types';
 
@@ -74,6 +75,10 @@ export class HerdrMultiplexer implements Multiplexer {
     }
 
     try {
+      // Normalize Windows backslashes→/ so sh -lc (MSYS2) doesn't
+      // corrupt --cwd (issue #568).
+      const attachDir = normalizePathForShell(directory);
+
       // 1. Split the parent pane to create a new one
       const splitArgs = [
         herdr,
@@ -83,7 +88,7 @@ export class HerdrMultiplexer implements Multiplexer {
         '--direction',
         this.paneDirection,
         '--cwd',
-        directory,
+        attachDir,
         '--no-focus',
       ];
 
@@ -125,7 +130,7 @@ export class HerdrMultiplexer implements Multiplexer {
       const opencodeCmd = buildOpencodeAttachCommand(
         sessionId,
         serverUrl,
-        directory,
+        attachDir,
       );
 
       log('[herdr] spawnPane: running attach command', {

@@ -41,8 +41,7 @@ describe('gracefulClosePane', () => {
       };
     });
 
-    const { gracefulClosePane } =
-      await importShared();
+    const { gracefulClosePane } = await importShared();
     const ok = await gracefulClosePane('tmux', '%1', {
       ctrlC: ['send-keys', '-t', '%1', 'C-c'],
       close: ['kill-pane', '-t', '%1'],
@@ -101,5 +100,47 @@ describe('gracefulClosePane', () => {
       close: ['y'],
     });
     expect(ok).toBe(false);
+  });
+});
+
+describe('buildOpencodeAttachCommand', () => {
+  test('normalizes Windows backslash paths to forward slashes', async () => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      configurable: true,
+    });
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      const cmd = buildOpencodeAttachCommand(
+        'sess',
+        'url',
+        'C:\\Users\\foo\\repo',
+      );
+      expect(cmd).toContain('C:/Users/foo/repo');
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: original,
+        configurable: true,
+      });
+    }
+  });
+
+  test('leaves non-Windows paths unchanged', async () => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    });
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      const cmd = buildOpencodeAttachCommand('sess', 'url', '/home/user/repo');
+      expect(cmd).toContain('/home/user/repo');
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: original,
+        configurable: true,
+      });
+    }
   });
 });
