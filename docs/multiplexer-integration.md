@@ -219,11 +219,17 @@ For Herdr:
 
 | Layout | Herdr behavior |
 |--------|-----------------|
-| `main-vertical` | Opens new subagent panes to the right |
-| `main-horizontal` | Opens new subagent panes down |
-| `even-horizontal` | Opens new subagent panes to the right |
-| `even-vertical` | Opens new subagent panes down |
-| `tiled` | Opens new subagent panes to the right |
+| `main-vertical` | Parent OpenCode pane stays on the left. First subagent opens in a right-side pane; subsequent subagents stack vertically in that right column. Parent pane remains dominant. |
+| `main-horizontal` | Each subagent splits below the parent (down). |
+| `even-horizontal` | Each subagent splits to the right of the parent. |
+| `even-vertical` | Each subagent splits below the parent. |
+| `tiled` | Each subagent splits to the right of the parent. |
+
+**Note:** Herdr has no layout rebalancing API like tmux's `select-layout`.
+The `main_pane_size` config is ignored. The `main-vertical` layout approximates
+tmux's behavior by tracking the first right-side pane and stacking later agents
+vertically within it. If the agent-area pane is closed, the next spawn
+re-creates it from the parent.
 
 > **Note:** `main_pane_size` is ignored by herdr. All layouts split from the parent pane.
 

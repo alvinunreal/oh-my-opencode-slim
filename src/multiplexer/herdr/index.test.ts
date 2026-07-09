@@ -346,6 +346,41 @@ describe('HerdrMultiplexer', () => {
     expect(result).toEqual({ success: false });
   });
 
+  test('closes orphaned pane when pane run fails (non-zero exit)', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('split')) {
+        return createSpawnResult(0, `${createSplitResponse('w1:p2')}\n`);
+      }
+      // run returns non-zero; everything else (close, send-keys) succeeds
+      if (command.includes('run')) {
+        return createSpawnResult(1, '', 'run failed');
+      }
+      return createSpawnResult();
+    });
+
+    const result = await herdr.spawnPane(
+      'session-1',
+      'Herdr worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+
+    expect(result).toEqual({ success: false });
+
+    const closeCommands = commands().filter(
+      (c) => c[1] === 'pane' && c[2] === 'close',
+    );
+    expect(closeCommands).toEqual([
+      ['/usr/bin/herdr', 'pane', 'close', 'w1:p2'],
+    ]);
+  });
+
   test('main-horizontal layout opens panes down', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-horizontal', 60);
@@ -406,6 +441,70 @@ describe('HerdrMultiplexer', () => {
     expect(splitCommand?.[directionArgIndex + 1]).toBe('right');
   });
 
+  test('tiled layout always splits parent right (unaffected)', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('tiled', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    expect(splitCommands[0]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+  });
+
+  test('main-horizontal layout always splits parent down (unaffected)', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-horizontal', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    expect(splitCommands[0]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'down',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'down',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+  });
+
   test('isInsideSession returns true when HERDR_ENV is set', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
@@ -432,13 +531,230 @@ describe('HerdrMultiplexer', () => {
     expect(herdr.isInsideSession()).toBe(false);
   });
 
-  test('applyLayout is a no-op', async () => {
+  test('stores layout from constructor', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+    // @ts-expect-error - accessing private for test
+    expect(herdr.layout).toBe('main-vertical');
+    // @ts-expect-error
+    expect(herdr.agentAreaPaneId).toBeNull();
+  });
+
+  test('main-vertical: 2nd spawn splits agent area down', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('s1', 'Agent 1', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s2', 'Agent 2', 'http://localhost:4096', '/repo');
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    expect(splitCommands[0]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p2',
+      '--direction',
+      'down',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+  });
+
+  test('main-vertical: 3rd spawn splits same agent area down', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s3', 'A3', 'http://localhost:4096', '/repo');
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    expect(splitCommands[2]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p2',
+      '--direction',
+      'down',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+  });
+
+  test('main-vertical: fallback to parent when agent area closed', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    const r1 = await herdr.spawnPane(
+      's1',
+      'A1',
+      'http://localhost:4096',
+      '/repo',
+    );
+    // Simulate agent area pane being closed externally
+    await herdr.closePane(r1.paneId as string);
+
+    // Next spawn should split from parent (w1:p1) → right, not from stale w1:p2
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    // 1st: parent → right (w1:p1)
+    expect(splitCommands[0]).toContain('w1:p1');
+    // 2nd (after close): parent → right again (w1:p1), not w1:p2
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+  });
+
+  test('main-vertical: implicit fallback when agent area split fails', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    // First spawn creates agent area (w1:p2)
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+
+    // Mock so split targeting w1:p2 (agent area, direction=down) fails
+    // but split targeting w1:p1 (parent, direction=right) succeeds
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (
+        command.includes('split') &&
+        command.includes('w1:p2') &&
+        command.includes('down')
+      ) {
+        return createSpawnResult(1, '', 'agent area pane gone');
+      }
+      if (command.includes('split')) {
+        return createSpawnResult(0, `${createSplitResponse('w1:p3')}\n`);
+      }
+      return createSpawnResult();
+    });
+
+    // Second spawn: agent area split fails → falls back to parent split
+    const result = await herdr.spawnPane(
+      's2',
+      'A2',
+      'http://localhost:4096',
+      '/repo',
+    );
+
+    expect(result).toEqual({ success: true, paneId: 'w1:p3' });
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+
+    // 1st: parent split → right (first spawn)
+    expect(splitCommands[0]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+
+    // 2nd: agent area split → down (second spawn) — fails
+    expect(splitCommands[1]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p2',
+      '--direction',
+      'down',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+
+    // 3rd: parent split → right (fallback from failed agent area split)
+    expect(splitCommands[2]).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'split',
+      'w1:p1',
+      '--direction',
+      'right',
+      '--cwd',
+      '/repo',
+      '--no-focus',
+    ]);
+
+    // agentAreaPaneId was updated to the new pane from the parent split
+    // @ts-expect-error - accessing private for test
+    expect(herdr.agentAreaPaneId).toBe('w1:p3');
+  });
+
+  test('closePane clears agentAreaPaneId when agent area closed', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    const r1 = await herdr.spawnPane(
+      's1',
+      'A1',
+      'http://localhost:4096',
+      '/repo',
+    );
+    await herdr.closePane(r1.paneId as string);
+
+    // @ts-expect-error - accessing private for test
+    expect(herdr.agentAreaPaneId).toBeNull();
+  });
+
+  test('closePane does NOT clear agentAreaPaneId for non-agent pane', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    // Close a different pane (simulated)
+    await herdr.closePane('w1:p99');
+
+    // @ts-expect-error
+    expect(herdr.agentAreaPaneId).not.toBeNull();
+  });
+
+  test('applyLayout clears agentAreaPaneId', async () => {
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.applyLayout('tiled', 50);
+
+    // @ts-expect-error
+    expect(herdr.agentAreaPaneId).toBeNull();
+  });
+
+  test('applyLayout issues no CLI commands', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     await herdr.applyLayout('tiled', 50);
 
-    // Only the binary check command should have been issued
+    // No CLI commands should be issued
     expect(commands()).toHaveLength(0);
   });
 });
