@@ -17,6 +17,7 @@ import { crossSpawn } from '../../utils/compat';
 import {
   buildOpencodeAttachCommand,
   findBinary,
+  gracefulClosePane,
   quoteShellArg,
 } from '../shared';
 import type { Multiplexer, PaneResult } from '../types';
@@ -494,34 +495,13 @@ export class ZellijMultiplexer implements Multiplexer {
   }
 
   async closePane(paneId: string): Promise<boolean> {
-    if (!paneId || paneId === 'unknown') return true;
-
     const zellij = await this.getBinary();
-    if (!zellij) return false;
-
-    try {
-      // Send Ctrl+C for graceful shutdown
-      await crossSpawn(
-        [zellij, 'action', 'write', '--pane-id', paneId, '\u0003'],
-        {
-          stdout: 'ignore',
-          stderr: 'ignore',
-        },
-      ).exited;
-
-      await new Promise((r) => setTimeout(r, 250));
-
-      // Close the pane
-      const proc = crossSpawn(
-        [zellij, 'action', 'close-pane', '--pane-id', paneId],
-        { stdout: 'pipe', stderr: 'pipe' },
-      );
-
-      const exitCode = await proc.exited;
-      return exitCode === 0 || exitCode === 1;
-    } catch {
-      return false;
-    }
+    return gracefulClosePane(zellij, paneId, {
+      ctrlC: ['action', 'write', '--pane-id', paneId, '\u0003'],
+      close: ['action', 'close-pane', '--pane-id', paneId],
+      acceptExitCode1: true,
+      emptyPaneReturnsTrue: true,
+    });
   }
 
   async applyLayout(

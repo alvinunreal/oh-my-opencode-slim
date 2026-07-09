@@ -2149,8 +2149,6 @@ describe('task-session-manager hook', () => {
     expect(messages.messages[0].parts[0].text).toContain(
       '### Background Job Board',
     );
-    expect(messages.messages[0].parts[0].text).toContain(
-      'child-transform-1',
-    );
+    expect(messages.messages[0].parts[0].text).toContain('child-transform-1');
   });
 });
