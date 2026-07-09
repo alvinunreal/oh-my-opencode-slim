@@ -177,7 +177,10 @@ function renderSidebar(
         [
           box(
             { paddingLeft: 1, paddingRight: 1, backgroundColor: theme.accent },
-            [text({ fg: theme.background }, ['OMO-Slim'])],
+            // Use theme.text, not theme.background: when the theme background is
+            // "none" (transparent) the foreground becomes RGBA(0,0,0,0) and the
+            // badge text vanishes. See #582.
+            [text({ fg: theme.text }, ['OMO-Slim'])],
           ),
           text({ fg: theme.textMuted }, [`v${version}`]),
         ],
