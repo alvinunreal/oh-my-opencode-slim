@@ -10,6 +10,11 @@ import {
   createTaskSessionManagerHook,
 } from './index';
 
+/** Wait for the idle reconciliation delay (2s + margin) to flush. */
+function flushIdleReconcileDelay() {
+  return new Promise((resolve) => setTimeout(resolve, 2100));
+}
+
 function createHook(options?: {
   shouldManageSession?: (sessionID: string) => boolean;
   readContextMinLines?: number;
@@ -52,6 +57,21 @@ function createMessages(sessionID: string, text = 'user message') {
       },
     ],
   };
+}
+
+function setupCompletedJob(
+  board: BackgroundJobBoard,
+  opts?: { taskID?: string; parentSessionID?: string },
+) {
+  const taskID = opts?.taskID ?? 'child-1';
+  const parentSessionID = opts?.parentSessionID ?? 'parent-1';
+  board.registerLaunch({
+    taskID,
+    parentSessionID,
+    agent: 'oracle',
+    description: 'review plan',
+  });
+  board.updateStatus({ taskID, state: 'completed', resultSummary: 'done' });
 }
 
 describe('task-session-manager hook', () => {
@@ -1281,6 +1301,9 @@ describe('task-session-manager hook', () => {
       },
     });
 
+    // Wait for deferred idle reconciliation timeout
+    await flushIdleReconcileDelay();
+
     expect(board.get('child-1')).toMatchObject({
       state: 'reconciled',
       terminalUnreconciled: false,
@@ -1317,6 +1340,40 @@ describe('task-session-manager hook', () => {
       state: 'reconciled',
       terminalUnreconciled: false,
       terminalState: 'cancelled',
+    });
+  });
+
+  test('late injected completion during idle delay is not dropped by reconciliation', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    setupCompletedJob(board);
+
+    const messages = createMessages('parent-1', 'continue');
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    // Fire idle event (starts 2s reconciliation timer)
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'parent-1', status: { type: 'idle' } },
+      },
+    });
+
+    // Before the timer fires, a late injected completion arrives with error
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'error',
+      resultSummary: 'actual error from child',
+    });
+
+    await flushIdleReconcileDelay();
+
+    // Reconciled with the late error's result, not the idle-written fallback
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'error',
+      resultSummary: 'actual error from child',
     });
   });
 
@@ -1406,6 +1463,9 @@ describe('task-session-manager hook', () => {
         properties: { sessionID: 'parent-1', status: { type: 'idle' } },
       },
     });
+
+    // Wait for deferred idle reconciliation timeout
+    await flushIdleReconcileDelay();
 
     const nextMessages = createMessages('parent-1', 'reuse');
     await hook['experimental.chat.messages.transform']({}, nextMessages);
@@ -1684,6 +1744,9 @@ describe('task-session-manager hook', () => {
       },
     });
 
+    // Wait for deferred idle reconciliation timeout
+    await flushIdleReconcileDelay();
+
     const reusable = createMessages('parent-1', 'reuse');
     await hook['experimental.chat.messages.transform']({}, reusable);
     expect(reusable.messages[0].parts[0].text).toContain(
@@ -1814,6 +1877,10 @@ describe('task-session-manager hook', () => {
         properties: { sessionID: 'parent-1', status: { type: 'idle' } },
       },
     });
+
+    // Wait for deferred idle reconciliation timeout
+    await flushIdleReconcileDelay();
+
     const next = createMessages('parent-1', 'reuse');
     await hook['experimental.chat.messages.transform']({}, next);
     const prompt = next.messages[0].parts[0].text;
