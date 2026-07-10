@@ -191,8 +191,10 @@ export class ForegroundFallbackManager {
   }
 
   registerSessionAgent(sessionID: string, agentName: string): void {
-    if (!sessionID || !agentName) return;
-    this.sessionAgent.set(sessionID, agentName);
+    const normalizedAgentName = agentName.trim();
+    if (!sessionID || !normalizedAgentName) return;
+    if (this.sessionAgent.has(sessionID)) return;
+    this.sessionAgent.set(sessionID, normalizedAgentName);
   }
 
   constructor(
@@ -247,7 +249,7 @@ export class ForegroundFallbackManager {
         if (!sessionID) break;
         // Capture agent name when available (OpenCode includes it on subagent messages)
         if (typeof info.agent === 'string') {
-          this.sessionAgent.set(sessionID, info.agent);
+          this.registerSessionAgent(sessionID, info.agent);
         }
         // Track the model currently serving this session
         if (
@@ -302,7 +304,7 @@ export class ForegroundFallbackManager {
           // session.status retry path always counts toward the budget
           // — even the first retry is absorbed before intervening.
           if (this.checkRetryBudget(sessionID)) {
-            await this.tryFallback(sessionID);
+            await this.tryFallback(sessionID, { abortBeforePrompt: true });
           }
           break;
         }
@@ -322,7 +324,7 @@ export class ForegroundFallbackManager {
             msg.includes('reduce concurrency')
           ) {
             if (this.checkRetryBudget(sessionID)) {
-              await this.tryFallback(sessionID);
+              await this.tryFallback(sessionID, { abortBeforePrompt: true });
             }
           }
           break;
@@ -341,7 +343,7 @@ export class ForegroundFallbackManager {
           | { sessionID?: string; agentName?: unknown }
           | undefined;
         if (props?.sessionID && typeof props.agentName === 'string') {
-          this.sessionAgent.set(props.sessionID, props.agentName);
+          this.registerSessionAgent(props.sessionID, props.agentName);
         }
         break;
       }
@@ -407,7 +409,10 @@ export class ForegroundFallbackManager {
   // Core fallback logic
   // ---------------------------------------------------------------------------
 
-  private async tryFallback(sessionID: string): Promise<void> {
+  private async tryFallback(
+    sessionID: string,
+    options: { abortBeforePrompt?: boolean } = {},
+  ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
 
@@ -550,6 +555,7 @@ export class ForegroundFallbackManager {
         promptAsync?: (args: {
           path: { id: string };
           body: {
+            agent?: string;
             parts: unknown[];
             model: { providerID: string; modelID: string };
           };
@@ -560,25 +566,40 @@ export class ForegroundFallbackManager {
         return;
       }
 
-      // Try queuing the fallback prompt without aborting first. If OpenCode
-      // accepts it (204), the fallback model replaces the retry loop
-      // transparently — no dialog, no session error shown to the user.
-      // If promptAsync throws (e.g. session busy), fall back to abort+retry.
-      try {
-        await sessionClient.promptAsync({
-          path: { id: sessionID },
-          body: { parts: lastUser.parts, model: ref },
-        });
-      } catch (_promptErr) {
-        log('[foreground-fallback] promptAsync on busy session, aborting', {
-          sessionID,
-        });
+      const promptBody = {
+        parts: lastUser.parts,
+        model: ref,
+        ...(agentName ? { agent: agentName } : {}),
+      };
+
+      if (options.abortBeforePrompt) {
         await abortSessionWithTimeout(this.client, sessionID);
         await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
         await sessionClient.promptAsync({
           path: { id: sessionID },
-          body: { parts: lastUser.parts, model: ref },
+          body: promptBody,
         });
+      } else {
+        // Try queuing the fallback prompt without aborting first. If OpenCode
+        // accepts it (204), the fallback model replaces the retry loop
+        // transparently — no dialog, no session error shown to the user.
+        // If promptAsync throws (e.g. session busy), fall back to abort+retry.
+        try {
+          await sessionClient.promptAsync({
+            path: { id: sessionID },
+            body: promptBody,
+          });
+        } catch (_promptErr) {
+          log('[foreground-fallback] promptAsync on busy session, aborting', {
+            sessionID,
+          });
+          await abortSessionWithTimeout(this.client, sessionID);
+          await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+          await sessionClient.promptAsync({
+            path: { id: sessionID },
+            body: promptBody,
+          });
+        }
       }
 
       this.sessionModel.set(sessionID, nextModel);

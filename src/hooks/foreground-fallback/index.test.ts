@@ -504,6 +504,127 @@ describe('ForegroundFallbackManager message.updated', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.status', () => {
+  test('aborts active retry-budget-exhausted session before fallback re-prompt', async () => {
+    const calls: string[] = [];
+    const { client, mocks } = createMockClient({
+      abortImpl: async () => {
+        calls.push('abort');
+      },
+      promptAsyncImpl: async () => {
+        calls.push('promptAsync');
+        return {};
+      },
+    });
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-retry-abort-before-prompt',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    for (const attempt of [1, 2, 3]) {
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: 'sess-retry-abort-before-prompt',
+          status: {
+            type: 'retry',
+            attempt,
+            message: 'rate limit, retrying...',
+          },
+        },
+      });
+    }
+
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['abort', 'promptAsync']);
+  });
+
+  test('keeps registered child agent identity sticky for retry fallback chain', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains({
+        oracle: ['anthropic/claude-sonnet-4-5', 'openai/o3'],
+      }),
+      true,
+      1,
+    );
+
+    mgr.registerSessionAgent('child-oracle-sticky', 'oracle');
+    mgr.registerSessionAgent('child-oracle-sticky', 'orchestrator');
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'child-oracle-sticky',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'child-oracle-sticky',
+        status: { type: 'retry', message: 'usage limit reached, retrying...' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.model).toEqual({ providerID: 'openai', modelID: 'o3' });
+  });
+
+  test('includes the sticky child agent in fallback promptAsync body', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains({
+        oracle: ['anthropic/claude-sonnet-4-5', 'openai/o3'],
+      }),
+      true,
+      1,
+    );
+
+    mgr.registerSessionAgent('child-oracle-agent-body', 'oracle');
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'child-oracle-agent-body',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'child-oracle-agent-body',
+        status: { type: 'retry', message: 'usage limit reached, retrying...' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { agent?: string; model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.agent).toBe('oracle');
+    expect(call[0].body.model).toEqual({ providerID: 'openai', modelID: 'o3' });
+  });
+
   test('triggers fallback on retry status with rate limit message', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true, 1);
