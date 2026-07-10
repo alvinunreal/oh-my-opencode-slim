@@ -58,7 +58,7 @@ export const MODEL_MAPPINGS = {
     observer: { model: 'opencode-go/kimi-k2.6' },
   },
   ultraslim: {
-    orchestrator: { model: 'opencode-go/glm-5.2' },
+    orchestrator: { model: 'opencode-go/deepseek-v4-flash' },
     oracle: { model: 'opencode-go/qwen3.7-max', variant: 'max' },
     librarian: { model: 'opencode-go/deepseek-v4-flash' },
     explorer: { model: 'opencode-go/deepseek-v4-flash' },
