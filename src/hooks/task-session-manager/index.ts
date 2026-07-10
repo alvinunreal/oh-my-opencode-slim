@@ -11,7 +11,7 @@ import {
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
-import { isRateLimitError } from '../foreground-fallback/index';
+import { isFailoverError } from '../foreground-fallback/index';
 import type { SessionLifecycle } from '../session-lifecycle';
 import {
   isUserMessageWithParts,
@@ -737,7 +737,7 @@ export function createTaskSessionManagerHook(
           const props = input.event.properties as
             | { error?: unknown }
             | undefined;
-          if (!props?.error || !isRateLimitError(props.error)) {
+          if (!props?.error || !isFailoverError(props.error)) {
             terminalJobsInjectedByParent.delete(sessionId);
           }
         }

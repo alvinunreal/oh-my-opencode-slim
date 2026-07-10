@@ -1028,6 +1028,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       if (agent) {
+        foregroundFallback.registerSessionAgent(input.sessionID, agent);
         sessionAgentMap.set(input.sessionID, agent);
         // A chat message means this session is actively working. This also
         // covers the race where session.status busy fires before the

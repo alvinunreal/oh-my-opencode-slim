@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { SessionLifecycle } from '../session-lifecycle';
-import { ForegroundFallbackManager, isRateLimitError } from './index';
+import {
+  ForegroundFallbackManager,
+  isFailoverError,
+  isRateLimitError,
+} from './index';
 
 type ForegroundFallbackClient = ConstructorParameters<
   typeof ForegroundFallbackManager
@@ -64,6 +68,10 @@ function makeChains(
 // ---------------------------------------------------------------------------
 
 describe('isRateLimitError', () => {
+  test('exports isFailoverError as the preferred classifier name', () => {
+    expect(typeof isFailoverError).toBe('function');
+  });
+
   test('returns true for 429 status code', () => {
     expect(isRateLimitError({ data: { statusCode: 429 } })).toBe(true);
   });
@@ -92,6 +100,87 @@ describe('isRateLimitError', () => {
 
   test('returns true for "Service Unavailable"', () => {
     expect(isRateLimitError({ message: 'Service Unavailable' })).toBe(true);
+  });
+
+  test('alias remains behaviorally compatible with isFailoverError', () => {
+    const controls = [
+      { data: { statusCode: 429 } },
+      { message: 'Rate limit exceeded' },
+      { message: 'internal server error' },
+      { data: { statusCode: 400, message: 'application invalid request' } },
+      { message: 'retried provider 503 times' },
+      null,
+      'string error',
+    ];
+
+    for (const error of controls) {
+      expect(isRateLimitError(error)).toBe(isFailoverError(error));
+    }
+  });
+
+  test('classifies textual provider outage errors as failover errors', () => {
+    for (const message of [
+      'internal server error',
+      'bad gateway',
+      'gateway timeout',
+    ]) {
+      expect(isFailoverError({ message })).toBe(true);
+    }
+  });
+
+  test('returns true for structured outage status codes', () => {
+    for (const statusCode of [500, 502, 503, 504]) {
+      expect(isRateLimitError({ data: { statusCode } })).toBe(true);
+    }
+  });
+
+  test('does not match outage status codes from arbitrary free text only', () => {
+    expect(isRateLimitError({ message: 'retried provider 503 times' })).toBe(
+      false,
+    );
+    expect(isFailoverError({ message: 'retried provider 503 times' })).toBe(
+      false,
+    );
+  });
+
+  test('returns true for transport-level provider errors', () => {
+    for (const error of [
+      { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1' },
+      { code: 'ECONNRESET', message: 'socket hang up' },
+      { code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND api.provider.test' },
+      { message: 'fetch failed' },
+      { message: 'provider request timeout' },
+    ]) {
+      expect(isRateLimitError(error)).toBe(true);
+    }
+  });
+
+  test('classifies nested transport cause codes as failover errors', () => {
+    expect(
+      isFailoverError({
+        message: 'wrapped provider failure',
+        cause: { code: 'ECONNREFUSED' },
+      }),
+    ).toBe(true);
+  });
+
+  test('returns false for HTTP 400 application invalid request', () => {
+    expect(
+      isRateLimitError({
+        data: {
+          statusCode: 400,
+          message: 'application invalid request: missing required field',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isFailoverError({
+        data: {
+          statusCode: 400,
+          message: 'application invalid request: missing required field',
+        },
+      }),
+    ).toBe(false);
   });
 
   test('returns true for "Monthly usage limit reached"', () => {
@@ -200,6 +289,39 @@ describe('ForegroundFallbackManager session.error', () => {
     ];
     expect(call[0].path.id).toBe('sess-1');
     // Should have picked the next model after anthropic/claude-opus-4-5
+    expect(call[0].body.model.providerID).toBe('openai');
+    expect(call[0].body.model.modelID).toBe('gpt-4o');
+  });
+
+  test('extracts session ID from properties.info.id on session.error', async () => {
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-info-error',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        info: { id: 'sess-info-error' },
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      {
+        path: { id: string };
+        body: { model: { providerID: string; modelID: string } };
+      },
+    ];
+    expect(call[0].path.id).toBe('sess-info-error');
     expect(call[0].body.model.providerID).toBe('openai');
     expect(call[0].body.model.modelID).toBe('gpt-4o');
   });
@@ -408,6 +530,36 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
+  test('extracts session ID from properties.info.id on session.status', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 1);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-info-status',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        info: { id: 'sess-info-status' },
+        status: { type: 'retry', message: 'usage limit reached, retrying...' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { path: { id: string } },
+    ];
+    expect(call[0].path.id).toBe('sess-info-status');
+  });
+
   test('triggers fallback on retry status with insufficient balance message', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true, 1);
@@ -499,6 +651,145 @@ describe('ForegroundFallbackManager session.status', () => {
           type: 'retry',
           attempt: 3,
           message: 'rate limit, retrying...',
+        },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('retry status with absent or unrecognized message still counts and triggers at maxRetries', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-retry-any-message',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-retry-any-message',
+        status: { type: 'retry' },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-retry-any-message',
+        status: { type: 'retry', message: 'provider is trying again' },
+      },
+    });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-retry-any-message',
+        status: { type: 'retry' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('busy statuses between retries do not reset the retry budget', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-retry-busy-retry',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    for (const status of [
+      { type: 'retry' },
+      { type: 'busy' },
+      { type: 'retry' },
+      { type: 'busy' },
+    ]) {
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: 'sess-retry-busy-retry',
+          status,
+        },
+      });
+    }
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-retry-busy-retry',
+        status: { type: 'retry' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('debounces outage retry statuses before fallback', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-outage-retry',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-outage-retry',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'service unavailable, retrying...',
+        },
+      },
+    });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-outage-retry',
+        status: {
+          type: 'retry',
+          attempt: 2,
+          message: 'service unavailable, retrying...',
+        },
+      },
+    });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-outage-retry',
+        status: {
+          type: 'retry',
+          attempt: 3,
+          message: 'service unavailable, retrying...',
         },
       },
     });
@@ -728,6 +1019,37 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
     // primary is tried → fallback picks claude-haiku
     expect(call[0].body.model.providerID).toBe('anthropic');
     expect(call[0].body.model.modelID).toBe('claude-haiku');
+  });
+
+  test('child Oracle first provider outage uses only Oracle fallback chain', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      {
+        orchestrator: ['google/gemini-2.5-pro', 'openai/gpt-4o'],
+        oracle: ['openai/gpt-4.1', 'anthropic/claude-sonnet-4-5'],
+      },
+      true,
+    );
+
+    mgr.registerSessionAgent('oracle-first-call', 'oracle');
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'oracle-first-call',
+        error: { data: { statusCode: 503, message: 'upstream outage' } },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      {
+        body: { model: { providerID: string; modelID: string } };
+      },
+    ];
+    expect(call[0].body.model.providerID).toBe('anthropic');
+    expect(call[0].body.model.modelID).toBe('claude-sonnet-4-5');
   });
 });
 
