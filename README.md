@@ -33,25 +33,11 @@ To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)*
 ### OpenAI GPT-5.6
 
 <p align="center">
-  <img src="img/openai-gpt-5-6-pantheon.jpeg" alt="OpenAI GPT-5.6 Pantheon: Terra, Sol, and Luna" width="720">
+  <img src="img/openai-gpt-5-6-pantheon.jpeg" alt="OpenAI GPT-5.6 Pantheon: Terra, Sol, and Luna" width="100%">
 </p>
 
 The default [OpenAI preset](docs/openai-preset.md) maps Terra to Orchestrator,
 Sol to Oracle, and Luna to the fast specialist lanes.
-
-### Manage Agent Skills with LazySkills
-
-<p align="center">
-  <a href="https://github.com/alvinunreal/lazyskills">
-    <img src="img/lazyskills-wide.svg" alt="LazySkills" width="720">
-  </a>
-</p>
-
-**[LazySkills](https://github.com/alvinunreal/lazyskills)** is a terminal UI for managing agent skills. It gives you one place to see what is installed, which agents can use each skill, why visibility may be broken, and what actions are safe to run next.
-
-<p align="center">
-  <a href="https://github.com/alvinunreal/lazyskills"><b>Explore LazySkills →</b></a>
-</p>
 
 ### What Users Say
 
