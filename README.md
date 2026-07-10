@@ -32,38 +32,6 @@ The main idea: instead of forcing one model to do everything, the plugin routes 
 
 To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the philosophy behind this approach, see **[Ultraslim Philosophy](docs/ultraslim-philosophy.md)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
 
-### OpenAI GPT-5.6
-
-<p align="center">
-  <img src="img/openai-gpt-5-6-pantheon.jpeg" alt="OpenAI GPT-5.6 Pantheon: Terra, Sol, and Luna" width="100%">
-</p>
-
-The default [OpenAI preset](docs/openai-preset.md) maps Terra to Orchestrator,
-Sol to Oracle, and Luna to the fast specialist lanes.
-
-### What Users Say
-
-> “Task management went from 5/10 to 8-9/10 easily. The Orchestrator sends
-> Fixers and Explorers, and I can still talk and plan with the Orchestrator in
-> the same session. The experience feels way smoother now.”
->
-> \- `vipor_idk`
-
-> “I ditched all my harnesses for this beta version of omo-slim and don't look
-> back or miss anything. Great work and IMHO all in the right direction.”
->
-> \- `stephanschielke`
-
-> “I love omo-slim, and can't imagine running opencode without it. I love that I
-> can create a Frankenstein of models... Makes the setup such a beast.”
->
-> \- `Capital-One3039`
-
-> “It has significantly improved my workflow... Now, it is working very
-> smoothly, and I love it.”
->
-> \- `xenstar1`
-
 ### Quick Start
 
 Copy and paste this prompt to your LLM agent (Claude Code, AmpCode, Cursor, etc.):
