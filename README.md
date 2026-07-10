@@ -30,15 +30,14 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 
 To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
 
-### V2 is ready for OpenAI GPT-5.6
+### OpenAI GPT-5.6
 
 <p align="center">
   <img src="img/openai-gpt-5-6-pantheon.jpeg" alt="OpenAI GPT-5.6 Pantheon: Terra, Sol, and Luna" width="720">
 </p>
 
 The default [OpenAI preset](docs/openai-preset.md) maps Terra to Orchestrator,
-Sol to Oracle, and Luna to the fast specialist lanes. It is a recommended
-starting point, not a requirement. See [what's new in V2](#whats-new-in-v2).
+Sol to Oracle, and Luna to the fast specialist lanes.
 
 ### Manage Agent Skills with LazySkills
 
