@@ -75,19 +75,19 @@ describe('BackgroundJobCoordinator', () => {
     expect(listener).toHaveBeenCalledWith('ses_123');
   });
 
-  test('handleTerminalState does not notify when not in deferred set', () => {
+  test('handleTerminalState notifies on terminal state even without prior defer', () => {
     const board = createMockBoard(false);
     const coordinator = new BackgroundJobCoordinator(board);
     const listener = mock(() => {});
 
     coordinator.addTerminalStateListener(listener);
 
-    // Simulate terminal state notification without deferring first
+    // Simulate terminal state notification without prior defer
     board.getState.mockReturnValue('completed');
     const boardListener = board.addTerminalStateListener.mock.calls[0]?.[0];
     boardListener?.('ses_123');
 
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledWith('ses_123');
   });
 
   test('full chain: board terminal → coordinator → listener for deferred job', () => {
