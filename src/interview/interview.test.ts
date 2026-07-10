@@ -174,6 +174,55 @@ describe('interview service', () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     });
 
+    test('renames session with interview title on creation', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+      const ctx = createMockContext({ directory: tempDir });
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-rename',
+          arguments: 'build a task manager',
+        },
+        output,
+      );
+
+      expect(ctx.client.session.update).toHaveBeenCalledTimes(1);
+      expect(ctx.client.session.update.mock.calls[0][0]).toEqual({
+        path: { id: 'session-rename' },
+        body: { title: 'Interview: build a task manager' },
+      });
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    test('truncates session title to 50 chars with ellipsis', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+      const ctx = createMockContext({ directory: tempDir });
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+
+      const longIdea = 'a'.repeat(60);
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-truncate',
+          arguments: longIdea,
+        },
+        output,
+      );
+
+      const title = ctx.client.session.update.mock.calls[0][0].body.title;
+      expect(title.length).toBe(50);
+      expect(title.endsWith('…')).toBe(true);
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
     test('creates markdown file with slug-only filename (no timestamp prefix)', async () => {
       const tempDir = await fs.mkdtemp('/tmp/interview-test-');
       const ctx = createMockContext({ directory: tempDir });
