@@ -6,20 +6,21 @@ const SCHEMA_URL =
   'https://unpkg.com/oh-my-opencode-ultraslim@latest/oh-my-opencode-ultraslim.schema.json';
 
 export const GENERATED_PRESETS = [
-  'openai',
+  'opencode-free',
   'opencode-go',
   'ultraslim',
 ] as const;
 
 // Model mappings by provider/preset.
 export const MODEL_MAPPINGS = {
-  openai: {
-    orchestrator: { model: 'openai/gpt-5.6-terra', variant: 'medium' },
-    oracle: { model: 'openai/gpt-5.6-sol', variant: 'high' },
-    librarian: { model: 'openai/gpt-5.6-luna', variant: 'low' },
-    explorer: { model: 'openai/gpt-5.6-luna', variant: 'low' },
-    designer: { model: 'openai/gpt-5.6-luna', variant: 'medium' },
-    fixer: { model: 'openai/gpt-5.6-luna', variant: 'medium' },
+  'opencode-free': {
+    orchestrator: { model: 'opencode/nemotron-3-ultra-free' },
+    oracle: { model: 'opencode/nemotron-3-ultra-free', variant: 'high' },
+    librarian: { model: 'opencode/deepseek-v4-flash-free', variant: 'low' },
+    explorer: { model: 'opencode/deepseek-v4-flash-free', variant: 'low' },
+    designer: { model: 'opencode/mimo-v2.5-free', variant: 'medium' },
+    fixer: { model: 'opencode/deepseek-v4-flash-free', variant: 'medium' },
+    observer: { model: 'opencode/mimo-v2.5-free' },
   },
   kimi: {
     orchestrator: { model: 'kimi-for-coding/k2p5' },
@@ -92,7 +93,7 @@ export function getGeneratedPresetNames(): GeneratedPresetName[] {
 export function generateLiteConfig(
   installConfig: InstallConfig,
 ): Record<string, unknown> {
-  const preset = installConfig.preset ?? 'openai';
+  const preset = installConfig.preset ?? 'ultraslim';
   if (!isGeneratedPresetName(preset)) {
     throw new Error(
       `Unsupported preset "${preset}". Available generated presets: ${getGeneratedPresetNames().join(', ')}`,

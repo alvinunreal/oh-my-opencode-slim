@@ -9,14 +9,14 @@ describe('providers', () => {
     expect(keys.sort()).toEqual([
       'copilot',
       'kimi',
-      'openai',
+      'opencode-free',
       'opencode-go',
       'ultraslim',
       'zai-plan',
     ]);
   });
 
-  test('generateLiteConfig defaults to openai and includes generated presets', () => {
+  test('generateLiteConfig defaults to ultraslim and includes generated presets', () => {
     const config = generateLiteConfig({
       hasTmux: false,
       installCustomSkills: false,
@@ -27,21 +27,22 @@ describe('providers', () => {
     expect(config.$schema).toBe(
       'https://unpkg.com/oh-my-opencode-ultraslim@latest/oh-my-opencode-ultraslim.schema.json',
     );
-    expect(config.preset).toBe('openai');
-    expect(config.disabled_agents).toBeUndefined();
+    expect(config.preset).toBe('ultraslim');
+    expect(config.disabled_agents).toEqual([]);
     expect((config.presets as any)['opencode-go']).toBeDefined();
     expect((config.presets as any)['opencode-go'].observer.model).toBe(
       'opencode-go/kimi-k2.6',
     );
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any).ultraslim;
     expect(agents).toBeDefined();
-    expect(agents.orchestrator.model).toBe('openai/gpt-5.6-terra');
-    expect(agents.orchestrator.variant).toBe('medium');
-    expect(agents.fixer.model).toBe('openai/gpt-5.6-luna');
-    expect(agents.fixer.variant).toBe('medium');
+    expect(agents.orchestrator.model).toBe('opencode-go/deepseek-v4-flash');
+    expect(agents.oracle.model).toBe('opencode-go/qwen3.7-max');
+    expect(agents.oracle.variant).toBe('max');
+    expect(agents.fixer.model).toBe('opencode-go/deepseek-v4-flash');
+    expect(agents.fixer.variant).toBe('high');
   });
 
-  test('generateLiteConfig uses correct OpenAI models', () => {
+  test('generateLiteConfig uses correct opencode-free models', () => {
     const config = generateLiteConfig({
       hasTmux: false,
       installCustomSkills: false,
@@ -49,17 +50,17 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any)['opencode-free'];
     expect(agents.orchestrator.model).toBe(
-      MODEL_MAPPINGS.openai.orchestrator.model,
+      MODEL_MAPPINGS['opencode-free'].orchestrator.model,
     );
-    expect(agents.oracle.model).toBe('openai/gpt-5.6-sol');
+    expect(agents.oracle.model).toBe('opencode/nemotron-3-ultra-free');
     expect(agents.oracle.variant).toBe('high');
-    expect(agents.librarian.model).toBe('openai/gpt-5.6-luna');
+    expect(agents.librarian.model).toBe('opencode/deepseek-v4-flash-free');
     expect(agents.librarian.variant).toBe('low');
-    expect(agents.explorer.model).toBe('openai/gpt-5.6-luna');
+    expect(agents.explorer.model).toBe('opencode/deepseek-v4-flash-free');
     expect(agents.explorer.variant).toBe('low');
-    expect(agents.designer.model).toBe('openai/gpt-5.6-luna');
+    expect(agents.designer.model).toBe('opencode/mimo-v2.5-free');
     expect(agents.designer.variant).toBe('medium');
   });
 
@@ -74,7 +75,7 @@ describe('providers', () => {
 
     expect(config.preset).toBe('opencode-go');
     expect(config.disabled_agents).toEqual([]);
-    expect((config.presets as any).openai).toBeDefined();
+    expect((config.presets as any)['opencode-free']).toBeDefined();
     const agents = (config.presets as any)['opencode-go'];
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('opencode-go/glm-5.2');
@@ -100,7 +101,7 @@ describe('providers', () => {
 
     expect(config.preset).toBe('ultraslim');
     expect(config.disabled_agents).toEqual([]);
-    expect((config.presets as any).openai).toBeDefined();
+    expect((config.presets as any)['opencode-free']).toBeDefined();
     const agents = (config.presets as any).ultraslim;
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('opencode-go/deepseek-v4-flash');
@@ -200,7 +201,7 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any)['opencode-free'];
     // Orchestrator should always have '*'
     expect(agents.orchestrator.skills).toEqual(['*']);
 
@@ -228,14 +229,14 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any)['opencode-free'];
     expect(agents.orchestrator.mcps).toBeDefined();
     expect(Array.isArray(agents.orchestrator.mcps)).toBe(true);
     expect(agents.librarian.mcps).toBeDefined();
     expect(Array.isArray(agents.librarian.mcps)).toBe(true);
   });
 
-  test('generateLiteConfig openai includes correct mcps', () => {
+  test('generateLiteConfig opencode-free includes correct mcps', () => {
     const config = generateLiteConfig({
       hasTmux: false,
       installCustomSkills: false,
@@ -243,7 +244,7 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any)['opencode-free'];
     expect(agents.orchestrator.mcps).toEqual(['*', '!context7']);
     expect(agents.librarian.mcps).toContain('websearch');
     expect(agents.librarian.mcps).toContain('context7');

@@ -427,13 +427,14 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(3);
   });
 
-  test('writeLiteConfig writes lite config with OpenAI preset', () => {
+  test('writeLiteConfig writes lite config with ultraslim preset', () => {
     const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-ultraslim.json');
     paths.ensureConfigDir();
 
     const result = writeLiteConfig({
       hasTmux: true,
       installCustomSkills: false,
+      backgroundSubagents: 'no',
       reset: false,
     });
     expect(result.success).toBe(true);
@@ -442,8 +443,8 @@ describe('config-io', () => {
     expect(saved.$schema).toBe(
       'https://unpkg.com/oh-my-opencode-ultraslim@latest/oh-my-opencode-ultraslim.schema.json',
     );
-    expect(saved.preset).toBe('openai');
-    expect(saved.presets.openai).toBeDefined();
+    expect(saved.preset).toBe('ultraslim');
+    expect(saved.presets['opencode-free']).toBeDefined();
     expect(saved.presets['opencode-go']).toBeDefined();
     expect(saved.tmux.enabled).toBe(true);
   });
@@ -456,6 +457,7 @@ describe('config-io', () => {
       hasTmux: false,
       installCustomSkills: false,
       preset: 'opencode-go',
+      backgroundSubagents: 'no',
       reset: false,
     });
     expect(result.success).toBe(true);
@@ -463,7 +465,7 @@ describe('config-io', () => {
     const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
     expect(saved.preset).toBe('opencode-go');
     expect(saved.disabled_agents).toEqual([]);
-    expect(saved.presets.openai).toBeDefined();
+    expect(saved.presets['opencode-free']).toBeDefined();
     expect(saved.presets['opencode-go'].orchestrator.model).toBe(
       'opencode-go/glm-5.2',
     );
