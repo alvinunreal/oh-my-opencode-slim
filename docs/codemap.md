@@ -15,7 +15,7 @@ Codemap is designed for repository understanding and hierarchical codemap genera
 
 ## How to use
 
-Codemap is installed automatically by the `oh-my-opencode-slim` installer when custom skills are enabled.
+Codemap is installed automatically by the `oh-my-opencode-ultraslim` installer when custom skills are enabled.
 
 ### Run it (manual / local)
 

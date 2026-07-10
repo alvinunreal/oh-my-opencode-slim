@@ -309,8 +309,8 @@ async function runBackgroundUpdateCheck(
 function showMajorUpgradeToast(ctx: PluginInput, version: string): void {
   showToast(
     ctx,
-    `oh-my-opencode-slim v${version} is available.`,
-    'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-slim@latest install',
+    `oh-my-opencode-ultraslim v${version} is available.`,
+    'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-ultraslim@latest install',
     'info',
     12_000,
   );

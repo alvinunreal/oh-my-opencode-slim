@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-CLI entry point and command-line interface for the oh-my-opencode-slim plugin. Provides installation, configuration, and diagnostic commands for setting up and managing the OpenCode plugin.
+CLI entry point and command-line interface for the oh-my-opencode-ultraslim plugin. Provides installation, configuration, and diagnostic commands for setting up and managing the OpenCode plugin.
 
 ## Design
 
@@ -32,7 +32,7 @@ The CLI follows a command pattern with two primary commands:
 
 ### Command Flow: CLI Entry Point
 ```
-1. CLI invoked (bunx oh-my-opencode-slim install/doctor)
+1. CLI invoked (bunx oh-my-opencode-ultraslim install/doctor)
 2. index.ts parses arguments and routes to command handler
 3. Command handler executes workflow
    - install: Runs multi-step installation process
@@ -50,7 +50,7 @@ The CLI follows a command pattern with two primary commands:
 7. Enable LSP integration by default
 8. Configure background subagents (shell integration)
 9. Install desktop companion (optional)
-10. Write oh-my-opencode-slim configuration (oh-my-opencode-slim.json)
+10. Write oh-my-opencode-ultraslim configuration (oh-my-opencode-ultraslim.json)
 11. Install custom skills (if requested)
 ```
 
@@ -62,7 +62,7 @@ The CLI follows a command pattern with two primary commands:
    - ~/.config/opencode (default)
 2. Resolve file paths:
    - opencode.json → opencode.jsonc → fallback to opencode.json
-   - oh-my-opencode-slim.json → oh-my-opencode-slim.jsonc → fallback
+   - oh-my-opencode-ultraslim.json → oh-my-opencode-ultraslim.jsonc → fallback
    - tui.json → tui.jsonc → fallback
 ```
 
@@ -124,16 +124,16 @@ The CLI follows a command pattern with two primary commands:
 |------|---------|------------|
 | opencode.json/opencode.jsonc | OpenCode main config | config-io.ts |
 | tui.json/tui.jsonc | OpenCode TUI config | config-io.ts |
-| oh-my-opencode-slim.json | Plugin-specific config | providers.ts |
+| oh-my-opencode-ultraslim.json | Plugin-specific config | providers.ts |
 
 ## Commands
 
 ### `install` Command
-Sets up oh-my-opencode-slim plugin with OpenCode.
+Sets up oh-my-opencode-ultraslim plugin with OpenCode.
 
 **Usage:**
 ```bash
-bunx oh-my-opencode-slim install [OPTIONS]
+bunx oh-my-opencode-ultraslim install [OPTIONS]
 ```
 
 **Options:**
@@ -154,7 +154,7 @@ Diagnoses plugin configuration and environment.
 
 **Usage:**
 ```bash
-bunx oh-my-opencode-slim doctor [OPTIONS]
+bunx oh-my-opencode-ultraslim doctor [OPTIONS]
 ```
 
 **Options:**

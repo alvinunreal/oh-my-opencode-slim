@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Core plugin implementation for **oh-my-opencode-slim**, providing:
+Core plugin implementation for **oh-my-opencode-ultraslim**, providing:
 - Main plugin initialization and OpenCode integration (`index.ts`)
 - Terminal User Interface (TUI) sidebar plugin for agent status display (`tui.ts`)
 - TUI state persistence and synchronization across sessions (`tui-state.ts`)
@@ -71,7 +71,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 
 ### State Persistence Flow (tui-state.ts)
 
-1. **State Path Resolution**: Determines XDG-compliant state directory (`~/.local/share/opencode/storage/oh-my-opencode-slim/tui-state.json`)
+1. **State Path Resolution**: Determines XDG-compliant state directory (`~/.local/share/opencode/storage/oh-my-opencode-ultraslim/tui-state.json`)
 2. **Snapshot Operations**:
    - `readTuiSnapshot()`: Reads and parses state file (returns empty snapshot on error)
    - `readTuiSnapshotAsync()`: Async variant for TUI rendering
@@ -135,7 +135,7 @@ Key event flows:
 ### Configuration Integration
 
 - Plugin config loaded via `loadPluginConfig()` with support for:
-  - User overrides from `~/.config/opencode/oh-my-opencode-slim.json`
+  - User overrides from `~/.config/opencode/oh-my-opencode-ultraslim.json`
   - Runtime presets via `/preset` command
   - Environment-based disablement via `OH_MY_OPENCODE_SLIM_DISABLE`
 - Agent configurations merged with user settings from OpenCode config

@@ -17,8 +17,8 @@ const repoRoot = path.resolve(__dirname, '..');
 const distDir = path.join(repoRoot, 'dist');
 
 const suspiciousPathPatterns = [
-  /\/Users\/[^\s'"`]+(?:node_modules|oh-my-opencode-slim)[^\s'"`]*/,
-  /\/home\/[^\s'"`]+(?:node_modules|oh-my-opencode-slim)[^\s'"`]*/,
+  /\/Users\/[^\s'"`]+(?:node_modules|oh-my-opencode-ultraslim)[^\s'"`]*/,
+  /\/home\/[^\s'"`]+(?:node_modules|oh-my-opencode-ultraslim)[^\s'"`]*/,
 ];
 const suspiciousImportPatterns = [/from\s+["']vscode-jsonrpc\/node["']/];
 
@@ -29,14 +29,14 @@ const packagedRequiredFiles = [
   'dist/index.js',
   'dist/index.d.ts',
   'dist/cli/index.js',
-  'oh-my-opencode-slim.schema.json',
+  'oh-my-opencode-ultraslim.schema.json',
   'src/companion/companion-manifest.json',
   'src/skills/simplify/SKILL.md',
   'src/skills/codemap/SKILL.md',
   'src/skills/clonedeps/SKILL.md',
   'src/skills/deepwork/SKILL.md',
   'src/skills/reflect/SKILL.md',
-  'src/skills/oh-my-opencode-slim/SKILL.md',
+  'src/skills/oh-my-opencode-ultraslim/SKILL.md',
   'src/skills/release-smoke-test/SKILL.md',
   'src/skills/worktrees/SKILL.md',
 ];
@@ -162,7 +162,7 @@ function verifyFreshInstall(tarballPath: string) {
     const installedEntry = path.join(
       installDir,
       'node_modules',
-      'oh-my-opencode-slim',
+      'oh-my-opencode-ultraslim',
       'dist',
       'index.js',
     );
@@ -177,7 +177,7 @@ function verifyFreshInstall(tarballPath: string) {
     }
 
     const smokeScript = [
-      "import pkg from 'oh-my-opencode-slim';",
+      "import pkg from 'oh-my-opencode-ultraslim';",
       "if (typeof pkg !== 'function') throw new Error('default export is not a function');",
       "console.log('package loads');",
       'process.exit(0);',

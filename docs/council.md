@@ -76,7 +76,7 @@ If you only remember one thing, remember this:
 
 Add a council model and at least one council preset to your plugin config:
 
-`~/.config/opencode/oh-my-opencode-slim.json`
+`~/.config/opencode/oh-my-opencode-ultraslim.json`
 
 ```jsonc
 {

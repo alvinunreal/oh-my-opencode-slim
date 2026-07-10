@@ -92,13 +92,15 @@ describe('paths', () => {
   test('getLiteConfig() returns correct path', () => {
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
     expect(getLiteConfig()).toBe(
-      '/tmp/xdg-config/opencode/oh-my-opencode-slim.json',
+      '/tmp/xdg-config/opencode/oh-my-opencode-ultraslim.json',
     );
   });
 
   test('getLiteConfig() respects OPENCODE_CONFIG_DIR', () => {
     process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
-    expect(getLiteConfig()).toBe('/custom/directory/oh-my-opencode-slim.json');
+    expect(getLiteConfig()).toBe(
+      '/custom/directory/oh-my-opencode-ultraslim.json',
+    );
   });
 
   describe('getExistingConfigPath()', () => {

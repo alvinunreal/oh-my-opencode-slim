@@ -29,7 +29,7 @@ The implementation follows a layered architecture:
   - `getEmptyResultHint()`: Provides user guidance when patterns yield no matches (e.g., missing colons in Python)
 
 - **Binary Management** (`downloader.ts`):
-  - `ensureAstGrepBinary()`: Downloads platform-specific ast-grep binary on-demand to `~/.cache/oh-my-opencode-slim/bin/`
+  - `ensureAstGrepBinary()`: Downloads platform-specific ast-grep binary on-demand to `~/.cache/oh-my-opencode-ultraslim/bin/`
   - Supports caching, version detection, and platform-specific artifacts
   - Handles permissions and cleanup
 

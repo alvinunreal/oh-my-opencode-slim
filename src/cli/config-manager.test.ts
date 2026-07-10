@@ -58,7 +58,7 @@ describe('config-manager (barrel)', () => {
     test('handles complex JSONC with mixed comments and trailing commas', () => {
       const json = `{
     // Configuration for the plugin
-    "plugin": ["oh-my-opencode-slim"],
+    "plugin": ["oh-my-opencode-ultraslim"],
     /* Provider settings
        with multiple lines */
     "provider": {
@@ -69,7 +69,7 @@ describe('config-manager (barrel)', () => {
   }`;
       const result = JSON.parse(stripJsonComments(json));
       expect(result).toEqual({
-        plugin: ['oh-my-opencode-slim'],
+        plugin: ['oh-my-opencode-ultraslim'],
         provider: {
           google: {
             name: 'Google',

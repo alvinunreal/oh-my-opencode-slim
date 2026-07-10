@@ -23,7 +23,7 @@ export async function installCompanion(
   }
 
   const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
-  const archiveName = `oh-my-opencode-slim-companion-v${COMPANION_MANIFEST.version}-${target}.${ext}`;
+  const archiveName = `oh-my-opencode-ultraslim-companion-v${COMPANION_MANIFEST.version}-${target}.${ext}`;
   const downloadUrl = `https://github.com/${COMPANION_MANIFEST.repo}/releases/download/${COMPANION_MANIFEST.tag}/${archiveName}`;
 
   if (config.dryRun) {

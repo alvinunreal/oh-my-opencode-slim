@@ -13,7 +13,8 @@ import { isUserMessageWithParts } from '../types';
 
 export { PHASE_REMINDER };
 
-export const PHASE_REMINDER_METADATA_KEY = 'oh-my-opencode-slim.phaseReminder';
+export const PHASE_REMINDER_METADATA_KEY =
+  'oh-my-opencode-ultraslim.phaseReminder';
 
 /**
  * Creates the experimental.chat.messages.transform hook for phase reminder injection.

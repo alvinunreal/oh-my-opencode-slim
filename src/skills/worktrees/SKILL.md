@@ -86,21 +86,21 @@ Before creating lanes, add or update managed marker blocks only.
 `.gitignore`:
 
 ```gitignore
-# BEGIN oh-my-opencode-slim worktrees
+# BEGIN oh-my-opencode-ultraslim worktrees
 .slim/worktrees/
 .slim/worktrees.json
-# END oh-my-opencode-slim worktrees
+# END oh-my-opencode-ultraslim worktrees
 ```
 
 `.ignore`:
 
 ```ignore
-# BEGIN oh-my-opencode-slim worktrees
+# BEGIN oh-my-opencode-ultraslim worktrees
 !.slim/
 !.slim/worktrees.json
 !.slim/worktrees/
 !.slim/worktrees/**
-# END oh-my-opencode-slim worktrees
+# END oh-my-opencode-ultraslim worktrees
 ```
 
 ---

@@ -33,7 +33,7 @@ interface TaskArgs {
 }
 
 export const BACKGROUND_JOB_BOARD_METADATA_KEY =
-  'oh-my-opencode-slim.backgroundJobBoard';
+  'oh-my-opencode-ultraslim.backgroundJobBoard';
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;

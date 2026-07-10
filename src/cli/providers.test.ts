@@ -11,6 +11,7 @@ describe('providers', () => {
       'kimi',
       'openai',
       'opencode-go',
+      'ultraslim',
       'zai-plan',
     ]);
   });
@@ -24,7 +25,7 @@ describe('providers', () => {
     });
 
     expect(config.$schema).toBe(
-      'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json',
+      'https://unpkg.com/oh-my-opencode-ultraslim@latest/oh-my-opencode-ultraslim.schema.json',
     );
     expect(config.preset).toBe('openai');
     expect(config.disabled_agents).toBeUndefined();
@@ -85,6 +86,26 @@ describe('providers', () => {
     expect(agents.designer.model).toBe('opencode-go/kimi-k2.7-code');
     expect(agents.fixer.model).toBe('opencode-go/deepseek-v4-flash');
     expect(agents.fixer.variant).toBe('high');
+    expect(agents.observer.model).toBe('opencode-go/kimi-k2.6');
+  });
+
+  test('generateLiteConfig can set ultraslim as active preset', () => {
+    const config = generateLiteConfig({
+      hasTmux: false,
+      installCustomSkills: false,
+      preset: 'ultraslim',
+      backgroundSubagents: 'no',
+      reset: false,
+    });
+
+    expect(config.preset).toBe('ultraslim');
+    expect(config.disabled_agents).toEqual([]);
+    expect((config.presets as any).openai).toBeDefined();
+    const agents = (config.presets as any).ultraslim;
+    expect(agents).toBeDefined();
+    expect(agents.orchestrator.model).toBe('opencode-go/glm-5.2');
+    expect(agents.oracle.model).toBe('opencode-go/qwen3.7-max');
+    expect(agents.oracle.variant).toBe('max');
     expect(agents.observer.model).toBe('opencode-go/kimi-k2.6');
   });
 

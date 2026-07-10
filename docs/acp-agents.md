@@ -23,8 +23,8 @@ The wrapper is sandboxed from normal local tools such as `bash`, `edit`,
 
 ## Configuration
 
-Add `acpAgents` to `~/.config/opencode/oh-my-opencode-slim.jsonc` or a
-project-local `.opencode/oh-my-opencode-slim.jsonc` file:
+Add `acpAgents` to `~/.config/opencode/oh-my-opencode-ultraslim.jsonc` or a
+project-local `.opencode/oh-my-opencode-ultraslim.jsonc` file:
 
 ```jsonc
 {

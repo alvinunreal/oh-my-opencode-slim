@@ -1,8 +1,8 @@
-# Repository Atlas: oh-my-opencode-slim
+# Repository Atlas: oh-my-opencode-ultraslim
 
 ## Project Responsibility
 
-`oh-my-opencode-slim` is an OpenCode plugin that implements a specialist-agent operating model on top of the host runtime. Its core responsibilities include:
+`oh-my-opencode-ultraslim` is an OpenCode plugin that implements a specialist-agent operating model on top of the host runtime. Its core responsibilities include:
 
 - Defining orchestrator and specialist agent factories with permission policies
 - Loading layered plugin configuration and per-agent permissions
@@ -21,7 +21,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/index.ts` | Main plugin bootstrap: wires agents, tools, MCPs, hooks, council managers, shared background job board, multiplexer session mirroring, interview/preset managers, task-session tracking, and config merge behavior. |
 | `src/cli/index.ts` | CLI entrypoint for installation/bootstrap workflows. |
 | `src/config/schema.ts` | Source-of-truth runtime config schema used by validation and schema generation. |
-| `scripts/generate-schema.ts` | Generates `oh-my-opencode-slim.schema.json` from the Zod config schema. |
+| `scripts/generate-schema.ts` | Generates `oh-my-opencode-ultraslim.schema.json` from the Zod config schema. |
 
 ## Repository Directory Map
 

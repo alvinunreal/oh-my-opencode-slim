@@ -13,7 +13,7 @@ import { PluginConfigSchema } from '../src/config/schema';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
-const outputPath = join(rootDir, 'oh-my-opencode-slim.schema.json');
+const outputPath = join(rootDir, 'oh-my-opencode-ultraslim.schema.json');
 
 const schema = z.toJSONSchema(PluginConfigSchema, {
   // Use 'input' so defaulted fields are optional in the schema,
@@ -24,9 +24,9 @@ const schema = z.toJSONSchema(PluginConfigSchema, {
 const jsonSchema = {
   ...schema,
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  title: 'oh-my-opencode-slim',
+  title: 'oh-my-opencode-ultraslim',
   description:
-    'Configuration schema for oh-my-opencode-slim plugin for OpenCode',
+    'Configuration schema for oh-my-opencode-ultraslim plugin for OpenCode',
 };
 
 const json = JSON.stringify(jsonSchema, null, 2);

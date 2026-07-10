@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Implements a background auto-update system for oh-my-opencode-slim that:
+Implements a background auto-update system for oh-my-opencode-ultraslim that:
 - Checks for plugin updates when new OpenCode sessions are created
 - Validates version compatibility and channel membership (latest, alpha, beta, etc.)
 - Prevents major version upgrades automatically (surfaces as manual migration notice)
@@ -157,7 +157,7 @@ The system reads from OpenCode configuration files:
 
 Uses OpenCode's plugin cache directory:
 - Platform-specific: `~/.cache/opencode/` (Linux/macOS) or `%LOCALAPPDATA%\opencode` (Windows)
-- Plugin cache: `node_modules/oh-my-opencode-slim/`
+- Plugin cache: `node_modules/oh-my-opencode-ultraslim/`
 - Package updates are installed to isolated cache directories
 
 ## Error Handling & Recovery

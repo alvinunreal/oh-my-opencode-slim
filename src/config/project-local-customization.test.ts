@@ -24,7 +24,7 @@ describe('Project-local customization - 15 core cases', () => {
 
   // Test Case 1: Project prompt root beats user prompt root
   test('1. Project prompt root beats user prompt root', () => {
-    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-ultraslim');
     fs.mkdirSync(userDir, { recursive: true });
     fs.writeFileSync(path.join(userDir, 'oracle.md'), 'user-oracle');
 
@@ -32,7 +32,7 @@ describe('Project-local customization - 15 core cases', () => {
     const projectPromptDir = path.join(
       projectDir,
       '.opencode',
-      'oh-my-opencode-slim',
+      'oh-my-opencode-ultraslim',
     );
     fs.mkdirSync(projectPromptDir, { recursive: true });
     fs.writeFileSync(
@@ -50,7 +50,7 @@ describe('Project-local customization - 15 core cases', () => {
     const projectPromptDir = path.join(
       projectDir,
       '.opencode',
-      'oh-my-opencode-slim',
+      'oh-my-opencode-ultraslim',
     );
     const projectPresetDir = path.join(projectPromptDir, 'test-preset');
     fs.mkdirSync(projectPresetDir, { recursive: true });
@@ -73,7 +73,7 @@ describe('Project-local customization - 15 core cases', () => {
 
   // Test Case 3: User preset prompt beats user root prompt when no project prompt exists
   test('3. User preset prompt beats user root prompt when no project prompt exists', () => {
-    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-ultraslim');
     const userPresetDir = path.join(userDir, 'test-preset');
     fs.mkdirSync(userPresetDir, { recursive: true });
 
@@ -93,7 +93,7 @@ describe('Project-local customization - 15 core cases', () => {
     const projectPromptDir = path.join(
       projectDir,
       '.opencode',
-      'oh-my-opencode-slim',
+      'oh-my-opencode-ultraslim',
     );
     fs.mkdirSync(projectPromptDir, { recursive: true });
 
@@ -141,7 +141,7 @@ describe('Project-local customization - 15 core cases', () => {
     };
 
     // User prompt file mock
-    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-ultraslim');
     fs.mkdirSync(userDir, { recursive: true });
     fs.writeFileSync(
       path.join(userDir, 'oracle.md'),
@@ -165,7 +165,7 @@ describe('Project-local customization - 15 core cases', () => {
     };
 
     // User append file mock
-    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-ultraslim');
     fs.mkdirSync(userDir, { recursive: true });
     fs.writeFileSync(path.join(userDir, 'oracle_append.md'), 'append content');
 
@@ -354,14 +354,14 @@ describe('Project-local customization - 15 core cases', () => {
   // Test Case 15: Docs examples match actual precedence
   test('15. Precedence chain: project preset -> project root -> user preset -> user root', () => {
     const userDir = path.join(tempDir, 'opencode');
-    const userPromptDir = path.join(userDir, 'oh-my-opencode-slim');
+    const userPromptDir = path.join(userDir, 'oh-my-opencode-ultraslim');
     const userPresetDir = path.join(userPromptDir, 'my-preset');
 
     const projectDir = path.join(tempDir, 'project');
     const projectPromptDir = path.join(
       projectDir,
       '.opencode',
-      'oh-my-opencode-slim',
+      'oh-my-opencode-ultraslim',
     );
     const projectPresetDir = path.join(projectPromptDir, 'my-preset');
 

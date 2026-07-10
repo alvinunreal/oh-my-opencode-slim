@@ -36,8 +36,8 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("oh-my-opencode-slim-companion")
-            .with_app_id("oh-my-opencode-slim-companion")
+            .with_title("oh-my-opencode-ultraslim-companion")
+            .with_app_id("oh-my-opencode-ultraslim-companion")
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
@@ -59,7 +59,7 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "oh-my-opencode-slim-companion",
+        "oh-my-opencode-ultraslim-companion",
         options,
         Box::new(|cc| Ok(Box::new(app::CompanionApp::new(cc)))),
     )

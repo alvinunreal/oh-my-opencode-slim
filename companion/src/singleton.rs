@@ -23,7 +23,7 @@ fn lock_path(owner_session_id: &str) -> PathBuf {
         });
     base.join("opencode")
         .join("storage")
-        .join("oh-my-opencode-slim")
+        .join("oh-my-opencode-ultraslim")
         .join(format!("companion.{safe_owner}.pid"))
 }
 

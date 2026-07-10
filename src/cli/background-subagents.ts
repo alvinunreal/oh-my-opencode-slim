@@ -6,8 +6,8 @@ export type BackgroundSubagentsMode = 'ask' | 'yes' | 'no';
 export type ShellKind = 'bash' | 'fish' | 'zsh';
 
 const ENV_NAME = 'OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS';
-const START_MARKER = '# >>> oh-my-opencode-slim background subagents >>>';
-const END_MARKER = '# <<< oh-my-opencode-slim background subagents <<<';
+const START_MARKER = '# >>> oh-my-opencode-ultraslim background subagents >>>';
+const END_MARKER = '# <<< oh-my-opencode-ultraslim background subagents <<<';
 
 export function isBackgroundSubagentsEnabled(
   value: string | undefined,

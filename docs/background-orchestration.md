@@ -1,7 +1,7 @@
 # Background Orchestration
 
 Background orchestration is the default orchestration model for
-oh-my-opencode-slim. It assumes native OpenCode background subagents are
+oh-my-opencode-ultraslim. It assumes native OpenCode background subagents are
 available and changes the orchestrator from a primary worker into a scheduler.
 
 The old model was:

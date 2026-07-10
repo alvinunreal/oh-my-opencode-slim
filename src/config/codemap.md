@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Centralizes configuration loading, validation, schema definitions, and runtime state management for the oh-my-opencode-slim plugin. This folder implements the configuration pipeline that merges user preferences, project overrides, and preset-based agent configurations, providing validated runtime configuration objects to the rest of the plugin.
+Centralizes configuration loading, validation, schema definitions, and runtime state management for the oh-my-opencode-ultraslim plugin. This folder implements the configuration pipeline that merges user preferences, project overrides, and preset-based agent configurations, providing validated runtime configuration objects to the rest of the plugin.
 
 ## Design
 
@@ -35,8 +35,8 @@ The config system follows a layered architecture:
 
 ```
 1. Discovery Phase
-   ├─ User config: $OPENCODE_CONFIG_DIR/oh-my-opencode-slim.{jsonc,json}
-   ├─ Project config: <directory>/.opencode/oh-my-opencode-slim.{jsonc,json}
+   ├─ User config: $OPENCODE_CONFIG_DIR/oh-my-opencode-ultraslim.{jsonc,json}
+   ├─ Project config: <directory>/.opencode/oh-my-opencode-ultraslim.{jsonc,json}
    └─ Environment variable: OH_MY_OPENCODE_SLIM_PRESET (overrides preset field)
 
 2. Parsing Phase

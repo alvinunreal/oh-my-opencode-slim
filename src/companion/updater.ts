@@ -48,17 +48,17 @@ const FIRST_METADATA_VERSION = '0.1.2';
 export const COMPANION_MANIFEST: CompanionManifest = {
   version: '0.1.3',
   tag: 'companion-v0.1.3',
-  repo: 'alvinunreal/oh-my-opencode-slim',
+  repo: 'alvinunreal/oh-my-opencode-ultraslim',
   checksums: {
-    'oh-my-opencode-slim-companion-v0.1.3-aarch64-apple-darwin.tar.gz':
+    'oh-my-opencode-ultraslim-companion-v0.1.3-aarch64-apple-darwin.tar.gz':
       'b4885f9b1900c02376e5f8f5ae6f3b8a89d26f7514b03f836d7e3d618164a0ed',
-    'oh-my-opencode-slim-companion-v0.1.3-aarch64-unknown-linux-gnu.tar.gz':
+    'oh-my-opencode-ultraslim-companion-v0.1.3-aarch64-unknown-linux-gnu.tar.gz':
       'ed7cffc583e1eaa78c9bea702e6b6aa3bbc5bb4d881713fb2050237ba6b7aca5',
-    'oh-my-opencode-slim-companion-v0.1.3-x86_64-apple-darwin.tar.gz':
+    'oh-my-opencode-ultraslim-companion-v0.1.3-x86_64-apple-darwin.tar.gz':
       '98d8ea7c7bc4415b18e0d4c524adb4eb9a84c872919840fdc021f0f50c61f808',
-    'oh-my-opencode-slim-companion-v0.1.3-x86_64-pc-windows-msvc.zip':
+    'oh-my-opencode-ultraslim-companion-v0.1.3-x86_64-pc-windows-msvc.zip':
       '9316a49bf01f3b4fb1ce2d62edfc46094e73bb153d6ce023fb7df085afcf77bd',
-    'oh-my-opencode-slim-companion-v0.1.3-x86_64-unknown-linux-gnu.tar.gz':
+    'oh-my-opencode-ultraslim-companion-v0.1.3-x86_64-unknown-linux-gnu.tar.gz':
       '33f5fd4b6c80155a019391e5efb13904ca9531ba8dd8c6cba30a161f1b07b764',
   },
 };
@@ -86,11 +86,11 @@ export function getCompanionBinaryPath(): string {
     base,
     'opencode',
     'storage',
-    'oh-my-opencode-slim',
+    'oh-my-opencode-ultraslim',
     'bin',
     platform() === 'win32'
-      ? 'oh-my-opencode-slim-companion.exe'
-      : 'oh-my-opencode-slim-companion',
+      ? 'oh-my-opencode-ultraslim-companion.exe'
+      : 'oh-my-opencode-ultraslim-companion',
   );
 }
 
@@ -301,8 +301,8 @@ async function installCompanionArchive(
     }
 
     const binaryName = isWindows
-      ? 'oh-my-opencode-slim-companion.exe'
-      : 'oh-my-opencode-slim-companion';
+      ? 'oh-my-opencode-ultraslim-companion.exe'
+      : 'oh-my-opencode-ultraslim-companion';
     const extractedBinaryPath = path.join(extractedDir, binaryName);
 
     if (!existsSync(extractedBinaryPath)) {
@@ -429,7 +429,7 @@ function companionArchiveName(
   isWindows = process.platform === 'win32',
 ): string {
   const ext = isWindows ? 'zip' : 'tar.gz';
-  return `oh-my-opencode-slim-companion-v${version}-${target}.${ext}`;
+  return `oh-my-opencode-ultraslim-companion-v${version}-${target}.${ext}`;
 }
 
 function compareSemver(a: string, b: string): number {

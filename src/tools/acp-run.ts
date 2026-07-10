@@ -90,8 +90,8 @@ class AcpClient {
       protocolVersion: 1,
       clientCapabilities: {},
       clientInfo: {
-        name: 'oh-my-opencode-slim',
-        title: 'oh-my-opencode-slim ACP bridge',
+        name: 'oh-my-opencode-ultraslim',
+        title: 'oh-my-opencode-ultraslim ACP bridge',
       },
     });
     this.authMethods = readAuthMethods(init);

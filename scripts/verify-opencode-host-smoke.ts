@@ -211,7 +211,7 @@ async function verifyHostSmoke(tarballPath: string) {
         {
           type: 'module',
           dependencies: {
-            'oh-my-opencode-slim': `file:${tarballTarget}`,
+            'oh-my-opencode-ultraslim': `file:${tarballTarget}`,
           },
         },
         null,
@@ -219,8 +219,8 @@ async function verifyHostSmoke(tarballPath: string) {
       ),
     );
     writeFileSync(
-      path.join(pluginDir, 'load-oh-my-opencode-slim.js'),
-      "export { default } from 'oh-my-opencode-slim';\n",
+      path.join(pluginDir, 'load-oh-my-opencode-ultraslim.js'),
+      "export { default } from 'oh-my-opencode-ultraslim';\n",
     );
 
     const config = JSON.stringify({

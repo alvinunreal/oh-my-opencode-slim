@@ -3,7 +3,7 @@ import { appendFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const LOG_PREFIX = 'oh-my-opencode-slim.';
+const LOG_PREFIX = 'oh-my-opencode-ultraslim.';
 const LOG_SUFFIX = '.log';
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 

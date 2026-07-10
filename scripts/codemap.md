@@ -11,7 +11,7 @@
 
 - `generate-schema.ts`
   - Imports `PluginConfigSchema` from `src/config/schema.ts` and emits canonical JSON Schema via `z.toJSONSchema`.
-  - Writes `oh-my-opencode-slim.schema.json` with explicit `$schema`, `title`, and plugin description.
+  - Writes `oh-my-opencode-ultraslim.schema.json` with explicit `$schema`, `title`, and plugin description.
 - `verify-release-artifact.ts`
   - Uses `spawnSync` + `npm pack --json --ignore-scripts`.
   - Scans `dist/**/*` for leaked machine paths (`/Users/*`, `/home/*`).

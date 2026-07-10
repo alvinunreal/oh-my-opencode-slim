@@ -15,5 +15,5 @@ Adapted from Addy Osmani's
 
 ## Installation
 
-Bundled with `oh-my-opencode-slim` and installed automatically when bundled
+Bundled with `oh-my-opencode-ultraslim` and installed automatically when bundled
 skills are enabled via the installer.

@@ -114,7 +114,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       const hint =
         available.length > 0
           ? `Available presets: ${available.join(', ')}`
-          : 'No presets configured. Define presets in oh-my-opencode-slim.jsonc.';
+          : 'No presets configured. Define presets in oh-my-opencode-ultraslim.jsonc.';
       output.parts.push(
         createInternalAgentTextPart(
           `Preset "${presetName}" not found. ${hint}`,
@@ -272,7 +272,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
   function formatPresetList(presets: Record<string, Preset>): string {
     const names = Object.keys(presets);
     if (names.length === 0) {
-      return 'No presets configured. Define presets in oh-my-opencode-slim.jsonc under the "presets" field.';
+      return 'No presets configured. Define presets in oh-my-opencode-ultraslim.jsonc under the "presets" field.';
     }
 
     const lines = ['Available presets:'];

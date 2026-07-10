@@ -50,11 +50,11 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     sourcePath: 'src/skills/reflect',
   },
   {
-    name: 'oh-my-opencode-slim',
+    name: 'oh-my-opencode-ultraslim',
     description:
-      'Configure, customize, and safely improve oh-my-opencode-slim setups',
+      'Configure, customize, and safely improve oh-my-opencode-ultraslim setups',
     allowedAgents: ['orchestrator'],
-    sourcePath: 'src/skills/oh-my-opencode-slim',
+    sourcePath: 'src/skills/oh-my-opencode-ultraslim',
   },
   {
     name: 'release-smoke-test',

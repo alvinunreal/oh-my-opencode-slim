@@ -6,7 +6,7 @@ and `opencode-go`; OpenAI is the one that runs unless you pick the other.
 ## Install with OpenAI Active
 
 ```bash
-bunx oh-my-opencode-slim@latest install
+bunx oh-my-opencode-ultraslim@latest install
 ```
 
 Then authenticate and refresh models:

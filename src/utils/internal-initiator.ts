@@ -4,13 +4,13 @@ export const SLIM_INTERNAL_INITIATOR_MARKER =
   '<!-- SLIM_INTERNAL_INITIATOR -->';
 
 export const INTERNAL_INITIATOR_METADATA_KEY =
-  'oh-my-opencode-slim.internalInitiator';
+  'oh-my-opencode-ultraslim.internalInitiator';
 
 export function createInternalAgentTextPart(text: string): {
   type: 'text';
   text: string;
   synthetic: true;
-  metadata: { 'oh-my-opencode-slim.internalInitiator': true };
+  metadata: { 'oh-my-opencode-ultraslim.internalInitiator': true };
 } {
   return {
     type: 'text',

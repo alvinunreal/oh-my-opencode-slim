@@ -1,6 +1,6 @@
 # Installation Guide
 
-Complete installation instructions for oh-my-opencode-slim.
+Complete installation instructions for oh-my-opencode-ultraslim.
 
 ## Table of Contents
 
@@ -18,13 +18,13 @@ Complete installation instructions for oh-my-opencode-slim.
 Run the interactive installer:
 
 ```bash
-bunx oh-my-opencode-slim@latest install
+bunx oh-my-opencode-ultraslim@latest install
 ```
 
 Or use non-interactive mode:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --skills=yes --background-subagents=yes
+bunx oh-my-opencode-ultraslim@latest install --no-tui --skills=yes --background-subagents=yes
 ```
 
 ### Configuration Options
@@ -55,13 +55,13 @@ The installer asks before adding that export to your shell startup file. The
 prompt defaults to `yes` because V2's default orchestration depends on it.
 
 ```bash
-bunx oh-my-opencode-slim@latest install
+bunx oh-my-opencode-ultraslim@latest install
 ```
 
 For non-interactive setup, pass the choice explicitly:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --background-subagents=yes
+bunx oh-my-opencode-ultraslim@latest install --no-tui --background-subagents=yes
 ```
 
 After the installer updates a shell startup file, restart your terminal or source
@@ -81,30 +81,30 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 
 ### Non-Destructive Behavior
 
-By default, the installer is non-destructive. If an `oh-my-opencode-slim.json` configuration file already exists, the installer will **not** overwrite it. Instead, it will display a message:
+By default, the installer is non-destructive. If an `oh-my-opencode-ultraslim.json` configuration file already exists, the installer will **not** overwrite it. Instead, it will display a message:
 
 ```
-[i] Configuration already exists at ~/.config/opencode/oh-my-opencode-slim.json. Use --reset to overwrite.
+[i] Configuration already exists at ~/.config/opencode/oh-my-opencode-ultraslim.json. Use --reset to overwrite.
 ```
 
 To force overwrite of your existing configuration, use the `--reset` flag:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --reset
+bunx oh-my-opencode-ultraslim@latest install --reset
 ```
 
 **Note:** When using `--reset`, the installer creates a `.bak` backup file before overwriting, so your previous configuration is preserved.
 
 ### After Installation
 
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using variant-aware GPT-5.6 models, including `gpt-5.6-terra (medium)` for Orchestrator, `gpt-5.6-sol (high)` for Oracle, `gpt-5.6-luna (medium)` for Fixer, and `gpt-5.6-luna` variants for other specialists). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. That preset uses GLM-5.1 for Orchestrator, so the installer also enables Observer with `opencode-go/kimi-k2.6` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
+The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using variant-aware GPT-5.6 models, including `gpt-5.6-terra (medium)` for Orchestrator, `gpt-5.6-sol (high)` for Oracle, `gpt-5.6-luna (medium)` for Fixer, and `gpt-5.6-luna` variants for other specialists). To make OpenCode Go active during install, run `bunx oh-my-opencode-ultraslim@latest install --preset=opencode-go`. That preset uses GLM-5.1 for Orchestrator, so the installer also enables Observer with `opencode-go/kimi-k2.6` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
 
 The plugin safely reconciles bundled skills on startup and after successful
 auto-updates. Missing bundled skills are installed, and previously managed skills
 are updated only when their local files still match a known plugin-installed
 version. If you customized a skill locally, the plugin preserves your active copy
 and stages the new bundled version under
-`~/.config/opencode/.oh-my-opencode-slim/skill-updates/` for manual review.
+`~/.config/opencode/.oh-my-opencode-ultraslim/skill-updates/` for manual review.
 Restart OpenCode after an auto-update to load the updated plugin and any changed
 skills.
 
@@ -119,7 +119,7 @@ opencode auth login
 opencode models --refresh
 ```
 
-Open your generated config at `~/.config/opencode/oh-my-opencode-slim.json`
+Open your generated config at `~/.config/opencode/oh-my-opencode-ultraslim.json`
 and adjust models if needed.
 
 Then run OpenCode and verify the agents:
@@ -128,7 +128,7 @@ Then run OpenCode and verify the agents:
 ping all agents
 ```
 
-> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely.
+> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-ultraslim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely.
 
 ### Alternative: Ask Any Coding Agent
 
@@ -136,14 +136,14 @@ Paste this into Claude Code, AmpCode, Cursor, or any coding agent:
 
 ```
 Install and configure by following the instructions here:
-https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
+https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-ultraslim/refs/heads/master/README.md
 ```
 
 ---
 
 ## For LLM Agents
 
-If you're an LLM Agent helping set up oh-my-opencode-slim, follow these steps.
+If you're an LLM Agent helping set up oh-my-opencode-ultraslim, follow these steps.
 
 ### Step 1: Check OpenCode Installation
 
@@ -158,25 +158,25 @@ If not installed, direct the user to https://opencode.ai/docs first.
 The installer generates OpenAI and OpenCode Go presets, with OpenAI active by default:
 
 ```bash
-bunx oh-my-opencode-slim@latest install --no-tui --skills=yes
+bunx oh-my-opencode-ultraslim@latest install --no-tui --skills=yes
 ```
 
 **Examples:**
 ```bash
 # Interactive install
-bunx oh-my-opencode-slim@latest install
+bunx oh-my-opencode-ultraslim@latest install
 
 # Non-interactive with bundled skills
-bunx oh-my-opencode-slim@latest install --no-tui --skills=yes --background-subagents=yes
+bunx oh-my-opencode-ultraslim@latest install --no-tui --skills=yes --background-subagents=yes
 
 # Make the generated OpenCode Go preset active
-bunx oh-my-opencode-slim@latest install --preset=opencode-go
+bunx oh-my-opencode-ultraslim@latest install --preset=opencode-go
 
 # Non-interactive without skills
-bunx oh-my-opencode-slim@latest install --no-tui --skills=no
+bunx oh-my-opencode-ultraslim@latest install --no-tui --skills=no
 
 # Force overwrite existing configuration
-bunx oh-my-opencode-slim@latest install --reset
+bunx oh-my-opencode-ultraslim@latest install --reset
 ```
 
 The installer automatically:
@@ -186,7 +186,7 @@ The installer automatically:
 - Enables OpenCode LSP integration when no explicit `lsp` setting exists
 - Configures `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` when approved
 - Generates agent model mappings in the same OpenCode config directory as
-  `oh-my-opencode-slim.json` (or `.jsonc`)
+  `oh-my-opencode-ultraslim.json` (or `.jsonc`)
 
 ### Step 3: Authenticate with Providers
 
@@ -211,9 +211,9 @@ Ask the user to:
 Verify all agents respond successfully.
 
 **Crucial Advice for the User:**
-- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
+- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-ultraslim.json` (or `.jsonc`).
 - If they want to add a different provider later (OpenCode Go, Kimi, GitHub Copilot, ZAI), they can update this file manually. See **[Configuration Reference](configuration.md)** and the preset docs for examples.
-- Read the generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file to understand the current configuration.
+- Read the generated `~/.config/opencode/oh-my-opencode-ultraslim.json` (or `.jsonc`) file to understand the current configuration.
 
 ---
 
@@ -223,11 +223,11 @@ Verify all agents respond successfully.
 
 Check the expected config format:
 ```bash
-bunx oh-my-opencode-slim@latest install --help
+bunx oh-my-opencode-ultraslim@latest install --help
 ```
 
 Then manually create the config files at:
-- `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
+- `~/.config/opencode/oh-my-opencode-ultraslim.json` (or `.jsonc`)
 
 ### Configuration Already Exists
 
@@ -237,7 +237,7 @@ If the installer reports that the configuration already exists, you have two opt
 
 2. **Reset configuration**: Use `--reset` to overwrite:
    ```bash
-   bunx oh-my-opencode-slim@latest install --reset
+   bunx oh-my-opencode-ultraslim@latest install --reset
    ```
    A `.bak` backup file will be created automatically.
 
@@ -250,7 +250,7 @@ If the installer reports that the configuration already exists, you have two opt
 
 2. From your project root, verify your config file exists and is valid:
    ```bash
-   bunx oh-my-opencode-slim@latest doctor
+   bunx oh-my-opencode-ultraslim@latest doctor
    ```
 
 3. Check that your provider is configured in `~/.config/opencode/opencode.json`
@@ -280,7 +280,7 @@ return task IDs, or delegation behaves like a blocking foreground call:
 
 4. If shell setup was missing, rerun the installer:
    ```bash
-   bunx oh-my-opencode-slim@latest install
+   bunx oh-my-opencode-ultraslim@latest install
    ```
 
 ### Authentication Issues
@@ -299,7 +299,7 @@ If providers are not working:
 
 3. Verify your config file has the correct provider configuration:
    ```bash
-   cat ~/.config/opencode/oh-my-opencode-slim.json
+   cat ~/.config/opencode/oh-my-opencode-ultraslim.json
    ```
 
 ### Editor Validation
@@ -308,7 +308,7 @@ Add a `$schema` reference to your config for autocomplete and inline validation:
 
 ```jsonc
 {
-  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
+  "$schema": "https://unpkg.com/oh-my-opencode-ultraslim@latest/oh-my-opencode-ultraslim.schema.json",
   // your config...
 }
 ```
@@ -335,11 +335,11 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 1. Remove the plugin from your OpenCode config:
 
-   Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-slim"` from the `plugin` array. If the installer enabled LSP (it only does so when no explicit `lsp` setting exists), set `"lsp": false` or remove the `"lsp"` key.
+   Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-ultraslim"` from the `plugin` array. If the installer enabled LSP (it only does so when no explicit `lsp` setting exists), set `"lsp": false` or remove the `"lsp"` key.
 
 2. Remove the TUI badge:
 
-   Edit `~/.config/opencode/tui.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
+   Edit `~/.config/opencode/tui.json` and remove `"oh-my-opencode-ultraslim"` from the `plugin` array.
 
 ### Optional Cleanup
 
@@ -358,13 +358,13 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 5. Clear the plugin cache:
    ```bash
-   rm -rf ~/.cache/opencode/packages/oh-my-opencode-slim@*
+   rm -rf ~/.cache/opencode/packages/oh-my-opencode-ultraslim@*
    ```
 
 6. Remove configuration files:
    ```bash
-   rm -f ~/.config/opencode/oh-my-opencode-slim.json
-   rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
+   rm -f ~/.config/opencode/oh-my-opencode-ultraslim.json
+   rm -f ~/.config/opencode/oh-my-opencode-ultraslim.json.bak
    ```
 
 7. Remove skills installed by the installer:
@@ -375,7 +375,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
    rm -rf ~/.config/opencode/skills/deepwork
    rm -rf ~/.config/opencode/skills/reflect
    rm -rf ~/.config/opencode/skills/worktrees
-   rm -rf ~/.config/opencode/skills/oh-my-opencode-slim
+   rm -rf ~/.config/opencode/skills/oh-my-opencode-ultraslim
    ```
 
    > **Note:** The installer manages these specific skills. If you added others manually, they won't be affected.
@@ -384,9 +384,9 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
    The companion is optional and not installed by default. If you installed it:
    ```bash
-   rm -rf ~/.local/share/opencode/storage/oh-my-opencode-slim
+   rm -rf ~/.local/share/opencode/storage/oh-my-opencode-ultraslim
    ```
 
 ### Verify
 
-Run `opencode auth status` and confirm oh-my-opencode-slim agents no longer appear.
+Run `opencode auth status` and confirm oh-my-opencode-ultraslim agents no longer appear.

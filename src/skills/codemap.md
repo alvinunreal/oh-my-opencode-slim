@@ -23,7 +23,7 @@
 | `deepwork/` | Orchestrator-only | Heavy coding sessions, multi-phase implementation, and risky refactors |
 | `reflect/` | Orchestrator-only | Learning from repeated work and suggesting reusable improvements |
 | `worktrees/` | Orchestrator-only | Safe Git worktree lanes for parallel, risky, or isolated work |
-| `oh-my-opencode-slim/` | Orchestrator-only | Plugin configuration and self-improvement guidance |
+| `oh-my-opencode-ultraslim/` | Orchestrator-only | Plugin configuration and self-improvement guidance |
 
 ### Installation Pipeline
 
@@ -58,7 +58,7 @@
   - `src/skills/deepwork/SKILL.md`
   - `src/skills/reflect/SKILL.md`
   - `src/skills/worktrees/SKILL.md`
-  - `src/skills/oh-my-opencode-slim/SKILL.md`
+  - `src/skills/oh-my-opencode-ultraslim/SKILL.md`
 - `package.json` scripts (`verify:release`, `build`) rely on these assets to ensure install-time skill availability
 
 ### Permission System

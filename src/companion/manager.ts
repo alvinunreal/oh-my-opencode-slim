@@ -57,7 +57,7 @@ export function stateFilePath(): string {
     base,
     'opencode',
     'storage',
-    'oh-my-opencode-slim',
+    'oh-my-opencode-ultraslim',
     'companion-state.json',
   );
 }
@@ -72,7 +72,7 @@ function pidFilePath(): string {
     base,
     'opencode',
     'storage',
-    'oh-my-opencode-slim',
+    'oh-my-opencode-ultraslim',
     'companion.pid',
   );
 }
@@ -148,13 +148,13 @@ function defaultBinaryPath(): string {
       : path.join(os.homedir(), '.local', 'share');
   const binaryName =
     os.platform() === 'win32'
-      ? 'oh-my-opencode-slim-companion.exe'
-      : 'oh-my-opencode-slim-companion';
+      ? 'oh-my-opencode-ultraslim-companion.exe'
+      : 'oh-my-opencode-ultraslim-companion';
   return path.join(
     base,
     'opencode',
     'storage',
-    'oh-my-opencode-slim',
+    'oh-my-opencode-ultraslim',
     'bin',
     binaryName,
   );

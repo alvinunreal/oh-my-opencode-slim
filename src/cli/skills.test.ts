@@ -27,7 +27,7 @@ describe('skills permissions', () => {
     expect(orchestratorPerms.reflect).toBe('allow');
     expect(orchestratorPerms['release-smoke-test']).toBe('allow');
     expect(orchestratorPerms.worktrees).toBe('allow');
-    expect(orchestratorPerms['oh-my-opencode-slim']).toBe('allow');
+    expect(orchestratorPerms['oh-my-opencode-ultraslim']).toBe('allow');
   });
 
   it('should honor explicit skill list overrides', () => {

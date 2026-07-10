@@ -13,7 +13,7 @@ fn log_path() -> PathBuf {
                 .join("share")
         });
     base.join("opencode").join("log").join(format!(
-        "oh-my-opencode-slim-companion.{}.log",
+        "oh-my-opencode-ultraslim-companion.{}.log",
         std::process::id()
     ))
 }

@@ -2,10 +2,10 @@
 
 Skills are specialized capabilities you can assign to agents. Unlike MCPs (which are running servers), skills are **prompt-based tool configurations** - instructions injected into an agent's system prompt that describe how to use a particular tool.
 
-Bundled skills are installed by the `oh-my-opencode-slim` installer and safely
+Bundled skills are installed by the `oh-my-opencode-ultraslim` installer and safely
 reconciled on plugin startup/auto-update. Local customizations are preserved;
 new bundled versions for customized skills are staged under
-`~/.config/opencode/.oh-my-opencode-slim/skill-updates/` for manual review.
+`~/.config/opencode/.oh-my-opencode-ultraslim/skill-updates/` for manual review.
 
 ---
 
@@ -22,7 +22,7 @@ new bundled versions for customized skills are staged under
 | [`reflect`](#reflect) | Review repeated work and suggest reusable workflow improvements | `orchestrator` |
 | [`worktrees`](#worktrees) | Safe Git worktree lane management | `orchestrator` |
 | [`release-smoke-test`](#release-smoke-test) | Packed release-candidate and bugfix smoke validation | `orchestrator` |
-| [`oh-my-opencode-slim`](#oh-my-opencode-slim) | Plugin configuration and self-improvement guidance | `orchestrator` |
+| [`oh-my-opencode-ultraslim`](#oh-my-opencode-ultraslim) | Plugin configuration and self-improvement guidance | `orchestrator` |
 
 ---
 
@@ -179,11 +179,11 @@ See **[Worktrees](worktrees.md)** for the detailed safety protocol.
 
 ---
 
-## oh-my-opencode-slim
+## oh-my-opencode-ultraslim
 
 **Configure, customize, and safely improve this plugin setup.**
 
-`oh-my-opencode-slim` is an orchestrator-only skill that teaches agents how to
+`oh-my-opencode-ultraslim` is an orchestrator-only skill that teaches agents how to
 configure the plugin itself: model presets, custom agents, agent prompts,
 `orchestratorPrompt` delegation hints, skills, MCP permissions, optional agents,
 and related OpenCode config files.
@@ -200,7 +200,7 @@ changes to take effect.
 Typical requests:
 
 ```text
-Tune my oh-my-opencode-slim models for lower cost.
+Tune my oh-my-opencode-ultraslim models for lower cost.
 Add a custom API reviewer agent.
 Make the Orchestrator more conservative about parallel writer agents.
 Help me configure MCP access for Librarian only.
@@ -242,7 +242,7 @@ skill records that limitation instead of treating it as equivalent to a clean
 
 ## Skills Assignment
 
-Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
+Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-ultraslim.json` (or `.jsonc`):
 
 | Syntax | Meaning |
 |--------|---------|

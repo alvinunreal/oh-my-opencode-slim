@@ -11,7 +11,7 @@ Switch agent model presets at runtime without restarting OpenCode using the `/pr
 
 ## How It Works
 
-1. Define named presets in `oh-my-opencode-slim.jsonc` under the `presets` field
+1. Define named presets in `oh-my-opencode-ultraslim.jsonc` under the `presets` field
 2. Run `/preset <name>` to switch. The plugin calls the OpenCode SDK's `config.update()` method, which triggers a server-side cache invalidation
 3. Agents covered by the new preset get the preset's values
 4. Agents that were in the *previous* preset but are *not* in the new one are reset to their config-file baseline values
@@ -62,7 +62,7 @@ There are two ways to activate a preset:
 
 | Method | How | Persists? |
 |--------|-----|-----------|
-| Config file | Set `"preset": "cheap"` in `oh-my-opencode-slim.jsonc` | Yes, across restarts |
+| Config file | Set `"preset": "cheap"` in `oh-my-opencode-ultraslim.jsonc` | Yes, across restarts |
 | `/preset` command | Run `/preset cheap` during a session | Across re-inits, not restarts |
 
 Runtime preset switches persist across plugin re-inits (triggered by config changes, etc.) within the same process, but revert on process restart. On restart, the plugin applies the preset from the config file. To make a runtime switch permanent, update the `"preset"` field in your config file.

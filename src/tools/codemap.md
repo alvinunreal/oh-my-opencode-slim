@@ -186,7 +186,7 @@ Tools Layer → Web Layer
 ### Configuration Integration
 
 - **ACP Agents**: Defined in `src/config/agents.ts`, consumed by `acp_run.ts`
-- **Presets**: Defined in plugin config (`oh-my-opencode-slim.jsonc`), managed by `preset-manager.ts`
+- **Presets**: Defined in plugin config (`oh-my-opencode-ultraslim.jsonc`), managed by `preset-manager.ts`
 - **Council**: Configured via council presets, validated by `council.ts`
 
 

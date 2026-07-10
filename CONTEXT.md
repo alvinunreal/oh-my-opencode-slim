@@ -49,7 +49,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Skills
 
-- **Skill** — A bundled, self-contained workflow or capability shipped with the plugin. Bundled skills: codemap, clonedeps, simplify, deepwork, reflect, worktrees, oh-my-opencode-slim, release-smoke-test. Note: `loop-engineering` exists on disk but is not registered as a bundled skill.
+- **Skill** — A bundled, self-contained workflow or capability shipped with the plugin. Bundled skills: codemap, clonedeps, simplify, deepwork, reflect, worktrees, oh-my-opencode-ultraslim, release-smoke-test. Note: `loop-engineering` exists on disk but is not registered as a bundled skill.
 
 ## Hooks
 
@@ -76,7 +76,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Config
 
-- **Plugin config** — The user-facing configuration loaded from `oh-my-opencode-slim.jsonc`.
+- **Plugin config** — The user-facing configuration loaded from `oh-my-opencode-ultraslim.jsonc`.
 - **Preset** — A named set of per-agent overrides. The same word also names council councillor lineups (see Flagged).
 - **Model entry** — A normalized model reference with an optional variant, used in fallback chains.
 - **Variant** — An optional model qualifier (e.g., a preview build) used in fallback resolution.

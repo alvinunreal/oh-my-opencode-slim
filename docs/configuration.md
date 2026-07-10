@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete reference for all configuration files and options in oh-my-opencode-slim. For repository-specific configurations, custom agents, and prompt directory lookups, see the [Project-local Customization Guide](project-local-customization.md).
+Complete reference for all configuration files and options in oh-my-opencode-ultraslim. For repository-specific configurations, custom agents, and prompt directory lookups, see the [Project-local Customization Guide](project-local-customization.md).
 
 ---
 
@@ -9,9 +9,9 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 | File | Purpose |
 |------|---------|
 | `~/.config/opencode/opencode.json` | OpenCode core settings (plugin registration, providers) |
-| `~/.config/opencode/oh-my-opencode-slim.json` | Plugin settings - agents, multiplexer, MCPs, council |
-| `~/.config/opencode/oh-my-opencode-slim.jsonc` | Same, but with JSONC (comments + trailing commas). Takes precedence over `.json` if both exist |
-| `.opencode/oh-my-opencode-slim.json` | Project-local overrides (optional, higher precedence than user config) |
+| `~/.config/opencode/oh-my-opencode-ultraslim.json` | Plugin settings - agents, multiplexer, MCPs, council |
+| `~/.config/opencode/oh-my-opencode-ultraslim.jsonc` | Same, but with JSONC (comments + trailing commas). Takes precedence over `.json` if both exist |
+| `.opencode/oh-my-opencode-ultraslim.json` | Project-local overrides (optional, higher precedence than user config) |
 
 > **💡 JSONC recommended:** Use the `.jsonc` extension to add comments and trailing commas. If both `.jsonc` and `.json` exist, `.jsonc` takes precedence.
 
@@ -19,17 +19,17 @@ Set `OPENCODE_CONFIG_DIR` to use a custom user config directory instead of
 `~/.config/opencode`; install and runtime config discovery both honor it.
 
 Set `OH_MY_OPENCODE_SLIM_DISABLE` to `1`, `true`, `yes`, or `on` to make
-oh-my-opencode-slim return during startup without registering agents, tools,
+oh-my-opencode-ultraslim return during startup without registering agents, tools,
 MCPs, hooks, Companion, or the TUI sidebar. This is a temporary escape hatch:
 
 ```bash
 OH_MY_OPENCODE_SLIM_DISABLE=1 opencode
 ```
 
-If OmO-slim detects an invalid plugin config for the current project, the TUI sidebar shows a warning. Run `oh-my-opencode-slim doctor` from your project root for full diagnostics.
+If OmO-slim detects an invalid plugin config for the current project, the TUI sidebar shows a warning. Run `oh-my-opencode-ultraslim doctor` from your project root for full diagnostics.
 
 The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
-`false` in `oh-my-opencode-slim.jsonc` to use the expanded layout:
+`false` in `oh-my-opencode-ultraslim.jsonc` to use the expanded layout:
 
 ```jsonc
 {
@@ -41,7 +41,7 @@ The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 
 ## Prompt Overriding
 
-Customize agent prompts without modifying source code. Create markdown files in `~/.config/opencode/oh-my-opencode-slim/`:
+Customize agent prompts without modifying source code. Create markdown files in `~/.config/opencode/oh-my-opencode-ultraslim/`:
 
 | File | Effect |
 |------|--------|
@@ -53,7 +53,7 @@ When a `preset` is active, the plugin checks preset directories before falling b
 **Example directory structure:**
 
 ```
-~/.config/opencode/oh-my-opencode-slim/
+~/.config/opencode/oh-my-opencode-ultraslim/
   ├── best/
   │   ├── orchestrator.md        # Preset-specific override (used when preset=best)
   │   └── explorer_append.md
@@ -169,12 +169,12 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 
 > **niri note:** `companion-v0.1.3` includes the fixed native companion release.
 > To make it open as a bottom-right overlay, add a niri rule matching its stable
-> `app-id`/title (`oh-my-opencode-slim-companion`), for example:
+> `app-id`/title (`oh-my-opencode-ultraslim-companion`), for example:
 >
 > ```kdl
 > window-rule {
->     match app-id=r"^oh-my-opencode-slim-companion$"
->     match title=r"^oh-my-opencode-slim-companion$"
+>     match app-id=r"^oh-my-opencode-ultraslim-companion$"
+>     match title=r"^oh-my-opencode-ultraslim-companion$"
 >     open-floating true
 >     open-focused false
 >     default-floating-position x=16 y=16 relative-to="bottom-right"
@@ -247,7 +247,7 @@ auto-update to a newer 1.x release, but it won't auto-install 2.x. When a newer
 major is available, the plugin shows a migration command instead.
 
 > Pinned plugin entries in `opencode.json` (for example
-> `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
+> `"oh-my-opencode-ultraslim@1.0.1"`) are the true version lock. Those stay pinned
 > regardless of `autoUpdate`.
 
 ### Background Job Management
@@ -314,7 +314,7 @@ Notes:
 
 The desktop companion app provides a visual status overlay showing running and active agents. For quick installation instructions, binary paths, config defaults, and release information, see the full **[Desktop Companion Guide](companion.md)**.
 
-Once installed, configure it in your `oh-my-opencode-slim` settings:
+Once installed, configure it in your `oh-my-opencode-ultraslim` settings:
 
 ```jsonc
 {

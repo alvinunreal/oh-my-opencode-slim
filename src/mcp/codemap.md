@@ -104,7 +104,7 @@ The system supports runtime configuration overrides:
 
 
 ```typescript
-// In user configuration (e.g., ~/.config/opencode/oh-my-opencode-slim.json)
+// In user configuration (e.g., ~/.config/opencode/oh-my-opencode-ultraslim.json)
 {
   "mcp": {
     "disabled": ["websearch"],

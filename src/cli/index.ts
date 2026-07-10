@@ -65,11 +65,11 @@ export function parseArgs(args: string[]): InstallArgs {
 
 function printHelp(): void {
   console.log(`
-oh-my-opencode-slim installer
+oh-my-opencode-ultraslim installer
 
 Usage:
-  bunx oh-my-opencode-slim install [OPTIONS]
-  bunx oh-my-opencode-slim doctor [OPTIONS]
+  bunx oh-my-opencode-ultraslim install [OPTIONS]
+  bunx oh-my-opencode-ultraslim doctor [OPTIONS]
 
 Options:
   --skills=yes|no        Install bundled skills (default: yes)
@@ -96,12 +96,12 @@ OpenAI is active unless --preset selects another generated preset.
 For the full config reference, see docs/configuration.md.
 
 Examples:
-  bunx oh-my-opencode-slim install
-  bunx oh-my-opencode-slim install --no-tui --skills=yes
-  bunx oh-my-opencode-slim install --background-subagents=yes
-  bunx oh-my-opencode-slim install --preset=opencode-go
-  bunx oh-my-opencode-slim install --reset
-  bunx oh-my-opencode-slim doctor
+  bunx oh-my-opencode-ultraslim install
+  bunx oh-my-opencode-ultraslim install --no-tui --skills=yes
+  bunx oh-my-opencode-ultraslim install --background-subagents=yes
+  bunx oh-my-opencode-ultraslim install --preset=opencode-go
+  bunx oh-my-opencode-ultraslim install --reset
+  bunx oh-my-opencode-ultraslim doctor
 `);
 }
 

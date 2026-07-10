@@ -41,7 +41,7 @@ describe('logger', () => {
     log('test message');
 
     const files = fs.readdirSync(tmpDir);
-    expect(files).toEqual(['oh-my-opencode-slim.20260416T143052.log']);
+    expect(files).toEqual(['oh-my-opencode-ultraslim.20260416T143052.log']);
   });
 
   test('writes log message with timestamp', async () => {
@@ -49,7 +49,7 @@ describe('logger', () => {
     log('timestamped message');
     await flushLoggerForTesting();
 
-    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-ultraslim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content).toMatch(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/);
     expect(content).toContain('timestamped message');
@@ -60,7 +60,7 @@ describe('logger', () => {
     log('message with data', { key: 'value', number: 42 });
     await flushLoggerForTesting();
 
-    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-ultraslim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content).toContain('"key":"value"');
     expect(content).toContain('"number":42');
@@ -71,7 +71,7 @@ describe('logger', () => {
     log('message without data');
     await flushLoggerForTesting();
 
-    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-ultraslim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content.trim()).toMatch(/message without data\s*$/);
   });
@@ -83,7 +83,7 @@ describe('logger', () => {
     log('third');
     await flushLoggerForTesting();
 
-    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-ultraslim.session1.log');
     const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n');
     expect(lines.length).toBe(3);
     expect(lines[0]).toContain('first');
@@ -100,8 +100,8 @@ describe('logger', () => {
 
     const files = fs.readdirSync(tmpDir).sort();
     expect(files).toEqual([
-      'oh-my-opencode-slim.session1.log',
-      'oh-my-opencode-slim.session2.log',
+      'oh-my-opencode-ultraslim.session1.log',
+      'oh-my-opencode-ultraslim.session2.log',
     ]);
 
     const content1 = fs.readFileSync(path.join(tmpDir, files[0]), 'utf-8');
@@ -112,7 +112,7 @@ describe('logger', () => {
   });
 
   test('cleanup deletes files older than 7 days', () => {
-    const oldFileName = 'oh-my-opencode-slim.20260301T000000.log';
+    const oldFileName = 'oh-my-opencode-ultraslim.20260301T000000.log';
     const oldPath = path.join(tmpDir, oldFileName);
     fs.writeFileSync(oldPath, 'old log\n');
 
@@ -128,7 +128,7 @@ describe('logger', () => {
   });
 
   test('cleanup preserves recent files', () => {
-    const recentFileName = 'oh-my-opencode-slim.20260415T000000.log';
+    const recentFileName = 'oh-my-opencode-ultraslim.20260415T000000.log';
     const recentPath = path.join(tmpDir, recentFileName);
     fs.writeFileSync(recentPath, 'recent log\n');
 
@@ -139,13 +139,13 @@ describe('logger', () => {
   });
 
   test('cleanup with mixed-age files deletes only old ones', () => {
-    const oldFileName = 'oh-my-opencode-slim.old.log';
+    const oldFileName = 'oh-my-opencode-ultraslim.old.log';
     const oldPath = path.join(tmpDir, oldFileName);
     fs.writeFileSync(oldPath, 'old log\n');
     const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
     fs.utimesSync(oldPath, new Date(eightDaysAgo), new Date(eightDaysAgo));
 
-    const recentFileName = 'oh-my-opencode-slim.recent.log';
+    const recentFileName = 'oh-my-opencode-ultraslim.recent.log';
     const recentPath = path.join(tmpDir, recentFileName);
     fs.writeFileSync(recentPath, 'recent log\n');
 
@@ -173,7 +173,7 @@ describe('logger', () => {
     expect(() => log('circular data', circular)).not.toThrow();
     await flushLoggerForTesting();
 
-    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-ultraslim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content).toContain('circular data');
     expect(content).toContain('[unserializable]');
@@ -208,7 +208,7 @@ describe('logger', () => {
     });
     await flushLoggerForTesting();
 
-    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const logPath = path.join(tmpDir, 'oh-my-opencode-ultraslim.session1.log');
     const content = fs.readFileSync(logPath, 'utf-8');
     expect(content).toContain('"nested":');
     expect(content).toContain('"array":[1,2,3]');

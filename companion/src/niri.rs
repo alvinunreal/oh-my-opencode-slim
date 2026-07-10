@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-const APP_ID: &str = "oh-my-opencode-slim-companion";
-const TITLE: &str = "oh-my-opencode-slim-companion";
+const APP_ID: &str = "oh-my-opencode-ultraslim-companion";
+const TITLE: &str = "oh-my-opencode-ultraslim-companion";
 const GAP: f64 = 10.0;
 
 #[derive(Debug, Deserialize)]
@@ -278,12 +278,12 @@ mod tests {
 
     const FIXTURE: &str = r#"[
       {"id":1,"pid":11,"app_id":"other","title":"x","is_floating":true,"layout":{"tile_pos_in_workspace_view":[1,2]}},
-      {"id":2,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[2424,944]}},
-      {"id":3,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":false,"layout":{"tile_pos_in_workspace_view":[0,0]}},
+      {"id":2,"pid":1234,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[2424,944]}},
+      {"id":3,"pid":1234,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":false,"layout":{"tile_pos_in_workspace_view":[0,0]}},
       {"id":4,"pid":1234,"app_id":"wrong","title":"wrong","is_floating":true,"layout":{"tile_pos_in_workspace_view":[0,0]}},
-      {"id":5,"pid":9999,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[0,0]}},
-      {"id":6,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":null},
-      {"id":7,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":null}}
+      {"id":5,"pid":9999,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[0,0]}},
+      {"id":6,"pid":1234,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":true,"layout":null},
+      {"id":7,"pid":1234,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":null}}
     ]"#;
 
     const OUTPUTS: &str = r#"{
@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn custom_position_uses_target_output() {
         let windows = r#"[
-          {"id":2,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[10,10]}}
+          {"id":2,"pid":1234,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[10,10]}}
         ]"#;
         assert_eq!(
             resolve_move_from_json(
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn large_output_deltas_are_allowed_with_derived_limit() {
         let windows = r#"[
-          {"id":2,"pid":1234,"app_id":"oh-my-opencode-slim-companion","title":"oh-my-opencode-slim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[8000,4000]}}
+          {"id":2,"pid":1234,"app_id":"oh-my-opencode-ultraslim-companion","title":"oh-my-opencode-ultraslim-companion","is_floating":true,"layout":{"tile_pos_in_workspace_view":[8000,4000]}}
         ]"#;
         let outputs = r#"{
           "big": {"logical":{"x":0,"y":0,"width":10000,"height":5000,"scale":1,"transform":"Normal"}}

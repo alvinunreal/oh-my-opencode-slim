@@ -4,7 +4,14 @@ This document provides guidelines for AI agents operating in this repository.
 
 ## Project Overview
 
-**oh-my-opencode-slim** - A lightweight agent orchestration plugin for OpenCode, a slimmed-down fork of oh-my-opencode. Built with TypeScript, Bun, and Biome.
+**oh-my-opencode-ultraslim** - An agent orchestration plugin for OpenCode with a dispatcher-first philosophy. The Orchestrator is a pure dispatcher (no planning/coding/reviewing), Oracle is the planner/architecture advisor, and Fixer is a pure executor (no tests). Built with TypeScript, Bun, and Biome.
+
+### Orchestration Philosophy
+- **Orchestrator**: Pure dispatcher only - delegates, validates, reconciles, escalates
+- **Oracle**: Planner + architecture advisor - creates structured plans for complex work
+- **Fixer**: Pure executor - implements concrete instructions without testing or decisions
+- **5-Phase Workflow**: Parse → Plan (Oracle) → Dispatch → Verify → Reconcile
+- **Three-Strike Escalation**: 3 Fixer failures → Oracle root cause analysis
 
 ## Commands
 
@@ -63,7 +70,7 @@ bun test -t "test-name-pattern"
 ## Project Structure
 
 ```
-oh-my-opencode-slim/
+oh-my-opencode-ultraslim/
 ├── src/
 │   ├── agents/       # Agent factories (orchestrator, explorer, oracle, etc.)
 │   ├── cli/          # CLI entry point
@@ -156,7 +163,7 @@ After making changes to session management:
 bun run build
 
 # 2. Run from local fork (in ~/.config/opencode/opencode.jsonc):
-# "plugin": ["file:///path/to/oh-my-opencode-slim"]
+# "plugin": ["file:///path/to/oh-my-opencode-ultraslim"]
 
 # 3. Launch test tasks
 @explorer count files in src/
@@ -274,7 +281,7 @@ Windows: Press WIN+R and paste %USERPROFILE%\.local\share\opencode\log
 Log files are named with timestamps (e.g., 2025-01-09T123456.log) and the most recent 10 log files are kept.
 You can set the log level with the --log-level command-line option to get more detailed debug information. For example, opencode --log-level DEBUG.
 ### Plugin
-~/.local/share/opencode/log/oh-my-opencode-slim.<timestamp>.log
+~/.local/share/opencode/log/oh-my-opencode-ultraslim.<timestamp>.log
 
 ## Cloned Dependency Source
 

@@ -1,11 +1,11 @@
 ---
 name: release-smoke-test
-description: Test an oh-my-opencode-slim release candidate or bugfix before publishing. Use when validating a packed plugin artifact, release branch, crash fix, OpenCode runtime compatibility, or model-specific smoke test such as OpenCode 1.17.11 message transform regressions.
+description: Test an oh-my-opencode-ultraslim release candidate or bugfix before publishing. Use when validating a packed plugin artifact, release branch, crash fix, OpenCode runtime compatibility, or model-specific smoke test such as OpenCode 1.17.11 message transform regressions.
 ---
 
 # Release Smoke Test
 
-Use this skill to validate an `oh-my-opencode-slim` release candidate before
+Use this skill to validate an `oh-my-opencode-ultraslim` release candidate before
 public npm publish. Test the packed artifact, not `@latest` and not the source
 tree.
 
@@ -15,7 +15,7 @@ tree.
 2. Build and pack the candidate.
 3. Install the tarball into a throwaway app.
 4. Create an isolated OpenCode config pointing at the installed
-   `node_modules/oh-my-opencode-slim/dist/index.js`.
+   `node_modules/oh-my-opencode-ultraslim/dist/index.js`.
 5. Run `opencode debug config` and verify `plugin_origins` contains only the
    intended plugin when doing an isolation smoke.
 6. Run non-pure `opencode run --print-logs --log-level DEBUG`.
@@ -29,7 +29,7 @@ Use a temp directory so release validation never depends on the local package
 cache.
 
 ```bash
-SMOKE=/tmp/oh-my-opencode-slim-release-smoke
+SMOKE=/tmp/oh-my-opencode-ultraslim-release-smoke
 rm -rf "$SMOKE"
 mkdir -p "$SMOKE/pkg" "$SMOKE/app" "$SMOKE/home" "$SMOKE/xdg/opencode" "$SMOKE/run"
 
@@ -42,8 +42,8 @@ Install the tarball:
 ```bash
 cd "$SMOKE/app"
 bun init -y
-bun add "$SMOKE/pkg"/oh-my-opencode-slim-*.tgz
-node -p "require('./node_modules/oh-my-opencode-slim/package.json').version"
+bun add "$SMOKE/pkg"/oh-my-opencode-ultraslim-*.tgz
+node -p "require('./node_modules/oh-my-opencode-ultraslim/package.json').version"
 ```
 
 ## Isolated Config
@@ -55,7 +55,7 @@ cat > "$SMOKE/xdg/opencode/opencode.json" <<EOF
 {
   "model": "opencode/deepseek-v4-flash-free",
   "plugin": [
-    "file://$SMOKE/app/node_modules/oh-my-opencode-slim/dist/index.js"
+    "file://$SMOKE/app/node_modules/oh-my-opencode-ultraslim/dist/index.js"
   ],
   "agent": {
     "orchestrator": {
@@ -121,7 +121,7 @@ cat > "$SMOKE/config/opencode.json" <<EOF
 {
   "model": "openai/gpt-5.6-fast",
   "plugin": [
-    "file://$SMOKE/app/node_modules/oh-my-opencode-slim/dist/index.js"
+    "file://$SMOKE/app/node_modules/oh-my-opencode-ultraslim/dist/index.js"
   ],
   "agent": {
     "orchestrator": {

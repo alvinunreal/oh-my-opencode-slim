@@ -3,9 +3,13 @@ import { CUSTOM_SKILLS } from './custom-skills';
 import type { InstallConfig } from './types';
 
 const SCHEMA_URL =
-  'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json';
+  'https://unpkg.com/oh-my-opencode-ultraslim@latest/oh-my-opencode-ultraslim.schema.json';
 
-export const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
+export const GENERATED_PRESETS = [
+  'openai',
+  'opencode-go',
+  'ultraslim',
+] as const;
 
 // Model mappings by provider/preset.
 export const MODEL_MAPPINGS = {
@@ -53,6 +57,15 @@ export const MODEL_MAPPINGS = {
     fixer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
     observer: { model: 'opencode-go/kimi-k2.6' },
   },
+  ultraslim: {
+    orchestrator: { model: 'opencode-go/glm-5.2' },
+    oracle: { model: 'opencode-go/qwen3.7-max', variant: 'max' },
+    librarian: { model: 'opencode-go/deepseek-v4-flash' },
+    explorer: { model: 'opencode-go/deepseek-v4-flash' },
+    designer: { model: 'opencode-go/kimi-k2.7-code', variant: 'medium' },
+    fixer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
+    observer: { model: 'opencode-go/kimi-k2.6' },
+  },
 } as const;
 
 export type PresetName = keyof typeof MODEL_MAPPINGS;
@@ -92,7 +105,7 @@ export function generateLiteConfig(
     presets: {},
   };
 
-  if (preset === 'opencode-go') {
+  if (preset === 'opencode-go' || preset === 'ultraslim') {
     config.disabled_agents = [];
   }
 

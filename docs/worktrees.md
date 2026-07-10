@@ -98,21 +98,21 @@ A local metadata registry mapping active worktree lanes.
 Managed `.gitignore` block:
 
 ```gitignore
-# BEGIN oh-my-opencode-slim worktrees
+# BEGIN oh-my-opencode-ultraslim worktrees
 .slim/worktrees/
 .slim/worktrees.json
-# END oh-my-opencode-slim worktrees
+# END oh-my-opencode-ultraslim worktrees
 ```
 
 Managed `.ignore` block:
 
 ```ignore
-# BEGIN oh-my-opencode-slim worktrees
+# BEGIN oh-my-opencode-ultraslim worktrees
 !.slim/
 !.slim/worktrees.json
 !.slim/worktrees/
 !.slim/worktrees/**
-# END oh-my-opencode-slim worktrees
+# END oh-my-opencode-ultraslim worktrees
 ```
 
 ---
