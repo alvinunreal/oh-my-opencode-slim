@@ -101,7 +101,7 @@ describe('createPresetManager', () => {
             orchestrator: { model: 'anthropic/claude-3.5-haiku' },
           },
           powerful: {
-            orchestrator: { model: 'openai/gpt-5.5' },
+            orchestrator: { model: 'openai/gpt-5.6' },
           },
         },
       };
@@ -125,7 +125,7 @@ describe('createPresetManager', () => {
         preset: 'cheap',
         presets: {
           cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
-          powerful: { orchestrator: { model: 'openai/gpt-5.5' } },
+          powerful: { orchestrator: { model: 'openai/gpt-5.6' } },
         },
       };
       const manager = createPresetManager(ctx, config);
@@ -161,7 +161,7 @@ describe('createPresetManager', () => {
         presets: {
           cheap: {
             orchestrator: { model: 'anthropic/claude-3.5-haiku' },
-            explorer: { model: 'openai/gpt-5.4-mini' },
+            explorer: { model: 'openai/gpt-5.6-luna' },
           },
         },
       };
@@ -187,8 +187,8 @@ describe('createPresetManager', () => {
     test('updates the TUI snapshot after a successful preset switch', async () => {
       recordTuiAgentModels({
         agentModels: {
-          explorer: 'openai/gpt-5.4-mini',
-          fixer: 'openai/gpt-5.4-mini',
+          explorer: 'openai/gpt-5.6-luna',
+          fixer: 'openai/gpt-5.6-luna',
         },
       });
 
@@ -197,7 +197,7 @@ describe('createPresetManager', () => {
         presets: {
           cheap: {
             orchestrator: { model: 'anthropic/claude-3.5-haiku' },
-            explorer: { model: 'openai/gpt-5.5' },
+            explorer: { model: 'openai/gpt-5.6' },
           },
         },
       };
@@ -210,8 +210,8 @@ describe('createPresetManager', () => {
       );
 
       expect(readTuiSnapshot().agentModels).toEqual({
-        explorer: 'openai/gpt-5.5',
-        fixer: 'openai/gpt-5.4-mini',
+        explorer: 'openai/gpt-5.6',
+        fixer: 'openai/gpt-5.6-luna',
         orchestrator: 'anthropic/claude-3.5-haiku',
       });
     });
@@ -356,7 +356,7 @@ describe('createPresetManager', () => {
       setActiveRuntimePreset('cheap');
       recordTuiAgentModels({
         agentModels: {
-          explorer: 'openai/gpt-5.4-mini',
+          explorer: 'openai/gpt-5.6-luna',
         },
       });
 
@@ -527,7 +527,7 @@ describe('createPresetManager', () => {
         presets: {
           fallback: {
             orchestrator: {
-              model: ['anthropic/claude-3.5-haiku', 'openai/gpt-5.5'],
+              model: ['anthropic/claude-3.5-haiku', 'openai/gpt-5.6'],
             },
           },
         },
@@ -609,7 +609,7 @@ describe('createPresetManager', () => {
       const config: PluginConfig = {
         presets: {
           cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
-          powerful: { orchestrator: { model: 'openai/gpt-5.5' } },
+          powerful: { orchestrator: { model: 'openai/gpt-5.6' } },
         },
       };
       const manager = createPresetManager(ctx, config);

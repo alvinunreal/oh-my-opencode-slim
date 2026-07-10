@@ -12,12 +12,12 @@ Codex Plus covers the OpenAI models and Copilot covers the design models, so you
 {
     "preset": "thirtydollars",
     "presets": {
-      "thirtydollars": { "orchestrator": { "model": "openai/gpt-5.5", "variant": "medium", "skills": [ "*" ], "mcps": [ "*", "websearch"] },
-        "oracle": { "model": "openai/gpt-5.5", "variant": "high", "skills": [], "mcps": [] },
-        "librarian": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [ "websearch", "context7", "gh_grep" ] },
-        "explorer": { "model": "openai/gpt-5.4-mini", "variant": "low", "skills": [], "mcps": [] },
+      "thirtydollars": { "orchestrator": { "model": "openai/gpt-5.6-terra", "variant": "medium", "skills": [ "*" ], "mcps": [ "*", "websearch"] },
+        "oracle": { "model": "openai/gpt-5.6-sol", "variant": "high", "skills": [], "mcps": [] },
+        "librarian": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": [ "websearch", "context7", "gh_grep" ] },
+        "explorer": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": [] },
         "designer": { "model": "github-copilot/gemini-3.5-flash", "skills": [], "mcps": [] },
-        "fixer": { "model": "openai/gpt-5.5", "variant": "low", "skills": [], "mcps": [] }
+        "fixer": { "model": "openai/gpt-5.6-luna", "variant": "medium", "skills": [], "mcps": [] }
       }
     }
   }

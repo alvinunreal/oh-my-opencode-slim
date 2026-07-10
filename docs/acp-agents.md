@@ -33,7 +33,7 @@ project-local `.opencode/oh-my-opencode-slim.jsonc` file:
       "command": "claude-code-acp",
       "args": [],
       "description": "Claude Code subscription agent for deep research",
-      "wrapperModel": "openai/gpt-5.4-mini",
+      "wrapperModel": "openai/gpt-5.6-luna",
       "permissionMode": "ask",
       "timeoutMs": 300000
     },

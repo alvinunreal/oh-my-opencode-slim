@@ -26,8 +26,8 @@ describe('tui sidebar agents', () => {
     const agentNames = getSidebarAgentNames(
       createSnapshot({
         agentModels: {
-          explorer: 'openai/gpt-5.4-mini',
-          fixer: 'openai/gpt-5.4-mini',
+          explorer: 'openai/gpt-5.6-luna',
+          fixer: 'openai/gpt-5.6-luna',
         },
       }),
     );
@@ -50,9 +50,9 @@ describe('tui sidebar agents', () => {
 
 describe('splitSidebarModelId', () => {
   test('splits provider from model at the first slash', () => {
-    expect(splitSidebarModelId('openai/gpt-5.5-fast')).toEqual({
+    expect(splitSidebarModelId('openai/gpt-5.6-fast')).toEqual({
       provider: 'openai',
-      model: 'gpt-5.5-fast',
+      model: 'gpt-5.6-fast',
     });
     expect(
       splitSidebarModelId(

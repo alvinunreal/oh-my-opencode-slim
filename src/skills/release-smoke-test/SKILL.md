@@ -119,13 +119,13 @@ tarball install.
 mkdir -p "$SMOKE/config"
 cat > "$SMOKE/config/opencode.json" <<EOF
 {
-  "model": "openai/gpt-5.5-fast",
+  "model": "openai/gpt-5.6-fast",
   "plugin": [
     "file://$SMOKE/app/node_modules/oh-my-opencode-slim/dist/index.js"
   ],
   "agent": {
     "orchestrator": {
-      "model": "openai/gpt-5.5-fast"
+      "model": "openai/gpt-5.6-fast"
     }
   }
 }

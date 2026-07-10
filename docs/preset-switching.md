@@ -24,11 +24,11 @@ Switch agent model presets at runtime without restarting OpenCode using the `/pr
   "presets": {
     "cheap": {
       "orchestrator": { "model": "anthropic/claude-3.5-haiku" },
-      "explorer": { "model": "openai/gpt-5.4-mini" },
+      "explorer": { "model": "openai/gpt-5.6-luna" },
       "oracle": { "model": "anthropic/claude-sonnet-4-6" }
     },
     "powerful": {
-      "orchestrator": { "model": "openai/gpt-5.5" },
+      "orchestrator": { "model": "openai/gpt-5.6" },
       "oracle": { "model": "anthropic/claude-opus-4-6" },
       "librarian": { "model": "anthropic/claude-sonnet-4-6" }
     },
@@ -77,10 +77,10 @@ Runtime preset switches persist across plugin re-inits (triggered by config chan
 Available presets:
   cheap ← active
     orchestrator → anthropic/claude-3.5-haiku
-    explorer → openai/gpt-5.4-mini
+    explorer → openai/gpt-5.6-luna
     oracle → anthropic/claude-sonnet-4-6
   powerful
-    orchestrator → openai/gpt-5.5
+    orchestrator → openai/gpt-5.6
     oracle → anthropic/claude-opus-4-6
 
 Usage: /preset <name> to switch.
@@ -92,7 +92,7 @@ Usage: /preset <name> to switch.
 
 ```
 Switched to preset "powerful":
-orchestrator → model: openai/gpt-5.5
+orchestrator → model: openai/gpt-5.6
 oracle → model: anthropic/claude-opus-4-6
 Reset to baseline: explorer
 ```

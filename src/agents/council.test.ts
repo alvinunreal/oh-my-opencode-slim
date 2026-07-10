@@ -15,7 +15,7 @@ describe('formatCouncillorResults', () => {
       },
       {
         name: 'beta',
-        model: 'openai/gpt-5.5',
+        model: 'openai/gpt-5.6',
         status: 'completed',
         result:
           'Consider Fastify for better performance and built-in type validation.',
@@ -30,7 +30,7 @@ describe('formatCouncillorResults', () => {
     expect(formatted).toContain('**Original Prompt**:');
     expect(formatted).toContain(originalPrompt);
     expect(formatted).toContain('**alpha** (claude-opus-4-6):');
-    expect(formatted).toContain('**beta** (gpt-5.5):');
+    expect(formatted).toContain('**beta** (gpt-5.6):');
     expect(formatted).toContain(
       'Use Express.js with TypeScript interfaces for type safety.',
     );
@@ -57,7 +57,7 @@ describe('formatCouncillorResults', () => {
       },
       {
         name: 'beta',
-        model: 'openai/gpt-5.5',
+        model: 'openai/gpt-5.6',
         status: 'timed_out',
         error: 'Request timed out after 180000ms',
       },
@@ -86,7 +86,7 @@ describe('formatCouncillorResults', () => {
     expect(formatted).toContain(
       '**gamma**: failed - Provider returned empty response',
     );
-    expect(formatted).not.toContain('**beta** (gpt-5.5):');
+    expect(formatted).not.toContain('**beta** (gpt-5.6):');
     expect(formatted).not.toContain('**gamma** (gemini-pro):');
   });
 
@@ -100,7 +100,7 @@ describe('formatCouncillorResults', () => {
       },
       {
         name: 'beta',
-        model: 'openai/gpt-5.5',
+        model: 'openai/gpt-5.6',
         status: 'error',
         error: 'Provider error',
       },
@@ -116,7 +116,7 @@ describe('formatCouncillorResults', () => {
     expect(formatted).toContain('**Councillor Responses**:');
     expect(formatted).toContain('All councillors failed to produce output:');
     expect(formatted).toContain('**alpha** (claude-opus-4-6):');
-    expect(formatted).toContain('**beta** (gpt-5.5):');
+    expect(formatted).toContain('**beta** (gpt-5.6):');
     expect(formatted).toContain('Request timed out');
     expect(formatted).toContain('Provider error');
   });
@@ -131,7 +131,7 @@ describe('formatCouncillorResults', () => {
       },
       {
         name: 'beta',
-        model: 'openai/gpt-5.5',
+        model: 'openai/gpt-5.6',
         status: 'completed',
         result: 'Another valid response',
       },
@@ -144,7 +144,7 @@ describe('formatCouncillorResults', () => {
 
     expect(formatted).toContain('**alpha** (claude-opus-4-6):');
     expect(formatted).toContain('Valid response');
-    expect(formatted).toContain('**beta** (gpt-5.5):');
+    expect(formatted).toContain('**beta** (gpt-5.6):');
     expect(formatted).toContain('Another valid response');
     expect(formatted).toContain('review each councillor response individually');
   });

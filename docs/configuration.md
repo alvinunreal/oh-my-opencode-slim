@@ -85,8 +85,8 @@ All config files support **JSONC** (JSON with Comments):
   /* Agent model mappings */
   "presets": {
     "openai": {
-      "oracle": { "model": "openai/gpt-5.5" },
-      "explorer": { "model": "openai/gpt-5.4-mini" },
+      "oracle": { "model": "openai/gpt-5.6-sol" },
+      "explorer": { "model": "openai/gpt-5.6-luna" },
     },
   },
 
@@ -199,7 +199,7 @@ and troubleshooting.
       "command": "claude-code-acp",
       "args": [],
       "description": "Claude Code subscription agent for deep research",
-      "wrapperModel": "openai/gpt-5.4-mini",
+      "wrapperModel": "openai/gpt-5.6-luna",
       "permissionMode": "ask",
       "timeoutMs": 300000
     },
@@ -296,7 +296,7 @@ teaches the orchestrator exactly when to delegate to it.
 {
   "agents": {
     "janitor": {
-      "model": "github-copilot/gpt-5.5",
+      "model": "github-copilot/gpt-5.6",
       "prompt": "You are Janitor. Audit codebase entropy, dead code, docs drift, naming inconsistencies, and unnecessary complexity. Prefer analysis and plans over direct edits.",
       "orchestratorPrompt": "@janitor\n- Role: Maintenance specialist for codebase cleanup and entropy reduction\n- **Delegate when:** after large refactors • cleanup/technical-debt review • dead code or docs drift is suspected\n- **Don't delegate when:** feature implementation • urgent debugging • UI/UX work"
     }

@@ -14,7 +14,7 @@ const ModelIdSchema = z
   .string()
   .regex(
     /^[^/\s]+\/[^\s]+$/,
-    'Expected provider/model format (e.g. "openai/gpt-5.4-mini")',
+    'Expected provider/model format (e.g. "openai/gpt-5.6-luna")',
   );
 
 const CouncillorModelEntrySchema = z.object({
@@ -33,7 +33,7 @@ const CouncillorModelSchema = z
     z.array(z.union([ModelIdSchema, CouncillorModelEntrySchema])).min(1),
   ])
   .describe(
-    'Model ID in provider/model format (e.g. "openai/gpt-5.4-mini"), or an ' +
+    'Model ID in provider/model format (e.g. "openai/gpt-5.6-luna"), or an ' +
       'ordered fallback chain (array of model IDs or { id, variant } entries) ' +
       'tried in order until one responds.',
   );
@@ -153,7 +153,7 @@ export const CouncillorExecutionModeSchema = z
  *   "council": {
  *     "presets": {
  *       "default": {
- *         "alpha": { "model": "openai/gpt-5.4-mini" },
+ *         "alpha": { "model": "openai/gpt-5.6-luna" },
  *         "beta":  { "model": "openai/gpt-5.3-codex" },
  *         "gamma": { "model": "google/gemini-3-pro" }
  *       }

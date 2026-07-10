@@ -122,13 +122,13 @@ Edit the active preset under `presets.<preset>.<agent>`:
   "presets": {
     "openai": {
       "orchestrator": {
-        "model": "openai/gpt-5.5",
+        "model": "openai/gpt-5.6-terra",
         "variant": "high",
         "skills": ["*"],
         "mcps": ["*", "!context7"]
       },
       "librarian": {
-        "model": "openai/gpt-5.4-mini",
+        "model": "openai/gpt-5.6-luna",
         "variant": "low",
         "skills": [],
         "mcps": ["websearch", "context7", "gh_grep"]
@@ -233,7 +233,7 @@ Use this shape as a starting point:
 {
   "agents": {
     "api-reviewer": {
-      "model": "openai/gpt-5.5",
+      "model": "openai/gpt-5.6",
       "variant": "high",
       "prompt": "You review API design, compatibility, error semantics, and migration risk. Return concise findings with file references.",
       "orchestratorPrompt": "Delegate to @api-reviewer for API contract changes, public SDK changes, backwards-compatibility questions, or migration-risk review. Do not use it for routine implementation.",

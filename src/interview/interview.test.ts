@@ -844,7 +844,7 @@ describe('interview service', () => {
             info: {
               sessionID,
               providerID: 'openai',
-              modelID: 'gpt-5.4-mini',
+              modelID: 'gpt-5.6-luna',
             },
           },
         },
@@ -856,7 +856,7 @@ describe('interview service', () => {
       const call = ctx.client.session.promptAsync.mock.calls[0]?.[0];
       expect(call.body.model).toEqual({
         providerID: 'openai',
-        modelID: 'gpt-5.4-mini',
+        modelID: 'gpt-5.6-luna',
       });
 
       await fs.rm(tempDir, { recursive: true, force: true });

@@ -31,8 +31,8 @@ describe('tui-state persistence', () => {
   test('persists enabled agent models', () => {
     recordTuiAgentModels({
       agentModels: {
-        explorer: 'openai/gpt-5.4-mini',
-        fixer: 'openai/gpt-5.4-mini',
+        explorer: 'openai/gpt-5.6-luna',
+        fixer: 'openai/gpt-5.6-luna',
       },
       agentVariants: {
         explorer: 'low',
@@ -43,8 +43,8 @@ describe('tui-state persistence', () => {
     const snapshot = readTuiSnapshot();
 
     expect(snapshot.agentModels).toEqual({
-      explorer: 'openai/gpt-5.4-mini',
-      fixer: 'openai/gpt-5.4-mini',
+      explorer: 'openai/gpt-5.6-luna',
+      fixer: 'openai/gpt-5.6-luna',
     });
     expect(snapshot.agentVariants).toEqual({
       explorer: 'low',
@@ -56,18 +56,18 @@ describe('tui-state persistence', () => {
     recordTuiAgentModels({
       agentModels: {
         orchestrator: 'default',
-        explorer: 'openai/gpt-5.4-mini',
+        explorer: 'openai/gpt-5.6-luna',
       },
     });
 
     recordTuiAgentModel({
       agentName: 'orchestrator',
-      model: 'openai/gpt-5.5',
+      model: 'openai/gpt-5.6',
     });
 
     expect(readTuiSnapshot().agentModels).toEqual({
-      orchestrator: 'openai/gpt-5.5',
-      explorer: 'openai/gpt-5.4-mini',
+      orchestrator: 'openai/gpt-5.6',
+      explorer: 'openai/gpt-5.6-luna',
     });
   });
 
@@ -75,7 +75,7 @@ describe('tui-state persistence', () => {
     recordTuiAgentModels({
       agentModels: {
         orchestrator: 'default',
-        explorer: 'openai/gpt-5.4-mini',
+        explorer: 'openai/gpt-5.6-luna',
       },
       agentVariants: {
         explorer: 'low',
@@ -84,7 +84,7 @@ describe('tui-state persistence', () => {
 
     recordTuiAgentModel({
       agentName: 'orchestrator',
-      model: 'openai/gpt-5.5',
+      model: 'openai/gpt-5.6',
       variant: 'high',
     });
 
@@ -108,7 +108,7 @@ describe('tui-state persistence', () => {
       JSON.stringify({
         version: 1,
         updatedAt: Date.now(),
-        agentModels: { explorer: 'openai/gpt-5.4-mini' },
+        agentModels: { explorer: 'openai/gpt-5.6-luna' },
         configInvalid: true,
         configInvalidByProject: { old: true },
       }),
@@ -116,7 +116,7 @@ describe('tui-state persistence', () => {
 
     const snapshot = readTuiSnapshot();
     expect(snapshot.agentModels).toEqual({
-      explorer: 'openai/gpt-5.4-mini',
+      explorer: 'openai/gpt-5.6-luna',
     });
     expect(snapshot.agentVariants).toEqual({});
   });

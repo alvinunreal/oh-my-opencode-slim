@@ -96,7 +96,7 @@ describe('loadPluginConfig', () => {
       JSON.stringify({
         agents: {
           oracle: {
-            model: 'openai/gpt-5.5',
+            model: 'openai/gpt-5.6',
             prompt: 'This is now allowed for built-in agents.',
           },
         },
@@ -113,7 +113,7 @@ describe('loadPluginConfig', () => {
       JSON.stringify({
         agents: {
           orchestrator: {
-            model: 'openai/gpt-5.5',
+            model: 'openai/gpt-5.6',
             orchestratorPrompt: 'This must be rejected.',
           },
         },
@@ -789,7 +789,7 @@ describe('preset resolution', () => {
         presets: {
           openai: {
             oracle: {
-              model: 'openai/gpt-5.5',
+              model: 'openai/gpt-5.6',
               options: { textVerbosity: 'low' },
             },
           },
@@ -803,7 +803,7 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.5');
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.6');
     // deepMerge should combine both option keys
     expect(config.agents?.oracle?.options).toEqual({
       textVerbosity: 'low',
@@ -850,7 +850,7 @@ describe('preset resolution', () => {
         presets: {
           concise: {
             oracle: {
-              model: 'openai/gpt-5.5',
+              model: 'openai/gpt-5.6',
               options: { textVerbosity: 'low' },
             },
           },
@@ -864,7 +864,7 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.5');
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.6');
     // root wins over preset for same key
     expect(config.agents?.oracle?.options).toEqual({
       textVerbosity: 'high',

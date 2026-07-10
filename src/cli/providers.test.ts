@@ -34,10 +34,10 @@ describe('providers', () => {
     );
     const agents = (config.presets as any).openai;
     expect(agents).toBeDefined();
-    expect(agents.orchestrator.model).toBe('openai/gpt-5.5');
+    expect(agents.orchestrator.model).toBe('openai/gpt-5.6-terra');
     expect(agents.orchestrator.variant).toBe('medium');
-    expect(agents.fixer.model).toBe('openai/gpt-5.5');
-    expect(agents.fixer.variant).toBe('low');
+    expect(agents.fixer.model).toBe('openai/gpt-5.6-luna');
+    expect(agents.fixer.variant).toBe('medium');
   });
 
   test('generateLiteConfig uses correct OpenAI models', () => {
@@ -52,13 +52,13 @@ describe('providers', () => {
     expect(agents.orchestrator.model).toBe(
       MODEL_MAPPINGS.openai.orchestrator.model,
     );
-    expect(agents.oracle.model).toBe('openai/gpt-5.5');
+    expect(agents.oracle.model).toBe('openai/gpt-5.6-sol');
     expect(agents.oracle.variant).toBe('high');
-    expect(agents.librarian.model).toBe('openai/gpt-5.4-mini');
+    expect(agents.librarian.model).toBe('openai/gpt-5.6-luna');
     expect(agents.librarian.variant).toBe('low');
-    expect(agents.explorer.model).toBe('openai/gpt-5.4-mini');
+    expect(agents.explorer.model).toBe('openai/gpt-5.6-luna');
     expect(agents.explorer.variant).toBe('low');
-    expect(agents.designer.model).toBe('openai/gpt-5.4-mini');
+    expect(agents.designer.model).toBe('openai/gpt-5.6-luna');
     expect(agents.designer.variant).toBe('medium');
   });
 

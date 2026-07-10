@@ -907,7 +907,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       client,
-      { orchestrator: ['openai/gpt-5.4', 'new-api/glm-5.2'] },
+      { orchestrator: ['openai/gpt-5.6', 'new-api/glm-5.2'] },
       true,
     );
 
@@ -918,13 +918,13 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
           sessionID: 'compaction-sess',
           agent: 'compaction', // NOT a known omos built-in agent
           providerID: 'openai',
-          modelID: 'gpt-5.4',
+          modelID: 'gpt-5.6',
           error: { message: 'rate limit exceeded' },
         },
       },
     });
 
-    // compaction's model (openai/gpt-5.4) matches orchestrator's chain
+    // compaction's model (openai/gpt-5.6) matches orchestrator's chain
     // → should fall back to the next untried model in that chain
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     const call = mocks.promptAsync.mock.calls[0] as [

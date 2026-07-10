@@ -597,7 +597,7 @@ describe('config-io', () => {
           dev: {
             orchestrator: {
               model: [
-                'openai/gpt-5.4-mini',
+                'openai/gpt-5.6-luna',
                 { id: 'anthropic/claude-opus-4-6' },
               ],
             },

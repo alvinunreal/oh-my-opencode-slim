@@ -19,7 +19,7 @@ This is the exact configuration the author runs day-to-day.
   "presets": {
     "openai": {
       "orchestrator": {
-        "model": "openai/gpt-5.5-fast",
+        "model": "openai/gpt-5.6-fast",
         "skills": [
           "*",
           "!make-interfaces-feel-better"
@@ -32,7 +32,7 @@ This is the exact configuration the author runs day-to-day.
         ]
       },
       "oracle": {
-        "model": "openai/gpt-5.5-fast",
+        "model": "openai/gpt-5.6-fast",
         "variant": "high",
         "skills": [
           "ce-brainstorm",

@@ -6,9 +6,9 @@ describe('custom-agent creation', () => {
   test('infers custom agents from unknown keys', () => {
     const config: PluginConfig = {
       agents: {
-        explorer: { model: 'openai/gpt-5.4-mini' },
+        explorer: { model: 'openai/gpt-5.6-luna' },
         reviewer: {
-          model: 'openai/gpt-5.5',
+          model: 'openai/gpt-5.6',
           prompt: 'You are the custom reviewer agent.',
         },
       },
@@ -21,7 +21,7 @@ describe('custom-agent creation', () => {
 
     const customAgent = agents.find((agent) => agent.name === 'reviewer');
     expect(customAgent).toBeDefined();
-    expect(customAgent?.config.model).toBe('openai/gpt-5.5');
+    expect(customAgent?.config.model).toBe('openai/gpt-5.6');
     expect(customAgent?.config.prompt).toBe(
       'You are the custom reviewer agent.',
     );
@@ -31,7 +31,7 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         'test-auditor': {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.6-luna',
           prompt: 'You are a custom subagent for auditing.',
           orchestratorPrompt:
             '@test-auditor\n- Role: Compliance audit specialist',
@@ -83,7 +83,7 @@ describe('custom-agent creation', () => {
       disabled_agents: ['test-auditor', 'designer'],
       agents: {
         'test-auditor': {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.6-luna',
           prompt: 'You are a disabled custom agent.',
         },
       },
@@ -101,7 +101,7 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         'unsafe/name': {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.6-luna',
         },
       },
     };
@@ -113,7 +113,7 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         janitor: {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.6-luna',
           orchestratorPrompt: '@cleanup\n- Role: Cleanup specialist',
         },
       },
@@ -136,7 +136,7 @@ describe('custom-agent creation', () => {
           timeoutMs: 0,
           permissionMode: 'ask',
           description: 'Claude Code research via ACP',
-          wrapperModel: 'openai/gpt-5.4-mini',
+          wrapperModel: 'openai/gpt-5.6-luna',
         },
       },
     };
@@ -147,7 +147,7 @@ describe('custom-agent creation', () => {
 
     expect(wrapper).toBeDefined();
     expect(wrapper?.description).toBe('Claude Code research via ACP');
-    expect(wrapper?.config.model).toBe('openai/gpt-5.4-mini');
+    expect(wrapper?.config.model).toBe('openai/gpt-5.6-luna');
     expect(wrapper?.config.prompt).toContain('acp_run');
     expect(orchestrator?.config.prompt).toContain('@claude-research');
   });
@@ -217,7 +217,7 @@ describe('custom-agent creation', () => {
   test('rejects acpAgents that conflict with custom agents', () => {
     const config: PluginConfig = {
       agents: {
-        bridge: { model: 'openai/gpt-5.4-mini' },
+        bridge: { model: 'openai/gpt-5.6-luna' },
       },
       acpAgents: {
         bridge: {
@@ -257,11 +257,11 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         explorer: {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.6-luna',
           displayName: 'fancy-explorer',
         },
         janitor: {
-          model: 'openai/gpt-5.5',
+          model: 'openai/gpt-5.6',
           orchestratorPrompt:
             'Please use @janitor to clean up after @explorer has completed.',
         },
@@ -314,7 +314,7 @@ describe('custom-agent creation', () => {
     const configOnlyAcp: PluginConfig = {
       agents: {
         explorer: {
-          model: 'openai/gpt-5.4-mini',
+          model: 'openai/gpt-5.6-luna',
           displayName: 'fancy-explorer',
         },
       },
