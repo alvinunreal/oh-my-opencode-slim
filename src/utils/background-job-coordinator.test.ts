@@ -24,37 +24,7 @@ describe('BackgroundJobCoordinator', () => {
     expect(coordinator.deferIfRunning('ses_123')).toBe(true);
   });
 
-  test('retryDeferredClose returns false when not in deferred set', () => {
-    const board = createMockBoard(false);
-    const coordinator = new BackgroundJobCoordinator(board);
-    expect(coordinator.retryDeferredClose('ses_123')).toBe(false);
-  });
-
-  test('retryDeferredClose returns true after job completes', () => {
-    const board = createMockBoard(true);
-    const coordinator = new BackgroundJobCoordinator(board);
-
-    // First call defers (job running)
-    expect(coordinator.deferIfRunning('ses_123')).toBe(false);
-
-    // Now simulate job completion
-    board.isRunning.mockReturnValue(false);
-    expect(coordinator.retryDeferredClose('ses_123')).toBe(true);
-  });
-
-  test('clearDeferredClose removes from deferred set', () => {
-    const board = createMockBoard(true);
-    const coordinator = new BackgroundJobCoordinator(board);
-
-    coordinator.deferIfRunning('ses_123');
-    coordinator.clearDeferredClose('ses_123');
-
-    // Now retryDeferredClose should return false (not in set)
-    board.isRunning.mockReturnValue(false);
-    expect(coordinator.retryDeferredClose('ses_123')).toBe(false);
-  });
-
-  test('handleTerminalState notifies listeners when retryDeferredClose returns true', () => {
+  test('handleTerminalState notifies listeners for a deferred job', () => {
     const board = createMockBoard(true);
     const coordinator = new BackgroundJobCoordinator(board);
     const listener = mock(() => {});

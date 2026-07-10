@@ -72,8 +72,6 @@ export interface BackgroundJobStore {
   /** Evaluate close policy. Returns true if session should close now.
    *  Mutates deferred state: adds to deferred set if running, removes if not. */
   deferIfRunning(sessionId: string): boolean;
-  /** Retry closing a deferred session. Returns true if session should now close. */
-  retryDeferredClose(sessionId: string): boolean;
   /** Clear deferred close state for a session being deleted. */
   clearDeferredClose(sessionId: string): void;
 }

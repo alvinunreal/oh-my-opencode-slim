@@ -524,10 +524,6 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     return false; // ponytail: safe default - don't close
   }
 
-  retryDeferredClose(_sessionId: string): boolean {
-    return false; // Nothing deferred at board level
-  }
-
   clearDeferredClose(_sessionId: string): void {
     // No-op at board level
   }

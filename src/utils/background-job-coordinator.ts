@@ -75,15 +75,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
   }
 
   /**
-   * Retry closing a deferred session. Called when a background job completes.
-   * Returns true if the session should now close.
-   */
-  retryDeferredClose(sessionId: string): boolean {
-    if (!this.deferredIdleCloses.has(sessionId)) return false;
-    return this.deferIfRunning(sessionId);
-  }
-
-  /**
    * Clear deferred close state for a session being deleted.
    */
   clearDeferredClose(sessionId: string): void {
