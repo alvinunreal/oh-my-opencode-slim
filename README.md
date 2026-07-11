@@ -614,7 +614,7 @@ rules.
 ### Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, PDFs, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. If your Orchestrator *is* multimodal, use the default `image_routing: "direct"` so attachments reach it directly. If it is *not* multimodal, set `image_routing: "auto"` to save attachments and route them to `@observer`.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. If your Orchestrator *is* multimodal, leave `image_routing` unset (defaults to `"direct"`, same as before PR #723) so attachments reach it directly. If it is *not* multimodal, set `image_routing: "auto"` to save attachments and route them to `@observer`.
 
 <table>
   <tr>
@@ -628,7 +628,7 @@ rules.
 
 - Images, screenshots, diagrams → `read` tool (native image support)
 - PDFs and binary documents → `read` tool (text + structure extraction)
-- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/kimi-k2.6`. Set `"image_routing": "auto"` to route attachments to Observer without forcing interception when the orchestrator is multimodal.
+- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/kimi-k2.6`. Set `"image_routing": "auto"` to automatically intercept image attachments and route them to Observer (requires observer to be enabled).
 
     </td>
   </tr>
