@@ -204,9 +204,7 @@ export class ForegroundFallbackManager {
   /**
    * Disable the fallback chain for a specific agent.
    * After calling this, rate-limit errors for that agent surface instead of
-   * silently falling back through the chain. This is called automatically by
-   * the config() hook when a user selects a model via /model that differs
-   * from the chain's primary model.
+   * silently falling back through the chain.
    */
   disableChain(agentName: string): void {
     // Keep the key present (known agent, no chain) rather than deleting it,

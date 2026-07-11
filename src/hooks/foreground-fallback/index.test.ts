@@ -6,13 +6,7 @@ import {
   isRateLimitError,
 } from './index';
 
-// ACCEPTANCE GAP: the live behavior this suite supports (a model switched via
-// /model empties the agent's chain so a rate-limit error surfaces instead of
-// falling back, plus the "[plugin] disabled fallback chain for model-switched
-// agent" log line) is only verified end-to-end by manually switching a model
-// in a running OpenCode session and forcing a 429. There is no CI harness
-// that triggers a real rate-limit through the config() hook, so that
-// acceptance path is NOT covered by automated tests.
+// ACCEPTANCE GAP: config() hook behaviour is not covered by CI — verify live.
 
 type ForegroundFallbackClient = ConstructorParameters<
   typeof ForegroundFallbackManager
