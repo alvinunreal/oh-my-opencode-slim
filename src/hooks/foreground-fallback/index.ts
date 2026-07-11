@@ -239,13 +239,6 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
-    /**
-     * When true (default), a runtime model outside the configured chain
-     * still triggers fallback on rate-limit errors. When false, out-of-chain
-     * runtime picks are respected and the error surfaces instead. Models
-     * that are members of the chain always fall back regardless.
-     */
-    private readonly runtimeOverride: boolean = true,
   ) {
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
@@ -506,32 +499,6 @@ export class ForegroundFallbackManager {
       // "next" fallback target.
       if (!currentModel && agentName && chain.length > 0) {
         currentModel = chain[0];
-      }
-
-      // Guard: when runtimeOverride is false, skip fallback for models
-      // that are not members of the configured chain. This respects a
-      // deliberate runtime `/model` pick (e.g. an expensive model outside
-      // the chain) and lets the error surface instead of silently swapping
-      // to the chain's default. Models that ARE in the chain always fall
-      // back normally regardless of this setting.
-      if (
-        !this.runtimeOverride &&
-        currentModel &&
-        !chain.includes(currentModel)
-      ) {
-        log(
-          '[foreground-fallback] current model not in chain, skipping fallback (runtimeOverride=false)',
-          {
-            sessionID,
-            agentName,
-            currentModel,
-            chain,
-          },
-        );
-        // Abort the session so the rate-limit error surfaces to the user
-        // instead of leaving the session in a silent retry loop.
-        await abortSessionWithTimeout(this.client, sessionID);
-        return;
       }
 
       if (!this.sessionTried.has(sessionID)) {
