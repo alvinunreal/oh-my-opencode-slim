@@ -247,8 +247,15 @@ export function processImageAttachments(args: {
       savedPaths.length > 0 ? ` Saved to: ${savedPaths.join(', ')}` : '';
     log(`[image-hook] stripping image/file parts, saving to disk${pathsText}`);
     log(
-      `[image-routing] auto mode: intercepted ${savedPaths.length} image(s), delegating to @observer`,
+      `[image-routing] auto mode: intercepted ${imageParts.length} image(s), delegating to @observer`,
     );
+
+    // If no image could be saved, do not strip the parts: the orchestrator
+    // would receive a nudge with no usable path and the bytes would be lost.
+    if (savedPaths.length === 0) {
+      log('[image-hook] no images saved; leaving original parts in message');
+      return;
+    }
 
     msg.parts = msg.parts
       .filter((p) => !isImagePart(p as ImagePart))

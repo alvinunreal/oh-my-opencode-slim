@@ -196,7 +196,7 @@
       }
     },
     "image_routing": {
-      "description": "How image/PDF attachments are handled. \"direct\" (default): pass attachments to the orchestrator untouched; @observer stays available for manual delegation. \"auto\": save attachments to disk and nudge the orchestrator to delegate to @observer. Requires observer to be enabled (not in disabled_agents).",
+      "description": "How image attachments are handled. \"direct\" (default): pass attachments to the orchestrator untouched; @observer stays available for manual delegation. \"auto\": save attachments to disk and nudge the orchestrator to delegate to @observer. Requires observer to be enabled (not in disabled_agents).",
       "type": "string",
       "enum": [
         "auto",
@@ -204,6 +204,7 @@
       ]
     },
     "disabled_mcps": {
+      "description": "MCP server names to disable completely. Disabled servers are not started and cannot be used by agents.",
       "type": "array",
       "items": {
         "type": "string"

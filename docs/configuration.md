@@ -149,6 +149,8 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
 | `fallback.retryDelayMs` | number | `500` | Delay between retry attempts |
+| `fallback.maxRetries` | number | `2` | Maximum failover attempts before giving up |
+| `fallback.runtimeOverride` | boolean | `true` | Allow per-call model overrides to bypass the fallback chain |
 | `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
 | `council.presets` | object | - | **Required if using council.** Named councillor presets |
 | `council.presets.<name>.<councillor>.model` | string | - | Councillor model |

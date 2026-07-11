@@ -332,14 +332,20 @@ export const PluginConfigSchema = z
       .enum(['auto', 'direct'])
       .optional()
       .describe(
-        'How image/PDF attachments are handled. ' +
+        'How image attachments are handled. ' +
           '"direct" (default): pass attachments to the orchestrator untouched; ' +
           '@observer stays available for manual delegation. ' +
           '"auto": save attachments to disk and nudge the orchestrator to ' +
           'delegate to @observer. Requires observer to be enabled ' +
           '(not in disabled_agents).',
       ),
-    disabled_mcps: z.array(z.string()).optional(),
+    disabled_mcps: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'MCP server names to disable completely. Disabled servers are not ' +
+          'started and cannot be used by agents.',
+      ),
     disabled_tools: z
       .array(z.string())
       .optional()
