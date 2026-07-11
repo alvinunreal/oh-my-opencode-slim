@@ -405,7 +405,7 @@ describe('ForegroundFallbackManager message.updated', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.status', () => {
-  test('aborts active retry-budget-exhausted session before fallback re-prompt', async () => {
+  test('aborts session before fallback re-prompt on first failover retry', async () => {
     const calls: string[] = [];
     const { client, mocks } = createMockClient({
       abortImpl: async () => {
@@ -429,19 +429,17 @@ describe('ForegroundFallbackManager session.status', () => {
       },
     });
 
-    for (const attempt of [1, 2, 3]) {
-      await mgr.handleEvent({
-        type: 'session.status',
-        properties: {
-          sessionID: 'sess-retry-abort-before-prompt',
-          status: {
-            type: 'retry',
-            attempt,
-            message: 'rate limit, retrying...',
-          },
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-retry-abort-before-prompt',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'rate limit, retrying...',
         },
-      });
-    }
+      },
+    });
 
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -627,7 +625,7 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('absorbs failover retries until the retry budget is exhausted', async () => {
+  test('triggers immediate fallback on first failover retry', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
 
@@ -642,7 +640,6 @@ describe('ForegroundFallbackManager session.status', () => {
       },
     });
 
-    // The first retry is absorbed; only exhaustion triggers a failover.
     await mgr.handleEvent({
       type: 'session.status',
       properties: {
@@ -654,10 +651,10 @@ describe('ForegroundFallbackManager session.status', () => {
         },
       },
     });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
-  test('switches models after three failover retries', async () => {
+  test('switches to fallback model on first failover retry', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
 
@@ -672,41 +669,11 @@ describe('ForegroundFallbackManager session.status', () => {
       },
     });
 
-    // First retry is absorbed.
     await mgr.handleEvent({
       type: 'session.status',
       properties: {
         sessionID: 'sess-retry2',
-        status: {
-          type: 'retry',
-          attempt: 1,
-          message: 'rate limit, retrying...',
-        },
-      },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
-
-    // Second retry is also absorbed; the third exhausts the budget.
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-retry2',
-        status: {
-          type: 'retry',
-          attempt: 2,
-          message: 'rate limit, retrying...',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-retry2',
-        status: {
-          type: 'retry',
-          attempt: 3,
-          message: 'rate limit, retrying...',
-        },
+        status: { type: 'retry', attempt: 1, message: 'rate limit, retrying...' },
       },
     });
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -766,7 +733,7 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
-  test('non-rate-limit status does not clear retries (no infinite loop from abort side effects)', async () => {
+  test('non-rate-limit retry does not trigger fallback but rate-limit does', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
 
@@ -781,23 +748,7 @@ describe('ForegroundFallbackManager session.status', () => {
       },
     });
 
-    // First rate-limit is absorbed.
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-nonrl',
-        status: {
-          type: 'retry',
-          attempt: 1,
-          message: 'rate limit, retrying...',
-        },
-      },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
-
-    // Non-rate-limit status (e.g. abort side effect): must NOT reset retries.
-    // If it did, the next rate-limit would see tried=0 and trigger immediate
-    // fallback again — the infinite loop.
+    // Non-rate-limit retry (e.g. abort side effect): must NOT trigger fallback.
     await mgr.handleEvent({
       type: 'session.status',
       properties: {
@@ -807,28 +758,14 @@ describe('ForegroundFallbackManager session.status', () => {
     });
     expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
 
-    // Second rate-limit remains within the budget.
+    // Genuine rate-limit retry triggers immediate fallback.
     await mgr.handleEvent({
       type: 'session.status',
       properties: {
         sessionID: 'sess-nonrl',
         status: {
           type: 'retry',
-          attempt: 2,
-          message: 'rate limit, retrying...',
-        },
-      },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
-
-    // Third rate-limit exhausts the budget.
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-nonrl',
-        status: {
-          type: 'retry',
-          attempt: 3,
+          attempt: 1,
           message: 'rate limit, retrying...',
         },
       },

@@ -324,7 +324,7 @@ export class ForegroundFallbackManager {
             (props.status.message !== undefined &&
               isFailoverError({ message: props.status.message })));
         if (isFailoverRetry) {
-          if (this.checkRetryBudget(sessionID)) {
+          if (this.shouldIntervene(sessionID)) {
             await this.tryFallbackWithAbort(sessionID);
           }
           break;
