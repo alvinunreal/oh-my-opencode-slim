@@ -6,9 +6,10 @@ default OpenAI setup.
 The installer builds both `openai` and `opencode-go`. OpenAI stays active unless
 you choose OpenCode Go at install time or switch to it later.
 
-Because the `opencode-go` preset uses GLM-5.1 for Orchestrator and GLM is not
-multimodal, installing with `--preset=opencode-go` also enables the Observer
-agent and configures it with `opencode-go/kimi-k2.6` for visual analysis.
+Because the `opencode-go` Orchestrator model (`minimax-m3`) is not multimodal,
+installing with `--preset=opencode-go` also enables the Observer agent and
+configures it with `opencode-go/mimo-v2.5` (a native omnimodal model) for
+visual analysis.
 
 ## Install with OpenCode Go Active
 
@@ -47,13 +48,13 @@ role:
 
 | Agent | Model |
 |-------|-------|
-| Orchestrator | `opencode-go/glm-5.2` |
+| Orchestrator | `opencode-go/minimax-m3` (`max`) |
 | Oracle | `opencode-go/qwen3.7-max` (`max`) |
-| Librarian | `opencode-go/deepseek-v4-flash` |
-| Explorer | `opencode-go/deepseek-v4-flash` |
+| Librarian | `opencode-go/deepseek-v4-flash` (`high`) + MCPs |
+| Explorer | `opencode-go/deepseek-v4-flash` (`max`) |
 | Designer | `opencode-go/kimi-k2.7-code` (`medium`) |
 | Fixer | `opencode-go/deepseek-v4-flash` (`high`) |
-| Observer | `opencode-go/kimi-k2.6` |
+| Observer | `opencode-go/mimo-v2.5` (`max`) |
 
 ## Generated Config Shape
 

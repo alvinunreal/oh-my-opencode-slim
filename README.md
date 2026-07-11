@@ -150,12 +150,13 @@ The default generated configuration includes both `openai` and `opencode-go` pre
       "fixer": { "model": "openai/gpt-5.6-luna", "variant": "medium", "skills": [], "mcps": [] }
     },
     "opencode-go": {
-      "orchestrator": { "model": "opencode-go/glm-5.2", "skills": [ "*" ], "mcps": [ "*", "!context7" ] },
+      "orchestrator": { "model": "opencode-go/minimax-m3", "variant": "max", "skills": [ "*" ], "mcps": [ "*", "!context7" ] },
       "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max", "skills": ["simplify"], "mcps": [] },
-      "librarian": { "model": "opencode-go/deepseek-v4-flash", "skills": [], "mcps": [ "websearch", "context7", "gh_grep" ] },
-      "explorer": { "model": "opencode-go/deepseek-v4-flash", "skills": [], "mcps": [] },
+      "librarian": { "model": "opencode-go/deepseek-v4-flash", "variant": "high", "skills": [], "mcps": [ "websearch", "context7", "gh_grep" ] },
+      "explorer": { "model": "opencode-go/deepseek-v4-flash", "variant": "max", "skills": [], "mcps": [] },
       "designer": { "model": "opencode-go/kimi-k2.7-code", "variant": "medium", "skills": [], "mcps": [] },
-      "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high", "skills": [], "mcps": [] }
+      "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high", "skills": [], "mcps": [] },
+      "observer": { "model": "opencode-go/mimo-v2.5", "variant": "max", "skills": [], "mcps": [] }
     }
   }
 }
