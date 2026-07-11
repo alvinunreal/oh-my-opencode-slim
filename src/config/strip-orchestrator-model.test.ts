@@ -72,7 +72,7 @@ describe('applyOrchestratorModelConfig', () => {
     expect(agents.orchestrator).toEqual({});
   });
 
-  test('retains an explicit runtime preset model over the file preset', () => {
+  test('skips stripping when the active runtime preset sets the orchestrator model', () => {
     const agents = {
       orchestrator: { model: 'openai/gpt-5', variant: 'high' },
     };
@@ -92,6 +92,20 @@ describe('applyOrchestratorModelConfig', () => {
       model: 'openai/gpt-5',
       variant: 'high',
     });
+  });
+
+  test('leaves a primitive orchestrator config unchanged', () => {
+    const agents: Record<string, unknown> = { orchestrator: 'invalid' };
+
+    applyOrchestratorModelConfig({
+      agents,
+      enabled: true,
+      presets: undefined,
+      configPreset: undefined,
+      runtimePreset: null,
+    });
+
+    expect(agents.orchestrator).toBe('invalid');
   });
 
   test('allows TUI state to capture the configured model and variant before stripping', () => {

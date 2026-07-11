@@ -1,5 +1,9 @@
 import type { PluginConfig, Preset } from './schema';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export function stripOrchestratorModel(
   agents: Record<string, unknown>,
   enabled: boolean | undefined,
@@ -7,10 +11,8 @@ export function stripOrchestratorModel(
 ): void {
   if (enabled !== true || preset?.orchestrator?.model !== undefined) return;
 
-  const orchestrator = agents.orchestrator as
-    | Record<string, unknown>
-    | undefined;
-  if (!orchestrator) return;
+  const orchestrator = agents.orchestrator;
+  if (!isRecord(orchestrator)) return;
 
   delete orchestrator.model;
   delete orchestrator.variant;
