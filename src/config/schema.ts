@@ -310,6 +310,12 @@ export const PluginConfigSchema = z
       .describe(
         'Use the compact TUI sidebar layout. Defaults to true; set false to use the expanded layout.',
       ),
+    stripOrchestratorModel: z
+      .boolean()
+      .optional()
+      .describe(
+        'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
+      ),
     autoUpdate: z
       .boolean()
       .optional()

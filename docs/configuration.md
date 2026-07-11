@@ -104,6 +104,7 @@ All config files support **JSONC** (JSON with Comments):
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
+| `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
 
 ### Runtime Preset Switching
 

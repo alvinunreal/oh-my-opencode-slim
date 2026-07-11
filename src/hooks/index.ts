@@ -7,6 +7,7 @@ export { createDelegateTaskRetryHook } from './delegate-task-retry/hook';
 export { createFilterAvailableSkillsHook } from './filter-available-skills';
 export {
   ForegroundFallbackManager,
+  isFailoverError,
   isRateLimitError,
 } from './foreground-fallback';
 export { processImageAttachments } from './image-hook';

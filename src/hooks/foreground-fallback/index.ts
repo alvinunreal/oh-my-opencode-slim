@@ -43,32 +43,119 @@ const RATE_LIMIT_PATTERNS = [
   /insufficient.?(quota|balance)/i,
   /high concurrency/i,
   /reduce concurrency/i,
-  // ponytail: transient server errors mixed in; rename to isRetryableError
-  // and split from rate-limit detection when this list grows further
-  /service unavailable/i,
   /monthly usage limit/i,
   /5-hour usage limit/i,
   /weekly usage limit/i,
 ];
 
-export function isRateLimitError(error: unknown): boolean {
+const OUTAGE_STATUS_CODES = new Set([500, 502, 503, 504]);
+const TRANSPORT_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+]);
+const TRANSPORT_MESSAGE_PATTERNS = [
+  /^fetch failed$/i,
+  /^socket hang up$/i,
+  /^provider request timeout$/i,
+  /^request timeout$/i,
+  /^connect ECONNREFUSED\b/i,
+  /^getaddrinfo ENOTFOUND\b/i,
+];
+const PROVIDER_OUTAGE_PATTERNS = [
+  /\binternal server error\b/i,
+  /\bbad gateway\b/i,
+  /\bgateway timeout\b/i,
+  /\bservice unavailable\b/i,
+  /\bupstream outage\b/i,
+  /\bprovider outage\b/i,
+  /\bprovider unavailable\b/i,
+];
+
+function extractStatusCode(error: {
+  statusCode?: unknown;
+  data?: { statusCode?: unknown };
+}): number | undefined {
+  const value = error.statusCode ?? error.data?.statusCode;
+  return typeof value === 'number' ? value : undefined;
+}
+
+function eventSessionID(props: {
+  sessionID?: string;
+  info?: { id?: string };
+}): string | undefined {
+  return props.sessionID ?? props.info?.id;
+}
+
+export function isFailoverError(error: unknown): boolean {
   if (!error) return false;
-  // Handle string-typed errors (OpenCode may send a plain error string)
   if (typeof error === 'string') {
-    return RATE_LIMIT_PATTERNS.some((p) => p.test(error));
+    return (
+      RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(error)) ||
+      PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(error)) ||
+      TRANSPORT_MESSAGE_PATTERNS.some((pattern) => pattern.test(error))
+    );
   }
   if (typeof error !== 'object') return false;
   const err = error as {
+    code?: unknown;
+    cause?: { code?: unknown };
     message?: string;
-    data?: { statusCode?: number; message?: string; responseBody?: string };
+    statusCode?: number;
+    data?: {
+      code?: unknown;
+      statusCode?: number;
+      message?: string;
+      responseBody?: string;
+    };
   };
+  const statusCode = extractStatusCode(err);
+  if (
+    statusCode === 429 ||
+    (statusCode !== undefined && OUTAGE_STATUS_CODES.has(statusCode))
+  ) {
+    return true;
+  }
+  if (
+    [err.code, err.cause?.code, err.data?.code].some(
+      (code) => typeof code === 'string' && TRANSPORT_CODES.has(code),
+    )
+  ) {
+    return true;
+  }
+
+  const messages = [
+    err.message ?? '',
+    err.data?.message ?? '',
+    err.data?.responseBody ?? '',
+  ];
+  if (
+    messages.some((message) =>
+      TRANSPORT_MESSAGE_PATTERNS.some((p) => p.test(message)),
+    )
+  ) {
+    return true;
+  }
+
   const text = [
     err.message ?? '',
-    String(err.data?.statusCode ?? ''),
     err.data?.message ?? '',
     err.data?.responseBody ?? '',
   ].join(' ');
-  return RATE_LIMIT_PATTERNS.some((p) => p.test(text));
+  const hasFailoverReason =
+    RATE_LIMIT_PATTERNS.some((p) => p.test(text)) ||
+    PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(text));
+  // Providers sometimes return recoverable rate-limit/outage payloads with
+  // an HTTP 400 wrapper. Preserve application-level 400 failures, but let a
+  // recognizable failover body continue through the fallback path.
+  return hasFailoverReason;
+}
+
+/** @deprecated Use isFailoverError instead. */
+export function isRateLimitError(error: unknown): boolean {
+  return isFailoverError(error);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +199,18 @@ export class ForegroundFallbackManager {
    *  while a fallback abort/re-prompt is in flight for this session. */
   isFallbackInProgress(sessionID: string): boolean {
     return this.inProgress.has(sessionID);
+  }
+
+  registerSessionAgent(sessionID: string, agentName: string): void {
+    const normalizedAgentName = agentName.trim();
+    if (
+      !sessionID ||
+      !normalizedAgentName ||
+      this.sessionAgent.has(sessionID)
+    ) {
+      return;
+    }
+    this.sessionAgent.set(sessionID, normalizedAgentName);
   }
 
   constructor(
@@ -166,7 +265,7 @@ export class ForegroundFallbackManager {
         if (!sessionID) break;
         // Capture agent name when available (OpenCode includes it on subagent messages)
         if (typeof info.agent === 'string') {
-          this.sessionAgent.set(sessionID, info.agent);
+          this.registerSessionAgent(sessionID, info.agent);
         }
         // Track the model currently serving this session
         if (
@@ -178,8 +277,8 @@ export class ForegroundFallbackManager {
             `${info.providerID}/${info.modelID}`,
           );
         }
-        // Rate-limit on an individual message
-        if (info.error && isRateLimitError(info.error)) {
+        // Failover-worthy error on an individual message
+        if (info.error && isFailoverError(info.error)) {
           if (this.shouldIntervene(sessionID)) {
             await this.tryFallback(sessionID);
           }
@@ -192,15 +291,17 @@ export class ForegroundFallbackManager {
 
       case 'session.error': {
         const props = event.properties as
-          | { sessionID?: string; error?: unknown }
+          | { sessionID?: string; info?: { id?: string }; error?: unknown }
           | undefined;
+        if (!props) break;
+        const sessionID = eventSessionID(props);
         if (
-          props?.sessionID &&
+          sessionID &&
           props.error &&
-          isRateLimitError(props.error) &&
-          this.shouldIntervene(props.sessionID)
+          isFailoverError(props.error) &&
+          this.shouldIntervene(sessionID)
         ) {
-          await this.tryFallback(props.sessionID);
+          await this.tryFallback(sessionID);
         }
         break;
       }
@@ -209,29 +310,29 @@ export class ForegroundFallbackManager {
         const props = event.properties as
           | {
               sessionID?: string;
+              info?: { id?: string };
               status?: { type?: string; message?: string; attempt?: number };
               error?: unknown;
             }
           | undefined;
-        if (!props?.sessionID) break;
-        const msg = props.status?.message?.toLowerCase() ?? '';
-        const isRateLimit =
-          (msg &&
-            (msg.includes('rate limit') ||
-              msg.includes('usage limit') ||
-              msg.includes('usage exceeded') ||
-              msg.includes('quota exceeded') ||
-              msg.includes('exceededbudget') ||
-              msg.includes('over budget') ||
-              msg.includes('insufficient') ||
-              msg.includes('high concurrency') ||
-              msg.includes('reduce concurrency'))) ||
-          isRateLimitError(props.error);
-        if (isRateLimit) {
-          if (this.shouldIntervene(props.sessionID)) {
-            await this.tryFallbackWithAbort(props.sessionID);
-            this.sessionRetries.set(props.sessionID, 1);
+        if (!props) break;
+        const sessionID = eventSessionID(props);
+        if (!sessionID) break;
+        const isFailoverRetry =
+          props.status?.type === 'retry' &&
+          (isFailoverError(props.error) ||
+            (props.status.message !== undefined &&
+              isFailoverError({ message: props.status.message })));
+        if (isFailoverRetry) {
+          if (this.checkRetryBudget(sessionID)) {
+            await this.tryFallbackWithAbort(sessionID);
           }
+          break;
+        }
+
+        if (this.isRecoveredStatus(props.status?.type)) {
+          // Recovered/terminal status: clear retry count.
+          this.sessionRetries.delete(sessionID);
         }
         // Note: do NOT clear sessionRetries here on non-rate-limit statuses.
         // Abort events triggered by our own fallback carry non-rate-limit
@@ -249,7 +350,7 @@ export class ForegroundFallbackManager {
           | { sessionID?: string; agentName?: unknown }
           | undefined;
         if (props?.sessionID && typeof props.agentName === 'string') {
-          this.sessionAgent.set(props.sessionID, props.agentName);
+          this.registerSessionAgent(props.sessionID, props.agentName);
         }
         break;
       }
@@ -299,6 +400,16 @@ export class ForegroundFallbackManager {
     const tried = this.sessionRetries.get(sessionID) ?? 0;
     if (tried === 0) return true;
     return this.checkRetryBudget(sessionID);
+  }
+
+  private isRecoveredStatus(statusType: string | undefined): boolean {
+    return (
+      statusType === 'idle' ||
+      statusType === 'complete' ||
+      statusType === 'completed' ||
+      statusType === 'success' ||
+      statusType === 'terminal'
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -482,6 +593,7 @@ export class ForegroundFallbackManager {
         promptAsync?: (args: {
           path: { id: string };
           body: {
+            agent?: string;
             parts: unknown[];
             model: { providerID: string; modelID: string };
           };
@@ -492,6 +604,12 @@ export class ForegroundFallbackManager {
         return;
       }
 
+      const promptBody = {
+        parts: lastUser.parts,
+        model: ref,
+        ...(agentName ? { agent: agentName } : {}),
+      };
+
       // Try queuing the fallback prompt without aborting first. If OpenCode
       // accepts it (204), the fallback model replaces the retry loop
       // transparently — no dialog, no session error shown to the user.
@@ -499,7 +617,7 @@ export class ForegroundFallbackManager {
       try {
         await sessionClient.promptAsync({
           path: { id: sessionID },
-          body: { parts: lastUser.parts, model: ref },
+          body: promptBody,
         });
       } catch (_promptErr) {
         log('[foreground-fallback] promptAsync on busy session, aborting', {
@@ -509,7 +627,7 @@ export class ForegroundFallbackManager {
         await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
         await sessionClient.promptAsync({
           path: { id: sessionID },
-          body: { parts: lastUser.parts, model: ref },
+          body: promptBody,
         });
       }
 

@@ -1441,6 +1441,45 @@ describe('task-session-manager hook', () => {
     });
   });
 
+  test('preserves injected terminal jobs for recoverable HTTP 400 errors', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'completed' });
+
+    const messages = createMessages('parent-1', 'continue');
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'parent-1',
+          error: {
+            data: { statusCode: 400, responseBody: 'rate limit exceeded' },
+          } as unknown as { name?: string },
+        },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'parent-1', status: { type: 'idle' } },
+      },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      terminalUnreconciled: true,
+    });
+  });
+
   test('completed reconciled job appears reusable and resumes via task', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
