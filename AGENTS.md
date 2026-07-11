@@ -99,6 +99,10 @@ oh-my-opencode-slim/
 4. Run `bun run typecheck` to verify types
 5. Run `bun test` to verify tests pass
 6. Commit changes
+7. Before opening a PR: complete `.github/PULL_REQUEST_TEMPLATE.md`, keep one
+   logical change, confirm `bun run check:ci` + `bun run typecheck` + `bun test`
+   pass, and show the full diff to the session user for sign-off. Full rules in
+   `CONTRIBUTING.md`.
 
 ## Release Workflow
 
