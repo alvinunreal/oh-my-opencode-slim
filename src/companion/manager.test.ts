@@ -202,12 +202,36 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].active_agents).toEqual(['intro']);
   });
 
-  it('ignores status events without agent or with unknown status', () => {
+  it('ignores status events with unknown status but tracks busy without agent', () => {
     const m = make();
     m.onLoad();
     m.onSessionStatus({ sessionId: 'ses_x', agent: undefined, status: 'busy' });
     m.onSessionStatus({ sessionId: 'ses_y', agent: 'fixer', status: 'retry' });
+    // ses_x is now tracked because Herdr subagents often lack
+    // the agent field; the session ID is used as a fallback name.
+    expect(readState().sessions[0].active_agents).toEqual(['ses_x']);
+  });
+
+  it('accepts busy sessions from agents without a known name (Herdr subagents)', () => {
+    const m = make();
+    m.onLoad();
+    // Simulate a Herdr subagent: busy event fires but agent is undefined
+    m.onSessionStatus({
+      sessionId: 'herdr_ses',
+      agent: undefined,
+      status: 'busy',
+    });
+    expect(readState().sessions[0].active_agents).toEqual(['herdr_ses']);
+    // The overall status stays 'idle' — only the orchestrator drives
+    // that field. Herdr subagents appear in active_agents.
+    // When the session goes idle it is removed even without a known agent name
+    m.onSessionStatus({
+      sessionId: 'herdr_ses',
+      agent: undefined,
+      status: 'idle',
+    });
     expect(readState().sessions[0].active_agents).toEqual(['intro']);
+    expect(readState().sessions[0].status).toBe('idle');
   });
 
   it('shows input gif while waiting for user input', () => {
