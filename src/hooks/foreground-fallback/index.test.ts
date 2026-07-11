@@ -567,6 +567,33 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
+  test('triggers fallback when props.error is a plain string', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-str-error',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    // props.error is a plain string — no object wrapper
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-str-error',
+        status: { type: 'retry', attempt: 1, message: 'retrying...' },
+        error: 'Usage exceeded for this billing period',
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
   test('non-rate-limit status does not clear retries (no infinite loop from abort side effects)', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
