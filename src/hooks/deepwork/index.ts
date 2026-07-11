@@ -1,4 +1,5 @@
 import { createInternalAgentTextPart } from '../../utils';
+import { registerCommandHook } from '../command-hook-utils';
 
 const COMMAND_NAME = 'deepwork';
 
@@ -30,16 +31,12 @@ export function createDeepworkCommandHook(): {
 } {
   return {
     registerCommand: (opencodeConfig) => {
-      const commandConfig = opencodeConfig.command as
-        | Record<string, unknown>
-        | undefined;
-      if (commandConfig?.[COMMAND_NAME]) return;
-      if (!opencodeConfig.command) opencodeConfig.command = {};
-      (opencodeConfig.command as Record<string, unknown>)[COMMAND_NAME] = {
-        template: 'Start a deepwork session for a complex coding task',
-        description:
-          'Use the deepwork workflow for heavy multi-phase coding work',
-      };
+      registerCommandHook(
+        opencodeConfig,
+        COMMAND_NAME,
+        'Start a deepwork session for a complex coding task',
+        'Use the deepwork workflow for heavy multi-phase coding work',
+      );
     },
 
     handleCommandExecuteBefore: async (input, output) => {

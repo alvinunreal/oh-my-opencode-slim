@@ -1,3 +1,5 @@
+import { registerCommandHook } from '../command-hook-utils';
+
 const COMMAND_NAME = 'reflect';
 
 function activationPrompt(
@@ -55,20 +57,12 @@ export function createReflectCommandHook(): {
 
   return {
     registerCommand: (opencodeConfig) => {
-      const commandConfig = opencodeConfig.command as
-        | Record<string, unknown>
-        | undefined;
-      if (commandConfig?.[COMMAND_NAME]) {
-        shouldHandleCommand = false;
-        return;
-      }
-      if (!opencodeConfig.command) opencodeConfig.command = {};
-      (opencodeConfig.command as Record<string, unknown>)[COMMAND_NAME] = {
-        template: 'Review repeated work and suggest workflow improvements',
-        description:
-          'Use reflect to learn from repeated workflows and suggest reusable improvements',
-      };
-      shouldHandleCommand = true;
+      shouldHandleCommand ||= registerCommandHook(
+        opencodeConfig,
+        COMMAND_NAME,
+        'Review repeated work and suggest workflow improvements',
+        'Use reflect to learn from repeated workflows and suggest reusable improvements',
+      );
     },
 
     handleCommandExecuteBefore: async (input, output) => {

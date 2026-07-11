@@ -10,7 +10,12 @@ import {
   type MultiplexerConfig,
 } from './config';
 import { parseList } from './config/agent-mcps';
-import { AGENT_ALIASES } from './config/constants';
+import {
+  AGENT_ALIASES,
+  DEFAULT_MAX_SESSIONS_PER_AGENT,
+  DEFAULT_READ_CONTEXT_MAX_FILES,
+  DEFAULT_READ_CONTEXT_MIN_LINES,
+} from './config/constants';
 import {
   getActiveRuntimePreset,
   getPreviousRuntimePreset,
@@ -257,9 +262,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : {};
     webfetch = createWebfetchTool(ctx);
     backgroundJobBoard = new BackgroundJobBoard({
-      maxReusablePerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
-      readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
-      readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
+      maxReusablePerAgent:
+        config.backgroundJobs?.maxSessionsPerAgent ??
+        DEFAULT_MAX_SESSIONS_PER_AGENT,
+      readContextMinLines:
+        config.backgroundJobs?.readContextMinLines ??
+        DEFAULT_READ_CONTEXT_MIN_LINES,
+      readContextMaxFiles:
+        config.backgroundJobs?.readContextMaxFiles ??
+        DEFAULT_READ_CONTEXT_MAX_FILES,
     });
 
     // Initialize coordinator as the sole writer to the board
@@ -307,9 +318,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     reflectCommandHook = createReflectCommandHook();
     loopCommandHook = createLoopCommandHook();
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
-      maxSessionsPerAgent: config.backgroundJobs?.maxSessionsPerAgent ?? 2,
-      readContextMinLines: config.backgroundJobs?.readContextMinLines ?? 10,
-      readContextMaxFiles: config.backgroundJobs?.readContextMaxFiles ?? 8,
+      maxSessionsPerAgent:
+        config.backgroundJobs?.maxSessionsPerAgent ??
+        DEFAULT_MAX_SESSIONS_PER_AGENT,
+      readContextMinLines:
+        config.backgroundJobs?.readContextMinLines ??
+        DEFAULT_READ_CONTEXT_MIN_LINES,
+      readContextMaxFiles:
+        config.backgroundJobs?.readContextMaxFiles ??
+        DEFAULT_READ_CONTEXT_MAX_FILES,
       backgroundJobBoard: backgroundJobCoordinator,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',

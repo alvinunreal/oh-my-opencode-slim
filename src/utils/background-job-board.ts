@@ -1,4 +1,9 @@
-import { formatSystemReminder } from '../config/constants';
+import {
+  DEFAULT_MAX_SESSIONS_PER_AGENT,
+  DEFAULT_READ_CONTEXT_MAX_FILES,
+  DEFAULT_READ_CONTEXT_MIN_LINES,
+  formatSystemReminder,
+} from '../config/constants';
 import type { BackgroundJobStore } from './background-job-store';
 import { parseTaskStatusOutput, type TaskOutputState } from './task';
 
@@ -92,9 +97,12 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   private readonly readContextMaxFiles: number;
 
   constructor(options: BackgroundJobBoardOptions = {}) {
-    this.maxReusablePerAgent = options.maxReusablePerAgent ?? 2;
-    this.readContextMinLines = options.readContextMinLines ?? 10;
-    this.readContextMaxFiles = options.readContextMaxFiles ?? 8;
+    this.maxReusablePerAgent =
+      options.maxReusablePerAgent ?? DEFAULT_MAX_SESSIONS_PER_AGENT;
+    this.readContextMinLines =
+      options.readContextMinLines ?? DEFAULT_READ_CONTEXT_MIN_LINES;
+    this.readContextMaxFiles =
+      options.readContextMaxFiles ?? DEFAULT_READ_CONTEXT_MAX_FILES;
   }
 
   addTerminalStateListener(listener: TerminalStateListener): void {

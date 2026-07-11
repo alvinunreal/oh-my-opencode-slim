@@ -1,3 +1,4 @@
+import { escapeHtml } from '../utils/escape-html';
 import type { InterviewFileItem, InterviewListItem } from './types';
 
 interface DashboardInterviewItem extends InterviewListItem {
@@ -10,15 +11,6 @@ interface DashboardInterviewItem extends InterviewListItem {
 
 const BRAND_LOGO_URL =
   'https://ohmyopencodeslim.com/android-chrome-512x512.png';
-
-export function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
 // ─── Shared client-side helpers ────────────────────────────────────
 

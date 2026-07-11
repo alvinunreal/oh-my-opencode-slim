@@ -1,6 +1,10 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
+import { escapeHtml } from '../../utils/escape-html';
+import { parseFrontmatter } from '../../utils/frontmatter';
 import type { CachedFetch, ExtractedContent } from './types';
+
+export { escapeHtml, parseFrontmatter };
 
 let jsdomPromise: Promise<typeof import('jsdom')> | undefined;
 
@@ -182,15 +186,6 @@ export function cleanFetchedText(input: string) {
   return trimBlankRuns(input);
 }
 
-export function escapeHtml(input: string) {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 export function withTruncationMarker(
   content: string,
   format: 'text' | 'markdown' | 'html',
@@ -346,21 +341,9 @@ export async function extractFromHtml(
   };
 }
 
-function parseFrontmatterBlock(content: string) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!match) return undefined;
-  const result: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.+?)\s*$/);
-    if (!kv) continue;
-    result[kv[1]] = kv[2].replace(/^(['"])(.*)\1$/, '$2');
-  }
-  return result;
-}
-
 export function inferCanonicalUrlFromText(content: string, finalUrl: string) {
-  const frontmatter = parseFrontmatterBlock(content);
-  const raw = frontmatter?.url;
+  const frontmatterData = parseFrontmatter(content);
+  const raw = frontmatterData?.url;
   if (!raw) return undefined;
   try {
     return new URL(raw, finalUrl).toString();

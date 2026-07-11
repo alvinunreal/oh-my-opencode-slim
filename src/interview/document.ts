@@ -1,6 +1,7 @@
 import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { parseFrontmatter as sharedParseFrontmatter } from '../utils/frontmatter';
 import type {
   InterviewAnswer,
   InterviewQuestion,
@@ -182,20 +183,7 @@ export function buildInterviewDocument(
 }
 
 /** Parse frontmatter from a .md file. Returns null if no frontmatter. */
-export function parseFrontmatter(
-  content: string,
-): Record<string, string> | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n/);
-  if (!match) return null;
-  const result: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const colonIdx = line.indexOf(':');
-    if (colonIdx > 0) {
-      result[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
-    }
-  }
-  return result;
-}
+export const parseFrontmatter = sharedParseFrontmatter;
 
 export async function ensureInterviewFile(
   record: InterviewRecord,
