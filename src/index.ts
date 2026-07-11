@@ -21,6 +21,7 @@ import {
   getPreviousRuntimePreset,
   setActiveRuntimePreset,
 } from './config/runtime-preset';
+import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
 import { CouncilManager } from './council';
 import {
   createApplyPatchHook,
@@ -739,6 +740,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
+      // Capture the resolved model state before optionally removing the
+      // orchestrator model from the SDK config, so the TUI keeps showing the
+      // configured model rather than a fallback or "default".
       const tuiAgentModels: Record<string, string> = {};
       const tuiAgentVariants: Record<string, string> = {};
       for (const agentDef of agentDefs) {
@@ -770,6 +774,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       recordTuiAgentModels({
         agentModels: tuiAgentModels,
         agentVariants: tuiAgentVariants,
+      });
+
+      applyOrchestratorModelConfig({
+        agents: configAgent,
+        enabled: config.stripOrchestratorModel,
+        presets: config.presets,
+        configPreset: config.preset,
+        runtimePreset: runtimePresetName,
       });
 
       // Merge MCP configs
