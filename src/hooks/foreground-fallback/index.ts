@@ -15,7 +15,6 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
-import { ALL_AGENT_NAMES } from '../../config/constants';
 import { log } from '../../utils/logger';
 import {
   abortSessionWithTimeout,
@@ -533,9 +532,8 @@ export class ForegroundFallbackManager {
    *
    * Priority:
    * 1. Agent name known AND has a configured chain → return it directly
-   * 2. Agent name known but NO chain configured → return [] (no fallback;
-   *    do NOT bleed into other agents' chains which would re-prompt the
-   *    session with a model belonging to a completely different agent)
+   * 2. Agent name known but NO chain → return [] (no fallback; never
+   *    bleed into other agents' chains)
    * 3. Agent name unknown, current model known → search all chains for
    *    the model to infer which chain to use
    * 4. Nothing matches → flatten all chains as a last resort (only
@@ -546,18 +544,13 @@ export class ForegroundFallbackManager {
     currentModel: string | undefined,
   ): string[] {
     if (agentName) {
-      // Agent is known: use its chain exactly if configured.
       const chain = this.chains[agentName];
       if (chain) return chain;
-      // Known omos built-in agent (oracle, librarian, …) without a
-      // configured chain: keep isolation - do NOT bleed into other
-      // agents' chains (preserves the cross-agent isolation contract
-      // from PR #199).
-      if ((ALL_AGENT_NAMES as readonly string[]).includes(agentName)) return [];
-      // Unknown agent (e.g. OpenCode built-in "compaction" or "title"
-      // that don't appear in the user preset): fall through to
-      // model-matching so they can inherit a chain from a configured
-      // agent that shares their model.
+      // Any known agent without a configured chain: no fallback.
+      // Don't bleed into other agents' chains via model-matching —
+      // that switches the session to the wrong agent (e.g. Build
+      // inherits Orchestrator's chain and becomes Orchestrator).
+      return [];
     }
 
     // Agent unknown: try to infer from the current model.

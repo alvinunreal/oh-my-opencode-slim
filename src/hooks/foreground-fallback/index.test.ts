@@ -1025,11 +1025,10 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
     expect(call[0].body.model.modelID).toBe('gpt-4o');
   });
 
-  test('falls through to model matching for non-omos agents (e.g. compaction)', async () => {
-    // compaction is an OpenCode built-in agent that is NOT an omos agent,
-    // so it has no chain configured. It should fall through to model
-    // matching and inherit a chain from a configured agent that shares
-    // its model, instead of being silently excluded from fallback.
+  test('does NOT bleed into other agent chains for non-omos agents without a chain', async () => {
+    // A user-defined agent (e.g. Build) shares its model with the orchestrator
+    // chain but has no chain of its own. It must NOT inherit the orchestrator
+    // chain — that would switch the session from Build to Orchestrator.
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       client,
@@ -1041,8 +1040,8 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       type: 'message.updated',
       properties: {
         info: {
-          sessionID: 'compaction-sess',
-          agent: 'compaction', // NOT a known omos built-in agent
+          sessionID: 'build-sess',
+          agent: 'build',
           providerID: 'openai',
           modelID: 'gpt-5.6',
           error: { message: 'rate limit exceeded' },
@@ -1050,14 +1049,8 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       },
     });
 
-    // compaction's model (openai/gpt-5.6) matches orchestrator's chain
-    // → should fall back to the next untried model in that chain
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [
-      { body: { model: { providerID: string; modelID: string } } },
-    ];
-    expect(call[0].body.model.providerID).toBe('new-api');
-    expect(call[0].body.model.modelID).toBe('glm-5.2');
+    // build has no configured chain and must not inherit orchestrator's
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -1212,14 +1205,14 @@ describe('ForegroundFallbackManager runtimeOverride', () => {
       false, // runtimeOverride
     );
 
-    // Simulate unknown agent (e.g. "compaction") using a model that IS in
-    // the orchestrator chain — resolveChain infers the chain from the model.
+    // Simulate an agent name OpenCode doesn't report (agent field absent).
+    // resolveChain falls through to model-matching, finds the chain that
+    // contains openai/gpt-4o (orchestrator's chain).
     await mgr.handleEvent({
       type: 'message.updated',
       properties: {
         info: {
           sessionID: 'sess-5',
-          agent: 'compaction',
           providerID: 'openai',
           modelID: 'gpt-4o',
           error: { message: 'rate limit exceeded' },
