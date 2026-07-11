@@ -16,7 +16,12 @@ import type {
 } from './types';
 import { trimBlankRuns } from './utils';
 
-export function normalizeUrl(input: string) {
+export function normalizeUrl(input: string): {
+  url: string;
+  upgradedToHttps: boolean;
+  fallbackUrl: string | undefined;
+  originalUrl: string;
+} {
   const parsed = new URL(input);
   const originalUrl = parsed.toString();
   let upgradedToHttps = false;
@@ -29,7 +34,7 @@ export function normalizeUrl(input: string) {
   return { url: parsed.toString(), upgradedToHttps, fallbackUrl, originalUrl };
 }
 
-export function isDocsLikeUrl(url: URL) {
+export function isDocsLikeUrl(url: URL): boolean {
   const host = url.hostname.toLowerCase();
   return (
     DOCS_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix)) ||
@@ -40,7 +45,7 @@ export function isDocsLikeUrl(url: URL) {
 export function buildPermissionPatterns(
   normalized: ReturnType<typeof normalizeUrl>,
   shouldProbeLlmsTxt: boolean,
-) {
+): string[] {
   const patterns = new Set<string>([normalized.url]);
   const origins = [new URL(normalized.url).origin];
   if (normalized.fallbackUrl) {
