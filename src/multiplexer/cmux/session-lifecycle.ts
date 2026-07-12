@@ -542,7 +542,6 @@ export class CmuxSessionLifecycle {
       noActivityMs,
       stuckThresholdMs: this.stuckThresholdMs,
     });
-    record.stuckDetectedAt = now;
 
     // Abort the session via the OpenCode client (best-effort — must not block cleanup)
     if (this.client) {
@@ -558,11 +557,21 @@ export class CmuxSessionLifecycle {
       }
     }
 
-    // Mark the background job as cancelled with stuck reason
-    this.backgroundJobs?.markCancelled?.(record.session, 'stuck');
+    // Mark the background job as cancelled with stuck reason (best-effort)
+    try {
+      this.backgroundJobs?.markCancelled?.(record.session, 'stuck');
+    } catch (err) {
+      log('[cmux-session-lifecycle] markCancelled failed, continuing cleanup', {
+        session: record.session,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Request pane close with stuck reason
     await this.requestClose(record, 'stuck');
+
+    // Set detection latch AFTER cleanup steps so a throw above allows retry on next poll
+    record.stuckDetectedAt = now;
   }
 
   private startPolling(): void {

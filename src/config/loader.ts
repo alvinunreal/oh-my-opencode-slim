@@ -52,10 +52,21 @@ const PROMPTS_DIR_NAME = 'oh-my-opencode-slim';
  * @param onWarning - Optional callback for warnings
  * @returns Validated config object, or null if loading failed
  */
-function loadConfigFromPath(
+/**
+ * Load raw plugin configuration from a specific file path.
+ * Supports both .json and .jsonc formats (JSON with comments).
+ * Returns null if the file doesn't exist, is invalid, or cannot be read.
+ * Does NOT apply schema validation or defaults — callers must validate
+ * the merged result so defaults don't override explicit user values.
+ *
+ * @param configPath - Absolute path to the config file
+ * @param onWarning - Optional callback for warnings
+ * @returns Raw config object, or null if loading failed
+ */
+function loadRawConfigFromPath(
   configPath: string,
   options?: LoadPluginConfigOptions,
-): PluginConfig | null {
+): Record<string, unknown> | null {
   try {
     const content = fs.readFileSync(configPath, 'utf-8');
     // Use stripJsonComments to support JSONC format (comments and trailing commas)
@@ -83,23 +94,10 @@ function loadConfigFromPath(
       }
       return null;
     }
-    const result = PluginConfigSchema.safeParse(rawConfig);
-
-    if (!result.success) {
-      options?.onWarning?.({
-        path: configPath,
-        kind: 'invalid-schema',
-        message: 'Config does not match schema',
-        formatted: result.error.format(),
-      });
-      if (!options?.silent) {
-        console.warn(`[oh-my-opencode-slim] Invalid config at ${configPath}:`);
-        console.warn(result.error.format());
-      }
+    if (rawConfig === null || typeof rawConfig !== 'object') {
       return null;
     }
-
-    return result.data;
+    return rawConfig as Record<string, unknown>;
   } catch (error) {
     // File doesn't exist or isn't readable - this is expected and fine
     if (
@@ -303,16 +301,40 @@ export function loadPluginConfig(
   const { userConfigPath, projectConfigPath } =
     findPluginConfigPaths(directory);
 
-  let config: PluginConfig = userConfigPath
-    ? (loadConfigFromPath(userConfigPath, options) ?? {})
-    : {};
-
-  const projectConfig = projectConfigPath
-    ? loadConfigFromPath(projectConfigPath, options)
+  // Load raw configs (no schema validation/defaults) so merging preserves
+  // explicit user values. Schema defaults are applied AFTER merging.
+  const userRaw = userConfigPath
+    ? loadRawConfigFromPath(userConfigPath, options)
     : null;
-  if (projectConfig) {
-    config = mergePluginConfigs(config, projectConfig);
+  const projectRaw = projectConfigPath
+    ? loadRawConfigFromPath(projectConfigPath, options)
+    : null;
+
+  // Merge raw configs before applying defaults
+  // Use deepMerge so nested objects (agents, tmux, stuckAgent, etc.) merge
+  // field-by-field rather than being replaced entirely.
+  const mergedRaw: Record<string, unknown> =
+    deepMerge(userRaw ?? {}, projectRaw ?? {}) ?? {};
+
+  // Validate merged config and apply defaults
+  const result = PluginConfigSchema.safeParse(mergedRaw);
+  if (!result.success) {
+    options?.onWarning?.({
+      path: projectConfigPath ?? userConfigPath ?? '',
+      kind: 'invalid-schema',
+      message: 'Config does not match schema',
+      formatted: result.error.format(),
+    });
+    if (!options?.silent) {
+      console.warn(
+        `[oh-my-opencode-slim] Invalid config at ${projectConfigPath ?? userConfigPath ?? ''}:`,
+      );
+      console.warn(result.error.format());
+    }
+    return {};
   }
+
+  let config: PluginConfig = result.data;
 
   // Migrate legacy tmux config to multiplexer config for backward compatibility
   config = migrateTmuxToMultiplexer(config);
