@@ -8,9 +8,7 @@ How the engineering skills should consume this repo's domain documentation when 
 - **`docs/adr/`** at the repo root — read ADRs that touch the area you're about to work in.
 - **`codemap.md`** at the repo root — the repo's own architecture map (referenced by `AGENTS.md`); read it for module responsibilities and integration points before deep work in a folder.
 
-This is a **single-context** repo: one `CONTEXT.md` and one `docs/adr/` at the root. There is no `CONTEXT-MAP.md` and no per-context `CONTEXT.md`.
-
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture` — external skills, not bundled in this repo) creates them lazily when terms or decisions actually get resolved.
 
 ## Use the glossary's vocabulary
 
@@ -22,4 +20,4 @@ If the concept you need isn't in the glossary yet, that's a signal — either yo
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
-> _Contradicts ADR-0001 (session reflection mode) — but worth reopening because…_
+> _Contradicts ADR-001 (session reflection mode) — but worth reopening because…_
