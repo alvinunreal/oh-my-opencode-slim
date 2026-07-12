@@ -176,6 +176,15 @@ export const BackgroundJobsConfigSchema = z.object({
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
 
+export const StuckAgentConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    timeoutMs: z.number().int().min(30_000).max(600_000).default(180_000),
+    graceMs: z.number().int().min(5_000).max(60_000).default(30_000),
+  })
+  .optional();
+export type StuckAgentConfig = z.infer<typeof StuckAgentConfigSchema>;
+
 export const FailoverConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -372,6 +381,7 @@ export const PluginConfigSchema = z
     websearch: WebsearchConfigSchema.optional(),
     interview: InterviewConfigSchema.optional(),
     backgroundJobs: BackgroundJobsConfigSchema.optional(),
+    stuckAgent: StuckAgentConfigSchema.optional(),
     fallback: FailoverConfigSchema.optional(),
     council: CouncilConfigSchema.optional(),
     companion: CompanionConfigSchema.optional(),

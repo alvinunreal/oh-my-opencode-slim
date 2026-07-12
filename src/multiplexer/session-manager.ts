@@ -180,7 +180,7 @@ export class MultiplexerSessionManager {
         this.resolveServerUrl,
         this.directory,
         this.backgroundJobBoard,
-        options,
+        { ...options, client: ctx.client },
       );
     }
 

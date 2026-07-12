@@ -146,6 +146,9 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) |
 | `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) |
 | `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) |
+| `stuckAgent.enabled` | boolean | `true` | Detect and abort background subagent sessions that stay busy without activity (cmux multiplexer only) |
+| `stuckAgent.timeoutMs` | number | `180000` | Inactivity (ms) before a busy session is considered stuck (30000–600000) |
+| `stuckAgent.graceMs` | number | `30000` | Minimum session age (ms) before stuck detection activates (5000–60000) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |

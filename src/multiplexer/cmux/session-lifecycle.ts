@@ -1,5 +1,10 @@
-import { POLL_INTERVAL_BACKGROUND_MS } from '../../config';
+import {
+  POLL_INTERVAL_BACKGROUND_MS,
+  STUCK_AGENT_GRACE_MS,
+  STUCK_AGENT_TIMEOUT_MS,
+} from '../../config';
 import { log } from '../../utils/logger';
+import { abortSessionWithTimeout } from '../../utils/session';
 import type { Multiplexer } from '../types';
 import { isServerRunning } from '../types';
 import { CmuxClosePolicy, type CmuxCloseReason } from './close-policy';
@@ -24,6 +29,7 @@ export interface CmuxSessionEvent {
 interface BackgroundJobs {
   deferIfRunning(session: string): boolean;
   clearDeferredClose(session: string): void;
+  markCancelled?(taskID: string, reason?: string): void;
 }
 
 export interface CmuxSessionLifecycleOptions {
@@ -39,6 +45,12 @@ export interface CmuxSessionLifecycleOptions {
   shutdownTimeoutMs?: number;
   isServerRunning?: (url: string) => Promise<boolean>;
   fetchStatuses?: () => Promise<Record<string, { type: string }>>;
+  /** Client for aborting stuck sessions. */
+  client?: Parameters<typeof abortSessionWithTimeout>[0];
+  /** Milliseconds of inactivity before a busy session is considered stuck. */
+  stuckThresholdMs?: number;
+  /** Minimum time a session must exist before stuck detection activates. */
+  stuckGraceMs?: number;
 }
 
 const ACTIVITY_EVENTS = new Set([
@@ -73,6 +85,9 @@ export class CmuxSessionLifecycle {
   private readonly fetchStatuses: () => Promise<
     Record<string, { type: string }>
   >;
+  private readonly client?: Parameters<typeof abortSessionWithTimeout>[0];
+  private readonly stuckThresholdMs: number;
+  private readonly stuckGraceMs: number;
   private pollTimer?: ReturnType<typeof setInterval>;
   private polling = false;
   private cleanupPromise?: Promise<void>;
@@ -98,6 +113,9 @@ export class CmuxSessionLifecycle {
     this.missingGraceMs = options.missingGraceMs ?? 30_000;
     this.closeRetryMs = options.closeRetryMs ?? 1_000;
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
+    this.client = options.client;
+    this.stuckThresholdMs = options.stuckThresholdMs ?? STUCK_AGENT_TIMEOUT_MS;
+    this.stuckGraceMs = options.stuckGraceMs ?? STUCK_AGENT_GRACE_MS;
     this.policy = new CmuxClosePolicy(
       options.closeRetryTtlMs,
       options.closeRetryMaxAttempts,
@@ -326,6 +344,9 @@ export class CmuxSessionLifecycle {
     if (!next && record.closeIntent) record.closeTimer?.cancel();
     record.closeIntent = next;
     if (!next) record.closeTimer = undefined;
+    // Clear stuck detection on any real activity
+    record.stuckDetectedAt = undefined;
+    record.stuckCheckVersion = undefined;
   }
 
   private async requestClose(
@@ -450,6 +471,35 @@ export class CmuxSessionLifecycle {
           }
         }
         if (status) record.statusMissingSince = undefined;
+        if (status && status.type === 'busy') {
+          // ---- Stuck detection for busy sessions ----
+          // Cancel idle close intents without resetting activity timestamps
+          // so lastActivityAt stays valid for stuck detection.
+          if (record.closeIntent?.reason === 'idle') {
+            record.closeTimer?.cancel();
+            record.closeTimer = undefined;
+            record.closeIntent = undefined;
+          }
+
+          if (this.stuckThresholdMs < Infinity && !record.stuckDetectedAt) {
+            const now = this.now();
+            const noActivityMs = now - record.lastActivityAt;
+
+            if (
+              noActivityMs > this.stuckThresholdMs &&
+              record.stuckCheckVersion !== undefined &&
+              now - (record.attachedAt ?? record.lastActivityAt) >
+                this.stuckGraceMs
+            ) {
+              await this.handleStuckSession(record);
+              continue;
+            }
+          }
+
+          // Record current version for next tick's comparison
+          record.stuckCheckVersion = record.activityVersion;
+          continue;
+        }
         if (status && status.type !== 'idle') {
           this.activity(record.session);
           continue;
@@ -480,6 +530,30 @@ export class CmuxSessionLifecycle {
     } finally {
       this.polling = false;
     }
+  }
+
+  private async handleStuckSession(record: CmuxSessionRecord): Promise<void> {
+    const now = this.now();
+    const noActivityMs = now - record.lastActivityAt;
+    log('[cmux-session-lifecycle] stuck session detected, aborting', {
+      session: record.session,
+      activityVersion: record.activityVersion,
+      lastActivityAt: record.lastActivityAt,
+      noActivityMs,
+      stuckThresholdMs: this.stuckThresholdMs,
+    });
+    record.stuckDetectedAt = now;
+
+    // Abort the session via the OpenCode client
+    if (this.client) {
+      await abortSessionWithTimeout(this.client, record.session, 1_000);
+    }
+
+    // Mark the background job as cancelled with stuck reason
+    this.backgroundJobs?.markCancelled?.(record.session, 'stuck');
+
+    // Request pane close with stuck reason
+    await this.requestClose(record, 'stuck');
   }
 
   private startPolling(): void {

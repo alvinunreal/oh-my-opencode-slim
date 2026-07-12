@@ -341,3 +341,220 @@ describe('CmuxSessionLifecycle races', () => {
     ).toBe(true);
   });
 });
+
+describe('CmuxSessionLifecycle stuck detection', () => {
+  const store = new CmuxSessionStore();
+  beforeEach(() => store.resetForTests());
+
+  function busyStatuses(
+    ...sessions: string[]
+  ): () => Promise<Record<string, { type: string }>> {
+    const map: Record<string, { type: string }> = {};
+    for (const s of sessions) map[s] = { type: 'busy' };
+    return async () => map;
+  }
+
+  test('stuck triggers when busy with no activityVersion change for > threshold', async () => {
+    let now = 0;
+    const mux = multiplexer();
+    const abort = mock(() => Promise.resolve());
+    const markCancelled = mock(() => {});
+    const lifecycle = new CmuxSessionLifecycle(
+      'owner',
+      mux,
+      () => 'http://server',
+      '/repo',
+      {
+        deferIfRunning: () => true,
+        clearDeferredClose: () => {},
+        markCancelled,
+      },
+      {
+        now: () => now,
+        stuckThresholdMs: 100,
+        stuckGraceMs: 10,
+        client: { session: { abort } },
+        isServerRunning: async () => true,
+        fetchStatuses: busyStatuses('stuck-1'),
+        delay: async () => {},
+      },
+    );
+    await lifecycle.onSessionCreated({
+      type: 'session.created',
+      properties: { info: { id: 'stuck-1', parentID: 'p' } },
+    });
+
+    // First poll: snapshot stuckCheckVersion (no activity - version stays 0)
+    now = 1_000;
+    await lifecycle.pollOnce();
+    expect(abort).not.toHaveBeenCalled();
+
+    // Second poll past threshold + grace: version still 0, stuck detected
+    now = 2_000;
+    await lifecycle.pollOnce();
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(mux.closePane).toHaveBeenCalledTimes(1);
+    await lifecycle.cleanup();
+  });
+
+  test('stuck does NOT trigger during grace period', async () => {
+    let now = 0;
+    const mux = multiplexer();
+    const abort = mock(() => Promise.resolve());
+    const lifecycle = new CmuxSessionLifecycle(
+      'owner',
+      mux,
+      () => 'http://server',
+      '/repo',
+      undefined,
+      {
+        now: () => now,
+        stuckThresholdMs: 100,
+        stuckGraceMs: 500_000, // very long grace
+        client: { session: { abort } },
+        isServerRunning: async () => true,
+        fetchStatuses: busyStatuses('grace'),
+        delay: async () => {},
+      },
+    );
+    await lifecycle.onSessionCreated({
+      type: 'session.created',
+      properties: { info: { id: 'grace', parentID: 'p' } },
+    });
+
+    now = 1_000;
+    await lifecycle.pollOnce(); // snapshot
+    now = 10_000;
+    await lifecycle.pollOnce(); // past threshold, but not grace
+    expect(abort).not.toHaveBeenCalled();
+    await lifecycle.cleanup();
+  });
+
+  test('stuck resets when activity fires between polls', async () => {
+    let now = 0;
+    const mux = multiplexer();
+    const abort = mock(() => Promise.resolve());
+    const lifecycle = new CmuxSessionLifecycle(
+      'owner',
+      mux,
+      () => 'http://server',
+      '/repo',
+      undefined,
+      {
+        now: () => now,
+        stuckThresholdMs: 300,
+        stuckGraceMs: 10,
+        client: { session: { abort } },
+        isServerRunning: async () => true,
+        fetchStatuses: busyStatuses('reset-me'),
+        delay: async () => {},
+      },
+    );
+    await lifecycle.onSessionCreated({
+      type: 'session.created',
+      properties: { info: { id: 'reset-me', parentID: 'p' } },
+    });
+
+    // Initial poll snapshots version
+    now = 10;
+    await lifecycle.pollOnce();
+
+    // Activity fires (content event) - resets stuck state (clears
+    // stuckCheckVersion + updates lastActivityAt)
+    now = 20;
+    await lifecycle.onSessionStatus({
+      type: 'message.updated',
+      properties: { sessionID: 'reset-me' },
+    });
+
+    // First poll after activity: snapshots the new version. Threshold has
+    // barely elapsed (noActivityMs = 10 < 300), so no stuck.
+    now = 30;
+    await lifecycle.pollOnce();
+    expect(abort).not.toHaveBeenCalled();
+
+    // Second poll after activity: version still same, threshold still not
+    // reached (noActivityMs = 40 - 20 = 20 < 300). No stuck.
+    now = 40;
+    await lifecycle.pollOnce();
+    expect(abort).not.toHaveBeenCalled();
+
+    // Enough time passes: now threshold exceeded
+    now = 500;
+    await lifecycle.pollOnce();
+    expect(abort).toHaveBeenCalledTimes(1);
+    await lifecycle.cleanup();
+  });
+
+  test('stuck does NOT trigger for idle sessions', async () => {
+    let now = 0;
+    const mux = multiplexer();
+    const abort = mock(() => Promise.resolve());
+    const lifecycle = new CmuxSessionLifecycle(
+      'owner',
+      mux,
+      () => 'http://server',
+      '/repo',
+      undefined,
+      {
+        now: () => now,
+        stuckThresholdMs: 100,
+        stuckGraceMs: 10,
+        client: { session: { abort } },
+        isServerRunning: async () => true,
+        fetchStatuses: async () => ({ nope: { type: 'idle' } }),
+        delay: async () => {},
+      },
+    );
+    await lifecycle.onSessionCreated({
+      type: 'session.created',
+      properties: { info: { id: 'nope', parentID: 'p' } },
+    });
+
+    now = 50_000;
+    await lifecycle.pollOnce();
+    expect(abort).not.toHaveBeenCalled();
+    await lifecycle.cleanup();
+  });
+
+  test('abort + close are invoked on a stuck session', async () => {
+    let now = 0;
+    const mux = multiplexer();
+    const abort = mock(() => Promise.resolve());
+    const markCancelled = mock(() => {});
+    const lifecycle = new CmuxSessionLifecycle(
+      'owner',
+      mux,
+      () => 'http://server',
+      '/repo',
+      {
+        deferIfRunning: () => true,
+        clearDeferredClose: () => {},
+        markCancelled,
+      },
+      {
+        now: () => now,
+        stuckThresholdMs: 50,
+        stuckGraceMs: 10,
+        client: { session: { abort } },
+        isServerRunning: async () => true,
+        fetchStatuses: busyStatuses('abort-me'),
+        delay: async () => {},
+      },
+    );
+    await lifecycle.onSessionCreated({
+      type: 'session.created',
+      properties: { info: { id: 'abort-me', parentID: 'p' } },
+    });
+
+    now = 500;
+    await lifecycle.pollOnce(); // snapshot
+    now = 10_000;
+    await lifecycle.pollOnce(); // stuck triggers
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(mux.closePane).toHaveBeenCalledTimes(1);
+    expect(markCancelled).toHaveBeenCalledWith('abort-me', 'stuck');
+    expect(store.get('abort-me')?.stuckDetectedAt).toBe(10_000);
+    await lifecycle.cleanup();
+  });
+});

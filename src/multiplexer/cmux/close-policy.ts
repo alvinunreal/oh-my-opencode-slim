@@ -1,4 +1,4 @@
-export type CmuxCloseReason = 'idle' | 'deleted' | 'cleanup';
+export type CmuxCloseReason = 'idle' | 'deleted' | 'cleanup' | 'stuck';
 export interface CmuxCloseIntent {
   reason: CmuxCloseReason;
   expectedActivityVersion: number;
@@ -20,7 +20,11 @@ export class CmuxClosePolicy {
     now: number,
     current?: CmuxCloseIntent,
   ): CmuxCloseIntent {
-    if (!current || (reason === 'deleted' && current.reason === 'idle')) {
+    if (
+      !current ||
+      ((reason === 'deleted' || reason === 'stuck') &&
+        current.reason === 'idle')
+    ) {
       return {
         reason,
         expectedActivityVersion: version,

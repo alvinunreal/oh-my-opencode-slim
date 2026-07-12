@@ -16,6 +16,8 @@ import {
   DEFAULT_READ_CONTEXT_MAX_FILES,
   DEFAULT_READ_CONTEXT_MIN_LINES,
   resolveImageRouting,
+  STUCK_AGENT_GRACE_MS,
+  STUCK_AGENT_TIMEOUT_MS,
 } from './config/constants';
 import {
   getActiveRuntimePreset,
@@ -282,10 +284,21 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
+    const stuckAgentEnabled = config.stuckAgent?.enabled ?? true;
     multiplexerSessionManager = new MultiplexerSessionManager(
       ctx,
       multiplexerConfig,
       backgroundJobCoordinator,
+      {
+        stuckThresholdMs: stuckAgentEnabled
+          ? (config.stuckAgent?.timeoutMs ?? STUCK_AGENT_TIMEOUT_MS)
+          : Infinity,
+        stuckGraceMs: config.stuckAgent?.graceMs ?? STUCK_AGENT_GRACE_MS,
+        // ponytail: isFallbackInProgress guard is not wired in Phase 1
+        // because foregroundFallback is initialized after this point.
+        // The skip is safe: isFallbackInProgress defaults to undefined,
+        // meaning stuck detection always proceeds for busy sessions.
+      },
     );
     backgroundJobCoordinator.addTerminalStateListener((taskID) => {
       void multiplexerSessionManager.closeSessionFromCoordinator(taskID);

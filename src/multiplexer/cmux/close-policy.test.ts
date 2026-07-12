@@ -22,6 +22,26 @@ describe('CmuxClosePolicy', () => {
     });
   });
 
+  test('activity cancels idle but not stuck', () => {
+    const policy = new CmuxClosePolicy();
+    expect(policy.activity(policy.request('idle', 1, 0))).toBeUndefined();
+    expect(policy.activity(policy.request('stuck', 1, 0))?.reason).toBe(
+      'stuck',
+    );
+  });
+
+  test('stuck upgrades idle and refreshes its retry budget', () => {
+    const policy = new CmuxClosePolicy(100, 2);
+    const idle = policy.failed(policy.request('idle', 1, 0), 1);
+    const stuck = policy.request('stuck', 2, 50, idle);
+    expect(stuck).toMatchObject({
+      reason: 'stuck',
+      attempts: 0,
+      deadline: 150,
+      nextAttemptAt: 50,
+    });
+  });
+
   test('exhaustion enters 30 then 60 second tracked cooldown', () => {
     const policy = new CmuxClosePolicy(100, 1);
     const first = policy.failed(policy.request('cleanup', 0, 0), 1);

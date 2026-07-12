@@ -47,6 +47,10 @@ export const POLL_INTERVAL_BACKGROUND_MS = 2000;
 // Timeouts
 export const MAX_POLL_TIME_MS = 5 * 60 * 1000; // 5 minutes
 
+// Stuck agent detection
+export const STUCK_AGENT_TIMEOUT_MS = 180_000; // 3 min
+export const STUCK_AGENT_GRACE_MS = 30_000; // 30 s
+
 // Subagent depth limits
 export const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 

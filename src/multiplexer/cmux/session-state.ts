@@ -28,6 +28,10 @@ export interface CmuxSessionRecord {
   closeIntent?: CmuxCloseIntent;
   closeTimer?: { cancel(): void };
   spawnPromise?: Promise<PaneResult>;
+  /** activityVersion captured at the last stuck check tick. */
+  stuckCheckVersion?: number;
+  /** Timestamp when stuck was first confirmed (prevents repeated aborts). */
+  stuckDetectedAt?: number;
 }
 
 const STORE_KEY = Symbol.for('oh-my-opencode-slim.cmux-session-store');

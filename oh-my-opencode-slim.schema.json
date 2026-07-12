@@ -363,6 +363,27 @@
         }
       }
     },
+    "stuckAgent": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "default": 180000,
+          "type": "integer",
+          "minimum": 30000,
+          "maximum": 600000
+        },
+        "graceMs": {
+          "default": 30000,
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 60000
+        }
+      }
+    },
     "fallback": {
       "type": "object",
       "properties": {
