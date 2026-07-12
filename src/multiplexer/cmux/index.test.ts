@@ -240,7 +240,6 @@ describe('CmuxMultiplexer', () => {
     const pane = await instance.spawnPane('s', 'agent', 'http://server', '/r');
     process.env.CMUX_SOCKET_PATH = '/tmp/socket-b';
     await instance.closePane(pane.paneId ?? '');
-    const close = calls.find((call) => call.includes('close-surface'));
     for (const operation of [
       'new-split',
       'respawn-pane',

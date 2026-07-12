@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Multiplexer } from '../types';
-import { CmuxSessionLifecycle } from './session-lifecycle';
 import { CmuxClosePolicy } from './close-policy';
+import { CmuxSessionLifecycle } from './session-lifecycle';
 import { CmuxSessionStore } from './session-state';
 
 function deferred<T>() {
