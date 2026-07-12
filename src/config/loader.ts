@@ -234,6 +234,10 @@ export function mergePluginConfigs(
       base.companion as Record<string, unknown> | undefined,
       override.companion as Record<string, unknown> | undefined,
     ) as PluginConfig['companion'],
+    stuckAgent: deepMerge(
+      base.stuckAgent as Record<string, unknown> | undefined,
+      override.stuckAgent as Record<string, unknown> | undefined,
+    ) as PluginConfig['stuckAgent'],
   };
 }
 

@@ -544,9 +544,18 @@ export class CmuxSessionLifecycle {
     });
     record.stuckDetectedAt = now;
 
-    // Abort the session via the OpenCode client
+    // Abort the session via the OpenCode client (best-effort — must not block cleanup)
     if (this.client) {
-      await abortSessionWithTimeout(this.client, record.session, 1_000);
+      try {
+        await abortSessionWithTimeout(this.client, record.session, 1_000);
+      } catch {
+        log(
+          '[cmux-session-lifecycle] abortSessionWithTimeout failed, continuing cleanup',
+          {
+            session: record.session,
+          },
+        );
+      }
     }
 
     // Mark the background job as cancelled with stuck reason
