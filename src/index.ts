@@ -914,6 +914,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Handle session.deleted events for pane cleanup
       await multiplexerSessionManager.onSessionDeleted(event);
 
+      if (event.type === 'server.instance.disposed') {
+        await multiplexerSessionManager.cleanupOnInstanceDisposed();
+      }
+
       // Runtime model fallback for foreground agents (rate-limit detection)
       await foregroundFallback.handleEvent(input.event);
 

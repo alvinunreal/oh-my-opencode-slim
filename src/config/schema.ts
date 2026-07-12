@@ -90,6 +90,7 @@ export const MultiplexerTypeSchema = z.enum([
   'tmux',
   'zellij',
   'herdr',
+  'cmux',
   'none',
 ]);
 export type MultiplexerType = z.infer<typeof MultiplexerTypeSchema>;

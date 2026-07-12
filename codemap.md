@@ -48,6 +48,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
 | `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
 | `src/multiplexer/herdr/` | herdr backend implementation for pane lifecycle. | [View Map](src/multiplexer/herdr/codemap.md) |
+| `src/multiplexer/cmux/` | cmux adapter plus dedicated lifecycle, global state registry, and close policy. | [View Map](src/multiplexer/codemap.md) |
 | `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
 | `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
 | `src/skills/clonedeps/` | Workflow-only dependency source mirroring skill that routes discovery/ref resolution through librarian and direct orchestrator git operations. | [View Map](src/skills/clonedeps/codemap.md) |
@@ -76,7 +77,8 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 3. **Delegated execution**
    - Native OpenCode background tasks are parsed from `task` output and injected completion messages and tracked in the shared background job board.
    - `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and injects background/reusable job context into the orchestrator prompt.
-   - `src/multiplexer/` optionally mirrors those sessions into tmux/zellij panes.
+   - `src/multiplexer/` optionally mirrors those sessions into tmux, Zellij,
+     Herdr, or cmux panes/surfaces.
    - Results flow back into the parent session through notifications/output polling.
 
 4. **Install/release path**
@@ -90,6 +92,9 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/config/` feeds `src/agents/`, session/delegation utilities, and MCP registration.
 - `src/cli/skills.ts` and `src/cli/custom-skills.ts` bridge install-time skill packaging with runtime permission policy.
 - Session/delegation utilities depend on `src/multiplexer/` and cooperate with helpers in `src/utils/` for depth tracking, result extraction, task output parsing, and alias state.
+- cmux-specific readiness, retry, orphan, and cleanup state lives under
+  `src/multiplexer/cmux/`; the generic manager delegates cmux events so other
+  multiplexer behavior remains on the upstream path.
 - `src/tools/council.ts` delegates into `src/council/`.
 - `src/tools/preset-manager.ts` hooks command execution and updates runtime agent models from configured presets.
 - `src/hooks/task-session-manager/` depends on `src/utils/background-job-board.ts` and `src/utils/task.ts` to support background task tracking, task output parsing, and safe alias reuse.

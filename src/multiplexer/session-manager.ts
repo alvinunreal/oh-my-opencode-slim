@@ -9,6 +9,11 @@ import {
 import type { BackgroundJobState } from '../utils/background-job-board';
 import type { BackgroundJobStore } from '../utils/background-job-store';
 import { log } from '../utils/logger';
+import {
+  CmuxSessionLifecycle,
+  type CmuxSessionLifecycleOptions,
+} from './cmux/session-lifecycle';
+import { CmuxSessionStore } from './cmux/session-state';
 
 type BackgroundJobReader = Pick<
   BackgroundJobStore,
@@ -45,7 +50,9 @@ interface SessionEvent {
       parentID?: string;
       title?: string;
       directory?: string;
+      sessionID?: string;
     };
+    part?: { sessionID?: string };
     sessionID?: string;
     status?: { type: string };
   };
@@ -78,7 +85,10 @@ export function resetMultiplexerSessionManagerState(): void {
   state.knownSessions.clear();
   state.spawningSessions.clear();
   state.closingSessions.clear();
+  new CmuxSessionStore().resetForTests();
 }
+
+export type MultiplexerSessionManagerOptions = CmuxSessionLifecycleOptions;
 
 /**
  * Tracks child sessions and spawns/closes multiplexer panes for them.
@@ -97,11 +107,13 @@ export class MultiplexerSessionManager {
   private closingSessions: SharedSessionState['closingSessions'];
   private pollInterval?: ReturnType<typeof setInterval>;
   private enabled = false;
+  private cmuxLifecycle?: CmuxSessionLifecycle;
 
   constructor(
     ctx: PluginInput,
     config: MultiplexerConfig,
     private readonly backgroundJobBoard?: BackgroundJobReader,
+    options: MultiplexerSessionManagerOptions = {},
   ) {
     const sharedState = getSharedState();
     this.sessions = sharedState.sessions;
@@ -119,6 +131,16 @@ export class MultiplexerSessionManager {
       config.type !== 'none' &&
       this.multiplexer !== null &&
       this.multiplexer.isInsideSession();
+    if (this.enabled && this.multiplexer?.type === 'cmux') {
+      this.cmuxLifecycle = new CmuxSessionLifecycle(
+        this.instanceId,
+        this.multiplexer,
+        this.serverUrl,
+        this.directory,
+        this.backgroundJobBoard,
+        options,
+      );
+    }
 
     log('[multiplexer-session-manager] initialized', {
       instanceId: this.instanceId,
@@ -131,6 +153,7 @@ export class MultiplexerSessionManager {
   }
 
   async onSessionCreated(event: SessionEvent): Promise<void> {
+    if (this.cmuxLifecycle) return this.cmuxLifecycle.onSessionCreated(event);
     if (!this.enabled || !this.multiplexer) return;
     if (event.type !== 'session.created') return;
 
@@ -241,6 +264,7 @@ export class MultiplexerSessionManager {
   }
 
   async onSessionStatus(event: SessionEvent): Promise<void> {
+    if (this.cmuxLifecycle) return this.cmuxLifecycle.onSessionStatus(event);
     if (!this.enabled) return;
 
     if (event.type === 'session.idle') {
@@ -299,6 +323,7 @@ export class MultiplexerSessionManager {
   }
 
   async onSessionDeleted(event: SessionEvent): Promise<void> {
+    if (this.cmuxLifecycle) return this.cmuxLifecycle.onSessionDeleted(event);
     if (!this.enabled) return;
     if (event.type !== 'session.deleted') return;
 
@@ -340,6 +365,7 @@ export class MultiplexerSessionManager {
   }
 
   private async pollSessions(): Promise<void> {
+    if (this.cmuxLifecycle) return this.cmuxLifecycle.pollOnce();
     if (this.sessions.size === 0) {
       this.stopPolling();
       return;
@@ -621,6 +647,8 @@ export class MultiplexerSessionManager {
   }
 
   async closeSessionFromCoordinator(sessionId: string): Promise<void> {
+    if (this.cmuxLifecycle)
+      return this.cmuxLifecycle.closeSessionFromCoordinator(sessionId);
     if (!this.enabled) return;
     // Coordinator already vetted lifecycle policy; skip re-check
     // ponytail: theoretical race if new job starts between coordinator's
@@ -629,6 +657,7 @@ export class MultiplexerSessionManager {
   }
 
   async cleanup(): Promise<void> {
+    if (this.cmuxLifecycle) return this.cmuxLifecycle.cleanup();
     this.stopPolling();
 
     if (this.closingSessions.size > 0) {
@@ -659,6 +688,10 @@ export class MultiplexerSessionManager {
     // Note: coordinator has same lifetime as plugin, so no explicit cleanup needed
 
     log('[multiplexer-session-manager] cleanup complete');
+  }
+
+  async cleanupOnInstanceDisposed(): Promise<void> {
+    if (this.cmuxLifecycle) await this.cmuxLifecycle.cleanup();
   }
 }
 

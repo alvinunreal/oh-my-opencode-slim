@@ -10,14 +10,17 @@ import type { MultiplexerConfig, MultiplexerLayout } from '../config/schema';
 export interface PaneResult {
   success: boolean;
   paneId?: string;
+  orphanPaneId?: string;
+  error?: 'unavailable' | 'not_found' | 'invalid_state' | 'hard';
 }
 
 /**
  * Core multiplexer interface
- * Implementations: TmuxMultiplexer, ZellijMultiplexer, HerdrMultiplexer
+ * Implementations: TmuxMultiplexer, ZellijMultiplexer, HerdrMultiplexer,
+ * CmuxMultiplexer
  */
 export interface Multiplexer {
-  readonly type: 'tmux' | 'zellij' | 'herdr';
+  readonly type: 'tmux' | 'zellij' | 'herdr' | 'cmux';
 
   /**
    * Check if the multiplexer binary is available on the system

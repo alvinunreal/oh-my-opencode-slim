@@ -5,6 +5,8 @@
  * Extracted to eliminate copy-paste duplication and prevent drift.
  */
 
+import { existsSync } from 'node:fs';
+import { basename, isAbsolute } from 'node:path';
 import { crossSpawn } from '../utils/compat';
 import { log } from '../utils/logger';
 
@@ -23,10 +25,11 @@ export function buildOpencodeAttachCommand(
   sessionId: string,
   serverUrl: string,
   directory: string,
+  executable = 'opencode',
 ): string {
   const attachDir = normalizePathForShell(directory);
   return [
-    'opencode',
+    executable === 'opencode' ? executable : quoteShellArg(executable),
     'attach',
     quoteShellArg(serverUrl),
     '--session',
@@ -34,6 +37,34 @@ export function buildOpencodeAttachCommand(
     '--dir',
     quoteShellArg(attachDir),
   ].join(' ');
+}
+
+export function resolveHostOpencodeBinary(
+  options: {
+    override?: string;
+    envOverride?: string;
+    execPath?: string;
+    argv0?: string;
+    pathExists?: (path: string) => boolean;
+  } = {},
+): string | null {
+  const pathExists = options.pathExists ?? existsSync;
+  for (const candidate of [
+    options.override,
+    options.envOverride ?? process.env.OPENCODE_BIN,
+    options.execPath ?? process.execPath,
+    options.argv0 ?? process.argv[0],
+  ]) {
+    if (
+      candidate &&
+      isAbsolute(candidate) &&
+      /^opencode(?:\.exe)?$/i.test(basename(candidate)) &&
+      pathExists(candidate)
+    ) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 export async function findBinary(

@@ -2,7 +2,8 @@
 
 ## Responsibility
 
-Provides a unified abstraction layer for terminal multiplexers (tmux and zellij) to spawn, manage, and close panes for child OpenCode agent sessions. This enables a "multiplexer-assisted" workflow where each child session runs in its own terminal pane, providing better isolation and resource management compared to traditional background processes.
+Provides a unified abstraction for tmux, Zellij, Herdr, and cmux to spawn,
+manage, and close panes for child OpenCode agent sessions.
 
 ## Design
 
@@ -13,15 +14,25 @@ Provides a unified abstraction layer for terminal multiplexers (tmux and zellij)
   - `TmuxMultiplexer`: tmux-specific implementation using `tmux` CLI commands
   - `ZellijMultiplexer`: zellij-specific implementation using zellij plugin API
   - `HerdrMultiplexer`: herdr-specific implementation using `herdr` CLI commands
+  - `CmuxMultiplexer`: cmux UUID surface implementation using the cmux CLI
 - **Shared Utilities** (`shared.ts`): `quoteShellArg`, `buildOpencodeAttachCommand`, and `findBinary` — extracted from the three adapters to eliminate copy-paste duplication.
 - **Session Manager** (`session-manager.ts`): Tracks child session lifecycle and coordinates pane operations via event-driven architecture.
+- **cmux lifecycle** (`cmux/session-lifecycle.ts`): Owns readiness, deferred
+  spawning, stable-idle polling, activity generations, reliable close retries,
+  tracked orphan cooldown, cleanup, timers, and ownership. The generic manager
+  delegates its five public lifecycle entries for cmux.
+- **cmux state/policy** (`cmux/session-state.ts`, `cmux/close-policy.ts`):
+  Shared single-record storage and pure close-intent transitions. Pane records
+  are removed only after confirmed close. The store uses a global symbol so a
+  same-directory lifecycle can take over tracked orphans after hot reload;
+  retry budgets remain finite per lifecycle instance.
 - **Factory** (`factory.ts`): Creates appropriate multiplexer instance based on configuration and environment detection.
 
 ### Key Interfaces
 
 ```typescript
 export interface Multiplexer {
-  readonly type: 'tmux' | 'zellij';
+  readonly type: 'tmux' | 'zellij' | 'herdr' | 'cmux';
   isAvailable(): Promise<boolean>;
   isInsideSession(): boolean;
   spawnPane(sessionId: string, description: string, serverUrl: string, directory: string): Promise<PaneResult>;
@@ -68,9 +79,8 @@ The session manager reacts to OpenCode session events:
    ├─ Records session in sessions map with pane metadata
    └─ Starts polling loop if not already running
 
-3. Multiplexer implementation spawns pane:
-   ├─ Tmux: Uses 'tmux new-window' or 'tmux split-window'
-   └─ Zellij: Uses zellij plugin API to create new pane
+3. The selected tmux, Zellij, Herdr, or cmux implementation creates the pane
+   or surface. cmux delegates lifecycle reliability to `CmuxSessionLifecycle`.
 ```
 
 ### Session Completion Flow
@@ -119,7 +129,7 @@ The session manager reacts to OpenCode session events:
 
 ```typescript
 interface MultiplexerConfig {
-  type: 'tmux' | 'zellij' | 'auto' | 'none';
+  type: 'tmux' | 'zellij' | 'herdr' | 'cmux' | 'auto' | 'none';
   layout: MultiplexerLayout; // 'tiled' | 'main-horizontal' | 'main-vertical' | 'grid'
   main_pane_size?: number; // Percentage for main pane (0-100)
   zellij_pane_mode?: string; // Zellij-specific pane mode
@@ -128,7 +138,9 @@ interface MultiplexerConfig {
 
 ### Environment Detection
 
-- **Auto Mode**: Detects multiplexer type from environment variables (`TMUX` or `ZELLIJ`)
+- **Auto Mode**: Detects tmux (`TMUX`), Zellij (`ZELLIJ`), Herdr
+  (`HERDR_ENV`/`HERDR_PANE_ID`), or cmux (complete `CMUX_SOCKET_PATH`,
+  `CMUX_WORKSPACE_ID`, and `CMUX_SURFACE_ID` identity).
 - **Availability Check**: Validates multiplexer binary is available before use
 
 ## Implementation Details
@@ -172,3 +184,7 @@ interface MultiplexerConfig {
 | `tmux/index.ts` | tmux-specific implementation |
 | `zellij/index.ts` | zellij-specific implementation |
 | `herdr/index.ts` | herdr-specific implementation |
+| `cmux/index.ts` | cmux adapter and encoded surface handles |
+| `cmux/session-lifecycle.ts` | cmux event, polling, spawn, close, orphan, and cleanup ownership |
+| `cmux/session-state.ts` | process-global cmux session registry |
+| `cmux/close-policy.ts` | pure cmux close-intent transitions and retry budgets |

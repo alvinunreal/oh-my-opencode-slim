@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 async function importFreshFactory(suffix: string) {
   return import(`./factory?test=${suffix}-${Date.now()}-${Math.random()}`);
@@ -9,12 +9,24 @@ describe('multiplexer factory', () => {
   const originalTmuxPane = process.env.TMUX_PANE;
   const originalHerdrEnv = process.env.HERDR_ENV;
   const originalHerdrPaneId = process.env.HERDR_PANE_ID;
+  const originalCmuxSocket = process.env.CMUX_SOCKET_PATH;
+  const originalCmuxWorkspace = process.env.CMUX_WORKSPACE_ID;
+  const originalCmuxSurface = process.env.CMUX_SURFACE_ID;
+
+  beforeEach(() => {
+    delete process.env.CMUX_SOCKET_PATH;
+    delete process.env.CMUX_WORKSPACE_ID;
+    delete process.env.CMUX_SURFACE_ID;
+  });
 
   afterEach(() => {
     process.env.TMUX = originalTmux;
     process.env.TMUX_PANE = originalTmuxPane;
     process.env.HERDR_ENV = originalHerdrEnv;
     process.env.HERDR_PANE_ID = originalHerdrPaneId;
+    process.env.CMUX_SOCKET_PATH = originalCmuxSocket;
+    process.env.CMUX_WORKSPACE_ID = originalCmuxWorkspace;
+    process.env.CMUX_SURFACE_ID = originalCmuxSurface;
   });
 
   test('returns a fresh tmux instance per call', async () => {
@@ -130,5 +142,35 @@ describe('multiplexer factory', () => {
 
     expect(multiplexer).not.toBeNull();
     expect(multiplexer?.type).toBe('herdr');
+  });
+
+  test('returns a cmux instance when explicitly configured', async () => {
+    const { getMultiplexer } = await importFreshFactory('cmux-explicit');
+    const multiplexer = getMultiplexer({
+      type: 'cmux',
+      layout: 'main-vertical',
+      main_pane_size: 60,
+      zellij_pane_mode: 'agent-tab',
+    });
+    expect(multiplexer?.type).toBe('cmux');
+  });
+
+  test('auto-detects cmux only with the complete cmux identity environment', async () => {
+    delete process.env.TMUX;
+    delete process.env.ZELLIJ;
+    delete process.env.HERDR_ENV;
+    delete process.env.HERDR_PANE_ID;
+    process.env.CMUX_SOCKET_PATH = '/tmp/cmux.sock';
+    process.env.CMUX_WORKSPACE_ID = 'workspace-1';
+    process.env.CMUX_SURFACE_ID = 'surface-1';
+    const { getMultiplexer } = await importFreshFactory('auto-cmux');
+    expect(
+      getMultiplexer({
+        type: 'auto',
+        layout: 'main-vertical',
+        main_pane_size: 60,
+        zellij_pane_mode: 'agent-tab',
+      })?.type,
+    ).toBe('cmux');
   });
 });

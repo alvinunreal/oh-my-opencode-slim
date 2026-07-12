@@ -4,6 +4,7 @@
 
 import type { MultiplexerConfig, MultiplexerType } from '../config/schema';
 import { log } from '../utils/logger';
+import { CmuxMultiplexer } from './cmux';
 import { HerdrMultiplexer } from './herdr';
 import { TmuxMultiplexer } from './tmux';
 import type { Multiplexer } from './types';
@@ -44,10 +45,21 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       multiplexer = new HerdrMultiplexer(config.layout, config.main_pane_size);
       actualType = 'herdr';
       break;
+    case 'cmux':
+      multiplexer = new CmuxMultiplexer();
+      actualType = 'cmux';
+      break;
     case 'auto': {
       // Auto-detect based on environment variables only
       // Note: Does NOT fall back to binary availability checks
-      if (process.env.TMUX) {
+      if (
+        process.env.CMUX_SOCKET_PATH &&
+        process.env.CMUX_WORKSPACE_ID &&
+        process.env.CMUX_SURFACE_ID
+      ) {
+        multiplexer = new CmuxMultiplexer();
+        actualType = 'cmux';
+      } else if (process.env.TMUX) {
         multiplexer = new TmuxMultiplexer(config.layout, config.main_pane_size);
         actualType = 'tmux';
       } else if (process.env.ZELLIJ) {

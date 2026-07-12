@@ -104,6 +104,44 @@ describe('gracefulClosePane', () => {
 });
 
 describe('buildOpencodeAttachCommand', () => {
+  test('quotes an absolute executable containing spaces and apostrophes', async () => {
+    const { buildOpencodeAttachCommand } = await importShared();
+    const cmd = buildOpencodeAttachCommand(
+      'sess',
+      'url',
+      '/repo',
+      "/Users/King's Tools/opencode",
+    );
+    expect(cmd).toStartWith("'/Users/King'\\''s Tools/opencode' attach");
+  });
+
+  test('resolves host executable with env, process, and bare fallbacks', async () => {
+    const { resolveHostOpencodeBinary } = await importShared();
+    expect(
+      resolveHostOpencodeBinary({
+        envOverride: '/Users/king/.opencode/bin/opencode',
+        pathExists: () => true,
+        execPath: '/opt/homebrew/bin/bun',
+        argv0: '/opt/homebrew/bin/bun',
+      }),
+    ).toBe('/Users/king/.opencode/bin/opencode');
+    expect(
+      resolveHostOpencodeBinary({
+        envOverride: '/missing/opencode',
+        pathExists: (path) => path === '/Users/king/.opencode/bin/opencode',
+        execPath: '/Users/king/.opencode/bin/opencode',
+      }),
+    ).toBe('/Users/king/.opencode/bin/opencode');
+    expect(
+      resolveHostOpencodeBinary({
+        envOverride: 'relative/opencode',
+        pathExists: () => true,
+        execPath: '/opt/homebrew/bin/bun',
+        argv0: 'bun',
+      }),
+    ).toBeNull();
+  });
+
   test('normalizes Windows backslash paths to forward slashes', async () => {
     const original = process.platform;
     Object.defineProperty(process, 'platform', {

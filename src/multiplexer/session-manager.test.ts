@@ -17,8 +17,11 @@ const mockFetch = mock(
 );
 
 // Define the mock multiplexer
+let mockMultiplexerType: 'tmux' | 'cmux' = 'tmux';
 const mockMultiplexer = {
-  type: 'tmux' as const,
+  get type() {
+    return mockMultiplexerType;
+  },
   isAvailable: mock(async () => true),
   isInsideSession: mock(() => true),
   spawnPane: mock(async () => ({
@@ -28,11 +31,12 @@ const mockMultiplexer = {
   closePane: mock(async () => true),
   applyLayout: mock(async () => {}),
 };
+const mockIsServerRunning = mock(async () => true);
 
 // Mock the multiplexer module
 mock.module('../multiplexer', () => ({
   getMultiplexer: () => mockMultiplexer,
-  isServerRunning: mock(async () => true),
+  isServerRunning: mockIsServerRunning,
   startAvailabilityCheck: () => {},
 }));
 
@@ -79,6 +83,10 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function flushPromises(count = 8): Promise<void> {
+  for (let index = 0; index < count; index++) await Promise.resolve();
+}
+
 describe('MultiplexerSessionManager', () => {
   beforeEach(() => {
     resetMultiplexerSessionManagerState();
@@ -94,6 +102,9 @@ describe('MultiplexerSessionManager', () => {
     mockMultiplexer.closePane.mockResolvedValue(true);
     mockMultiplexer.isInsideSession.mockReset();
     mockMultiplexer.isInsideSession.mockReturnValue(true);
+    mockMultiplexerType = 'tmux';
+    mockIsServerRunning.mockReset();
+    mockIsServerRunning.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -1396,7 +1407,467 @@ describe('MultiplexerSessionManager', () => {
     });
   });
 
+  describe('cmux lifecycle', () => {
+    const cmuxConfig = { ...defaultMultiplexerConfig, type: 'cmux' as const };
+
+    test('requires lifetime, three idle polls, and a final idle recheck', async () => {
+      mockMultiplexerType = 'cmux';
+      let now = 0;
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        { now: () => now },
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'cmux-idle', parentID: 'parent' } },
+      });
+      await manager.onSessionStatus({
+        type: 'session.idle',
+        properties: { sessionID: 'cmux-idle' },
+      });
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+
+      setMockSessionStatuses({ 'cmux-idle': { type: 'idle' } });
+      await (manager as any).pollSessions();
+      now = 10_000;
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+      await (manager as any).pollSessions();
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('%mock-pane');
+    });
+
+    test('activity resets idle stability and missing status is a grace', async () => {
+      mockMultiplexerType = 'cmux';
+      let now = 0;
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        { now: () => now },
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'cmux-active', parentID: 'parent' } },
+      });
+      now = 10_000;
+      setMockSessionStatuses({ 'cmux-active': { type: 'idle' } });
+      await (manager as any).pollSessions();
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'cmux-active',
+          status: { type: 'message' },
+        },
+      });
+      now = 20_000;
+      setMockSessionStatuses({});
+      await (manager as any).pollSessions();
+      setMockSessionStatuses({ 'cmux-active': { type: 'idle' } });
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+    });
+
+    test('delete and cleanup cancel deferred retries', async () => {
+      for (const action of ['delete', 'cleanup'] as const) {
+        resetMultiplexerSessionManagerState();
+        mockMultiplexer.spawnPane.mockReset();
+        mockMultiplexer.spawnPane.mockResolvedValue({
+          success: false,
+          error: 'invalid_state',
+        });
+        mockMultiplexerType = 'cmux';
+        const retry = createDeferred<void>();
+        const manager = new MultiplexerSessionManager(
+          createMockContext(),
+          cmuxConfig,
+          undefined,
+          { delay: () => retry.promise },
+        );
+        await manager.onSessionCreated({
+          type: 'session.created',
+          properties: { info: { id: action, parentID: 'parent' } },
+        });
+        if (action === 'delete') {
+          await manager.onSessionDeleted({
+            type: 'session.deleted',
+            properties: { sessionID: action },
+          });
+        } else {
+          await manager.cleanup();
+        }
+        retry.resolve();
+        await Promise.resolve();
+        expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    test('hard spawn failures are not deferred', async () => {
+      mockMultiplexerType = 'cmux';
+      const delay = mock(async () => {});
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: false,
+        error: 'hard',
+      });
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        { delay },
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'hard', parentID: 'parent' } },
+      });
+      expect(delay).not.toHaveBeenCalled();
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+    });
+
+    test('server-down deferred retry recovers and expires at original TTL', async () => {
+      for (const recovers of [true, false]) {
+        resetMultiplexerSessionManagerState();
+        mockMultiplexer.spawnPane.mockReset();
+        mockMultiplexer.spawnPane
+          .mockResolvedValueOnce({ success: false, error: 'unavailable' })
+          .mockResolvedValue({ success: true, paneId: `server-${recovers}` });
+        mockIsServerRunning.mockReset();
+        mockIsServerRunning.mockResolvedValue(true);
+        mockMultiplexerType = 'cmux';
+        let now = 0;
+        const retries: Array<ReturnType<typeof createDeferred<void>>> = [];
+        const manager = new MultiplexerSessionManager(
+          createMockContext(),
+          cmuxConfig,
+          undefined,
+          {
+            now: () => now,
+            deferredTtlMs: 10,
+            delay: () => {
+              const retry = createDeferred<void>();
+              retries.push(retry);
+              return retry.promise;
+            },
+          },
+        );
+        await manager.onSessionCreated({
+          type: 'session.created',
+          properties: { info: { id: `down-${recovers}`, parentID: 'p' } },
+        });
+        mockIsServerRunning.mockResolvedValue(false);
+        now = 5;
+        retries[0]?.resolve();
+        await flushPromises();
+        if (recovers) mockIsServerRunning.mockResolvedValue(true);
+        else now = 10;
+        retries[1]?.resolve();
+        await flushPromises();
+        expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(
+          recovers ? 2 : 1,
+        );
+      }
+    });
+
+    test('message events and close-list races reset cmux idle', async () => {
+      mockMultiplexerType = 'cmux';
+      let now = 0;
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        { now: () => now },
+      );
+      for (const id of ['message-a', 'message-b']) {
+        await manager.onSessionCreated({
+          type: 'session.created',
+          properties: { info: { id, parentID: 'parent' } },
+        });
+      }
+      now = 10_000;
+      setMockSessionStatuses({
+        'message-a': { type: 'idle' },
+        'message-b': { type: 'idle' },
+      });
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      const originalClose = mockMultiplexer.closePane;
+      originalClose.mockImplementationOnce(async () => {
+        await manager.onSessionStatus({
+          type: 'message.part.delta',
+          properties: { sessionID: 'message-b' },
+        });
+        return true;
+      });
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+      await manager.onSessionStatus({
+        type: 'message.updated',
+        properties: { info: { sessionID: 'message-b' } },
+      });
+      await manager.onSessionStatus({
+        type: 'message.removed',
+        properties: { sessionID: 'message-b' },
+      });
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+    });
+
+    test('deleted stale spawn and cleanup retry close failures', async () => {
+      mockMultiplexerType = 'cmux';
+      const spawn = createDeferred<{ success: true; paneId: string }>();
+      const retries: Array<ReturnType<typeof createDeferred<void>>> = [];
+      mockMultiplexer.spawnPane.mockImplementationOnce(() => spawn.promise);
+      mockMultiplexer.closePane
+        .mockResolvedValueOnce(false)
+        .mockRejectedValueOnce(new Error('socket'))
+        .mockResolvedValueOnce(true);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        {
+          delay: () => {
+            const retry = createDeferred<void>();
+            retries.push(retry);
+            return retry.promise;
+          },
+        },
+      );
+      const creating = manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'stale-cmux', parentID: 'parent' } },
+      });
+      await flushPromises();
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'stale-cmux' },
+      });
+      spawn.resolve({ success: true, paneId: 'stale-pane' });
+      await creating;
+      retries[0]?.resolve();
+      await flushPromises();
+      retries[1]?.resolve();
+      await flushPromises();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(3);
+    });
+
+    test('retries false and thrown closes until success', async () => {
+      mockMultiplexerType = 'cmux';
+      const retries: Array<ReturnType<typeof createDeferred<void>>> = [];
+      mockMultiplexer.closePane
+        .mockResolvedValueOnce(false)
+        .mockRejectedValueOnce(new Error('socket'))
+        .mockResolvedValueOnce(true);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        {
+          delay: () => {
+            const retry = createDeferred<void>();
+            retries.push(retry);
+            return retry.promise;
+          },
+          closeRetryMaxAttempts: 4,
+        },
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'close-retry', parentID: 'parent' } },
+      });
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'close-retry' },
+      });
+      retries[0]?.resolve();
+      await flushPromises();
+      retries[1]?.resolve();
+      await flushPromises();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(3);
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'close-retry' },
+      });
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(3);
+    });
+
+    test('activity during final recheck cancels close', async () => {
+      mockMultiplexerType = 'cmux';
+      let now = 10_000;
+      const finalFetch = createDeferred<Response>();
+      mockFetch
+        .mockResolvedValueOnce(Response.json({ race: { type: 'idle' } }))
+        .mockResolvedValueOnce(Response.json({ race: { type: 'idle' } }))
+        .mockResolvedValueOnce(Response.json({ race: { type: 'idle' } }))
+        .mockImplementationOnce(() => finalFetch.promise);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        { now: () => now },
+      );
+      now = 0;
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'race', parentID: 'parent' } },
+      });
+      now = 10_000;
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      const finalPoll = (manager as any).pollSessions();
+      await flushPromises();
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: { sessionID: 'race', status: { type: 'message' } },
+      });
+      finalFetch.resolve(Response.json({ race: { type: 'idle' } }));
+      await finalPoll;
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
+    test('poll guard prevents overlapping status fetches', async () => {
+      mockMultiplexerType = 'cmux';
+      const slowFetch = createDeferred<Response>();
+      mockFetch.mockImplementationOnce(() => slowFetch.promise);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'slow', parentID: 'parent' } },
+      });
+      const first = (manager as any).pollSessions();
+      const second = (manager as any).pollSessions();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      slowFetch.resolve(Response.json({ slow: { type: 'idle' } }));
+      await Promise.all([first, second]);
+    });
+
+    test('missing resets idle streak and closes after grace expires', async () => {
+      mockMultiplexerType = 'cmux';
+      let now = 0;
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        undefined,
+        { now: () => now, missingGraceMs: 30 },
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'missing', parentID: 'parent' } },
+      });
+      now = 10_000;
+      setMockSessionStatuses({ missing: { type: 'idle' } });
+      await (manager as any).pollSessions();
+      setMockSessionStatuses({});
+      await (manager as any).pollSessions();
+      now += 29;
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+      setMockSessionStatuses({ missing: { type: 'idle' } });
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+      setMockSessionStatuses({});
+      await (manager as any).pollSessions();
+      now += 30;
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+    });
+
+    test('background job policy still gates stable cmux idle close', async () => {
+      mockMultiplexerType = 'cmux';
+      let now = 0;
+      const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
+      board.registerLaunch({
+        taskID: 'cmux-background',
+        parentSessionID: 'parent',
+        agent: 'explorer',
+      });
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        coordinator,
+        { now: () => now },
+      );
+      coordinator.addTerminalStateListener((sessionId) => {
+        void manager.closeSessionFromCoordinator(sessionId);
+      });
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'cmux-background', parentID: 'parent' },
+        },
+      });
+      now = 10_000;
+      setMockSessionStatuses({ 'cmux-background': { type: 'idle' } });
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+      board.updateStatus({ taskID: 'cmux-background', state: 'completed' });
+      await (manager as any).pollSessions();
+      expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+    });
+
+    test('session.deleted closes immediately', async () => {
+      mockMultiplexerType = 'cmux';
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'cmux-deleted', parentID: 'parent' } },
+      });
+      await manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'cmux-deleted' },
+      });
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('%mock-pane');
+    });
+  });
+
   describe('cleanup', () => {
+    test('instance disposal cleanup is a no-op for non-cmux multiplexers', async () => {
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        defaultMultiplexerConfig,
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'tmux-live', parentID: 'parent' } },
+      });
+      mockMultiplexer.closePane.mockClear();
+      await manager.cleanupOnInstanceDisposed();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
+    test('cmux cleanup has a shutdown deadline for a hanging spawn', async () => {
+      mockMultiplexerType = 'cmux';
+      const spawn = createDeferred<{ success: true; paneId: string }>();
+      mockMultiplexer.spawnPane.mockImplementationOnce(() => spawn.promise);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        { ...defaultMultiplexerConfig, type: 'cmux' },
+        undefined,
+        { shutdownTimeoutMs: 1 },
+      );
+      void manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'hanging-cleanup', parentID: 'parent' } },
+      });
+      await flushPromises();
+      await manager.cleanup();
+      expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
     test('closes all tracked panes concurrently', async () => {
       const ctx = createMockContext();
       mockMultiplexer.spawnPane
@@ -1448,12 +1919,11 @@ describe('MultiplexerSessionManager', () => {
 
       await Promise.resolve();
 
-      await manager.cleanup();
+      const cleanupPromise = manager.cleanup();
+      deferred.resolve({ success: true, paneId: 'p-cleanup' });
+      await Promise.all([createPromise, cleanupPromise]);
 
       await manager.onSessionCreated(event);
-
-      deferred.resolve({ success: true, paneId: 'p-cleanup' });
-      await createPromise;
 
       expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(2);
     });
