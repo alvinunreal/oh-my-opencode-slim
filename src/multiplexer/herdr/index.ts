@@ -42,6 +42,8 @@ export class HerdrMultiplexer implements Multiplexer {
   private layout: MultiplexerLayout;
   private paneDirection: HerdrPaneDirection;
   private agentAreaPaneId: string | null = null;
+  // ponytail: serialize spawnPane to prevent concurrent races on agentAreaPaneId
+  private spawnMutex: Promise<unknown> = Promise.resolve();
 
   constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
     // Herdr does not support exact main pane sizing like tmux.
@@ -66,6 +68,25 @@ export class HerdrMultiplexer implements Multiplexer {
   }
 
   async spawnPane(
+    sessionId: string,
+    description: string,
+    serverUrl: string,
+    directory: string,
+  ): Promise<PaneResult> {
+    // ponytail: serialize concurrent spawns to prevent races on agentAreaPaneId
+    const prev = this.spawnMutex;
+    let release!: () => void;
+    this.spawnMutex = new Promise<void>((r) => (release = r));
+    await prev;
+
+    try {
+      return await this.doSpawn(sessionId, description, serverUrl, directory);
+    } finally {
+      release();
+    }
+  }
+
+  private async doSpawn(
     sessionId: string,
     description: string,
     serverUrl: string,
