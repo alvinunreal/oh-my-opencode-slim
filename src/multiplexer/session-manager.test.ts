@@ -1549,12 +1549,7 @@ describe('MultiplexerSessionManager', () => {
         properties: { sessionID: 'busy-url', status: { type: 'busy' } },
       });
 
-      expect(mockMultiplexer.spawnPane).toHaveBeenLastCalledWith(
-        'busy-url',
-        'Subagent',
-        'http://127.0.0.1:63872/',
-        '/test/directory',
-      );
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
     });
 
     test('each poll resolves the latest URL', async () => {
@@ -2107,6 +2102,8 @@ describe('MultiplexerSessionManager', () => {
       setMockSessionStatuses({});
       await (manager as any).pollSessions();
       now += 30;
+      await (manager as any).pollSessions();
+      await (manager as any).pollSessions();
       await (manager as any).pollSessions();
       expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
     });

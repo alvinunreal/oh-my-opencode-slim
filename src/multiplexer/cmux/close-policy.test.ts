@@ -28,6 +28,9 @@ describe('CmuxClosePolicy', () => {
     expect(first).toMatchObject({ phase: 'cooldown', nextAttemptAt: 30_001 });
     const second = policy.failed(first, 30_001);
     expect(second.nextAttemptAt).toBe(90_001);
+    const resumed = policy.resume(first, 30_001);
+    const third = policy.failed(resumed, 30_002);
+    expect(third.nextAttemptAt).toBe(90_002);
     expect(policy.complete()).toBeUndefined();
   });
 });

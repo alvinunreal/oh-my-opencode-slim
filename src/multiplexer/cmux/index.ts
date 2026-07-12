@@ -45,26 +45,34 @@ export interface CmuxClient {
   getVersionError?(): 'unavailable' | 'hard';
   identify(): Promise<CmuxIdentity | null>;
   getIdentifyError?(): 'unavailable' | 'hard';
-  createSurface(input: {
-    workspaceId: string;
-    targetSurfaceId: string;
-    direction: 'right' | 'down';
-    focus: false;
-  }): Promise<{ paneId: string; surfaceId: string } | null>;
+  createSurface(
+    input: {
+      workspaceId: string;
+      targetSurfaceId: string;
+      direction: 'right' | 'down';
+      focus: false;
+    },
+    socketPath?: string,
+  ): Promise<{ paneId: string; surfaceId: string } | null>;
   getCreateError?(): 'not_found' | 'unavailable' | 'invalid_state' | 'hard';
   respawnSurface(
     workspaceId: string,
     surfaceId: string,
     command: string,
+    socketPath?: string,
   ): Promise<boolean>;
   closeSurface(
     workspaceId: string,
     surfaceId: string,
+    socketPath?: string,
   ): Promise<'closed' | 'not_found' | 'failed'>;
-  equalizeSplits(params: {
-    workspace_id: string;
-    orientation: 'vertical';
-  }): Promise<boolean>;
+  equalizeSplits(
+    params: {
+      workspace_id: string;
+      orientation: 'vertical';
+    },
+    socketPath?: string,
+  ): Promise<boolean>;
 }
 
 interface Handle {
@@ -178,12 +186,15 @@ export class CmuxMultiplexer implements Multiplexer {
       const previous = registry.agents.at(-1);
       const targetSurfaceId = previous?.surfaceId ?? registry.root.surfaceId;
       const direction = previous ? 'down' : 'right';
-      const created = await this.client.createSurface({
-        workspaceId: root.workspaceId,
-        targetSurfaceId,
-        direction,
-        focus: false,
-      });
+      const created = await this.client.createSurface(
+        {
+          workspaceId: root.workspaceId,
+          targetSurfaceId,
+          direction,
+          focus: false,
+        },
+        root.socketPath,
+      );
       if (!created) {
         log('[cmux] spawnPane failed', {
           sequence,
@@ -219,6 +230,7 @@ export class CmuxMultiplexer implements Multiplexer {
           root.workspaceId,
           created.surfaceId,
           command,
+          root.socketPath,
         );
         if (!started) {
           log('[cmux] spawnPane failed', {
@@ -244,14 +256,19 @@ export class CmuxMultiplexer implements Multiplexer {
         const cleaned = await this.cleanupPane(
           root.workspaceId,
           created.surfaceId,
+          root.socketPath,
         );
         return cleaned
-          ? { success: false, error: 'hard' }
-          : { success: false, error: 'hard', orphanPaneId: encodedHandle };
+          ? { success: false, error: 'unavailable' }
+          : {
+              success: false,
+              error: 'unavailable',
+              orphanPaneId: encodedHandle,
+            };
       }
 
       registry.agents.push(handle);
-      await this.equalize(root.workspaceId);
+      await this.equalize(root.workspaceId, root.socketPath);
       return { success: true, paneId: encodeHandle(handle) };
     });
   }
@@ -264,6 +281,7 @@ export class CmuxMultiplexer implements Multiplexer {
       const result = await this.client.closeSurface(
         handle.workspaceId,
         handle.surfaceId,
+        handle.socketPath,
       );
       if (result === 'failed') return false;
       const key = registryKey(handle.socketPath, handle.workspaceId);
@@ -275,7 +293,7 @@ export class CmuxMultiplexer implements Multiplexer {
         if (index >= 0) registry.agents.splice(index, 1);
         if (registry.agents.length === 0) registries.delete(key);
       }
-      await this.equalize(handle.workspaceId);
+      await this.equalize(handle.workspaceId, handle.socketPath);
       return true;
     });
   }
@@ -290,9 +308,14 @@ export class CmuxMultiplexer implements Multiplexer {
   private async cleanupPane(
     workspaceId: string,
     surfaceId: string,
+    socketPath: string,
   ): Promise<boolean> {
     try {
-      const result = await this.client.closeSurface(workspaceId, surfaceId);
+      const result = await this.client.closeSurface(
+        workspaceId,
+        surfaceId,
+        socketPath,
+      );
       if (result === 'failed') {
         log('[cmux] failed to close pre-respawn surface', {
           workspaceId,
@@ -348,12 +371,18 @@ export class CmuxMultiplexer implements Multiplexer {
     return false;
   }
 
-  private async equalize(workspaceId: string): Promise<void> {
+  private async equalize(
+    workspaceId: string,
+    socketPath: string,
+  ): Promise<void> {
     try {
-      const success = await this.client.equalizeSplits({
-        workspace_id: workspaceId,
-        orientation: 'vertical',
-      });
+      const success = await this.client.equalizeSplits(
+        {
+          workspace_id: workspaceId,
+          orientation: 'vertical',
+        },
+        socketPath,
+      );
       if (!success)
         log('[cmux] workspace.equalize_splits failed', { workspaceId });
     } catch (error) {
@@ -462,26 +491,31 @@ export class CliCmuxClient implements CmuxClient {
     return this.identifyError;
   }
 
-  async createSurface(input: {
-    workspaceId: string;
-    targetSurfaceId: string;
-    direction: 'right' | 'down';
-    focus: false;
-  }): Promise<{ paneId: string; surfaceId: string } | null> {
+  async createSurface(
+    input: {
+      workspaceId: string;
+      targetSurfaceId: string;
+      direction: 'right' | 'down';
+      focus: false;
+    },
+    socketPath?: string,
+  ): Promise<{ paneId: string; surfaceId: string } | null> {
     this.createError = 'hard';
-    const result = await this.run([
-      '--json',
-      '--id-format',
-      'uuids',
-      'new-split',
-      input.direction,
-      '--workspace',
-      input.workspaceId,
-      '--surface',
-      input.targetSurfaceId,
-      '--focus',
-      'false',
-    ]);
+    const result = await this.run(
+      withSocket(socketPath, [
+        '--json',
+        '--id-format',
+        'uuids',
+        'new-split',
+        input.direction,
+        '--workspace',
+        input.workspaceId,
+        '--surface',
+        input.targetSurfaceId,
+        '--focus',
+        'false',
+      ]),
+    );
     if (!result || result.exitCode !== 0) {
       this.createError = this.lastRunThrew
         ? 'unavailable'
@@ -516,30 +550,36 @@ export class CliCmuxClient implements CmuxClient {
     workspaceId: string,
     surfaceId: string,
     command: string,
+    socketPath?: string,
   ): Promise<boolean> {
-    const result = await this.run([
-      'respawn-pane',
-      '--workspace',
-      workspaceId,
-      '--surface',
-      surfaceId,
-      '--command',
-      command,
-    ]);
+    const result = await this.run(
+      withSocket(socketPath, [
+        'respawn-pane',
+        '--workspace',
+        workspaceId,
+        '--surface',
+        surfaceId,
+        '--command',
+        command,
+      ]),
+    );
     return result?.exitCode === 0;
   }
 
   async closeSurface(
     workspaceId: string,
     surfaceId: string,
+    socketPath?: string,
   ): Promise<'closed' | 'not_found' | 'failed'> {
-    const result = await this.run([
-      'close-surface',
-      '--workspace',
-      workspaceId,
-      '--surface',
-      surfaceId,
-    ]);
+    const result = await this.run(
+      withSocket(socketPath, [
+        'close-surface',
+        '--workspace',
+        workspaceId,
+        '--surface',
+        surfaceId,
+      ]),
+    );
     if (result?.exitCode === 0) return 'closed';
     return result?.stderr.toLowerCase().includes('not_found') ||
       result?.stderr.toLowerCase().includes('not found')
@@ -547,15 +587,20 @@ export class CliCmuxClient implements CmuxClient {
       : 'failed';
   }
 
-  async equalizeSplits(params: {
-    workspace_id: string;
-    orientation: 'vertical';
-  }): Promise<boolean> {
-    const result = await this.run([
-      'rpc',
-      'workspace.equalize_splits',
-      JSON.stringify(params),
-    ]);
+  async equalizeSplits(
+    params: {
+      workspace_id: string;
+      orientation: 'vertical';
+    },
+    socketPath?: string,
+  ): Promise<boolean> {
+    const result = await this.run(
+      withSocket(socketPath, [
+        'rpc',
+        'workspace.equalize_splits',
+        JSON.stringify(params),
+      ]),
+    );
     return result?.exitCode === 0;
   }
 
@@ -647,6 +692,10 @@ function commandOperation(args: string[]): string {
       ].includes(arg),
     ) ?? 'version'
   );
+}
+
+function withSocket(socketPath: string | undefined, args: string[]): string[] {
+  return socketPath ? ['--socket', socketPath, ...args] : args;
 }
 
 function safeSummary(value: string): string {

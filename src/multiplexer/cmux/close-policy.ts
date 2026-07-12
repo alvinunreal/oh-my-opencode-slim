@@ -6,6 +6,7 @@ export interface CmuxCloseIntent {
   deadline: number;
   phase: 'pending' | 'cooldown';
   nextAttemptAt: number;
+  cooldowns: number;
 }
 
 export class CmuxClosePolicy {
@@ -27,6 +28,7 @@ export class CmuxClosePolicy {
         deadline: now + this.budgetMs,
         phase: 'pending',
         nextAttemptAt: now,
+        cooldowns: 0,
       };
     }
     return current;
@@ -37,15 +39,29 @@ export class CmuxClosePolicy {
   failed(intent: CmuxCloseIntent, now: number): CmuxCloseIntent {
     const attempts = intent.attempts + 1;
     if (attempts >= this.maxAttempts || now >= intent.deadline) {
-      const delay = intent.phase === 'cooldown' ? 60_000 : 30_000;
+      const cooldowns = intent.cooldowns + 1;
+      const delay =
+        cooldowns === 1 ? 30_000 : cooldowns === 2 ? 60_000 : Infinity;
       return {
         ...intent,
         attempts,
         phase: 'cooldown',
         nextAttemptAt: now + delay,
+        cooldowns,
       };
     }
     return { ...intent, attempts, nextAttemptAt: now + 1_000 };
+  }
+  resume(intent: CmuxCloseIntent, now: number): CmuxCloseIntent {
+    if (intent.phase !== 'cooldown' || now < intent.nextAttemptAt)
+      return intent;
+    return {
+      ...intent,
+      attempts: 0,
+      deadline: now + this.budgetMs,
+      phase: 'pending',
+      nextAttemptAt: now,
+    };
   }
   complete(): undefined {
     return undefined;

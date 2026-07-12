@@ -34,6 +34,15 @@ multiple instances. The plugin now reads `ctx.serverUrl` only when checking,
 spawning, or polling, which avoids snapshotting the temporary startup URL; it
 cannot create a listener that OpenCode did not start.
 
+For cmux, a session status that remains missing for more than the 30-second
+grace period is treated as an idle candidate. Closing still requires the pane
+to have been attached for at least 10 seconds, three stable idle-candidate
+checks, and a final status recheck.
+
+If all bounded close attempts and both cooldown retries are exhausted, the pane
+remains tracked as an orphan without a running timer. A later lifecycle for the
+same directory claims it with a fresh, bounded close-attempt budget.
+
 This zsh helper preserves an explicit `--port` and exports the matching
 `OPENCODE_PORT`. Otherwise, it asks Python to select an available loopback port
 and starts OpenCode with that port explicitly:

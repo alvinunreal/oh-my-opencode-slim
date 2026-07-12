@@ -154,6 +154,7 @@ describe('CmuxMultiplexer', () => {
     expect(api.closeSurface).toHaveBeenCalledWith(
       'workspace-root',
       'surface-1',
+      '/tmp/cmux.sock',
     );
     expect(await waiting).toEqual({ success: false, error: 'unavailable' });
   });
@@ -179,25 +180,117 @@ describe('CmuxMultiplexer', () => {
     const instance = mux(api);
     const first = await instance.spawnPane('s1', 'one', 'http://server', '/r');
     await instance.spawnPane('s2', 'two', 'http://server', '/r');
-    expect(api.createSurface).toHaveBeenNthCalledWith(1, {
-      workspaceId: 'workspace-root',
-      targetSurfaceId: 'surface-root',
-      direction: 'right',
-      focus: false,
-    });
+    expect(api.createSurface).toHaveBeenNthCalledWith(
+      1,
+      {
+        workspaceId: 'workspace-root',
+        targetSurfaceId: 'surface-root',
+        direction: 'right',
+        focus: false,
+      },
+      '/tmp/cmux.sock',
+    );
     expect(api.createSurface).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         targetSurfaceId: 'surface-1',
         direction: 'down',
       }),
+      '/tmp/cmux.sock',
     );
     await instance.closePane(first.paneId ?? '');
     expect(api.closeSurface).toHaveBeenCalledWith(
       'workspace-root',
       'surface-1',
+      '/tmp/cmux.sock',
     );
     expect(api.equalizeSplits).toHaveBeenCalledTimes(3);
+  });
+
+  test('uses the identified socket for every operation after identify', async () => {
+    const calls: string[][] = [];
+    const runner: CommandRunner = {
+      run: mock(async (argv) => {
+        calls.push(argv);
+        if (argv.includes('--version'))
+          return { exitCode: 0, stdout: 'cmux 0.64.17', stderr: '' };
+        if (argv.includes('identify'))
+          return {
+            exitCode: 0,
+            stderr: '',
+            stdout: JSON.stringify({
+              socket_path: '/tmp/socket-a',
+              caller: {
+                workspace_id: 'w',
+                pane_id: 'p',
+                surface_id: 'root',
+              },
+            }),
+          };
+        return {
+          exitCode: 0,
+          stderr: '',
+          stdout: JSON.stringify({ pane_id: 'p2', surface_id: 's2' }),
+        };
+      }),
+    };
+    const previous = process.env.CMUX_SOCKET_PATH;
+    process.env.CMUX_SOCKET_PATH = '/tmp/socket-a';
+    const instance = mux(new CliCmuxClient(runner, '/bin/cmux'));
+    const pane = await instance.spawnPane('s', 'agent', 'http://server', '/r');
+    process.env.CMUX_SOCKET_PATH = '/tmp/socket-b';
+    await instance.closePane(pane.paneId ?? '');
+    const close = calls.find((call) => call.includes('close-surface'));
+    for (const operation of [
+      'new-split',
+      'respawn-pane',
+      'rpc',
+      'close-surface',
+    ]) {
+      const call = calls.find((candidate) => candidate.includes(operation));
+      expect(call?.slice(1, 3)).toEqual(['--socket', '/tmp/socket-a']);
+    }
+    if (previous === undefined) delete process.env.CMUX_SOCKET_PATH;
+    else process.env.CMUX_SOCKET_PATH = previous;
+  });
+
+  test('keeps separate multiplexer instances on their identified sockets', async () => {
+    const first = client();
+    const second = client();
+    first.identify = mock(async () => ({
+      workspaceId: 'w1',
+      paneId: 'p1',
+      surfaceId: 'root1',
+      socketPath: '/tmp/a',
+    }));
+    second.identify = mock(async () => ({
+      workspaceId: 'w2',
+      paneId: 'p2',
+      surfaceId: 'root2',
+      socketPath: '/tmp/b',
+    }));
+    await mux(first).spawnPane('a', 'agent', 'http://server', '/repo');
+    await mux(second).spawnPane('b', 'agent', 'http://server', '/repo');
+    expect(first.createSurface).toHaveBeenCalledWith(
+      expect.any(Object),
+      '/tmp/a',
+    );
+    expect(second.createSurface).toHaveBeenCalledWith(
+      expect.any(Object),
+      '/tmp/b',
+    );
+    expect(first.respawnSurface).toHaveBeenCalledWith(
+      'w1',
+      expect.any(String),
+      expect.any(String),
+      '/tmp/a',
+    );
+    expect(second.respawnSurface).toHaveBeenCalledWith(
+      'w2',
+      expect.any(String),
+      expect.any(String),
+      '/tmp/b',
+    );
   });
 
   test('serializes concurrent spawns', async () => {
@@ -210,6 +303,7 @@ describe('CmuxMultiplexer', () => {
     expect(api.createSurface).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ direction: 'down' }),
+      '/tmp/cmux.sock',
     );
   });
 
@@ -225,6 +319,7 @@ describe('CmuxMultiplexer', () => {
       'workspace-root',
       'surface-1',
       "'/opt/opencode' attach 'http://host/a b;$()' --session 's'\\''$(touch /tmp/no);' --dir '/repo/a b/'\\''quoted'\\'''",
+      '/tmp/cmux.sock',
     );
   });
 
@@ -241,6 +336,7 @@ describe('CmuxMultiplexer', () => {
       'workspace-root',
       'surface-1',
       "'/Users/king/.opencode/bin/opencode' attach 'http://server' --session 's1' --dir '/repo'",
+      '/tmp/cmux.sock',
     );
   });
 
@@ -270,7 +366,7 @@ describe('CmuxMultiplexer', () => {
     );
     expect(result).toEqual({
       success: false,
-      error: 'hard',
+      error: 'unavailable',
       orphanPaneId: expect.stringContaining('cmux:v1:'),
     });
     expect(await mux(api).closePane(result.orphanPaneId ?? '')).toBe(false);
