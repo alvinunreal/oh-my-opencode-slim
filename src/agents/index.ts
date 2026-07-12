@@ -728,4 +728,3 @@ export function getDisabledAgents(config?: PluginConfig): Set<string> {
   }
   return disabled;
 }
-
