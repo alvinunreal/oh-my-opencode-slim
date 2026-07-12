@@ -122,6 +122,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `agents.<customAgent>.model` | string\|array | - | Required for custom agents inferred from unknown `agents` keys |
 | `agents.<customAgent>.prompt` | string | - | Full execution prompt for a custom agent |
 | `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
+| `agents.<agent>.permission` | object \| string | - | Tool-level permission rules enforced by the SDK. See [Agent Permissions](#agent-permissions) |
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
 | `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command |
@@ -313,6 +314,95 @@ Notes:
 - Custom agent names must be safe identifiers such as `janitor` or `security-reviewer`
 - Custom agents without a `model` are skipped with a warning
 - Disabled custom agents are not registered or injected into the orchestrator prompt
+
+### Agent Permissions
+
+The `permission` field provides deterministic, tool-level permission restrictions on custom agents, built-in agent overrides, and presets. Unlike prompt instructions ("do not edit files"), these rules are enforced by the OpenCode SDK at the tool-call level.
+
+The field accepts either:
+
+1. **Shorthand string** — `"ask"`, `"allow"`, or `"deny"` applied to all tools
+2. **Object** — keys are tool names, values are `"ask" | "allow" | "deny"` or (for rule keys) a pattern-to-action map
+
+**Example: read-only `planner` agent:**
+
+```jsonc
+{
+  "agents": {
+    "planner": {
+      "model": "openai/gpt-5.5",
+      "variant": "high",
+      "skills": [],
+      "mcps": ["context7", "websearch"],
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "grep *": "allow"
+        },
+        "webfetch": "allow",
+        "websearch": "allow",
+        "task": "deny"
+      },
+      "prompt": "You are Planner. Create implementation plans only. Do not implement code."
+    }
+  }
+}
+```
+
+**Example: `security-reviewer` agent:**
+
+```jsonc
+{
+  "agents": {
+    "security-reviewer": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "webfetch": "allow"
+      },
+      "prompt": "You are a security reviewer. Inspect code and report findings. Do not patch anything."
+    }
+  }
+}
+```
+
+#### Permission keys
+
+| Key | Value type | Description |
+|-----|------------|-------------|
+| `read` | string or object | File reading |
+| `edit` | string or object | File editing |
+| `glob` | string or object | File pattern matching |
+| `grep` | string or object | Content search |
+| `list` | string or object | Directory listing |
+| `bash` | string or object | Shell command execution |
+| `task` | string or object | Subagent task delegation |
+| `external_directory` | string or object | Access to directories outside the workspace |
+| `lsp` | string or object | Language server protocol operations |
+| `skill` | string or object | Skill execution |
+| `todowrite` | string only | Todo list writing |
+| `question` | string only | Asking the user questions |
+| `webfetch` | string only | Web content fetching |
+| `websearch` | string only | Web search |
+| `codesearch` | string only | Code search |
+| `doom_loop` | string only | Doom loop prevention |
+
+Keys marked "string or object" accept pattern-based rules (e.g. `bash: { "git status*": "allow", "*": "ask" }`). Keys marked "string only" accept a single `"ask"`, `"allow"`, or `"deny"` value. Unknown tool names (including MCP-derived keys) pass through without error.
+
+#### Merge semantics
+
+When a user supplies `permission` and also uses the `skills` or `mcps` arrays on the same agent, the plugin merges them:
+
+1. **User-supplied `permission` is the base layer.**
+2. **Plugin-generated rules from the `skills` array override `permission.skill`** — the `skills` array is authoritative for skill gating.
+3. **Plugin-generated rules from the `mcps` array set `permission.<mcp>_*` keys** — the `mcps` array is authoritative for MCP gating.
+4. **User-supplied keys for standard tools** (`edit`, `bash`, `webfetch`, `task`, etc.) survive the merge untouched.
+
+Use the `skills`/`mcps` arrays for skill and MCP gating. Use `permission` for everything else (file access, bash, web, task delegation).
 
 ### Desktop Companion App
 
