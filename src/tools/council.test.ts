@@ -501,6 +501,5 @@ describe('council_session tool', () => {
 
       expect(result).toContain('Council: 10/10 councillors responded');
     });
-
   });
 });

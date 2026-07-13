@@ -400,36 +400,6 @@ failure.
 
 ## Compatibility Notes
 
-### Deprecated `master` fields
-
-Older examples used these fields:
-
-- `council.master`
-- `council.master_timeout`
-- `council.master_fallback`
-
-They are deprecated.
-
-Current behavior:
-
-- `master_timeout` is ignored
-- `master_fallback` is ignored
-- `master` is deprecated, but `master.model` is still accepted as a temporary
-  fallback for the **Council agent model only** when no explicit `council`
-  agent model is configured elsewhere
-
-Prefer this instead:
-
-```jsonc
-{
-  "presets": {
-    "openai": {
-      "council": { "model": "openai/gpt-5.6" }
-    }
-  }
-}
-```
-
 ### Reserved keys inside presets
 
 - A preset key named `master` is ignored

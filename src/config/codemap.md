@@ -47,8 +47,7 @@ The config system follows a layered architecture:
 3. Merging Phase
    ├─ User config (base) + Project config (override) → deep merge
    ├─ Preset resolution: preset → merge preset.agents with root agents
-   ├─ Legacy tmux → multiplexer migration for backward compatibility
-   └─ Normalization: companion defaults, ACP agent defaults
+    └─ Normalization: companion defaults, ACP agent defaults
 
 4. Runtime Phase
    ├─ Active preset state persisted across plugin re-inits
@@ -153,8 +152,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `disabled_mcps`: List of MCPs to disable
 - `disabled_tools`: List of tools to disable
 - `disabled_skills`: List of skills to disable
-- `multiplexer`: Unified pane management config (type, layout, sizes)
-- `tmux`: Legacy tmux configuration (migrated to multiplexer)
+- `multiplexer`: Pane management config (type, layout, sizes)
 - `websearch`: Websearch provider configuration
 - `interview`: Interview feature configuration
 - `backgroundJobs`: Background job configuration
@@ -194,9 +192,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ## Backward Compatibility
 
-- Legacy `tmux.enabled` is automatically migrated to `multiplexer.type = 'tmux'`
-- Legacy nested `councillors` format in presets is automatically unwrapped
-- Legacy `master` field in council config is accepted but ignored (council agent synthesizes directly)
+- None. All legacy config keys have been removed. Use `multiplexer` for pane management, and flat councillor keys in council presets.
 
 ## Error Handling
 
