@@ -140,9 +140,6 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Tmux applies full layouts; Zellij and Herdr map supported layouts to split directions; cmux maintains a right-hand agent column |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij, Herdr, and cmux |
 | `multiplexer.zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `agent-tab` creates/reuses a dedicated `opencode-agents` tab; `current-tab` opens subagents as panes in the tab containing the parent OpenCode pane, falling back to the focused tab if the parent pane cannot be resolved |
-| `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` |
-| `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` |
-| `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) |
 | `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) |
 | `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) |
@@ -228,8 +225,7 @@ subprocess.
   `presets.<name>.council.model`.
 - The **councillor models** are configured separately under
   `council.presets.<name>.<councillor>.model`.
-- Deprecated `council.master*` fields are legacy compatibility aliases only;
-  do not use them in new configs.
+- **BREAKING:** The `council.master` field has been removed — configure the council agent model via `presets.<name>.council.model`.
 
 ### Manual Update Mode
 

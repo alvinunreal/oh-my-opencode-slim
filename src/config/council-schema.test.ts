@@ -216,11 +216,9 @@ describe('CouncilConfigSchema', () => {
     }
   });
 
-  test('rejects missing presets', () => {
+  test('rejects config with only non-preset keys', () => {
     const badConfig = {
-      master: {
-        model: 'anthropic/claude-opus-4-6',
-      },
+      timeout: 5000,
     };
 
     const result = CouncilConfigSchema.safeParse(badConfig);

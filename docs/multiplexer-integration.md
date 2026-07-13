@@ -273,21 +273,17 @@ OpenCode pane, even if another Zellij tab is focused when a subagent starts.
 If the parent pane cannot be resolved, it falls back to the currently focused
 tab.
 
-### Legacy tmux config
-
-Older configs still work:
+### Tmux via multiplexer config
 
 ```jsonc
 {
-  "tmux": {
-    "enabled": true,
+  "multiplexer": {
+    "type": "tmux",
     "layout": "main-vertical",
     "main_pane_size": 60
   }
 }
 ```
-
-This is converted automatically to `multiplexer.type: "tmux"`.
 
 ---
 

@@ -137,8 +137,8 @@ export function generateLiteConfig(
   }
 
   if (installConfig.hasTmux) {
-    config.tmux = {
-      enabled: true,
+    config.multiplexer = {
+      type: 'tmux',
       layout: 'main-vertical',
       main_pane_size: 60,
     };

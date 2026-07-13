@@ -110,8 +110,8 @@ This is the exact configuration the author runs day-to-day.
       "mcps": []
     }
   },
-  "tmux": {
-    "enabled": true,
+  "multiplexer": {
+    "type": "tmux",
     "layout": "main-vertical",
     "main_pane_size": 60
   }

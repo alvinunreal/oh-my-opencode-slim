@@ -704,9 +704,9 @@ export function detectCurrentConfig(): DetectedConfig {
       }
     }
 
-    if (configObj.tmux && typeof configObj.tmux === 'object') {
-      const tmuxConfig = configObj.tmux as { enabled?: boolean };
-      result.hasTmux = tmuxConfig.enabled === true;
+    if (configObj.multiplexer && typeof configObj.multiplexer === 'object') {
+      const muxConfig = configObj.multiplexer as { type?: string };
+      result.hasTmux = muxConfig.type === 'tmux';
     }
   }
 

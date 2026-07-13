@@ -398,13 +398,9 @@ failure.
 
 ---
 
-## Compatibility Notes
+## Breaking Changes
 
-### Reserved keys inside presets
-
-- A preset key named `master` is ignored
-- Legacy nested `councillors` objects are still accepted for backward
-  compatibility
+- Legacy `master` and nested `councillors` keys inside presets are no longer accepted. Use flat councillor keys directly in `council.presets.<name>` — for example `alpha`, `beta`, `gamma`.
 
 ---
 

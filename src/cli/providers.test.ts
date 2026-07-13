@@ -132,9 +132,9 @@ describe('providers', () => {
       reset: false,
     });
 
-    expect(config.tmux).toBeDefined();
-    expect((config.tmux as any).enabled).toBe(true);
-    expect((config.tmux as any).layout).toBe('main-vertical');
+    expect(config.multiplexer).toBeDefined();
+    expect((config.multiplexer as any).type).toBe('tmux');
+    expect((config.multiplexer as any).layout).toBe('main-vertical');
   });
 
   test('generateLiteConfig companion: yes', () => {
