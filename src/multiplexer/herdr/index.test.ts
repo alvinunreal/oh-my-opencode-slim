@@ -757,4 +757,48 @@ describe('HerdrMultiplexer', () => {
     // No CLI commands should be issued
     expect(commands()).toHaveLength(0);
   });
+
+  // Regression: concurrent spawns must not race on agentAreaPaneId (#762)
+  test('main-vertical: concurrent spawns produce one parent split + down splits', async () => {
+    let splitCount = 0;
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('split')) {
+        splitCount++;
+        // Return sequential pane IDs so we can track which split is which
+        return createSpawnResult(
+          0,
+          `${createSplitResponse(`w1:p${splitCount + 1}`)}\n`,
+        );
+      }
+      return createSpawnResult();
+    });
+
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    // Fire both concurrently — before the fix, both would see
+    // agentAreaPaneId === null and split from the parent (w1:p1).
+    const [r1, r2] = await Promise.all([
+      herdr.spawnPane('s1', 'Agent 1', 'http://localhost:4096', '/repo'),
+      herdr.spawnPane('s2', 'Agent 2', 'http://localhost:4096', '/repo'),
+    ]);
+
+    expect(r1.success).toBe(true);
+    expect(r2.success).toBe(true);
+
+    const splitCommands = commands().filter((c) => c.includes('split'));
+    // Exactly 2 splits total
+    expect(splitCommands.length).toBe(2);
+
+    // First split: parent (w1:p1) → right
+    expect(splitCommands[0][3]).toBe('w1:p1');
+    expect(splitCommands[0]).toContain('right');
+
+    // Second split: agent area (w1:p2) → down
+    expect(splitCommands[1][3]).toBe('w1:p2');
+    expect(splitCommands[1]).toContain('down');
+  });
 });
