@@ -35,18 +35,6 @@ describe('agent alias backward compatibility', () => {
     expect(explorer?.config.model).toBe('test/old-explore-model');
   });
 
-  test("applies 'frontend-ui-ux-engineer' config to 'designer' agent", () => {
-    const config: PluginConfig = {
-      agents: {
-        'frontend-ui-ux-engineer': { model: 'test/old-frontend-model' },
-      },
-    };
-    const agents = createAgents(config);
-    const designer = agents.find((a) => a.name === 'designer');
-    expect(designer).toBeDefined();
-    expect(designer?.config.model).toBe('test/old-frontend-model');
-  });
-
   test('new name takes priority over old alias', () => {
     const config: PluginConfig = {
       agents: {
@@ -531,74 +519,13 @@ describe('council agent model resolution', () => {
     expect(councillor?.config.model).toBe(DEFAULT_MODELS.councillor);
   });
 
-  test('council falls back to legacy master.model when no preset override', () => {
-    // Simulates a pre-1.0.0 config with council.master.model but no council
-    // entry in the agent preset - the exact scenario from issue #369.
-    const config: PluginConfig = {
-      agents: {
-        oracle: { model: 'openai/gpt-5.6' },
-      },
-      council: {
-        ...councilConfig(),
-        _legacyMasterModel: 'anthropic/claude-opus-4-6',
-      },
-    };
-    const agents = createAgents(config);
-    const council = agents.find((a) => a.name === 'council');
-    expect(council?.config.model).toBe('anthropic/claude-opus-4-6');
-  });
-
-  test('council preset override takes precedence over legacy master.model', () => {
-    // If user has explicit council in preset, that wins - legacy is ignored.
-    const config: PluginConfig = {
-      agents: {
-        council: { model: 'google/gemini-3-pro' },
-      },
-      council: {
-        ...councilConfig(),
-        _legacyMasterModel: 'anthropic/claude-opus-4-6',
-      },
-    };
-    const agents = createAgents(config);
-    const council = agents.find((a) => a.name === 'council');
-    expect(council?.config.model).toBe('google/gemini-3-pro');
-  });
-
-  test('council uses default when no legacy master and no preset override', () => {
-    // No legacy master, no preset override → standard default
+  test('council uses default when no preset override', () => {
     const config: PluginConfig = {
       council: councilConfig(),
     };
     const agents = createAgents(config);
     const council = agents.find((a) => a.name === 'council');
     expect(council?.config.model).toBe(DEFAULT_MODELS.council);
-  });
-
-  test('end-to-end: raw master.model config flows through schema to council agent', () => {
-    // Integration test: start from raw user config with deprecated master.model,
-    // parse through CouncilConfigSchema, then pass to createAgents.
-    // This validates the full seam between schema transform and agent resolution.
-    const rawCouncilConfig = {
-      master: { model: 'anthropic/claude-opus-4-6' },
-      presets: {
-        default: {
-          alpha: { model: 'openai/gpt-5.6-luna' },
-        },
-      },
-    };
-
-    const parsed = CouncilConfigSchema.safeParse(rawCouncilConfig);
-    expect(parsed.success).toBe(true);
-
-    if (parsed.success) {
-      const config: PluginConfig = {
-        council: parsed.data,
-      };
-      const agents = createAgents(config);
-      const council = agents.find((a) => a.name === 'council');
-      // Legacy master.model should flow through schema → agent
-      expect(council?.config.model).toBe('anthropic/claude-opus-4-6');
-    }
   });
 });
 

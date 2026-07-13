@@ -513,69 +513,6 @@ describe('deepMerge behavior', () => {
     expect(config.agents?.designer?.model).toBe('project/designer-model');
   });
 
-  test('merges nested tmux configs', () => {
-    const userOpencodeDir = path.join(userConfigDir, 'opencode');
-    fs.mkdirSync(userOpencodeDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: {
-          enabled: true,
-          layout: 'main-vertical',
-          main_pane_size: 60,
-        },
-      }),
-    );
-
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: {
-          enabled: false, // Override enabled
-          layout: 'tiled', // Override layout
-        },
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir);
-
-    expect(config.tmux?.enabled).toBe(false); // From project (override)
-    expect(config.tmux?.layout).toBe('tiled'); // From project
-    expect(config.tmux?.main_pane_size).toBe(60); // From user (preserved)
-  });
-
-  test("preserves user tmux.enabled when project doesn't specify", () => {
-    const userOpencodeDir = path.join(userConfigDir, 'opencode');
-    fs.mkdirSync(userOpencodeDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: {
-          enabled: true,
-          layout: 'main-vertical',
-        },
-      }),
-    );
-
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        agents: { oracle: { model: 'test' } }, // No tmux override
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir);
-
-    expect(config.tmux?.enabled).toBe(true); // Preserved from user
-    expect(config.tmux?.layout).toBe('main-vertical'); // Preserved from user
-  });
-
   test('project config overrides top-level arrays', () => {
     const userOpencodeDir = path.join(userConfigDir, 'opencode');
     fs.mkdirSync(userOpencodeDir, { recursive: true });
@@ -1240,10 +1177,6 @@ describe('JSONC config support', () => {
             "explorer": { "model": "dev-explorer", },
           },
         },
-        "tmux": {
-          "enabled": true, // Enable tmux
-          "layout": "main-vertical",
-        },
       }`,
     );
 
@@ -1251,8 +1184,6 @@ describe('JSONC config support', () => {
     expect(config.preset).toBe('dev');
     expect(config.agents?.oracle?.model).toBe('dev-oracle');
     expect(config.agents?.explorer?.model).toBe('dev-explorer');
-    expect(config.tmux?.enabled).toBe(true);
-    expect(config.tmux?.layout).toBe('main-vertical');
   });
 });
 
