@@ -1,6 +1,9 @@
 # Skills
 
-Skills are specialized capabilities you can assign to agents. Unlike MCPs (which are running servers), skills are **prompt-based tool configurations** - instructions injected into an agent's system prompt that describe how to use a particular tool.
+Skills are specialized capabilities and workflows you can assign to agents.
+Unlike MCPs (which are running servers), skills are **prompt-based instructions**
+injected into an agent's system prompt to guide decisions, workflows, and, when
+relevant, tool use.
 
 Bundled skills are installed by the `oh-my-opencode-slim` installer and safely
 reconciled on plugin startup/auto-update. Local customizations are preserved;
@@ -19,6 +22,7 @@ new bundled versions for customized skills are staged under
 | [`codemap`](#codemap) | Repository codemap generation | `orchestrator` |
 | [`clonedeps`](#clonedeps) | Local dependency source cloning | `orchestrator` |
 | [`deepwork`](#deepwork) | Heavy/complex coding sessions workflow | `orchestrator` |
+| [`verification-planning`](#verification-planning) | Design project-specific evidence before implementation | `orchestrator` |
 | [`reflect`](#reflect) | Review repeated work and suggest reusable workflow improvements | `orchestrator` |
 | [`worktrees`](#worktrees) | Safe Git worktree lane management | `orchestrator` |
 | [`release-smoke-test`](#release-smoke-test) | Packed release-candidate and bugfix smoke validation | `orchestrator` |
@@ -119,6 +123,39 @@ Start it directly with:
 **When to use:** Large-scale refactoring, multi-file architectural changes, complex feature development spanning modules.
 
 **When NOT to use:** Simple single-file edits, trivial bug fixes, quick one-off changes.
+
+---
+
+## verification-planning
+
+**Design project-specific evidence before non-trivial implementation.**
+
+`verification-planning` is an orchestrator-only skill for planning how a
+non-trivial implementation, bug fix, refactor, multi-layer change, or externally
+visible behavior will be proven before work begins. It starts with the claim to
+establish, its uncertainty and failure modes, then generates evidence paths from
+the system's controllable inputs, state transitions, boundaries, artifacts,
+invariants, reversibility, and repeatability rather than defaulting to familiar
+methods.
+
+When the system cannot expose decisive truth clearly enough, the skill may add a
+verification affordance: the smallest temporary or durable capability that makes
+the relevant state controllable, observable, repeatable, and diagnosable for an
+agent. This lets the agent improve the system's legibility instead of accepting
+weak, indirect evidence.
+
+It selects the narrowest path by credibility, signal quality, cost, safety, and
+independent inspectability or repeatability. When relevant project facilities or
+constraints are unfamiliar or rapidly changing, it asks `@librarian` for focused
+official and project-specific research before deciding; it does not seek generic
+testing advice or research when current evidence is already decisive.
+
+**When NOT to use:** tiny mechanical edits or release-specific validation (use
+`release-smoke-test`). It complements ordinary verification and deepwork, does
+not prescribe a default mechanism, and requires approval for verification-only
+dependencies, persistent instrumentation, production debug surfaces, or
+structural changes. Temporary support is removed; durable support needs a clear
+justification. Completed work reports what was established and its limitations.
 
 ---
 

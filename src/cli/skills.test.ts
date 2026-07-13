@@ -24,6 +24,7 @@ describe('skills permissions', () => {
     const orchestratorPerms = getSkillPermissionsForAgent('orchestrator');
     expect(orchestratorPerms.clonedeps).toBe('allow');
     expect(orchestratorPerms.deepwork).toBe('allow');
+    expect(orchestratorPerms['verification-planning']).toBe('allow');
     expect(orchestratorPerms.reflect).toBe('allow');
     expect(orchestratorPerms['release-smoke-test']).toBe('allow');
     expect(orchestratorPerms.worktrees).toBe('allow');
