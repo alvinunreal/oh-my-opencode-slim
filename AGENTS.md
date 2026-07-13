@@ -294,7 +294,10 @@ Issues and PRs are tracked on GitHub (`alvinunreal/oh-my-opencode-slim`); extern
 
 ### Triage labels
 
-Canonical triage roles map to repo labels via `docs/agents/triage-labels.md` (e.g. `ready-for-agent` → `good-to-code`; `needs-triage` = unlabeled).
+Canonical triage roles map to repo labels via `docs/agents/triage-labels.md`
+(e.g. `ready-for-agent` → `good-to-code`; `needs-triage` = unlabeled). Install
+the `triage` skill (command in `docs/maintainers.md`). Community preset
+submissions use the `community-preset` label (see `docs/maintainers.md`).
 
 ### Domain docs
 

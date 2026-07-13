@@ -5,6 +5,9 @@ Maps the **canonical triage roles** (defined in the `triage` skill from
 issue tracker. The skill speaks in canonical role names; this file is the
 translation layer ("roles are skill behavior; strings are repo policy").
 
+> **See also:** [`docs/maintainers.md`](../maintainers.md) — triage workflow
+> procedure (how to apply labels, when to close, etc.).
+
 | Label in `mattpocock/skills` | Label in our tracker | Meaning |
 | ---------------------------- | -------------------- | ------- |
 | `bug`                        | `bug`                | Something is broken |
@@ -26,8 +29,7 @@ translation layer ("roles are skill behavior; strings are repo policy").
   issues that still need implementation.
 - The following repo labels are intentionally **outside** the triage taxonomy
   and should not be applied by `/triage`:
-  - `confirmed` — maintainer-acknowledged signal after `needs-triage`
   - `status:in-review` — human review state (optional overlay on `good-to-code`)
-  - `P0` — priority overlay; apply manually alongside any role for urgent items
   - `release` — release management
   - `Share Your Thoughts` — open-ended community feedback
+  - `community-preset` — community submission (applied via `preset_submission.yml` form)
