@@ -209,6 +209,9 @@ verification while specialists do the work in their own lanes.
   agents are currently active, including parallel background specialists.
 - **[Deepwork](#deepwork)** - a structured workflow for large, multi-file, risky,
   or phased coding work using persistent plan files and Oracle review gates.
+- **[Verification Planning](#verification-planning)** - plans a project-specific
+  evidence path before non-trivial implementation, including verification
+  affordances when the system needs to become more legible to an agent.
 - **[Reflect](#reflect)** - reviews repeated work patterns and suggests reusable skills,
   agents, commands, config rules, prompt rules, or project playbooks.
 - **[Worktrees](#worktrees)** - manages Git worktrees as isolated coding lanes
@@ -262,6 +265,18 @@ Start it with:
 
 See **[Skills](docs/skills.md#deepwork)** for when to use it and how the workflow
 runs.
+
+#### Verification Planning
+
+Verification Planning gives the Orchestrator a way to decide how a non-trivial
+change will be proven before implementation begins. It frames the claim, designs
+project-specific evidence paths, and can create a small verification affordance
+when the system cannot directly reveal the decisive state to an agent. For
+unfamiliar capabilities, it asks the Librarian for focused research before
+choosing an approach.
+
+See **[Skills](docs/skills.md#verification-planning)** for the evidence-path
+workflow and its safety boundaries.
 
 #### Reflect
 
@@ -681,7 +696,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Project Customization](docs/project-local-customization.md)** | Repository-specific custom agents, prompt overrides, per-agent skills, and precedence |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
-| **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
+| **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `verification-planning`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `websearch`, `context7`, `gh_grep`, and how MCP permissions work per agent |
 | **[Tools](docs/tools.md)** | Built-in tool capabilities like `webfetch`, LSP tools, code search, and formatters |
 

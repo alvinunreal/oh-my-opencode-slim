@@ -43,6 +43,13 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     sourcePath: 'src/skills/deepwork',
   },
   {
+    name: 'verification-planning',
+    description:
+      'Plan credible, proportionate evidence before non-trivial implementation',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/verification-planning',
+  },
+  {
     name: 'reflect',
     description:
       'Review repeated work and suggest reusable workflow improvements',
