@@ -177,7 +177,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       // Non-critical: runtime state is set regardless
     }
 
-    const snapshot = readTuiSnapshot();
+    const snapshot = readTuiSnapshot(ctx.directory);
     const agentModels = { ...snapshot.agentModels };
     const agentVariants = { ...snapshot.agentVariants };
     for (const [agentName, agentConfig] of Object.entries(agentUpdates)) {
@@ -191,7 +191,7 @@ export function createPresetManager(ctx: PluginInput, config: PluginConfig) {
       }
     }
 
-    recordTuiAgentModels({ agentModels, agentVariants });
+    recordTuiAgentModels({ agentModels, agentVariants }, ctx.directory);
 
     activePreset = presetName;
 

@@ -772,10 +772,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           tuiAgentVariants[agentDef.name] = resolvedVariant;
         }
       }
-      recordTuiAgentModels({
-        agentModels: tuiAgentModels,
-        agentVariants: tuiAgentVariants,
-      });
+      recordTuiAgentModels(
+        {
+          agentModels: tuiAgentModels,
+          agentVariants: tuiAgentVariants,
+        },
+        ctx.directory,
+      );
 
       applyOrchestratorModelConfig({
         agents: configAgent,
@@ -888,11 +891,14 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const agentName = resolveRuntimeAgentName(config, info.agent);
           const model = `${providerID}/${modelID}`;
           const variant = resolveTuiVariantForModel(agentName, model);
-          recordTuiAgentModel({
-            agentName,
-            model,
-            variant: variant ?? null,
-          });
+          recordTuiAgentModel(
+            {
+              agentName,
+              model,
+              variant: variant ?? null,
+            },
+            ctx.directory,
+          );
         }
       }
 

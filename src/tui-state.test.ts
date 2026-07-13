@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  getTuiStatePath,
   readTuiSnapshot,
   recordTuiAgentModel,
   recordTuiAgentModels,
@@ -29,18 +30,21 @@ afterEach(() => {
 
 describe('tui-state persistence', () => {
   test('persists enabled agent models', () => {
-    recordTuiAgentModels({
-      agentModels: {
-        explorer: 'openai/gpt-5.6-luna',
-        fixer: 'openai/gpt-5.6-luna',
+    recordTuiAgentModels(
+      {
+        agentModels: {
+          explorer: 'openai/gpt-5.6-luna',
+          fixer: 'openai/gpt-5.6-luna',
+        },
+        agentVariants: {
+          explorer: 'low',
+          fixer: 'high',
+        },
       },
-      agentVariants: {
-        explorer: 'low',
-        fixer: 'high',
-      },
-    });
+      tempDir,
+    );
 
-    const snapshot = readTuiSnapshot();
+    const snapshot = readTuiSnapshot(tempDir);
 
     expect(snapshot.agentModels).toEqual({
       explorer: 'openai/gpt-5.6-luna',
@@ -53,55 +57,61 @@ describe('tui-state persistence', () => {
   });
 
   test('updates a single live agent model without dropping others', () => {
-    recordTuiAgentModels({
-      agentModels: {
-        orchestrator: 'default',
-        explorer: 'openai/gpt-5.6-luna',
+    recordTuiAgentModels(
+      {
+        agentModels: {
+          orchestrator: 'default',
+          explorer: 'openai/gpt-5.6-luna',
+        },
       },
-    });
+      tempDir,
+    );
 
-    recordTuiAgentModel({
-      agentName: 'orchestrator',
-      model: 'openai/gpt-5.6',
-    });
+    recordTuiAgentModel(
+      {
+        agentName: 'orchestrator',
+        model: 'openai/gpt-5.6',
+      },
+      tempDir,
+    );
 
-    expect(readTuiSnapshot().agentModels).toEqual({
+    expect(readTuiSnapshot(tempDir).agentModels).toEqual({
       orchestrator: 'openai/gpt-5.6',
       explorer: 'openai/gpt-5.6-luna',
     });
   });
 
   test('updates a single live agent variant without dropping others', () => {
-    recordTuiAgentModels({
-      agentModels: {
-        orchestrator: 'default',
-        explorer: 'openai/gpt-5.6-luna',
+    recordTuiAgentModels(
+      {
+        agentModels: {
+          orchestrator: 'default',
+          explorer: 'openai/gpt-5.6-luna',
+        },
+        agentVariants: {
+          explorer: 'low',
+        },
       },
-      agentVariants: {
-        explorer: 'low',
+      tempDir,
+    );
+
+    recordTuiAgentModel(
+      {
+        agentName: 'orchestrator',
+        model: 'openai/gpt-5.6',
+        variant: 'high',
       },
-    });
+      tempDir,
+    );
 
-    recordTuiAgentModel({
-      agentName: 'orchestrator',
-      model: 'openai/gpt-5.6',
-      variant: 'high',
-    });
-
-    expect(readTuiSnapshot().agentVariants).toEqual({
+    expect(readTuiSnapshot(tempDir).agentVariants).toEqual({
       orchestrator: 'high',
       explorer: 'low',
     });
   });
 
   test('ignores legacy config status fields in old snapshots', () => {
-    const filePath = path.join(
-      tempDir,
-      'opencode',
-      'storage',
-      'oh-my-opencode-slim',
-      'tui-state.json',
-    );
+    const filePath = getTuiStatePath(tempDir);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(
       filePath,
@@ -114,7 +124,7 @@ describe('tui-state persistence', () => {
       }),
     );
 
-    const snapshot = readTuiSnapshot();
+    const snapshot = readTuiSnapshot(tempDir);
     expect(snapshot.agentModels).toEqual({
       explorer: 'openai/gpt-5.6-luna',
     });

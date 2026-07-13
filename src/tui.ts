@@ -252,11 +252,11 @@ const plugin: TuiPluginModule & { id: string } = {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
     let configDirectory = getTuiDirectory(api);
     let { configInvalid, compactSidebar } = readConfigState(configDirectory);
-    let snapshot = readTuiSnapshot();
+    let snapshot = readTuiSnapshot(configDirectory);
     const renderTimer = setInterval(async () => {
       try {
-        snapshot = await readTuiSnapshotAsync();
         const currentDirectory = getTuiDirectory(api);
+        snapshot = await readTuiSnapshotAsync(currentDirectory);
         if (currentDirectory !== configDirectory) {
           configDirectory = currentDirectory;
           ({ configInvalid, compactSidebar } =

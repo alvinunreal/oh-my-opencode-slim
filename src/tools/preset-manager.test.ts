@@ -185,12 +185,15 @@ describe('createPresetManager', () => {
     });
 
     test('updates the TUI snapshot after a successful preset switch', async () => {
-      recordTuiAgentModels({
-        agentModels: {
-          explorer: 'openai/gpt-5.6-luna',
-          fixer: 'openai/gpt-5.6-luna',
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            explorer: 'openai/gpt-5.6-luna',
+            fixer: 'openai/gpt-5.6-luna',
+          },
         },
-      });
+        tempDir,
+      );
 
       const ctx = createMockContext();
       const config: PluginConfig = {
@@ -209,7 +212,7 @@ describe('createPresetManager', () => {
         output,
       );
 
-      expect(readTuiSnapshot().agentModels).toEqual({
+      expect(readTuiSnapshot(tempDir).agentModels).toEqual({
         explorer: 'openai/gpt-5.6',
         fixer: 'openai/gpt-5.6-luna',
         orchestrator: 'anthropic/claude-3.5-haiku',
@@ -354,11 +357,14 @@ describe('createPresetManager', () => {
 
     test('unknown preset does not change active state or dispose instance', async () => {
       setActiveRuntimePreset('cheap');
-      recordTuiAgentModels({
-        agentModels: {
-          explorer: 'openai/gpt-5.6-luna',
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            explorer: 'openai/gpt-5.6-luna',
+          },
         },
-      });
+        tempDir,
+      );
 
       const ctx = createMockContext();
       const config: PluginConfig = {
