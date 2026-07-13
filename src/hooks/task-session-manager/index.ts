@@ -489,6 +489,14 @@ export function createTaskSessionManagerHook(
           launch.taskID,
           taskContextTracker.contextFilesForPrompt(launch.taskID),
         );
+        // Append the background job board to the task output so the model
+        // sees the active job immediately and knows to wait for completion.
+        const board = backgroundJobBoard.formatForPrompt(
+          pending.parentSessionId,
+        );
+        if (board) {
+          output.output = `${output.output}\n\n${board}`;
+        }
         return;
       }
 
