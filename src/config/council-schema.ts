@@ -77,8 +77,6 @@ export type CouncillorConfig = z.infer<typeof CouncillorConfigSchema>;
  * A named preset grouping several councillors.
  *
  * All keys are treated as councillor names mapping to councillor configs.
- * The reserved key `"master"` is silently ignored (legacy from when
- * council-master was a separate agent).
  */
 export const CouncilPresetSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -86,33 +84,6 @@ export const CouncilPresetSchema = z
     const councillors: Record<string, CouncillorConfig> = {};
 
     for (const [key, raw] of Object.entries(entries)) {
-      // Silently skip the legacy "master" key - no longer parsed as a
-      // councillor. Old configs with per-preset master overrides won't
-      // error, but the override has no effect.
-      if (key === 'master') continue;
-
-      // Legacy nested format: old configs wrapped councillors in a
-      // "councillors" key inside each preset. Unwrap them into the
-      // parent so the config still works without migration.
-      if (key === 'councillors' && typeof raw === 'object' && raw !== null) {
-        for (const [innerKey, innerRaw] of Object.entries(
-          raw as Record<string, unknown>,
-        )) {
-          const innerParsed = CouncillorConfigSchema.safeParse(innerRaw);
-          if (!innerParsed.success) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: `Invalid councillor "${innerKey}" (nested under legacy "councillors" key): ${innerParsed.error.issues
-                .map((i) => i.message)
-                .join(', ')}`,
-            });
-            return z.NEVER;
-          }
-          councillors[innerKey] = innerParsed.data;
-        }
-        continue;
-      }
-
       const parsed = CouncillorConfigSchema.safeParse(raw);
       if (!parsed.success) {
         ctx.addIssue({
@@ -172,6 +143,7 @@ export const CouncilConfigSchema = z
     councillor_execution_mode: CouncillorExecutionModeSchema.describe(
       'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
     ),
+
     councillor_retries: z
       .number()
       .int()
@@ -182,39 +154,14 @@ export const CouncilConfigSchema = z
         'Number of retry attempts for councillors that return empty responses ' +
           '(e.g. due to provider rate limiting). Default: 3 retries.',
       ),
-    // Deprecated fields - accepted for backward compatibility but ignored.
-    // The council agent now synthesizes directly; no separate master session.
-    // Uses permissive schemas since the values are discarded - strict
-    // validation would break old configs with non-standard model IDs.
-    master: z
-      .unknown()
-      .optional()
-      .describe('DEPRECATED - ignored. Council agent synthesizes directly.'),
   })
   .transform((data) => {
-    // Detect deprecated fields and attach warning for consumers
-    const deprecated: string[] = [];
-    if (data.master !== undefined) deprecated.push('master');
-
-    // Backward compat: extract master.model so the council agent can use it
-    // as a fallback when no explicit council entry exists in the active preset.
-    // See https://github.com/alvinunreal/oh-my-opencode-slim/issues/369
-    const legacyMasterModel: string | undefined =
-      typeof data.master === 'object' &&
-      data.master !== null &&
-      'model' in data.master &&
-      typeof (data.master as { model: unknown }).model === 'string'
-        ? (data.master as { model: string }).model
-        : undefined;
-
     return {
       presets: data.presets,
       timeout: data.timeout,
       default_preset: data.default_preset,
       councillor_execution_mode: data.councillor_execution_mode,
       councillor_retries: data.councillor_retries,
-      _deprecated: deprecated.length > 0 ? deprecated : undefined,
-      _legacyMasterModel: legacyMasterModel,
     };
   });
 
