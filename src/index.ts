@@ -146,6 +146,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let multiplexerSessionManager: MultiplexerSessionManager;
   let autoUpdateChecker: ReturnType<typeof createAutoUpdateCheckerHook>;
   let sessionAgentMap: Map<string, string>;
+  // ponytail: cache sessionID -> project directory so TUI model writes
+  // land in the right per-project file after a project switch (ctx.directory is stale)
+  const sessionDirectories = new Map<string, string>();
   let sessionLifecycle: SessionLifecycle;
 
   let chatHeadersHook: ReturnType<typeof createChatHeadersHook>;
@@ -865,6 +868,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
               modelID?: string;
             };
             sessionID?: string;
+            directory?: string;
           };
           sessionID?: string;
           id?: string;
@@ -897,7 +901,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
               model,
               variant: variant ?? null,
             },
-            ctx.directory,
+            (info?.sessionID && sessionDirectories.get(info.sessionID)) ??
+              ctx.directory,
           );
         }
       }
@@ -907,6 +912,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const parentSessionId = event.properties?.info?.parentID;
         if (depthTracker && childSessionId && parentSessionId) {
           depthTracker.registerChild(parentSessionId, childSessionId);
+        }
+        const createdSessionId = event.properties?.info?.id;
+        const createdSessionDir = event.properties?.info?.directory;
+        if (createdSessionId && createdSessionDir) {
+          sessionDirectories.set(createdSessionId, createdSessionDir);
         }
       }
 
@@ -987,6 +997,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
         if (sessionID) {
           sessionAgentMap.delete(sessionID);
+          sessionDirectories.delete(sessionID);
         }
       }
     },
