@@ -1255,6 +1255,30 @@ describe('ForegroundFallbackManager session.deleted', () => {
     // Triggered (dedup was cleared by deletion)
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
+
+  test('does NOT clear inProgress when session.deleted fires', () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const { client } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      client,
+      makeChains(),
+      true,
+      3,
+      coordinator,
+    );
+
+    // Simulate: fallback is in progress
+    const sessionID = 'sess-inprog';
+    (mgr as any).inProgress.add(sessionID);
+    expect(mgr.isFallbackInProgress(sessionID)).toBe(true);
+
+    // Session deleted fires (as it does during abort in tryFallbackWithAbort)
+    coordinator.dispatchSessionDeleted(sessionID);
+
+    // inProgress must survive — the finally block of tryFallback/WithAbort
+    // manages it, not the session.deleted callback
+    expect(mgr.isFallbackInProgress(sessionID)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

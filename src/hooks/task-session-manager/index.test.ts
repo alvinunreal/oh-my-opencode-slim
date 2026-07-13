@@ -2150,6 +2150,56 @@ describe('task-session-manager hook', () => {
     expect(board.get('child-1')).toMatchObject({ state: 'running' });
   });
 
+  test('does NOT drop job from board on session.deleted when fallback in progress', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'architecture review',
+    });
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+
+    createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      isFallbackInProgress: (id) => id === 'child-1',
+    });
+
+    // Dispatch session.deleted while fallback is in progress
+    coordinator.dispatchSessionDeleted('child-1');
+
+    // Job must survive — the orchestrator needs to track it through the
+    // abort/re-prompt cycle
+    expect(board.get('child-1')).toBeDefined();
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
+  });
+
+  test('drops job from board on session.deleted when no fallback in progress', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-2',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'architecture review',
+    });
+    expect(board.get('child-2')).toMatchObject({ state: 'running' });
+
+    createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      // isFallbackInProgress not set — no guard
+    });
+
+    // Dispatch session.deleted normally
+    coordinator.dispatchSessionDeleted('child-2');
+
+    // Job should be dropped
+    expect(board.get('child-2')).toBeUndefined();
+  });
+
   test('reconciles from idle when fallback guard passes', async () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({

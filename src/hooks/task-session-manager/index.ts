@@ -128,8 +128,15 @@ export function createTaskSessionManagerHook(
 
   if (options.coordinator) {
     options.coordinator.onSessionDeleted((sessionId) => {
-      backgroundJobBoard.drop(sessionId);
-      backgroundJobBoard.clearParent(sessionId);
+      // During a foreground fallback abort/re-prompt cycle, the session
+      // is being torn down and immediately recreated with a fallback model.
+      // Dropping the job from the board here would make the orchestrator
+      // lose track of the task and report it as cancelled even though the
+      // oracle actually completed.
+      if (!options.isFallbackInProgress?.(sessionId)) {
+        backgroundJobBoard.drop(sessionId);
+        backgroundJobBoard.clearParent(sessionId);
+      }
       terminalJobsInjectedByParent.delete(sessionId);
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);

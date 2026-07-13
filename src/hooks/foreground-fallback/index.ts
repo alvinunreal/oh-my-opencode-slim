@@ -241,7 +241,12 @@ export class ForegroundFallbackManager {
         this.sessionModel.delete(id);
         this.sessionAgent.delete(id);
         this.sessionTried.delete(id);
-        this.inProgress.delete(id);
+        // NOTE: inProgress is intentionally NOT cleared here —
+        // the finally blocks in tryFallback() and tryFallbackWithAbort()
+        // manage inProgress lifecycle. Clearing it here would make
+        // isFallbackInProgress() return false during the abort/re-prompt
+        // cycle, letting the task-session-manager treat the abort idle
+        // as a real completion and report a background task as cancelled.
         this.lastTrigger.delete(id);
         this.lastTriggerModel.delete(id);
         this.sessionRetries.delete(id);
