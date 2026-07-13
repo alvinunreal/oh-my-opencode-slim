@@ -323,7 +323,7 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private async ensureAgentTab(
     zellij: string,
-  ): Promise<{ tabId: string; firstPaneId: string } | null> {
+  ): Promise<{ tabId: string; firstPaneId: string | null } | null> {
     try {
       // Try to find existing tab
       const existingTab = await this.findTabByName(zellij, 'opencode-agents');
@@ -334,12 +334,9 @@ export class ZellijMultiplexer implements Multiplexer {
         );
         return {
           tabId: existingTab.tabId,
-          firstPaneId: firstPane || 'terminal_0',
+          firstPaneId: firstPane,
         };
       }
-
-      // Get panes before creating tab
-      const beforePanes = await this.listPanes(zellij);
 
       // Create new tab
       const createProc = crossSpawn(
@@ -353,11 +350,25 @@ export class ZellijMultiplexer implements Multiplexer {
       const newTab = await this.findTabByName(zellij, 'opencode-agents');
       if (!newTab) return null;
 
-      // Get the new pane
-      const afterPanes = await this.listPanes(zellij);
-      const newPane = afterPanes.find((p) => !beforePanes.includes(p));
+      // Get the default pane in the new tab
+      const firstPane = await this.getFirstPaneInTab(zellij, newTab.tabId);
+      return { tabId: newTab.tabId, firstPaneId: firstPane };
+    } catch {
+      return null;
+    }
+  }
 
-      return { tabId: newTab.tabId, firstPaneId: newPane || 'terminal_0' };
+  private async listPanesJson(
+    zellij: string,
+  ): Promise<ZellijPaneInfo[] | null> {
+    try {
+      const proc = crossSpawn(
+        [zellij, 'action', 'list-panes', '--json', '--tab', '--all'],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      if ((await proc.exited) !== 0) return null;
+      const stdout = await proc.stdout();
+      return JSON.parse(stdout) as ZellijPaneInfo[];
     } catch {
       return null;
     }
@@ -367,26 +378,17 @@ export class ZellijMultiplexer implements Multiplexer {
     zellij: string,
     tabId: string,
   ): Promise<string | null> {
-    const originalTab = await this.getCurrentTabId(zellij);
-    await crossSpawn([zellij, 'action', 'go-to-tab-by-id', tabId], {
-      stdout: 'ignore',
-      stderr: 'ignore',
-    }).exited;
-
-    const panes = await this.listPanes(zellij);
-
-    // Restore original tab
-    if (originalTab) {
-      await crossSpawn(
-        [zellij, 'action', 'go-to-tab-by-id', String(originalTab)],
-        {
-          stdout: 'ignore',
-          stderr: 'ignore',
-        },
-      ).exited;
+    try {
+      const panes = await this.listPanesJson(zellij);
+      if (!panes) return null;
+      const pane = panes.find(
+        (candidate) =>
+          !candidate.is_plugin && candidate.tab_id === Number(tabId),
+      );
+      return pane ? `terminal_${pane.id}` : null;
+    } catch {
+      return null;
     }
-
-    return panes[0] || null;
   }
 
   private async findTabByName(
@@ -473,27 +475,6 @@ export class ZellijMultiplexer implements Multiplexer {
     }
   }
 
-  private async listPanes(zellij: string): Promise<string[]> {
-    try {
-      const proc = crossSpawn([zellij, 'action', 'list-panes'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) return [];
-
-      const stdout = await proc.stdout();
-      return stdout
-        .split('\n')
-        .slice(1)
-        .map((line) => line.trim().split(/\s+/)[0])
-        .filter((id) => id?.startsWith('terminal_'));
-    } catch {
-      return [];
-    }
-  }
-
   async closePane(paneId: string): Promise<boolean> {
     const zellij = await this.getBinary();
     return gracefulClosePane(zellij, paneId, {
@@ -541,24 +522,13 @@ export class ZellijMultiplexer implements Multiplexer {
     paneId: string,
   ): Promise<string | null> {
     try {
-      const proc = crossSpawn(
-        [zellij, 'action', 'list-panes', '--json', '--tab', '--all'],
-        {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        },
-      );
-
-      if ((await proc.exited) !== 0) return null;
-
-      const stdout = await proc.stdout();
-      const panes: ZellijPaneInfo[] = JSON.parse(stdout);
+      const panes = await this.listPanesJson(zellij);
+      if (!panes) return null;
       const normalizedPaneId = normalizePaneId(paneId);
       const pane = panes.find(
         (candidate) =>
           !candidate.is_plugin && String(candidate.id) === normalizedPaneId,
       );
-
       return pane?.tab_id === undefined ? null : String(pane.tab_id);
     } catch {
       return null;

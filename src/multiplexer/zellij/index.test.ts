@@ -74,8 +74,14 @@ async function spawnSecondAgentTabPane(
     if (command.includes('current-tab-info')) {
       return createSpawnResult(0, JSON.stringify({ tab_id: 0 }));
     }
-    if (command.includes('list-panes')) {
-      return createSpawnResult(0, 'PANE ID\nterminal_7\n');
+    if (command.includes('list-panes') && command.includes('--json')) {
+      return createSpawnResult(
+        0,
+        JSON.stringify([
+          { id: 0, is_plugin: false, tab_id: 0 },
+          { id: 7, is_plugin: false, tab_id: 5 },
+        ]),
+      );
     }
     if (command.includes('new-pane')) {
       return createSpawnResult(0, 'terminal_8\n');
@@ -206,7 +212,7 @@ describe('ZellijMultiplexer', () => {
         return createSpawnResult(0, '/usr/bin/zellij\n');
       }
       if (command.includes('list-panes')) {
-        return createSpawnResult(0, createPaneListJson(0));
+        return createSpawnResult(0, createPaneListJson());
       }
       if (command.includes('current-tab-info')) {
         return createSpawnResult(0, JSON.stringify({ tab_id: 1 }));
@@ -430,5 +436,117 @@ describe('ZellijMultiplexer', () => {
     const newPaneCommand = await spawnSecondAgentTabPane('tiled');
 
     expect(newPaneCommand).not.toContain('--direction');
+  });
+
+  test('getFirstPaneInTab picks the target tab pane, not the current tab pane', async () => {
+    const { ZellijMultiplexer } = await importFreshZellij();
+    const zellij = new ZellijMultiplexer('main-vertical', 60, 'agent-tab');
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/zellij\n');
+      }
+      if (command.includes('list-tabs')) {
+        return createSpawnResult(
+          0,
+          JSON.stringify([{ name: 'opencode-agents', tab_id: 5 }]),
+        );
+      }
+      if (command.includes('current-tab-info')) {
+        return createSpawnResult(0, JSON.stringify({ tab_id: 0 }));
+      }
+      // getFirstPaneInTab: list-panes with --json --tab --all
+      if (command.includes('--json') && command.includes('--tab')) {
+        return createSpawnResult(
+          0,
+          JSON.stringify([
+            { id: 0, is_plugin: false, tab_id: 0 },
+            { id: 7, is_plugin: false, tab_id: 5 },
+            { id: 8, is_plugin: false, tab_id: 5 },
+          ]),
+        );
+      }
+      if (command.includes('list-panes')) {
+        return createSpawnResult(0, 'PANE ID\nterminal_7\n');
+      }
+      if (command.includes('new-pane')) {
+        return createSpawnResult(0, 'terminal_8\n');
+      }
+      return createSpawnResult();
+    });
+
+    const result = await zellij.spawnPane(
+      'session-1',
+      'First agent worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+    expect(result).toEqual({ success: true, paneId: 'terminal_7' });
+
+    const allCommands = commands();
+
+    // Should NOT create a new pane — reused the first pane via write-chars
+    const newPaneCmds = allCommands.filter((c) => c.includes('new-pane'));
+    expect(newPaneCmds).toHaveLength(0);
+
+    // Should focus the pane in tab 5 (terminal_7), not the one in tab 0 (terminal_0)
+    const focusPaneCmd = allCommands.find((c) => c.includes('focus-pane'));
+    expect(focusPaneCmd).toBeDefined();
+    expect(focusPaneCmd).toEqual(expect.arrayContaining(['terminal_7']));
+  });
+
+  test('getFirstPaneInTab null falls through to new-pane', async () => {
+    const { ZellijMultiplexer } = await importFreshZellij();
+    const zellij = new ZellijMultiplexer('main-vertical', 60, 'agent-tab');
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/zellij\n');
+      }
+      if (command.includes('list-tabs')) {
+        return createSpawnResult(
+          0,
+          JSON.stringify([{ name: 'opencode-agents', tab_id: 5 }]),
+        );
+      }
+      if (command.includes('current-tab-info')) {
+        return createSpawnResult(0, JSON.stringify({ tab_id: 0 }));
+      }
+      // getFirstPaneInTab: only main tab (tab 0) has panes, agent tab (5) has none
+      if (command.includes('--json') && command.includes('--tab')) {
+        return createSpawnResult(
+          0,
+          JSON.stringify([
+            { id: 0, is_plugin: false, tab_id: 0 },
+            { id: 4, is_plugin: false, tab_id: 1 },
+          ]),
+        );
+      }
+      if (command.includes('list-panes')) {
+        return createSpawnResult(0, 'PANE ID\nterminal_7\n');
+      }
+      if (command.includes('new-pane')) {
+        return createSpawnResult(0, 'terminal_8\n');
+      }
+      return createSpawnResult();
+    });
+
+    const result = await zellij.spawnPane(
+      'session-1',
+      'First agent worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+
+    // Falls through to createPaneInAgentTab -> new-pane
+    expect(result).toEqual({ success: true, paneId: 'terminal_8' });
+
+    const allCommands = commands();
+    const newPaneCmd = allCommands.find((c) => c.includes('new-pane'));
+    expect(newPaneCmd).toBeDefined();
+
+    // Should NOT use write-chars (no pane to reuse)
+    const writeCharsCmds = allCommands.filter((c) => c.includes('write-chars'));
+    expect(writeCharsCmds).toHaveLength(0);
   });
 });

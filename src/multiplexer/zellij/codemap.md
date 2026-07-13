@@ -65,7 +65,7 @@ Implements a Zellij-based multiplexer adapter that creates and manages terminal 
    - Tries JSON output first (--json flag)
    - Falls back to text parsing if JSON unavailable
 2. getCurrentTabId() queries current-tab-info --json
-3. listPanes() parses list-panes output to track active panes
+3. getFirstPaneInTab() / findTabIdForPane() use listPanesJson() (list-panes --json --tab --all) filtered by tab_id
 4. findTabIdForPane() correlates pane IDs with tab IDs for parent tab tracking
 ```
 
