@@ -8,7 +8,7 @@ export { createFilterAvailableSkillsHook } from './filter-available-skills';
 export {
   ForegroundFallbackManager,
   isFailoverError,
-  isRateLimitError,
+  isRetryableError,
 } from './foreground-fallback';
 export { processImageAttachments } from './image-hook';
 export { createJsonErrorRecoveryHook } from './json-error-recovery/hook';

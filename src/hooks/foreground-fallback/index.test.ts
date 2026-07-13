@@ -3,7 +3,7 @@ import { SessionLifecycle } from '../session-lifecycle';
 import {
   ForegroundFallbackManager,
   isFailoverError,
-  isRateLimitError,
+  isRetryableError,
 } from './index';
 
 type ForegroundFallbackClient = ConstructorParameters<
@@ -82,38 +82,38 @@ describe('isFailoverError', () => {
   });
 
   test('returns true for 429 status code', () => {
-    expect(isRateLimitError({ data: { statusCode: 429 } })).toBe(true);
+    expect(isRetryableError({ data: { statusCode: 429 } })).toBe(true);
   });
 
   test('returns true for "rate limit" in message', () => {
-    expect(isRateLimitError({ message: 'Rate limit exceeded' })).toBe(true);
+    expect(isRetryableError({ message: 'Rate limit exceeded' })).toBe(true);
   });
 
   test('returns true for "quota exceeded" in responseBody', () => {
-    expect(isRateLimitError({ data: { responseBody: 'quota exceeded' } })).toBe(
+    expect(isRetryableError({ data: { responseBody: 'quota exceeded' } })).toBe(
       true,
     );
   });
 
   test('returns true for "usage exceeded"', () => {
-    expect(isRateLimitError({ message: 'usage exceeded' })).toBe(true);
+    expect(isRetryableError({ message: 'usage exceeded' })).toBe(true);
   });
 
   test('returns true for "overloaded"', () => {
-    expect(isRateLimitError({ message: 'overloaded_error' })).toBe(true);
+    expect(isRetryableError({ message: 'overloaded_error' })).toBe(true);
   });
 
   test('returns true for "Insufficient balance."', () => {
-    expect(isRateLimitError({ message: 'Insufficient balance.' })).toBe(true);
+    expect(isRetryableError({ message: 'Insufficient balance.' })).toBe(true);
   });
 
   test('returns true for "Service Unavailable"', () => {
-    expect(isRateLimitError({ message: 'Service Unavailable' })).toBe(true);
+    expect(isRetryableError({ message: 'Service Unavailable' })).toBe(true);
   });
 
   test('returns true for "Monthly usage limit reached"', () => {
     expect(
-      isRateLimitError({
+      isRetryableError({
         message: 'Monthly usage limit reached. Resets in X days.',
       }),
     ).toBe(true);
@@ -121,7 +121,7 @@ describe('isFailoverError', () => {
 
   test('returns true for "5-hour usage limit reached"', () => {
     expect(
-      isRateLimitError({
+      isRetryableError({
         message: '5-hour usage limit reached. Resets in 36min.',
       }),
     ).toBe(true);
@@ -129,28 +129,44 @@ describe('isFailoverError', () => {
 
   test('returns true for "Weekly usage limit reached"', () => {
     expect(
-      isRateLimitError({
+      isRetryableError({
         message: 'Weekly usage limit reached. Resets in 2 days.',
       }),
     ).toBe(true);
   });
 
   test('returns false for non-rate-limit error', () => {
-    expect(isRateLimitError({ message: 'invalid API key' })).toBe(false);
+    expect(isRetryableError({ message: 'invalid API key' })).toBe(false);
   });
 
   test('returns false for null', () => {
-    expect(isRateLimitError(null)).toBe(false);
+    expect(isRetryableError(null)).toBe(false);
   });
 
   test('returns true for string error with rate-limit message', () => {
-    expect(isRateLimitError('Usage exceeded')).toBe(true);
-    expect(isRateLimitError('rate limit exceeded')).toBe(true);
-    expect(isRateLimitError('quota exceeded')).toBe(true);
+    expect(isRetryableError('Usage exceeded')).toBe(true);
+    expect(isRetryableError('rate limit exceeded')).toBe(true);
+    expect(isRetryableError('quota exceeded')).toBe(true);
   });
 
   test('returns false for non-object', () => {
-    expect(isRateLimitError(42)).toBe(false);
+    expect(isRetryableError(42)).toBe(false);
+  });
+
+  test('returns true for 403 status code', () => {
+    expect(isRetryableError({ data: { statusCode: 403 } })).toBe(true);
+  });
+
+  test('returns true for "Forbidden" in message', () => {
+    expect(isRetryableError({ message: '403 Forbidden' })).toBe(true);
+  });
+
+  test('returns true for "blocked by gateway" in message', () => {
+    expect(isRetryableError({ message: 'blocked by gateway' })).toBe(true);
+  });
+
+  test('returns true for "forbidden" (lowercase) in message', () => {
+    expect(isRetryableError({ message: 'forbidden' })).toBe(true);
   });
 });
 

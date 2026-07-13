@@ -47,7 +47,7 @@ OpenCode Event (message.updated/session.error/session.status)
     ↓
 ForegroundFallbackManager.handleEvent()
     ↓
-Rate-limit detection via isRateLimitError()
+Retryable error detection via isRetryableError()
     ↓
 tryFallback(sessionID) [deduplicated, in-progress guarded]
     ↓

@@ -2,7 +2,8 @@
  * Runtime model fallback for foreground (interactive) agent sessions.
  *
  * When OpenCode fires a session.error, message.updated, or session.status
- * event containing a rate-limit signal, this manager:
+ * event containing a transient error (rate-limit, 403/Forbidden, etc.), this
+ * manager:
  *   1. Looks up the next untried model in the agent's configured chain
  *   2. Aborts the rate-limited prompt via client.session.abort() on the
  *      session.status retry path; session.error and message.updated paths
@@ -28,10 +29,10 @@ import { isUserMessageWithParts } from '../types';
 type OpencodeClient = PluginInput['client'];
 
 // ---------------------------------------------------------------------------
-// Rate-limit detection
+// Retryable error detection
 // ---------------------------------------------------------------------------
 
-const RATE_LIMIT_PATTERNS = [
+const RETRYABLE_ERROR_PATTERNS = [
   /\b429\b/,
   /rate.?limit/i,
   /too many requests/i,
@@ -48,10 +49,15 @@ const RATE_LIMIT_PATTERNS = [
   /monthly usage limit/i,
   /5-hour usage limit/i,
   /weekly usage limit/i,
+  // Forbidden / 403 — providers return these instead of explicit rate-limit
+  // signals, but they are equally transient and should trigger fallback.
+  /\b403\b/,
+  /forbidden/i,
+  /blocked by gateway/i,
 ];
 
 const OUTAGE_STATUS_CODES = new Set([500, 502, 503, 504]);
-// ponytail: validated against real OpenCode error shapes
+// (ponytail) validated against real OpenCode error shapes
 const TRANSPORT_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
@@ -96,7 +102,7 @@ export function isFailoverError(error: unknown): boolean {
   if (!error) return false;
   if (typeof error === 'string') {
     return (
-      RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(error)) ||
+      RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(error)) ||
       PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(error)) ||
       TRANSPORT_MESSAGE_PATTERNS.some((pattern) => pattern.test(error))
     );
@@ -117,6 +123,7 @@ export function isFailoverError(error: unknown): boolean {
   const statusCode = extractStatusCode(err);
   if (
     statusCode === 429 ||
+    statusCode === 403 ||
     (statusCode !== undefined && OUTAGE_STATUS_CODES.has(statusCode))
   ) {
     return true;
@@ -148,7 +155,7 @@ export function isFailoverError(error: unknown): boolean {
     err.data?.responseBody ?? '',
   ].join(' ');
   const hasFailoverReason =
-    RATE_LIMIT_PATTERNS.some((p) => p.test(text)) ||
+    RETRYABLE_ERROR_PATTERNS.some((p) => p.test(text)) ||
     PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(text));
   // Providers sometimes return recoverable rate-limit/outage payloads with
   // an HTTP 400 wrapper. Preserve application-level 400 failures, but let a
@@ -156,9 +163,17 @@ export function isFailoverError(error: unknown): boolean {
   return hasFailoverReason;
 }
 
-/** @deprecated Use isFailoverError instead. */
-export function isRateLimitError(error: unknown): boolean {
+/**
+ * Checks whether an error is a transient/retryable error (rate-limit,
+ * 403/Forbidden, etc.) that should trigger model fallback.
+ */
+export function isRetryableError(error: unknown): boolean {
   return isFailoverError(error);
+}
+
+/** @deprecated Use isRetryableError instead. */
+export function isRateLimitError(error: unknown): boolean {
+  return isRetryableError(error);
 }
 
 // ---------------------------------------------------------------------------
