@@ -26,9 +26,32 @@
 
 oh-my-opencode-slim is an agent orchestration plugin for OpenCode. It includes a built-in team of specialized agents that can scout a codebase, look up fresh documentation, review architecture, handle UI work, and execute well-scoped implementation tasks under one orchestrator.
 
-The main idea is simple: instead of forcing one model to do everything, the plugin routes each part of the job to the agent best suited for it, balancing **quality, speed and cost**.
+The main idea is simple: instead of forcing one model to do everything, the plugin routes each part of the job to the agent best suited for it, balancing **quality, speed and cost**. The Orchestrator plans the work graph, dispatches specialists as background tasks, and reconciles their results before continuing.
 
-To explore the agents themselves, see **[Meet the Pantheon](#meet-the-pantheon)**. For the full feature set, see **[Features & Workflows](#features-and-workflows)** below.
+### ✨ Highlights
+
+- **[Seven specialized agents](#meet-the-pantheon)** - Orchestrator, Explorer,
+  Oracle, Council, Librarian, Designer, and Fixer. Each part of the job goes to
+  the agent best suited for it - mix any models across any providers.
+- **[Background orchestration](docs/background-orchestration.md)** - the
+  Orchestrator dispatches specialists as background tasks, tracks them, and
+  reconciles results before continuing - parallel work by default.
+- **[Bundled skills](#skills)** - prompt-based workflows like `deepwork`,
+  `codemap`, `verification-planning`, and `reflect`, assigned per agent.
+- **[Council](docs/council.md)** - run multiple models in parallel on the same
+  question and synthesize a single answer with `@council`.
+- **[Companion](docs/companion.md)** - an optional floating desktop window
+  showing which agents are active, including parallel background specialists.
+- **[Multiplexer integration](docs/multiplexer-integration.md)** - watch agents
+  work live in Tmux, Zellij, Herdr, or cmux panes.
+- **[Preset switching](docs/preset-switching.md)** - swap the whole team's
+  models at runtime with `/preset`.
+- **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
+  across 25 languages, and built-in MCPs for web search, docs, and GitHub code
+  search.
+- **[Fully customizable](docs/configuration.md)** - custom agents, prompt
+  overrides, per-agent skill/MCP permissions, and
+  [project-local customization](docs/project-local-customization.md).
 
 ### OpenAI GPT-5.6
 
@@ -194,135 +217,6 @@ ping all agents
 </div>
 
 If any agent fails to respond, check your provider authentication and config file.
-
----
-
-### What's New in V2
-
-V2 turns oh-my-opencode-slim into a scheduler-first multi-agent workflow system.
-The Orchestrator stays focused on planning, delegation, reconciliation, and
-verification while specialists do the work in their own lanes.
-
-- **[Background agents](#background-agents)** - the Orchestrator now dispatches
-  specialists as background tasks, tracks task/session IDs, waits for completion
-  events, and reconciles results before continuing.
-- **[Companion](#companion)** - an optional floating desktop window shows which
-  agents are currently active, including parallel background specialists.
-- **[Deepwork](#deepwork)** - a structured workflow for large, multi-file, risky,
-  or phased coding work using persistent plan files and Oracle review gates.
-- **[Verification Planning](#verification-planning)** - plans a project-specific
-  evidence path before non-trivial implementation, including verification
-  affordances when the system needs to become more legible to an agent.
-- **[Reflect](#reflect)** - reviews repeated work patterns and suggests reusable skills,
-  agents, commands, config rules, prompt rules, or project playbooks.
-- **[Worktrees](#worktrees)** - manages Git worktrees as isolated coding lanes
-  with safety protocols for complex, risky, or parallel tasks.
-- **[oh-my-opencode-slim skill](#oh-my-opencode-slim-skill)** - a bundled
-  configuration skill that helps tune models, prompts, custom agents, MCP access,
-  presets, and plugin behavior safely.
-
-#### Background Agents
-
-V2 makes background specialists the default mental model: the Orchestrator plans
-the work graph, launches the right agents, avoids overlapping write ownership,
-and waits for terminal task results before acting on them.
-
-See **[Background Orchestration](docs/background-orchestration.md)** for the
-full scheduler model.
-
-#### Companion
-
-The optional Companion is a floating desktop status window for live agent
-activity. It shows the current session state and which agents are active, so
-background work is easier to follow at a glance.
-
-<div align="center">
-  <img src="img/companion.gif" alt="Companion showing active agents" width="600">
-  <p><i>Left bottom visual companion.</i></p>
-</div>
-
-During interactive install, the installer asks whether to enable Companion and
-defaults to `no`. For automation, enable it explicitly with:
-
-```bash
-bunx oh-my-opencode-slim@latest install --companion=yes
-```
-
-See **[Companion](docs/companion.md)** for configuration, positions, sizes, and
-install details.
-
-#### Deepwork
-
-Deepwork is for heavy coding sessions: broad refactors, multi-phase features,
-risky architecture changes, or work that needs a persistent plan. It creates a
-local markdown progress file, uses Oracle review gates, and keeps implementation
-phases structured.
-
-Start it with:
-
-```text
-/deepwork <heavy coding task>
-```
-
-See **[Skills](docs/skills.md#deepwork)** for when to use it and how the workflow
-runs.
-
-#### Verification Planning
-
-Verification Planning gives the Orchestrator a way to decide how a non-trivial
-change will be proven before implementation begins. It frames the claim, designs
-project-specific evidence paths, and can create a small verification affordance
-when the system cannot directly reveal the decisive state to an agent. For
-unfamiliar capabilities, it asks the Librarian for focused research before
-choosing an approach.
-
-See **[Skills](docs/skills.md#verification-planning)** for the evidence-path
-workflow and its safety boundaries.
-
-#### Reflect
-
-Reflect helps the Orchestrator learn from repeated workflow friction. It reviews
-recent work and existing assets, then recommends the smallest useful improvement:
-a skill, custom agent, command, config rule, prompt rule, MCP permission change,
-or project playbook. If there is not enough evidence, it should recommend
-creating nothing.
-
-Use it directly with:
-
-```text
-/reflect
-/reflect release workflow and checks
-```
-
-Or with natural prompts like:
-
-```text
-reflect on my recent workflows
-find repeated work worth turning into reusable instructions
-```
-
-See **[Skills](docs/skills.md#reflect)** for the full workflow and guardrails.
-
-#### Worktrees
-
-Worktrees manages Git worktrees as safe, isolated coding lanes under `.slim/worktrees/<slug>/`. The Orchestrator manages the lifecycle of these lanes, tracks state in `.slim/worktrees.json`, dispatches specialist agents inside them, and requires explicit confirmation before mutating git state.
-
-See **[Skills](docs/skills.md#worktrees)** for the safety protocol.
-
-#### oh-my-opencode-slim Skill
-
-The bundled `oh-my-opencode-slim` skill helps the Orchestrator configure and
-improve the plugin itself. Use it for model tuning, custom agents, prompt
-overrides, skill/MCP permissions, presets, optional agents, background
-orchestration, and recurring workflow friction.
-
-<div align="center">
-  <img src="img/oh-my-opencode-skill.png" alt="oh-my-opencode-slim skill in use" width="600">
-  <p><i>Ask the bundled skill to tune and improve your agent setup.</i></p>
-</div>
-
-See **[Skills](docs/skills.md#oh-my-opencode-slim)** for examples and safety
-rules.
 
 ---
 
@@ -664,6 +558,68 @@ rules.
     </td>
   </tr>
 </table>
+
+---
+
+<a id="skills"></a>
+
+## 🧩 Skills
+
+Skills are prompt-based instructions injected into an agent's system prompt to
+guide decisions, workflows, and tool use. Unlike MCPs (which are running
+servers), a skill runs no process — it is a focused playbook an agent activates
+when the task calls for it. The installer bundles eight skills and keeps them
+updated on plugin auto-update; local customizations are preserved.
+
+| Skill | Purpose | Default agent | How to invoke | Source |
+|-------|---------|---------------|---------------|--------|
+| `codemap` | Hierarchical repository maps so agents understand codebases without re-reading everything | `orchestrator` | `run codemap` | [SKILL.md](src/skills/codemap/SKILL.md) |
+| `deepwork` | Structured workflow for large, risky, multi-phase coding sessions with review gates | `orchestrator` | `/deepwork <task>` | [SKILL.md](src/skills/deepwork/SKILL.md) |
+| `verification-planning` | Plans a project-specific evidence path before non-trivial changes | `orchestrator` | automatic before non-trivial work | [SKILL.md](src/skills/verification-planning/SKILL.md) |
+| `simplify` | Behavior-preserving simplification for readability and maintainability | `oracle` | ask for simplification or during review | [SKILL.md](src/skills/simplify/SKILL.md) |
+| `worktrees` | Git worktrees as safe, isolated coding lanes for risky or parallel work | `orchestrator` | `work in a worktree` | [SKILL.md](src/skills/worktrees/SKILL.md) |
+| `clonedeps` | Clones dependency source locally so agents can inspect library internals | `orchestrator` | `clone dependencies` | [SKILL.md](src/skills/clonedeps/SKILL.md) |
+| `reflect` | Turns repeated workflow friction into reusable skills, agents, or config | `orchestrator` | `/reflect` | [SKILL.md](src/skills/reflect/SKILL.md) |
+| `oh-my-opencode-slim` | Configures and safely improves the plugin setup itself | `orchestrator` | ask to tune your setup | [SKILL.md](src/skills/oh-my-opencode-slim/SKILL.md) |
+
+<div align="center">
+  <img src="img/oh-my-opencode-skill.png" alt="oh-my-opencode-slim skill in use" width="600">
+  <p><i>Ask the bundled skill to tune and improve your agent setup.</i></p>
+</div>
+
+Skill assignments are permission grants — an agent can only activate skills it
+has been given. Configure them per agent with the `skills` array in
+`~/.config/opencode/oh-my-opencode-slim.json`: an explicit list, `"*"` for
+everything, or `"!skill-name"` to deny one.
+
+See **[Skills](docs/skills.md)** for full documentation, or browse the
+illustrated overview at
+**[ohmyopencodeslim.com/skills](https://ohmyopencodeslim.com/skills)**.
+
+---
+
+<a id="companion"></a>
+
+## 🖥️ Companion
+
+The optional Companion is a floating desktop status window for live agent
+activity. It shows the current session state and which agents are active, so
+background work is easier to follow at a glance.
+
+<div align="center">
+  <img src="img/companion.gif" alt="Companion showing active agents" width="600">
+  <p><i>Left bottom visual companion.</i></p>
+</div>
+
+During interactive install, the installer asks whether to enable Companion and
+defaults to `no`. For automation, enable it explicitly with:
+
+```bash
+bunx oh-my-opencode-slim@latest install --companion=yes
+```
+
+See **[Companion](docs/companion.md)** for configuration, positions, sizes, and
+install details.
 
 ---
 
