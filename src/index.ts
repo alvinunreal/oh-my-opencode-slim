@@ -339,6 +339,20 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       isFallbackInProgress: (sessionID) =>
         foregroundFallback.isFallbackInProgress(sessionID),
       coordinator: sessionLifecycle,
+      onTerminalJob: (parentSessionID) => {
+        void ctx.client.session.promptAsync({
+          path: { id: parentSessionID },
+          body: {
+            agent: 'orchestrator',
+            parts: [
+              {
+                type: 'text',
+                text: '(Background job completed.)',
+              },
+            ],
+          },
+        });
+      },
     });
 
     // Initialize hooks and wrapPostToolHook helper for error isolation

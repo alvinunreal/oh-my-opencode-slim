@@ -1876,6 +1876,8 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBeUndefined();
   });
 
+  });
+
   test('reads before and after launch attach with unique-line counts and caps', async () => {
     const { hook } = createHook({
       readContextMinLines: 5,

@@ -1,0 +1,56 @@
+From e71469d9588896e7593b8c213028f9f424971950 Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Wed, 15 Jul 2026 12:33:17 -0500
+Subject: [PATCH 05/10] test(task-session-manager): add onJobTerminal coverage
+ for session.idle path
+
+---
+ src/hooks/task-session-manager/index.test.ts | 32 ++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/src/hooks/task-session-manager/index.test.ts b/src/hooks/task-session-manager/index.test.ts
+index d16cdc7..004a8df 100644
+--- a/src/hooks/task-session-manager/index.test.ts
++++ b/src/hooks/task-session-manager/index.test.ts
+@@ -2261,6 +2261,38 @@ describe('task-session-manager hook', () => {
+     });
+   });
+ 
++  test('onJobTerminal fires from session.idle reconciliation', async () => {
++    const board = new BackgroundJobBoard();
++    const receivedParentIDs: string[] = [];
++    board.registerLaunch({
++      taskID: 'child-1',
++      parentSessionID: 'parent-1',
++      agent: 'fixer',
++      description: 'fix bug',
++    });
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++
++    const { hook } = createHook({
++      backgroundJobBoard: board,
++      shouldManageSession: (id) => id === 'parent-1',
++      onJobTerminal: (parentSessionID) => {
++        receivedParentIDs.push(parentSessionID);
++      },
++    });
++
++    await hook.event({
++      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
++    });
++
++    // Job should be reconciled
++    expect(board.get('child-1')).toMatchObject({
++      state: 'reconciled',
++      terminalState: 'completed',
++    });
++    // onJobTerminal should fire with the parent session ID
++    expect(receivedParentIDs).toEqual(['parent-1']);
++  });
++
+   test('ignores session.idle for already reconciled job', async () => {
+     const board = new BackgroundJobBoard();
+     board.registerLaunch({
+-- 
+2.43.0
+

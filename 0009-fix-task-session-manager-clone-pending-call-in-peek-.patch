@@ -1,0 +1,31 @@
+From 5fb40ca752505c0d81570128d0f970dca1a3df65 Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Thu, 16 Jul 2026 07:49:24 -0500
+Subject: [PATCH 09/10] fix(task-session-manager): clone pending call in peek
+ to avoid shared-ref mutation
+
+peek() returned the live Map reference that take() later consumes. Between
+peek (session.created net) and take (tool.execute.after), tool.execute.before
+could mutate resumedTaskId on the shared object. Return a shallow clone so
+the later take() sees a stable snapshot (issue #765).
+---
+ src/hooks/task-session-manager/pending-call-tracker.ts | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/hooks/task-session-manager/pending-call-tracker.ts b/src/hooks/task-session-manager/pending-call-tracker.ts
+index d3d30b8..5d7fb38 100644
+--- a/src/hooks/task-session-manager/pending-call-tracker.ts
++++ b/src/hooks/task-session-manager/pending-call-tracker.ts
+@@ -63,7 +63,8 @@ export function createPendingCallTracker() {
+         callId = this.findByParent(parentSessionId);
+       }
+       if (!callId) return undefined;
+-      return pendingCalls.get(callId);
++      const pending = pendingCalls.get(callId);
++      return pending ? { ...pending } : undefined;
+     },
+ 
+     clearSession(sessionId: string) {
+-- 
+2.43.0
+

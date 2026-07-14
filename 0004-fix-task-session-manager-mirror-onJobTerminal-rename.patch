@@ -1,0 +1,28 @@
+From 24299c430120fdeb75cabb217afc7ab055c1fbaf Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Wed, 15 Jul 2026 08:30:23 -0500
+Subject: [PATCH 04/10] fix(task-session-manager): mirror onJobTerminal rename
+ in src/index.ts wiring
+
+The onTerminalJob -> onJobTerminal rename in the hook options interface
+must be mirrored in the plugin wiring. Missed from the prior commit.
+---
+ src/index.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/index.ts b/src/index.ts
+index 126d0d0..47324cd 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -342,7 +342,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
+       isFallbackInProgress: (sessionID) =>
+         foregroundFallback.isFallbackInProgress(sessionID),
+       coordinator: sessionLifecycle,
+-      onTerminalJob: (parentSessionID) => {
++      onJobTerminal: (parentSessionID) => {
+         void ctx.client.session.promptAsync({
+           path: { id: parentSessionID },
+           body: {
+-- 
+2.43.0
+

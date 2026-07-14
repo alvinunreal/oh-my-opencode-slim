@@ -1,0 +1,402 @@
+From 20740690152382392a11ce72c7155e18a6ffc641 Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Wed, 15 Jul 2026 13:43:24 -0500
+Subject: [PATCH 06/10] fix(fallback): add grace window so fallback-aborted
+ background tasks reconcile (#765)
+
+PR #769 guarded backgroundJobBoard.drop() in onSessionDeleted with the strict
+isFallbackInProgress flag, but that flag is cleared in the finally block of
+tryFallback/tryFallbackWithAbort right after promptAsync returns. The abort's
+late session.deleted (and the aborted task's cancelled/error status) arrive
+asynchronously after the finally, so the guard was ineffective: the board job
+was dropped or overwritten with a terminal cancelled/error state. When the
+fallback re-prompt's response made the session go idle, board.get(id).state
+!== 'running', so the idle reconciliation (which requires running) never fired
+and the task was reported cancelled despite the agent having responded.
+
+Add a separate time-based grace window (wasFallbackRecent) that stays true for
+FALLBACK_GRACE_WINDOW_MS (5s) after a successful fallback re-prompt, distinct
+from the strict in-flight isFallbackInProgress flag (which must clear in
+finally so the genuine fallback-response idle still reconciles). Wire it into
+task-session-manager to:
+
+(a) keep the onSessionDeleted drop guard effective against late
+    abort-induced session.deleted (!isFallbackInProgress && !wasFallbackRecent)
+(b) suppress spurious fallback-induced cancelled/error status updates in both
+    the injected-completion path (updateBackgroundJobFromOutput) and the
+    synchronous tool.execute.after status path, so the job stays running for
+    idle reconciliation.
+
+The grace window is armed only after promptAsync is accepted (not on
+chain-exhaustion aborts), so a real terminated session still records its
+cancelled/error status.
+---
+ src/hooks/task-session-manager/codemap.md    |   8 +-
+ src/hooks/task-session-manager/index.test.ts | 213 +++++++++++++++++++
+ src/hooks/task-session-manager/index.ts      |  57 ++++-
+ src/index.ts                                 |   2 +
+ 4 files changed, 276 insertions(+), 4 deletions(-)
+
+diff --git a/src/hooks/task-session-manager/codemap.md b/src/hooks/task-session-manager/codemap.md
+index 1816e09..4d2e29d 100644
+--- a/src/hooks/task-session-manager/codemap.md
++++ b/src/hooks/task-session-manager/codemap.md
+@@ -50,10 +50,12 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
+    - Remembers injected terminal jobs to reconcile them on parent idle events
+ 
+ 5. **Lifecycle Events (`event`)**
+-   - `session.created`: Adds new task IDs to pending managed set
+-   - `session.idle` / `session.status` (idle): Reconciles injected terminal jobs for the parent session
++   - `session.created`: Adds new task IDs to pending managed set; registers a background job from the pending call when `tool.execute.after` was missed (net for #765), with phantom-running-job cleanup during fallback
++   - `session.idle` / `session.status` (idle): Reconciles injected terminal jobs for the parent session; also reconciles a still-running child job from idle (guarded by `isFallbackInProgress` so transient fallback aborts don't prematurely complete it)
+    - `session.status` (busy): Marks sessions as running from live session state
+-   - `session.deleted`: Clears job state, child jobs, and pending call records for the session
++   - `session.deleted`: Clears job state, child jobs, and pending call records for the session — guarded by `isFallbackInProgress` AND `wasFallbackRecent` so a late abort-induced deletion during/after a foreground fallback doesn't drop a still-live job (issue #765)
++   - `onJobTerminal`: Notifies the orchestrator (via `promptAsync`) when a background job reaches a terminal state, so it re-evaluates its conversation even when no child idle fires
++   - Spurious cancelled/error status arriving within `wasFallbackRecent` (injected completions and `tool.execute.after`) is suppressed so the job stays running for the genuine fallback-response idle (issue #765)
+ 
+ ### Data & Control Flow
+ 
+diff --git a/src/hooks/task-session-manager/index.test.ts b/src/hooks/task-session-manager/index.test.ts
+index 004a8df..7a655de 100644
+--- a/src/hooks/task-session-manager/index.test.ts
++++ b/src/hooks/task-session-manager/index.test.ts
+@@ -28,6 +28,7 @@ function createHook(options?: {
+   backgroundJobBoard?: BackgroundJobBoard;
+   sessionStatus?: unknown;
+   isFallbackInProgress?: (sessionID: string) => boolean;
++  wasFallbackRecent?: (sessionID: string) => boolean;
+   coordinator?: SessionLifecycle;
+   onJobTerminal?: (parentSessionID: string) => void;
+ }) {
+@@ -49,6 +50,7 @@ function createHook(options?: {
+       shouldManageSession: options?.shouldManageSession ?? (() => true),
+       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
+       isFallbackInProgress: options?.isFallbackInProgress,
++      wasFallbackRecent: options?.wasFallbackRecent,
+       coordinator: options?.coordinator,
+       onJobTerminal: options?.onJobTerminal,
+     },
+@@ -2466,6 +2468,217 @@ describe('task-session-manager hook', () => {
+     });
+   });
+ 
++  test('does NOT drop job on session.deleted when fallback was recent (grace window)', async () => {
++    const coordinator = new SessionLifecycle(() => {});
++    const board = new BackgroundJobBoard();
++    board.registerLaunch({
++      taskID: 'child-1',
++      parentSessionID: 'parent-1',
++      agent: 'oracle',
++      description: 'architecture review',
++    });
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++
++    createHook({
++      backgroundJobBoard: board,
++      coordinator,
++      // Strict in-flight guard already cleared (finally ran), but the grace
++      // window is still active — the late abort-induced session.deleted must
++      // not drop the job (issue #765).
++      isFallbackInProgress: () => false,
++      wasFallbackRecent: (id) => id === 'child-1',
++    });
++
++    coordinator.dispatchSessionDeleted('child-1');
++
++    expect(board.get('child-1')).toBeDefined();
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++  });
++
++  test('drops job on session.deleted after grace window expires', async () => {
++    const coordinator = new SessionLifecycle(() => {});
++    const board = new BackgroundJobBoard();
++    board.registerLaunch({
++      taskID: 'child-2',
++      parentSessionID: 'parent-1',
++      agent: 'oracle',
++      description: 'architecture review',
++    });
++
++    createHook({
++      backgroundJobBoard: board,
++      coordinator,
++      isFallbackInProgress: () => false,
++      wasFallbackRecent: () => false,
++    });
++
++    coordinator.dispatchSessionDeleted('child-2');
++
++    expect(board.get('child-2')).toBeUndefined();
++  });
++
++  test('suppresses fallback-induced cancelled status within grace window (tool.execute.after)', async () => {
++    const board = new BackgroundJobBoard();
++    const receivedParentIDs: string[] = [];
++    const { hook } = createHook({
++      backgroundJobBoard: board,
++      onJobTerminal: (parentSessionID) => {
++        receivedParentIDs.push(parentSessionID);
++      },
++      isFallbackInProgress: () => false,
++      wasFallbackRecent: (id) => id === 'child-1',
++    });
++
++    // Register the launch (V2 task tool returns a launch id first).
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
++      { args: { subagent_type: 'oracle', description: 'hello' } },
++    );
++    await hook['tool.execute.after'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
++      { output: 'task_id: child-1\nstate: running' },
++    );
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++
++    // Spurious cancelled status from the fallback abort (synchronous task
++    // result path) — must be suppressed within the grace window.
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
++      { args: { subagent_type: 'oracle', task_id: 'child-1' } },
++    );
++    await hook['tool.execute.after'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
++      { output: 'task_id: child-1\nstate: cancelled' },
++    );
++
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++    expect(receivedParentIDs).toEqual([]);
++  });
++
++  test('real cancelled status applies after grace window (tool.execute.after)', async () => {
++    const board = new BackgroundJobBoard();
++    const receivedParentIDs: string[] = [];
++    const { hook } = createHook({
++      backgroundJobBoard: board,
++      onJobTerminal: (parentSessionID) => {
++        receivedParentIDs.push(parentSessionID);
++      },
++      isFallbackInProgress: () => false,
++      wasFallbackRecent: () => false,
++    });
++
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
++      { args: { subagent_type: 'oracle', description: 'hello' } },
++    );
++    await hook['tool.execute.after'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
++      { output: 'task_id: child-1\nstate: running' },
++    );
++
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
++      { args: { subagent_type: 'oracle', task_id: 'child-1' } },
++    );
++    await hook['tool.execute.after'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
++      { output: 'task_id: child-1\nstate: cancelled' },
++    );
++
++    expect(board.get('child-1')).toMatchObject({ state: 'cancelled' });
++    expect(receivedParentIDs).toEqual(['parent-1']);
++  });
++
++  test('suppresses fallback-induced error status within grace window (injected completion)', async () => {
++    const board = new BackgroundJobBoard();
++    const receivedParentIDs: string[] = [];
++    const { hook } = createHook({
++      backgroundJobBoard: board,
++      onJobTerminal: (parentSessionID) => {
++        receivedParentIDs.push(parentSessionID);
++      },
++      isFallbackInProgress: () => false,
++      wasFallbackRecent: (id) => id === 'child-1',
++    });
++
++    board.registerLaunch({
++      taskID: 'child-1',
++      parentSessionID: 'parent-1',
++      agent: 'oracle',
++      description: 'hello',
++    });
++
++    await hook['experimental.chat.messages.transform'](
++      {},
++      {
++        messages: [
++          {
++            info: {
++              role: 'user',
++              agent: 'orchestrator',
++              sessionID: 'parent-1',
++            },
++            parts: [
++              {
++                type: 'text',
++                synthetic: true,
++                text: 'task_id: child-1\nstate: error',
++              },
++            ],
++          },
++        ],
++      },
++    );
++
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++    expect(receivedParentIDs).toEqual([]);
++  });
++
++  test('real error status applies after grace window (injected completion)', async () => {
++    const board = new BackgroundJobBoard();
++    const receivedParentIDs: string[] = [];
++    const { hook } = createHook({
++      backgroundJobBoard: board,
++      onJobTerminal: (parentSessionID) => {
++        receivedParentIDs.push(parentSessionID);
++      },
++      isFallbackInProgress: () => false,
++      wasFallbackRecent: () => false,
++    });
++
++    board.registerLaunch({
++      taskID: 'child-1',
++      parentSessionID: 'parent-1',
++      agent: 'oracle',
++      description: 'hello',
++    });
++
++    await hook['experimental.chat.messages.transform'](
++      {},
++      {
++        messages: [
++          {
++            info: {
++              role: 'user',
++              agent: 'orchestrator',
++              sessionID: 'parent-1',
++            },
++            parts: [
++              {
++                type: 'text',
++                synthetic: true,
++                text: 'task_id: child-1\nstate: error',
++              },
++            ],
++          },
++        ],
++      },
++    );
++
++    expect(board.get('child-1')).toMatchObject({ state: 'error' });
++    expect(receivedParentIDs).toEqual(['parent-1']);
++  });
++
+   test('cancelled job is not reconciled from idle', async () => {
+     const board = new BackgroundJobBoard();
+     board.registerLaunch({
+diff --git a/src/hooks/task-session-manager/index.ts b/src/hooks/task-session-manager/index.ts
+index 128d7ee..8f1ffa1 100644
+--- a/src/hooks/task-session-manager/index.ts
++++ b/src/hooks/task-session-manager/index.ts
+@@ -109,6 +109,15 @@ export function createTaskSessionManagerHook(
+      *  completed during transient fallback); phantom cleanup is enabled
+      *  in session.created nets. */
+     isFallbackInProgress?: (sessionID: string) => boolean;
++    /** Called with a task/session ID to check whether a foreground fallback
++     *  re-prompt was accepted for it within the grace window
++     *  (FALLBACK_GRACE_WINDOW_MS). When true: the onSessionDeleted drop guard
++     *  stays effective against late abort-induced session.deleted, and
++     *  cancelled/error status updates are suppressed so the job stays
++     *  running for idle reconciliation. Distinct from the strict
++     *  isFallbackInProgress (in-flight) so the genuine response idle still
++     *  reconciles (issue #765). */
++    wasFallbackRecent?: (sessionID: string) => boolean;
+     coordinator?: SessionLifecycle;
+     /** Called when a background job reaches a terminal state so the
+      *  orchestrator can be prodded to re-evaluate its conversation. */
+@@ -138,7 +147,14 @@ export function createTaskSessionManagerHook(
+       // Dropping the job from the board here would make the orchestrator
+       // lose track of the task and report it as cancelled even though the
+       // oracle actually completed.
+-      if (!options.isFallbackInProgress?.(sessionId)) {
++      //
++      // isFallbackInProgress covers the strict in-flight window; wasFallbackRecent
++      // extends the guard across the async window where the abort's late
++      // session.deleted arrives after the finally clears inProgress (issue #765).
++      if (
++        !options.isFallbackInProgress?.(sessionId) &&
++        !options.wasFallbackRecent?.(sessionId)
++      ) {
+         backgroundJobBoard.drop(sessionId);
+         backgroundJobBoard.clearParent(sessionId);
+       }
+@@ -178,6 +194,28 @@ export function createTaskSessionManagerHook(
+       return existing;
+     }
+ 
++    // Suppress spurious cancelled/error status arriving within the
++    // fallback grace window. A foreground-fallback abort re-prompts the
++    // session with a fallback model, so a cancelled/error status fired by
++    // the abort is not a real termination — keep the job running so the
++    // genuine fallback-response idle (or a later "completed" injected
++    // completion) can reconcile it (issue #765).
++    if (
++      (status.state === 'cancelled' || status.state === 'error') &&
++      options.wasFallbackRecent?.(status.taskID)
++    ) {
++      log(
++        '[task-session-manager] suppressed fallback-induced terminal status',
++        {
++          taskID: status.taskID,
++          state: status.state,
++          alias: existing?.alias,
++          boardState: existing?.state,
++        },
++      );
++      return existing;
++    }
++
+     const updated = backgroundJobBoard.updateStatus({
+       taskID: status.taskID,
+       state: status.state,
+@@ -520,6 +558,23 @@ export function createTaskSessionManagerHook(
+       normalizeLateCancelledTaskOutput(output);
+       const status = parseTaskStatusOutput(output.output);
+       if (status) {
++        // Suppress spurious cancelled/error status from a foreground-fallback
++        // abort within the grace window — keep the job running so the
++        // genuine fallback-response idle can reconcile it (issue #765).
++        if (
++          (status.state === 'cancelled' || status.state === 'error') &&
++          options.wasFallbackRecent?.(status.taskID)
++        ) {
++          log(
++            '[task-session-manager] suppressed fallback-induced terminal status (tool.execute.after)',
++            {
++              taskID: status.taskID,
++              state: status.state,
++              alias: backgroundJobBoard.get(status.taskID)?.alias,
++            },
++          );
++          return;
++        }
+         const existing = backgroundJobBoard.get(status.taskID);
+         const record =
+           existing ??
+diff --git a/src/index.ts b/src/index.ts
+index 48263e8..9834848 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -341,6 +341,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
+       },
+       isFallbackInProgress: (sessionID) =>
+         foregroundFallback.isFallbackInProgress(sessionID),
++      wasFallbackRecent: (sessionID) =>
++        foregroundFallback.wasFallbackRecent(sessionID),
+       coordinator: sessionLifecycle,
+       onJobTerminal: (parentSessionID) => {
+         void ctx.client.session.promptAsync({
+-- 
+2.43.0
+

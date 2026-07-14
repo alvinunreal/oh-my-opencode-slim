@@ -1,0 +1,55 @@
+From 772b8b27d6fec148d56ad8e714c4da200b31aa17 Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Thu, 16 Jul 2026 15:09:22 -0500
+Subject: [PATCH 10/10] fix(task-session-manager): key wasFallbackRecent by
+ parent session ID, not child task ID
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both call sites passed status.taskID (child task ID) while the grace window
+is armed under the parent session ID, so the lookup always missed and the
+fallback-induced cancelled/error suppression never fired. The job was then
+incorrectly marked terminal — the root cause of #765 (random firings not
+working).
+
+- index.ts:215 use existing?.parentSessionID
+- index.ts:573 use pending.parentSessionId
+---
+ src/hooks/task-session-manager/index.ts | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/hooks/task-session-manager/index.ts b/src/hooks/task-session-manager/index.ts
+index fe7c5b8..89dbb1e 100644
+--- a/src/hooks/task-session-manager/index.ts
++++ b/src/hooks/task-session-manager/index.ts
+@@ -212,7 +212,8 @@ export function createTaskSessionManagerHook(
+     // completion) can reconcile it (issue #765).
+     if (
+       (status.state === 'cancelled' || status.state === 'error') &&
+-      options.wasFallbackRecent?.(status.taskID)
++      existing?.parentSessionID &&
++      options.wasFallbackRecent?.(existing.parentSessionID)
+     ) {
+       log(
+         '[task-session-manager] suppressed fallback-induced terminal status',
+@@ -565,12 +566,13 @@ export function createTaskSessionManagerHook(
+       normalizeLateCancelledTaskOutput(output);
+       const status = parseTaskStatusOutput(output.output);
+       if (status) {
+-        // Suppress spurious cancelled/error status from a foreground-fallback
++// Suppress spurious cancelled/error status from a foreground-fallback
+         // abort within the grace window — keep the job running so the
+-        // genuine fallback-response idle can reconcile it (issue #765).
++        // genuine fallback-response idle can reconcile it — issue #765.
+         if (
+           (status.state === 'cancelled' || status.state === 'error') &&
+-          options.wasFallbackRecent?.(status.taskID)
++          pending?.parentSessionId &&
++          options.wasFallbackRecent?.(pending.parentSessionId)
+         ) {
+           log(
+             '[task-session-manager] suppressed fallback-induced terminal status (tool.execute.after)',
+-- 
+2.43.0
+

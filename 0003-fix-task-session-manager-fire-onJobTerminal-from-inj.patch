@@ -1,0 +1,376 @@
+From a89c5b7947e323f3fc1b10a141e8c5080bdbbafd Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Wed, 15 Jul 2026 08:28:16 -0500
+Subject: [PATCH 03/10] fix(task-session-manager): fire onJobTerminal from
+ injected completion + review cleanups
+
+- Call onJobTerminal when an injected completion marks a background job
+  terminal, so the orchestrator is notified even when session.idle fires
+  after the job is already completed.
+- Dedupe onJobTerminal per taskID to prevent double-fire.
+- Extract findByParent() helper to remove peek/take duplication.
+- Scope fallback phantom-drop to a single phantom job.
+- Rename onTerminalJob -> onJobTerminal; drop redundant shouldManageSession
+  guard; add typeof guard on board-part overwrite; add peek JSDoc and
+  isFallbackInProgress JSDoc; split the over-packed phantom-drop test;
+  add a test asserting onJobTerminal fires on injected completion.
+---
+ src/hooks/task-session-manager/index.test.ts  | 95 ++++++++++++++-----
+ src/hooks/task-session-manager/index.ts       | 70 +++++++++-----
+ .../pending-call-tracker.ts                   | 31 +++---
+ 3 files changed, 138 insertions(+), 58 deletions(-)
+
+diff --git a/src/hooks/task-session-manager/index.test.ts b/src/hooks/task-session-manager/index.test.ts
+index d684394..356a2c3 100644
+--- a/src/hooks/task-session-manager/index.test.ts
++++ b/src/hooks/task-session-manager/index.test.ts
+@@ -24,6 +24,7 @@ function createHook(options?: {
+   sessionStatus?: unknown;
+   isFallbackInProgress?: (sessionID: string) => boolean;
+   coordinator?: SessionLifecycle;
++  onJobTerminal?: (parentSessionID: string) => void;
+ }) {
+   const hook = createTaskSessionManagerHook(
+     {
+@@ -44,6 +45,7 @@ function createHook(options?: {
+       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
+       isFallbackInProgress: options?.isFallbackInProgress,
+       coordinator: options?.coordinator,
++      onJobTerminal: options?.onJobTerminal,
+     },
+   );
+ 
+@@ -1897,12 +1899,57 @@ describe('task-session-manager hook', () => {
+     });
+   });
+ 
+-  test('session.created during fallback drops phantom job and preserves completion path (peek not take)', async () => {
++  test('onJobTerminal fires when injected completion makes a job terminal', async () => {
++    const board = new BackgroundJobBoard();
++    const receivedParentIDs: string[] = [];
++    const { hook } = createHook({
++      backgroundJobBoard: board,
++      onJobTerminal: (parentSessionID) => {
++        receivedParentIDs.push(parentSessionID);
++      },
++    });
++
++    board.registerLaunch({
++      taskID: 'child-1',
++      parentSessionID: 'parent-1',
++      agent: 'explorer',
++      description: 'test job',
++    });
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++
++    await hook['experimental.chat.messages.transform'](
++      {},
++      {
++        messages: [
++          {
++            info: {
++              role: 'user',
++              agent: 'orchestrator',
++              sessionID: 'parent-1',
++            },
++            parts: [
++              {
++                type: 'text',
++                synthetic: true,
++                text: 'task_id: child-1\nstate: completed',
++              },
++            ],
++          },
++        ],
++      },
++    );
++
++    const job = board.get('child-1');
++    expect(job).toMatchObject({
++      state: 'completed',
++      terminalUnreconciled: true,
++    });
++    expect(receivedParentIDs).toEqual(['parent-1']);
++  });
++
++  test('session.created during fallback drops phantom running job', async () => {
+     const board = new BackgroundJobBoard();
+ 
+-    // Pre-register child-1 as a phantom running job — simulates the
+-    // preserved entry from session.deleted when isFallbackInProgress was
+-    // true.
+     board.registerLaunch({
+       taskID: 'child-1',
+       parentSessionID: 'parent-1',
+@@ -1916,18 +1963,13 @@ describe('task-session-manager hook', () => {
+       isFallbackInProgress: (id) => id === 'parent-1',
+     });
+ 
+-    // Seed a pending call for child-2's launch
+     await hook['tool.execute.before'](
+       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+       {
+-        args: {
+-          subagent_type: 'explorer',
+-          description: 'retried child task',
+-        },
++        args: { subagent_type: 'explorer', description: 'retried child task' },
+       },
+     );
+ 
+-    // Dispatch session.created for child-2 during fallback
+     await hook.event({
+       event: {
+         type: 'session.created',
+@@ -1935,10 +1977,8 @@ describe('task-session-manager hook', () => {
+       },
+     });
+ 
+-    // Phantom child-1 must be dropped by the net
+     expect(board.get('child-1')).toBeUndefined();
+ 
+-    // child-2 should be registered (running) via peek
+     const job = board.get('child-2');
+     expect(job).toBeDefined();
+     expect(job).toMatchObject({
+@@ -1947,21 +1987,32 @@ describe('task-session-manager hook', () => {
+       state: 'running',
+       agent: 'explorer',
+     });
++  });
+ 
+-    // The pending call was peeked, not taken — so tool.execute.after
+-    // still receives it and can register completion (no swallow).
+-    await hook['tool.execute.after'](
++  test('session.created net uses peek so tool.execute.after can still consume the call', async () => {
++    const board = new BackgroundJobBoard();
++    const { hook } = createHook({ backgroundJobBoard: board });
++
++    await hook['tool.execute.before'](
+       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+-      { output: ['task_id: child-2', 'state: completed'].join('\n') },
++      { args: { subagent_type: 'explorer', description: 'test' } },
+     );
+ 
+-    // child-2 must be completed (not swallowed)
+-    const completed = board.get('child-2');
+-    expect(completed).toBeDefined();
+-    expect(completed).toMatchObject({ state: 'completed' });
++    await hook.event({
++      event: {
++        type: 'session.created',
++        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
++      },
++    });
++
++    expect(board.get('child-1')).toMatchObject({ state: 'running' });
++
++    await hook['tool.execute.after'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
++      { output: ['task_id: child-1', 'state: completed'].join('\n') },
++    );
+ 
+-    // child-1 still gone
+-    expect(board.get('child-1')).toBeUndefined();
++    expect(board.get('child-1')).toMatchObject({ state: 'completed' });
+   });
+ 
+   test('reads before and after launch attach with unique-line counts and caps', async () => {
+diff --git a/src/hooks/task-session-manager/index.ts b/src/hooks/task-session-manager/index.ts
+index d5adb31..128d7ee 100644
+--- a/src/hooks/task-session-manager/index.ts
++++ b/src/hooks/task-session-manager/index.ts
+@@ -102,16 +102,17 @@ export function createTaskSessionManagerHook(
+     /** Register a session as orchestrator when the transform hook detects
+      *  an orchestrator message but the session isn't in the agent map yet. */
+     registerSessionAsOrchestrator?: (sessionID: string) => void;
+-    /** Optional guard: when provided, idle events for a session that is
+-     *  currently undergoing a foreground-fallback abort/re-prompt cycle
+-     *  will NOT trigger idle reconciliation. prevents marking a still-
+-     *  active child job as completed when the session was aborted for
+-     *  model fallback rather than natural completion. */
++    /** Called with a sessionID to check if that session (or its parent)
++     *  is currently undergoing a foreground-fallback abort/re-prompt cycle.
++     *  When true: idle events for both the parent and any background
++     *  children are skipped (prevents marking a still-active job as
++     *  completed during transient fallback); phantom cleanup is enabled
++     *  in session.created nets. */
+     isFallbackInProgress?: (sessionID: string) => boolean;
+     coordinator?: SessionLifecycle;
+     /** Called when a background job reaches a terminal state so the
+      *  orchestrator can be prodded to re-evaluate its conversation. */
+-    onTerminalJob?: (parentSessionID: string) => void;
++    onJobTerminal?: (parentSessionID: string) => void;
+   },
+ ) {
+   const backgroundJobBoard =
+@@ -128,6 +129,7 @@ export function createTaskSessionManagerHook(
+   const processedInjectedCompletions = new Set<string>();
+   const processedInjectedCompletionOrder: string[] = [];
+   const terminalJobsInjectedByParent = new Map<string, Set<string>>();
++  const terminalJobNotified = new Set<string>();
+ 
+   if (options.coordinator) {
+     options.coordinator.onSessionDeleted((sessionId) => {
+@@ -141,6 +143,7 @@ export function createTaskSessionManagerHook(
+         backgroundJobBoard.clearParent(sessionId);
+       }
+       terminalJobsInjectedByParent.delete(sessionId);
++      terminalJobNotified.delete(sessionId);
+       taskContextTracker.clearSession(sessionId);
+       taskContextTracker.prune(backgroundJobBoard);
+       pendingCallTracker.clearSession(sessionId);
+@@ -279,6 +282,18 @@ export function createTaskSessionManagerHook(
+     });
+ 
+     rememberProcessedInjectedCompletion(occurrenceId);
++
++    // ponytail: notify orchestrator when injected completion makes a
++    // job terminal. The session.idle handler for the child only fires
++    // when job.state === 'running', which won't be true if the injected
++    // completion already marked it completed.
++    if (updated.terminalUnreconciled && options.onJobTerminal) {
++      if (!terminalJobNotified.has(updated.taskID)) {
++        terminalJobNotified.add(updated.taskID);
++        options.onJobTerminal(updated.parentSessionID);
++      }
++    }
++
+     return updated;
+   }
+ 
+@@ -537,9 +552,10 @@ export function createTaskSessionManagerHook(
+           taskContextTracker.contextFilesForPrompt(status.taskID),
+         );
+         taskContextTracker.prune(backgroundJobBoard);
+-        if (updated && updated.state !== 'running' && options.onTerminalJob) {
+-          if (options.shouldManageSession(pending.parentSessionId)) {
+-            options.onTerminalJob(pending.parentSessionId);
++        if (updated && updated.state !== 'running' && options.onJobTerminal) {
++          if (!terminalJobNotified.has(status.taskID)) {
++            terminalJobNotified.add(status.taskID);
++            options.onJobTerminal(pending.parentSessionId);
+           }
+         }
+         return;
+@@ -626,8 +642,10 @@ export function createTaskSessionManagerHook(
+             part.metadata[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
+         );
+         if (existingBoardIndex !== -1) {
+-          (message.parts[existingBoardIndex] as { text: string }).text =
+-            reminders.join('\n\n');
++          const part = message.parts[existingBoardIndex];
++          if (typeof (part as { text?: unknown }).text === 'string') {
++            (part as { text: string }).text = reminders.join('\n\n');
++          }
+           return;
+         }
+ 
+@@ -699,15 +717,21 @@ export function createTaskSessionManagerHook(
+                 state: record.state,
+               },
+             );
+-            // ponytail: clean up phantom during fallback. When this session.created
+-            // is a fallback continuation (isFallbackInProgress true), drop any stale
+-            // phantom running job(s) for the parent whose taskID !== info.id.
++            // ponytail: clean up phantom running job during fallback.
++            // Only auto-drop when exactly 1 other running job exists
++            // (the single phantom). More than 1 means there might be
++            // legit concurrent jobs — session.deleted cleans them
++            // individually.
++            // ponytail: O(n) scan over the parent's jobs — n is tiny
++            // (≤ maxSessionsPerAgent running jobs per parent, default 2)
++            // and only runs during fallback, so the linear cost is
++            // negligible. A per-parent index would be premature.
+             if (options.isFallbackInProgress?.(info.parentID)) {
+-              const jobs = backgroundJobBoard.list(info.parentID);
+-              for (const job of jobs) {
+-                if (job.taskID !== info.id && job.state === 'running') {
+-                  backgroundJobBoard.drop(job.taskID);
+-                }
++              const runningJobs = backgroundJobBoard
++                .list(info.parentID)
++                .filter((j) => j.state === 'running' && j.taskID !== info.id);
++              if (runningJobs.length === 1) {
++                backgroundJobBoard.drop(runningJobs[0].taskID);
+               }
+             }
+           }
+@@ -772,9 +796,10 @@ export function createTaskSessionManagerHook(
+             taskContextTracker.contextFilesForPrompt(sessionId),
+           );
+           taskContextTracker.prune(backgroundJobBoard);
+-          if (options.onTerminalJob) {
+-            if (options.shouldManageSession(job.parentSessionID)) {
+-              options.onTerminalJob(job.parentSessionID);
++          if (options.onJobTerminal) {
++            if (!terminalJobNotified.has(sessionId)) {
++              terminalJobNotified.add(sessionId);
++              options.onJobTerminal(job.parentSessionID);
+             }
+           }
+         }
+@@ -867,6 +892,7 @@ export function createTaskSessionManagerHook(
+       log('[task-session-manager] session.deleted observed', {
+         sessionID: sessionId,
+       });
++      terminalJobNotified.delete(sessionId);
+     },
+   };
+ 
+diff --git a/src/hooks/task-session-manager/pending-call-tracker.ts b/src/hooks/task-session-manager/pending-call-tracker.ts
+index d2e4d99..2fc6e0f 100644
+--- a/src/hooks/task-session-manager/pending-call-tracker.ts
++++ b/src/hooks/task-session-manager/pending-call-tracker.ts
+@@ -23,15 +23,19 @@ export function createPendingCallTracker() {
+       }
+     },
+ 
++    findByParent(parentSessionId: string): string | undefined {
++      for (const id of pendingCalls.keys()) {
++        const call = pendingCalls.get(id);
++        if (call && call.parentSessionId === parentSessionId) {
++          return id;
++        }
++      }
++      return undefined;
++    },
++
+     take(callId?: string, parentSessionId?: string) {
+       if (!callId && parentSessionId) {
+-        for (const id of pendingCalls.keys()) {
+-          const call = pendingCalls.get(id);
+-          if (call && call.parentSessionId === parentSessionId) {
+-            callId = id;
+-            break;
+-          }
+-        }
++        callId = this.findByParent(parentSessionId);
+       }
+       if (!callId) return undefined;
+       const pending = pendingCalls.get(callId);
+@@ -39,15 +43,14 @@ export function createPendingCallTracker() {
+       return pending;
+     },
+ 
++    /**
++     * Same lookup as {@link take} but does not consume the pending call.
++     * Used by session.created net (#765) so tool.execute.after can still
++     * receive the result.
++     */
+     peek(callId?: string, parentSessionId?: string) {
+       if (!callId && parentSessionId) {
+-        for (const id of pendingCalls.keys()) {
+-          const call = pendingCalls.get(id);
+-          if (call && call.parentSessionId === parentSessionId) {
+-            callId = id;
+-            break;
+-          }
+-        }
++        callId = this.findByParent(parentSessionId);
+       }
+       if (!callId) return undefined;
+       return pendingCalls.get(callId);
+-- 
+2.43.0
+

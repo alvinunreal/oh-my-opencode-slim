@@ -1,0 +1,111 @@
+From 84923432c9f9d8d94bb17d465e39b0dad01e42f0 Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Tue, 14 Jul 2026 14:07:27 -0500
+Subject: [PATCH 01/10] fix(task-session-manager): register background job on
+ session.created (net for #765)
+
+When a child task hits a rate limit and falls back, the abort/re-prompt
+cycle can prevent tool.execute.after from registering the launch on the
+BackgroundJobBoard, so the orchestrator reports the task as "cancelled"
+while it is still running. Register the launch in the session.created
+handler by pulling the pending call from the tracker, covering the case
+where tool.execute.after never fired.
+
+Regression test: session.created registers background job when pending call exists.
+---
+ src/hooks/task-session-manager/index.test.ts | 35 ++++++++++++++++++++
+ src/hooks/task-session-manager/index.ts      | 32 ++++++++++++++++++
+ 2 files changed, 67 insertions(+)
+
+diff --git a/src/hooks/task-session-manager/index.test.ts b/src/hooks/task-session-manager/index.test.ts
+index 2b27b99..3806ddf 100644
+--- a/src/hooks/task-session-manager/index.test.ts
++++ b/src/hooks/task-session-manager/index.test.ts
+@@ -1862,6 +1862,41 @@ describe('task-session-manager hook', () => {
+     expect(resume.args.task_id).toBeUndefined();
+   });
+ 
++  test('session.created registers background job when pending call exists (net for #765)', async () => {
++    const board = new BackgroundJobBoard();
++    const { hook } = createHook({ backgroundJobBoard: board });
++
++    // Seed a pending call via tool.execute.before
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
++      {
++        args: {
++          subagent_type: 'explorer',
++          description: 'test session.created net',
++        },
++      },
++    );
++
++    // Dispatch session.created — should consume the pending call
++    // and register the launch on the board
++    await hook.event({
++      event: {
++        type: 'session.created',
++        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
++      },
++    });
++
++    // Board should have a registered running job
++    const job = board.get('child-1');
++    expect(job).toBeDefined();
++    expect(job).toMatchObject({
++      taskID: 'child-1',
++      parentSessionID: 'parent-1',
++      state: 'running',
++      agent: 'explorer',
++    });
++  });
++
+   test('reads before and after launch attach with unique-line counts and caps', async () => {
+     const { hook } = createHook({
+       readContextMinLines: 5,
+diff --git a/src/hooks/task-session-manager/index.ts b/src/hooks/task-session-manager/index.ts
+index fe769ab..6b8747f 100644
+--- a/src/hooks/task-session-manager/index.ts
++++ b/src/hooks/task-session-manager/index.ts
+@@ -660,6 +660,38 @@ export function createTaskSessionManagerHook(
+           options.shouldManageSession(info.parentID)
+         ) {
+           taskContextTracker.pendingManagedTaskIds.add(info.id);
++          // ponytail: net for #765. tool.execute.after is the only path that
++          // registers a launch, but it can be missed (plugin reload / session
++          // attached before hooks). When that happens the board never tracks
++          // the job and the orchestrator reports it cancelled though the
++          // session runs. Register here from the pending call instead.
++          // take() is FIFO by insertion order, so the oldest pending call for
++          // this parent is the right one even with several in flight.
++          const pending = pendingCallTracker.take(undefined, info.parentID);
++          if (pending) {
++            const record = backgroundJobBoard.registerLaunch({
++              taskID: info.id,
++              parentSessionID: info.parentID,
++              agent: pending.agentType,
++              description: pending.label,
++              objective: pending.label,
++            });
++            backgroundJobBoard.addContext(
++              info.id,
++              taskContextTracker.contextFilesForPrompt(info.id),
++            );
++            log(
++              '[task-session-manager] background task launch registered (session.created net)',
++              {
++                taskID: record.taskID,
++                alias: record.alias,
++                parentSessionID: record.parentSessionID,
++                agent: record.agent,
++                description: record.description,
++                state: record.state,
++              },
++            );
++          }
+         }
+         return;
+       }
+-- 
+2.43.0
+

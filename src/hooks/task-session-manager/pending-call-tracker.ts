@@ -47,6 +47,20 @@ export function createPendingCallTracker() {
       return undefined;
     },
 
+    peek(callId?: string, parentSessionId?: string) {
+      if (!callId && parentSessionId) {
+        for (const id of pendingCalls.keys()) {
+          const call = pendingCalls.get(id);
+          if (call && call.parentSessionId === parentSessionId) {
+            callId = id;
+            break;
+          }
+        }
+      }
+      if (!callId) return undefined;
+      return pendingCalls.get(callId);
+    },
+
     clearSession(sessionId: string) {
       for (const [callId, pending] of pendingCalls.entries()) {
         if (pending.parentSessionId === sessionId) {

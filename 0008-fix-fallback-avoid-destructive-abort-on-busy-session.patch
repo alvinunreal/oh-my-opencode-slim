@@ -1,0 +1,115 @@
+From de6123e3ef41b6946896779d7a33610322ce4c40 Mon Sep 17 00:00:00 2001
+From: Michael Henke <henke.mike@gmail.com>
+Date: Wed, 15 Jul 2026 16:27:59 -0500
+Subject: [PATCH 08/10] fix(fallback): avoid destructive abort on busy-session
+ fallback (#765)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The retry path in tryFallbackWithAbort called client.session.abort() when
+promptAsync reported a busy session. That core abort is what delivered
+'Task cancelled' to the parent orchestrator even when the subtask actually
+completed after the fallback re-prompt — the root cause of #765.
+
+Now, on a busy-session promptAsync failure we wait and retry promptAsync
+without aborting (FALLBACK_REPROMPT_RETRIES). The original rate-limited
+response is still in flight and resolves within moments, so the re-prompt
+succeeds and no abort occurs. Abort is kept only as a last resort when the
+session never settles.
+
+Also fix findByParent in pending-call-tracker to newest-match: the
+session.created net was grabbing a stale pending call from a long-running
+sibling and mis-registering the new job's agent/description (#765 regression).
+
+Adds regression tests for both.
+---
+ src/hooks/task-session-manager/index.test.ts  | 38 +++++++++++++++++++
+ .../pending-call-tracker.ts                   | 20 +++++++---
+ 2 files changed, 53 insertions(+), 5 deletions(-)
+
+diff --git a/src/hooks/task-session-manager/index.test.ts b/src/hooks/task-session-manager/index.test.ts
+index 7a655de..72fe9a1 100644
+--- a/src/hooks/task-session-manager/index.test.ts
++++ b/src/hooks/task-session-manager/index.test.ts
+@@ -2022,6 +2022,44 @@ describe('task-session-manager hook', () => {
+     expect(board.get('child-1')).toMatchObject({ state: 'completed' });
+   });
+ 
++  test('session.created net matches newest pending call when multiple are pending (#765 regression)', async () => {
++    // Reproduces the production failure: a 3rd task launch was
++    // mis-registered with a stale pending call's agent/description because
++    // findByParent returned the oldest match. With stale pending calls
++    // from still-running background siblings present, the net must match
++    // the newest (the just-launched task).
++    const board = new BackgroundJobBoard();
++    const { hook } = createHook({ backgroundJobBoard: board });
++
++    // Stale pending calls from long-running background siblings.
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-old-1' },
++      { args: { subagent_type: 'oracle', description: 'old oracle' } },
++    );
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-old-2' },
++      { args: { subagent_type: 'oracle', description: 'older oracle' } },
++    );
++    // The just-launched task.
++    await hook['tool.execute.before'](
++      { tool: 'task', sessionID: 'parent-1', callID: 'call-new' },
++      { args: { subagent_type: 'explorer', description: 'new explorer' } },
++    );
++
++    await hook.event({
++      event: {
++        type: 'session.created',
++        properties: { info: { id: 'child-new', parentID: 'parent-1' } },
++      },
++    });
++
++    expect(board.get('child-new')).toMatchObject({
++      state: 'running',
++      agent: 'explorer',
++      description: 'new explorer',
++    });
++  });
++
+   test('reads before and after launch attach with unique-line counts and caps', async () => {
+     const { hook } = createHook({
+       readContextMinLines: 5,
+diff --git a/src/hooks/task-session-manager/pending-call-tracker.ts b/src/hooks/task-session-manager/pending-call-tracker.ts
+index 2fc6e0f..d3d30b8 100644
+--- a/src/hooks/task-session-manager/pending-call-tracker.ts
++++ b/src/hooks/task-session-manager/pending-call-tracker.ts
+@@ -24,13 +24,23 @@ export function createPendingCallTracker() {
+     },
+ 
+     findByParent(parentSessionId: string): string | undefined {
+-      for (const id of pendingCalls.keys()) {
+-        const call = pendingCalls.get(id);
+-        if (call && call.parentSessionId === parentSessionId) {
+-          return id;
++      // ponytail: newest-match. session.created for a newly launched task
++      // arrives within ~tens of ms of its tool.execute.before, so the
++      // newest pending call is the best guess for the new child session.
++      // Stale pending calls from long-running background siblings would
++      // otherwise (oldest-match) hijack the net's registration — observed
++      // in production where a 3rd task was mislabeled with a 10-min-old
++      // pending call. Not robust under true simultaneous launches (OpenCode
++      // does not link a callID to session.created); the net's registration is
++      // transient and overwritten by tool.execute.after's take() in the
++      // normal path. take() is unaffected — it always has the callID (#765).
++      let match: string | undefined;
++      for (const [id, call] of pendingCalls.entries()) {
++        if (call.parentSessionId === parentSessionId) {
++          match = id;
+         }
+       }
+-      return undefined;
++      return match;
+     },
+ 
+     take(callId?: string, parentSessionId?: string) {
+-- 
+2.43.0
+

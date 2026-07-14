@@ -112,6 +112,9 @@ export function createTaskSessionManagerHook(
     coordinator?: SessionLifecycle;
     /** Test seam only; production always uses the reconciliation delay. */
     idleReconcileDelayMs?: number;
+    /** Called when a background job reaches a terminal state so the
+     *  orchestrator can be prodded to re-evaluate its conversation. */
+    onTerminalJob?: (parentSessionID: string) => void;
   },
 ) {
   const backgroundJobBoard =
@@ -804,6 +807,11 @@ export function createTaskSessionManagerHook(
           taskContextTracker.contextFilesForPrompt(status.taskID),
         );
         taskContextTracker.prune(backgroundJobBoard);
+        if (updated && updated.state !== 'running' && options.onTerminalJob) {
+          if (options.shouldManageSession(pending.parentSessionId)) {
+            options.onTerminalJob(pending.parentSessionId);
+          }
+        }
         return;
       }
 
@@ -881,14 +889,15 @@ export function createTaskSessionManagerHook(
         if (isInternalInitiatorPart(textPart)) {
           return;
         }
-        if (
-          message.parts.some(
-            (part) =>
-              part.synthetic === true &&
-              isObjectRecord(part.metadata) &&
-              part.metadata[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
-          )
-        ) {
+        const existingBoardIndex = message.parts.findIndex(
+          (part) =>
+            part.synthetic === true &&
+            isObjectRecord(part.metadata) &&
+            part.metadata[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
+        );
+        if (existingBoardIndex !== -1) {
+          (message.parts[existingBoardIndex] as { text: string }).text =
+            reminders.join('\n\n');
           return;
         }
 
@@ -958,6 +967,17 @@ export function createTaskSessionManagerHook(
                 agent: record.agent,
               },
             );
+            // ponytail: clean up phantom during fallback. When this session.created
+            // is a fallback continuation (isFallbackInProgress true), drop any stale
+            // phantom running job(s) for the parent whose taskID !== info.id.
+            if (options.isFallbackInProgress?.(info.parentID)) {
+              const jobs = backgroundJobBoard.list(info.parentID);
+              for (const job of jobs) {
+                if (job.taskID !== info.id && job.state === 'running') {
+                  backgroundJobBoard.drop(job.taskID);
+                }
+              }
+            }
           }
         }
         return;
@@ -1029,6 +1049,11 @@ export function createTaskSessionManagerHook(
             taskContextTracker.contextFilesForPrompt(sessionId),
           );
           taskContextTracker.prune(backgroundJobBoard);
+          if (options.onTerminalJob) {
+            if (options.shouldManageSession(job.parentSessionID)) {
+              options.onTerminalJob(job.parentSessionID);
+            }
+          }
         }
         return;
       }
