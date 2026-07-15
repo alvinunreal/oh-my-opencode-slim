@@ -1126,12 +1126,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
             s.includes('orchestrator'),
         );
         if (!alreadyInjected) {
-          // Prepend the orchestrator prompt to the system array. Use the
-          // resolved prompt from the orchestrator agent definition (which
-          // includes any custom replacement or append from orchestrator.md
-          // / orchestrator_append.md) Fall back to
-          // buildOrchestratorPrompt only if the resolved prompt is
-          // missing.
+          // Place the orchestrator prompt after AGENTS.md so the user's
+          // behavioral rules (language, code conventions, etc.) retain
+          // their intended priority. AGENTS.md is injected by OpenCode
+          // core into system[0]; prepending the orchestrator prompt before
+          // it buries user-defined rules under thousands of lines of
+          // orchestration instructions.
           const orchestratorDef = agentDefs.find(
             (a) => a.name === 'orchestrator',
           );
@@ -1140,8 +1140,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
               ? orchestratorDef.config.prompt
               : buildOrchestratorPrompt(disabledAgents);
           output.system[0] =
-            orchestratorPrompt +
-            (output.system[0] ? `\n\n${output.system[0]}` : '');
+            (output.system[0] || '') +
+            `\n\n${orchestratorPrompt}`;
         }
       }
 
