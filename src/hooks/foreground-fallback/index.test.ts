@@ -331,7 +331,7 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('falls back to abort+retry when promptAsync fails on busy session', async () => {
+  test('falls back to abort+retry only after retry budget exhausted', async () => {
     const { client, mocks } = createMockClient({
       promptAsyncImpl: async () => {
         throw new Error('session busy');
@@ -350,9 +350,56 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
-    // First promptAsync attempt failed → abort called, then promptAsync retried
+    // promptAsync always throws: 1 initial + 3 retries + 1 abort-retry = 5 calls
     expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(5);
+  });
+
+  test('retries promptAsync without abort on busy session, succeeds on retry', async () => {
+    let callCount = 0;
+    const { client, mocks } = createMockClient({
+      promptAsyncImpl: async () => {
+        callCount++;
+        if (callCount === 1) throw new Error('session busy');
+        return {};
+      },
+    });
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    // Seed session with a model so execFallback can resolve the fallback chain
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-busy-retry',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    // Trigger fallback via session.error (tryFallback path — no prior abort)
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-busy-retry',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    // Abort must NEVER have been called — retry succeeded
+    expect(mocks.abort).toHaveBeenCalledTimes(0);
+    expect(mocks.promptAsync).toHaveBeenCalled();
+    // Last call should carry the fallback model
+    const lastCall = mocks.promptAsync.mock.calls[
+      mocks.promptAsync.mock.calls.length - 1
+    ] as [{ body: { model: { providerID: string; modelID: string } } }];
+    expect(lastCall[0].body.model).toEqual({
+      providerID: 'openai',
+      modelID: 'gpt-4o',
+    });
+    // Grace window should be armed (fallback was successful)
+    expect(mgr.wasFallbackRecent('sess-busy-retry')).toBe(true);
   });
 });
 

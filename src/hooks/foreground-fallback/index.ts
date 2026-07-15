@@ -183,6 +183,13 @@ export function isRateLimitError(error: unknown): boolean {
 /** Prevent re-triggering within this window for the same session. */
 const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
+// ponytail: on a busy-session promptAsync failure we retry WITHOUT aborting.
+// The original rate-limited response is still in flight and resolves within
+// moments, after which promptAsync accepts the fallback re-prompt. Aborting
+// would kill that in-flight response and make core deliver "Task cancelled"
+// to the parent (issue #765). Abort is kept only as a last resort if the
+// session never settles.
+const FALLBACK_REPROMPT_RETRIES = 3;
 /** Grace window after a successful fallback re-prompt during which the
  *  task-session-manager treats late abort-induced session.deleted and
  *  cancelled/error status updates as spurious (the session was re-prompted,
@@ -675,22 +682,50 @@ export class ForegroundFallbackManager {
       // Try queuing the fallback prompt without aborting first. If OpenCode
       // accepts it (204), the fallback model replaces the retry loop
       // transparently — no dialog, no session error shown to the user.
-      // If promptAsync throws (e.g. session busy), fall back to abort+retry.
+      // If promptAsync throws (e.g. session busy), retry without abort first;
+      // only fall back to abort+retry if the session never settles.
       try {
         await sessionClient.promptAsync({
           path: { id: sessionID },
           body: promptBody,
         });
       } catch (_promptErr) {
-        log('[foreground-fallback] promptAsync on busy session, aborting', {
-          sessionID,
-        });
-        await abortSessionWithTimeout(this.client, sessionID);
-        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        await sessionClient.promptAsync({
-          path: { id: sessionID },
-          body: promptBody,
-        });
+        log(
+          '[foreground-fallback] promptAsync on busy session, retrying without abort',
+          {
+            sessionID,
+          },
+        );
+        // ponytail: retry promptAsync without abort first. The session is busy
+        // because the original rate-limited response is still in flight; it
+        // resolves within moments. Only abort (which triggers "Task cancelled"
+        // in the parent orchestrator, issue #765) if all retries fail — abort
+        // is last-resort only.
+        let settled = false;
+        for (let i = 0; i < FALLBACK_REPROMPT_RETRIES; i++) {
+          await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+          try {
+            await sessionClient.promptAsync({
+              path: { id: sessionID },
+              body: promptBody,
+            });
+            settled = true;
+            break;
+          } catch {
+            // Session still busy — retry.
+          }
+        }
+        if (!settled) {
+          log('[foreground-fallback] session never settled, aborting', {
+            sessionID,
+          });
+          await abortSessionWithTimeout(this.client, sessionID);
+          await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+          await sessionClient.promptAsync({
+            path: { id: sessionID },
+            body: promptBody,
+          });
+        }
       }
 
       this.sessionModel.set(sessionID, nextModel);
