@@ -373,13 +373,19 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       };
     };
 
-    phaseReminder = createPhaseReminderHook();
+    // Both message transforms share this gate so a rejected nudge cannot be
+    // followed by a phase reminder in the same outgoing turn.
+    const shouldInjectOrchestratorReminder = (sessionID: string) =>
+      sessionAgentMap.get(sessionID) === 'orchestrator';
+
+    phaseReminder = createPhaseReminderHook({
+      shouldInject: shouldInjectOrchestratorReminder,
+    });
 
     filterAvailableSkills = createFilterAvailableSkillsHook(ctx, config);
 
     postFileToolNudge = createPostFileToolNudgeHook({
-      shouldInject: (sessionID) =>
-        sessionAgentMap.get(sessionID) === 'orchestrator',
+      shouldInject: shouldInjectOrchestratorReminder,
       coordinator: sessionLifecycle,
     });
 

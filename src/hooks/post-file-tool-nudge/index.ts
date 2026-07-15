@@ -91,7 +91,7 @@ function getEligibleMessage(
   if (
     !isUserMessageWithParts(message) ||
     !message.info.sessionID ||
-    (message.info.agent && message.info.agent !== 'orchestrator')
+    message.info.agent !== 'orchestrator'
   ) {
     return undefined;
   }

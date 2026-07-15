@@ -63,6 +63,34 @@ describe('post-file-tool-nudge hook', () => {
     expect(reminderParts(freshMessage)).toHaveLength(1);
   });
 
+  test('shared session eligibility suppresses both reminders for a rejected turn', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    let isOrchestratorSession = false;
+    const shouldInject = () => isOrchestratorSession;
+    const nudge = createPostFileToolNudgeHook({ coordinator, shouldInject });
+    const phaseReminder = createPhaseReminderHook({ shouldInject });
+    const rejectedMessage = orchestratorMessage();
+
+    await nudge['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await nudge['experimental.chat.messages.transform'](
+      {},
+      { messages: [rejectedMessage] },
+    );
+    await phaseReminder['experimental.chat.messages.transform'](
+      {},
+      { messages: [rejectedMessage] },
+    );
+    expect(reminderParts(rejectedMessage)).toHaveLength(0);
+
+    isOrchestratorSession = true;
+    const eligibleMessage = orchestratorMessage();
+    await phaseReminder['experimental.chat.messages.transform'](
+      {},
+      { messages: [eligibleMessage] },
+    );
+    expect(reminderParts(eligibleMessage)).toHaveLength(1);
+  });
+
   test('collapses multiple Read and Write calls into one reminder', async () => {
     const coordinator = new SessionLifecycle(() => {});
     const hook = createPostFileToolNudgeHook({ coordinator });
@@ -77,6 +105,31 @@ describe('post-file-tool-nudge hook', () => {
     );
 
     expect(reminderParts(message)).toHaveLength(1);
+  });
+
+  test('injects only into the latest user message', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
+    const olderMessage = orchestratorMessage();
+    const latestMessage = orchestratorMessage();
+
+    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await hook['experimental.chat.messages.transform'](
+      {},
+      {
+        messages: [
+          olderMessage,
+          {
+            info: { role: 'assistant', sessionID: 's1' },
+            parts: [{ type: 'text', text: 'working' }],
+          },
+          latestMessage,
+        ],
+      },
+    );
+
+    expect(reminderParts(olderMessage)).toHaveLength(0);
+    expect(reminderParts(latestMessage)).toHaveLength(1);
   });
 
   test.each([

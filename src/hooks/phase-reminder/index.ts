@@ -14,12 +14,16 @@ export { PHASE_REMINDER };
 
 export const PHASE_REMINDER_METADATA_KEY = 'oh-my-opencode-slim.phaseReminder';
 
+interface PhaseReminderOptions {
+  shouldInject?: (sessionID: string) => boolean;
+}
+
 /**
  * Creates the experimental.chat.messages.transform hook for phase reminder injection.
  * This hook runs right before sending to API, so it doesn't affect UI display.
  * Only injects for the orchestrator agent.
  */
-export function createPhaseReminderHook() {
+export function createPhaseReminderHook(options: PhaseReminderOptions = {}) {
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
@@ -48,8 +52,12 @@ export function createPhaseReminderHook() {
         return;
       }
 
-      const agent = lastUserMessage.info.agent;
-      if (agent && agent !== 'orchestrator') {
+      const { agent, sessionID } = lastUserMessage.info;
+      if (
+        agent !== 'orchestrator' ||
+        !sessionID ||
+        (options.shouldInject && !options.shouldInject(sessionID))
+      ) {
         return;
       }
 
