@@ -8,11 +8,19 @@
 import { PHASE_REMINDER } from '../../config/constants';
 import { isInternalInitiatorPart } from '../../utils';
 import { isRecord } from '../../utils/guards';
-import { isUserMessageWithParts } from '../types';
+import { findLatestUserMessage, type MessagePart } from '../types';
 
 export { PHASE_REMINDER };
 
 export const PHASE_REMINDER_METADATA_KEY = 'oh-my-opencode-slim.phaseReminder';
+
+export function hasPhaseReminder(part: MessagePart): boolean {
+  return (
+    part.synthetic === true &&
+    isRecord(part.metadata) &&
+    part.metadata[PHASE_REMINDER_METADATA_KEY] === true
+  );
+}
 
 interface PhaseReminderOptions {
   shouldInject?: (sessionID: string) => boolean;
@@ -31,24 +39,8 @@ export function createPhaseReminderHook(options: PhaseReminderOptions = {}) {
     ): Promise<void> => {
       const messages = Array.isArray(output.messages) ? output.messages : [];
 
-      if (messages.length === 0) {
-        return;
-      }
-
-      let lastUserMessageIndex = -1;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (isUserMessageWithParts(messages[i])) {
-          lastUserMessageIndex = i;
-          break;
-        }
-      }
-
-      if (lastUserMessageIndex === -1) {
-        return;
-      }
-
-      const lastUserMessage = messages[lastUserMessageIndex];
-      if (!isUserMessageWithParts(lastUserMessage)) {
+      const lastUserMessage = findLatestUserMessage(messages);
+      if (!lastUserMessage) {
         return;
       }
 
@@ -73,17 +65,11 @@ export function createPhaseReminderHook(options: PhaseReminderOptions = {}) {
       if (isInternalInitiatorPart(originalPart)) {
         return;
       }
-      if (
-        lastUserMessage.parts.some(
-          (part) =>
-            part.synthetic === true &&
-            isRecord(part.metadata) &&
-            part.metadata[PHASE_REMINDER_METADATA_KEY] === true,
-        )
-      ) {
+      if (lastUserMessage.parts.some(hasPhaseReminder)) {
         return;
       }
 
+      // post-file-tool-nudge must run first so its tagged part deduplicates.
       // Append reminder as a new, separate message part instead of mutating
       // the user-authored text. This prevents the reminder from leaking into
       // the UI display and chat history (issue #448).

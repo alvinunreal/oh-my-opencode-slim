@@ -1195,6 +1195,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         log,
       });
 
+      // Post-file metadata must be added before phase-reminder deduplicates it.
       await postFileToolNudge['experimental.chat.messages.transform'](
         input as never,
         typedOutput as never,

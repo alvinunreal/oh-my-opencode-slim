@@ -8,10 +8,16 @@
 
 import { PHASE_REMINDER } from '../../config/constants';
 import { isInternalInitiatorPart } from '../../utils';
-import { isRecord } from '../../utils/guards';
-import { PHASE_REMINDER_METADATA_KEY } from '../phase-reminder';
+import {
+  hasPhaseReminder,
+  PHASE_REMINDER_METADATA_KEY,
+} from '../phase-reminder';
 import type { SessionLifecycle } from '../session-lifecycle';
-import { isUserMessageWithParts, type MessageWithParts } from '../types';
+import {
+  findLatestUserMessage,
+  isUserMessageWithParts,
+  type MessageWithParts,
+} from '../types';
 
 const FILE_TOOLS = new Set(['Read', 'read', 'Write', 'write']);
 
@@ -46,26 +52,13 @@ export function createPostFileToolNudgeHook(
       }
 
       const messages = Array.isArray(output.messages) ? output.messages : [];
-      let lastUserMessage: unknown;
-      for (let index = messages.length - 1; index >= 0; index--) {
-        if (isUserMessageWithParts(messages[index])) {
-          lastUserMessage = messages[index];
-          break;
-        }
-      }
-
-      const eligible = getEligibleMessage(lastUserMessage);
+      const eligible = getEligibleMessage(findLatestUserMessage(messages));
       if (!eligible) {
         return;
       }
       const { message, sessionID } = eligible;
 
-      const hasReminder = message.parts.some(
-        (part) =>
-          part.synthetic === true &&
-          isRecord(part.metadata) &&
-          part.metadata[PHASE_REMINDER_METADATA_KEY] === true,
-      );
+      const hasReminder = message.parts.some(hasPhaseReminder);
       if (!coordinator.consumePending(sessionID)) {
         return;
       }
@@ -75,6 +68,7 @@ export function createPostFileToolNudgeHook(
       ) {
         return;
       }
+      // This transform must run before phase-reminder so this metadata deduplicates.
       message.parts.push({
         type: 'text',
         synthetic: true,
