@@ -1,25 +1,19 @@
 # src/hooks/post-file-tool-nudge/
 
 ## Responsibility
-Implements a post-tool execution hook that automatically appends delegation reminders to file operation outputs, preventing the "inspect/edit files → implement myself" anti-pattern where agents attempt to implement functionality themselves instead of delegating to specialized tools.
+Implements a post-tool execution hook that queues delegation reminders after file operations and injects them as synthetic message parts for the next eligible orchestrator turn.
 
 ## Design
 
 ### Hook Structure
-- **Factory Pattern**: `createPostFileToolNudgeHook()` returns a hook object with a `tool.execute.after` handler
+- **Factory Pattern**: `createPostFileToolNudgeHook()` returns `tool.execute.after` and `experimental.chat.messages.transform` handlers
 - **Conditional Injection**: Uses `shouldInject` option to filter sessions where the reminder should be applied
 - **Set-based Tool Filtering**: Maintains a Set of file tool names for O(1) lookup
 
 ### Core Logic
-```typescript
-const FILE_TOOLS = new Set(['Read', 'read', 'Write', 'write']);
-
-function appendReminder(output: ToolExecuteAfterOutput): void {
-  if (typeof output.output !== 'string') return;
-  if (output.output.includes(PHASE_REMINDER)) return;
-  output.output = `${output.output}\n\n${PHASE_REMINDER}`;
-}
-```
+- Read/Write records one pending marker per session.
+- The message transform finds the latest matching orchestrator user message with a non-internal text part before consuming that marker.
+- It appends `PHASE_REMINDER` as a synthetic metadata-tagged text part, preserving user-authored text and allowing phase-reminder metadata deduplication.
 
 ### Integration Points
 - **Config Dependency**: Imports `PHASE_REMINDER` constant from `../../config/constants`
@@ -34,10 +28,10 @@ function appendReminder(output: ToolExecuteAfterOutput): void {
    - Verify sessionID exists
    - Apply shouldInject filter if provided
 3. **Reminder Injection**:
-   - Extract output string
-   - Check if PHASE_REMINDER already present (idempotent)
-   - Append PHASE_REMINDER to output
-4. **Result**: Agent receives output with delegation reminder prepended
+   - Find a matching eligible orchestrator user message
+   - Consume the session marker only after validation
+   - Append one synthetic, metadata-tagged reminder part
+4. **Result**: The API receives the reminder without mutating tool output or user-authored text
 
 ## Integration
 

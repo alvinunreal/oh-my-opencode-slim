@@ -8,7 +8,6 @@
 import { PHASE_REMINDER } from '../../config/constants';
 import { isInternalInitiatorPart } from '../../utils';
 import { isRecord } from '../../utils/guards';
-import type { SessionLifecycle } from '../session-lifecycle';
 import { isUserMessageWithParts } from '../types';
 
 export { PHASE_REMINDER };
@@ -20,7 +19,7 @@ export const PHASE_REMINDER_METADATA_KEY = 'oh-my-opencode-slim.phaseReminder';
  * This hook runs right before sending to API, so it doesn't affect UI display.
  * Only injects for the orchestrator agent.
  */
-export function createPhaseReminderHook(coordinator?: SessionLifecycle) {
+export function createPhaseReminderHook() {
   return {
     'experimental.chat.messages.transform': async (
       _input: Record<string, never>,
@@ -51,14 +50,6 @@ export function createPhaseReminderHook(coordinator?: SessionLifecycle) {
 
       const agent = lastUserMessage.info.agent;
       if (agent && agent !== 'orchestrator') {
-        return;
-      }
-
-      // If post-file-tool-nudge is pending for this session, it handles
-      // injection via system prompt — skip message-level injection.
-      const sessionId = (lastUserMessage as { info?: { sessionID?: string } })
-        ?.info?.sessionID;
-      if (sessionId && coordinator?.hasPendingSession(sessionId)) {
         return;
       }
 

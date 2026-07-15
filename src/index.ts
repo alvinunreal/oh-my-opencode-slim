@@ -373,7 +373,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       };
     };
 
-    phaseReminder = createPhaseReminderHook(sessionLifecycle);
+    phaseReminder = createPhaseReminderHook();
 
     filterAvailableSkills = createFilterAvailableSkillsHook(ctx, config);
 
@@ -1145,12 +1145,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Inject ephemeral post-file-tool-nudge reminder
-      await postFileToolNudge['experimental.chat.system.transform'](
-        input as never,
-        output as never,
-      );
-
       // Collapse to single system message for provider compatibility.
       // Some providers (e.g. Qwen via VLLM/DashScope) reject multiple
       // system messages. Sub-hooks above may push additional entries; join
@@ -1195,6 +1189,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         log,
       });
 
+      await postFileToolNudge['experimental.chat.messages.transform'](
+        input as never,
+        typedOutput as never,
+      );
       await phaseReminder['experimental.chat.messages.transform'](
         input as never,
         typedOutput as never,
