@@ -620,6 +620,7 @@ function normalizeWhitespace(value: string): string {
 
 function formatJob(job: BackgroundJobRecord): string {
   const isResume = job.lastLaunchedAt !== job.launchedAt;
+  // Exclude wall-clock age labels so prompts remain stable between job-state transitions for cache reuse.
   const state =
     job.state === 'running' && isResume ? 'running [resumed]' : job.state;
   const status = job.terminalUnreconciled
