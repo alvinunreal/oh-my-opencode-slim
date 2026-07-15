@@ -1,7 +1,6 @@
 export class SessionLifecycle {
   #cleanupCallbacks: Array<(sessionId: string) => void> = [];
   #pendingSessionIds = new Set<string>();
-  #everPendingSessionIds = new Set<string>();
   #log: (msg: string, meta?: Record<string, unknown>) => void;
 
   constructor(log: (msg: string, meta?: Record<string, unknown>) => void) {
@@ -27,7 +26,6 @@ export class SessionLifecycle {
 
   markPending(sessionId: string): void {
     this.#pendingSessionIds.add(sessionId);
-    this.#everPendingSessionIds.add(sessionId);
   }
 
   /** Atomic — only one caller gets true per markPending call. */
@@ -37,15 +35,7 @@ export class SessionLifecycle {
     return had;
   }
 
-  hasPendingSession(sessionId: string): boolean {
-    return (
-      this.#everPendingSessionIds.has(sessionId) &&
-      !this.#pendingSessionIds.has(sessionId)
-    );
-  }
-
   clearSession(sessionId: string): void {
     this.#pendingSessionIds.delete(sessionId);
-    this.#everPendingSessionIds.delete(sessionId);
   }
 }

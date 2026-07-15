@@ -755,7 +755,7 @@ describe('BackgroundJobBoard', () => {
     expect(board.formatForPrompt('parent-1')).toContain('Reusable Sessions');
   });
 
-  test('annotates just-launched running jobs with age in the prompt', () => {
+  test('keeps initial running prompt output stable regardless of now', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -765,12 +765,14 @@ describe('BackgroundJobBoard', () => {
       now: 1_000,
     });
 
-    // 4 seconds after launch - should show age annotation
-    const prompt = board.formatForPrompt('parent-1', 5_000);
-    expect(prompt).toContain('running [just launched, 4s ago]');
+    const promptAtLaunch = board.formatForPrompt('parent-1', 1_000);
+    const promptMuchLater = board.formatForPrompt('parent-1', 9_999_999_999);
+
+    expect(promptAtLaunch).toBe(promptMuchLater);
+    expect(promptAtLaunch).toContain('fix-1 / ses_1 / fixer / running');
   });
 
-  test('does not annotate running jobs older than 30s', () => {
+  test('relaunch changes the running state display to resumed', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'ses_1',
@@ -780,10 +782,20 @@ describe('BackgroundJobBoard', () => {
       now: 1_000,
     });
 
-    // 39 seconds after launch - age label should be absent
-    const prompt = board.formatForPrompt('parent-1', 40_000);
-    expect(prompt).not.toContain('just launched');
-    expect(prompt).toContain('/ running\n');
+    const initialPrompt = board.formatForPrompt('parent-1', 1_000);
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'implement feature continued',
+      now: 5_000,
+    });
+    const resumedPrompt = board.formatForPrompt('parent-1', 5_000);
+
+    expect(initialPrompt).toContain('fix-1 / ses_1 / fixer / running\n');
+    expect(resumedPrompt).toContain(
+      'fix-1 / ses_1 / fixer / running [resumed]',
+    );
   });
 
   test('registerLaunch can reset a reconciled job to running', () => {
@@ -816,9 +828,8 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
-  test('annotates resumed running jobs with resumed label in the prompt', () => {
+  test('keeps resumed running prompt output stable regardless of now', () => {
     const board = new BackgroundJobBoard();
-    // Initial launch at t=1000
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -826,7 +837,6 @@ describe('BackgroundJobBoard', () => {
       description: 'implement feature',
       now: 1_000,
     });
-    // Reuse the same session ID at t=5000 (session reuse)
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -835,9 +845,13 @@ describe('BackgroundJobBoard', () => {
       now: 5_000,
     });
 
-    // 4 seconds after relaunch - should show [resumed, 4s ago]
-    const prompt = board.formatForPrompt('parent-1', 9_000);
-    expect(prompt).toContain('running [resumed, 4s ago]');
+    const promptAtResume = board.formatForPrompt('parent-1', 5_000);
+    const promptMuchLater = board.formatForPrompt('parent-1', 9_999_999_999);
+
+    expect(promptAtResume).toBe(promptMuchLater);
+    expect(promptAtResume).toContain(
+      'fix-1 / ses_1 / fixer / running [resumed]',
+    );
   });
 
   describe('intent-revealing query methods', () => {

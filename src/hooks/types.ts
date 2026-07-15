@@ -46,3 +46,15 @@ export function isUserMessageWithParts(
 ): message is MessageWithParts {
   return isMessageWithParts(message) && message.info.role === 'user';
 }
+
+export function findLatestUserMessage(
+  messages: unknown[],
+): MessageWithParts | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (isUserMessageWithParts(message)) {
+      return message;
+    }
+  }
+  return undefined;
+}

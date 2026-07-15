@@ -31,23 +31,10 @@ describe('SessionLifecycle', () => {
     expect(lc.consumePending('s1')).toBe(false);
   });
 
-  test('hasPendingSession after consume', () => {
+  test('clearSession removes pending state', () => {
     const lc = new SessionLifecycle(noop);
     lc.markPending('s1');
-    lc.consumePending('s1');
-    expect(lc.hasPendingSession('s1')).toBe(true);
-  });
-
-  test('hasPendingSession false for unknown session', () => {
-    const lc = new SessionLifecycle(noop);
-    expect(lc.hasPendingSession('s1')).toBe(false);
-  });
-
-  test('clearSession removes all state', () => {
-    const lc = new SessionLifecycle(noop);
-    lc.markPending('s1');
-    lc.consumePending('s1');
     lc.clearSession('s1');
-    expect(lc.hasPendingSession('s1')).toBe(false);
+    expect(lc.consumePending('s1')).toBe(false);
   });
 });

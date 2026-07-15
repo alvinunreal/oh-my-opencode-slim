@@ -1,200 +1,298 @@
 import { describe, expect, test } from 'bun:test';
 
 import { PHASE_REMINDER } from '../../config/constants';
+import { createInternalAgentTextPart } from '../../utils';
+import {
+  createPhaseReminderHook,
+  PHASE_REMINDER_METADATA_KEY,
+} from '../phase-reminder';
 import { SessionLifecycle } from '../session-lifecycle';
 import { createPostFileToolNudgeHook } from './index';
 
+const orchestratorMessage = (sessionID = 's1') => ({
+  info: { role: 'user', agent: 'orchestrator', sessionID },
+  parts: [{ type: 'text', text: 'hello' }],
+});
+
+const reminderParts = (message: ReturnType<typeof orchestratorMessage>) =>
+  message.parts.filter((part) => part.text === PHASE_REMINDER);
+
 describe('post-file-tool-nudge hook', () => {
-  test('records pending session on Read tool', async () => {
+  test('injects a synthetic reminder without a system transform or text mutation', async () => {
     const coordinator = new SessionLifecycle(() => {});
     const hook = createPostFileToolNudgeHook({ coordinator });
-    const output = { system: [] };
+    const message = orchestratorMessage();
 
+    expect(hook['experimental.chat.system.transform']).toBeUndefined();
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [message] },
     );
 
-    expect(output.system).toContain(PHASE_REMINDER);
+    expect(message.parts[0].text).toBe('hello');
+    expect(reminderParts(message)).toHaveLength(1);
+    expect(message.parts[1]).toMatchObject({
+      synthetic: true,
+      metadata: { [PHASE_REMINDER_METADATA_KEY]: true },
+    });
   });
 
-  test('records pending session on Write tool', async () => {
+  test('composes with phase reminder without duplication and permits a fresh reminder', async () => {
     const coordinator = new SessionLifecycle(() => {});
-    const hook = createPostFileToolNudgeHook({ coordinator });
-    const output = { system: [] };
+    const nudge = createPostFileToolNudgeHook({ coordinator });
+    const phaseReminder = createPhaseReminderHook();
+    const afterFileMessage = orchestratorMessage();
 
-    await hook['tool.execute.after']({ tool: 'Write', sessionID: 's1' }, {});
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
+    await nudge['tool.execute.after']({ tool: 'Write', sessionID: 's1' }, {});
+    await nudge['experimental.chat.messages.transform'](
+      {},
+      { messages: [afterFileMessage] },
     );
-
-    expect(output.system).toContain(PHASE_REMINDER);
-  });
-
-  test('does not mutate tool output', async () => {
-    const coordinator = new SessionLifecycle(() => {});
-    const hook = createPostFileToolNudgeHook({ coordinator });
-    const toolOutput = { output: 'real content' };
-
-    await hook['tool.execute.after'](
-      { tool: 'Read', sessionID: 's1' },
-      toolOutput,
+    await phaseReminder['experimental.chat.messages.transform'](
+      {},
+      { messages: [afterFileMessage] },
     );
+    expect(reminderParts(afterFileMessage)).toHaveLength(1);
 
-    expect(toolOutput.output).toBe('real content');
+    const freshMessage = orchestratorMessage();
+    await phaseReminder['experimental.chat.messages.transform'](
+      {},
+      { messages: [freshMessage] },
+    );
+    expect(reminderParts(freshMessage)).toHaveLength(1);
   });
 
-  test('deduplicates multiple Read/Write calls in same session', async () => {
+  test('shared session eligibility suppresses a rejected turn and retains its pending nudge', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    let isOrchestratorSession = false;
+    const shouldInject = () => isOrchestratorSession;
+    const nudge = createPostFileToolNudgeHook({ coordinator, shouldInject });
+    const phaseReminder = createPhaseReminderHook({ shouldInject });
+    const rejectedMessage = orchestratorMessage();
+
+    await nudge['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await nudge['experimental.chat.messages.transform'](
+      {},
+      { messages: [rejectedMessage] },
+    );
+    await phaseReminder['experimental.chat.messages.transform'](
+      {},
+      { messages: [rejectedMessage] },
+    );
+    expect(reminderParts(rejectedMessage)).toHaveLength(0);
+
+    isOrchestratorSession = true;
+    const eligibleMessage = orchestratorMessage();
+    await nudge['experimental.chat.messages.transform'](
+      {},
+      { messages: [eligibleMessage] },
+    );
+    await phaseReminder['experimental.chat.messages.transform'](
+      {},
+      { messages: [eligibleMessage] },
+    );
+    expect(reminderParts(eligibleMessage)).toHaveLength(1);
+  });
+
+  test('collapses multiple Read and Write calls into one reminder', async () => {
     const coordinator = new SessionLifecycle(() => {});
     const hook = createPostFileToolNudgeHook({ coordinator });
+    const message = orchestratorMessage();
 
     await hook['tool.execute.after']({ tool: 'read', sessionID: 's1' }, {});
     await hook['tool.execute.after']({ tool: 'write', sessionID: 's1' }, {});
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-
-    const output = { system: [] };
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [message] },
     );
 
-    expect(output.system.filter((s) => s === PHASE_REMINDER)).toHaveLength(1);
+    expect(reminderParts(message)).toHaveLength(1);
   });
 
-  test('consumes pending marker after injection', async () => {
+  test('injects only into the latest user message', async () => {
     const coordinator = new SessionLifecycle(() => {});
     const hook = createPostFileToolNudgeHook({ coordinator });
+    const olderMessage = orchestratorMessage();
+    const latestMessage = orchestratorMessage();
 
     await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      { system: [] },
+    await hook['experimental.chat.messages.transform'](
+      {},
+      {
+        messages: [
+          olderMessage,
+          {
+            info: { role: 'assistant', sessionID: 's1' },
+            parts: [{ type: 'text', text: 'working' }],
+          },
+          latestMessage,
+        ],
+      },
     );
 
-    // Second transform should not inject
-    const output = { system: [] };
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
-    );
-
-    expect(output.system).toHaveLength(0);
+    expect(reminderParts(olderMessage)).toHaveLength(0);
+    expect(reminderParts(latestMessage)).toHaveLength(1);
   });
 
-  test('ignores non-file tools', async () => {
+  test.each([
+    ['wrong session', { messages: [orchestratorMessage('s2')] }],
+    ['empty messages', { messages: [] }],
+    [
+      'non-orchestrator turn',
+      {
+        messages: [
+          {
+            info: { role: 'user', agent: 'explorer', sessionID: 's1' },
+            parts: [{ type: 'text', text: 'hello' }],
+          },
+        ],
+      },
+    ],
+    [
+      'turn without a session',
+      {
+        messages: [
+          {
+            info: { role: 'user', agent: 'orchestrator' },
+            parts: [{ type: 'text', text: 'hello' }],
+          },
+        ],
+      },
+    ],
+    [
+      'attachment-only turn',
+      {
+        messages: [
+          {
+            info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
+            parts: [{ type: 'image', url: 'https://example.com/image.png' }],
+          },
+        ],
+      },
+    ],
+    [
+      'internal turn',
+      {
+        messages: [
+          {
+            info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
+            parts: [createInternalAgentTextPart('internal notification')],
+          },
+        ],
+      },
+    ],
+  ])('does not consume pending for %s', async (_name, output) => {
     const coordinator = new SessionLifecycle(() => {});
     const hook = createPostFileToolNudgeHook({ coordinator });
-    const output = { system: [] };
+    const eligibleMessage = orchestratorMessage();
+
+    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await hook['experimental.chat.messages.transform']({}, output);
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [eligibleMessage] },
+    );
+
+    expect(reminderParts(eligibleMessage)).toHaveLength(1);
+  });
+
+  test('trusted phase reminder metadata consumes pending without duplication', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
+    const message = orchestratorMessage();
+    message.parts.push({
+      type: 'text',
+      synthetic: true,
+      text: PHASE_REMINDER,
+      metadata: { [PHASE_REMINDER_METADATA_KEY]: true },
+    });
+
+    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [message] },
+    );
+    expect(reminderParts(message)).toHaveLength(1);
+
+    const freshMessage = orchestratorMessage();
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [freshMessage] },
+    );
+    expect(reminderParts(freshMessage)).toHaveLength(0);
+  });
+
+  test('passes the derived session ID to shouldInject', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const seenSessionIDs: string[] = [];
+    const hook = createPostFileToolNudgeHook({
+      coordinator,
+      shouldInject: (sessionID) => {
+        seenSessionIDs.push(sessionID);
+        return false;
+      },
+    });
+    const message = orchestratorMessage();
+
+    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [message] },
+    );
+    expect(reminderParts(message)).toHaveLength(0);
+    expect(seenSessionIDs).toEqual(['s1']);
+  });
+
+  test('cleans pending state after session deletion', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
+    const message = orchestratorMessage();
+
+    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    coordinator.dispatchSessionDeleted('s1');
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [message] },
+    );
+
+    expect(reminderParts(message)).toHaveLength(0);
+  });
+
+  test('ignores non-file tools and file calls without a session', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
+    const message = orchestratorMessage();
 
     await hook['tool.execute.after']({ tool: 'bash', sessionID: 's1' }, {});
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
-    );
-
-    expect(output.system).toHaveLength(0);
-  });
-
-  test('skips injection when shouldInject returns false', async () => {
-    const coordinator = new SessionLifecycle(() => {});
-    const hook = createPostFileToolNudgeHook({
-      shouldInject: () => false,
-      coordinator,
-    });
-    const output = { system: [] };
-
-    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
-    );
-
-    expect(output.system).toHaveLength(0);
-  });
-
-  test('ignores Read/Write without sessionID', async () => {
-    const coordinator = new SessionLifecycle(() => {});
-    const hook = createPostFileToolNudgeHook({ coordinator });
-    const output = { system: [] };
-
-    await hook['tool.execute.after']({ tool: 'read' }, {});
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
-    );
-
-    expect(output.system).toHaveLength(0);
-  });
-
-  test('cleans up pending marker on session.deleted via coordinator', async () => {
-    const coordinator = new SessionLifecycle(() => {});
-    const hook = createPostFileToolNudgeHook({ coordinator });
-
-    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    coordinator.dispatchSessionDeleted('s1');
-
-    const output = { system: [] };
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
-    );
-
-    expect(output.system).toHaveLength(0);
-  });
-
-  test('cleans up pending marker via coordinator with info.id shape', async () => {
-    const coordinator = new SessionLifecycle(() => {});
-    const hook = createPostFileToolNudgeHook({ coordinator });
-
-    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
-    coordinator.dispatchSessionDeleted('s1');
-
-    const output = { system: [] };
-    await hook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      output,
-    );
-
-    expect(output.system).toHaveLength(0);
-  });
-
-  test('composed: phase-reminder skips when post-file-tool-nudge handles system', async () => {
-    const { createPhaseReminderHook } = await import('../phase-reminder/index');
-    const coordinator = new SessionLifecycle(() => {});
-    const nudgeHook = createPostFileToolNudgeHook({ coordinator });
-    const phaseHook = createPhaseReminderHook(coordinator);
-
-    // Simulate Read tool call
-    await nudgeHook['tool.execute.after'](
-      { tool: 'Read', sessionID: 's1' },
+    await hook['tool.execute.after']({ tool: 'Read' }, {});
+    await hook['experimental.chat.messages.transform'](
       {},
+      { messages: [message] },
     );
 
-    // System transform injects into system array
-    const systemOutput = { system: [] as string[] };
-    await nudgeHook['experimental.chat.system.transform'](
-      { sessionID: 's1' },
-      systemOutput,
-    );
-    expect(systemOutput.system).toContain(PHASE_REMINDER);
+    expect(reminderParts(message)).toHaveLength(0);
+  });
 
-    // Messages transform should NOT inject (pending already handled by system)
-    const messagesOutput = {
-      messages: [
-        {
-          info: { role: 'user', sessionID: 's1' },
-          parts: [{ type: 'text', text: 'hello' }],
-        },
-      ],
-    };
-    await phaseHook['experimental.chat.messages.transform']({}, messagesOutput);
+  test('keeps pending sessions isolated', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const hook = createPostFileToolNudgeHook({ coordinator });
+    const s1Message = orchestratorMessage('s1');
+    const s2Message = orchestratorMessage('s2');
 
-    const userParts = messagesOutput.messages[0].parts;
-    const reminderParts = userParts.filter(
-      (p: { text?: string }) => p.text === PHASE_REMINDER,
+    await hook['tool.execute.after']({ tool: 'Read', sessionID: 's1' }, {});
+    await hook['tool.execute.after']({ tool: 'Write', sessionID: 's2' }, {});
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [s2Message] },
     );
-    expect(reminderParts).toHaveLength(0);
+    await hook['experimental.chat.messages.transform'](
+      {},
+      { messages: [s1Message] },
+    );
+
+    expect(reminderParts(s2Message)).toHaveLength(1);
+    expect(reminderParts(s1Message)).toHaveLength(1);
   });
 });

@@ -373,13 +373,19 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       };
     };
 
-    phaseReminder = createPhaseReminderHook(sessionLifecycle);
+    // Both message transforms share this gate so a rejected nudge cannot be
+    // followed by a phase reminder in the same outgoing turn.
+    const shouldInjectOrchestratorReminder = (sessionID: string) =>
+      sessionAgentMap.get(sessionID) === 'orchestrator';
+
+    phaseReminder = createPhaseReminderHook({
+      shouldInject: shouldInjectOrchestratorReminder,
+    });
 
     filterAvailableSkills = createFilterAvailableSkillsHook(ctx, config);
 
     postFileToolNudge = createPostFileToolNudgeHook({
-      shouldInject: (sessionID) =>
-        sessionAgentMap.get(sessionID) === 'orchestrator',
+      shouldInject: shouldInjectOrchestratorReminder,
       coordinator: sessionLifecycle,
     });
 
@@ -1145,12 +1151,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Inject ephemeral post-file-tool-nudge reminder
-      await postFileToolNudge['experimental.chat.system.transform'](
-        input as never,
-        output as never,
-      );
-
       // Collapse to single system message for provider compatibility.
       // Some providers (e.g. Qwen via VLLM/DashScope) reject multiple
       // system messages. Sub-hooks above may push additional entries; join
@@ -1195,15 +1195,20 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         log,
       });
 
+      // Repair session mappings before reminder gates; nudge metadata precedes phase dedup.
+      await taskSessionManagerHook['experimental.chat.messages.transform'](
+        input as never,
+        typedOutput as never,
+      );
+      await postFileToolNudge['experimental.chat.messages.transform'](
+        input as never,
+        typedOutput as never,
+      );
       await phaseReminder['experimental.chat.messages.transform'](
         input as never,
         typedOutput as never,
       );
       await filterAvailableSkills['experimental.chat.messages.transform'](
-        input as never,
-        typedOutput as never,
-      );
-      await taskSessionManagerHook['experimental.chat.messages.transform'](
         input as never,
         typedOutput as never,
       );

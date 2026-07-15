@@ -15,7 +15,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [{ type: 'text', text: 'hello' }],
         },
       ],
@@ -52,13 +52,45 @@ describe('createPhaseReminderHook', () => {
     expect(output.messages[0].parts[0].text).toBe('hello');
   });
 
+  test('skips turns without an explicit orchestrator agent', async () => {
+    const hook = createPhaseReminderHook();
+    const output = {
+      messages: [
+        {
+          info: { role: 'user', sessionID: 's1' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts).toHaveLength(1);
+  });
+
+  test('skips turns without a session ID', async () => {
+    const hook = createPhaseReminderHook();
+    const output = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts).toHaveLength(1);
+  });
+
   test('does not mutate internal notification turns', async () => {
     const hook = createPhaseReminderHook();
     const text = `[Background task "x" completed]\n${SLIM_INTERNAL_INITIATOR_MARKER}`;
     const output = {
       messages: [
         {
-          info: { role: 'user' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [
             createInternalAgentTextPart('[Background task "x" completed]'),
           ],
@@ -80,7 +112,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [internalPart],
         },
       ],
@@ -99,7 +131,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [
             {
               type: 'text',
@@ -122,7 +154,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [
             { type: 'text', text: 'hello' },
             JSON.parse(
@@ -149,7 +181,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [{ type: 'text', text: PHASE_REMINDER }],
         },
       ],
@@ -166,7 +198,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [{ type: 'text', text: originalText }],
         },
       ],
@@ -184,7 +216,7 @@ describe('createPhaseReminderHook', () => {
     const output = {
       messages: [
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [{ type: 'image', url: 'http://example.com/img.png' }],
         },
       ],
@@ -239,7 +271,7 @@ describe('createPhaseReminderHook', () => {
         { info: { role: 'assistant' } },
         { parts: [{ type: 'text', text: 'missing info' }] },
         {
-          info: { role: 'user', agent: 'orchestrator' },
+          info: { role: 'user', agent: 'orchestrator', sessionID: 's1' },
           parts: [{ type: 'text', text: 'hello' }],
         },
       ],

@@ -6,6 +6,11 @@ import {
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
 import {
+  createPhaseReminderHook,
+  PHASE_REMINDER_METADATA_KEY,
+} from '../phase-reminder';
+import { createPostFileToolNudgeHook } from '../post-file-tool-nudge';
+import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
   createTaskSessionManagerHook,
 } from './index';
@@ -2455,5 +2460,42 @@ describe('task-session-manager hook', () => {
       '### Background Job Board',
     );
     expect(messages.messages[0].parts[0].text).toContain('child-transform-1');
+  });
+
+  test('repairs session mapping before composed reminder transforms', async () => {
+    const agentMap = new Map<string, string>();
+    const coordinator = new SessionLifecycle(() => {});
+    const shouldInject = (sessionID: string) =>
+      agentMap.get(sessionID) === 'orchestrator';
+    const { hook: taskSessionManager } = createHook({
+      shouldManageSession: shouldInject,
+      registerSessionAsOrchestrator: (sessionID) => {
+        agentMap.set(sessionID, 'orchestrator');
+      },
+    });
+    const postFileNudge = createPostFileToolNudgeHook({
+      coordinator,
+      shouldInject,
+    });
+    const phaseReminder = createPhaseReminderHook({ shouldInject });
+    const messages = createMessages('orchestrator-1');
+
+    await postFileNudge['tool.execute.after'](
+      { tool: 'Read', sessionID: 'orchestrator-1' },
+      {},
+    );
+    await taskSessionManager['experimental.chat.messages.transform'](
+      {},
+      messages,
+    );
+    await postFileNudge['experimental.chat.messages.transform']({}, messages);
+    await phaseReminder['experimental.chat.messages.transform']({}, messages);
+
+    expect(agentMap.get('orchestrator-1')).toBe('orchestrator');
+    expect(
+      messages.messages[0].parts.filter(
+        (part) => part.metadata?.[PHASE_REMINDER_METADATA_KEY] === true,
+      ),
+    ).toHaveLength(1);
   });
 });
