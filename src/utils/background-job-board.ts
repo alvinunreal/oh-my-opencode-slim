@@ -485,7 +485,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
 
   formatForPrompt(
     parentSessionID: string,
-    now = Date.now(),
+    _now?: number,
   ): string | undefined {
     const active = this.list(parentSessionID).filter(
       (job) => job.state === 'running' || job.terminalUnreconciled,
@@ -505,7 +505,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
         '',
         '#### Active / Unreconciled',
         ...(active.length > 0
-          ? active.map((job) => formatJob(job, now))
+          ? active.map(formatJob)
           : ['- none']),
         '',
         '#### Reusable Sessions',
@@ -623,20 +623,17 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-function formatJob(job: BackgroundJobRecord, now = Date.now()): string {
-  const ageMs = now - job.lastLaunchedAt;
+function formatJob(job: BackgroundJobRecord): string {
   const isResume = job.lastLaunchedAt !== job.launchedAt;
-  const ageLabel =
-    job.state === 'running' && ageMs < 30_000
-      ? ` [${isResume ? 'resumed' : 'just launched'}, ${Math.floor(ageMs / 1000)}s ago]`
-      : '';
+  const state =
+    job.state === 'running' && isResume ? 'running [resumed]' : job.state;
   const status = job.terminalUnreconciled
     ? `${job.state}, unreconciled`
     : job.statusUncertain
       ? `${job.state}, status uncertain`
       : job.timedOut
         ? `${job.state}, timed out`
-        : `${job.state}${ageLabel}`;
+        : state;
   const lines = [
     `- ${promptSafe(job.alias)} / ${promptSafe(job.taskID)} / ${promptSafe(job.agent)} / ${promptSafe(status)}`,
     `  Objective: ${promptSafe(job.objective || job.description)}`,
