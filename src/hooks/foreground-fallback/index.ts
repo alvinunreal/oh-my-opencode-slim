@@ -542,6 +542,14 @@ export class ForegroundFallbackManager {
 
     this.inProgress.add(sessionID);
     try {
+      // Arm the grace window BEFORE the abort: the abort fires a cancelled
+      // status + session.deleted, and task-session-manager suppresses the
+      // cancelled status only while wasFallbackRecent() is true. Arming here
+      // closes the race where the abort's terminal status arrived before
+      // execFallback's post-re-prompt arm. Chain exhaustion re-disarms this
+      // in execFallback (no re-prompt follows, so the cancelled status is
+      // real). (issue #765, Greptile review)
+      this.markFallbackDone(sessionID);
       await abortSessionWithTimeout(this.client, sessionID);
       await this.execFallback(sessionID);
     } finally {
@@ -623,6 +631,10 @@ export class ForegroundFallbackManager {
             tried: [...tried],
           });
           await abortSessionWithTimeout(this.client, sessionID);
+          // Chain exhausted: no re-prompt follows, so the abort's cancelled
+          // status is real. Disarm the grace window armed by the caller so
+          // task-session-manager does not suppress the genuine terminal.
+          this.lastFallbackAt.delete(sessionID);
           return;
         }
       }
