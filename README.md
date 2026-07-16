@@ -125,6 +125,32 @@ bun install
 bun run build
 ```
 
+#### Cache verification
+
+Run `bun install` and build first, then point `OPENCODE_BIN` at a
+pre-provisioned `opencode-ai@1.18.2` binary. The verification uses the local
+plugin dependency tree, disables Bun auto-install, and uses a local capture
+server; it makes no external provider or dependency-resolution network calls:
+
+```bash
+bun run build
+OPENCODE_BIN=/absolute/path/to/opencode bun run verify:cache-stability
+```
+
+The live benchmark is manual and opt-in, not a CI check. It targets an already
+configured OpenCode server and writes redacted JSON telemetry:
+
+```bash
+bun scripts/benchmark-opencode-cache.ts \
+  --server http://127.0.0.1:4096 \
+  --provider anthropic \
+  --model claude-sonnet-4-5 \
+  --runs 10 \
+  --arm plugin-on \
+  --plugin-build "$(git rev-parse HEAD)" \
+  --output /tmp/opencode-cache-benchmark.json
+```
+
 ### Getting Started
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
