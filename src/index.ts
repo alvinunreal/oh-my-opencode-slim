@@ -338,6 +338,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       },
       isFallbackInProgress: (sessionID) =>
         foregroundFallback.isFallbackInProgress(sessionID),
+      wasFallbackRecent: (sessionID) =>
+        foregroundFallback.wasFallbackRecent(sessionID),
       coordinator: sessionLifecycle,
       onJobTerminal: (parentSessionID) => {
         void ctx.client.session.promptAsync({

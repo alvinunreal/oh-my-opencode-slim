@@ -51,21 +51,6 @@ export function createPendingCallTracker() {
       return undefined;
     },
 
-    /**
-     * Same lookup as {@link take} but does not consume the pending call.
-     * Used by session.created net (#765) so tool.execute.after can still
-     * receive the result.
-     */
-
-    peek(callId?: string, parentSessionId?: string) {
-      if (!callId && parentSessionId) {
-        callId = this.findByParent(parentSessionId);
-      }
-      if (!callId) return undefined;
-      const pending = pendingCalls.get(callId);
-      return pending ? { ...pending } : undefined;
-    },
-
     clearSession(sessionId: string) {
       for (const [callId, pending] of pendingCalls.entries()) {
         if (pending.parentSessionId === sessionId) {
