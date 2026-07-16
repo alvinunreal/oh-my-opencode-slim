@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { doctor, parseDoctorArgs } from './doctor';
 import { install } from './install';
 import { getGeneratedPresetNames, isGeneratedPresetName } from './providers';

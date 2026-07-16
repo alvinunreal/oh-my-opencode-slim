@@ -101,6 +101,13 @@ Install and configure oh-my-opencode-slim: https://raw.githubusercontent.com/alv
 bunx oh-my-opencode-slim@latest install
 ```
 
+The published CLI is a Node-compatible bundle, so `npx` works too if you don't
+have Bun installed:
+
+```bash
+npx oh-my-opencode-slim@latest install
+```
+
 ### Run from Master
 
 Use this if you want the latest code, easier bug fixes, or a local setup for
