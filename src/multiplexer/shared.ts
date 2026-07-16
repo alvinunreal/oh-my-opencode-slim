@@ -57,7 +57,8 @@ export function resolveOpencodeExecutable(): string {
  *
  * Mirrors OpenCode's own `Shell.args()` resolution:
  * - nu / fish: `<shell> -c <command>` (no login mode)
- * - zsh: login mode, sources zshenv/zshrc, then runs command
+ * - zsh: login mode; zsh sources ~/.zshenv automatically, then we source
+ *   .zshrc before running the command
  * - bash: login mode, sources bashrc, then runs command
  * - cmd: `cmd /c <command>`
  * - powershell: `pwsh -NoProfile -Command <command>`
@@ -77,11 +78,15 @@ export function buildShellLaunchArgs(command: string): string[] {
     return [shell, '-c', command];
   }
   if (name === 'zsh') {
+    // zsh sources ~/.zshenv unconditionally at startup (every session, login or
+    // not), so we must not source it again here. Only source .zshrc (login
+    // mode already implies this, but doing it explicitly keeps PATH/aliases
+    // consistent for the launched command).
     return [
       shell,
       '-l',
       '-c',
-      `[[ -f ~/.zshenv ]] && source ~/.zshenv >/dev/null 2>&1 || true\n[[ -f "\${ZDOTDIR:-$HOME}/.zshrc" ]] && source "\${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1\n${command}`,
+      `[[ -f "\${ZDOTDIR:-$HOME}/.zshrc" ]] && source "\${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1\n${command}`,
     ];
   }
   if (name === 'bash') {
