@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, mock, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -9,24 +9,25 @@ import {
   getOpenCodeVersion,
   isOpenCodeInstalled,
   isTmuxInstalled,
+  resolveOpenCodePath,
 } from './system';
 
 describe('system', () => {
-  test('isOpenCodeInstalled detects opencode in ~/.opencode/bin', async () => {
+  test('resolves opencode in ~/.opencode/bin', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opencode-system-test-'));
 
     try {
       const opencodePath = join(dir, '.opencode', 'bin', 'opencode');
       mkdirSync(join(dir, '.opencode', 'bin'), { recursive: true });
-      symlinkSync(process.execPath, opencodePath, 'file');
+      writeFileSync(opencodePath, 'placeholder');
 
       expect(
-        await isOpenCodeInstalled({
+        resolveOpenCodePath({
           ...process.env,
           HOME: dir,
           PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
         }),
-      ).toBe(true);
+      ).toBe(opencodePath);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
