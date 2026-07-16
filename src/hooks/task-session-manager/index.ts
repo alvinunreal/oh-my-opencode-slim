@@ -110,6 +110,12 @@ export function createTaskSessionManagerHook(
      *  completed during transient fallback); phantom cleanup is enabled
      *  in session.created nets. */
     isFallbackInProgress?: (sessionID: string) => boolean;
+    /** Called with a sessionID to check whether a foreground fallback
+     *  re-prompt was accepted for it within the grace window
+     *  (FALLBACK_GRACE_WINDOW_MS). When true: cancelled/error status
+     *  updates are suppressed so the job stays running for idle
+     *  reconciliation (issue #765). */
+    wasFallbackRecent?: (sessionID: string) => boolean;
     coordinator?: SessionLifecycle;
     /** Test seam only; production always uses the reconciliation delay. */
     idleReconcileDelayMs?: number;
@@ -409,6 +415,29 @@ export function createTaskSessionManagerHook(
         terminalState: existing?.terminalState,
         result: status.result,
       });
+      return existing;
+    }
+
+    // Suppress spurious cancelled/error status arriving within the
+    // fallback grace window. A foreground-fallback abort re-prompts the
+    // session with a fallback model, so a cancelled/error status fired by
+    // the abort is not a real termination — keep the job running so the
+    // genuine fallback-response idle (or a later "completed" injected
+    // completion) can reconcile it (issue #765).
+    if (
+      (status.state === 'cancelled' || status.state === 'error') &&
+      existing?.parentSessionID &&
+      options.wasFallbackRecent?.(existing.parentSessionID)
+    ) {
+      log(
+        '[task-session-manager] suppressed fallback-induced terminal status',
+        {
+          taskID: status.taskID,
+          state: status.state,
+          alias: existing?.alias,
+          boardState: existing?.state,
+        },
+      );
       return existing;
     }
 
@@ -790,6 +819,24 @@ export function createTaskSessionManagerHook(
       normalizeLateCancelledTaskOutput(output);
       const status = parseTaskStatusOutput(output.output);
       if (status) {
+        // Suppress spurious cancelled/error status from a foreground-fallback
+        // abort within the grace window — keep the job running so the
+        // genuine fallback-response idle can reconcile it — issue #765.
+        if (
+          (status.state === 'cancelled' || status.state === 'error') &&
+          pending?.parentSessionId &&
+          options.wasFallbackRecent?.(pending.parentSessionId)
+        ) {
+          log(
+            '[task-session-manager] suppressed fallback-induced terminal status (tool.execute.after)',
+            {
+              taskID: status.taskID,
+              state: status.state,
+              alias: backgroundJobBoard.get(status.taskID)?.alias,
+            },
+          );
+          return;
+        }
         const existing = backgroundJobBoard.get(status.taskID);
         const record =
           existing ??
