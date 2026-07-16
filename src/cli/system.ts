@@ -4,12 +4,16 @@ import { crossSpawn } from '../utils/compat';
 
 let cachedOpenCodePath: string | null = null;
 
-function resolvePathCommand(command: string): string | null {
+function resolvePathCommand(
+  command: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string | null {
   try {
     const resolver = process.platform === 'win32' ? 'where' : 'which';
     const result = spawnSync(resolver, [command], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: environment,
     });
 
     if (result.status !== 0) {
@@ -27,10 +31,15 @@ function resolvePathCommand(command: string): string | null {
   }
 }
 
-function canExecute(command: string, args: string[]): boolean {
+function canExecute(
+  command: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
   try {
     const result = spawnSync(command, args, {
       stdio: 'ignore',
+      env: environment,
     });
     return result.status === 0;
   } catch {
@@ -38,8 +47,10 @@ function canExecute(command: string, args: string[]): boolean {
   }
 }
 
-function getOpenCodePaths(): string[] {
-  const home = process.env.HOME || process.env.USERPROFILE || '';
+function getOpenCodePaths(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const home = environment.HOME || environment.USERPROFILE || '';
 
   return [
     // PATH (try this first)
@@ -84,25 +95,32 @@ function getOpenCodePaths(): string[] {
   ];
 }
 
-export function resolveOpenCodePath(): string {
-  if (cachedOpenCodePath) {
+export function resolveOpenCodePath(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const useCache = environment === process.env;
+  if (useCache && cachedOpenCodePath) {
     return cachedOpenCodePath;
   }
 
-  const pathOpenCodePath = resolvePathCommand('opencode');
+  const pathOpenCodePath = resolvePathCommand('opencode', environment);
   if (pathOpenCodePath) {
-    cachedOpenCodePath = pathOpenCodePath;
+    if (useCache) {
+      cachedOpenCodePath = pathOpenCodePath;
+    }
     return pathOpenCodePath;
   }
 
-  const paths = getOpenCodePaths();
+  const paths = getOpenCodePaths(environment);
 
   for (const opencodePath of paths) {
     if (opencodePath === 'opencode') continue;
     try {
       const stat = statSync(opencodePath);
       if (stat.isFile()) {
-        cachedOpenCodePath = opencodePath;
+        if (useCache) {
+          cachedOpenCodePath = opencodePath;
+        }
         return opencodePath;
       }
     } catch {
@@ -114,15 +132,23 @@ export function resolveOpenCodePath(): string {
   return 'opencode';
 }
 
-export async function isOpenCodeInstalled(): Promise<boolean> {
-  const pathOpenCodePath = resolvePathCommand('opencode');
+export async function isOpenCodeInstalled(
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const useCache = environment === process.env;
+  const pathOpenCodePath = resolvePathCommand('opencode', environment);
 
-  if (pathOpenCodePath && canExecute(pathOpenCodePath, ['--version'])) {
-    cachedOpenCodePath = pathOpenCodePath;
+  if (
+    pathOpenCodePath &&
+    canExecute(pathOpenCodePath, ['--version'], environment)
+  ) {
+    if (useCache) {
+      cachedOpenCodePath = pathOpenCodePath;
+    }
     return true;
   }
 
-  const paths = getOpenCodePaths();
+  const paths = getOpenCodePaths(environment);
 
   for (const opencodePath of paths) {
     if (opencodePath === 'opencode') continue;
@@ -130,10 +156,13 @@ export async function isOpenCodeInstalled(): Promise<boolean> {
       const proc = crossSpawn([opencodePath, '--version'], {
         stdout: 'pipe',
         stderr: 'pipe',
+        env: environment,
       });
       await proc.exited;
       if (proc.exitCode === 0) {
-        cachedOpenCodePath = opencodePath;
+        if (useCache) {
+          cachedOpenCodePath = opencodePath;
+        }
         return true;
       }
     } catch {

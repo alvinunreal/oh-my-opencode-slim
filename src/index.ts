@@ -42,6 +42,7 @@ import {
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
 import { isMessageWithParts, type MessageWithParts } from './hooks/types';
+import { handleTaskSessionEvent } from './index-event';
 import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
 import {
@@ -930,31 +931,29 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Instance disposal must reach the task-session manager before any
-      // awaited cleanup. This invalidates active continuation evaluations so
-      // they cannot nudge while teardown is in progress.
-      await taskSessionManagerHook.event(
+      await handleTaskSessionEvent(
         input as {
           event: {
             type: string;
             properties?: { info?: { id?: string }; sessionID?: string };
           };
         },
+        taskSessionManagerHook.event,
+        async () => {
+          // Handle multiplexer pane spawning for OpenCode's Task tool sessions
+          await multiplexerSessionManager.onSessionCreated(event);
+
+          // Handle session status/idle events for pane cleanup early so child panes
+          // close promptly even if later hooks do additional work on idle.
+          await multiplexerSessionManager.onSessionStatus(event);
+
+          // Handle session.deleted events for pane cleanup
+          await multiplexerSessionManager.onSessionDeleted(event);
+        },
+        async () => {
+          await multiplexerSessionManager.cleanupOnInstanceDisposed();
+        },
       );
-
-      // Handle multiplexer pane spawning for OpenCode's Task tool sessions
-      await multiplexerSessionManager.onSessionCreated(event);
-
-      // Handle session status/idle events for pane cleanup early so child panes
-      // close promptly even if later hooks do additional work on idle.
-      await multiplexerSessionManager.onSessionStatus(event);
-
-      // Handle session.deleted events for pane cleanup
-      await multiplexerSessionManager.onSessionDeleted(event);
-
-      if (event.type === 'server.instance.disposed') {
-        await multiplexerSessionManager.cleanupOnInstanceDisposed();
-      }
 
       // Runtime model fallback for foreground agents (rate-limit detection)
       await foregroundFallback.handleEvent(input.event);

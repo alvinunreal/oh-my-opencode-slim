@@ -20,22 +20,21 @@ import {
 describe('system', () => {
   test('isOpenCodeInstalled detects opencode in ~/.opencode/bin', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'opencode-system-test-'));
-    const originalPath = process.env.PATH;
-    const originalHome = process.env.HOME;
 
     try {
       const opencodePath = join(dir, '.opencode', 'bin', 'opencode');
       mkdirSync(join(dir, '.opencode', 'bin'), { recursive: true });
       writeFileSync(opencodePath, '#!/bin/sh\necho 1.2.3\n');
       chmodSync(opencodePath, 0o755);
-      process.env.HOME = dir;
-      process.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 
-      const system = await import(`./system?test=home-detect-${Date.now()}`);
-      expect(await system.isOpenCodeInstalled()).toBe(true);
+      expect(
+        await isOpenCodeInstalled({
+          ...process.env,
+          HOME: dir,
+          PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        }),
+      ).toBe(true);
     } finally {
-      process.env.PATH = originalPath;
-      process.env.HOME = originalHome;
       rmSync(dir, { recursive: true, force: true });
     }
   });
