@@ -16,7 +16,8 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   - `sessionModel`: Maps sessionID → current model string ("providerID/modelID")
   - `sessionAgent`: Maps sessionID → agent name
   - `sessionTried`: Maps sessionID → Set of models already attempted
-  - `inProgress`: Set of sessions with active fallback in flight
+  - `inProgress`: Set of sessions with active fallback in flight (strict — cleared in `finally` so the genuine fallback-response idle still reconciles)
+  - `lastFallbackAt`: Maps sessionID → timestamp of last accepted re-prompt; `wasFallbackRecent()` returns true within `FALLBACK_GRACE_WINDOW_MS` (5s), letting task-session-manager suppress spurious abort-induced cancellations without blocking the genuine idle (issue #765)
   - `lastTrigger`: Maps sessionID → timestamp for deduplication
 
 ### Fallback Chain Resolution
@@ -37,7 +38,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 ### State Management
 - **Deduplication window**: 5-second cooldown (`DEDUP_WINDOW_MS`) to prevent multiple triggers for same rate-limit event
 - **Session cleanup**: `session.deleted` event handler removes all per-session state to prevent memory leaks
-- **In-progress tracking**: Prevents concurrent fallback attempts on same session
+- **In-progress tracking**: Prevents concurrent fallback attempts on same session (`inProgress`, cleared in `finally`)
+- **Grace window**: `wasFallbackRecent()` stays true for 5s after a successful re-prompt — distinct from the strict in-flight flag — so late abort-induced `session.deleted` and cancelled/error status are suppressed while the genuine fallback-response idle still reconciles (issue #765)
+- **Retry-without-abort**: When `promptAsync` throws on a busy session (original rate-limited response still in flight), retries up to `FALLBACK_REPROMPT_RETRIES` (3) without aborting. Abort is kept as last resort only (avoids "Task cancelled" in parent, issue #765)
 
 ## Flow
 
@@ -49,17 +52,22 @@ ForegroundFallbackManager.handleEvent()
     ↓
 Retryable error detection via isRetryableError()
     ↓
-tryFallback(sessionID) [deduplicated, in-progress guarded]
+tryFallback(sessionID) or tryFallbackWithAbort(sessionID)
+    [deduplicated, in-progress guarded]
+    ↓
+Abort current rate-limited prompt (with timeout) [tryFallbackWithAbort only]
     ↓
 Resolve fallback chain for session
     ↓
-Abort current rate-limited prompt (with timeout)
-    ↓
 Retrieve last user message from session history
     ↓
-Re-prompt session with next model via promptAsync()
+execFallback(sessionID)
+  ├─ Re-prompt with next model via promptAsync()
+  │   (busy session: retry up to 3x without abort; abort only as last resort)
+  ├─ markFallbackDone(sessionID) — arms 5s grace window
+  └─ Update session state with new model
     ↓
-Update session state with new model
+tryFallback/tryFallbackWithAbort finally: clear inProgress
     ↓
 Log fallback event
 ```
@@ -69,6 +77,8 @@ Log fallback event
 2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
 3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
 4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking)
+5. **Retry-without-abort**: When `promptAsync` throws on a busy session, retries up to `FALLBACK_REPROMPT_RETRIES` (3) without aborting. Abort is last-resort only if the session never settles — avoids triggering "Task cancelled" in the parent orchestrator (issue #765)
+6. **Grace window**: `markFallbackDone()` records the time of successful re-prompt; `wasFallbackRecent()` exposes a 5s window for task-session-manager to suppress abort artifacts
 
 ## Integration
 
