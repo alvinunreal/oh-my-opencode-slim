@@ -142,11 +142,17 @@ export async function promptWithTimeout(
 
     await Promise.race(racers);
   } catch (error) {
-    if (error instanceof OperationTimeoutError) {
+    // Abort the server-side session on timeout OR signal cancel. Without
+    // the signal branch, a cancelled parent tool leaves the child running
+    // as an orphan ("Task cancelled" to the orchestrator, child still
+    // working). Match by error identity, not `signal.aborted`, so an
+    // unrelated rejection overlapping a signal abort does not fire an
+    // extra abort round-trip.
+    if (isPromptCancellationError(error)) {
       try {
         await abortSessionWithTimeout(client, sessionId);
       } catch {
-        // Best-effort cleanup: preserve the original prompt timeout error.
+        // Best-effort: preserve the original error.
       }
     }
     throw error;
@@ -154,6 +160,12 @@ export async function promptWithTimeout(
     clearTimeout(timer);
     if (onAbort) signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/** OperationTimeoutError or our own "Prompt cancelled" Error. */
+function isPromptCancellationError(error: unknown): boolean {
+  if (error instanceof OperationTimeoutError) return true;
+  return error instanceof Error && error.message === 'Prompt cancelled';
 }
 
 /**

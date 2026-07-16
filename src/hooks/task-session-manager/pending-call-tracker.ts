@@ -39,6 +39,14 @@ export function createPendingCallTracker() {
       return pending;
     },
 
+    /** Peek oldest pending call for a parent without removing it. */
+    peekByParent(parentSessionId: string) {
+      for (const call of pendingCalls.values()) {
+        if (call.parentSessionId === parentSessionId) return call;
+      }
+      return undefined;
+    },
+
     clearSession(sessionId: string) {
       for (const [callId, pending] of pendingCalls.entries()) {
         if (pending.parentSessionId === sessionId) {

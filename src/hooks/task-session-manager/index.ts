@@ -660,6 +660,35 @@ export function createTaskSessionManagerHook(
           options.shouldManageSession(info.parentID)
         ) {
           taskContextTracker.pendingManagedTaskIds.add(info.id);
+          // Early board registration: if the parent tool call is cancelled
+          // before tool.execute.after (e.g. foreground fallback abort), the
+          // after-hook never fires and the job is never tracked — idle then
+          // reports runningJobForSession:false and the orchestrator sees
+          // "Task cancelled" while the child is still working (#765).
+          // Peek (don't take) so tool.execute.after can still re-register.
+          const pending = pendingCallTracker.peekByParent(info.parentID);
+          if (
+            pending &&
+            !pending.resumedTaskId &&
+            !backgroundJobBoard.get(info.id)
+          ) {
+            const record = backgroundJobBoard.registerLaunch({
+              taskID: info.id,
+              parentSessionID: pending.parentSessionId,
+              agent: pending.agentType,
+              description: pending.label,
+              objective: pending.label,
+            });
+            log(
+              '[task-session-manager] early board registration from session.created',
+              {
+                taskID: record.taskID,
+                alias: record.alias,
+                parentSessionID: record.parentSessionID,
+                agent: record.agent,
+              },
+            );
+          }
         }
         return;
       }

@@ -2281,6 +2281,50 @@ describe('task-session-manager hook', () => {
     });
   });
 
+  test('session.created early-registers board job so after-hook cancellation cannot orphan the child', async () => {
+    // Reproduces #765: parent tool may be cancelled before tool.execute.after,
+    // so the job never lands on the board. Early registration from
+    // session.created keeps runningJobForSession true and lets idle reconcile.
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          subagent_type: 'oracle',
+          description: 'loss design review',
+        },
+      },
+    );
+
+    // Child session is created while the parent tool is still in flight.
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
+      },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      agent: 'oracle',
+      parentSessionID: 'parent-1',
+      description: 'loss design review',
+    });
+
+    // Simulate parent tool never firing tool.execute.after (cancelled).
+    // Child goes idle after finishing — board must still reconcile.
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'completed',
+    });
+  });
+
   test('cancelled job is not reconciled from idle', async () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
