@@ -61,6 +61,9 @@ mock.module('./hooks', () => ({
   },
 }));
 
+const { default: plugin } = await import('./index');
+mock.restore();
+
 const cleanupOnInstanceDisposed = spyOn(
   MultiplexerSessionManager.prototype,
   'cleanupOnInstanceDisposed',
@@ -76,8 +79,6 @@ const cleanupOnInstanceDisposed = spyOn(
 afterAll(() => {
   cleanupOnInstanceDisposed.mockRestore();
 });
-
-const { default: plugin } = await import('./index');
 
 describe('plugin disposal event ordering', () => {
   test('invalidates task continuations before awaited disposal cleanup', async () => {
