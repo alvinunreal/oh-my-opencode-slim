@@ -48,10 +48,13 @@ function commands(): string[][] {
 describe('KittyMultiplexer', () => {
   const originalKittyPid = process.env.KITTY_PID;
   const originalKittyWindowId = process.env.KITTY_WINDOW_ID;
+  const originalKittyListenOn = process.env.KITTY_LISTEN_ON;
 
   beforeEach(() => {
     process.env.KITTY_PID = '12345';
     process.env.KITTY_WINDOW_ID = '1';
+    // kitty exports KITTY_LISTEN_ON to its children; the backend requires it.
+    process.env.KITTY_LISTEN_ON = 'unix:/tmp/kitty-rc-test';
 
     logMock.mockClear();
     crossSpawnMock.mockReset();
@@ -75,6 +78,7 @@ describe('KittyMultiplexer', () => {
   afterEach(() => {
     process.env.KITTY_PID = originalKittyPid;
     process.env.KITTY_WINDOW_ID = originalKittyWindowId;
+    process.env.KITTY_LISTEN_ON = originalKittyListenOn;
   });
 
   test('isAvailable returns true when kitten is found', async () => {
