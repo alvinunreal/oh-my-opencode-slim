@@ -167,36 +167,24 @@ after creation (see below):
 
 **Important — `gh` version reality:** many `gh` builds reject `--field` and
 reject `--template` together with `--body-file`. The reliable cross-version
-pattern is to write the form's fields as **YAML front matter** in a body file
-and create with `--body-file` (no `--template`, no `--field`), then apply the
-label manually. The form's field IDs are `problem` + `context`
-(`feature-request.yml`) and `what_happened`/`steps`/`config`/`opencode_version`/
-`plugin_version`/`operating_system`/`logs` (`bug-report.yml`) — but since we
-post the log as a comment, the bug form's `logs` field just gets a pointer.
+pattern is to write a **plain markdown body** to a file and create with
+`--body-file` (no `--template`, no `--field`), then apply the label manually.
+`gh` does NOT parse YAML front matter from `--body-file` — it renders the whole
+file verbatim — so do NOT include front matter. The body below is the full
+issue body; the structured form fields are not populated, which is fine.
 
 Write the body to a temp file, then:
 
 **Bug** → `/tmp/omos-issue-<ts>.md`:
 
 ```markdown
----
-name: Bug report
-what_happened: |-
-  <description + expected/actual>
-steps: |-
-  <repro steps>
-config: |-
-  <oh-my-opencode.json or 'omitted'>
-opencode_version: "<version>"
-plugin_version: "<plugin version>"
-operating_system: "<os>"
-logs: |-
-  Scrubbed plugin log posted as a comment below.
----
-
 ## Description
 
-<user description / repro steps>
+<user description + expected vs actual>
+
+## Repro Steps
+
+<numbered repro steps>
 
 ## Skill / Command
 
@@ -227,14 +215,6 @@ gh issue create \
 **Enhancement** → `/tmp/omos-issue-<ts>.md`:
 
 ```markdown
----
-name: Feature request
-problem: |-
-  <what you want and why>
-context: |-
-  <optional examples/links>
----
-
 ## Description
 
 <what you want and why>
