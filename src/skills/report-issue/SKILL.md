@@ -45,71 +45,37 @@ secrets before approving.
 
 ### 2. Collect environment
 
-Run these and capture the output:
-
-```bash
-echo "OS: $(uname -a 2>/dev/null || echo unknown)"
-echo "OpenCode: $(opencode --version 2>/dev/null || echo unknown)"
-echo "Plugin: $(bun -e 'import {readFileSync}from"node:fs";try{const p=JSON.parse(readFileSync("package.json","utf8"));console.log(p.version)}catch{console.log("unknown")}' 2>/dev/null || echo unknown)"
-echo "Node: $(node --version 2>/dev/null || echo unknown)"
-echo "Bun: $(bun --version 2>/dev/null || echo unknown)"
-echo "Shell: $SHELL"
-```
-
-If a command is unavailable, record `unknown` rather than failing the whole step.
+Gather the environment yourself — OS, OpenCode version, this plugin's version,
+Node/Bun versions, and the shell. Run whatever command fits the platform; if a
+value is unavailable, record `unknown` rather than failing.
 
 ### 3. Collect plugin logs
 
-Resolve the log directory, then take the most recent plugin log:
-
-```bash
-LOG_DIR="${OPENCODE_LOG_DIR:-$HOME/.local/share/opencode/log}"
-LOG_FILE=$(ls -t "$LOG_DIR"/oh-my-opencode-slim.*.log 2>/dev/null | head -n1)
-```
-
-Windows path note: on Windows the default is
-`%USERPROFILE%\.local\share\opencode\log`. This skill targets macOS/Linux; if
-the user is on Windows and `OPENCODE_LOG_DIR` is unset, ask them for the path.
+Locate the most recent plugin log. The directory is `$OPENCODE_LOG_DIR` if set,
+otherwise `~/.local/share/opencode/log` (macOS/Linux) or
+`%USERPROFILE%\.local\share\opencode\log` (Windows). Pick the newest
+`oh-my-opencode-slim.*.log`. If none exists, note `[no plugin log found]`.
 
 ### 4. Scrub the log
 
-You are an AI model — redact secrets by reading the tailed log and applying the
-checklist below. Do **not** rely on a regex script; redact inline as you prepare
-the draft. This avoids brittle escaping and lets you catch shapes regex misses.
-
-First read the tail:
-
-```bash
-if [ -z "$LOG_FILE" ]; then
-  echo "[no plugin log found]"
-else
-  tail -n 500 "$LOG_FILE"
-fi
-```
+You are an AI model — redact secrets by reading the log and applying judgment.
+Do **not** run a regex script; redact inline as you prepare the draft. This
+avoids brittle escaping and lets you catch shapes regex misses.
 
 **PEM tripwire (check first):** If the log contains
 `-----BEGIN ... PRIVATE KEY-----` (any variant: RSA, EC, DSA, OPENSSH,
 ENCRYPTED), do **not** embed the log. Tell the user a private key was detected,
 refuse to include it, and use `Logs: [skipped — private key detected in log]`.
 
-Otherwise, redact these from the log before embedding. Replace the value with
-the marker shown — never paraphrase or summarize the log (paraphrasing bypasses
-redaction):
-
-- API keys: `sk-…`, `xai-…`, `exaApiKey=…` → `<REDACTED:API_KEY>`
-- Bearer / session tokens, and `?token=` / `?access_token=` / `?auth=` URL
-  params → `<REDACTED:TOKEN>`
-- JWTs (`eyJ… . … . …`) → `<REDACTED:JWT>`
-- DB connection strings (`mongodb://`, `postgres://`, `redis://`, etc.) →
-  `<REDACTED:DB_CONNSTR>`
-- Explicit secret env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`,
-  `GITHUB_TOKEN`, `AWS_*` → `<REDACTED:SECRET>`
-- Absolute paths containing the user's home directory → replace with `~`
-- Any other credential-shaped value you recognize (long base64/hex strings in
-  auth contexts, passwords, tokens) → `<REDACTED:SECRET>`
-
-When in doubt, redact. The user reviews the draft before submit, but the model
-is the first line of defense.
+Otherwise, redact credential-shaped content before embedding: API keys
+(`sk-…`, `xai-…`, `exaApiKey=…`), bearer/session tokens and `?token=` /
+`?access_token=` / `?auth=` URL params, JWTs, DB connection strings, explicit
+secret env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`,
+`GITHUB_TOKEN`, `AWS_*`), home-directory paths (→ `~`), and anything else that
+looks like a secret. Replace each value with a `<REDACTED:…>` marker. Never
+paraphrase or summarize the log — embed it verbatim after redaction
+(paraphrasing bypasses redaction). When in doubt, redact; the user reviews the
+draft before submit, but you are the first line of defense.
 
 ### 5. Draft the issue body
 
@@ -133,13 +99,13 @@ Write the draft to a temp file (e.g. `/tmp/omos-issue.md`) using this template:
 - Bun: <bun version>
 - Shell: <shell>
 
-## Plugin Logs (last 500 lines, scrubbed)
+## Plugin Logs (scrubbed)
 
 <details>
 <summary>Click to expand — scrubbed plugin log</summary>
 
 ```log
-<scrubbed log, or [no plugin log found] / [skipped — private key detected in log]>
+<scrubbed log, or [no plugin log found] / [skipped — private key detected in log] / [skipped by user]>
 ```
 
 </details>
@@ -148,13 +114,11 @@ Write the draft to a temp file (e.g. `/tmp/omos-issue.md`) using this template:
 🤖 This issue was created using the /report-issue skill.
 ```
 
-If `--no-logs` was requested, put `Logs: [skipped by user]` in the details block
-instead of log content.
-
-Truncate at **line boundaries only**: if the scrubbed log exceeds ~6000
-characters, keep whole lines up to that limit and append
-`\n... [truncated — review may be incomplete; attach raw log manually]`. Never
-cut a line in half (that can split a secret mid-token).
+If the log is very long, keep it readable: trim to a sensible tail (a few
+hundred lines is plenty for a bug report) and append
+`... [truncated — review may be incomplete; attach raw log manually]`. Always
+cut at line boundaries — never split a line in half, since that can split a
+secret mid-token.
 
 ### 6. Confirm
 
