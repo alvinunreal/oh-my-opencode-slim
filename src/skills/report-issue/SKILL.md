@@ -135,25 +135,49 @@ approve, edit, or cancel. Do not run `gh` until they approve.
 
 ### 6. Submit
 
+This repo uses GitHub **issue forms** (`.github/ISSUE_TEMPLATE/bug-report.yml`
+and `feature-request.yml`), and blank issues are disabled. So file through the
+form template, not a free-form body — a plain `--body` is rejected.
+
 If `gh` is available and the user approved:
 
 Check `gh auth status` first. If not authenticated, tell the user to run
 `gh auth login` (or paste the draft manually at the URL below) — do not attempt
 the create.
 
+**Bug** → use `bug-report.yml` and map fields:
+
 ```bash
 gh issue create \
   --repo alvinunreal/oh-my-opencode-slim \
+  --template bug-report.yml \
   --title "<title>" \
-  --label "<type>" \
-  --body-file /tmp/omos-issue-$(date +%s).md
+  --field "What happened, and what did you expect?"="<description + expected/actual>" \
+  --field "Steps to reproduce"="<repro steps>" \
+  --field "oh-my-opencode.json"="<config or 'omitted'>" \
+  --field "OpenCode version"="<version>" \
+  --field "oh-my-opencode-slim version"="<plugin version>" \
+  --field "Operating system"="<os>" \
+  --field "Logs, screenshots, or extra context"="<scrubbed plugin log>"
 ```
 
-- `<type>` is `bug` or `enhancement` from step 1; the label carries the
-  categorization, so the title stays prefix-free.
+**Enhancement** → use `feature-request.yml`:
+
+```bash
+gh issue create \
+  --repo alvinunreal/oh-my-opencode-slim \
+  --template feature-request.yml \
+  --title "<title>" \
+  --field "Description"="<what you want and why>" \
+  --field "Extra context"="<optional examples/links>"
+```
+
+- The `--title` should be prefix-free (no `[Bug]`/`[Feature]`); the form's
+  `title:` prefix and `labels:` are applied by the template automatically.
 - If `gh` is not installed or not authenticated, do **not** fail silently: print
   the full draft and tell the user to paste it at
-  `https://github.com/alvinunreal/oh-my-opencode-slim/issues/new`.
+  `https://github.com/alvinunreal/oh-my-opencode-slim/issues/new?template=bug-report.yml`
+  (or `feature-request.yml`).
 
 ## Skipping logs
 
