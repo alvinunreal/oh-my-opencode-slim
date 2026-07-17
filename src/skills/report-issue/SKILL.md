@@ -67,14 +67,24 @@ Gather the environment yourself — OS, OpenCode version, this plugin's version,
 Node/Bun versions, and the shell. Run whatever command fits the platform; if a
 value is unavailable, record `unknown` rather than failing.
 
-Locate the most recent plugin log. The directory is `$OPENCODE_LOG_DIR` if set,
+Locate the relevant plugin log. The directory is `$OPENCODE_LOG_DIR` if set,
 otherwise `~/.local/share/opencode/log` (macOS/Linux) or
-`%USERPROFILE%\.local\share\opencode\log` (Windows). Pick the newest
-`oh-my-opencode-slim.*.log`. If none exists, that's fine — note
-`[no plugin log found]` and continue; the issue can still be filed without it.
-Prefer the log segment around when the reported problem occurred; if the user
-named a skill/command (step 1), scan for that in the log to pull the relevant
-lines rather than dumping the whole file.
+`%USERPROFILE%\.local\share\opencode\log` (Windows). Logs are named
+`oh-my-opencode-slim.<timestamp>.log` and only the most recent 10 are kept.
+
+**The newest log is not always the right one.** The bug usually happened in a
+specific session, not the most recent startup. Ask the user which log is
+relevant — list the available `oh-my-opencode-slim.*.log` files with
+timestamps and let them pick, or accept "newest" if they don't care. If none
+exists, that's fine — note `[no plugin log found]` and continue; the issue can
+still be filed without it.
+
+Once the log is chosen, **pull only the segment around the reported problem** —
+not the whole file. If the user named a skill/command in step 1, grep the log
+for that to find the relevant lines, then include a window of context around
+them (e.g. ±30 lines). A raw init/health-check dump is noise and should not be
+the default. If the relevant segment can't be found, say so and include the
+tail of the log instead of the entire file.
 
 ### 3. Scrub the log
 
@@ -267,10 +277,10 @@ First row (example):
 ```
 
 <details>
-<summary>Full scrubbed plugin log (click to expand)</summary>
+<summary>Scrubbed plugin log segment (click to expand)</summary>
 
 ```log
-<scrubbed log, or [no plugin log found] / [skipped — private key detected in log] / [skipped by user]>
+<relevant scrubbed segment, or [no plugin log found] / [skipped — private key detected in log] / [skipped by user]>
 ```
 
 </details>
