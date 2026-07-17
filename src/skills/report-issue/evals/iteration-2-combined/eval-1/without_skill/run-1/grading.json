@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    { "text": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell.", "passed": false, "evidence": "Environment left as TBD placeholders; agent did not actually collect." },
+    { "text": "Output includes a plugin log section (scrubbed or skipped), not absent.", "passed": false, "evidence": "Log section says '[no plugin log available in this eval environment]' — not collected." },
+    { "text": "Stops and asks user to approve the draft; does NOT run gh issue create.", "passed": true, "evidence": "Stopped before submit; noted no gh run." },
+    { "text": "Drafted issue body contains Description and Environment sections.", "passed": true, "evidence": "Has Description and Environment sections (with placeholders)." },
+    { "text": "No gh issue create was actually run (test guard).", "passed": true, "evidence": "No gh invoked." }
+  ],
+  "summary": { "pass_rate": 0.6 }
+}

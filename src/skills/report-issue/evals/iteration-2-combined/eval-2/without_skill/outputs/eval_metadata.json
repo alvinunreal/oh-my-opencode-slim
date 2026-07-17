@@ -1,0 +1,6 @@
+{
+  "eval_id": 2,
+  "eval_name": "omos-test-watch-enhancement",
+  "prompt": "i want to propose an enhancement: add a --watch flag to the omos-test skill so it reruns tests on file change. open a github issue for oh-my-opencode-slim please.",
+  "assertions": []
+}

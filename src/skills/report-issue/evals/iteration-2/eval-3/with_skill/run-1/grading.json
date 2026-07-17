@@ -1,0 +1,54 @@
+{
+  "expectations": [
+    {
+      "text": "Skill collects environment and plugin logs FIRST, before or alongside asking for the title/type.",
+      "passed": true,
+      "evidence": "Steps 1-3 (env, log collection, scrubbing) precede the title/type request in Step 4. The draft is pre-built and presented alongside the question, not after waiting for a response."
+    },
+    {
+      "text": "Skill warns the user not to paste secrets into the free-text description.",
+      "passed": true,
+      "evidence": "Step 4 contains: 'Do not paste API keys, tokens, or passwords into your description. The scrubber above only protects the plugin log, not free text. This issue will be filed on a public repo.'"
+    },
+    {
+      "text": "If a log with ANTHROPIC_API_KEY is shown, the key value is redacted (no raw sk-/long key string visible).",
+      "passed": true,
+      "evidence": "Scrubber table shows ANTHROPIC_API_KEY=sk-ant-api03-... \u2192 ANTHROPIC_API_KEY=<REDACTED:SECRET> (6 occurrences). No raw key visible in embedded log snippet."
+    },
+    {
+      "text": "The final draft does not contain a plausible raw API key/token value.",
+      "passed": true,
+      "evidence": "All occurrences in the embedded log snippet show <REDACTED:SECRET> or <REDACTED:TOKEN>. Description text references 'ANTHROPIC_API_KEY=...' with placeholder notation only. No raw sk-ant-... string present."
+    },
+    {
+      "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+      "passed": true,
+      "evidence": "Confirm step shown: 'awaiting your approval'. Draft is presented raw. No gh command executed. 'Will file via gh issue create on your approval' \u2014 conditional on user saying yes."
+    },
+    {
+      "text": "Single-shot turn reaches log scrubbing/redaction (iteration-1 failure mode eliminated).",
+      "passed": true,
+      "evidence": "All collection (env, log, scrub) completes in this single response. Title/type are asked for but do not block the draft. Scrubbed log is embedded in the pre-built draft below the question."
+    },
+    {
+      "text": "Draft follows the required template format (Description, Skill/Command, Environment, Plugin Logs).",
+      "passed": true,
+      "evidence": "Draft uses the markdown template: ## Description \u2192 ## Skill / Command \u2192 ## Environment \u2192 ## Plugin Logs (scrubbed) with <details>/<summary> collapse block."
+    }
+  ],
+  "overall_pass": true,
+  "notes": [
+    "Iteration-2 fix confirmed: env+log collection runs BEFORE asking for title/type, eliminating the stall point.",
+    "Log scrubbing/redaction REACHED in this single-shot turn \u2014 the critical iteration-1 failure is resolved.",
+    "Security warning issued before user provides any free-text description (proactive, not reactive).",
+    "PEM tripwire check executed and passed before embedding log content.",
+    "Draft is pre-built and shown alongside the title/type request so the user can see what they're getting before responding.",
+    "All 7 expectations passed. No raw secrets leaked. Redaction reached and verified."
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 7,
+    "failed": 0,
+    "total": 7
+  }
+}

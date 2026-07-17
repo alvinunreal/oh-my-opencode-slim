@@ -1,0 +1,27 @@
+{
+  "eval_id": 1,
+  "eval_name": "explorer-tmux-hang-bug",
+  "prompt": "something broke when i ran @explorer to search my codebase — it threw an error and the tmux pane just hung. i'm on macos, latest opencode. can you file an issue for me?",
+  "assertions": [
+    {
+      "name": "collects_env",
+      "description": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell."
+    },
+    {
+      "name": "collects_logs",
+      "description": "Output includes a plugin log section (scrubbed or skipped), not absent."
+    },
+    {
+      "name": "asks_confirm_before_submit",
+      "description": "Stops and asks user to approve the draft; does NOT run gh issue create."
+    },
+    {
+      "name": "draft_has_description_and_env",
+      "description": "Drafted issue body contains Description and Environment sections."
+    },
+    {
+      "name": "no_gh_executed",
+      "description": "No `gh issue create` command was actually run (test guard)."
+    }
+  ]
+}

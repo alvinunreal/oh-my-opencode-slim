@@ -1,0 +1,42 @@
+{
+  "expectations": [
+    {
+      "text": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell.",
+      "passed": true,
+      "evidence": "Step 1 collected OS (Linux runtime; macOS noted), OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, shell /usr/bin/zsh \u2014 all populated in the draft Environment section."
+    },
+    {
+      "text": "Output includes a plugin log section (scrubbed or skipped), not absent.",
+      "passed": true,
+      "evidence": "Plugin Logs <details> block present in the draft with scrubbed tail (45 lines, home-directory paths redacted). PEM tripwire check performed first."
+    },
+    {
+      "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+      "passed": true,
+      "evidence": "Step 5 shows 'awaiting user approval' gate with Approve/Edit/Cancel options. No gh invocation shown."
+    },
+    {
+      "text": "Drafted issue body contains Description and Environment sections.",
+      "passed": true,
+      "evidence": "Draft has ## Description (with repro steps, expected/actual behavior), ## Skill / Command, ## Environment, and ## Plugin Logs (scrubbed) sections."
+    },
+    {
+      "text": "No gh issue create was actually run (test guard).",
+      "passed": true,
+      "evidence": "gh is only shown as a pending command ('will run'), never executed in the response."
+    }
+  ],
+  "overall_pass": true,
+  "notes": [
+    "NEW WORKFLOW ORDERING (Iteration 2): Environment and log collection (Step 1) executed BEFORE user input gathering (Step 2) \u2014 matches the new SKILL.md ordering that requires gathering env+logs 'first, before or alongside asking for details'.",
+    "REDACTION REACHED IN SINGLE SHOT: Log scrubbing (Step 3) was performed on the collected 500-line tail. PEM tripwire checked first (negative). Home-directory paths redacted to ~. No API keys/tokens found. Scrub step was reached without requiring a second turn.",
+    "Truncation applied at line boundaries (45 lines) with truncation notice appended \u2014 per skill guidelines.",
+    "Runtime env (Linux) differs from user-reported (macOS); discrepancy noted in draft with instruction for user to verify."
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 5,
+    "failed": 0,
+    "total": 5
+  }
+}

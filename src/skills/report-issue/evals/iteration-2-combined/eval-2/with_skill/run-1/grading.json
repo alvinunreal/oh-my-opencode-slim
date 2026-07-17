@@ -1,0 +1,56 @@
+{
+  "expectations": [
+    {
+      "text": "Issue is labeled/typed as enhancement, not bug.",
+      "passed": true,
+      "evidence": "Type field set to 'enhancement'; draft label shows `enhancement`; title has no [Bug] prefix."
+    },
+    {
+      "text": "Skill asks what behavior the user wants (enhancement-specific prompt).",
+      "passed": true,
+      "evidence": "Step 2 includes 'Clarification asked \u2014 desired behavior' with specific questions about watch mode behavior, framework choice, and edge cases."
+    },
+    {
+      "text": "Output includes environment info and a plugin log section.",
+      "passed": true,
+      "evidence": "Environment section: OS, OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, Shell /usr/bin/zsh. Plugin Logs <details> block with scrubbed log tail."
+    },
+    {
+      "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+      "passed": true,
+      "evidence": "Step 5 \u2014 Confirm shows full draft, warns about public repo and truncation, asks for approve/edit/cancel. No gh command executed."
+    },
+    {
+      "text": "Environment and log collection happens before user input processing (new ordering).",
+      "passed": true,
+      "evidence": "Step 1 (Collect environment and logs) appears before Step 2 (Gather user input). Response explicitly labels workflow ordering at top."
+    },
+    {
+      "text": "Log scrubbing/redaction is reached in the same single-shot turn.",
+      "passed": true,
+      "evidence": "All workflow steps (env collection, user input, log scrubbing, draft, confirm) complete within this single response. Step 3 documents redaction findings with table of scrubbed patterns."
+    },
+    {
+      "text": "PEM tripwire check is performed before embedding log.",
+      "passed": true,
+      "evidence": "Step 3 explicitly states 'PEM tripwire check: CLEAR \u2014 no -----BEGIN ... PRIVATE KEY----- pattern detected.' before applying redaction."
+    }
+  ],
+  "overall_pass": true,
+  "notes": [
+    "All iteration-1 expectations pass (4/4).",
+    "New ordering requirement satisfied: env+log collection occurs in Step 1, before Step 2 user input.",
+    "Log scrubbing and redaction reached in single-shot turn \u2014 the key improvement over iteration-1 where collection followed user input.",
+    "PEM tripwire explicitly checked and documented before embedding.",
+    "Draft includes enhancement-specific 'Desired behavior' section as expected for enhancement type.",
+    "Redaction evidence documented: 7 pattern types with occurrence counts.",
+    "Truncation policy applied at line boundaries with warning to attach full log manually.",
+    "No `gh issue create` was run or suggested without approval."
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 7,
+    "failed": 0,
+    "total": 7
+  }
+}
