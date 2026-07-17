@@ -72,18 +72,23 @@ otherwise `~/.local/share/opencode/log` (macOS/Linux) or
 `%USERPROFILE%\.local\share\opencode\log` (Windows). Logs are named
 `oh-my-opencode-slim.<timestamp>.log` and only the most recent 10 are kept.
 
-**The newest log is not always the right one.** The bug usually happened in a
-specific session, not the most recent startup. Ask the user which log is
-relevant — list the available `oh-my-opencode-slim.*.log` files with
-timestamps and let them pick, or accept "newest" if they don't care. If none
-exists, that's fine — note `[no plugin log found]` and continue; the issue can
+**The newest log is almost never the right one.** The bug happened in a
+specific session, not the most recent startup — the newest log is usually just
+an unrelated init/health-check dump. You MUST ask the user which log is
+relevant; do NOT silently default to the newest file.
+
+List the available `oh-my-opencode-slim.*.log` files with timestamps and ask
+the user to pick the one from when the problem occurred (or say "none / skip").
+This is a **blocking question** — wait for the answer before proceeding, just
+like the field questions in step 1. If the user says none exists or to skip,
+note `[no plugin log found]` / `[skipped by user]` and continue; the issue can
 still be filed without it.
 
 Once the log is chosen, **pull only the segment around the reported problem** —
 not the whole file. If the user named a skill/command in step 1, grep the log
 for that to find the relevant lines, then include a window of context around
-them (e.g. ±30 lines). A raw init/health-check dump is noise and should not be
-the default. If the relevant segment can't be found, say so and include the
+them (e.g. ±30 lines). A raw init/health-check dump is noise and must never be
+posted as "the log." If the relevant segment can't be found, say so and include the
 tail of the log instead of the entire file.
 
 ### 3. Scrub the log
@@ -301,9 +306,11 @@ If no log was found or the user skipped it, post a one-line comment
 ## Skipping logs
 
 Logs are included by default, but they are optional. If the user says not to
-include logs (or you judge them irrelevant for the report), skip the log comment
-and note `[skipped by user]` in the Environment section. No flag is needed —
-just ask or note it.
+include logs (or you judge them irrelevant for the report — e.g. an acceptance
+test with no real failure, where every available log is just init noise), skip
+the log comment and note `[skipped by user]` in the Environment section. No flag
+is needed — just ask or note it. Never post an unrelated init/health-check dump
+just to have a log.
 
 ## Safety Rules
 
