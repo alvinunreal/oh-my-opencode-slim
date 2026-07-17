@@ -103,3 +103,6 @@ companion/target/
 .codegraph/
 companion/VIDEOS/
 .worktrees/
+
+# Skill eval artifacts (benchmark outputs, not source)
+src/skills/*/evals/
