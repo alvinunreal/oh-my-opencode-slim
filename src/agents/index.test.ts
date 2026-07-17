@@ -176,21 +176,28 @@ describe('orchestrator agent', () => {
     const agents = createAgents();
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator?.config.permission).toBeDefined();
-    expect((orchestrator?.config.permission as any).question).toBe('allow');
+    expect(
+      (orchestrator as { config: { permission: Record<string, unknown> } })
+        .config.permission.question,
+    ).toBe('allow');
   });
 
   test('orchestrator is denied access to council_session', () => {
     const agents = createAgents();
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect((orchestrator?.config.permission as any).council_session).toBe(
-      'deny',
-    );
+    expect(
+      (orchestrator as { config: { permission: Record<string, unknown> } })
+        .config.permission.council_session,
+    ).toBe('deny');
   });
 
   test('orchestrator is allowed to invoke cancel_task', () => {
     const agents = createAgents();
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect((orchestrator?.config.permission as any).cancel_task).toBe('allow');
+    expect(
+      (orchestrator as { config: { permission: Record<string, unknown> } })
+        .config.permission.cancel_task,
+    ).toBe('allow');
   });
 
   test('orchestrator accepts overrides', () => {
@@ -336,43 +343,64 @@ describe('tool permissions', () => {
       council: councilConfig(),
     });
     const council = agents.find((a) => a.name === 'council');
-    expect((council?.config.permission as any).council_session).toBe('allow');
+    expect(
+      (council as { config: { permission: Record<string, unknown> } }).config
+        .permission.council_session,
+    ).toBe('allow');
   });
 
   test('oracle is denied access to council_session', () => {
     const agents = createAgents();
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect((oracle?.config.permission as any).council_session).toBe('deny');
+    expect(
+      (oracle as { config: { permission: Record<string, unknown> } }).config
+        .permission.council_session,
+    ).toBe('deny');
   });
 
   test('explorer is denied access to council_session', () => {
     const agents = createAgents();
     const explorer = agents.find((a) => a.name === 'explorer');
-    expect((explorer?.config.permission as any).council_session).toBe('deny');
+    expect(
+      (explorer as { config: { permission: Record<string, unknown> } }).config
+        .permission.council_session,
+    ).toBe('deny');
   });
 
   test('councillor is denied access to council_session', () => {
     const agents = createAgents();
     const councillor = agents.find((a) => a.name === 'councillor');
-    expect((councillor?.config.permission as any).council_session).toBe('deny');
+    expect(
+      (councillor as { config: { permission: Record<string, unknown> } }).config
+        .permission.council_session,
+    ).toBe('deny');
   });
 
   test('oracle is denied access to cancel_task', () => {
     const agents = createAgents();
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect((oracle?.config.permission as any).cancel_task).toBe('deny');
+    expect(
+      (oracle as { config: { permission: Record<string, unknown> } }).config
+        .permission.cancel_task,
+    ).toBe('deny');
   });
 
   test('explorer is denied access to cancel_task', () => {
     const agents = createAgents();
     const explorer = agents.find((a) => a.name === 'explorer');
-    expect((explorer?.config.permission as any).cancel_task).toBe('deny');
+    expect(
+      (explorer as { config: { permission: Record<string, unknown> } }).config
+        .permission.cancel_task,
+    ).toBe('deny');
   });
 
   test('fixer is denied access to cancel_task', () => {
     const agents = createAgents();
     const fixer = agents.find((a) => a.name === 'fixer');
-    expect((fixer?.config.permission as any).cancel_task).toBe('deny');
+    expect(
+      (fixer as { config: { permission: Record<string, unknown> } }).config
+        .permission.cancel_task,
+    ).toBe('deny');
   });
 
   test('council agent is read-only except council_session', () => {

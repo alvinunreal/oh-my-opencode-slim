@@ -727,6 +727,25 @@ describe('interview service', () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     });
 
+    test('/interview with no idea and no active interview asks for idea', async () => {
+      const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+      const ctx = createMockContext({ directory: tempDir });
+
+      const service = createInterviewService(ctx);
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+      await service.handleCommandExecuteBefore(
+        { command: 'interview', sessionID: 'fresh-session', arguments: '' },
+        output,
+      );
+
+      expect(output.parts).toHaveLength(1);
+      expect(output.parts[0].text).toContain('Ask them for the product idea');
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
     test('reusing same idea in same session returns existing interview', async () => {
       const tempDir = await fs.mkdtemp('/tmp/interview-test-');
       const ctx = createMockContext({ directory: tempDir });

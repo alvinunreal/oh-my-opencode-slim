@@ -444,7 +444,7 @@ export class CliCmuxClient implements CmuxClient {
   async version(): Promise<string | null> {
     this.versionError = 'unavailable';
     const result = await this.run(['--version']);
-    if (!result || result.exitCode !== 0) {
+    if (result?.exitCode !== 0) {
       this.versionError = 'unavailable';
       return null;
     }
@@ -460,7 +460,7 @@ export class CliCmuxClient implements CmuxClient {
   async identify(): Promise<CmuxIdentity | null> {
     this.identifyError = 'unavailable';
     const result = await this.run(['--id-format', 'uuids', 'identify']);
-    if (!result || result.exitCode !== 0) {
+    if (result?.exitCode !== 0) {
       this.identifyError = 'unavailable';
       return null;
     }
@@ -516,7 +516,7 @@ export class CliCmuxClient implements CmuxClient {
         'false',
       ]),
     );
-    if (!result || result.exitCode !== 0) {
+    if (result?.exitCode !== 0) {
       this.createError = this.lastRunThrew
         ? 'unavailable'
         : classifyCreateError(result?.stderr ?? '');

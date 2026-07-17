@@ -10,17 +10,12 @@ describe('isTruthyEnvValue', () => {
     expect(isTruthyEnvValue(value)).toBe(true);
   });
 
-  test.each([
-    undefined,
-    '',
-    '0',
-    'false',
-    'no',
-    'off',
-    'anything',
-  ])('%p is not truthy', (value) => {
-    expect(isTruthyEnvValue(value)).toBe(false);
-  });
+  test.each([undefined, '', '0', 'false', 'no', 'off', 'anything'])(
+    '%p is not truthy',
+    (value) => {
+      expect(isTruthyEnvValue(value)).toBe(false);
+    },
+  );
 });
 
 describe('isPluginDisabledByEnv', () => {
