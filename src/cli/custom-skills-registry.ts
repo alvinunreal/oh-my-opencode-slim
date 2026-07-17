@@ -70,4 +70,11 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     allowedAgents: ['orchestrator'],
     sourcePath: 'src/skills/worktrees',
   },
+  {
+    name: 'report-issue',
+    description:
+      'File a GitHub issue for oh-my-opencode-slim with environment info and scrubbed logs',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/report-issue',
+  },
 ];

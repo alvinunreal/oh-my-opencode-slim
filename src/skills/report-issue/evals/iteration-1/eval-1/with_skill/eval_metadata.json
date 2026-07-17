@@ -1,0 +1,6 @@
+{
+  "eval_id": 1,
+  "eval_name": "explorer-tmux-hang-bug",
+  "prompt": "Execute this task using the skill at /home/mhenke/Projects/oh-my-opencode-slim/src/skills/report-issue/SKILL.md:\n\nTask: \"something broke when i ran @explorer to search my codebase — it threw an error and the tmux pane just hung. i'm on macos, latest opencode. can you file an issue for me?\"\n\nInput files: none\n\nFollow the skill's instructions exactly. IMPORTANT: this is a test — do NOT actually run `gh issue create`. Stop at the confirmation step (show the drafted issue body and ask the user to approve). Save your full response/output to /home/mhenke/Projects/oh-my-opencode-slim/src/skills/report-issue/evals/iteration-1/eval-1/with_skill/outputs/response.md\n\nAlso save an eval_metadata.json next to it with: eval_id 1, eval_name \"explorer-tmux-hang-bug\", prompt (the task above), assertions [] (empty for now).",
+  "assertions": []
+}

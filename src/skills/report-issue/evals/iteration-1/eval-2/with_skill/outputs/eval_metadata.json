@@ -1,0 +1,6 @@
+{
+  "eval_id": 2,
+  "eval_name": "omos-test-watch-enhancement",
+  "prompt": "Task: \"i want to propose an enhancement: add a --watch flag to the omos-test skill so it reruns tests on file change. open a github issue for oh-my-opencode-slim please.\"\n\nInput files: none\n\nFollow the skill's instructions exactly. IMPORTANT: this is a test — do NOT actually run `gh issue create`. Stop at the confirmation step (show the drafted issue body and ask the user to approve). Save your full response/output to /home/mhenke/Projects/oh-my-opencode-slim/src/skills/report-issue/evals/iteration-1/eval-2/with_skill/outputs/response.md\n\nAlso save an eval_metadata.json next to it with: eval_id 2, eval_name \"omos-test-watch-enhancement\", prompt (the task above), assertions [] (empty for now).",
+  "assertions": []
+}
