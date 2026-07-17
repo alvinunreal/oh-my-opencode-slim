@@ -1,0 +1,37 @@
+{
+  "expectations": [
+    {
+      "text": "Issue is labeled/typed as enhancement, not bug.",
+      "passed": true,
+      "evidence": "Step 1 explicitly confirms type=enhancement; draft uses enhancement format (no Bug label, Desired behavior section); Iron Rule gate references feature-request.yml template."
+    },
+    {
+      "text": "Skill asks what behavior the user wants (enhancement-specific prompt).",
+      "passed": true,
+      "evidence": "User provided desired behavior in first message; Step 1 confirms/restates it; draft includes 'Desired behavior' sub-section per enhancement pattern."
+    },
+    {
+      "text": "Output includes environment info and a plugin log section.",
+      "passed": true,
+      "evidence": "Step 2 collects full environment (OS, OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, Shell /usr/bin/zsh); draft contains Environment table and Plugin Logs <details> with scrubbed log."
+    },
+    {
+      "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+      "passed": true,
+      "evidence": "Step 5 (Iron Rule gate) presents raw markdown draft verbatim, offers explicit Approve/Revise/Deny choices, states 'gh issue create was NOT run'. No gh invocation in output."
+    }
+  ],
+  "overall_pass": true,
+  "notes": [
+    "New iteration-3 workflow followed: issue details finalized first (Step 1) before env/log collection (Step 2). Secrets warning delivered upfront in Step 1, consistent with new workflow requirement.",
+    "Log scrubbed inline per new workflow (no external scrubber script), with PEM tripwire check before embedding.",
+    "Draft written to timestamped temp file (/tmp/omos-issue-<timestamp>.md) instead of fixed path, per new workflow template guidance.",
+    "Iron Rule gate includes truncation advisory and public-repo secrets reminder as required by new workflow."
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 4,
+    "failed": 0,
+    "total": 4
+  }
+}

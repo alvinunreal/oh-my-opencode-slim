@@ -1,0 +1,23 @@
+{
+  "eval_id": 2,
+  "eval_name": "omos-test-watch-enhancement",
+  "prompt": "i want to propose an enhancement: add a --watch flag to the omos-test skill so it reruns tests on file change. open a github issue for oh-my-opencode-slim please.",
+  "assertions": [
+    {
+      "name": "labels_enhancement",
+      "description": "Issue is labeled/typed as enhancement, not bug."
+    },
+    {
+      "name": "asks_desired_behavior",
+      "description": "Skill asks what behavior the user wants (enhancement-specific prompt)."
+    },
+    {
+      "name": "collects_env_and_logs",
+      "description": "Output includes environment info and a plugin log section."
+    },
+    {
+      "name": "asks_confirm_before_submit",
+      "description": "Stops and asks user to approve the draft; does NOT run gh issue create."
+    }
+  ]
+}

@@ -1,0 +1,359 @@
+{
+  "metadata": {
+    "skill_name": "report-issue",
+    "skill_path": "src/skills/report-issue/SKILL.md",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-07-17T14:15:08Z",
+    "evals_run": [1, 2, 3],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 11,
+        "failed": 0,
+        "total": 11,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Issue gathered BEFORE environment and logs (new ordering requirement).",
+          "passed": true,
+          "evidence": "Step 1 (Gather issue) appears before Step 2 (Collect environment and log). Issue title, type, description, and skill confirmed first, then env+log collected."
+        },
+        {
+          "text": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell.",
+          "passed": true,
+          "evidence": "Step 2 collected OS (Linux runtime; macOS noted), OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, shell /usr/bin/zsh \u2014 all populated in draft Environment section."
+        },
+        {
+          "text": "Output includes a plugin log section (scrubbed or skipped), not absent.",
+          "passed": true,
+          "evidence": "Plugin Logs <details> block present in draft with scrubbed tail (45 lines, home-directory paths redacted to ~). PEM tripwire check performed first (negative)."
+        },
+        {
+          "text": "Iron Rule gate offers exactly Approve/Revise/Deny (not Approve/Edit/Cancel).",
+          "passed": true,
+          "evidence": "Step 5 lists three options: Approve, Revise, Deny \u2014 matching the new skill's gate wording. No mention of 'Edit' or 'Cancel'."
+        },
+        {
+          "text": "No gh issue create shown as pending command; gh only mentioned as conditional on Approve.",
+          "passed": true,
+          "evidence": "No 'will run: gh issue create ...' line present. The only gh reference is 'I'll publish the issue to GitHub using gh issue create' under the Approve option description \u2014 not as a pending command. The Iron Rule statement 'gh will not run unless you pick Approve' reinforces this."
+        },
+        {
+          "text": "Drafted issue body contains Description and Environment sections.",
+          "passed": true,
+          "evidence": "Draft has ## Description (with repro steps, expected/actual behavior), ## Skill / Command, ## Environment, and ## Plugin Logs (scrubbed) sections \u2014 matching the template."
+        },
+        {
+          "text": "No gh issue create was actually run (test guard).",
+          "passed": true,
+          "evidence": "gh is never invoked in the response. The response stops at the confirmation gate. Draft saved to /tmp/omos-issue-20260717.md."
+        },
+        {
+          "text": "Draft written to unique temp file path (not a fixed /tmp/omos-issue.md).",
+          "passed": true,
+          "evidence": "Draft saved to /tmp/omos-issue-20260717.md \u2014 includes date timestamp, avoiding clobbering prior drafts."
+        },
+        {
+          "text": "PEM tripwire check performed before log embedding.",
+          "passed": true,
+          "evidence": "Step 2 includes 'PEM tripwire check: No -----BEGIN ... PRIVATE KEY----- found. Safe to proceed.' and Step 3 scrub table shows 'PEM private key: No'."
+        },
+        {
+          "text": "Truncation at line boundaries with explicit notice.",
+          "passed": true,
+          "evidence": "Truncation message in Step 3 ('Keeping last 45 lines at line boundaries'), truncation notice appended to log block ('... [truncated \u2014 review may be incomplete...]'), and public-repo warning in Step 5 gate."
+        },
+        {
+          "text": "Secrets warning given to user upfront before description input.",
+          "passed": true,
+          "evidence": "Step 1 includes: 'Do not paste API keys, tokens, or passwords into the description \u2014 I'll scrub the plugin log but can't scrub free-text. The issue is filed on a public repo.'"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Issue is labeled/typed as enhancement, not bug.",
+          "passed": true,
+          "evidence": "Step 1 explicitly confirms type=enhancement; draft uses enhancement format (no Bug label, Desired behavior section); Iron Rule gate references feature-request.yml template."
+        },
+        {
+          "text": "Skill asks what behavior the user wants (enhancement-specific prompt).",
+          "passed": true,
+          "evidence": "User provided desired behavior in first message; Step 1 confirms/restates it; draft includes 'Desired behavior' sub-section per enhancement pattern."
+        },
+        {
+          "text": "Output includes environment info and a plugin log section.",
+          "passed": true,
+          "evidence": "Step 2 collects full environment (OS, OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, Shell /usr/bin/zsh); draft contains Environment table and Plugin Logs <details> with scrubbed log."
+        },
+        {
+          "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+          "passed": true,
+          "evidence": "Step 5 (Iron Rule gate) presents raw markdown draft verbatim, offers explicit Approve/Revise/Deny choices, states 'gh issue create was NOT run'. No gh invocation in output."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 10,
+        "failed": 0,
+        "total": 10,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Issue gathered FIRST \u2014 description collected before touching logs or environment.",
+          "passed": true,
+          "evidence": "Step 1 extracts description, infers title/type, and delivers security warning. Steps 2+ (env, log) follow afterward. Explicitly labeled 'do this FIRST \u2014 description before logs'."
+        },
+        {
+          "text": "Single-shot: does not stall by asking user for title or type \u2014 infers from the bug description.",
+          "passed": true,
+          "evidence": "Title inferred from description: 'Council tool returns garbage output; API key leaks into plugin log via pasted curl command'. Type inferred: 'bug' (from user saying 'report a bug'). No clarifying follow-up questions asked. Section notes 'No clarifying follow-up needed' and 'Inferred (single-shot \u2014 no stall)'."
+        },
+        {
+          "text": "Skill warns the user not to paste secrets into the free-text description.",
+          "passed": true,
+          "evidence": "Security warning delivered in Step 1: 'Do not paste API keys, tokens, or passwords into the description above. The log scrubber only protects the plugin log, not free text. This issue will be filed on a public repo'. Also includes relative path advice."
+        },
+        {
+          "text": "If a log with ANTHROPIC_API_KEY is shown, the key value is redacted (no raw sk-/long key string visible).",
+          "passed": true,
+          "evidence": "Scrubber redacted ANTHROPIC_API_KEY=sk-ant-api03-abc123def456ghi789jkl000mno111pqr222stu333vwx444yz to ANTHROPIC_API_KEY=<REDACTED:SECRET>. Raw value absent from draft log block."
+        },
+        {
+          "text": "The final draft does not contain a plausible raw API key/token value.",
+          "passed": true,
+          "evidence": "No raw sk-ant-... or any other API key string present anywhere in the draft body or log section. Scrubber verification explicitly confirms."
+        },
+        {
+          "text": "Iron Rule gate presented with Approve / Revise / Deny options.",
+          "passed": true,
+          "evidence": "Step 5 titled 'The Iron Rule gate (Approve / Revise / Deny)'. Three explicit choices listed: Approve (publish via gh), Revise (re-draft), Deny (discard). Reminder that gh is NOT run."
+        },
+        {
+          "text": "gh is NOT run \u2014 no submit, no silent gh call, no 'just creating it now'.",
+          "passed": true,
+          "evidence": "Step 5 ends with '(gh is NOT run at this point. Waiting for your explicit instruction.)'. No gh commands executed or implied anywhere in the response."
+        },
+        {
+          "text": "Draft written to a unique temp file (not a fixed path that overwrites).",
+          "passed": true,
+          "evidence": "Draft written to /tmp/omos-issue-1727796502.md (timestamp-suffixed unique path). Comment: 'unique timestamp to avoid clobbering prior drafts'."
+        },
+        {
+          "text": "PEM tripwire check performed before log embedding.",
+          "passed": true,
+          "evidence": "Step 3: 'PEM tripwire check: PASS \u2014 no -----BEGIN.*PRIVATE KEY----- found.' Performed before any log content is embedded."
+        },
+        {
+          "text": "Log segment focused on the council tool (relevant to the report), not a full log dump.",
+          "passed": true,
+          "evidence": "Step 2b: 'scanning log for council invocations', 'Extracted ~180 lines from the log segment around the council invocation'. Log segment is relevant and targeted."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.6,
+        "passed": 0,
+        "failed": 0,
+        "total": 0,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell.",
+          "passed": false,
+          "evidence": "Environment left as TBD placeholders; agent did not actually collect."
+        },
+        {
+          "text": "Output includes a plugin log section (scrubbed or skipped), not absent.",
+          "passed": false,
+          "evidence": "Log section says '[no plugin log available in this eval environment]' \u2014 not collected."
+        },
+        {
+          "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+          "passed": true,
+          "evidence": "Stopped before submit; noted no gh run."
+        },
+        {
+          "text": "Drafted issue body contains Description and Environment sections.",
+          "passed": true,
+          "evidence": "Has Description and Environment sections (with placeholders)."
+        },
+        {
+          "text": "No gh issue create was actually run (test guard).",
+          "passed": true,
+          "evidence": "No gh invoked."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 0,
+        "failed": 0,
+        "total": 0,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Issue is labeled/typed as enhancement, not bug.",
+          "passed": true,
+          "evidence": "Labeled enhancement."
+        },
+        {
+          "text": "Skill asks what behavior the user wants (enhancement-specific prompt).",
+          "passed": false,
+          "evidence": "Drafted directly without asking for desired behavior; no enhancement-specific prompt shown."
+        },
+        {
+          "text": "Output includes environment info and a plugin log section.",
+          "passed": true,
+          "evidence": "Environment present; log section present."
+        },
+        {
+          "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+          "passed": true,
+          "evidence": "Stopped before submit."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.5,
+        "passed": 0,
+        "failed": 0,
+        "total": 0,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Skill warns the user not to paste secrets into the free-text description.",
+          "passed": false,
+          "evidence": "No upfront secret warning; dove into source reading instead."
+        },
+        {
+          "text": "If a log with ANTHROPIC_API_KEY is shown, the key value is redacted (no raw sk-/long key string visible).",
+          "passed": false,
+          "evidence": "No log embedded; drafted issue describing the leak with file paths, no redaction applied."
+        },
+        {
+          "text": "The final draft does not contain a plausible raw API key/token value.",
+          "passed": true,
+          "evidence": "No raw key in the draft body."
+        },
+        {
+          "text": "Stops and asks user to approve the draft; does NOT run gh issue create.",
+          "passed": true,
+          "evidence": "Stopped before submit."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.6167,
+        "stddev": 0.1258,
+        "min": 0.5,
+        "max": 0.75
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.38",
+      "time_seconds": "+0.0",
+      "tokens": "+0"
+    }
+  },
+  "notes": []
+}

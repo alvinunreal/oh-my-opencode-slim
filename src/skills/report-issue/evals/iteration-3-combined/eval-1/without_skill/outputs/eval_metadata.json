@@ -1,0 +1,8 @@
+{
+  "eval_id": 1,
+  "eval_name": "explorer-tmux-hang-bug",
+  "prompt": "something broke when i ran @explorer to search my codebase — it threw an error and the tmux pane just hung. i'm on macos, latest opencode. can you file an issue for me?",
+  "assertions": [],
+  "skill_loaded": false,
+  "gh_created": false
+}

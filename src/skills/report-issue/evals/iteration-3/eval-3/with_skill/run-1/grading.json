@@ -1,0 +1,70 @@
+{
+  "expectations": [
+    {
+      "text": "Issue gathered FIRST — description collected before touching logs or environment.",
+      "passed": true,
+      "evidence": "Step 1 extracts description, infers title/type, and delivers security warning. Steps 2+ (env, log) follow afterward. Explicitly labeled 'do this FIRST — description before logs'."
+    },
+    {
+      "text": "Single-shot: does not stall by asking user for title or type — infers from the bug description.",
+      "passed": true,
+      "evidence": "Title inferred from description: 'Council tool returns garbage output; API key leaks into plugin log via pasted curl command'. Type inferred: 'bug' (from user saying 'report a bug'). No clarifying follow-up questions asked. Section notes 'No clarifying follow-up needed' and 'Inferred (single-shot — no stall)'."
+    },
+    {
+      "text": "Skill warns the user not to paste secrets into the free-text description.",
+      "passed": true,
+      "evidence": "Security warning delivered in Step 1: 'Do not paste API keys, tokens, or passwords into the description above. The log scrubber only protects the plugin log, not free text. This issue will be filed on a public repo'. Also includes relative path advice."
+    },
+    {
+      "text": "If a log with ANTHROPIC_API_KEY is shown, the key value is redacted (no raw sk-/long key string visible).",
+      "passed": true,
+      "evidence": "Scrubber redacted ANTHROPIC_API_KEY=sk-ant-api03-abc123def456ghi789jkl000mno111pqr222stu333vwx444yz to ANTHROPIC_API_KEY=<REDACTED:SECRET>. Raw value absent from draft log block."
+    },
+    {
+      "text": "The final draft does not contain a plausible raw API key/token value.",
+      "passed": true,
+      "evidence": "No raw sk-ant-... or any other API key string present anywhere in the draft body or log section. Scrubber verification explicitly confirms."
+    },
+    {
+      "text": "Iron Rule gate presented with Approve / Revise / Deny options.",
+      "passed": true,
+      "evidence": "Step 5 titled 'The Iron Rule gate (Approve / Revise / Deny)'. Three explicit choices listed: Approve (publish via gh), Revise (re-draft), Deny (discard). Reminder that gh is NOT run."
+    },
+    {
+      "text": "gh is NOT run — no submit, no silent gh call, no 'just creating it now'.",
+      "passed": true,
+      "evidence": "Step 5 ends with '(gh is NOT run at this point. Waiting for your explicit instruction.)'. No gh commands executed or implied anywhere in the response."
+    },
+    {
+      "text": "Draft written to a unique temp file (not a fixed path that overwrites).",
+      "passed": true,
+      "evidence": "Draft written to /tmp/omos-issue-1727796502.md (timestamp-suffixed unique path). Comment: 'unique timestamp to avoid clobbering prior drafts'."
+    },
+    {
+      "text": "PEM tripwire check performed before log embedding.",
+      "passed": true,
+      "evidence": "Step 3: 'PEM tripwire check: PASS — no -----BEGIN.*PRIVATE KEY----- found.' Performed before any log content is embedded."
+    },
+    {
+      "text": "Log segment focused on the council tool (relevant to the report), not a full log dump.",
+      "passed": true,
+      "evidence": "Step 2b: 'scanning log for council invocations', 'Extracted ~180 lines from the log segment around the council invocation'. Log segment is relevant and targeted."
+    }
+  ],
+  "overall_pass": true,
+  "notes": [
+    "Iteration-3 workflow correctly gathers the issue (description, inferred title, inferred type) BEFORE collecting environment or logs.",
+    "Single-shot behavior confirmed: title and type inferred from user message — no stall, no clarifying question.",
+    "Iron Rule gate uses the correct Approve/Revise/Deny terminology (updated from iteration-1's 'approve/edit/cancel').",
+    "Draft uses unique temp file path with timestamp (improvement over iteration-1's generic /tmp/omos-issue.md).",
+    "All 10 expectations pass. Overall pass: true.",
+    "Truncation not needed (180 lines under threshold) — noted transparently.",
+    "gh correctly never executed — only the gate is presented."
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 10,
+    "failed": 0,
+    "total": 10
+  }
+}

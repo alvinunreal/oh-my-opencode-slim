@@ -1,0 +1,74 @@
+{
+  "expectations": [
+    {
+      "text": "Issue gathered BEFORE environment and logs (new ordering requirement).",
+      "passed": true,
+      "evidence": "Step 1 (Gather issue) appears before Step 2 (Collect environment and log). Issue title, type, description, and skill confirmed first, then env+log collected."
+    },
+    {
+      "text": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell.",
+      "passed": true,
+      "evidence": "Step 2 collected OS (Linux runtime; macOS noted), OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, shell /usr/bin/zsh — all populated in draft Environment section."
+    },
+    {
+      "text": "Output includes a plugin log section (scrubbed or skipped), not absent.",
+      "passed": true,
+      "evidence": "Plugin Logs <details> block present in draft with scrubbed tail (45 lines, home-directory paths redacted to ~). PEM tripwire check performed first (negative)."
+    },
+    {
+      "text": "Iron Rule gate offers exactly Approve/Revise/Deny (not Approve/Edit/Cancel).",
+      "passed": true,
+      "evidence": "Step 5 lists three options: Approve, Revise, Deny — matching the new skill's gate wording. No mention of 'Edit' or 'Cancel'."
+    },
+    {
+      "text": "No gh issue create shown as pending command; gh only mentioned as conditional on Approve.",
+      "passed": true,
+      "evidence": "No 'will run: gh issue create ...' line present. The only gh reference is 'I'll publish the issue to GitHub using gh issue create' under the Approve option description — not as a pending command. The Iron Rule statement 'gh will not run unless you pick Approve' reinforces this."
+    },
+    {
+      "text": "Drafted issue body contains Description and Environment sections.",
+      "passed": true,
+      "evidence": "Draft has ## Description (with repro steps, expected/actual behavior), ## Skill / Command, ## Environment, and ## Plugin Logs (scrubbed) sections — matching the template."
+    },
+    {
+      "text": "No gh issue create was actually run (test guard).",
+      "passed": true,
+      "evidence": "gh is never invoked in the response. The response stops at the confirmation gate. Draft saved to /tmp/omos-issue-20260717.md."
+    },
+    {
+      "text": "Draft written to unique temp file path (not a fixed /tmp/omos-issue.md).",
+      "passed": true,
+      "evidence": "Draft saved to /tmp/omos-issue-20260717.md — includes date timestamp, avoiding clobbering prior drafts."
+    },
+    {
+      "text": "PEM tripwire check performed before log embedding.",
+      "passed": true,
+      "evidence": "Step 2 includes 'PEM tripwire check: No -----BEGIN ... PRIVATE KEY----- found. Safe to proceed.' and Step 3 scrub table shows 'PEM private key: No'."
+    },
+    {
+      "text": "Truncation at line boundaries with explicit notice.",
+      "passed": true,
+      "evidence": "Truncation message in Step 3 ('Keeping last 45 lines at line boundaries'), truncation notice appended to log block ('... [truncated — review may be incomplete...]'), and public-repo warning in Step 5 gate."
+    },
+    {
+      "text": "Secrets warning given to user upfront before description input.",
+      "passed": true,
+      "evidence": "Step 1 includes: 'Do not paste API keys, tokens, or passwords into the description — I'll scrub the plugin log but can't scrub free-text. The issue is filed on a public repo.'"
+    }
+  ],
+  "overall_pass": true,
+  "notes": [
+    "Iteration-3 ordering: issue gathered FIRST (Step 1), env+log second (Step 2) — matches the new workflow requiring issue clarity before context collection.",
+    "Iron Rule gate uses correct Approve/Revise/Deny terminology per the updated skill. No 'Edit' or 'Cancel' labels.",
+    "gh never appears as a pending command ('will run: ...'). The only gh reference is conditional within the Approve option description.",
+    "Temp file uses unique name with timestamp (/tmp/omos-issue-20260717.md) per the skill's requirement.",
+    "Runtime env (Linux) differs from user-reported (macOS); discrepancy noted in draft with instruction for user to verify.",
+    "Log truncation applied at line boundaries (45 lines) with truncation notice — per skill guidelines."
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 11,
+    "failed": 0,
+    "total": 11
+  }
+}
