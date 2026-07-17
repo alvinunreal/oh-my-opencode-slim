@@ -25,9 +25,26 @@ draft. That confirm step is the safety net — do not skip it.
 
 ## Workflow
 
-### 1. Gather user input
+Start the collection work immediately — gather environment and plugin logs
+**before** or alongside asking the user for details. This way the draft (and
+secret redaction) is always reached even in a single-shot turn, and you are not
+blocked waiting on the user's title.
 
-Ask for three things (one message, can be combined if the user volunteers them):
+### 1. Collect environment and logs (do this first)
+
+Gather the environment yourself — OS, OpenCode version, this plugin's version,
+Node/Bun versions, and the shell. Run whatever command fits the platform; if a
+value is unavailable, record `unknown` rather than failing.
+
+Locate the most recent plugin log. The directory is `$OPENCODE_LOG_DIR` if set,
+otherwise `~/.local/share/opencode/log` (macOS/Linux) or
+`%USERPROFILE%\.local\share\opencode\log` (Windows). Pick the newest
+`oh-my-opencode-slim.*.log`. If none exists, note `[no plugin log found]`.
+
+### 2. Gather user input
+
+Ask for what you still need (one message; the user may have already volunteered
+some of it):
 
 - **Title** — short, specific, actionable summary (under ~72 chars). No need
   for a `[Bug]`/`[Feature]` prefix; the type label carries that.
@@ -43,20 +60,7 @@ description.** The scrubber only protects the plugin log, not free text. Also
 warn that the issue is filed on a **public** repo, so review the draft for
 secrets before approving.
 
-### 2. Collect environment
-
-Gather the environment yourself — OS, OpenCode version, this plugin's version,
-Node/Bun versions, and the shell. Run whatever command fits the platform; if a
-value is unavailable, record `unknown` rather than failing.
-
-### 3. Collect plugin logs
-
-Locate the most recent plugin log. The directory is `$OPENCODE_LOG_DIR` if set,
-otherwise `~/.local/share/opencode/log` (macOS/Linux) or
-`%USERPROFILE%\.local\share\opencode\log` (Windows). Pick the newest
-`oh-my-opencode-slim.*.log`. If none exists, note `[no plugin log found]`.
-
-### 4. Scrub the log
+### 3. Scrub the log
 
 You are an AI model — redact secrets by reading the log and applying judgment.
 Do **not** run a regex script; redact inline as you prepare the draft. This
@@ -77,7 +81,7 @@ paraphrase or summarize the log — embed it verbatim after redaction
 (paraphrasing bypasses redaction). When in doubt, redact; the user reviews the
 draft before submit, but you are the first line of defense.
 
-### 5. Draft the issue body
+### 4. Draft the issue body
 
 Write the draft to a temp file (e.g. `/tmp/omos-issue.md`) using this template:
 
@@ -120,14 +124,14 @@ hundred lines is plenty for a bug report) and append
 cut at line boundaries — never split a line in half, since that can split a
 secret mid-token.
 
-### 6. Confirm
+### 5. Confirm
 
 Show the **raw** draft to the user (verbatim markdown, not a rendered preview).
 State explicitly if truncation happened, and remind them the issue is filed on
 a **public** repo — review for any secrets before approving. Ask the user to
 approve, edit, or cancel. Do not run `gh` until they approve.
 
-### 7. Submit
+### 6. Submit
 
 If `gh` is available and the user approved:
 
