@@ -1494,6 +1494,69 @@ describe('task-session-manager hook', () => {
     });
   });
 
+  test('non-retryable session.error marks running job as error on board', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'UnknownError',
+            message: 'LLM proxy connection refused',
+          },
+        },
+      },
+    });
+
+    const job = board.get('child-1');
+    expect(job?.state).toBe('error');
+    expect(job?.resultSummary).toBe('LLM proxy connection refused');
+  });
+
+  test('session.idle does not overwrite error state with completed', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'review plan',
+    });
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'error',
+      resultSummary: 'connection refused',
+    });
+
+    const messages = createMessages('parent-1', 'continue');
+    await hook['experimental.chat.messages.transform']({}, messages);
+
+    await hook.event({
+      event: {
+        type: 'session.idle',
+        properties: {
+          info: { id: 'child-1', parentID: 'parent-1' },
+        },
+      },
+    });
+
+    const job = board.get('child-1');
+    expect(job?.state).toBe('error');
+    expect(job?.resultSummary).toBe('connection refused');
+  });
+
   test('completed reconciled job appears reusable and resumes via task', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });

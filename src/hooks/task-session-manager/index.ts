@@ -1048,6 +1048,18 @@ export function createTaskSessionManagerHook(
             | undefined;
           if (!props?.error || !isFailoverError(props.error)) {
             terminalJobsInjectedByParent.delete(sessionId);
+            // Record non-retryable errors on the job board so the
+            // orchestrator sees the failure instead of a false completion.
+            const job = backgroundJobBoard.get(sessionId);
+            if (job) {
+              backgroundJobBoard.updateStatus({
+                taskID: sessionId,
+                state: 'error',
+                resultSummary:
+                  (props?.error as { message?: string } | undefined)?.message ??
+                  'Session error',
+              });
+            }
           }
         }
 
