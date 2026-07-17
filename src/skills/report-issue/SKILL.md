@@ -67,46 +67,49 @@ LOG_DIR="${OPENCODE_LOG_DIR:-$HOME/.local/share/opencode/log}"
 LOG_FILE=$(ls -t "$LOG_DIR"/oh-my-opencode-slim.*.log 2>/dev/null | head -n1)
 ```
 
-- If no log file exists, set logs to `[no plugin log found]` and continue.
-- Tail the last 500 lines: `tail -n 500 "$LOG_FILE"`.
-
 Windows path note: on Windows the default is
 `%USERPROFILE%\.local\share\opencode\log`. This skill targets macOS/Linux; if
 the user is on Windows and `OPENCODE_LOG_DIR` is unset, ask them for the path.
 
 ### 4. Scrub the log
 
-Run the tail through a single-pass scrubber. Use `bun -e` so no extra file is
-needed:
+You are an AI model — redact secrets by reading the tailed log and applying the
+checklist below. Do **not** rely on a regex script; redact inline as you prepare
+the draft. This avoids brittle escaping and lets you catch shapes regex misses.
+
+First read the tail:
 
 ```bash
-tail -n 500 "$LOG_FILE" | bun -e '
-const lines = require("node:fs").readFileSync(0,"utf8").split("\n");
-const home = require("node:os").homedir();
-const rules = [
-  [/(sk-[A-Za-z0-9]{20,})/g, "<REDACTED:OPENAI_KEY>"],
-  [/(xai-[A-Za-z0-9]{20,})/g, "<REDACTED:XAI_KEY>"],
-  [/(exa[A-Za-z0-9_-]*key[=:]\s*["'"'"']?[A-Za-z0-9_-]{12,})/gi, "exaApiKey=<REDACTED:EXA_KEY>"],
-  [/(Bearer\s+[A-Za-z0-9._-]{12,})/g, "Bearer <REDACTED:TOKEN>"],
-  [/(?:[\?&](?:token|access_token|auth)=)([A-Za-z0-9._-]{12,})/gi, "$1=<REDACTED:URL_TOKEN>"],
-  [/(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/g, "<REDACTED:JWT>"],
-  [/(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|amqp):\/\/[^\s"'"]+/gi, "<REDACTED:DB_CONNSTR>"],
-  [/(?:ANTHROPIC_API_KEY|OPENAI_API_KEY|XAI_API_KEY|GITHUB_TOKEN|AWS_[A-Z_]+|[^A-Za-z]SECRET|[^A-Za-z]TOKEN|[^A-Za-z]KEY)\s*=\s*["'"'"']?[A-Za-z0-9\/+._-]{12,}/g, "$1=<REDACTED:SECRET>"],
-  [/(?:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, "<REDACTED:EMAIL>"],
-  [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<REDACTED:IP>"],
-  [/\b(?:(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4})\b/g, "<REDACTED:IPV6>"],
-];
-let out = lines.map(l => rules.reduce((s,[re,rep]) => s.replace(re,rep), l));
-// home dir redaction (covers expanded paths the $HOME pattern misses)
-if (home) out = out.map(l => l.split(home).join("~"));
-process.stdout.write(out.join("\n"));
-'
+if [ -z "$LOG_FILE" ]; then
+  echo "[no plugin log found]"
+else
+  tail -n 500 "$LOG_FILE"
+fi
 ```
 
-**PEM tripwire (run before scrubbing):** if the raw tail contains
-`-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`, do **not**
-embed the log. Tell the user a private key was detected, refuse to include the
-log, and continue with `Logs: [skipped — private key detected in log]`.
+**PEM tripwire (check first):** If the log contains
+`-----BEGIN ... PRIVATE KEY-----` (any variant: RSA, EC, DSA, OPENSSH,
+ENCRYPTED), do **not** embed the log. Tell the user a private key was detected,
+refuse to include it, and use `Logs: [skipped — private key detected in log]`.
+
+Otherwise, redact these from the log before embedding. Replace the value with
+the marker shown — never paraphrase or summarize the log (paraphrasing bypasses
+redaction):
+
+- API keys: `sk-…`, `xai-…`, `exaApiKey=…` → `<REDACTED:API_KEY>`
+- Bearer / session tokens, and `?token=` / `?access_token=` / `?auth=` URL
+  params → `<REDACTED:TOKEN>`
+- JWTs (`eyJ… . … . …`) → `<REDACTED:JWT>`
+- DB connection strings (`mongodb://`, `postgres://`, `redis://`, etc.) →
+  `<REDACTED:DB_CONNSTR>`
+- Explicit secret env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`,
+  `GITHUB_TOKEN`, `AWS_*` → `<REDACTED:SECRET>`
+- Absolute paths containing the user's home directory → replace with `~`
+- Any other credential-shaped value you recognize (long base64/hex strings in
+  auth contexts, passwords, tokens) → `<REDACTED:SECRET>`
+
+When in doubt, redact. The user reviews the draft before submit, but the model
+is the first line of defense.
 
 ### 5. Draft the issue body
 
@@ -178,10 +181,12 @@ gh issue create \
   the full draft and tell the user to paste it at
   `https://github.com/alvinunreal/oh-my-opencode-slim/issues/new`.
 
-## Flags
+## Skipping logs
 
-- `--no-logs` — skip log collection; the details block shows
-  `Logs: [skipped by user]`.
+Logs are included by default, but they are optional. If the user says not to
+include logs (or you judge them irrelevant for the report), put
+`Logs: [skipped by user]` in the details block instead of log content. No flag
+is needed — just ask or note it.
 
 ## Safety Rules
 
