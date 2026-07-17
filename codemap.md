@@ -53,6 +53,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
 | `src/skills/clonedeps/` | Workflow-only dependency source mirroring skill that routes discovery/ref resolution through librarian and direct orchestrator git operations. | [View Map](src/skills/clonedeps/codemap.md) |
 | `src/skills/simplify/` | Behavior-preserving simplification skill package. | [View Map](src/skills/simplify/codemap.md) |
+| `src/skills/report-issue/` | Files a GitHub issue for this plugin with environment info and model-scrubbed logs. | [View Map](src/skills/report-issue/SKILL.md) |
 | `src/tools/` | Tool and runtime-command export surface for AST-grep, smartfetch, council orchestration, and `/preset` switching. | [View Map](src/tools/codemap.md) |
 | `src/tools/ast-grep/` | AST-grep binary management and AST-aware search/replace tool flow. | [View Map](src/tools/ast-grep/codemap.md) |
 | `src/tools/smartfetch/` | Fetch/extract/cache pipeline for web content and secondary-model summarization. | [View Map](src/tools/smartfetch/codemap.md) |
