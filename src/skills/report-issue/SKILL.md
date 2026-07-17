@@ -31,7 +31,7 @@ in a single shot (the user's first message is usually the description).
 
 ### 1. Finalize the issue details (do this first)
 
-Get these four fields settled **before** moving on to logs — they shape the
+Get these five fields settled **before** moving on to logs — they shape the
 whole draft and tell you which log lines matter:
 
 - **Description** — what happened and reproduction steps. For a `bug`, also ask
@@ -51,7 +51,7 @@ Do not proceed to log collection until these are finalized. **Never assume any
 of the five** — if a field is missing or ambiguous, ask for that one field
 specifically (one question at a time), and wait for the answer before asking the
 next. Do not invent a title, guess a type, or infer a description from context.
-Only once all four are explicitly confirmed by the user do you move to logs.
+Only once all five are explicitly confirmed by the user do you move to logs.
 
 Tell the user up front: **do not paste API keys, tokens, or passwords into the
 description.** The scrubber only protects the plugin log, not free text. Also
@@ -168,9 +168,10 @@ Rules for this gate:
 
 ### 6. Submit (only after explicit Approve)
 
-This repo uses GitHub **issue forms** (`.github/ISSUE_TEMPLATE/bug-report.yml`
-and `feature-request.yml`), and blank issues are disabled. So file through the
-form template, not a free-form body — a plain `--body` is rejected.
+This repo provides GitHub **issue forms** (`.github/ISSUE_TEMPLATE/bug-report.yml`
+and `feature-request.yml`). We file with `--body-file` (no `--template`) so the
+label carries the categorization; a plain `--body` works via the API but the
+form-based path keeps the issue consistent with the repo's templates.
 
 Check `gh auth status` first. If not authenticated, do **not** attempt the
 create — tell the user to run `gh auth login` (or paste the draft manually at

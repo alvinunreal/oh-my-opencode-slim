@@ -6,8 +6,8 @@ const COMMAND_NAME = 'report-issue';
 function activationPrompt(text: string): string {
   return [
     'The user ran `/report-issue`. Follow the `report-issue` skill',
-    'instructions (gather environment + plugin logs first, scrub secrets,',
-    'draft, confirm before submitting).',
+    'instructions (finalize issue details first, then collect environment +',
+    'relevant plugin log, scrub secrets, draft, confirm before submitting).',
     '',
     `User's request: ${text}`,
   ].join('\n');
