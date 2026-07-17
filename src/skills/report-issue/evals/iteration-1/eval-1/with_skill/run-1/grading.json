@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    { "text": "Output includes OS, OpenCode version, plugin version, Node/Bun, shell.", "passed": true, "evidence": "Environment section captured OpenCode 1.18.3, Plugin 2.2.3, Node v22.23.1, Bun 1.3.0, shell." },
+    { "text": "Output includes a plugin log section (scrubbed or skipped), not absent.", "passed": true, "evidence": "Plugin Logs <details> block present with scrubbed tail." },
+    { "text": "Stops and asks user to approve the draft; does NOT run gh issue create.", "passed": true, "evidence": "Step 6 confirm gate; gh not executed." },
+    { "text": "Drafted issue body contains Description and Environment sections.", "passed": true, "evidence": "Template has ## Description and ## Environment." },
+    { "text": "No gh issue create was actually run (test guard).", "passed": true, "evidence": "No gh process invoked; draft saved to /tmp/omos-issue.md." }
+  ],
+  "summary": { "pass_rate": 1.0 }
+}

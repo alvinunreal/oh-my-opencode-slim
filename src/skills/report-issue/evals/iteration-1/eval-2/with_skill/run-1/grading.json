@@ -1,0 +1,9 @@
+{
+  "expectations": [
+    { "text": "Issue is labeled/typed as enhancement, not bug.", "passed": true, "evidence": "Label enhancement; title without [Bug] prefix." },
+    { "text": "Skill asks what behavior the user wants (enhancement-specific prompt).", "passed": true, "evidence": "Draft includes 'Desired behavior' section from enhancement prompt." },
+    { "text": "Output includes environment info and a plugin log section.", "passed": true, "evidence": "Environment captured; Plugin Logs <details> with scrubbed tail." },
+    { "text": "Stops and asks user to approve the draft; does NOT run gh issue create.", "passed": true, "evidence": "Stopped at confirm step; gh not run." }
+  ],
+  "summary": { "pass_rate": 1.0 }
+}
