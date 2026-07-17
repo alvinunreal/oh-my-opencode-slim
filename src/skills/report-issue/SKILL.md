@@ -58,7 +58,8 @@ some of it):
 Tell the user up front: **do not paste API keys, tokens, or passwords into the
 description.** The scrubber only protects the plugin log, not free text. Also
 warn that the issue is filed on a **public** repo, so review the draft for
-secrets before approving.
+secrets before approving. Likewise avoid absolute file paths (e.g.
+`/Users/john/...`) in the description — use relative paths or `~`.
 
 ### 3. Scrub the log
 
@@ -83,7 +84,8 @@ draft before submit, but you are the first line of defense.
 
 ### 4. Draft the issue body
 
-Write the draft to a temp file (e.g. `/tmp/omos-issue.md`) using this template:
+Write the draft to a unique temp file (e.g. `/tmp/omos-issue-$(date +%s).md`)
+to avoid clobbering a prior draft, using this template:
 
 ```markdown
 ## Description
@@ -135,12 +137,16 @@ approve, edit, or cancel. Do not run `gh` until they approve.
 
 If `gh` is available and the user approved:
 
+Check `gh auth status` first. If not authenticated, tell the user to run
+`gh auth login` (or paste the draft manually at the URL below) — do not attempt
+the create.
+
 ```bash
 gh issue create \
   --repo alvinunreal/oh-my-opencode-slim \
   --title "<title>" \
   --label "<type>" \
-  --body-file /tmp/omos-issue.md
+  --body-file /tmp/omos-issue-$(date +%s).md
 ```
 
 - `<type>` is `bug` or `enhancement` from step 1; the label carries the
