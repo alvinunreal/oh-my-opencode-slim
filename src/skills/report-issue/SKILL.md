@@ -42,9 +42,13 @@ whole draft and tell you which log lines matter:
 - **Type** — `bug` or `enhancement`.
 - **Skill/command** — which omos agent, skill, or command was in use when it
   broke (helps triage; optional).
+- **Screenshots** — ask if the user has any screenshots (error UI, terminal
+  output, behavior). `gh` cannot attach files, so if they have them, they drag
+  them into the GitHub issue after it's created. Note `screenshots: <yes, drag
+  into issue> / <none>` so the user knows to attach them.
 
 Do not proceed to log collection until these are finalized. **Never assume any
-of the four** — if a field is missing or ambiguous, ask for that one field
+of the five** — if a field is missing or ambiguous, ask for that one field
 specifically (one question at a time), and wait for the answer before asking the
 next. Do not invent a title, guess a type, or infer a description from context.
 Only once all four are explicitly confirmed by the user do you move to logs.
@@ -95,8 +99,8 @@ draft before submit, but you are the first line of defense.
 
 ### 4. Draft the issue body
 
-Write the draft to a unique temp file (e.g. `/tmp/omos-issue-$(date +%s).md`)
-to avoid clobbering a prior draft, using this template:
+Prepare the draft as markdown to show the user at the Iron Rule gate (step 5),
+using this template:
 
 ```markdown
 ## Description
@@ -115,27 +119,17 @@ to avoid clobbering a prior draft, using this template:
 - Node: <node version>
 - Bun: <bun version>
 - Shell: <shell>
-
-## Plugin Logs (scrubbed)
-
-<details>
-<summary>Click to expand — scrubbed plugin log</summary>
-
-```log
-<scrubbed log, or [no plugin log found] / [skipped — private key detected in log] / [skipped by user]>
-```
-
-</details>
+- Screenshots: <yes — drag into the issue after it's created / none>
 
 ---
 🤖 This issue was created using the /report-issue skill.
 ```
 
-If the log is very long, keep it readable: trim to a sensible tail (a few
-hundred lines is plenty for a bug report) and append
-`... [truncated — review may be incomplete; attach raw log manually]`. Always
-cut at line boundaries — never split a line in half, since that can split a
-secret mid-token.
+The scrubbed plugin log is **not** inlined here — it is posted as a separate
+comment after the issue is created (see step 6), so the issue body stays
+readable. If no log was found or the user skipped it, note
+`[no plugin log found]` / `[skipped by user]` in the Environment section
+instead.
 
 ### 5. The Iron Rule gate (approve / revise / deny)
 
@@ -167,35 +161,148 @@ Check `gh auth status` first. If not authenticated, do **not** attempt the
 create — tell the user to run `gh auth login` (or paste the draft manually at
 the URL below).
 
-**Bug** → use `bug-report.yml` and map fields:
+**Bug** → use `bug-report.yml` and map fields. The log is **not** inlined
+here — put a short pointer in the logs field and post the full log as a comment
+after creation (see below):
+
+**Important — `gh` version reality:** many `gh` builds reject `--field` and
+reject `--template` together with `--body-file`. The reliable cross-version
+pattern is to write the form's fields as **YAML front matter** in a body file
+and create with `--body-file` (no `--template`, no `--field`), then apply the
+label manually. The form's field IDs are `problem` + `context`
+(`feature-request.yml`) and `what_happened`/`steps`/`config`/`opencode_version`/
+`plugin_version`/`operating_system`/`logs` (`bug-report.yml`) — but since we
+post the log as a comment, the bug form's `logs` field just gets a pointer.
+
+Write the body to a temp file, then:
+
+**Bug** → `/tmp/omos-issue-<ts>.md`:
+
+```markdown
+---
+name: Bug report
+what_happened: |-
+  <description + expected/actual>
+steps: |-
+  <repro steps>
+config: |-
+  <oh-my-opencode.json or 'omitted'>
+opencode_version: "<version>"
+plugin_version: "<plugin version>"
+operating_system: "<os>"
+logs: |-
+  Scrubbed plugin log posted as a comment below.
+---
+
+## Description
+
+<user description / repro steps>
+
+## Skill / Command
+
+<skill or command in use when it broke, or N/A>
+
+## Environment
+
+- OS: <os>
+- OpenCode: <opencode version>
+- Plugin: <plugin version>
+- Node: <node version>
+- Bun: <bun version>
+- Shell: <shell>
+- Screenshots: <yes — drag into the issue after it's created / none>
+
+---
+🤖 This issue was created using the /report-issue skill.
+```
 
 ```bash
 gh issue create \
   --repo alvinunreal/oh-my-opencode-slim \
-  --template bug-report.yml \
   --title "<title>" \
-  --field "What happened, and what did you expect?"="<description + expected/actual>" \
-  --field "Steps to reproduce"="<repro steps>" \
-  --field "oh-my-opencode.json"="<config or 'omitted'>" \
-  --field "OpenCode version"="<version>" \
-  --field "oh-my-opencode-slim version"="<plugin version>" \
-  --field "Operating system"="<os>" \
-  --field "Logs, screenshots, or extra context"="<scrubbed plugin log>"
+  --body-file /tmp/omos-issue-<ts>.md \
+  --label bug
 ```
 
-**Enhancement** → use `feature-request.yml`:
+**Enhancement** → `/tmp/omos-issue-<ts>.md`:
+
+```markdown
+---
+name: Feature request
+problem: |-
+  <what you want and why>
+context: |-
+  <optional examples/links>
+---
+
+## Description
+
+<what you want and why>
+
+## Skill / Command
+
+<skill or command, or N/A>
+
+## Environment
+
+- OS: <os>
+- OpenCode: <opencode version>
+- Plugin: <plugin version>
+- Node: <node version>
+- Bun: <bun version>
+- Shell: <shell>
+- Screenshots: <yes — drag into the issue after it's created / none>
+
+---
+🤖 This issue was created using the /report-issue skill.
+```
 
 ```bash
 gh issue create \
   --repo alvinunreal/oh-my-opencode-slim \
-  --template feature-request.yml \
   --title "<title>" \
-  --field "Description"="<what you want and why>" \
-  --field "Extra context"="<optional examples/links>"
+  --body-file /tmp/omos-issue-<ts>.md \
+  --label enhancement
 ```
 
-- The `--title` should be prefix-free (no `[Bug]`/`[Feature]`); the form's
-  `title:` prefix and `labels:` are applied by the template automatically.
+After the issue is created, post the scrubbed plugin log as a **separate
+comment** (this keeps the issue body clean and the log out of the form fields).
+Format it with the first log row shown as a visible example, then the full log
+in a collapsible block, and a clear note explaining what the comment is:
+
+```bash
+gh issue comment <issue-number> --repo alvinunreal/oh-my-opencode-slim --body-file /tmp/omos-issue-log-<ts>.md
+```
+
+Where `/tmp/omos-issue-log-<ts>.md` contains:
+
+```markdown
+> 📎 **Scrubbed plugin log** — posted as a separate comment so the issue body
+> stays readable. Secrets were redacted by the /report-issue skill. The first
+> row is shown as an example; expand below for the full log.
+
+First row (example):
+```
+<first scrubbed log line>
+```
+
+<details>
+<summary>Full scrubbed plugin log (click to expand)</summary>
+
+```log
+<scrubbed log, or [no plugin log found] / [skipped — private key detected in log] / [skipped by user]>
+```
+
+</details>
+```
+
+If no log was found or the user skipped it, post a one-line comment
+(`[no plugin log found]` / `[skipped by user]`) instead of the block above.
+
+- The `--title` should be prefix-free (no `[Bug]`/`[Feature]`); the `--label`
+  flag applies the categorization since we don't use `--template`.
+- Both `gh` calls (create + comment) are gated by the Approve choice — neither
+  runs without it.
 - If `gh` is not installed or not authenticated, do **not** fail silently: print
   the full draft and tell the user to paste it at
   `https://github.com/alvinunreal/oh-my-opencode-slim/issues/new?template=bug-report.yml`
@@ -204,9 +311,9 @@ gh issue create \
 ## Skipping logs
 
 Logs are included by default, but they are optional. If the user says not to
-include logs (or you judge them irrelevant for the report), put
-`Logs: [skipped by user]` in the details block instead of log content. No flag
-is needed — just ask or note it.
+include logs (or you judge them irrelevant for the report), skip the log comment
+and note `[skipped by user]` in the Environment section. No flag is needed —
+just ask or note it.
 
 ## Safety Rules
 
