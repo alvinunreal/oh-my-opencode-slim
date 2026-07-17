@@ -36,6 +36,7 @@ import {
   createPhaseReminderHook,
   createPostFileToolNudgeHook,
   createReflectCommandHook,
+  createReportIssueCommandHook,
   createTaskSessionManagerHook,
   ForegroundFallbackManager,
   SessionLifecycle,
@@ -156,6 +157,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let deepworkCommandHook: ReturnType<typeof createDeepworkCommandHook>;
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
+  let reportIssueCommandHook: ReturnType<typeof createReportIssueCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let phaseReminder: ReturnType<typeof createPhaseReminderHook>;
   let filterAvailableSkills: ReturnType<typeof createFilterAvailableSkillsHook>;
@@ -320,6 +322,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     deepworkCommandHook = createDeepworkCommandHook();
     reflectCommandHook = createReflectCommandHook();
     loopCommandHook = createLoopCommandHook();
+    reportIssueCommandHook = createReportIssueCommandHook();
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
       maxSessionsPerAgent:
         config.backgroundJobs?.maxSessionsPerAgent ??
@@ -865,6 +868,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       deepworkCommandHook.registerCommand(opencodeConfig);
       reflectCommandHook.registerCommand(opencodeConfig);
       loopCommandHook.registerCommand(opencodeConfig);
+      reportIssueCommandHook.registerCommand(opencodeConfig);
       presetManager.registerCommand(opencodeConfig);
     },
 
@@ -1057,6 +1061,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
 
       await loopCommandHook.handleCommandExecuteBefore(
+        input as {
+          command: string;
+          sessionID: string;
+          arguments: string;
+        },
+        output as { parts: Array<{ type: string; text?: string }> },
+      );
+
+      await reportIssueCommandHook.handleCommandExecuteBefore(
         input as {
           command: string;
           sessionID: string;

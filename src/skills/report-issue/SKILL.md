@@ -25,12 +25,39 @@ draft. That confirm step is the safety net — do not skip it.
 
 ## Workflow
 
-Start the collection work immediately — gather environment and plugin logs
-**before** or alongside asking the user for details. This way the draft (and
-secret redaction) is always reached even in a single-shot turn, and you are not
-blocked waiting on the user's title.
+Get the issue clear first, then pull the supporting context. This keeps the
+log relevant to what the user is actually reporting, and still reaches a draft
+in a single shot (the user's first message is usually the description).
 
-### 1. Collect environment and logs (do this first)
+### 1. Finalize the issue details (do this first)
+
+Get these four fields settled **before** moving on to logs — they shape the
+whole draft and tell you which log lines matter:
+
+- **Description** — what happened and reproduction steps. For a `bug`, also ask
+  for expected vs actual behavior; for an `enhancement`, ask what behavior the
+  user wants. This is the core of the report.
+- **Title** — short, specific, actionable summary (under ~72 chars). No need
+  for a `[Bug]`/`[Feature]` prefix; the type label carries that.
+- **Type** — `bug` or `enhancement`.
+- **Skill/command** — which omos agent, skill, or command was in use when it
+  broke (helps triage; optional).
+
+Do not proceed to log collection until these are finalized. **Never assume any
+of the four** — if a field is missing or ambiguous, ask for that one field
+specifically (one question at a time), and wait for the answer before asking the
+next. Do not invent a title, guess a type, or infer a description from context.
+Only once all four are explicitly confirmed by the user do you move to logs.
+
+Tell the user up front: **do not paste API keys, tokens, or passwords into the
+description.** The scrubber only protects the plugin log, not free text. Also
+warn that the issue is filed on a **public** repo, so review the draft for
+secrets before approving. Likewise avoid absolute file paths (e.g.
+`/Users/john/...`) in the description — use relative paths or `~`.
+
+### 2. Collect environment and the relevant plugin log
+
+Now that you know what broke, gather the supporting context:
 
 Gather the environment yourself — OS, OpenCode version, this plugin's version,
 Node/Bun versions, and the shell. Run whatever command fits the platform; if a
@@ -39,27 +66,11 @@ value is unavailable, record `unknown` rather than failing.
 Locate the most recent plugin log. The directory is `$OPENCODE_LOG_DIR` if set,
 otherwise `~/.local/share/opencode/log` (macOS/Linux) or
 `%USERPROFILE%\.local\share\opencode\log` (Windows). Pick the newest
-`oh-my-opencode-slim.*.log`. If none exists, note `[no plugin log found]`.
-
-### 2. Gather user input
-
-Ask for what you still need (one message; the user may have already volunteered
-some of it):
-
-- **Title** — short, specific, actionable summary (under ~72 chars). No need
-  for a `[Bug]`/`[Feature]` prefix; the type label carries that.
-- **Type** — `bug` or `enhancement`.
-- **Description** — what happened and reproduction steps. For a `bug`, also ask
-  for expected vs actual behavior; for an `enhancement`, ask what behavior the
-  user wants.
-- **Skill/command** — which omos agent, skill, or command was in use when it
-  broke (helps triage; optional).
-
-Tell the user up front: **do not paste API keys, tokens, or passwords into the
-description.** The scrubber only protects the plugin log, not free text. Also
-warn that the issue is filed on a **public** repo, so review the draft for
-secrets before approving. Likewise avoid absolute file paths (e.g.
-`/Users/john/...`) in the description — use relative paths or `~`.
+`oh-my-opencode-slim.*.log`. If none exists, that's fine — note
+`[no plugin log found]` and continue; the issue can still be filed without it.
+Prefer the log segment around when the reported problem occurred; if the user
+named a skill/command (step 1), scan for that in the log to pull the relevant
+lines rather than dumping the whole file.
 
 ### 3. Scrub the log
 
@@ -126,24 +137,35 @@ hundred lines is plenty for a bug report) and append
 cut at line boundaries — never split a line in half, since that can split a
 secret mid-token.
 
-### 5. Confirm
+### 5. The Iron Rule gate (approve / revise / deny)
 
-Show the **raw** draft to the user (verbatim markdown, not a rendered preview).
-State explicitly if truncation happened, and remind them the issue is filed on
-a **public** repo — review for any secrets before approving. Ask the user to
-approve, edit, or cancel. Do not run `gh` until they approve.
+This is the **only** point where the user decides. Everything above is
+automatic — you fill in env, logs, and the draft. Then present the **raw**
+draft (verbatim markdown, not a rendered preview) and offer exactly three
+choices:
 
-### 6. Submit
+- **Approve** — publish the issue to GitHub.
+- **Revise** — tell you what to change (or edit inline); you re-draft and show
+  the gate again.
+- **Deny** — discard; nothing is sent.
+
+Rules for this gate:
+
+- State explicitly if truncation happened, and remind them the issue is filed on
+  a **public** repo — review for any secrets before approving.
+- **`gh` is never run unless the user picks Approve.** No exceptions, no
+  "just creating it now", no silent submit.
+- If the user approves, only then proceed to Submit.
+
+### 6. Submit (only after explicit Approve)
 
 This repo uses GitHub **issue forms** (`.github/ISSUE_TEMPLATE/bug-report.yml`
 and `feature-request.yml`), and blank issues are disabled. So file through the
 form template, not a free-form body — a plain `--body` is rejected.
 
-If `gh` is available and the user approved:
-
-Check `gh auth status` first. If not authenticated, tell the user to run
-`gh auth login` (or paste the draft manually at the URL below) — do not attempt
-the create.
+Check `gh auth status` first. If not authenticated, do **not** attempt the
+create — tell the user to run `gh auth login` (or paste the draft manually at
+the URL below).
 
 **Bug** → use `bug-report.yml` and map fields:
 
@@ -188,7 +210,8 @@ is needed — just ask or note it.
 
 ## Safety Rules
 
-- Never run `gh issue create` without explicit user approval of the draft.
+- **Iron rule: `gh` is never called unless the user explicitly picks Approve at
+  the gate.** No publish, no draft creation, no silent submit — ever.
 - Embed the log **verbatim** after scrubbing — never paraphrase it (paraphrasing
   bypasses the scrubber).
 - The PEM tripwire refuses embedding; it does not try to scrub a key.

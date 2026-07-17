@@ -16,5 +16,6 @@ export { createLoopCommandHook } from './loop-command';
 export { createPhaseReminderHook } from './phase-reminder';
 export { createPostFileToolNudgeHook } from './post-file-tool-nudge';
 export { createReflectCommandHook } from './reflect';
+export { createReportIssueCommandHook } from './report-issue-command';
 export { SessionLifecycle } from './session-lifecycle';
 export { createTaskSessionManagerHook } from './task-session-manager';
