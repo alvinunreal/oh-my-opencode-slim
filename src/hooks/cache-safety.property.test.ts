@@ -205,8 +205,8 @@ describe('cache-safety: determinism under ambient inputs', () => {
 describe('cache-safety: pipeline drift guard', () => {
   const srcRoot = path.resolve(import.meta.dir, '..');
 
-  test('src/index.ts transform order matches this suite', () => {
-    const source = readFileSync(path.join(srcRoot, 'index.ts'), 'utf8');
+  test('src/plugin-composer.ts transform order matches this suite', () => {
+    const source = readFileSync(path.join(srcRoot, 'plugin-composer.ts'), 'utf8');
 
     const orderedCalls = [
       ...source.matchAll(
@@ -214,10 +214,10 @@ describe('cache-safety: pipeline drift guard', () => {
       ),
     ].map((match) => match[1]);
 
-    // If this fails, src/index.ts gained, lost, or reordered a transform
-    // step. Update createPipeline() in this file to match, then update this
-    // expectation — the property tests are only meaningful while the two
-    // stay in lockstep.
+    // If this fails, src/plugin-composer.ts gained, lost, or reordered a
+    // transform step. Update createPipeline() in this file to match, then
+    // update this expectation — the property tests are only meaningful while
+    // the two stay in lockstep.
     expect(orderedCalls).toEqual([
       'taskSessionManagerHook',
       'postFileToolNudge',
@@ -228,11 +228,12 @@ describe('cache-safety: pipeline drift guard', () => {
       'await taskSessionManagerHook.injectBackgroundJobBoard(',
     );
 
-    // One handler definition plus the four dispatch calls above.
+    // One handler definition in the return object, four dispatch calls in
+    // HookComposer, and four dispatch calls in MessageTransformComposer.
     const literalCount = source.split(
       "'experimental.chat.messages.transform'",
     ).length;
-    expect(literalCount - 1).toBe(5);
+    expect(literalCount - 1).toBe(9);
   });
 
   test('every hook module defining a message transform is covered here', async () => {

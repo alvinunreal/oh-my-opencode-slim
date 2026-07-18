@@ -331,6 +331,7 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
         deps.resolveImageRouting(config.image_routing),
         modelArrayMap,
         agentDefs,
+        taskSessionManagerHook,
       );
 
       // Message transform hook
@@ -725,7 +726,229 @@ class ConfigComposer {
     ctx: Parameters<Plugin>[0],
   ) {
     return async (opencodeConfig: Record<string, unknown>) => {
-      // Placeholder - will be implemented in Task 3
+      // Only set default_agent if not already configured by the user
+      if (
+        config.setDefaultAgent !== false &&
+        !(opencodeConfig as { default_agent?: string }).default_agent
+      ) {
+        (opencodeConfig as { default_agent?: string }).default_agent =
+          'orchestrator';
+      }
+
+      // Merge Agent configs - per-agent shallow merge
+      if (!opencodeConfig.agent) {
+        opencodeConfig.agent = { ...agents as Record<string, unknown> };
+      } else {
+        for (const [name, pluginAgent] of Object.entries(agents as Record<string, unknown>)) {
+          const existing = (opencodeConfig.agent as Record<string, unknown>)[name] as Record<string, unknown> | undefined;
+          if (existing && typeof existing.model === 'string') {
+            const primary = modelArrayMap[name]?.[0]?.id;
+            if (primary && existing.model !== primary) {
+              everModelSwitched.add(name);
+            }
+            if (everModelSwitched.has(name)) {
+              foregroundFallback.disableChain(name);
+            }
+          }
+          if (existing) {
+            (opencodeConfig.agent as Record<string, unknown>)[name] = {
+              ...pluginAgent as Record<string, unknown>,
+              ...existing,
+            };
+          } else {
+            (opencodeConfig.agent as Record<string, unknown>)[name] = {
+              ...pluginAgent as Record<string, unknown>,
+            };
+          }
+        }
+      }
+      const configAgent = opencodeConfig.agent as Record<string, unknown>;
+
+      // Model resolution for foreground agents
+      if (Object.keys(modelArrayMap).length > 0) {
+        for (const [agentName, models] of Object.entries(modelArrayMap)) {
+          if (models.length === 0) continue;
+          const chosen = models[0];
+          const entry = configAgent[agentName] as Record<string, unknown> | undefined;
+          if (entry) {
+            if (entry.model === undefined) {
+              entry.model = chosen.id;
+              if (chosen.variant) {
+                entry.variant = chosen.variant;
+              }
+            }
+          } else {
+            (configAgent as Record<string, unknown>)[agentName] = {
+              model: chosen.id,
+              ...(chosen.variant ? { variant: chosen.variant } : {}),
+            };
+          }
+          this.deps.log('[plugin] resolved model from array', {
+            agent: agentName,
+            model: chosen.id,
+            variant: chosen.variant,
+          });
+        }
+      }
+
+      // Runtime preset override
+      const runtimePresetName = this.deps.getActiveRuntimePreset();
+      if (runtimePresetName && config.presets?.[runtimePresetName]) {
+        const runtimePreset = config.presets[runtimePresetName];
+        for (const [agentName, override] of Object.entries(runtimePreset)) {
+          const resolvedName = this.deps.AGENT_ALIASES[agentName] ?? agentName;
+          const entry = configAgent[resolvedName] as Record<string, unknown> | undefined;
+          if (!entry) continue;
+
+          if (typeof override.model === 'string') {
+            entry.model = override.model;
+          } else if (Array.isArray(override.model) && override.model.length > 0) {
+            const first = override.model[0];
+            entry.model = typeof first === 'string' ? first : first.id;
+            if (typeof first !== 'string' && first.variant) {
+              entry.variant = first.variant;
+            }
+          }
+          if (typeof override.variant === 'string') {
+            entry.variant = override.variant;
+          } else if ('variant' in override) {
+            delete entry.variant;
+          }
+          if (typeof override.temperature === 'number') {
+            entry.temperature = override.temperature;
+          } else if ('temperature' in override) {
+            delete entry.temperature;
+          }
+          if (override.options && typeof override.options === 'object' && !Array.isArray(override.options)) {
+            entry.options = override.options;
+          } else if ('options' in override) {
+            delete entry.options;
+          }
+          this.deps.log('[plugin] runtime preset override', {
+            preset: runtimePresetName,
+            agent: agentName,
+            model: entry.model as string,
+          });
+        }
+
+        // Reset agents from the previous preset that aren't in the new one
+        const prevPresetName = this.deps.getPreviousRuntimePreset();
+        if (prevPresetName && config.presets?.[prevPresetName]) {
+          const prevPreset = config.presets[prevPresetName];
+          const newPresetResolved = new Set(
+            Object.keys(runtimePreset).map((k) => this.deps.AGENT_ALIASES[k] ?? k),
+          );
+          for (const agentName of Object.keys(prevPreset)) {
+            const resolvedName = this.deps.AGENT_ALIASES[agentName] ?? agentName;
+            if (newPresetResolved.has(resolvedName)) continue;
+            const entry = configAgent[resolvedName] as Record<string, unknown> | undefined;
+            if (!entry) continue;
+            const baseline = config.agents?.[resolvedName];
+            const prevOverride = prevPreset[agentName] as Record<string, unknown> | undefined;
+            if (typeof baseline?.model === 'string') {
+              entry.model = baseline.model;
+            }
+            if (typeof baseline?.variant === 'string') {
+              entry.variant = baseline.variant;
+            } else if (prevOverride && 'variant' in prevOverride) {
+              delete entry.variant;
+            }
+            if (typeof baseline?.temperature === 'number') {
+              entry.temperature = baseline.temperature;
+            } else if (prevOverride && 'temperature' in prevOverride) {
+              delete entry.temperature;
+            }
+            if (baseline?.options && typeof baseline.options === 'object' && !Array.isArray(baseline.options)) {
+              entry.options = baseline.options;
+            } else if (prevOverride && 'options' in prevOverride) {
+              delete entry.options;
+            }
+            this.deps.log('[plugin] runtime preset reset from previous', {
+              previousPreset: prevPresetName,
+              agent: resolvedName,
+              model: entry.model as string,
+            });
+          }
+        }
+      }
+
+      // Capture resolved model state for TUI
+      const tuiAgentModels: Record<string, string> = {};
+      const tuiAgentVariants: Record<string, string> = {};
+      for (const agentDef of agentDefs) {
+        if (agentDef.name === 'council' || agentDef.name === 'councillor' || agentDef.name.startsWith('councillor-'))
+          continue;
+        const entry = configAgent[agentDef.name] as Record<string, unknown> | undefined;
+        const resolvedModel =
+          typeof entry?.model === 'string'
+            ? entry.model
+            : runtimeChains[agentDef.name]?.[0]
+              ? runtimeChains[agentDef.name][0]
+              : typeof agentDef.config.model === 'string'
+                ? agentDef.config.model
+                : undefined;
+        const resolvedVariant =
+          typeof entry?.variant === 'string'
+            ? entry.variant
+            : typeof agentDef.config.variant === 'string'
+              ? agentDef.config.variant
+              : undefined;
+        tuiAgentModels[agentDef.name] = resolvedModel ?? 'default';
+        if (resolvedVariant) {
+          tuiAgentVariants[agentDef.name] = resolvedVariant;
+        }
+      }
+      this.deps.recordTuiAgentModels(
+        { agentModels: tuiAgentModels, agentVariants: tuiAgentVariants },
+        ctx.directory,
+      );
+
+      this.deps.applyOrchestratorModelConfig({
+        agents: configAgent,
+        enabled: config.stripOrchestratorModel,
+        presets: config.presets,
+        configPreset: config.preset,
+        runtimePreset: runtimePresetName,
+      });
+
+      // Merge MCP configs
+      const mcps = this.deps.createBuiltinMcps(config.disabled_mcps, config.websearch);
+      const configMcp = opencodeConfig.mcp as Record<string, unknown> | undefined;
+      if (!configMcp) {
+        opencodeConfig.mcp = { ...mcps };
+      } else {
+        Object.assign(configMcp, mcps);
+      }
+
+      // Agent permission rules from MCPs
+      const mergedMcpConfig = opencodeConfig.mcp as Record<string, unknown> | undefined;
+      const allMcpNames = Object.keys(mergedMcpConfig ?? mcps);
+      for (const [agentName, agentConfig] of Object.entries(agents as Record<string, unknown>)) {
+        const agentMcps = (agentConfig as { mcps?: string[] })?.mcps;
+        if (!agentMcps) continue;
+        if (!configAgent[agentName]) {
+          configAgent[agentName] = { ...agentConfig as Record<string, unknown> };
+        }
+        const agentConfigEntry = configAgent[agentName] as Record<string, unknown>;
+        const agentPermission = (agentConfigEntry.permission ?? {}) as Record<string, unknown>;
+        const allowedMcps = this.deps.parseList(agentMcps, allMcpNames);
+        for (const mcpName of allMcpNames) {
+          const sanitizedMcpName = mcpName.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const permissionKey = `${sanitizedMcpName}_*`;
+          const action = allowedMcps.includes(mcpName) ? 'allow' : 'deny';
+          if (!(permissionKey in agentPermission)) {
+            agentPermission[permissionKey] = action;
+          }
+        }
+        agentConfigEntry.permission = agentPermission;
+      }
+
+      // Register commands
+      this.deps.createInterviewManager(ctx, config).registerCommand(opencodeConfig);
+      this.deps.createDeepworkCommandHook().registerCommand(opencodeConfig);
+      this.deps.createReflectCommandHook().registerCommand(opencodeConfig);
+      this.deps.createLoopCommandHook().registerCommand(opencodeConfig);
+      this.deps.createPresetManager(ctx, config).registerCommand(opencodeConfig);
     };
   }
 }
@@ -751,9 +974,104 @@ class EventComposer {
     resolveImageRouting: ReturnType<typeof import('./config/constants').resolveImageRouting>,
     modelArrayMap: Record<string, Array<{ id: string; variant?: string }>>,
     agentDefs: AgentDefinition[],
+    taskSessionManagerHook: ReturnType<typeof import('./hooks').createTaskSessionManagerHook>,
   ) {
     return async (input: { event: { type: string; properties?: Record<string, unknown> } }) => {
-      // Placeholder - will be implemented in Task 3
+      await cacheMonitor.event(input);
+
+      const event = input.event as {
+        type: string;
+        properties?: {
+          info?: { id?: string; parentID?: string; title?: string; agent?: string; providerID?: string; modelID?: string; model?: { providerID?: string; modelID?: string }; sessionID?: string; directory?: string };
+          sessionID?: string; id?: string; requestID?: string; status?: { type: string };
+        };
+      };
+
+      const resolveTuiVariantForModel = (agentName: string, model: string): string | undefined => {
+        const configEntry = config.agents?.[agentName];
+        const defaultVariant = typeof configEntry?.variant === 'string' ? configEntry.variant : undefined;
+        const chainMatches = modelArrayMap[agentName]?.filter((entry) => entry.id === model);
+        if (chainMatches) {
+          if (chainMatches.length === 1) return chainMatches[0].variant ?? defaultVariant;
+          return undefined;
+        }
+        if (typeof configEntry?.model === 'string' && configEntry.model === model && defaultVariant) {
+          return defaultVariant;
+        }
+        return undefined;
+      };
+
+      if (event.type === 'message.updated') {
+        const info = event.properties?.info;
+        const providerID = typeof info?.providerID === 'string' ? info.providerID : typeof info?.model?.providerID === 'string' ? info.model.providerID : undefined;
+        const modelID = typeof info?.modelID === 'string' ? info.modelID : typeof info?.model?.modelID === 'string' ? info.model.modelID : undefined;
+        if (typeof info?.agent === 'string' && providerID && modelID) {
+          const agentName = this.deps.resolveRuntimeAgentName(config, info.agent);
+          const model = `${providerID}/${modelID}`;
+          const variant = resolveTuiVariantForModel(agentName, model);
+          this.deps.recordTuiAgentModel(
+            { agentName, model, variant: variant ?? null },
+            (info?.sessionID && sessionDirectories.get(info.sessionID)) ?? ctx.directory,
+          );
+        }
+      }
+
+      if (event.type === 'session.created') {
+        const createdSessionId = event.properties?.info?.id;
+        const createdSessionDir = event.properties?.info?.directory;
+        if (createdSessionId && createdSessionDir) {
+          sessionDirectories.set(createdSessionId, createdSessionDir);
+        }
+      }
+
+      await this.deps.handleTaskSessionEvent(
+        input as { event: { type: string; properties?: { info?: { id?: string }; sessionID?: string } } },
+        taskSessionManagerHook.event,
+        async () => {
+          if (multiplexerSessionManager) {
+            await multiplexerSessionManager.onSessionCreated(event);
+            await multiplexerSessionManager.onSessionStatus(event);
+            await multiplexerSessionManager.onSessionDeleted(event);
+          }
+        },
+        async () => {
+          if (multiplexerSessionManager) {
+            await multiplexerSessionManager.cleanupOnInstanceDisposed();
+          }
+        },
+      );
+
+      await foregroundFallback.handleEvent(input.event);
+      await autoUpdateChecker.event(input);
+      await interviewManager.handleEvent(input as { event: { type: string; properties?: Record<string, unknown> } });
+
+      if (event.type === 'permission.asked' || event.type === 'question.asked') {
+        companionManager.onWaitingInput();
+      }
+      if (event.type === 'permission.replied' || event.type === 'question.replied' || event.type === 'question.rejected') {
+        companionManager.onInputResolved();
+      }
+      if (input.event.type === 'session.status') {
+        const props = input.event.properties as { sessionID?: string; status?: { type?: string } } | undefined;
+        const sessionID = props?.sessionID;
+        companionManager.onSessionStatus({
+          sessionId: sessionID,
+          agent: sessionID ? sessionAgentMap.get(sessionID) : undefined,
+          status: props?.status?.type,
+        });
+      }
+      if (input.event.type === 'session.deleted') {
+        const props = input.event.properties as { info?: { id?: string }; sessionID?: string } | undefined;
+        const sessionID = props?.info?.id || props?.sessionID;
+        if (sessionID) {
+          sessionLifecycle.dispatchSessionDeleted(sessionID);
+        }
+        companionManager.onSessionDeleted(sessionID);
+        if (sessionID) {
+          sessionAgentMap.delete(sessionID);
+          sessionDirectories.delete(sessionID);
+        }
+      }
     };
   }
 }
@@ -777,7 +1095,50 @@ class MessageTransformComposer {
     agentDefs: AgentDefinition[],
   ) {
     return async (input: Record<string, never>, output: { messages: unknown[] }) => {
-      // Placeholder - will be implemented in Task 3
+      const typedOutput = output as { messages: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> };
+
+      for (const message of typedOutput.messages) {
+        if (message.info.role !== 'user') continue;
+        for (const part of message.parts) {
+          if (part.type !== 'text' || typeof part.text !== 'string') continue;
+          part.text = rewriteDisplayNameMentions(part.text);
+        }
+      }
+
+      // Strip image parts from orchestrator messages when @observer is
+      // available. When the orchestrator's model doesn't support image
+      // input, the API call fails before the LLM can respond. We replace
+      // image bytes with a text nudge so the orchestrator delegates to
+      // @observer instead.
+      this.deps.processImageAttachments({
+        messages: typedOutput.messages as never,
+        workDir: ctx.directory,
+        imageRouting: this.deps.resolveImageRouting(config.image_routing),
+        disabledAgents,
+        log: this.deps.log,
+      });
+
+      // Repair session mappings before reminder gates; nudge metadata precedes phase dedup.
+      await taskSessionManagerHook['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
+      await postFileToolNudge['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
+      await phaseReminder['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
+      await filterAvailableSkills['experimental.chat.messages.transform'](
+        input,
+        typedOutput,
+      );
+      await taskSessionManagerHook.injectBackgroundJobBoard(
+        input,
+        typedOutput,
+      );
     };
   }
 }
@@ -793,7 +1154,24 @@ class SystemTransformComposer {
     buildOrchestratorPrompt: typeof import('./agents/orchestrator').buildOrchestratorPrompt,
   ) {
     return async (input: { sessionID?: string }, output: { system: string[] }) => {
-      // Placeholder - will be implemented in Task 3
+      const agentName = input.sessionID
+        ? sessionAgentMap.get(input.sessionID)
+        : undefined;
+      if (agentName === 'orchestrator') {
+        const alreadyInjected = output.system.some(
+          (s) => typeof s === 'string' && s.includes('<Role>') && s.includes('orchestrator'),
+        );
+        if (!alreadyInjected) {
+          const orchestratorDef = agentDefs.find((a) => a.name === 'orchestrator');
+          const orchestratorPrompt =
+            typeof orchestratorDef?.config?.prompt === 'string'
+              ? orchestratorDef.config.prompt
+              : buildOrchestratorPrompt(disabledAgents);
+          output.system[0] =
+            orchestratorPrompt + (output.system[0] ? `\n\n${output.system[0]}` : '');
+        }
+      }
+      this.deps.collapseSystemInPlace(output.system);
     };
   }
 }
