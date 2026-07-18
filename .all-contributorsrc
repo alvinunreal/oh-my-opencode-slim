@@ -722,6 +722,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "GiuseppeBellamacina",
+      "name": "Giuseppe Bellamacina",
+      "avatar_url": "https://avatars.githubusercontent.com/u/102151655?v=4",
+      "profile": "https://giuseppebellamacina.com/",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

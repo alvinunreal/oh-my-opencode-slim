@@ -88,7 +88,7 @@ Preset resolution flow:
 |--------|-----------------|-------------|
 | `src/index.ts` | `loadPluginConfig()` | Main plugin entry point loads merged config |
 | `src/agents/` | Agent configuration | Agents use config for model selection and permissions |
-| `src/council/` | Council configuration | Council agent uses CouncilConfig for multi-LLM orchestration |
+| `src/agents/council.ts` | Council agent configuration | Council agent uses CouncilConfig for multi-LLM orchestration |
 | `src/multiplexer/` | Multiplexer configuration | Uses multiplexer config for pane layout and type |
 | `src/cli/` | Config file discovery | CLI tools use config paths for user/project config lookup |
 
@@ -176,10 +176,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ### CouncilConfig
 - `presets`: Named council presets (map of presetName → CouncillorConfig[])
-- `timeout`: Council execution timeout in ms
 - `default_preset`: Default preset name to use
-- `councillor_execution_mode`: "parallel" or "serial" execution
-- `councillor_retries`: Number of retry attempts for empty responses
 
 ### MultiplexerConfig
 - `type`: "auto", "tmux", "zellij", or "none"

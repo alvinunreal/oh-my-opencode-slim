@@ -118,7 +118,7 @@ The session manager reacts to OpenCode session events:
 ### Consumers
 
 - **Main Plugin** (`src/index.ts`): Initializes multiplexer session manager during plugin startup
-- **Council Manager** (`src/council/council-manager.ts`): Uses session manager for child session pane management
+- **Council Agents** (`src/agents/council.ts`, `src/agents/council-agents.ts`): Use session manager for child session pane management
 - **Background Job Board** (`src/utils/background-job-board.ts`): Coordinates with session manager to defer pane closing when background jobs are running
 
 ### Dependencies

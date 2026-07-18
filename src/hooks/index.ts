@@ -1,6 +1,20 @@
 export { createApplyPatchHook } from './apply-patch';
 export type { AutoUpdateCheckerOptions } from './auto-update-checker';
 export { createAutoUpdateCheckerHook } from './auto-update-checker';
+export {
+  type CacheMonitorOptions,
+  createCacheMonitorHook,
+} from './cache-monitor';
+export {
+  appendTaggedSyntheticPart,
+  appendTrailingVolatileMessage,
+  createTaggedSyntheticPart,
+  hasTaggedPart,
+  isTaggedPart,
+  isVolatileTaggedMessage,
+  stripTaggedContent,
+  type TaggedSyntheticPartSpec,
+} from './cache-safe-injection';
 export { createChatHeadersHook } from './chat-headers';
 export { createDeepworkCommandHook } from './deepwork';
 export { createDelegateTaskRetryHook } from './delegate-task-retry/hook';

@@ -159,9 +159,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant |
 | `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor |
 | `council.default_preset` | string | `"default"` | Default preset when none is specified |
-| `council.timeout` | number | `180000` | Per-councillor timeout (ms) |
-| `council.councillor_execution_mode` | string | `"parallel"` | Run councillors in `parallel` or `serial`; use `serial` for single-model setups |
-| `council.councillor_retries` | number | `3` | Max retries per councillor on empty provider response (0–5) |
+| — | — | — | *Timeouts, execution mode, and retries are now handled by the orchestrator's council-mode prompt instructions; see `src/agents/council.ts`.* |
 | `interview.maxQuestions` | integer | `2` | Max questions per interview round (1–10) |
 | `interview.outputFolder` | string | `"interview"` | Directory where interview markdown files are written (relative to project root) |
 | `interview.autoOpenBrowser` | boolean | `true` | Automatically open the interview UI in your default browser during interactive runs; suppressed in tests and CI |

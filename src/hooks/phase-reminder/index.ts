@@ -7,7 +7,10 @@
  */
 import { PHASE_REMINDER } from '../../config/constants';
 import { isInternalInitiatorPart } from '../../utils';
-import { isRecord } from '../../utils/guards';
+import {
+  appendTaggedSyntheticPart,
+  isTaggedPart,
+} from '../cache-safe-injection';
 import {
   findLatestUserMessage,
   isUserMessageWithParts,
@@ -19,11 +22,7 @@ export { PHASE_REMINDER };
 export const PHASE_REMINDER_METADATA_KEY = 'oh-my-opencode-slim.phaseReminder';
 
 export function hasPhaseReminder(part: MessagePart): boolean {
-  return (
-    part.synthetic === true &&
-    isRecord(part.metadata) &&
-    part.metadata[PHASE_REMINDER_METADATA_KEY] === true
-  );
+  return isTaggedPart(part, PHASE_REMINDER_METADATA_KEY);
 }
 
 interface PhaseReminderOptions {
@@ -81,11 +80,9 @@ export function createPhaseReminderHook(options: PhaseReminderOptions = {}) {
           continue;
         }
 
-        message.parts.push({
-          type: 'text',
-          synthetic: true,
+        appendTaggedSyntheticPart(message, {
           text: PHASE_REMINDER,
-          metadata: { [PHASE_REMINDER_METADATA_KEY]: true },
+          metadataKey: PHASE_REMINDER_METADATA_KEY,
         });
       }
     },

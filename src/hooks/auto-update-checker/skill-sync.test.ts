@@ -20,10 +20,14 @@ mock.module('node:fs', () => {
 
 let importCounter = 0;
 
-async function syncBundledSkillsFromPackage(packageRoot: string) {
+async function syncBundledSkillsFromPackage(
+  packageRoot: string,
+  options: { force?: boolean } = {},
+) {
   const module = await import(`./skill-sync?test=${importCounter++}`);
   return module.syncBundledSkillsFromPackage(packageRoot, {
     skills: getFakeManagedSkills(packageRoot),
+    ...options,
   });
 }
 
@@ -135,6 +139,102 @@ describe('syncBundledSkillsFromPackage', () => {
     // Should not have overwritten
     expect(fs.readFileSync(path.join(destSkillDir, 'SKILL.md'), 'utf-8')).toBe(
       '# Original Skill',
+    );
+  });
+
+  test('force overwrites customized managed skill directories', async () => {
+    const skillName = 'force-customized-skill';
+    const skillSrcDir = path.join(fakePackageRoot, 'src', 'skills', skillName);
+    fs.mkdirSync(skillSrcDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Bundled Skill');
+
+    const manifestDir = path.join(fakeDestConfigDir, '.oh-my-opencode-slim');
+    const stagedDir = path.join(
+      manifestDir,
+      'skill-updates',
+      '1.0.0',
+      skillName,
+    );
+    fs.mkdirSync(stagedDir, { recursive: true });
+    fs.writeFileSync(path.join(stagedDir, 'SKILL.md'), '# Staged Skill');
+    fs.writeFileSync(
+      path.join(manifestDir, 'skills-manifest.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        skills: {
+          [skillName]: {
+            status: 'customized',
+            packageVersion: '1.0.0',
+            sourceHash: 'old-source-hash',
+            lastManagedHash: 'old-managed-hash',
+            lastSeenHash: 'customized-hash',
+            stagedPath: stagedDir,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      }),
+    );
+
+    const destSkillDir = path.join(fakeDestConfigDir, 'skills', skillName);
+    fs.mkdirSync(destSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(destSkillDir, 'SKILL.md'), '# Customized Skill');
+
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot, {
+      force: true,
+    });
+
+    expect(result.installed).toContain(skillName);
+    expect(result.staged).not.toContain(skillName);
+    expect(result.customized).not.toContain(skillName);
+    expect(fs.readFileSync(path.join(destSkillDir, 'SKILL.md'), 'utf-8')).toBe(
+      '# Bundled Skill',
+    );
+    expect(fs.existsSync(stagedDir)).toBe(false);
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(manifestDir, 'skills-manifest.json'), 'utf-8'),
+    );
+    expect(manifest.skills[skillName].status).toBe('managed');
+    expect(manifest.skills[skillName].stagedPath).toBeUndefined();
+  });
+
+  test('force skips destination files and symlinks without overwriting', async () => {
+    const fileSkill = 'force-file-skill';
+    const symlinkSkill = 'force-symlink-skill';
+    for (const skillName of [fileSkill, symlinkSkill]) {
+      const skillSrcDir = path.join(
+        fakePackageRoot,
+        'src',
+        'skills',
+        skillName,
+      );
+      fs.mkdirSync(skillSrcDir, { recursive: true });
+      fs.writeFileSync(path.join(skillSrcDir, 'SKILL.md'), '# Bundled Skill');
+    }
+
+    const destSkillsDir = path.join(fakeDestConfigDir, 'skills');
+    fs.mkdirSync(destSkillsDir, { recursive: true });
+    const filePath = path.join(destSkillsDir, fileSkill);
+    fs.writeFileSync(filePath, '# User File');
+    const symlinkTarget = path.join(fakeDestConfigDir, 'symlink-target');
+    fs.mkdirSync(symlinkTarget, { recursive: true });
+    fs.writeFileSync(path.join(symlinkTarget, 'SKILL.md'), '# User Symlink');
+    const symlinkPath = path.join(destSkillsDir, symlinkSkill);
+    fs.symlinkSync(symlinkTarget, symlinkPath, 'dir');
+
+    const result = await syncBundledSkillsFromPackage(fakePackageRoot, {
+      force: true,
+    });
+
+    expect(result.installed).toHaveLength(0);
+    expect(result.skippedExisting).toEqual(
+      expect.arrayContaining([fileSkill, symlinkSkill]),
+    );
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# User File');
+    expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(symlinkTarget, 'SKILL.md'), 'utf-8')).toBe(
+      '# User Symlink',
     );
   });
 
@@ -406,6 +506,11 @@ describe('syncBundledSkillsFromPackage', () => {
     );
 
     expect(manifest.skills[skillName].status).toBe('customized');
+    expect(result.stagedThisSync).toEqual([skillName]);
+
+    const unchangedResult = await syncBundledSkillsFromPackage(fakePackageRoot);
+    expect(unchangedResult.customized).toEqual([skillName]);
+    expect(unchangedResult.stagedThisSync).toEqual([]);
   });
 
   test('fails closed (only installs missing) when manifest is corrupt', async () => {

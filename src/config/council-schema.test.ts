@@ -59,8 +59,6 @@ describe('CouncillorConfigSchema', () => {
     if (result.success) {
       // Deprecated fields are stripped but reported via _deprecated
       expect(result.data._deprecated).toEqual(['master']);
-      // Core fields still work normally
-      expect(result.data.timeout).toBe(180000);
       expect(Object.keys(result.data.presets.default)).toEqual(['alpha']);
       // Legacy master.model is extracted for backward-compat fallback
       expect(result.data._legacyMasterModel).toBe('anthropic/claude-opus-4-6');
@@ -305,8 +303,6 @@ describe('CouncilConfigSchema', () => {
     expect(result.success).toBe(true);
 
     if (result.success) {
-      // Check defaults are filled in
-      expect(result.data.timeout).toBe(180000);
       expect(result.data.default_preset).toBe('default');
     }
   });
@@ -325,7 +321,6 @@ describe('CouncilConfigSchema', () => {
     expect(result.success).toBe(true);
 
     if (result.success) {
-      expect(result.data.timeout).toBe(180000);
       expect(result.data.default_preset).toBe('custom');
     }
   });
@@ -335,38 +330,6 @@ describe('CouncilConfigSchema', () => {
 
     const result = CouncilConfigSchema.safeParse(badConfig);
     expect(result.success).toBe(false);
-  });
-
-  test('rejects invalid timeout (negative)', () => {
-    const badConfig = {
-      presets: {
-        default: {
-          alpha: { model: 'openai/gpt-5.6-luna' },
-        },
-      },
-      timeout: -1000,
-    };
-
-    const result = CouncilConfigSchema.safeParse(badConfig);
-    expect(result.success).toBe(false);
-  });
-
-  test('accepts zero timeout values (no timeout)', () => {
-    const config = {
-      presets: {
-        default: {
-          alpha: { model: 'openai/gpt-5.6-luna' },
-        },
-      },
-      timeout: 0,
-    };
-
-    const result = CouncilConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-
-    if (result.success) {
-      expect(result.data.timeout).toBe(0);
-    }
   });
 
   test('rejects missing presets', () => {

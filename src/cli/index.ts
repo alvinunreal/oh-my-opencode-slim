@@ -4,9 +4,9 @@ import { install } from './install';
 import { getGeneratedPresetNames, isGeneratedPresetName } from './providers';
 import type {
   BackgroundSubagentsArg,
-  BooleanArg,
   CompanionArg,
   InstallArgs,
+  SkillsArg,
 } from './types';
 
 export function parseArgs(args: string[]): InstallArgs {
@@ -20,7 +20,12 @@ export function parseArgs(args: string[]): InstallArgs {
     if (arg === '--no-tui') {
       result.tui = false;
     } else if (arg.startsWith('--skills=')) {
-      result.skills = arg.split('=')[1] as BooleanArg;
+      const mode = arg.split('=')[1] as SkillsArg;
+      if (!['yes', 'no', 'force'].includes(mode)) {
+        console.error('Unsupported --skills value: use yes, no, or force');
+        process.exit(1);
+      }
+      result.skills = mode;
     } else if (arg.startsWith('--companion=')) {
       const mode = arg.split('=')[1] as CompanionArg;
       if (!['ask', 'yes', 'no'].includes(mode)) {
@@ -72,7 +77,8 @@ Usage:
   bunx oh-my-opencode-slim doctor [OPTIONS]
 
 Options:
-  --skills=yes|no        Install bundled skills (default: yes)
+  --skills=yes|no|force  Install bundled skills; force replaces existing skill
+                         directories (default: yes)
   --companion=ask|yes|no Install desktop companion binary and enable config
                          (default: ask; prompt defaults to no)
   --preset=<name>        Active generated config preset (default: openai)

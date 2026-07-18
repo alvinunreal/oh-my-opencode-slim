@@ -2,7 +2,7 @@
  * Pure helpers for councillor model fallback chains.
  *
  * Kept free of any schema/validation library import so that runtime consumers
- * (e.g. `CouncilManager`) can resolve a councillor's ordered model chain
+ * (e.g. council dispatch) can resolve a councillor's ordered model chain
  * without pulling in zod or the config schema module.
  */
 

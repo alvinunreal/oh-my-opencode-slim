@@ -17,6 +17,7 @@ import {
 import { getAgentMcpList } from '../config/agent-mcps';
 
 import { createCouncilAgent } from './council';
+import { buildCouncillorAgents, getCouncillorSeatName } from './council-agents';
 import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
@@ -38,7 +39,6 @@ type AgentFactory = (
   customAppendPrompt?: string,
 ) => AgentDefinition;
 
-const COUNCIL_TOOL_ALLOWED_AGENTS = new Set(['council']);
 const CANCEL_TASK_ALLOWED_AGENTS = new Set(['orchestrator']);
 const SAFE_AGENT_ALIAS_RE = /^[a-z][a-z0-9_-]*$/i;
 
@@ -296,13 +296,6 @@ function applyDefaultPermissions(
 
   // Respect explicit deny on question (councillor)
   const questionPerm = existing.question === 'deny' ? 'deny' : 'allow';
-  // Councillors are denied council_session so they cannot spawn nested
-  // councils — this permission denial is now the recursion guard (the
-  // plugin's SubagentDepthTracker was removed; OpenCode's native
-  // subagent_depth covers TaskTool-based recursion for other subagents).
-  const councilSessionPerm = COUNCIL_TOOL_ALLOWED_AGENTS.has(agent.name)
-    ? (existing.council_session ?? 'allow')
-    : 'deny';
   const cancelTaskPerm = CANCEL_TASK_ALLOWED_AGENTS.has(agent.name)
     ? (existing.cancel_task ?? 'allow')
     : 'deny';
@@ -310,7 +303,6 @@ function applyDefaultPermissions(
   agent.config.permission = {
     ...existing,
     question: questionPerm,
-    council_session: councilSessionPerm,
     cancel_task: cancelTaskPerm,
     // Apply skill permissions as nested object under 'skill' key
     skill: {
@@ -514,10 +506,21 @@ export function createAgents(
     return agent;
   });
 
+  // Build dynamic councillor agents from council config (flatten mode).
+  // Each councillor becomes a dispatchable subagent with its own model,
+  // so the orchestrator can task() them with native panes at depth 1.
+  const councillorAgents = buildCouncillorAgents(config, disabled).map(
+    (agent) => {
+      applyDefaultPermissions(agent, undefined, config?.disabled_skills);
+      return agent;
+    },
+  );
+
   const allSubAgents = [
     ...builtInSubAgents,
     ...customSubAgents,
     ...acpSubAgents,
+    ...councillorAgents,
   ];
 
   // 3. Create Orchestrator (with its own overrides and custom prompts)
@@ -535,6 +538,7 @@ export function createAgents(
     undefined,
     undefined,
     disabled,
+    councillorAgents.length > 0 ? ['council'] : undefined,
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
@@ -650,6 +654,17 @@ export function createAgents(
     updatedPrompt = `${updatedPrompt}\n\n${rewrittenAcps.join('\n\n')}`;
   }
 
+  // Inject council-dispatch block if dynamic councillors exist (flatten mode)
+  if (councillorAgents.length > 0) {
+    const dispatchList = councillorAgents
+      .map(
+        (a: AgentDefinition) =>
+          `   - task(subagent_type='${a.name}', description='Councillor ${getCouncillorSeatName(a.name)} on <brief topic>', prompt=<user's question>)`,
+      )
+      .join('\n');
+    updatedPrompt = `${updatedPrompt}\n\n## Council Mode\n\nWhen you need to run a council or the user asks for consensus/multiple opinions, use this procedure INSTEAD of delegating to @council:\n\n1. If the question references an external resource (PR, URL, issue, doc), fetch its content FIRST using your own tools (webfetch/bash/gh), then embed a concise summary in the prompt you send to each councillor — councillors have read-only codebase access only and cannot fetch external content themselves.\n2. Dispatch the user's question (with any fetched context) to each councillor in PARALLEL via task():\n${dispatchList}\n3. Collect ALL councillor responses. If any councillor returns empty or does not respond within 3 minutes, proceed without it — do not wait indefinitely. If a councillor's response is empty, retry that councillor once before continuing.\n4. Call task(subagent_type='council', description='Synthesize council report') with a prompt that includes the original user question AND all councillor responses. For each councillor, label its response with its seat name AND its model (e.g. "alpha (gpt-5.6-luna)"). Format each councillor's seat name and response clearly separated. If a councillor failed or timed out, include that status explicitly (e.g. "beta (gemini-3-pro): FAILED/TIMED OUT") instead of omitting it. Skip only councillors that returned empty after one retry.\n5. Present the council's synthesized report.\n\nThis ensures each councillor runs with its own model and the council agent synthesizes the full multi-model consensus.`;
+  }
+
   orchestrator.config.prompt = updatedPrompt;
 
   return [orchestrator, ...allSubAgents];
@@ -681,8 +696,9 @@ export function getAgentConfigs(
       // Council is callable both as a primary agent (user-facing)
       // and as a subagent (orchestrator can delegate to it)
       sdkConfig.mode = 'all';
-    } else if (name === 'councillor') {
-      // Internal agent - subagent mode, hidden from @ autocomplete
+    } else if (name === 'councillor' || name.startsWith('councillor-')) {
+      // Internal agent - subagent mode, hidden from @ autocomplete.
+      // Dynamic councillors are named councillor-<seat> (see council-agents.ts).
       sdkConfig.mode = 'subagent';
       sdkConfig.hidden = true;
     } else if (isSubagent(name)) {
@@ -694,7 +710,8 @@ export function getAgentConfigs(
     }
   };
 
-  const isInternalOnly = (name: string): boolean => name === 'councillor';
+  const isInternalOnly = (name: string): boolean =>
+    name === 'councillor' || name.startsWith('councillor-');
 
   const entries: Array<[string, SDKAgentConfig]> = [];
 

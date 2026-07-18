@@ -4,7 +4,7 @@
 
 Centralized tool factory and registry for the OpenCode plugin system. This directory defines all executable tools exposed to OpenCode agents, including:
 
-- **Agent orchestration tools**: Multi-LLM council sessions, task cancellation, and ACP agent execution
+- **Agent orchestration tools**: Multi-LLM council synthesis, task cancellation, and ACP agent execution
 - **Code intelligence tools**: AST-grep pattern matching and transformation across languages
 - **Web capabilities**: Smart web fetching with caching and secondary model processing
 - **Runtime configuration**: Preset management for dynamic agent configuration switching
@@ -26,7 +26,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 | Tool Family | Purpose | Key Components |
 |------------|---------|----------------|
-| **Council** | Multi-LLM consensus orchestration | `council.ts`, `council-manager.ts` |
+| **Council** | Multi-LLM consensus synthesis (orchestrator dispatches councillors as subagents) | `agents/council.ts`, `agents/index.ts` |
 | **Task Management** | Background task lifecycle control | `cancel-task.ts`, `background-job-board.ts` |
 | **ACP Integration** | External agent protocol execution | `acp-run.ts`, ACP client implementation |
 | **Code Intelligence** | AST-based code manipulation | `ast-grep/` directory, `tools.ts` |
@@ -35,7 +35,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 ### Security & Validation
 
-- **Agent Restrictions**: Tools validate calling agent identity (e.g., `council_session` only callable by `council` agent)
+- **Agent Restrictions**: Tools validate calling agent identity and configured permissions
 - **Permission Prompts**: Web fetching and ACP tools require explicit user permission via `ctx.ask()`
 - **Timeout Controls**: Configurable timeouts prevent unbounded execution
 - **Input Sanitization**: Zod schemas validate all tool arguments
@@ -66,19 +66,6 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
    ├─> May call ctx.ask() for user permission
    ├─> Returns structured result or error
    └─> OpenCode presents result to agent
-```
-
-### Council Session Flow (Multi-LLM Orchestration)
-
-```
-1. Agent invokes council_session tool
-   ├─> Validates calling agent is 'council'
-   ├─> Receives prompt and optional preset
-   ├─> Delegates to CouncilManager.runCouncil()
-   │   ├─> Spawns parallel councillor sessions
-   │   ├─> Collects formatted responses
-   │   └─> Synthesizes final output with model composition footer
-   └─> Returns consensus result to agent
 ```
 
 ### Task Cancellation Flow
@@ -139,7 +126,8 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
   - `getToolDefinitions()` - Composes tool set for plugin initialization
   
 - **Agents** (`src/agents/`):
-  - Council agent uses `council_session` tool
+  - Orchestrator dispatches councillors as subagents
+  - Council agent synthesizes councillor responses
   - Individual agents use `acp_run` tool for specialized tasks
   - All agents use `ast_grep_search`/`ast_grep_replace` for code manipulation
 
@@ -152,7 +140,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 | Dependency | Purpose |
 |------------|---------|
 | `@opencode-ai/plugin` | Tool schema and execution framework |
-| `CouncilManager` (`src/council/`) | Multi-LLM orchestration engine |
+| `Council Config` (`src/config/council-schema.ts`) | Councillor model/preset definitions |
 | `BackgroundJobBoard` (`src/utils/`) | Background task tracking and cleanup |
 | `Config System` (`src/config/`) | ACP agent configurations and presets |
 | `TUI State` (`src/tui-state.ts`) | Preset visualization in terminal UI |
@@ -162,10 +150,6 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ### Cross-Module Data Flow
 
 ```
-Tools Layer → Council Layer
-├─ council_session tool → CouncilManager.runCouncil()
-└─> Returns consensus result with model composition footer
-
 Tools Layer → Background Layer
 ├─ cancel_task tool → BackgroundJobBoard.resolve() → abortSessionWithTimeout()
 └─> Returns cancellation status
@@ -210,9 +194,6 @@ export { ast_grep_replace, ast_grep_search } from './ast-grep';
 // Task management
 export { createCancelTaskTool } from './cancel-task';
 
-// Council orchestration
-export { createCouncilTool } from './council';
-
 // Preset management
 export type { PresetManager } from './preset-manager';
 export { createPresetManager } from './preset-manager';
@@ -229,10 +210,10 @@ export { createWebfetchTool } from './smartfetch';
 - Each agent requires: `command`, `args`, `cwd`, `permissionMode`
 - Supports: `ask` (prompt user), `reject` (auto-deny), `allow` (auto-approve)
 
-#### Council Sessions (council.ts)
+#### Council Sessions
 - Configured via council presets in plugin config
-- Requires council agent to be registered in OpenCode
-- Supports preset-specific councillor configurations
+- Orchestrator dispatches each councillor as a prefixed subagent (`councillor-<name>`)
+- Council agent synthesizes responses into a consensus report
 
 #### Presets (preset-manager.ts)
 - Defined in plugin config under `presets` field
@@ -253,7 +234,7 @@ export { createWebfetchTool } from './smartfetch';
 
 - **Unit Tests**: Individual tool factories tested in `*.test.ts` files
 - **Integration Tests**: Tools tested with mock dependencies and OpenCode context
-- **E2E Tests**: Council and ACP tools tested with real external services
+- **E2E Tests**: ACP tools tested with real external services
 - **Binary Tests**: AST-grep CLI availability and functionality verified
 
 ## Performance Considerations
@@ -261,7 +242,7 @@ export { createWebfetchTool } from './smartfetch';
 - **Binary Downloads**: AST-grep CLI downloaded once and cached
 - **Network Caching**: Webfetch results cached to avoid redundant requests
 - **Timeout Enforcement**: Prevents unbounded execution of external tools
-- **Parallel Execution**: Council sessions run councillors in parallel
+- **Parallel Execution**: Councillors run as parallel subagent tasks
 
 ## Security Considerations
 

@@ -31,7 +31,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/agents/` | Agent factory layer for orchestrator and specialists, including prompt/model overrides, display-name normalization, MCP assignment, and permission shaping. | [View Map](src/agents/codemap.md) |
 | `src/cli/` | Installer, config editing, provider preset generation, and built-in skill installation. | [View Map](src/cli/codemap.md) |
 | `src/config/` | Configuration schema, layered loaders, preset merging, compatibility migrations, constant tables, and agent/MCP policy helpers. | [View Map](src/config/codemap.md) |
-| `src/council/` | Multi-model council orchestration with preset resolution, councillor execution modes, retries, timeout handling, and synthesis fallback flow. | [View Map](src/council/codemap.md) |
+
 | `src/hooks/` | Aggregated runtime hook surface for prompt transforms, recovery logic, task-session aliasing, nudges, and lifecycle policies. | [View Map](src/hooks/codemap.md) |
 | `src/hooks/apply-patch/` | Structured `apply_patch` parsing, matching, recovery, and rewrite pipeline. | [View Map](src/hooks/apply-patch/codemap.md) |
 | `src/hooks/auto-update-checker/` | Startup update detection, cache handling, and optional install prompt flow. | [View Map](src/hooks/auto-update-checker/codemap.md) |
@@ -95,7 +95,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - cmux-specific readiness, retry, orphan, and cleanup state lives under
   `src/multiplexer/cmux/`; the generic manager delegates cmux events so other
   multiplexer behavior remains on the upstream path.
-- `src/tools/council.ts` delegates into `src/council/`.
+- Council mode is implemented in `src/agents/`; the orchestrator dispatches councillors as subagents and the council agent synthesizes responses.
 - `src/tools/preset-manager.ts` hooks command execution and updates runtime agent models from configured presets.
 - `src/hooks/task-session-manager/` depends on `src/utils/background-job-board.ts` and `src/utils/task.ts` to support background task tracking, task output parsing, and safe alias reuse.
 - `src/hooks/filter-available-skills/` and agent permission logic rely on shared skill names from the CLI/config layer.

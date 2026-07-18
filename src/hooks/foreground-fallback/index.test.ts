@@ -1549,6 +1549,108 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// No-chain sessions (councillor / self-managed agents)
+// ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager no-chain sessions', () => {
+  test('councillor session.status retry: no abort and no re-prompt', async () => {
+    // Councillor is owned by CouncilManager (own model chain + timeout).
+    // FG must not abort or re-prompt — that races the council lifecycle and
+    // previously produced "[foreground-fallback] no chain configured" noise.
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'councillor-sess',
+          agent: 'councillor',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'councillor-sess',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'rate limit, retrying...',
+        },
+      },
+    });
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('councillor session.error: no abort and no re-prompt', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'councillor-err',
+          agent: 'councillor',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'councillor-err',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('disableChain agent on session.status: no abort (not just no re-prompt)', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 3);
+    mgr.disableChain('orchestrator');
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'disabled-status',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'disabled-status',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'rate limit, retrying...',
+        },
+      },
+    });
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // disableChain API
 // ---------------------------------------------------------------------------
 

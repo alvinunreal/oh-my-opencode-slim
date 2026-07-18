@@ -23,10 +23,10 @@ import {
   setActiveRuntimePreset,
 } from './config/runtime-preset';
 import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
-import { CouncilManager } from './council';
 import {
   createApplyPatchHook,
   createAutoUpdateCheckerHook,
+  createCacheMonitorHook,
   createChatHeadersHook,
   createDeepworkCommandHook,
   createDelegateTaskRetryHook,
@@ -55,7 +55,6 @@ import {
   ast_grep_search,
   createAcpRunTool,
   createCancelTaskTool,
-  createCouncilTool,
   createPresetManager,
   createWebfetchTool,
 } from './tools';
@@ -131,6 +130,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     return {};
   }
 
+  // Observation-only prompt-cache watchdog; safe to create before config
+  // loads and must see every event, so it sits outside the try block.
+  const cacheMonitor = createCacheMonitorHook();
+
   // Declare variables that must survive the try/catch for the return
   // closure. These are set inside the try block.
   let config: ReturnType<typeof loadPluginConfig>;
@@ -171,7 +174,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let presetManager: ReturnType<typeof createPresetManager>;
   let companionManager: CompanionManager;
-  let councilTools: ReturnType<typeof createCouncilTool>;
   let cancelTaskTools: ReturnType<typeof createCancelTaskTool>;
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
@@ -251,14 +253,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       startAvailabilityCheck(multiplexerConfig);
     }
 
-    // Initialize council tools (only when council is configured)
-    councilTools = config.council
-      ? createCouncilTool(
-          ctx,
-          new CouncilManager(ctx, config, multiplexerEnabled),
-        )
-      : {};
-
     mcps = createBuiltinMcps(config.disabled_mcps, config.websearch);
     acpRunTools =
       Object.keys(config.acpAgents ?? {}).length > 0
@@ -307,8 +301,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     chatHeadersHook = createChatHeadersHook(ctx);
 
     // Initialize foreground fallback manager for runtime model switching.
-    // Enabled by default even without fallback chains — the manager can still
-    // abort rate-limited sessions after maxRetries to prevent infinite freezes.
+    // Agents without a chain (e.g. councillor, owned by CouncilManager) are
+    // left alone — FG only aborts/re-prompts when it has a model to switch to.
     foregroundFallback = new ForegroundFallbackManager(
       ctx.client,
       runtimeChains,
@@ -436,7 +430,6 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
 
     tools = {
-      ...councilTools,
       ...cancelTaskTools,
       ...acpRunTools,
       webfetch,
@@ -885,6 +878,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     event: async (input) => {
+      await cacheMonitor.event(input);
+
       const event = input.event as {
         type: string;
         properties?: {
@@ -1226,6 +1221,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         typedOutput as never,
       );
+      await taskSessionManagerHook.injectBackgroundJobBoard(input, typedOutput);
     },
 
     'tool.execute.after': async (input, output) => {

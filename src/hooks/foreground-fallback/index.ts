@@ -514,6 +514,9 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
+    // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
+    if (!this.hasFallbackChain(sessionID)) return;
 
     // Deduplicate: multiple events can fire for a single rate-limit event.
     // Bypass dedup when the model changed since the last trigger - the new
@@ -534,10 +537,15 @@ export class ForegroundFallbackManager {
    * session is in retry mode.  inProgress is set first so the
    * task-session-manager sees isFallbackInProgress()=true during the
    * abort idle window and does not cancel the pending task call.
+   *
+   * When no chain is available, do nothing (no abort, no log). Aborting
+   * without a replacement model only races owners that manage their own
+   * lifecycle (e.g. CouncilManager for councillor) and produces noise.
    */
   private async tryFallbackWithAbort(sessionID: string): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
 
     this.inProgress.add(sessionID);
@@ -580,13 +588,8 @@ export class ForegroundFallbackManager {
       let currentModel = this.sessionModel.get(sessionID);
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
-      if (!chain.length) {
-        log('[foreground-fallback] no chain configured', {
-          sessionID,
-          agentName,
-        });
-        return;
-      }
+      // Callers pre-check via hasFallbackChain; keep as defensive guard only.
+      if (!chain.length) return;
 
       // When the agent is known but no model was captured (common for
       // subagent error events that fire before message.updated), infer
@@ -768,6 +771,16 @@ export class ForegroundFallbackManager {
   // ---------------------------------------------------------------------------
   // Chain resolution
   // ---------------------------------------------------------------------------
+
+  /** True when resolveChain yields at least one model for this session. */
+  private hasFallbackChain(sessionID: string): boolean {
+    return (
+      this.resolveChain(
+        this.sessionAgent.get(sessionID),
+        this.sessionModel.get(sessionID),
+      ).length > 0
+    );
+  }
 
   /**
    * Determine the fallback chain to use for a session.

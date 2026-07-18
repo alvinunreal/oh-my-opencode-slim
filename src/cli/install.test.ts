@@ -48,22 +48,26 @@ let mockFailedResult: string[] = [];
 let mockStagedResult: string[] = [];
 let mockAdoptedResult: string[] = [];
 let mockCustomizedResult: string[] = [];
+let receivedSkillSyncOptions: unknown;
 let enableInstallMocks = false;
 
 mock.module('../hooks/auto-update-checker/skill-sync', () => {
   return {
     ...actualSkillSync,
-    syncBundledSkillsFromPackage: (packageRoot: string, options?: any) =>
-      enableInstallMocks
-        ? {
-            installed: [],
-            skippedExisting: mockSkippedResult,
-            failed: mockFailedResult,
-            staged: mockStagedResult,
-            adopted: mockAdoptedResult,
-            customized: mockCustomizedResult,
-          }
-        : originalSyncBundledSkillsFromPackage(packageRoot, options),
+    syncBundledSkillsFromPackage: (packageRoot: string, options?: any) => {
+      if (enableInstallMocks) {
+        receivedSkillSyncOptions = options;
+        return {
+          installed: [],
+          skippedExisting: mockSkippedResult,
+          failed: mockFailedResult,
+          staged: mockStagedResult,
+          adopted: mockAdoptedResult,
+          customized: mockCustomizedResult,
+        };
+      }
+      return originalSyncBundledSkillsFromPackage(packageRoot, options);
+    },
   };
 });
 
@@ -145,6 +149,7 @@ function baseConfig(): InstallConfig {
   return {
     hasTmux: false,
     installCustomSkills: false,
+    forceSkillSync: false,
     reset: false,
     backgroundSubagents: 'no',
     companion: 'ask',
@@ -197,6 +202,7 @@ describe('install skill synchronization error mapping', () => {
     mockStagedResult = [];
     mockAdoptedResult = [];
     mockCustomizedResult = [];
+    receivedSkillSyncOptions = undefined;
     originalConsoleLog = console.log;
     logSpy = mock(() => {});
     console.log = logSpy;
@@ -384,5 +390,17 @@ describe('install skill synchronization error mapping', () => {
     expect(summaryMsg).toContain(
       '0 skipped/preserved, 1 staged, 1 adopted, 1 customized, 0 failed.',
     );
+  });
+
+  test('passes force mode to bundled skill synchronization', async () => {
+    const { install } = await import(`./install?test=${importCounter++}`);
+
+    await install({
+      skills: 'force',
+      tui: false,
+      companion: 'no',
+    });
+
+    expect(receivedSkillSyncOptions).toEqual({ force: true });
   });
 });

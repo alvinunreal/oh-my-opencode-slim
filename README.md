@@ -578,6 +578,11 @@ servers), a skill runs no process — it is a focused playbook an agent activate
 when the task calls for it. The installer bundles eight skills and keeps them
 updated on plugin auto-update; local customizations are preserved.
 
+> [!TIP]
+> To discard local bundled-skill customizations and receive package updates, run
+> `bunx oh-my-opencode-slim install --skills=force`. This deliberately replaces
+> installed bundled skills with the package versions.
+
 | Skill | Purpose | Default agent | How to invoke |
 |:-----:|---------|---------------|---------------|
 | <img src="img/skills/codemap.webp" width="120" alt="Codemap artifact"><br>[`codemap`](src/skills/codemap/SKILL.md) | Hierarchical repository maps so agents understand codebases without re-reading everything | `orchestrator` | `run codemap` |
@@ -668,7 +673,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-79-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-80-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -785,6 +790,7 @@ Use this section as a map: start with installation, then jump to features, confi
     </tr>
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/DanielMaly"><img src="https://avatars.githubusercontent.com/u/1443921?v=4?s=100" width="100px;" alt="Daniel Maly"/><br /><sub><b>Daniel Maly</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=DanielMaly" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://giuseppebellamacina.com/"><img src="https://avatars.githubusercontent.com/u/102151655?v=4?s=100" width="100px;" alt="Giuseppe Bellamacina"/><br /><sub><b>Giuseppe Bellamacina</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=GiuseppeBellamacina" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

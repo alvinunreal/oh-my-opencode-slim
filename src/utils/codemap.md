@@ -6,7 +6,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 - Background job lifecycle management via BackgroundJobBoard
 - Environment and configuration utilities
 - Type guards and validation helpers
-- Session and timeout utilities for council/council-manager
+- Session and timeout utilities for council dispatch
 - Logging infrastructure with automatic rotation
 - Task output parsing utilities
 - System message utilities
@@ -54,7 +54,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 4. Log writes are queued to avoid blocking, with errors silently ignored
 
 ### Session Operations
-1. Council manager uses `promptWithTimeout()` to send prompts with configurable timeout
+1. Council dispatch uses `promptWithTimeout()` to send prompts with configurable timeout
 2. On timeout, session is aborted and OperationTimeoutError is thrown
 3. Results are extracted via `extractSessionResult()` which collects all assistant message text
 
@@ -62,7 +62,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Consumers
 
-- **Council/Council Manager** (`src/council/`):
+- **Council Agents** (`src/agents/council.ts`, `src/agents/council-agents.ts`):
   - Uses BackgroundJobBoard for background task management
   - Uses session utilities for prompt timeout and session extraction
   - Uses logger for debug and audit logging

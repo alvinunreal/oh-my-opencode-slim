@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
+import { CouncilConfigSchema } from '../config/council-schema';
 import { createAgents, getAgentConfigs } from './index';
 
 describe('displayName', () => {
@@ -208,5 +209,19 @@ describe('displayName', () => {
 
     expect(sdkConfigs.reviewer).toBeUndefined();
     expect(sdkConfigs.councillor?.hidden).toBe(true);
+  });
+
+  test('keeps dynamic councillor-<seat> agents hidden from @ autocomplete', () => {
+    const config: PluginConfig = {
+      disabled_agents: [],
+      council: CouncilConfigSchema.parse({
+        presets: { default: { alpha: { model: 'test/councillor' } } },
+      }),
+    };
+
+    const sdkConfigs = getAgentConfigs(config);
+
+    expect(sdkConfigs['councillor-alpha']?.hidden).toBe(true);
+    expect(sdkConfigs['councillor-alpha']?.mode).toBe('subagent');
   });
 });

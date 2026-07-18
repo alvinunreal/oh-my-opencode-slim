@@ -132,19 +132,6 @@ export const CouncilPresetSchema = z
 export type CouncilPreset = z.infer<typeof CouncilPresetSchema>;
 
 /**
- * Execution mode for councillors.
- * - parallel: Run all councillors concurrently (default, fastest for multi-model systems)
- * - serial: Run councillors one at a time (required for single-model systems to avoid conflicts)
- */
-export const CouncillorExecutionModeSchema = z
-  .enum(['parallel', 'serial'])
-  .default('parallel')
-  .describe(
-    'Execution mode for councillors. Use "serial" for single-model systems to avoid conflicts. ' +
-      'Use "parallel" for multi-model systems for faster execution.',
-  );
-
-/**
  * Top-level council configuration.
  *
  * Example JSONC:
@@ -157,9 +144,7 @@ export const CouncillorExecutionModeSchema = z
  *         "beta":  { "model": "openai/gpt-5.3-codex" },
  *         "gamma": { "model": "google/gemini-3-pro" }
  *       }
- *     },
- *     "timeout": 180000,
- *     "councillor_execution_mode": "serial"
+ *     }
  *   }
  * }
  * ```
@@ -167,21 +152,7 @@ export const CouncillorExecutionModeSchema = z
 export const CouncilConfigSchema = z
   .object({
     presets: z.record(z.string(), CouncilPresetSchema),
-    timeout: z.number().min(0).default(180000),
     default_preset: z.string().default('default'),
-    councillor_execution_mode: CouncillorExecutionModeSchema.describe(
-      'Execution mode for councillors. "serial" runs them one at a time (required for single-model systems). "parallel" runs them concurrently (default, faster for multi-model systems).',
-    ),
-    councillor_retries: z
-      .number()
-      .int()
-      .min(0)
-      .max(5)
-      .default(3)
-      .describe(
-        'Number of retry attempts for councillors that return empty responses ' +
-          '(e.g. due to provider rate limiting). Default: 3 retries.',
-      ),
     // Deprecated fields - accepted for backward compatibility but ignored.
     // The council agent now synthesizes directly; no separate master session.
     // Uses permissive schemas since the values are discarded - strict
@@ -209,32 +180,10 @@ export const CouncilConfigSchema = z
 
     return {
       presets: data.presets,
-      timeout: data.timeout,
       default_preset: data.default_preset,
-      councillor_execution_mode: data.councillor_execution_mode,
-      councillor_retries: data.councillor_retries,
       _deprecated: deprecated.length > 0 ? deprecated : undefined,
       _legacyMasterModel: legacyMasterModel,
     };
   });
 
 export type CouncilConfig = z.infer<typeof CouncilConfigSchema>;
-export type CouncillorExecutionMode = z.infer<
-  typeof CouncillorExecutionModeSchema
->;
-
-/**
- * Result of a council session.
- */
-export interface CouncilResult {
-  success: boolean;
-  result?: string;
-  error?: string;
-  councillorResults: Array<{
-    name: string;
-    model: string;
-    status: 'completed' | 'failed' | 'timed_out';
-    result?: string;
-    error?: string;
-  }>;
-}

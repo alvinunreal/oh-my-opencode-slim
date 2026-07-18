@@ -1,8 +1,11 @@
 # Cache verification
 
-This project has two complementary checks. They answer different questions and
-should not be conflated.
+This project has four complementary layers. They answer different questions
+and should not be conflated.
 
+- **Continuous cache-safety tests** run in `bun test` (and therefore CI) and
+  enforce the payload invariants directly against the hook pipeline. This is
+  the first line of defense against cache regressions.
 - **Deterministic payload verification** proves that this plugin projects a
   stable provider payload under a controlled local capture server. It does not
   measure a provider cache.
@@ -10,6 +13,44 @@ should not be conflated.
   provider-backed OpenCode server. It is opt-in, provider-specific, and useful
   for comparing explicitly controlled arms; it is not a CI check or a general
   cache guarantee.
+- **Runtime cache monitoring** watches provider-reported cache telemetry
+  during real sessions and logs a warning when a cache bust signature appears.
+
+## Continuous cache-safety tests (CI)
+
+Provider prompt caches are exact byte-prefix matches over the rendered
+request. Instead of enumerating known-good payload shapes, these suites
+assert the properties every transform must uphold, so they also catch
+mistakes that have not been made before:
+
+- `src/hooks/cache-safety.property.test.ts` — re-renders a growing
+  conversation through the real transform pipeline (mirroring the
+  composition in `src/index.ts`) and asserts turn-over-turn byte-prefix
+  stability, isolation of volatile content to the tagged trailing message,
+  determinism under wall-clock/randomness changes, and pass-through of
+  specialist payloads. A drift guard fails when `src/index.ts` gains, loses,
+  or reorders transform steps without the suite being updated.
+- `src/hooks/cache-payload.snapshot.test.ts` — golden snapshots of every
+  prompt surface the plugin injects (phase reminder, orchestrator system
+  prompt, canonical transformed payload). A failure means the change will
+  invalidate provider caches for existing sessions once; update deliberately
+  with `bun test --update-snapshots` so the PR diff documents the impact.
+- `src/cache-safety-tripwire.test.ts` — scans prompt-assembly directories
+  for volatile-input patterns (`Date.now`, `new Date`, `Math.random`,
+  `randomUUID`, `performance.now`) outside a justified allowlist.
+
+All hook injections must go through `src/hooks/cache-safe-injection.ts`; see
+the Prompt Cache Safety section in `AGENTS.md` for the authoring rules.
+
+## Runtime cache monitoring
+
+`src/hooks/cache-monitor/` observes `message.updated` events and the
+provider-reported `tokens.cache.read` / `tokens.cache.write` counters. When a
+session that previously hit the cache reports zero cache-read tokens on a
+sizeable request, it logs a `[cache-monitor] possible prompt-cache bust`
+warning (once per bust streak) to the plugin log. Providers that never report
+cache telemetry produce no warnings. This is the field safety net for
+provider-side behavior no offline test can model.
 
 ## Prerequisites
 

@@ -9,23 +9,41 @@ function resolvePathCommand(
   environment: NodeJS.ProcessEnv = process.env,
 ): string | null {
   try {
-    const resolver = process.platform === 'win32' ? 'where' : 'which';
+    const isWindows = process.platform === 'win32';
+    const resolver = isWindows ? 'where' : 'which';
     const result = spawnSync(resolver, [command], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       env: environment,
+      // On Windows, `where opencode` returns multiple shims (opencode, opencode.cmd,
+      // opencode.ps1). Node's spawnSync cannot execute an extensionless npm shim,
+      // and since Node's CVE-2024-27980 patch .cmd/.bat files also require a shell.
+      shell: isWindows,
     });
 
     if (result.status !== 0) {
       return null;
     }
 
-    const resolved = result.stdout
+    const lines = result.stdout
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find(Boolean);
+      .filter(Boolean);
 
-    return resolved ?? null;
+    if (lines.length === 0) {
+      return null;
+    }
+
+    // On Windows, prefer executable shims (.cmd, .exe, .ps1) over the
+    // extensionless npm wrapper that Node cannot spawn directly.
+    if (isWindows) {
+      const executable = lines.find((line) =>
+        /\.(cmd|exe|ps1|bat)$/i.test(line),
+      );
+      return executable ?? lines[0];
+    }
+
+    return lines[0];
   } catch {
     return null;
   }
@@ -37,9 +55,13 @@ function canExecute(
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
   try {
+    const isWindows = process.platform === 'win32';
     const result = spawnSync(command, args, {
       stdio: 'ignore',
       env: environment,
+      // Required on Windows to execute .cmd/.bat shims produced by npm/pnpm/yarn
+      // (Node's CVE-2024-27980 patch blocks them without a shell).
+      shell: isWindows,
     });
     return result.status === 0;
   } catch {
@@ -51,10 +73,33 @@ function getOpenCodePaths(
   environment: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const home = environment.HOME || environment.USERPROFILE || '';
+  const isWindows = process.platform === 'win32';
+  const appData = environment.APPDATA || `${home}\\AppData\\Roaming`;
+  const localAppData = environment.LOCALAPPDATA || `${home}\\AppData\\Local`;
+
+  const windowsPaths = isWindows
+    ? [
+        // npm global shims (created as .cmd on Windows)
+        `${appData}\\npm\\opencode.cmd`,
+        `${appData}\\npm\\opencode.ps1`,
+        // pnpm global
+        `${localAppData}\\pnpm\\opencode.cmd`,
+        // Yarn global
+        `${localAppData}\\Yarn\\bin\\opencode.cmd`,
+        // opencode.ai/install .exe location
+        `${localAppData}\\Programs\\opencode\\opencode.exe`,
+        // Scoop
+        `${home}\\scoop\\shims\\opencode.exe`,
+        `${home}\\scoop\\apps\\opencode\\current\\bin\\opencode.exe`,
+        // Chocolatey
+        `C:\\ProgramData\\chocolatey\\bin\\opencode.exe`,
+      ]
+    : [];
 
   return [
     // PATH (try this first)
     'opencode',
+    ...windowsPaths,
     // User local installations (Linux & macOS)
     `${home}/.local/bin/opencode`,
     `${home}/.opencode/bin/opencode`,

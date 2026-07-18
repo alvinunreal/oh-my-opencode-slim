@@ -8,6 +8,7 @@
 
 import { PHASE_REMINDER } from '../../config/constants';
 import { isInternalInitiatorPart } from '../../utils';
+import { appendTaggedSyntheticPart } from '../cache-safe-injection';
 import {
   hasPhaseReminder,
   PHASE_REMINDER_METADATA_KEY,
@@ -65,11 +66,9 @@ export function createPostFileToolNudgeHook(
       if (!coordinator.consumePending(sessionID)) return;
       if (hasReminder) return;
       // This transform must run before phase-reminder so this metadata deduplicates.
-      message.parts.push({
-        type: 'text',
-        synthetic: true,
+      appendTaggedSyntheticPart(message, {
         text: PHASE_REMINDER,
-        metadata: { [PHASE_REMINDER_METADATA_KEY]: true },
+        metadataKey: PHASE_REMINDER_METADATA_KEY,
       });
     },
   };

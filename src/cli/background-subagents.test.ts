@@ -154,6 +154,12 @@ describe('parseArgs companion', () => {
   });
 });
 
+describe('parseArgs skills', () => {
+  test('parses force skill synchronization mode', () => {
+    expect(parseArgs(['--skills=force']).skills).toBe('force');
+  });
+});
+
 describe('configureBackgroundSubagents', () => {
   let tempDir: string | undefined;
   const originalBackgroundEnv =

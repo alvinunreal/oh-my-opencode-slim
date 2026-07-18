@@ -496,10 +496,6 @@ describe('permission edge cases', () => {
       (orchestrator?.config.permission as Record<string, unknown>)?.question,
     ).toBeDefined();
     expect(
-      (orchestrator?.config.permission as Record<string, unknown>)
-        ?.council_session,
-    ).toBeDefined();
-    expect(
       (orchestrator?.config.permission as Record<string, unknown>)?.cancel_task,
     ).toBeDefined();
   });

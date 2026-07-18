@@ -1,10 +1,11 @@
 export type BooleanArg = 'yes' | 'no';
+export type SkillsArg = BooleanArg | 'force';
 export type BackgroundSubagentsArg = 'ask' | 'yes' | 'no';
 export type CompanionArg = 'ask' | BooleanArg;
 
 export interface InstallArgs {
   tui: boolean;
-  skills?: BooleanArg;
+  skills?: SkillsArg;
   preset?: string;
   dryRun?: boolean;
   reset?: boolean;
@@ -23,6 +24,7 @@ export interface OpenCodeConfig {
 export interface InstallConfig {
   hasTmux: boolean;
   installCustomSkills: boolean;
+  forceSkillSync: boolean;
   preset?: string;
   promptForStar?: boolean;
   dryRun?: boolean;

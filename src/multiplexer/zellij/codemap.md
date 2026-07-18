@@ -79,7 +79,7 @@ Implements a Zellij-based multiplexer adapter that creates and manages terminal 
 
 ### Consumers
 - **Main Plugin**: `src/index.ts` instantiates ZellijMultiplexer via multiplexer factory
-- **Council Manager**: `src/council/council-manager.ts` uses multiplexer for session pane management
+- **Council Agents**: `src/agents/council.ts` and `src/agents/council-agents.ts` use multiplexer for session pane management
 - **Session Lifecycle**: MultiplexerSessionManager coordinates pane creation/cleanup with session events
 
 ### Environment

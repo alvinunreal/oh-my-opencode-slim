@@ -62,6 +62,21 @@ describe('createCouncillorAgent', () => {
   });
 });
 
+test('sets variant when provided', () => {
+  const agent = createCouncillorAgent(
+    'test-model',
+    undefined,
+    undefined,
+    'high',
+  );
+  expect(agent.config.variant).toBe('high');
+});
+
+test('variant is undefined when not provided', () => {
+  const agent = createCouncillorAgent('test-model');
+  expect(agent.config.variant).toBeUndefined();
+});
+
 describe('councillor permissions', () => {
   test('denies all by default with wildcard', () => {
     const agent = createCouncillorAgent('test-model');
