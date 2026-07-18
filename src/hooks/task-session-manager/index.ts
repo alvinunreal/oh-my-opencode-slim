@@ -1175,23 +1175,6 @@ export function createTaskSessionManagerHook(
                 agent: record.agent,
               },
             );
-            // ponytail: clean up phantom running job during fallback.
-            // Only auto-drop when exactly 1 other running job exists
-            // (the single phantom). More than 1 means there might be
-            // legit concurrent jobs — session.deleted cleans them
-            // individually.
-            // ponytail: O(n) scan over the parent's jobs — n is tiny
-            // (≤ maxSessionsPerAgent running jobs per parent, default 2)
-            // and only runs during fallback, so the linear cost is
-            // negligible. A per-parent index would be premature.
-            if (options.isFallbackInProgress?.(info.parentID)) {
-              const runningJobs = backgroundJobBoard
-                .list(info.parentID)
-                .filter((j) => j.state === 'running' && j.taskID !== info.id);
-              if (runningJobs.length === 1) {
-                backgroundJobBoard.drop(runningJobs[0].taskID);
-              }
-            }
           }
         }
         return;
