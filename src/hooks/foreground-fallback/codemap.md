@@ -17,8 +17,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   - `sessionAgent`: Maps sessionID → agent name
   - `sessionTried`: Maps sessionID → Set of models already attempted
   - `inProgress`: Set of sessions with active fallback in flight (strict — cleared in finally so the genuine fallback-response idle still reconciles)
-  - `lastFallbackAt`: Maps sessionID → timestamp of last accepted re-prompt; `wasFallbackRecent()` returns true within `FALLBACK_GRACE_WINDOW_MS` (5s), used by task-session-manager to keep the onSessionDeleted drop guard effective and suppress spurious abort-induced cancelled/error status (issue #765)
   - `lastTrigger`: Maps sessionID → timestamp for deduplication
+  - `lastTriggerModel`: Maps sessionID → model in use when lastTrigger was set; dedup is bypassed when the model has changed, allowing the cascade to continue when a new fallback model also fails within the dedup window
+  - `sessionRetries`: Maps sessionID → consecutive 429 count for the current model; reset on model swap or session deletion
 
 ### Fallback Chain Resolution
 - **Agent-specific chains**: Each agent defines an ordered list of fallback models via `_modelArray` entries
@@ -39,7 +40,6 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - **Deduplication window**: 5-second cooldown (`DEDUP_WINDOW_MS`) to prevent multiple triggers for same rate-limit event
 - **Session cleanup**: `session.deleted` event handler removes all per-session state to prevent memory leaks
 - **In-progress tracking**: Prevents concurrent fallback attempts on same session (`inProgress`, cleared in finally)
-- **Grace window**: `wasFallbackRecent()` stays true for 5s after a successful re-prompt, distinct from the strict in-flight flag, so the task-session-manager can suppress late abort-induced `session.deleted` and cancelled/error status without blocking the genuine fallback-response idle reconciliation (issue #765)
 
 ## Flow
 
