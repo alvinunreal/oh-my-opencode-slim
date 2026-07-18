@@ -1,5 +1,10 @@
 import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
-import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
+import {
+  createAgents,
+  getAgentConfigs,
+  getDisabledAgents,
+  isSubagent,
+} from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
@@ -543,14 +548,20 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcp: mcps,
 
     config: async (opencodeConfig: Record<string, unknown>) => {
-      // Only set default_agent if not already configured by the user
-      // and the plugin config doesn't explicitly disable this behavior
-      if (
-        config.setDefaultAgent !== false &&
-        !(opencodeConfig as { default_agent?: string }).default_agent
-      ) {
-        (opencodeConfig as { default_agent?: string }).default_agent =
-          'orchestrator';
+      // Force default_agent to 'orchestrator' when unset, and also when the
+      // user pointed it at an omos subagent name (opencode rejects subagent
+      // names as default_agent with "default agent must be a primary agent").
+      // Other values (opencode's built-in 'build'/'plan', or a user-defined
+      // primary agent) are respected. This guards against promptAsync calls
+      // that omit the `agent` field from falling back to 'build' when the
+      // orchestrator agent is temporarily unresolved.
+      if (config.setDefaultAgent !== false) {
+        const existing = (opencodeConfig as { default_agent?: string })
+          .default_agent;
+        if (!existing || isSubagent(existing)) {
+          (opencodeConfig as { default_agent?: string }).default_agent =
+            'orchestrator';
+        }
       }
 
       // Merge Agent configs - per-agent shallow merge to preserve
