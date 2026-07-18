@@ -2,6 +2,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { getOpenCodeConfigPaths } from '../../cli/config-manager';
 
+export { INSTALLER_MANAGED_PLUGIN_OPTION } from '../../plugin-entry';
+
 export const PACKAGE_NAME = 'oh-my-opencode-slim';
 export const NPM_REGISTRY_URL = `https://registry.npmjs.org/-/package/${PACKAGE_NAME}/dist-tags`;
 export const NPM_PACKAGE_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;

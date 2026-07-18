@@ -36,6 +36,7 @@ export interface AutoUpdateCheckerOptions {
 export interface PluginEntryInfo {
   entry: string;
   isPinned: boolean;
+  isInstallerManaged: boolean;
   pinnedVersion: string | null;
   configPath: string;
 }

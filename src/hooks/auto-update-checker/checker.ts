@@ -1,7 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stripJsonComments } from '../../cli/config-manager';
+import {
+  getOpenCodeConfigPaths,
+  stripJsonComments,
+} from '../../cli/config-manager';
+import { getTuiConfig, getTuiConfigJsonc } from '../../cli/paths';
+import { INSTALLER_MANAGED_PLUGIN_OPTION } from '../../plugin-entry';
 import { log } from '../../utils/logger';
 import {
   INSTALLED_PACKAGE_JSON,
@@ -32,8 +37,182 @@ function isString(value: unknown): value is string {
   return typeof value === 'string';
 }
 
-function getPluginEntries(config: OpencodeConfig): string[] {
-  return Array.isArray(config.plugin) ? config.plugin.filter(isString) : [];
+function getPluginEntries(config: OpencodeConfig): unknown[] {
+  return Array.isArray(config.plugin) ? config.plugin : [];
+}
+
+function getPluginSpec(entry: unknown): string | null {
+  if (isString(entry)) return entry;
+  return Array.isArray(entry) && isString(entry[0]) ? entry[0] : null;
+}
+
+function isInstallerManagedEntry(entry: unknown): boolean {
+  return (
+    Array.isArray(entry) &&
+    entry.length >= 2 &&
+    entry[1] !== null &&
+    typeof entry[1] === 'object' &&
+    !Array.isArray(entry[1]) &&
+    (entry[1] as Record<string, unknown>)[INSTALLER_MANAGED_PLUGIN_OPTION] ===
+      true
+  );
+}
+
+type JsoncToken = {
+  kind: 'string' | 'literal' | 'punctuation';
+  value: string;
+  start: number;
+  end: number;
+};
+
+function tokenizeJsonc(content: string): JsoncToken[] {
+  const tokens: JsoncToken[] = [];
+  for (let index = 0; index < content.length; ) {
+    const char = content[index];
+    if (/\s/.test(char)) index++;
+    else if (content.startsWith('//', index)) {
+      index = content.indexOf('\n', index);
+      if (index === -1) break;
+    } else if (content.startsWith('/*', index)) {
+      index = content.indexOf('*/', index + 2);
+      if (index === -1) break;
+      index += 2;
+    } else if ('[]{}:,'.includes(char)) {
+      tokens.push({
+        kind: 'punctuation',
+        value: char,
+        start: index,
+        end: ++index,
+      });
+    } else if (char === '"') {
+      const start = index++;
+      while (index < content.length) {
+        if (content[index] === '\\') index += 2;
+        else if (content[index++] === '"') break;
+      }
+      const raw = content.slice(start, index);
+      try {
+        tokens.push({
+          kind: 'string',
+          value: JSON.parse(raw) as string,
+          start,
+          end: index,
+        });
+      } catch {
+        return [];
+      }
+    } else {
+      const start = index;
+      while (index < content.length && !/\s|[[\]{}:,]/.test(content[index]))
+        index++;
+      tokens.push({
+        kind: 'literal',
+        value: content.slice(start, index),
+        start,
+        end: index,
+      });
+    }
+  }
+  return tokens;
+}
+
+function matchingToken(
+  tokens: JsoncToken[],
+  start: number,
+  open: string,
+  close: string,
+): number {
+  let depth = 0;
+  for (let index = start; index < tokens.length; index++) {
+    if (tokens[index].kind === 'punctuation' && tokens[index].value === open)
+      depth++;
+    if (
+      tokens[index].kind === 'punctuation' &&
+      tokens[index].value === close &&
+      --depth === 0
+    )
+      return index;
+  }
+  return -1;
+}
+
+function hasDirectInstallerMarker(
+  tokens: JsoncToken[],
+  objectStart: number,
+): boolean {
+  const objectEnd = matchingToken(tokens, objectStart, '{', '}');
+  if (objectEnd === -1) return false;
+  let depth = 1;
+  let markerValue = false;
+  for (let index = objectStart + 1; index < objectEnd; index++) {
+    const value = tokens[index].value;
+    if (tokens[index].kind === 'punctuation' && value === '{') depth++;
+    else if (tokens[index].kind === 'punctuation' && value === '}') depth--;
+    else if (
+      depth === 1 &&
+      tokens[index].kind === 'string' &&
+      value === INSTALLER_MANAGED_PLUGIN_OPTION &&
+      tokens[index + 1]?.kind === 'punctuation' &&
+      tokens[index + 1]?.value === ':' &&
+      tokens[index + 2]
+    ) {
+      markerValue =
+        tokens[index + 2].kind === 'literal' &&
+        tokens[index + 2].value === 'true';
+    }
+  }
+  return markerValue;
+}
+
+function findManagedSpecifierRanges(content: string): Array<[number, number]> {
+  const tokens = tokenizeJsonc(content);
+  const rootStart = tokens.findIndex(
+    (token) => token.kind === 'punctuation' && token.value === '{',
+  );
+  if (rootStart === -1) return [];
+  const rootEnd = matchingToken(tokens, rootStart, '{', '}');
+  if (rootEnd === -1) return [];
+  let objectDepth = 1;
+  let plugin = -1;
+  for (let index = rootStart + 1; index < rootEnd; index++) {
+    const value = tokens[index].value;
+    if (tokens[index].kind === 'punctuation' && value === '{') objectDepth++;
+    else if (tokens[index].kind === 'punctuation' && value === '}')
+      objectDepth--;
+    else if (
+      objectDepth === 1 &&
+      value === 'plugin' &&
+      tokens[index + 1]?.kind === 'punctuation' &&
+      tokens[index + 1]?.value === ':' &&
+      tokens[index + 2]?.kind === 'punctuation' &&
+      tokens[index + 2]?.value === '['
+    ) {
+      plugin = index;
+    }
+  }
+  if (plugin === -1) return [];
+  const arrayStart = plugin + 2;
+  const arrayEnd = matchingToken(tokens, arrayStart, '[', ']');
+  if (arrayEnd === -1) return [];
+  const ranges: Array<[number, number]> = [];
+  for (let index = arrayStart + 1; index < arrayEnd; index++) {
+    if (tokens[index].kind !== 'punctuation' || tokens[index].value !== '[')
+      continue;
+    const tupleEnd = matchingToken(tokens, index, '[', ']');
+    if (tupleEnd === -1) break;
+    const specifier = tokens[index + 1];
+    if (
+      specifier?.value.startsWith(`${PACKAGE_NAME}@`) &&
+      tokens[index + 2]?.kind === 'punctuation' &&
+      tokens[index + 2]?.value === ',' &&
+      tokens[index + 3]?.kind === 'punctuation' &&
+      tokens[index + 3]?.value === '{' &&
+      hasDirectInstallerMarker(tokens, index + 3)
+    )
+      ranges.push([specifier.start + 1, specifier.end - 1]);
+    index = tupleEnd;
+  }
+  return ranges;
 }
 
 /**
@@ -153,10 +332,10 @@ export function extractChannel(version: string | null): string {
  */
 function getConfigPaths(directory: string): string[] {
   return [
-    path.join(directory, '.opencode', 'opencode.json'),
-    path.join(directory, '.opencode', 'opencode.jsonc'),
     USER_OPENCODE_CONFIG,
     USER_OPENCODE_CONFIG_JSONC,
+    path.join(directory, '.opencode', 'opencode.json'),
+    path.join(directory, '.opencode', 'opencode.jsonc'),
   ];
 }
 
@@ -172,11 +351,13 @@ function getLocalDevPath(directory: string): string | null {
       const plugins = getPluginEntries(config);
 
       for (const entry of plugins) {
-        if (entry.startsWith('file://') && entry.includes(PACKAGE_NAME)) {
+        const spec = getPluginSpec(entry);
+        if (!spec) continue;
+        if (spec.startsWith('file://') && spec.includes(PACKAGE_NAME)) {
           try {
-            return fileURLToPath(entry);
+            return fileURLToPath(spec);
           } catch {
-            return entry.replace('file://', '');
+            return spec.replace('file://', '');
           }
         }
       }
@@ -251,6 +432,7 @@ export function getCurrentRuntimePackageJsonPath(
  * Searches across all config locations to find the current installation entry for this plugin.
  */
 export function findPluginEntry(directory: string): PluginEntryInfo | null {
+  let selected: PluginEntryInfo | null = null;
   for (const configPath of getConfigPaths(directory)) {
     try {
       if (!fs.existsSync(configPath)) continue;
@@ -258,16 +440,27 @@ export function findPluginEntry(directory: string): PluginEntryInfo | null {
       const config = JSON.parse(stripJsonComments(content)) as OpencodeConfig;
       const plugins = getPluginEntries(config);
 
-      for (const entry of plugins) {
+      for (const rawEntry of plugins) {
+        const entry = getPluginSpec(rawEntry);
+        if (!entry) continue;
         if (entry === PACKAGE_NAME) {
-          return { entry, isPinned: false, pinnedVersion: null, configPath };
+          selected = {
+            entry,
+            isPinned: false,
+            isInstallerManaged: false,
+            pinnedVersion: null,
+            configPath,
+          };
+          continue;
         }
         if (entry.startsWith(`${PACKAGE_NAME}@`)) {
           const pinnedVersion = entry.slice(PACKAGE_NAME.length + 1);
-          const isPinned = pinnedVersion !== 'latest';
-          return {
+          const isInstallerManaged = isInstallerManagedEntry(rawEntry);
+          const isPinned = pinnedVersion !== 'latest' && !isInstallerManaged;
+          selected = {
             entry,
             isPinned,
+            isInstallerManaged,
             pinnedVersion: isPinned ? pinnedVersion : null,
             configPath,
           };
@@ -275,7 +468,7 @@ export function findPluginEntry(directory: string): PluginEntryInfo | null {
       }
     } catch {}
   }
-  return null;
+  return selected;
 }
 
 const _cachedLocalVersion: string | null = null;
@@ -324,43 +517,62 @@ export function getCachedVersion(): string | null {
  * Safely updates a pinned version in the configuration file.
  * It attempts to replace the exact plugin string to preserve comments and formatting.
  */
-export function updatePinnedVersion(
-  configPath: string,
-  oldEntry: string,
+export function updateInstallerManagedVersions(
+  directory: string,
   newVersion: string,
 ): boolean {
   try {
-    if (!fs.existsSync(configPath)) return false;
-
-    const content = fs.readFileSync(configPath, 'utf-8');
+    const paths = [
+      ...getConfigPaths(directory),
+      ...getOpenCodeConfigPaths(),
+      getTuiConfig(),
+      getTuiConfigJsonc(),
+    ]
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .filter((configPath) => fs.existsSync(configPath));
     const newEntry = `${PACKAGE_NAME}@${newVersion}`;
-
-    // Check if the old entry actually exists as a quoted string
-    const escapedOldEntry = oldEntry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const entryRegex = new RegExp(`(["'])${escapedOldEntry}\\1`, 'g');
-
-    if (!entryRegex.test(content)) {
-      log(
-        `[auto-update-checker] Entry "${oldEntry}" not found in ${configPath}`,
-      );
-      return false;
+    const updates = paths.flatMap((configPath) => {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      const updated = findManagedSpecifierRanges(content)
+        .toReversed()
+        .reduce(
+          (result, [start, end]) =>
+            `${result.slice(0, start)}${newEntry}${result.slice(end)}`,
+          content,
+        );
+      const changed = updated !== content;
+      return changed
+        ? [
+            {
+              configPath,
+              content,
+              updated,
+            },
+          ]
+        : [];
+    });
+    if (updates.length === 0) return false;
+    const token = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    for (const update of updates)
+      fs.writeFileSync(`${update.configPath}.${token}.tmp`, update.updated);
+    const committed: typeof updates = [];
+    try {
+      for (const update of updates) {
+        fs.renameSync(`${update.configPath}.${token}.tmp`, update.configPath);
+        committed.push(update);
+      }
+    } catch (err) {
+      for (const update of committed) {
+        const restorePath = `${update.configPath}.${token}.restore`;
+        fs.writeFileSync(restorePath, update.content);
+        fs.renameSync(restorePath, update.configPath);
+      }
+      throw err;
     }
-
-    // Perform the replacement
-    const updatedContent = content.replace(entryRegex, `$1${newEntry}$1`);
-
-    if (updatedContent === content) {
-      return false;
-    }
-
-    fs.writeFileSync(configPath, updatedContent, 'utf-8');
-    log(
-      `[auto-update-checker] Updated ${configPath}: ${oldEntry} → ${newEntry}`,
-    );
     return true;
   } catch (err) {
     log(
-      `[auto-update-checker] Failed to update config file ${configPath}:`,
+      '[auto-update-checker] Failed to update installer-managed configs:',
       err,
     );
     return false;
