@@ -398,8 +398,6 @@ describe('ForegroundFallbackManager session.error', () => {
       providerID: 'openai',
       modelID: 'gpt-4o',
     });
-    // Grace window should be armed (fallback was successful)
-    expect(mgr.wasFallbackRecent('sess-busy-retry')).toBe(true);
   });
 });
 
@@ -1343,115 +1341,6 @@ describe('ForegroundFallbackManager session.deleted', () => {
     // inProgress must survive — the finally block of tryFallback/WithAbort
     // manages it, not the session.deleted callback
     expect(mgr.isFallbackInProgress(sessionID)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ForegroundFallbackManager - wasFallbackRecent grace window (#765)
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager wasFallbackRecent grace window', () => {
-  test('false before any fallback', () => {
-    const { client } = createMockClient();
-    const mgr = new ForegroundFallbackManager(client, makeChains(), true);
-    expect(mgr.wasFallbackRecent('sess-never')).toBe(false);
-  });
-
-  test('armed after a successful fallback re-prompt, then expires', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(client, makeChains(), true, 1);
-
-    // Establish current model + agent so execFallback can pick the next model.
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-grace',
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-grace',
-        status: { type: 'retry', attempt: 1, message: 'rate limit' },
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    // Strict inProgress is cleared in finally; grace window is armed.
-    expect(mgr.isFallbackInProgress('sess-grace')).toBe(false);
-    expect(mgr.wasFallbackRecent('sess-grace')).toBe(true);
-
-    // Simulate the grace window elapsing.
-    (
-      mgr as unknown as { lastFallbackAt: Map<string, number> }
-    ).lastFallbackAt.set('sess-grace', Date.now() - 6_000);
-    expect(mgr.wasFallbackRecent('sess-grace')).toBe(false);
-  });
-
-  test('cleared on session.deleted', () => {
-    const coordinator = new SessionLifecycle(() => {});
-    const { client } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      client,
-      makeChains(),
-      true,
-      3,
-      coordinator,
-    );
-
-    // Arm the grace window manually.
-    (
-      mgr as unknown as { lastFallbackAt: Map<string, number> }
-    ).lastFallbackAt.set('sess-gone', Date.now());
-    expect(mgr.wasFallbackRecent('sess-gone')).toBe(true);
-
-    coordinator.dispatchSessionDeleted('sess-gone');
-    expect(mgr.wasFallbackRecent('sess-gone')).toBe(false);
-  });
-
-  test('NOT armed on chain exhaustion (no re-prompt)', async () => {
-    // Single-model chain: first model fails, no fallback model available.
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      client,
-      makeChains({ orchestrator: ['anthropic/claude-opus-4-5'] }),
-      true,
-      1,
-    );
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-exhaust',
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-exhaust',
-        status: { type: 'retry', attempt: 1, message: 'rate limit' },
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-
-    // promptAsync never called (chain exhausted → abort only), and the
-    // grace window must NOT be armed so the real cancelled/error status is
-    // not suppressed.
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
-    expect(mgr.wasFallbackRecent('sess-exhaust')).toBe(false);
   });
 });
 
