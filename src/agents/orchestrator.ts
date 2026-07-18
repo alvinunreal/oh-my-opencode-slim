@@ -162,7 +162,8 @@ Review available agents and lane rules. Before beginning non-trivial work, ident
 
 **Routing threshold:**
 - Handle directly only for one isolated, clear, low-risk action where delegation would cost more than execution.
-- For multi-step implementation, broad discovery, external research, visual work, or complex debugging, delegate to the suitable specialist.
+- Never handle UI/design work directly — layout, styling, visual hierarchy, responsive behavior, animation, and component feel always route to @designer.
+- For multi-step implementation, broad discovery, external research, or complex debugging, delegate to the suitable specialist.
 - If two or more parts can proceed independently, dispatch them in parallel before starting dependent work.
 - Do not delegate merely because an agent exists. Do not keep substantive work entirely in the orchestrator merely because each individual step seems easy.
 
