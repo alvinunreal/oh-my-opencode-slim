@@ -16,8 +16,10 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   - `sessionModel`: Maps sessionID → current model string ("providerID/modelID")
   - `sessionAgent`: Maps sessionID → agent name
   - `sessionTried`: Maps sessionID → Set of models already attempted
-  - `inProgress`: Set of sessions with active fallback in flight
+  - `inProgress`: Set of sessions with active fallback in flight (strict — cleared in finally so the genuine fallback-response idle still reconciles)
   - `lastTrigger`: Maps sessionID → timestamp for deduplication
+  - `lastTriggerModel`: Maps sessionID → model in use when lastTrigger was set; dedup is bypassed when the model has changed, allowing the cascade to continue when a new fallback model also fails within the dedup window
+  - `sessionRetries`: Maps sessionID → consecutive 429 count for the current model; reset on model swap or session deletion
 
 ### Fallback Chain Resolution
 - **Agent-specific chains**: Each agent defines an ordered list of fallback models via `_modelArray` entries
@@ -37,7 +39,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 ### State Management
 - **Deduplication window**: 5-second cooldown (`DEDUP_WINDOW_MS`) to prevent multiple triggers for same rate-limit event
 - **Session cleanup**: `session.deleted` event handler removes all per-session state to prevent memory leaks
-- **In-progress tracking**: Prevents concurrent fallback attempts on same session
+- **In-progress tracking**: Prevents concurrent fallback attempts on same session (`inProgress`, cleared in finally)
 
 ## Flow
 

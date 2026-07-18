@@ -129,15 +129,20 @@ export function createTaskSessionManagerHook(
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
     registerSessionAsOrchestrator?: (sessionID: string) => void;
-    /** Optional guard: when provided, idle events for a session that is
-     *  currently undergoing a foreground-fallback abort/re-prompt cycle
-     *  will NOT trigger idle reconciliation. prevents marking a still-
-     *  active child job as completed when the session was aborted for
-     *  model fallback rather than natural completion. */
+    /** Called with a sessionID to check if that session (or its parent)
+     *  is currently undergoing a foreground-fallback abort/re-prompt cycle.
+     *  When true: idle events for both the parent and any background
+     *  children are skipped (prevents marking a still-active job as
+     *  completed during transient fallback); phantom cleanup is enabled
+     *  in session.created nets. */
     isFallbackInProgress?: (sessionID: string) => boolean;
+
     coordinator?: SessionLifecycle;
     /** Test seam only; production always uses the reconciliation delay. */
     idleReconcileDelayMs?: number;
+    /** Called when a background job reaches a terminal state so the
+     *  orchestrator can be prodded to re-evaluate its conversation. */
+    onJobTerminal?: (parentSessionID: string) => void;
   },
 ) {
   const backgroundJobBoard =
@@ -158,6 +163,7 @@ export function createTaskSessionManagerHook(
   const continuationSessionTokens = new Map<string, symbol>();
   const activeContinuationEvaluations = new Map<string, Set<symbol>>();
   const continuationConsumed = new Set<string>();
+  const terminalJobNotified = new Set<string>();
   const inputWaitsByParent = new Map<string, Set<string | symbol>>();
   const idleReconcileDelayMs =
     options.idleReconcileDelayMs ?? IDLE_RECONCILE_DELAY_MS;
@@ -455,6 +461,7 @@ export function createTaskSessionManagerHook(
         backgroundJobBoard.clearParent(sessionId);
       }
       terminalJobsInjectedByParent.delete(sessionId);
+      terminalJobNotified.delete(sessionId);
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);
       pendingCallTracker.clearSession(sessionId);
@@ -593,6 +600,18 @@ export function createTaskSessionManagerHook(
     });
 
     rememberProcessedInjectedCompletion(occurrenceId);
+
+    // ponytail: notify orchestrator when injected completion makes a
+    // job terminal. The session.idle handler for the child only fires
+    // when job.state === 'running', which won't be true if the injected
+    // completion already marked it completed.
+    if (updated.terminalUnreconciled && options.onJobTerminal) {
+      if (!terminalJobNotified.has(updated.taskID)) {
+        terminalJobNotified.add(updated.taskID);
+        options.onJobTerminal(updated.parentSessionID);
+      }
+    }
+
     return updated;
   }
 
@@ -941,6 +960,12 @@ export function createTaskSessionManagerHook(
           taskContextTracker.contextFilesForPrompt(status.taskID),
         );
         taskContextTracker.prune(backgroundJobBoard);
+        if (updated && updated.state !== 'running' && options.onJobTerminal) {
+          if (!terminalJobNotified.has(status.taskID)) {
+            terminalJobNotified.add(status.taskID);
+            options.onJobTerminal(pending.parentSessionId);
+          }
+        }
         return;
       }
 
@@ -993,6 +1018,54 @@ export function createTaskSessionManagerHook(
         for (const [partIndex, part] of message.parts.entries()) {
           updateFromInjectedCompletion(part, message, messageIndex, partIndex);
         }
+      }
+
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (!isUserMessageWithParts(message)) continue;
+        if (message.info.agent && message.info.agent !== 'orchestrator') return;
+        if (
+          !message.info.sessionID ||
+          !options.shouldManageSession(message.info.sessionID)
+        ) {
+          return;
+        }
+
+        const reminders = [
+          backgroundJobBoard.formatForPrompt(message.info.sessionID),
+        ].filter((item): item is string => Boolean(item));
+        if (reminders.length === 0) return;
+
+        const textPart = message.parts.find(
+          (part) => part.type === 'text' && typeof part.text === 'string',
+        );
+        if (!textPart) return;
+        if (isInternalInitiatorPart(textPart)) {
+          return;
+        }
+        const existingBoardIndex = message.parts.findIndex(
+          (part) =>
+            part.synthetic === true &&
+            isObjectRecord(part.metadata) &&
+            part.metadata[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
+        );
+        if (existingBoardIndex !== -1) {
+          const part = message.parts[existingBoardIndex];
+          if (typeof (part as { text?: unknown }).text === 'string') {
+            (part as { text: string }).text = reminders.join('\n\n');
+          }
+          return;
+        }
+
+        rememberInjectedTerminalJobs(message.info.sessionID);
+        const boardPart = {
+          type: 'text',
+          synthetic: true,
+          text: reminders.join('\n\n'),
+          metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
+        };
+        message.parts.unshift(boardPart);
+        return;
       }
     },
 
@@ -1129,6 +1202,12 @@ export function createTaskSessionManagerHook(
             taskContextTracker.contextFilesForPrompt(sessionId),
           );
           taskContextTracker.prune(backgroundJobBoard);
+          if (options.onJobTerminal) {
+            if (!terminalJobNotified.has(sessionId)) {
+              terminalJobNotified.add(sessionId);
+              options.onJobTerminal(job.parentSessionID);
+            }
+          }
         }
         return;
       }
@@ -1220,6 +1299,7 @@ export function createTaskSessionManagerHook(
       log('[task-session-manager] session.deleted observed', {
         sessionID: sessionId,
       });
+      terminalJobNotified.delete(sessionId);
     },
   };
 

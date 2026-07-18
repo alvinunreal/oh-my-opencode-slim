@@ -333,6 +333,27 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       isFallbackInProgress: (sessionID) =>
         foregroundFallback.isFallbackInProgress(sessionID),
       coordinator: sessionLifecycle,
+      onJobTerminal: (parentSessionID) => {
+        ctx.client.session
+          .promptAsync({
+            path: { id: parentSessionID },
+            body: {
+              agent: 'orchestrator',
+              parts: [
+                {
+                  type: 'text',
+                  text: '(Background job completed.)',
+                },
+              ],
+            },
+          })
+          .catch((err) =>
+            log('[plugin] onJobTerminal nudge failed', {
+              parentSessionID,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+      },
     });
 
     // Initialize hooks and wrapPostToolHook helper for error isolation
