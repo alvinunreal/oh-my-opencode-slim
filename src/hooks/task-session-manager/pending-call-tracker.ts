@@ -39,12 +39,13 @@ export function createPendingCallTracker() {
       return pending;
     },
 
-    /** Peek oldest pending call for a parent without removing it. */
+    /** Peek most recent pending call for a parent without removing it. */
     peekByParent(parentSessionId: string) {
+      let latest: PendingTaskCall | undefined;
       for (const call of pendingCalls.values()) {
-        if (call.parentSessionId === parentSessionId) return call;
+        if (call.parentSessionId === parentSessionId) latest = call;
       }
-      return undefined;
+      return latest;
     },
 
     clearSession(sessionId: string) {
