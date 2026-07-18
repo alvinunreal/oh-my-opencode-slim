@@ -136,14 +136,6 @@ export function generateLiteConfig(
     presets[presetName] = buildPreset(presetName);
   }
 
-  if (installConfig.hasTmux) {
-    config.tmux = {
-      enabled: true,
-      layout: 'main-vertical',
-      main_pane_size: 60,
-    };
-  }
-
   if (installConfig.companion === 'yes') {
     config.companion = {
       enabled: true,

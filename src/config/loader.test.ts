@@ -438,6 +438,94 @@ describe('onWarning callback', () => {
     expect(config.agents?.oracle?.model).toBe('valid/model');
   });
 
+  test('deprecated tmux key calls onWarning with invalid-schema and still loads', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        tmux: { enabled: true, layout: 'main-vertical' },
+        agents: { oracle: { model: 'valid/model' } },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.kind).toBe('invalid-schema');
+    expect(warnings[0]?.message).toContain('Deprecated tmux config key');
+    expect(config.agents?.oracle?.model).toBe('valid/model');
+  });
+
+  test('deprecated council.master key calls onWarning with invalid-schema and still loads', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        council: {
+          master: { model: 'openai/gpt-5.6' },
+          presets: {
+            default: {
+              alpha: { model: 'openai/gpt-5.6-luna' },
+            },
+          },
+        },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.kind).toBe('invalid-schema');
+    expect(warnings[0]?.message).toContain(
+      'Deprecated council.master config key',
+    );
+    expect(config.council?.presets?.default?.alpha?.model).toBe(
+      'openai/gpt-5.6-luna',
+    );
+  });
+
+  test('both deprecated keys fire two warnings', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        tmux: { enabled: true },
+        council: {
+          master: { model: 'openai/gpt-5.6' },
+          presets: {
+            default: {
+              alpha: { model: 'openai/gpt-5.6-luna' },
+            },
+          },
+        },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(2);
+    const messages = warnings.map((w) => w.message);
+    expect(messages.some((m) => m.includes('Deprecated tmux'))).toBe(true);
+    expect(messages.some((m) => m.includes('Deprecated council.master'))).toBe(
+      true,
+    );
+  });
+
   test('no options object does not break loadPluginConfig', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -511,69 +599,6 @@ describe('deepMerge behavior', () => {
 
     // designer: from project only
     expect(config.agents?.designer?.model).toBe('project/designer-model');
-  });
-
-  test('merges nested tmux configs', () => {
-    const userOpencodeDir = path.join(userConfigDir, 'opencode');
-    fs.mkdirSync(userOpencodeDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: {
-          enabled: true,
-          layout: 'main-vertical',
-          main_pane_size: 60,
-        },
-      }),
-    );
-
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: {
-          enabled: false, // Override enabled
-          layout: 'tiled', // Override layout
-        },
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir);
-
-    expect(config.tmux?.enabled).toBe(false); // From project (override)
-    expect(config.tmux?.layout).toBe('tiled'); // From project
-    expect(config.tmux?.main_pane_size).toBe(60); // From user (preserved)
-  });
-
-  test("preserves user tmux.enabled when project doesn't specify", () => {
-    const userOpencodeDir = path.join(userConfigDir, 'opencode');
-    fs.mkdirSync(userOpencodeDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: {
-          enabled: true,
-          layout: 'main-vertical',
-        },
-      }),
-    );
-
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        agents: { oracle: { model: 'test' } }, // No tmux override
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir);
-
-    expect(config.tmux?.enabled).toBe(true); // Preserved from user
-    expect(config.tmux?.layout).toBe('main-vertical'); // Preserved from user
   });
 
   test('project config overrides top-level arrays', () => {
@@ -1240,10 +1265,6 @@ describe('JSONC config support', () => {
             "explorer": { "model": "dev-explorer", },
           },
         },
-        "tmux": {
-          "enabled": true, // Enable tmux
-          "layout": "main-vertical",
-        },
       }`,
     );
 
@@ -1251,8 +1272,6 @@ describe('JSONC config support', () => {
     expect(config.preset).toBe('dev');
     expect(config.agents?.oracle?.model).toBe('dev-oracle');
     expect(config.agents?.explorer?.model).toBe('dev-explorer');
-    expect(config.tmux?.enabled).toBe(true);
-    expect(config.tmux?.layout).toBe('main-vertical');
   });
 });
 
