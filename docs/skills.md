@@ -96,7 +96,7 @@ See **[Clonedeps](clonedeps.md)** for the full workflow and file layout.
 
 **Heavy/complex coding sessions and large modifications workflow.**
 
-`deepwork` is an orchestrator-only workflow skill for managing deep architectural work, multi-phase implementations, and complex refactoring. It provides a structured approach with mandatory review gates while maintaining flexibility in planning.
+`deepwork` is an orchestrator-only workflow skill for managing deep architectural work, multi-phase implementations, and complex refactoring. It provides a structured approach with risk-based review gates while maintaining flexibility in planning.
 
 Start it directly with:
 
@@ -111,15 +111,21 @@ Start it directly with:
    `!.slim/deepwork/**` in `.ignore`. This keeps state git-local while making it
    readable to OpenCode.
 2. Orchestrator creates a session artifact at `.slim/deepwork/<task>.md`
-3. Draft plan → Oracle review → Revise until acceptable
-4. Create phased implementation plan → Oracle review
-5. Execute phase by phase with validation
-6. After each phase: validate → Oracle review → fix issues → continue
+3. Draft a phased implementation plan with a small number of coherent phases
+   based on dependencies and natural delivery boundaries. Do not split work
+   merely to make an Oracle review smaller.
+4. Before execution, show a compact overview of phase order, specialist
+   ownership/scope, the Oracle review total, the review after each phase, and a
+   short reason for each gate.
+5. Execute phase by phase: validate, update session state, then get an Oracle
+   review before advancing.
+6. Batch material findings into one bounded remediation pass with focused
+   validation. Re-review only when needed to assess a changed decision/risk or
+   an otherwise unverifiable concern.
 
 **Key features:**
 - Persistent session state in markdown files
-- Mandatory oracle reviews at plan and phase boundaries
-- Oracle phase reviews include simplify/readability feedback alongside regular correctness and risk review
+- Predictable Oracle reviews after each planned phase, declared before execution
 - V2 scheduler integration (dispatch specialists, wait for hook-driven completion, reconcile)
 - OpenCode todo lists for progress tracking
 - Flexible structure - orchestrator adapts format to task needs
