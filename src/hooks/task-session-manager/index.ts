@@ -12,6 +12,7 @@ import {
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import { getClient } from '../../utils/opencode-client';
 import {
   appendTrailingVolatileMessage,
   stripTaggedContent,
@@ -166,15 +167,7 @@ export function createTaskSessionManagerHook(
   const idleReconcileDelayMs =
     options.idleReconcileDelayMs ?? IDLE_RECONCILE_DELAY_MS;
 
-  type SdkResponse = { data?: unknown };
-  type SessionSdk = {
-    todo?: (input: unknown) => Promise<SdkResponse>;
-    children?: (input: unknown) => Promise<SdkResponse>;
-    status?: (input: unknown) => Promise<SdkResponse>;
-    promptAsync?: (input: unknown) => Promise<unknown>;
-  };
-  const sessionSdk = (_ctx.client as unknown as { session?: SessionSdk })
-    .session;
+  const sessionSdk = getClient(_ctx).session;
 
   function getContinuationSessionToken(sessionID: string): symbol {
     const existing = continuationSessionTokens.get(sessionID);
@@ -302,15 +295,15 @@ export function createTaskSessionManagerHook(
     try {
       const [todoResponse, childrenResponse, statusResponse] =
         await Promise.all([
-          sessionSdk.todo({
-            path: { id: parentSessionID },
-            throwOnError: true,
-          }),
-          sessionSdk.children({
-            path: { id: parentSessionID },
-            throwOnError: true,
-          }),
-          sessionSdk.status({ throwOnError: true }),
+          sessionSdk.todo(
+            { sessionID: parentSessionID },
+            { throwOnError: true },
+          ),
+          sessionSdk.children(
+            { sessionID: parentSessionID },
+            { throwOnError: true },
+          ),
+          sessionSdk.status({}, { throwOnError: true }),
         ]);
       if (
         !Array.isArray(todoResponse.data) ||
@@ -350,11 +343,11 @@ export function createTaskSessionManagerHook(
       // Re-read liveness immediately before queuing work; board state is only
       // authoritative for terminal results observed by this plugin instance.
       const [latestChildrenResponse, latestStatusResponse] = await Promise.all([
-        sessionSdk.children({
-          path: { id: parentSessionID },
-          throwOnError: true,
-        }),
-        sessionSdk.status({ throwOnError: true }),
+        sessionSdk.children(
+          { sessionID: parentSessionID },
+          { throwOnError: true },
+        ),
+        sessionSdk.status({}, { throwOnError: true }),
       ]);
       if (
         !Array.isArray(latestChildrenResponse.data) ||
@@ -399,14 +392,14 @@ export function createTaskSessionManagerHook(
         return;
       }
       continuationConsumed.add(parentSessionID);
-      await sessionSdk.promptAsync({
-        path: { id: parentSessionID },
-        body: {
+      await sessionSdk.promptAsync(
+        {
+          sessionID: parentSessionID,
           agent: 'orchestrator',
           parts: [createInternalAgentTextPart(CONTINUATION_NUDGE)],
         },
-        throwOnError: true,
-      });
+        { throwOnError: true },
+      );
     } catch (error) {
       log(
         '[task-session-manager] continuation nudge suppressed after SDK error',
@@ -486,8 +479,7 @@ export function createTaskSessionManagerHook(
       backgroundJobBoard.updateStatus({
         taskID: sessionID,
         state: 'completed',
-        resultSummary:
-          'Background task completed (reconciled from idle event)',
+        resultSummary: 'Background task completed (reconciled from idle event)',
       });
       backgroundJobBoard.markReconciled(sessionID);
       taskContextTracker.pendingManagedTaskIds.delete(sessionID);

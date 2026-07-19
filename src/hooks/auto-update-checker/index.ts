@@ -6,6 +6,7 @@ import {
 } from '../../companion/updater';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
+import { getClient } from '../../utils/opencode-client';
 import {
   discardPreparedPackageUpdate,
   preparePackageUpdate,
@@ -436,10 +437,8 @@ function showToast(
   variant: 'info' | 'success' | 'error' = 'info',
   duration = 3000,
 ): void {
-  ctx.client.tui
-    .showToast({
-      body: { title, message, variant, duration },
-    })
+  getClient(ctx)
+    .tui.showToast({ title, message, variant, duration })
     .catch(() => {});
 }
 

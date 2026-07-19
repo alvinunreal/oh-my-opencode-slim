@@ -57,10 +57,7 @@ export function createPendingCallTracker() {
      * Falls back to the oldest pending call for the parent when no
      * agent match is found (preserves prior behavior).
      */
-    peekByParentAndAgent(
-      parentSessionId: string,
-      agentHint?: string,
-    ) {
+    peekByParentAndAgent(parentSessionId: string, agentHint?: string) {
       if (!agentHint) return this.peekByParent(parentSessionId);
       let fallback: PendingTaskCall | undefined;
       for (const call of pendingCalls.values()) {

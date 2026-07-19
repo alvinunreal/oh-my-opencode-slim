@@ -15,6 +15,12 @@ import {
   createTaskSessionManagerHook,
 } from './index';
 
+// Route getClient back to _ctx.client so existing _ctx.client.session
+// mocks continue to work through the new v2 lookup path.
+mock.module('../../utils/opencode-client', () => ({
+  getClient: (input: { client: unknown }) => input.client as never,
+}));
+
 /** Wait for the idle reconciliation delay (2s + margin) to flush. */
 function flushIdleReconcileDelay() {
   return new Promise((resolve) => setTimeout(resolve, 2100));
@@ -2753,25 +2759,40 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: {
         type: 'session.created',
-        properties: { info: { id: 'child-a', parentID: 'parent-1', agent: 'oracle' } },
+        properties: {
+          info: { id: 'child-a', parentID: 'parent-1', agent: 'oracle' },
+        },
       },
     });
     await hook.event({
       event: {
         type: 'session.created',
-        properties: { info: { id: 'child-b', parentID: 'parent-1', agent: 'explorer' } },
+        properties: {
+          info: { id: 'child-b', parentID: 'parent-1', agent: 'explorer' },
+        },
       },
     });
     await hook.event({
       event: {
         type: 'session.created',
-        properties: { info: { id: 'child-c', parentID: 'parent-1', agent: 'fixer' } },
+        properties: {
+          info: { id: 'child-c', parentID: 'parent-1', agent: 'fixer' },
+        },
       },
     });
 
-    expect(board.get('child-a')).toMatchObject({ agent: 'oracle', description: 'audit loss' });
-    expect(board.get('child-b')).toMatchObject({ agent: 'explorer', description: 'audit data' });
-    expect(board.get('child-c')).toMatchObject({ agent: 'fixer', description: 'audit fix' });
+    expect(board.get('child-a')).toMatchObject({
+      agent: 'oracle',
+      description: 'audit loss',
+    });
+    expect(board.get('child-b')).toMatchObject({
+      agent: 'explorer',
+      description: 'audit data',
+    });
+    expect(board.get('child-c')).toMatchObject({
+      agent: 'fixer',
+      description: 'audit fix',
+    });
   });
 
   test('cancelled job is not reconciled from idle', async () => {
@@ -3014,10 +3035,9 @@ describe('task-session-manager hook', () => {
     expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: expect.objectContaining({
-          parts: [expect.objectContaining({ synthetic: true })],
-        }),
+        parts: [expect.objectContaining({ synthetic: true })],
       }),
+      expect.anything(),
     );
   });
 

@@ -72,6 +72,7 @@ import {
 } from './utils';
 import { isPluginDisabledByEnv } from './utils/env';
 import { initLogger, log } from './utils/logger';
+import { getClient } from './utils/opencode-client';
 import { collapseSystemInPlace } from './utils/system-collapse';
 
 /**
@@ -85,8 +86,10 @@ async function appLog(
   message: string,
 ): Promise<void> {
   try {
-    await ctx.client.app.log({
-      body: { service: 'oh-my-opencode-slim', level, message },
+    await getClient(ctx).app.log({
+      service: 'oh-my-opencode-slim',
+      level,
+      message,
     });
   } catch {
     // client.app.log may deadlock or be unavailable; stderr is the
@@ -309,10 +312,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Agents without a chain (e.g. councillor, owned by CouncilManager) are
     // left alone — FG only aborts/re-prompts when it has a model to switch to.
     foregroundFallback = new ForegroundFallbackManager(
-      ctx.client,
       runtimeChains,
       config.fallback?.enabled !== false,
       config.fallback?.maxRetries ?? 3,
+      ctx,
       sessionLifecycle,
     );
 
@@ -412,7 +415,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       config.companion,
     );
     cancelTaskTools = createCancelTaskTool({
-      client: ctx.client,
+      input: ctx,
       backgroundJobBoard: backgroundJobCoordinator,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',

@@ -1609,37 +1609,6 @@ describe('MultiplexerSessionManager', () => {
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
     });
 
-    test('uses the SDK client baseUrl when ctx.serverUrl is missing', async () => {
-      mockMultiplexerType = 'cmux';
-      const ctx = createMockContext();
-      ctx.serverUrl = undefined;
-      ctx.client._client = {
-        getConfig: () => ({ baseUrl: 'http://127.0.0.1:63872/' }),
-      };
-      const serverCheck = mock(async () => true);
-      const manager = new MultiplexerSessionManager(
-        ctx,
-        cmuxConfig,
-        undefined,
-        {
-          isServerRunning: serverCheck,
-        },
-      );
-
-      await manager.onSessionCreated({
-        type: 'session.created',
-        properties: { info: { id: 'client-url', parentID: 'parent' } },
-      });
-
-      expect(serverCheck).toHaveBeenCalledWith('http://127.0.0.1:63872/');
-      expect(mockMultiplexer.spawnPane).toHaveBeenCalledWith(
-        'client-url',
-        'Subagent',
-        'http://127.0.0.1:63872/',
-        '/test/directory',
-      );
-    });
-
     test('does not health check, spawn, or fall back to 4096 without a URL', async () => {
       mockMultiplexerType = 'cmux';
       const ctx = createMockContext();

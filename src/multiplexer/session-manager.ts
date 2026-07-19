@@ -102,32 +102,10 @@ function validServerUrl(value: unknown): string | null {
   }
 }
 
-function clientBaseUrl(client: unknown): string | null {
-  try {
-    if (!client || typeof client !== 'object' || !('_client' in client))
-      return null;
-    const internal = client._client;
-    if (!internal || typeof internal !== 'object' || !('getConfig' in internal))
-      return null;
-    const getConfig = internal.getConfig;
-    if (typeof getConfig !== 'function') return null;
-    const config: unknown = getConfig.call(internal);
-    if (!config || typeof config !== 'object' || !('baseUrl' in config))
-      return null;
-    return validServerUrl(config.baseUrl);
-  } catch {
-    return null;
-  }
-}
-
 function createServerUrlResolver(ctx: PluginInput): () => string | null {
   return () => {
     try {
-      const serverUrl = validServerUrl(ctx.serverUrl);
-      if (serverUrl) return serverUrl;
-    } catch {}
-    try {
-      return clientBaseUrl(ctx.client);
+      return validServerUrl(ctx.serverUrl);
     } catch {
       return null;
     }

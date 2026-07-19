@@ -75,8 +75,16 @@ mock.module('../../utils/compat', () => ({
 
 let importCounter = 0;
 
+// Module-scoped mock so mock.module factory captures the binding
+let mockShowToast: ReturnType<typeof mock>;
+
+mock.module('../../utils/opencode-client', () => ({
+  getClient: () => ({ tui: { showToast: mockShowToast } }),
+}));
+
 function createCtx() {
-  const showToast = mock(() => Promise.resolve(undefined));
+  mockShowToast = mock(() => Promise.resolve(undefined));
+  const showToast = mockShowToast;
 
   return {
     ctx: {
@@ -256,13 +264,10 @@ describe('auto-update-checker/index', () => {
       '/tmp/opencode/node_modules/oh-my-opencode-slim',
     );
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message: 'v0.9.1 → v0.9.11\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -302,12 +307,10 @@ describe('auto-update-checker/index', () => {
 
     expect(showToast).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'Skill updates need review',
-        message: 'Manual review required: reflect',
-        variant: 'info',
-        duration: 8000,
-      },
+      title: 'Skill updates need review',
+      message: 'Manual review required: reflect',
+      variant: 'info',
+      duration: 8000,
     });
   });
 
@@ -345,12 +348,10 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast, 2);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'Skill updates need review',
-        message: 'Manual review required: reflect',
-        variant: 'info',
-        duration: 8000,
-      },
+      title: 'Skill updates need review',
+      message: 'Manual review required: reflect',
+      variant: 'info',
+      duration: 8000,
     });
   });
 
@@ -385,13 +386,11 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nAdded bundled skills: reflect, worktrees\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message:
+        'v0.9.1 → v0.9.11\nAdded bundled skills: reflect, worktrees\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -426,13 +425,11 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nAdded bundled skills: reflect\nStaged skill updates require manual review: worktrees\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message:
+        'v0.9.1 → v0.9.11\nAdded bundled skills: reflect\nStaged skill updates require manual review: worktrees\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -480,13 +477,11 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nStaged skill updates require manual review: reflect\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message:
+        'v0.9.1 → v0.9.11\nStaged skill updates require manual review: reflect\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -534,13 +529,10 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message: 'v0.9.1 → v0.9.11\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -593,13 +585,11 @@ describe('auto-update-checker/index', () => {
       },
     });
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nCompanion updated.\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message:
+        'v0.9.1 → v0.9.11\nCompanion updated.\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -634,13 +624,11 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nCompanion update will retry on restart.\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message:
+        'v0.9.1 → v0.9.11\nCompanion update will retry on restart.\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
   });
 
@@ -675,13 +663,10 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim Updated!',
-        message:
-          'v0.9.1 → v0.9.11\nRestart OpenCode to apply the plugin update.',
-        variant: 'success',
-        duration: 8000,
-      },
+      title: 'OMO-Slim Updated!',
+      message: 'v0.9.1 → v0.9.11\nRestart OpenCode to apply the plugin update.',
+      variant: 'success',
+      duration: 8000,
     });
     expect(logMock).toHaveBeenCalledWith(
       '[auto-update-checker] Skill sync warnings/failures: reflect',
@@ -712,12 +697,10 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim 0.9.11',
-        message: 'v0.9.11 available. Auto-update is disabled.',
-        variant: 'info',
-        duration: 8000,
-      },
+      title: 'OMO-Slim 0.9.11',
+      message: 'v0.9.11 available. Auto-update is disabled.',
+      variant: 'info',
+      duration: 8000,
     });
     expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
     expect(crossSpawnMock).not.toHaveBeenCalled();
@@ -749,13 +732,11 @@ describe('auto-update-checker/index', () => {
     expect(crossSpawnMock).not.toHaveBeenCalled();
     expect(skillSyncMocks.syncBundledSkillsFromPackage).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim 0.9.11',
-        message:
-          'v0.9.11 available. Auto-update could not prepare the active install.',
-        variant: 'info',
-        duration: 8000,
-      },
+      title: 'OMO-Slim 0.9.11',
+      message:
+        'v0.9.11 available. Auto-update could not prepare the active install.',
+      variant: 'info',
+      duration: 8000,
     });
   });
 
@@ -795,13 +776,11 @@ describe('auto-update-checker/index', () => {
     );
     expect(skillSyncMocks.syncBundledSkillsFromPackage).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim 0.9.11',
-        message:
-          'v0.9.11 available, but auto-update failed to install it. Check logs or retry manually.',
-        variant: 'error',
-        duration: 8000,
-      },
+      title: 'OMO-Slim 0.9.11',
+      message:
+        'v0.9.11 available, but auto-update failed to install it. Check logs or retry manually.',
+      variant: 'error',
+      duration: 8000,
     });
   });
 
@@ -848,12 +827,10 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast, 2);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'Skill updates need review',
-        message: 'Manual review required: reflect',
-        variant: 'info',
-        duration: 8000,
-      },
+      title: 'Skill updates need review',
+      message: 'Manual review required: reflect',
+      variant: 'info',
+      duration: 8000,
     });
   });
 
@@ -879,13 +856,11 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'oh-my-opencode-slim v2.0.0 is available.',
-        message:
-          'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-slim@latest install',
-        variant: 'info',
-        duration: 12000,
-      },
+      title: 'oh-my-opencode-slim v2.0.0 is available.',
+      message:
+        'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-slim@latest install',
+      variant: 'info',
+      duration: 12000,
     });
     expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
     expect(crossSpawnMock).not.toHaveBeenCalled();
@@ -914,11 +889,11 @@ describe('auto-update-checker/index', () => {
     await waitForCalls(showToast);
 
     expect(showToast).toHaveBeenCalledTimes(1);
-    expect(showToast).toHaveBeenCalledWith({
-      body: expect.objectContaining({
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
         title: 'oh-my-opencode-slim v2.0.0 is available.',
       }),
-    });
+    );
     expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
     expect(crossSpawnMock).not.toHaveBeenCalled();
     expect(skillSyncMocks.syncBundledSkillsFromPackage).not.toHaveBeenCalled();
@@ -948,13 +923,11 @@ describe('auto-update-checker/index', () => {
 
     expect(showToast).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
-      body: {
-        title: 'OMO-Slim 1.9.0',
-        message:
-          'v1.9.0 available. Auto-update skipped because the current version could not be compared safely.',
-        variant: 'info',
-        duration: 8000,
-      },
+      title: 'OMO-Slim 1.9.0',
+      message:
+        'v1.9.0 available. Auto-update skipped because the current version could not be compared safely.',
+      variant: 'info',
+      duration: 8000,
     });
     expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
     expect(crossSpawnMock).not.toHaveBeenCalled();
