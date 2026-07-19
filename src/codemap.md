@@ -3,7 +3,7 @@
 ## Responsibility
 
 Core plugin implementation for **oh-my-opencode-slim**, providing:
-- Main plugin initialization and OpenCode integration (`index.ts`)
+- Main plugin initialization and OpenCode integration (delegates to `plugin-composer.ts`)
 - Terminal User Interface (TUI) sidebar plugin for agent status display (`tui.ts`)
 - TUI state persistence and synchronization across sessions (`tui-state.ts`)
 
@@ -14,7 +14,7 @@ This directory serves as the primary entry point for the plugin's runtime behavi
 ### Architectural Patterns
 
 - **Plugin Pattern**: The plugin follows OpenCode's plugin architecture with a single exported plugin function that returns agent, tool, and MCP registrations
-- **Facade Pattern**: `index.ts` acts as a facade that composes multiple subsystems (agents, tools, MCPs, hooks, multiplexer)
+- **Facade Pattern**: `plugin-composer.ts` acts as a facade that composes multiple subsystems (agents, tools, MCPs, hooks, multiplexer); `index.ts` is a thin delegation wrapper.
 - **Observer Pattern**: Event-driven architecture using OpenCode's event system for session lifecycle, message updates, and tool execution
 - **Strategy Pattern**: Runtime model selection and fallback via `ForegroundFallbackManager`
 - **Singleton Pattern**: `MultiplexerSessionManager` maintains single instance for task session management
@@ -22,7 +22,7 @@ This directory serves as the primary entry point for the plugin's runtime behavi
 ### Data Flow
 
 ```
-OpenCode Core → Plugin Initialization (index.ts)
+OpenCode Core → Plugin Initialization (index.ts → plugin-composer.ts)
   → Agent Registration (createAgents/getAgentConfigs)
   → Tool Registration (createCancelTaskTool, etc.)
   → MCP Registration (createBuiltinMcps)
@@ -36,7 +36,8 @@ OpenCode Core → Plugin Initialization (index.ts)
 
 | File | Role | Dependencies |
 |------|------|--------------|
-| `index.ts` | Main plugin entry, orchestrates all subsystems | Config system, agent factories, tool creators, multiplexer |
+| `index.ts` | Thin delegation wrapper; delegates to `plugin-composer.ts` | `plugin-composer.ts` |
+| `plugin-composer.ts` | Composition root; orchestrates all subsystems | Config system, agent factories, tool creators, multiplexer |
 | `tui.ts` | TUI sidebar plugin for agent model display | tui-state.ts, config constants |
 | `tui-state.ts` | Persistent state management for TUI | Node.js fs/promises, os module |
 

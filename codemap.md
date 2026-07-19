@@ -18,7 +18,8 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | Path | Role |
 |---|---|
 | `package.json` | Package manifest, dependency graph, release scripts, published file list. |
-| `src/index.ts` | Main plugin bootstrap: wires agents, tools, MCPs, hooks, council managers, shared background job board, multiplexer session mirroring, interview/preset managers, task-session tracking, and config merge behavior. |
+| `src/index.ts` | Thin delegation wrapper: imports `createPluginComposer` and returns `composer.compose(ctx)`. Preserves the `Plugin` export and type re-exports. |
+| `src/plugin-composer.ts` | Composition root: wires agents, tools, MCPs, hooks, council managers, shared background job board, multiplexer session mirroring, interview/preset managers, task-session tracking, and config merge behavior. |
 | `src/cli/index.ts` | CLI entrypoint for installation/bootstrap workflows. |
 | `src/config/schema.ts` | Source-of-truth runtime config schema used by validation and schema generation. |
 | `scripts/generate-schema.ts` | Generates `oh-my-opencode-slim.schema.json` from the Zod config schema. |

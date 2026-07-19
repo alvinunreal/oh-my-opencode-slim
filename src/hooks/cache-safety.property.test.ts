@@ -205,8 +205,11 @@ describe('cache-safety: determinism under ambient inputs', () => {
 describe('cache-safety: pipeline drift guard', () => {
   const srcRoot = path.resolve(import.meta.dir, '..');
 
-  test('src/index.ts transform order matches this suite', () => {
-    const source = readFileSync(path.join(srcRoot, 'index.ts'), 'utf8');
+  test('src/plugin-composer.ts transform order matches this suite', () => {
+    const source = readFileSync(
+      path.join(srcRoot, 'plugin-composer.ts'),
+      'utf8',
+    );
 
     const orderedCalls = [
       ...source.matchAll(
@@ -214,10 +217,10 @@ describe('cache-safety: pipeline drift guard', () => {
       ),
     ].map((match) => match[1]);
 
-    // If this fails, src/index.ts gained, lost, or reordered a transform
-    // step. Update createPipeline() in this file to match, then update this
-    // expectation — the property tests are only meaningful while the two
-    // stay in lockstep.
+    // If this fails, src/plugin-composer.ts gained, lost, or reordered a
+    // transform step. Update createPipeline() in this file to match, then
+    // update this expectation — the property tests are only meaningful while
+    // the two stay in lockstep.
     expect(orderedCalls).toEqual([
       'taskSessionManagerHook',
       'postFileToolNudge',
@@ -249,7 +252,7 @@ describe('cache-safety: pipeline drift guard', () => {
     }
 
     // If a new file appears here, wire its transform into createPipeline()
-    // above (in the same order as src/index.ts) so the cache-safety
+    // above (in the same order as src/plugin-composer.ts) so the cache-safety
     // properties cover it, then add it to this list.
     expect(hookFilesWithTransforms.sort()).toEqual([
       'filter-available-skills/index.ts',

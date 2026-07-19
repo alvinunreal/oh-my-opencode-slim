@@ -25,10 +25,10 @@ mistakes that have not been made before:
 
 - `src/hooks/cache-safety.property.test.ts` — re-renders a growing
   conversation through the real transform pipeline (mirroring the
-  composition in `src/index.ts`) and asserts turn-over-turn byte-prefix
+  composition in `src/plugin-composer.ts`) and asserts turn-over-turn byte-prefix
   stability, isolation of volatile content to the tagged trailing message,
   determinism under wall-clock/randomness changes, and pass-through of
-  specialist payloads. A drift guard fails when `src/index.ts` gains, loses,
+  specialist payloads. A drift guard fails when `src/plugin-composer.ts` gains, loses,
   or reorders transform steps without the suite being updated.
 - `src/hooks/cache-payload.snapshot.test.ts` — golden snapshots of every
   prompt surface the plugin injects (phase reminder, orchestrator system
