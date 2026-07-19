@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { RGBA } from '@opentui/core';
 import {
+  getContrastForeground,
   getSidebarAgentNames,
   readCompactSidebar,
   readConfigInvalid,
@@ -194,5 +196,50 @@ describe('tui plugin env disable', () => {
     expect(registered).toBe(false);
     expect(disposeRegistered).toBe(false);
     expect(renderRequested).toBe(false);
+  });
+});
+
+describe('getContrastForeground', () => {
+  const white = RGBA.fromInts(255, 255, 255);
+  const black = RGBA.fromInts(0, 0, 0);
+  const darkGray = RGBA.fromInts(30, 30, 30);
+  const transparent = RGBA.fromInts(0, 0, 0, 0);
+
+  test('returns theme text when fallback is triggered', () => {
+    expect(getContrastForeground(undefined, 'theme-text', 'theme-bg')).toBe(
+      'theme-text',
+    );
+  });
+
+  test('returns black on a light background', () => {
+    // White background -> black text
+    const result = getContrastForeground(white, white, black) as RGBA;
+    expect(result.toInts()).toEqual([0, 0, 0, 255]);
+  });
+
+  test('returns white on a dark background', () => {
+    // Black background -> white text
+    const result = getContrastForeground(black, white, black) as RGBA;
+    expect(result.toInts()).toEqual([255, 255, 255, 255]);
+  });
+
+  test('respects themeBackground if it is dark and solid when accent is light', () => {
+    const result = getContrastForeground(white, white, darkGray) as RGBA;
+    expect(result.toInts()).toEqual([30, 30, 30, 255]);
+  });
+
+  test('never returns transparent themeBackground even if accent is light', () => {
+    const result = getContrastForeground(white, white, transparent) as RGBA;
+    expect(result.toInts()).toEqual([0, 0, 0, 255]);
+  });
+
+  test('respects themeText if it is light when accent is dark', () => {
+    const result = getContrastForeground(black, white, black) as RGBA;
+    expect(result.toInts()).toEqual([255, 255, 255, 255]);
+  });
+
+  test('parses hex string colors correctly', () => {
+    const result = getContrastForeground('#ffffff', '#ffffff', '#1e1e1e');
+    expect(result).toBe('#1e1e1e');
   });
 });

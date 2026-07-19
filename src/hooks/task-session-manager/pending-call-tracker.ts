@@ -51,6 +51,30 @@ export function createPendingCallTracker() {
       return undefined;
     },
 
+    /**
+     * Peek a pending call for a parent, preferring one whose agentType
+     * matches `agentHint`. Used by session.created early registration:
+     * when a parent launches several parallel task tools with different
+     * subagent types (e.g. council reviewers), `info.agent` on the
+     * child session identifies which subagent started it, so we can
+     * avoid attributing the child to the wrong pending call.
+     * Falls back to the oldest pending call for the parent when no
+     * agent match is found (preserves prior behavior).
+     */
+    peekByParentAndAgent(
+      parentSessionId: string,
+      agentHint?: string,
+    ) {
+      if (!agentHint) return this.peekByParent(parentSessionId);
+      let fallback: PendingTaskCall | undefined;
+      for (const call of pendingCalls.values()) {
+        if (call.parentSessionId !== parentSessionId) continue;
+        if (!fallback) fallback = call;
+        if (call.agentType === agentHint) return call;
+      }
+      return fallback;
+    },
+
     clearSession(sessionId: string) {
       for (const [callId, pending] of pendingCalls.entries()) {
         if (pending.parentSessionId === sessionId) {

@@ -14,11 +14,15 @@ const checkerMocks = {
   getLatestVersion: mock(async () => null),
   getLocalDevVersion: mock(() => null),
   getCurrentRuntimePackageJsonPath: mock(() => null),
+  updateInstallerManagedVersions: mock(() => true),
 };
 
 const cacheMocks = {
   preparePackageUpdate: mock(() => '/tmp/opencode'),
+  discardPreparedPackageUpdate: mock(() => {}),
+  publishPackageUpdate: mock(() => '/tmp/opencode'),
   resolveInstallContext: mock(() => ({ installDir: '/tmp/opencode' })),
+  verifyInstalledPackage: mock(() => true),
 };
 
 const skillSyncMocks = {
@@ -122,13 +126,23 @@ describe('auto-update-checker/index', () => {
     checkerMocks.getLatestVersion.mockImplementation(async () => null);
     checkerMocks.getLocalDevVersion.mockReset();
     checkerMocks.getLocalDevVersion.mockImplementation(() => null);
+    checkerMocks.updateInstallerManagedVersions.mockReset();
+    checkerMocks.updateInstallerManagedVersions.mockImplementation(() => true);
     checkerMocks.getCurrentRuntimePackageJsonPath.mockReset();
     checkerMocks.getCurrentRuntimePackageJsonPath.mockImplementation(
       () => null,
     );
 
     cacheMocks.preparePackageUpdate.mockReset();
-    cacheMocks.preparePackageUpdate.mockImplementation(() => '/tmp/opencode');
+    cacheMocks.preparePackageUpdate.mockImplementation(() => ({
+      stagingDir: '/tmp/opencode-staging',
+      targetDir: '/tmp/opencode',
+    }));
+    cacheMocks.publishPackageUpdate.mockReset();
+    cacheMocks.publishPackageUpdate.mockImplementation(() => '/tmp/opencode');
+    cacheMocks.verifyInstalledPackage.mockReset();
+    cacheMocks.verifyInstalledPackage.mockImplementation(() => true);
+    cacheMocks.discardPreparedPackageUpdate.mockReset();
     cacheMocks.resolveInstallContext.mockReset();
     cacheMocks.resolveInstallContext.mockImplementation(() => ({
       installDir: '/tmp/opencode',
@@ -231,10 +245,12 @@ describe('auto-update-checker/index', () => {
     expect(cacheMocks.preparePackageUpdate).toHaveBeenCalledWith(
       '0.9.11',
       'oh-my-opencode-slim',
+      undefined,
+      'latest',
     );
     expect(crossSpawnMock).toHaveBeenCalledWith(
       ['bun', 'install'],
-      expect.objectContaining({ cwd: '/tmp/opencode' }),
+      expect.objectContaining({ cwd: '/tmp/opencode-staging' }),
     );
     expect(skillSyncMocks.syncBundledSkillsFromPackage).toHaveBeenCalledWith(
       '/tmp/opencode/node_modules/oh-my-opencode-slim',
@@ -775,7 +791,7 @@ describe('auto-update-checker/index', () => {
 
     expect(crossSpawnMock).toHaveBeenCalledWith(
       ['bun', 'install'],
-      expect.objectContaining({ cwd: '/tmp/opencode' }),
+      expect.objectContaining({ cwd: '/tmp/opencode-staging' }),
     );
     expect(skillSyncMocks.syncBundledSkillsFromPackage).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({

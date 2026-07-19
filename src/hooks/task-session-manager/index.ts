@@ -160,6 +160,10 @@ export function createTaskSessionManagerHook(
   const processedInjectedCompletionOrder: string[] = [];
   const terminalJobsInjectedByParent = new Map<string, Set<string>>();
   const idleReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const childIdleReconcileTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   const continuationSessionTokens = new Map<string, symbol>();
   const activeContinuationEvaluations = new Map<string, Set<symbol>>();
   const continuationConsumed = new Set<string>();
@@ -403,7 +407,10 @@ export function createTaskSessionManagerHook(
       continuationConsumed.add(parentSessionID);
       await sessionSdk.promptAsync({
         path: { id: parentSessionID },
-        body: { parts: [createInternalAgentTextPart(CONTINUATION_NUDGE)] },
+        body: {
+          agent: 'orchestrator',
+          parts: [createInternalAgentTextPart(CONTINUATION_NUDGE)],
+        },
         throwOnError: true,
       });
     } catch (error) {
@@ -447,10 +454,75 @@ export function createTaskSessionManagerHook(
     idleReconcileTimers.set(parentSessionID, timer);
   }
 
+  /**
+   * Delay child idle→completed reconciliation. Immediate reconcile races
+   * ForegroundFallbackManager: OpenCode can emit idle for a rate-limited
+   * child before FG sets isFallbackInProgress, marking the job completed
+   * while FG re-prompts and the session keeps working (false cancel/complete).
+   * Re-check running state, fallback-in-progress, and lastLiveBusyAt after
+   * the delay so a post-idle busy from the fallback re-prompt wins.
+   */
+  function scheduleChildIdleReconciliation(
+    sessionID: string,
+    idleObservedAt: number,
+  ): void {
+    if (childIdleReconcileTimers.has(sessionID)) return;
+    if (options.isFallbackInProgress?.(sessionID)) return;
+
+    const timer = setTimeout(() => {
+      childIdleReconcileTimers.delete(sessionID);
+      if (options.isFallbackInProgress?.(sessionID)) return;
+
+      const job = backgroundJobBoard.get(sessionID);
+      if (!job || job.state !== 'running') return;
+
+      // Busy after the idle means the session recovered (e.g. FG re-prompt).
+      if (
+        job.lastLiveBusyAt !== undefined &&
+        job.lastLiveBusyAt > idleObservedAt
+      ) {
+        return;
+      }
+
+      log('[task-session-manager] reconciled running job from idle', {
+        sessionID,
+        alias: job.alias,
+        parentSessionID: job.parentSessionID,
+      });
+      backgroundJobBoard.updateStatus({
+        taskID: sessionID,
+        state: 'completed',
+        resultSummary: 'Background task completed (reconciled from idle event)',
+      });
+      backgroundJobBoard.markReconciled(sessionID);
+      taskContextTracker.pendingManagedTaskIds.delete(sessionID);
+      backgroundJobBoard.addContext(
+        sessionID,
+        taskContextTracker.contextFilesForPrompt(sessionID),
+      );
+      taskContextTracker.prune(backgroundJobBoard);
+      // Notify orchestrator so it re-evaluates after idle reconcile marks
+      // the job terminal. Without this, the orchestrator may not pick up
+      // the completed result promptly when no injected completion arrived.
+      if (options.onJobTerminal) {
+        if (!terminalJobNotified.has(sessionID)) {
+          terminalJobNotified.add(sessionID);
+          options.onJobTerminal(job.parentSessionID);
+        }
+      }
+    }, idleReconcileDelayMs).unref?.();
+    childIdleReconcileTimers.set(sessionID, timer);
+  }
+
   if (options.coordinator) {
     options.coordinator.onSessionDeleted((sessionId) => {
       clearContinuation(sessionId);
       clearInputWaits(sessionId);
+      const pendingChildIdle = childIdleReconcileTimers.get(sessionId);
+      if (pendingChildIdle) {
+        clearTimeout(pendingChildIdle);
+        childIdleReconcileTimers.delete(sessionId);
+      }
       // During a foreground fallback abort/re-prompt cycle, the session
       // is being torn down and immediately recreated with a fallback model.
       // Dropping the job from the board here would make the orchestrator
@@ -1076,7 +1148,7 @@ export function createTaskSessionManagerHook(
       event: {
         type: string;
         properties?: {
-          info?: { id?: string; parentID?: string };
+          info?: { id?: string; parentID?: string; agent?: string };
           id?: string;
           requestID?: string;
           sessionID?: string;
@@ -1108,7 +1180,15 @@ export function createTaskSessionManagerHook(
           // reports runningJobForSession:false and the orchestrator sees
           // "Task cancelled" while the child is still working (#765).
           // Peek (don't take) so tool.execute.after can still re-register.
-          const pending = pendingCallTracker.peekByParent(info.parentID);
+          //
+          // When the parent has multiple task calls in flight at once (e.g.
+          // parallel council reviewers), `info.agent` on the child session
+          // identifies which subagent started it; prefer the matching
+          // pending call so we don't attribute the child to the wrong agent.
+          const pending = pendingCallTracker.peekByParentAndAgent(
+            info.parentID,
+            info.agent,
+          );
           if (
             pending &&
             !pending.resumedTaskId &&
@@ -1136,6 +1216,10 @@ export function createTaskSessionManagerHook(
       }
 
       if (input.event.type === 'server.instance.disposed') {
+        for (const timer of childIdleReconcileTimers.values()) {
+          clearTimeout(timer);
+        }
+        childIdleReconcileTimers.clear();
         const continuationSessionIDs = new Set([
           ...idleReconcileTimers.keys(),
           ...continuationSessionTokens.keys(),
@@ -1176,39 +1260,9 @@ export function createTaskSessionManagerHook(
         // Fallback: for background child sessions that go idle without
         // an injected completion, reconcile the board entry since the
         // session being idle is itself the completion signal.
-        // Guard: skip when a foreground-fallback abort/re-prompt is in
-        // flight for this session — the idle is transient, not a real
-        // completion.
-        if (
-          job &&
-          sessionId &&
-          job.state === 'running' &&
-          !options.isFallbackInProgress?.(sessionId)
-        ) {
-          log('[task-session-manager] reconciled running job from idle', {
-            sessionID: sessionId,
-            alias: job.alias,
-            parentSessionID: job.parentSessionID,
-          });
-          backgroundJobBoard.updateStatus({
-            taskID: sessionId,
-            state: 'completed',
-            resultSummary:
-              'Background task completed (reconciled from idle event)',
-          });
-          backgroundJobBoard.markReconciled(sessionId);
-          taskContextTracker.pendingManagedTaskIds.delete(sessionId);
-          backgroundJobBoard.addContext(
-            sessionId,
-            taskContextTracker.contextFilesForPrompt(sessionId),
-          );
-          taskContextTracker.prune(backgroundJobBoard);
-          if (options.onJobTerminal) {
-            if (!terminalJobNotified.has(sessionId)) {
-              terminalJobNotified.add(sessionId);
-              options.onJobTerminal(job.parentSessionID);
-            }
-          }
+        // Delayed so FG can claim the session before we mark completed.
+        if (job && sessionId && job.state === 'running') {
+          scheduleChildIdleReconciliation(sessionId, Date.now());
         }
         return;
       }
@@ -1243,6 +1297,27 @@ export function createTaskSessionManagerHook(
               });
             }
           }
+        } else if (sessionId) {
+          // Child subagent sessions are not orchestrators, so the block
+          // above never runs for them. Without this, a failed background
+          // subagent leaves its job in `running` and the idle-reconciliation
+          // path (which has no shouldManageSession guard) marks it
+          // `completed` — a false success. A child with no fallback chain has
+          // nothing to retry into, so surface the failure on the board.
+          const props = input.event.properties as
+            | { error?: unknown }
+            | undefined;
+          if (options.isFallbackInProgress?.(sessionId)) return;
+          const job = backgroundJobBoard.get(sessionId);
+          if (job && job.state === 'running') {
+            backgroundJobBoard.updateStatus({
+              taskID: sessionId,
+              state: 'error',
+              resultSummary:
+                (props?.error as { message?: string } | undefined)?.message ??
+                'Session error',
+            });
+          }
         }
 
         return;
@@ -1257,6 +1332,15 @@ export function createTaskSessionManagerHook(
         if (sessionId) invalidateContinuation(sessionId);
         if (statusType !== 'busy') {
           return;
+        }
+        // Live busy cancels a pending child idle-reconcile — the session
+        // recovered (FG re-prompt or continued work).
+        if (sessionId) {
+          const pendingChildIdle = childIdleReconcileTimers.get(sessionId);
+          if (pendingChildIdle) {
+            clearTimeout(pendingChildIdle);
+            childIdleReconcileTimers.delete(sessionId);
+          }
         }
         const before = sessionId
           ? backgroundJobBoard.get(sessionId)

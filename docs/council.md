@@ -348,14 +348,11 @@ A footer tracks participation:
 
 ## Compatibility Notes
 
-### Deprecated `master` fields
+### Removed `master` fields
 
-Older configs used `council.master` and several other `master`-prefixed
-fields. These fields are deprecated and ignored.
-
-`master.model` is still accepted as a temporary fallback for the **Council
-agent model only** when no explicit `council` agent model is configured
-elsewhere.
+The `council.master` field and other `master`-prefixed fields have been
+removed. A deprecation warning is logged this release if a config still
+contains them, but they no longer have any effect.
 
 Prefer this instead:
 

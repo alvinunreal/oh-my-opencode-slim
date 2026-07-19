@@ -5,7 +5,7 @@ import { buildCouncillorAgents } from './council-agents';
 /**
  * Build a minimal CouncilConfig for use in tests.
  * We cast through `unknown` to avoid repeating the full post-transform shape
- * which includes `_deprecated` / `_legacyMasterModel` and optional fields.
+ * which includes `_deprecated` and optional fields.
  */
 function makeConfig(overrides: Record<string, unknown>): PluginConfig {
   return {
@@ -13,7 +13,6 @@ function makeConfig(overrides: Record<string, unknown>): PluginConfig {
       presets: {},
       default_preset: 'default',
       _deprecated: undefined,
-      _legacyMasterModel: undefined,
       ...overrides,
     },
   } as unknown as PluginConfig;

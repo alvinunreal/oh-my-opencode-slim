@@ -25,6 +25,11 @@ async function flushContinuation(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Flush delayed child idle-reconcile timers when idleReconcileDelayMs is 0. */
+async function flushChildIdleReconcile(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
 function createHook(options?: {
   shouldManageSession?: (sessionID: string) => boolean;
   registerSessionAsOrchestrator?: (sessionID: string) => void;
@@ -1719,6 +1724,79 @@ describe('task-session-manager hook', () => {
     expect(job?.resultSummary).toBe('connection refused');
   });
 
+  test('child session.error (non-orchestrator) records failure on board', async () => {
+    const board = new BackgroundJobBoard();
+    // Child subagent sessions are not orchestrators, so shouldManageSession
+    // returns false for them. The error must still land on the board,
+    // otherwise idle reconciliation marks the job completed (false success).
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'designer',
+      description: 'design ui',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'AI_APICallError',
+            message: 'Internal server error',
+          },
+        },
+      },
+    });
+
+    const job = board.get('child-1');
+    expect(job?.state).toBe('error');
+    expect(job?.resultSummary).toBe('Internal server error');
+  });
+
+  test('child session.error during fallback is not recorded on board', async () => {
+    const board = new BackgroundJobBoard();
+    // isFallbackInProgress is currently always-false for real children
+    // (they have no fallback chain), so this guard path is unreachable in
+    // production today. The test pins the defensive behavior for the day
+    // children gain a fallback chain.
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => true,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'designer',
+      description: 'design ui',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'AI_APICallError',
+            message: 'Internal server error',
+          },
+        },
+      },
+    });
+
+    const job = board.get('child-1');
+    expect(job?.state).toBe('running');
+  });
+
   test('completed reconciled job appears reusable and resumes via task', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
@@ -2326,11 +2404,13 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({
       backgroundJobBoard: board,
       shouldManageSession: (id) => id === 'parent-1',
+      idleReconcileDelayMs: 0,
     });
 
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
 
     expect(board.get('child-1')).toMatchObject({
       state: 'reconciled',
@@ -2352,6 +2432,7 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({
       backgroundJobBoard: board,
       shouldManageSession: (id) => id === 'parent-1',
+      idleReconcileDelayMs: 0,
       onJobTerminal: (parentSessionID) => {
         receivedParentIDs.push(parentSessionID);
       },
@@ -2360,6 +2441,7 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
 
     // Job should be reconciled
     expect(board.get('child-1')).toMatchObject({
@@ -2407,11 +2489,13 @@ describe('task-session-manager hook', () => {
       backgroundJobBoard: board,
       shouldManageSession: (id) => id === 'parent-1',
       isFallbackInProgress: (id) => id === 'child-1',
+      idleReconcileDelayMs: 0,
     });
 
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
 
     // Job should still be running — not reconciled
     expect(board.get('child-1')).toMatchObject({ state: 'running' });
@@ -2482,11 +2566,13 @@ describe('task-session-manager hook', () => {
       shouldManageSession: (id) => id === 'parent-1',
       // isFallbackInProgress returns false for child-1
       isFallbackInProgress: () => false,
+      idleReconcileDelayMs: 0,
     });
 
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
 
     expect(board.get('child-1')).toMatchObject({
       state: 'reconciled',
@@ -2511,12 +2597,14 @@ describe('task-session-manager hook', () => {
       backgroundJobBoard: board,
       shouldManageSession: () => false,
       isFallbackInProgress: (id) => id === 'child-1',
+      idleReconcileDelayMs: 0,
     });
 
     // First idle (abort from fallback) — guarded, no reconciliation
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
     expect(board.get('child-1')).toMatchObject({ state: 'running' });
 
     // Busy signal (fallback re-prompt) — updates lastLiveBusyAt
@@ -2533,14 +2621,94 @@ describe('task-session-manager hook', () => {
       backgroundJobBoard: board,
       shouldManageSession: () => false,
       isFallbackInProgress: () => false,
+      idleReconcileDelayMs: 0,
     });
     await hook2.hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
     expect(board.get('child-1')).toMatchObject({
       state: 'reconciled',
       terminalState: 'completed',
     });
+  });
+
+  test('busy after idle cancels pending child idle-reconcile (FG race)', async () => {
+    // OpenCode can emit idle for a rate-limited child BEFORE FG sets
+    // isFallbackInProgress. Immediate reconcile would mark completed while
+    // FG re-prompts and the child keeps working. Delay + busy cancel keeps
+    // the job running (the observed council-b false-complete race).
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-b',
+      parentSessionID: 'parent-1',
+      agent: 'councillor-reviewer-b',
+      description: 'audit distributed',
+    });
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => false,
+      idleReconcileDelayMs: 30,
+    });
+
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-b' } },
+    });
+    expect(board.get('child-b')).toMatchObject({ state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-b', status: { type: 'busy' } },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(board.get('child-b')).toMatchObject({ state: 'running' });
+  });
+
+  test('session.deleted cancels pending child idle-reconcile (FG teardown race)', async () => {
+    // FG aborts the child session mid-idle-delay; onSessionDeleted must
+    // cancel the pending timer so it cannot fire after FG finishes and
+    // re-check isFallbackInProgress=false, falsely reconciling the board
+    // entry while the re-prompted session keeps working.
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-b',
+      parentSessionID: 'parent-1',
+      agent: 'councillor-reviewer-b',
+      description: 'audit distributed',
+    });
+
+    let fgInProgress = false;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => fgInProgress,
+      idleReconcileDelayMs: 30,
+    });
+
+    // idle fires before FG sets isFallbackInProgress — schedules timer T.
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-b' } },
+    });
+    // FG claims the session and aborts it; OpenCode emits session.deleted
+    // while the timer is still pending. onSessionDeleted must cancel T.
+    fgInProgress = true;
+    coordinator.dispatchSessionDeleted('child-b');
+    // FG finishes; isFallbackInProgress goes false before T would fire.
+    fgInProgress = false;
+
+    await new Promise((r) => setTimeout(r, 60));
+    // Board entry survives (isFallbackInProgress was true at delete time)
+    // but is NOT reconciled — the timer was cancelled on session.deleted.
+    const job = board.get('child-b');
+    expect(job).toBeDefined();
+    expect(job?.state).toBe('running');
   });
 
   test('session.created early-registers board job so after-hook cancellation cannot orphan the child', async () => {
@@ -2548,7 +2716,10 @@ describe('task-session-manager hook', () => {
     // so the job never lands on the board. Early registration from
     // session.created keeps runningJobForSession true and lets idle reconcile.
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      idleReconcileDelayMs: 0,
+    });
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
@@ -2580,10 +2751,77 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
 
     expect(board.get('child-1')).toMatchObject({
       state: 'reconciled',
       terminalState: 'completed',
+    });
+  });
+
+  test('session.created early registration attributes each parallel child to its own pending call', async () => {
+    // Regression: when a parent launches several task tools in parallel with
+    // different subagent types (e.g. council reviewers a/b/c), the old
+    // peekByParent() returned the FIRST pending call for every child, so
+    // all children were registered with the first subagent's agentType.
+    // info.agent on the child session disambiguates which pending call
+    // started it.
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    // Parent fires three task tools in parallel: oracle / explorer / fixer.
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-a' },
+      { args: { subagent_type: 'oracle', description: 'audit loss' } },
+    );
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-b' },
+      { args: { subagent_type: 'explorer', description: 'audit data' } },
+    );
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-c' },
+      { args: { subagent_type: 'fixer', description: 'audit fix' } },
+    );
+
+    // Each child session is created while the parent tool calls are still
+    // in flight (before any tool.execute.after). info.agent identifies the
+    // subagent that owns each child.
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: { id: 'child-a', parentID: 'parent-1', agent: 'oracle' },
+        },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: { id: 'child-b', parentID: 'parent-1', agent: 'explorer' },
+        },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: { id: 'child-c', parentID: 'parent-1', agent: 'fixer' },
+        },
+      },
+    });
+
+    expect(board.get('child-a')).toMatchObject({
+      agent: 'oracle',
+      description: 'audit loss',
+    });
+    expect(board.get('child-b')).toMatchObject({
+      agent: 'explorer',
+      description: 'audit data',
+    });
+    expect(board.get('child-c')).toMatchObject({
+      agent: 'fixer',
+      description: 'audit fix',
     });
   });
 
@@ -2601,11 +2839,13 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({
       backgroundJobBoard: board,
       shouldManageSession: () => false,
+      idleReconcileDelayMs: 0,
     });
 
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
+    await flushChildIdleReconcile();
 
     // Should remain cancelled — idle does not override terminal state
     const job = board.get('child-1');
@@ -2625,6 +2865,7 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({
       backgroundJobBoard: board,
       shouldManageSession: (id) => id === 'parent-1',
+      idleReconcileDelayMs: 0,
     });
 
     await hook.event({
@@ -2633,6 +2874,7 @@ describe('task-session-manager hook', () => {
         properties: { sessionID: 'child-1', status: { type: 'idle' } },
       },
     });
+    await flushChildIdleReconcile();
 
     expect(board.get('child-1')).toMatchObject({
       state: 'reconciled',

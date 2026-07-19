@@ -1,114 +1,30 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { stripJsonComments } from '../../cli/config-manager';
 import { log } from '../../utils/logger';
 import { getCurrentRuntimePackageJsonPath } from './checker';
 import { CACHE_DIR, PACKAGE_NAME } from './constants';
-
-interface BunLockfile {
-  workspaces?: {
-    ''?: {
-      dependencies?: Record<string, string>;
-    };
-  };
-  packages?: Record<string, unknown>;
-}
 
 interface AutoUpdateInstallContext {
   installDir: string;
   packageJsonPath: string;
 }
 
-/**
- * Removes a package from the bun.lock file if it's in JSON format.
- * Note: Newer Bun versions (1.1+) use a custom text format for bun.lock.
- * This function handles JSON-based lockfiles gracefully.
- */
-function removeFromBunLock(installDir: string, packageName: string): boolean {
-  const lockPath = path.join(installDir, 'bun.lock');
-  if (!fs.existsSync(lockPath)) return false;
-
-  try {
-    const content = fs.readFileSync(lockPath, 'utf-8');
-    let lock: BunLockfile;
-
-    try {
-      lock = JSON.parse(stripJsonComments(content)) as BunLockfile;
-    } catch {
-      // If it's not valid JSON(C), it might be the new Bun text format or binary format.
-      // For now, we only support JSON-based lockfile manipulation.
-      return false;
-    }
-
-    let modified = false;
-
-    if (lock.workspaces?.['']?.dependencies?.[packageName]) {
-      delete lock.workspaces[''].dependencies[packageName];
-      modified = true;
-    }
-
-    if (lock.packages?.[packageName]) {
-      delete lock.packages[packageName];
-      modified = true;
-    }
-
-    if (modified) {
-      fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2));
-      log(`[auto-update-checker] Removed from bun.lock: ${packageName}`);
-    }
-
-    return modified;
-  } catch (err) {
-    log(`[auto-update-checker] Failed to process bun.lock:`, err);
-    return false;
-  }
+interface PreparedPackageUpdate {
+  stagingDir: string;
+  targetDir: string;
 }
 
-function ensureDependencyVersion(
-  packageJsonPath: string,
-  packageName: string,
+function getTargetInstallContext(
+  installContext: AutoUpdateInstallContext,
   version: string,
-): boolean {
-  if (!fs.existsSync(packageJsonPath)) return false;
-
-  try {
-    const content = fs.readFileSync(packageJsonPath, 'utf-8');
-    const pkgJson = JSON.parse(stripJsonComments(content)) as {
-      dependencies?: Record<string, string>;
-      [key: string]: unknown;
-    };
-
-    const dependencies = { ...(pkgJson.dependencies ?? {}) };
-    if (dependencies[packageName] === version) {
-      return true;
-    }
-
-    dependencies[packageName] = version;
-    pkgJson.dependencies = dependencies;
-    fs.writeFileSync(packageJsonPath, JSON.stringify(pkgJson, null, 2));
-    log(
-      `[auto-update-checker] Updated dependency in package.json: ${packageName} → ${version}`,
-    );
-    return true;
-  } catch (err) {
-    log(
-      `[auto-update-checker] Failed to update package.json dependency for auto-update:`,
-      err,
-    );
-    return false;
-  }
-}
-
-function removeInstalledPackage(
-  installDir: string,
-  packageName: string,
-): boolean {
-  const pkgDir = path.join(installDir, 'node_modules', packageName);
-  if (!fs.existsSync(pkgDir)) return false;
-
-  fs.rmSync(pkgDir, { recursive: true, force: true });
-  log(`[auto-update-checker] Package removed: ${pkgDir}`);
-  return true;
+): AutoUpdateInstallContext {
+  const installParent = path.dirname(installContext.installDir);
+  const parentDir =
+    path.basename(installParent) === 'packages'
+      ? installParent
+      : path.join(CACHE_DIR, 'packages');
+  const installDir = path.join(parentDir, `${PACKAGE_NAME}@${version}`);
+  return { installDir, packageJsonPath: path.join(installDir, 'package.json') };
 }
 
 export function resolveInstallContext(
@@ -148,7 +64,9 @@ export function preparePackageUpdate(
   version: string,
   packageName: string = PACKAGE_NAME,
   runtimePackageJsonPath: string | null = getCurrentRuntimePackageJsonPath(),
-): string | null {
+  cacheIdentity: string = version,
+): PreparedPackageUpdate | null {
+  let stagingDir: string | null = null;
   try {
     const installContext = resolveInstallContext(runtimePackageJsonPath);
     if (!installContext) {
@@ -156,33 +74,99 @@ export function preparePackageUpdate(
       return null;
     }
 
-    const dependencyReady = ensureDependencyVersion(
-      installContext.packageJsonPath,
-      packageName,
-      version,
+    const targetContext = getTargetInstallContext(
+      installContext,
+      cacheIdentity,
     );
-    if (!dependencyReady) {
-      return null;
-    }
-
-    const packageRemoved = removeInstalledPackage(
-      installContext.installDir,
-      packageName,
+    const targetParent = path.dirname(targetContext.installDir);
+    fs.mkdirSync(targetParent, { recursive: true });
+    stagingDir = fs.mkdtempSync(
+      path.join(targetParent, `.${PACKAGE_NAME}@${cacheIdentity}.staging-`),
     );
-    const lockRemoved = removeFromBunLock(
-      installContext.installDir,
-      packageName,
+    fs.writeFileSync(
+      path.join(stagingDir, 'package.json'),
+      JSON.stringify({
+        private: true,
+        dependencies: { [packageName]: version },
+      }),
     );
 
-    if (!packageRemoved && !lockRemoved) {
-      log(
-        `[auto-update-checker] No cached package artifacts removed for ${packageName}; continuing with updated dependency spec`,
-      );
-    }
-
-    return installContext.installDir;
+    return { stagingDir, targetDir: targetContext.installDir };
   } catch (err) {
+    if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });
     log('[auto-update-checker] Failed to prepare package update:', err);
     return null;
+  }
+}
+
+export function discardPreparedPackageUpdate(
+  prepared: PreparedPackageUpdate,
+): void {
+  fs.rmSync(prepared.stagingDir, { recursive: true, force: true });
+}
+
+export function publishPackageUpdate(
+  prepared: PreparedPackageUpdate,
+  version: string,
+): string | null {
+  try {
+    if (fs.existsSync(prepared.targetDir)) {
+      if (verifyInstalledPackage(prepared.targetDir, version)) {
+        discardPreparedPackageUpdate(prepared);
+        return prepared.targetDir;
+      }
+      const quarantineDir = `${prepared.targetDir}.invalid-${process.pid}-${Date.now()}`;
+      fs.renameSync(prepared.targetDir, quarantineDir);
+      try {
+        fs.renameSync(prepared.stagingDir, prepared.targetDir);
+        if (verifyInstalledPackage(prepared.targetDir, version)) {
+          fs.rmSync(quarantineDir, { recursive: true, force: true });
+          return prepared.targetDir;
+        }
+        fs.rmSync(prepared.targetDir, { recursive: true, force: true });
+        fs.renameSync(quarantineDir, prepared.targetDir);
+        return null;
+      } catch {
+        if (fs.existsSync(prepared.targetDir)) {
+          if (verifyInstalledPackage(prepared.targetDir, version)) {
+            discardPreparedPackageUpdate(prepared);
+            fs.rmSync(quarantineDir, { recursive: true, force: true });
+            return prepared.targetDir;
+          }
+        }
+      }
+      if (!fs.existsSync(prepared.targetDir)) {
+        fs.renameSync(quarantineDir, prepared.targetDir);
+      }
+      discardPreparedPackageUpdate(prepared);
+      return null;
+    }
+    fs.renameSync(prepared.stagingDir, prepared.targetDir);
+    if (verifyInstalledPackage(prepared.targetDir, version)) {
+      return prepared.targetDir;
+    }
+    fs.rmSync(prepared.targetDir, { recursive: true, force: true });
+    return null;
+  } catch {
+    discardPreparedPackageUpdate(prepared);
+    return null;
+  }
+}
+
+export function verifyInstalledPackage(
+  installDir: string,
+  version: string,
+  packageName: string = PACKAGE_NAME,
+): boolean {
+  try {
+    const packageJson = JSON.parse(
+      fs.readFileSync(
+        path.join(installDir, 'node_modules', packageName, 'package.json'),
+        'utf-8',
+      ),
+    ) as { name?: string; version?: string };
+    return packageJson.name === packageName && packageJson.version === version;
+  } catch {
+    return false;
   }
 }

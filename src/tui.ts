@@ -1,4 +1,5 @@
 import type { TuiPluginModule } from '@opencode-ai/plugin/tui';
+import { type ColorInput, parseColor, RGBA } from '@opentui/core';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { DEFAULT_DISABLED_AGENTS, SUBAGENT_NAMES } from './config/constants';
@@ -141,6 +142,61 @@ function compactAgentRow(
   );
 }
 
+export function getContrastForeground(
+  accent: unknown,
+  themeText: unknown,
+  themeBackground: unknown,
+): unknown {
+  if (!accent) return themeText;
+
+  let accentRgba: RGBA;
+  try {
+    accentRgba = parseColor(accent as ColorInput);
+  } catch {
+    return themeText;
+  }
+
+  // Calculate relative luminance: R, G, B are in range 0..1
+  const luminance =
+    0.299 * accentRgba.r + 0.587 * accentRgba.g + 0.114 * accentRgba.b;
+
+  if (luminance > 0.5) {
+    // Light accent bg -> we need a dark fg.
+    // Let's use themeBackground if it exists, is resolved, and not transparent.
+    if (themeBackground) {
+      try {
+        const bgRgba = parseColor(themeBackground as ColorInput);
+        if (bgRgba.a !== 0) {
+          const bgLum = 0.299 * bgRgba.r + 0.587 * bgRgba.g + 0.114 * bgRgba.b;
+          if (bgLum < 0.5) {
+            return themeBackground;
+          }
+        }
+      } catch {
+        // ignore and fallback
+      }
+    }
+    return RGBA.fromInts(0, 0, 0);
+  }
+
+  // Dark accent bg -> we need a light fg.
+  // Let's use themeText if it exists and is light.
+  if (themeText) {
+    try {
+      const textRgba = parseColor(themeText as ColorInput);
+      const textLum =
+        0.299 * textRgba.r + 0.587 * textRgba.g + 0.114 * textRgba.b;
+      if (textLum > 0.5) {
+        return themeText;
+      }
+    } catch {
+      // ignore and fallback
+    }
+  }
+
+  return RGBA.fromInts(255, 255, 255);
+}
+
 function renderSidebar(
   snapshot: TuiSnapshot,
   version: string,
@@ -177,10 +233,18 @@ function renderSidebar(
         [
           box(
             { paddingLeft: 1, paddingRight: 1, backgroundColor: theme.accent },
-            // Use theme.text, not theme.background: when the theme background is
-            // "none" (transparent) the foreground becomes RGBA(0,0,0,0) and the
-            // badge text vanishes. See #582.
-            [text({ fg: theme.text }, ['OMO-Slim'])],
+            [
+              text(
+                {
+                  fg: getContrastForeground(
+                    theme.accent,
+                    theme.text,
+                    theme.background,
+                  ),
+                },
+                ['OMO-Slim'],
+              ),
+            ],
           ),
           text({ fg: theme.textMuted }, [`v${version}`]),
         ],
