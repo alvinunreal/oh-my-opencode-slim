@@ -206,7 +206,10 @@ describe('cache-safety: pipeline drift guard', () => {
   const srcRoot = path.resolve(import.meta.dir, '..');
 
   test('src/plugin-composer.ts transform order matches this suite', () => {
-    const source = readFileSync(path.join(srcRoot, 'plugin-composer.ts'), 'utf8');
+    const source = readFileSync(
+      path.join(srcRoot, 'plugin-composer.ts'),
+      'utf8',
+    );
 
     const orderedCalls = [
       ...source.matchAll(

@@ -24,6 +24,7 @@ export {
   isFailoverError,
   isRetryableError,
 } from './foreground-fallback';
+export { createHookRegistry, HookRegistry } from './hook-registry';
 export { processImageAttachments } from './image-hook';
 export { createJsonErrorRecoveryHook } from './json-error-recovery/hook';
 export { createLoopCommandHook } from './loop-command';
@@ -32,4 +33,3 @@ export { createPostFileToolNudgeHook } from './post-file-tool-nudge';
 export { createReflectCommandHook } from './reflect';
 export { SessionLifecycle } from './session-lifecycle';
 export { createTaskSessionManagerHook } from './task-session-manager';
-export { HookRegistry, createHookRegistry } from './hook-registry';

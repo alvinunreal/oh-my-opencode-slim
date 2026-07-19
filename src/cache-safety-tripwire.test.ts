@@ -43,6 +43,14 @@ const VOLATILE_PATTERNS: Array<{ name: string; regex: RegExp }> = [
  */
 const ALLOWLIST = new Map<string, string>([
   [
+    'hooks/auto-update-checker/cache.ts',
+    'Local FS paths and temp dirs for update package quarantine; produces no prompt content.',
+  ],
+  [
+    'hooks/auto-update-checker/checker.ts',
+    'Unique suffix for writing temp config files in atomic updates; produces no prompt content.',
+  ],
+  [
     'hooks/auto-update-checker/skill-sync.ts',
     'Update scheduling and install bookkeeping; produces no prompt content.',
   ],

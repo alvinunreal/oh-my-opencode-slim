@@ -1,7 +1,11 @@
 import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
-import type { PluginConfig, AgentOverrideConfig, MultiplexerConfig } from './config';
 import type { AgentDefinition } from './agents';
-import { HookRegistry } from './hooks/hook-registry';
+import type {
+  AgentOverrideConfig,
+  MultiplexerConfig,
+  PluginConfig,
+} from './config';
+import type { HookRegistry } from './hooks/hook-registry';
 
 // Re-export for consumers
 export type { HookRegistry } from './hooks/hook-registry';
@@ -13,7 +17,10 @@ export interface ComposerDependencies {
   getDisabledAgents: typeof import('./agents').getDisabledAgents;
   buildOrchestratorPrompt: typeof import('./agents/orchestrator').buildOrchestratorPrompt;
   applyOrchestratorModelConfig: typeof import('./config/strip-orchestrator-model').applyOrchestratorModelConfig;
-  agentDefsGetter: (config: PluginConfig, options: { projectDirectory: string }) => AgentDefinition[];
+  agentDefsGetter: (
+    config: PluginConfig,
+    options: { projectDirectory: string },
+  ) => AgentDefinition[];
 
   // Hook system
   hookRegistry: HookRegistry;
@@ -96,10 +103,15 @@ export interface PluginComposer {
   compose(ctx: Parameters<Plugin>[0]): ReturnType<Plugin>;
 }
 
-export function createPluginComposer(deps: ComposerDependencies): PluginComposer {
+export function createPluginComposer(
+  deps: ComposerDependencies,
+): PluginComposer {
   return {
     async compose(ctx) {
-      const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+      const sessionId = new Date()
+        .toISOString()
+        .replace(/[-:]/g, '')
+        .slice(0, 15);
       deps.initLogger(sessionId);
 
       if (deps.isPluginDisabledByEnv()) {
@@ -125,10 +137,16 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
 
       // Create agents
       const agentComposer = new AgentComposer(deps);
-      const { disabledAgents, agentDefs, agents } = agentComposer.compose(config, ctx.directory);
+      const { disabledAgents, agentDefs, agents } = agentComposer.compose(
+        config,
+        ctx.directory,
+      );
 
       // Build model array map and runtime chains
-      const modelArrayMap: Record<string, Array<{ id: string; variant?: string }>> = {};
+      const modelArrayMap: Record<
+        string,
+        Array<{ id: string; variant?: string }>
+      > = {};
       const everModelSwitched = new Set<string>();
       const runtimeChains: Record<string, string[]> = {};
       for (const agentDef of agentDefs) {
@@ -140,19 +158,25 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
 
       // Multiplexer
       const multiplexerComposer = new MultiplexerComposer(deps);
-      const { multiplexerConfig, multiplexerEnabled, multiplexer } = multiplexerComposer.compose(config);
+      const { multiplexerConfig, multiplexerEnabled, multiplexer } =
+        multiplexerComposer.compose(config);
 
       // Background jobs
       const backgroundJobBoard = new deps.BackgroundJobBoard({
         maxReusablePerAgent:
-          config.backgroundJobs?.maxSessionsPerAgent ?? deps.DEFAULT_MAX_SESSIONS_PER_AGENT,
+          config.backgroundJobs?.maxSessionsPerAgent ??
+          deps.DEFAULT_MAX_SESSIONS_PER_AGENT,
         readContextMinLines:
-          config.backgroundJobs?.readContextMinLines ?? deps.DEFAULT_READ_CONTEXT_MIN_LINES,
+          config.backgroundJobs?.readContextMinLines ??
+          deps.DEFAULT_READ_CONTEXT_MIN_LINES,
         readContextMaxFiles:
-          config.backgroundJobs?.readContextMaxFiles ?? deps.DEFAULT_READ_CONTEXT_MAX_FILES,
+          config.backgroundJobs?.readContextMaxFiles ??
+          deps.DEFAULT_READ_CONTEXT_MAX_FILES,
       });
 
-      const backgroundJobCoordinator = new deps.BackgroundJobCoordinator(backgroundJobBoard);
+      const backgroundJobCoordinator = new deps.BackgroundJobCoordinator(
+        backgroundJobBoard,
+      );
 
       // Multiplexer session manager
       const multiplexerSessionManager = new deps.MultiplexerSessionManager(
@@ -197,31 +221,41 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
       // Task session manager
       const taskSessionManagerHook = deps.createTaskSessionManagerHook(ctx, {
         maxSessionsPerAgent:
-          config.backgroundJobs?.maxSessionsPerAgent ?? deps.DEFAULT_MAX_SESSIONS_PER_AGENT,
+          config.backgroundJobs?.maxSessionsPerAgent ??
+          deps.DEFAULT_MAX_SESSIONS_PER_AGENT,
         readContextMinLines:
-          config.backgroundJobs?.readContextMinLines ?? deps.DEFAULT_READ_CONTEXT_MIN_LINES,
+          config.backgroundJobs?.readContextMinLines ??
+          deps.DEFAULT_READ_CONTEXT_MIN_LINES,
         readContextMaxFiles:
-          config.backgroundJobs?.readContextMaxFiles ?? deps.DEFAULT_READ_CONTEXT_MAX_FILES,
+          config.backgroundJobs?.readContextMaxFiles ??
+          deps.DEFAULT_READ_CONTEXT_MAX_FILES,
         backgroundJobBoard: backgroundJobCoordinator,
-        shouldManageSession: (sessionID) => sessionAgentMap.get(sessionID) === 'orchestrator',
+        shouldManageSession: (sessionID) =>
+          sessionAgentMap.get(sessionID) === 'orchestrator',
         registerSessionAsOrchestrator: (sessionID) => {
           sessionAgentMap.set(sessionID, 'orchestrator');
         },
-        isFallbackInProgress: (sessionID) => foregroundFallback.isFallbackInProgress(sessionID),
+        isFallbackInProgress: (sessionID) =>
+          foregroundFallback.isFallbackInProgress(sessionID),
         coordinator: sessionLifecycle,
       });
 
       // Phase reminder
       const phaseReminder = deps.createPhaseReminderHook({
-        shouldInject: (sessionID: string) => sessionAgentMap.get(sessionID) === 'orchestrator',
+        shouldInject: (sessionID: string) =>
+          sessionAgentMap.get(sessionID) === 'orchestrator',
       });
 
       // Filter available skills
-      const filterAvailableSkills = deps.createFilterAvailableSkillsHook(ctx, config);
+      const filterAvailableSkills = deps.createFilterAvailableSkillsHook(
+        ctx,
+        config,
+      );
 
       // Post file tool nudge
       const postFileToolNudge = deps.createPostFileToolNudgeHook({
-        shouldInject: (sessionID: string) => sessionAgentMap.get(sessionID) === 'orchestrator',
+        shouldInject: (sessionID: string) =>
+          sessionAgentMap.get(sessionID) === 'orchestrator',
         coordinator: sessionLifecycle,
       });
 
@@ -251,23 +285,31 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
       const cancelTaskTools = deps.createCancelTaskTool({
         client: ctx.client,
         backgroundJobBoard: backgroundJobCoordinator,
-        shouldManageSession: (sessionID) => sessionAgentMap.get(sessionID) === 'orchestrator',
+        shouldManageSession: (sessionID) =>
+          sessionAgentMap.get(sessionID) === 'orchestrator',
       });
 
       // ACP run tools
-      const acpRunTools = Object.keys(config.acpAgents ?? {}).length > 0
-        ? { acp_run: deps.createAcpRunTool(config.acpAgents) }
-        : {};
+      const acpRunTools =
+        Object.keys(config.acpAgents ?? {}).length > 0
+          ? { acp_run: deps.createAcpRunTool(config.acpAgents) }
+          : {};
 
       // Webfetch
       const webfetch = deps.createWebfetchTool(ctx);
 
       // Tools
       const toolComposer = new ToolComposer(deps);
-      const tools = toolComposer.compose(config, ctx, backgroundJobCoordinator, sessionAgentMap);
+      const tools = toolComposer.compose(
+        config,
+        ctx,
+        backgroundJobCoordinator,
+        sessionAgentMap,
+      );
 
       // Rewrite display name mentions
-      const rewriteDisplayNameMentions = deps.createDisplayNameMentionRewriter(config);
+      const rewriteDisplayNameMentions =
+        deps.createDisplayNameMentionRewriter(config);
 
       // Register all hooks
       const hookComposer = new HookComposer(deps);
@@ -361,12 +403,18 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
       );
 
       // Create MCPs
-      const mcps = deps.createBuiltinMcps(config.disabled_mcps, config.websearch);
+      const mcps = deps.createBuiltinMcps(
+        config.disabled_mcps,
+        config.websearch,
+      );
 
       // Health check
       const agentCount = Object.keys(agents).length;
       const mcpCount = Object.keys(mcps).length;
-      const mcpThreshold = config.disabled_mcps && config.disabled_mcps.length > 0 ? 0 : deps.HEALTH_CHECK.minMcps;
+      const mcpThreshold =
+        config.disabled_mcps && config.disabled_mcps.length > 0
+          ? 0
+          : deps.HEALTH_CHECK.minMcps;
 
       if (
         agentCount < deps.HEALTH_CHECK.minAgents ||
@@ -410,9 +458,15 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
             lockTimeoutMs: 500,
           });
           if (companionResult.status === 'installed') {
-            deps.log('[companion] updated before startup', companionResult.version);
+            deps.log(
+              '[companion] updated before startup',
+              companionResult.version,
+            );
           } else if (companionResult.status === 'failed') {
-            deps.log('[companion] startup update failed', companionResult.error);
+            deps.log(
+              '[companion] startup update failed',
+              companionResult.error,
+            );
           }
         } catch (err) {
           deps.log('[companion] startup update failed', String(err));
@@ -431,7 +485,11 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
         event: eventHook,
         'tool.execute.before': async (input, output) => {
           await deps.hookRegistry.dispatch('applyPatch.before', input, output);
-          await deps.hookRegistry.dispatch('taskSessionManager.before', input, output);
+          await deps.hookRegistry.dispatch(
+            'taskSessionManager.before',
+            input,
+            output,
+          );
         },
         'command.execute.before': async (input, output) => {
           await deps.hookRegistry.dispatch('command.before', input, output);
@@ -477,7 +535,10 @@ export function createPluginComposer(deps: ComposerDependencies): PluginComposer
 }
 
 // Helper for chat.message
-function shouldInjectOrchestratorReminder(sessionID: string, sessionAgentMap: Map<string, string>) {
+function shouldInjectOrchestratorReminder(
+  sessionID: string,
+  sessionAgentMap: Map<string, string>,
+) {
   return sessionAgentMap.get(sessionID) === 'orchestrator';
 }
 
@@ -493,8 +554,12 @@ function createToolRegistry(): ToolRegistry {
   const tools: Record<string, ToolDefinition> = {};
   return {
     tools,
-    register(name: string, tool: ToolDefinition) { tools[name] = tool; },
-    getAll() { return { ...tools }; },
+    register(name: string, tool: ToolDefinition) {
+      tools[name] = tool;
+    },
+    getAll() {
+      return { ...tools };
+    },
     applyDisabledTools(disabled: string[]) {
       const disabledSet = new Set(disabled);
       for (const name of Object.keys(tools)) {
@@ -528,23 +593,49 @@ class HookComposer {
     sessionAgentMap: Map<string, string>,
     sessionDirectories: Map<string, string>,
     sessionLifecycle: InstanceType<typeof import('./hooks').SessionLifecycle>,
-    backgroundJobCoordinator: InstanceType<typeof import('./utils').BackgroundJobCoordinator>,
-    multiplexerSessionManager: InstanceType<typeof import('./multiplexer').MultiplexerSessionManager>,
-    foregroundFallback: InstanceType<typeof import('./hooks').ForegroundFallbackManager>,
-    interviewManager: ReturnType<typeof import('./interview').createInterviewManager>,
-    presetManager: ReturnType<typeof import('./tools/preset-manager').createPresetManager>,
-    taskSessionManagerHook: ReturnType<typeof import('./hooks').createTaskSessionManagerHook>,
-    postFileToolNudge: ReturnType<typeof import('./hooks').createPostFileToolNudgeHook>,
-    delegateTaskRetry: ReturnType<typeof import('./hooks').createDelegateTaskRetryHook>,
-    jsonErrorRecovery: ReturnType<typeof import('./hooks').createJsonErrorRecoveryHook>,
+    backgroundJobCoordinator: InstanceType<
+      typeof import('./utils').BackgroundJobCoordinator
+    >,
+    multiplexerSessionManager: InstanceType<
+      typeof import('./multiplexer').MultiplexerSessionManager
+    >,
+    foregroundFallback: InstanceType<
+      typeof import('./hooks').ForegroundFallbackManager
+    >,
+    interviewManager: ReturnType<
+      typeof import('./interview').createInterviewManager
+    >,
+    presetManager: ReturnType<
+      typeof import('./tools/preset-manager').createPresetManager
+    >,
+    taskSessionManagerHook: ReturnType<
+      typeof import('./hooks').createTaskSessionManagerHook
+    >,
+    postFileToolNudge: ReturnType<
+      typeof import('./hooks').createPostFileToolNudgeHook
+    >,
+    delegateTaskRetry: ReturnType<
+      typeof import('./hooks').createDelegateTaskRetryHook
+    >,
+    jsonErrorRecovery: ReturnType<
+      typeof import('./hooks').createJsonErrorRecoveryHook
+    >,
     phaseReminder: ReturnType<typeof import('./hooks').createPhaseReminderHook>,
-    filterAvailableSkills: ReturnType<typeof import('./hooks').createFilterAvailableSkillsHook>,
+    filterAvailableSkills: ReturnType<
+      typeof import('./hooks').createFilterAvailableSkillsHook
+    >,
     applyPatch: ReturnType<typeof import('./hooks').createApplyPatchHook>,
-    autoUpdateChecker: ReturnType<typeof import('./hooks').createAutoUpdateCheckerHook>,
+    autoUpdateChecker: ReturnType<
+      typeof import('./hooks').createAutoUpdateCheckerHook
+    >,
     cacheMonitor: ReturnType<typeof import('./hooks').createCacheMonitorHook>,
     chatHeadersHook: ReturnType<typeof import('./hooks').createChatHeadersHook>,
-    companionManager: InstanceType<typeof import('./companion/manager').CompanionManager>,
-    rewriteDisplayNameMentions: ReturnType<typeof import('./utils').createDisplayNameMentionRewriter>,
+    companionManager: InstanceType<
+      typeof import('./companion/manager').CompanionManager
+    >,
+    rewriteDisplayNameMentions: ReturnType<
+      typeof import('./utils').createDisplayNameMentionRewriter
+    >,
   ) {
     const registry = this.deps.hookRegistry;
 
@@ -557,7 +648,11 @@ class HookComposer {
         try {
           await fn(i, o);
         } catch (error) {
-          const meta = i as { tool?: string; sessionID?: string; callID?: string };
+          const meta = i as {
+            tool?: string;
+            sessionID?: string;
+            callID?: string;
+          };
           this.deps.log('[plugin] post-tool hook failed open', {
             hook: name,
             tool: meta.tool,
@@ -574,13 +669,36 @@ class HookComposer {
 
     // Register hooks in priority order (lower = earlier)
     // applyPatch.before - priority 10
-    registry.register('applyPatch.before', ((input: unknown, output: unknown) => applyPatch['tool.execute.before'](input as never, output as never)) as (input: unknown, output: unknown) => Promise<void>, 10);
+    registry.register(
+      'applyPatch.before',
+      ((input: unknown, output: unknown) =>
+        applyPatch['tool.execute.before'](input as never, output as never)) as (
+        input: unknown,
+        output: unknown,
+      ) => Promise<void>,
+      10,
+    );
 
     // taskSessionManager.before - priority 20
-    registry.register('taskSessionManager.before', ((input: unknown, output: unknown) => taskSessionManagerHook['tool.execute.before'](input as never, output as never)) as (input: unknown, output: unknown) => Promise<void>, 20);
+    registry.register(
+      'taskSessionManager.before',
+      ((input: unknown, output: unknown) =>
+        taskSessionManagerHook['tool.execute.before'](
+          input as never,
+          output as never,
+        )) as (input: unknown, output: unknown) => Promise<void>,
+      20,
+    );
 
     // chat.headers - priority 30
-    registry.register('chat.headers', chatHeadersHook['chat.headers'] as unknown as (input: unknown, output: unknown) => Promise<void>, 30);
+    registry.register(
+      'chat.headers',
+      chatHeadersHook['chat.headers'] as unknown as (
+        input: unknown,
+        output: unknown,
+      ) => Promise<void>,
+      30,
+    );
 
     // chat.message - priority 40 (handled in main compose return)
     registry.register('chat.message', async () => {}, 40);
@@ -592,63 +710,139 @@ class HookComposer {
     registry.register('messages.transform', async () => {}, 60);
 
     // taskSessionManager.transform - priority 70
-    registry.register('messages.transform', ((input: unknown, output: unknown) => taskSessionManagerHook['experimental.chat.messages.transform'](input as never, output as never)) as (input: unknown, output: unknown) => Promise<void>, 70);
+    registry.register(
+      'messages.transform',
+      ((input: unknown, output: unknown) =>
+        taskSessionManagerHook['experimental.chat.messages.transform'](
+          input as never,
+          output as never,
+        )) as (input: unknown, output: unknown) => Promise<void>,
+      70,
+    );
 
     // postFileToolNudge.transform - priority 80
-    registry.register('messages.transform', ((input: unknown, output: unknown) => postFileToolNudge['experimental.chat.messages.transform'](input as never, output as never)) as (input: unknown, output: unknown) => Promise<void>, 80);
+    registry.register(
+      'messages.transform',
+      ((input: unknown, output: unknown) =>
+        postFileToolNudge['experimental.chat.messages.transform'](
+          input as never,
+          output as never,
+        )) as (input: unknown, output: unknown) => Promise<void>,
+      80,
+    );
 
     // phaseReminder.transform - priority 90
-    registry.register('messages.transform', ((input: unknown, output: unknown) => phaseReminder['experimental.chat.messages.transform'](input as never, output as never)) as (input: unknown, output: unknown) => Promise<void>, 90);
+    registry.register(
+      'messages.transform',
+      ((input: unknown, output: unknown) =>
+        phaseReminder['experimental.chat.messages.transform'](
+          input as never,
+          output as never,
+        )) as (input: unknown, output: unknown) => Promise<void>,
+      90,
+    );
 
     // filterAvailableSkills.transform - priority 100
-    registry.register('messages.transform', ((input: unknown, output: unknown) => filterAvailableSkills['experimental.chat.messages.transform'](input as never, output as never)) as (input: unknown, output: unknown) => Promise<void>, 100);
+    registry.register(
+      'messages.transform',
+      ((input: unknown, output: unknown) =>
+        filterAvailableSkills['experimental.chat.messages.transform'](
+          input as never,
+          output as never,
+        )) as (input: unknown, output: unknown) => Promise<void>,
+      100,
+    );
 
     // injectBackgroundJobBoard - priority 110
-    registry.register('messages.transform', async (input, output) => {
-      await taskSessionManagerHook.injectBackgroundJobBoard(input as never, output as never);
-    }, 110);
+    registry.register(
+      'messages.transform',
+      async (input, output) => {
+        await taskSessionManagerHook.injectBackgroundJobBoard(
+          input as never,
+          output as never,
+        );
+      },
+      110,
+    );
 
     // tool.after hooks - priorities 120-150
-    const postFileToolNudgeAfter = wrapPostToolHook('post-file-tool-nudge', (i, o) =>
-      postFileToolNudge['tool.execute.after'](i as never, o as never),
+    const postFileToolNudgeAfter = wrapPostToolHook(
+      'post-file-tool-nudge',
+      (i, o) => postFileToolNudge['tool.execute.after'](i as never, o as never),
     );
     registry.register('tool.after', postFileToolNudgeAfter, 120);
 
-    const delegateTaskRetryAfter = wrapPostToolHook('delegate-task-retry', (i, o) =>
-      delegateTaskRetry['tool.execute.after'](i as never, o as never),
+    const delegateTaskRetryAfter = wrapPostToolHook(
+      'delegate-task-retry',
+      (i, o) => delegateTaskRetry['tool.execute.after'](i as never, o as never),
     );
     registry.register('tool.after', delegateTaskRetryAfter, 130);
 
-    const jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
-      jsonErrorRecovery['tool.execute.after'](i as never, o as never),
+    const jsonErrorRecoveryAfter = wrapPostToolHook(
+      'json-error-recovery',
+      (i, o) => jsonErrorRecovery['tool.execute.after'](i as never, o as never),
     );
     registry.register('tool.after', jsonErrorRecoveryAfter, 140);
 
-    const taskSessionManagerAfter = wrapPostToolHook('task-session-manager', (i, o) =>
-      taskSessionManagerHook['tool.execute.after'](i as never, o as never),
+    const taskSessionManagerAfter = wrapPostToolHook(
+      'task-session-manager',
+      (i, o) =>
+        taskSessionManagerHook['tool.execute.after'](i as never, o as never),
     );
     registry.register('tool.after', taskSessionManagerAfter, 150);
 
     // command.before hooks - priorities 160-200
-    registry.register('command.before', async (input, output) => {
-      await interviewManager.handleCommandExecuteBefore(input as never, output as never);
-    }, 160);
+    registry.register(
+      'command.before',
+      async (input, output) => {
+        await interviewManager.handleCommandExecuteBefore(
+          input as never,
+          output as never,
+        );
+      },
+      160,
+    );
 
-    registry.register('command.before', async (input, output) => {
-      await presetManager.handleCommandExecuteBefore(input as never, output as never);
-    }, 170);
+    registry.register(
+      'command.before',
+      async (input, output) => {
+        await presetManager.handleCommandExecuteBefore(
+          input as never,
+          output as never,
+        );
+      },
+      170,
+    );
 
-    registry.register('command.before', async (input, output) => {
-      await this.deps.createDeepworkCommandHook().handleCommandExecuteBefore(input as never, output as never);
-    }, 180);
+    registry.register(
+      'command.before',
+      async (input, output) => {
+        await this.deps
+          .createDeepworkCommandHook()
+          .handleCommandExecuteBefore(input as never, output as never);
+      },
+      180,
+    );
 
-    registry.register('command.before', async (input, output) => {
-      await this.deps.createReflectCommandHook().handleCommandExecuteBefore(input as never, output as never);
-    }, 190);
+    registry.register(
+      'command.before',
+      async (input, output) => {
+        await this.deps
+          .createReflectCommandHook()
+          .handleCommandExecuteBefore(input as never, output as never);
+      },
+      190,
+    );
 
-    registry.register('command.before', async (input, output) => {
-      await this.deps.createLoopCommandHook().handleCommandExecuteBefore(input as never, output as never);
-    }, 200);
+    registry.register(
+      'command.before',
+      async (input, output) => {
+        await this.deps
+          .createLoopCommandHook()
+          .handleCommandExecuteBefore(input as never, output as never);
+      },
+      200,
+    );
   }
 }
 
@@ -656,20 +850,33 @@ class HookComposer {
 class ToolComposer {
   constructor(private deps: ComposerDependencies) {}
 
-  compose(config: PluginConfig, ctx: Parameters<Plugin>[0], backgroundJobCoordinator: InstanceType<typeof import('./utils').BackgroundJobCoordinator>, sessionAgentMap: Map<string, string>) {
+  compose(
+    config: PluginConfig,
+    ctx: Parameters<Plugin>[0],
+    backgroundJobCoordinator: InstanceType<
+      typeof import('./utils').BackgroundJobCoordinator
+    >,
+    sessionAgentMap: Map<string, string>,
+  ) {
     const registry = createToolRegistry();
 
     const cancelTaskTools = this.deps.createCancelTaskTool({
       client: ctx.client,
       backgroundJobBoard: backgroundJobCoordinator,
-      shouldManageSession: (sessionID) => sessionAgentMap.get(sessionID) === 'orchestrator',
+      shouldManageSession: (sessionID) =>
+        sessionAgentMap.get(sessionID) === 'orchestrator',
     });
-    Object.entries(cancelTaskTools).forEach(([name, tool]) => { registry.register(name, tool); });
+    Object.entries(cancelTaskTools).forEach(([name, tool]) => {
+      registry.register(name, tool);
+    });
 
-    const acpRunTools = Object.keys(config.acpAgents ?? {}).length > 0
-      ? { acp_run: this.deps.createAcpRunTool(config.acpAgents) }
-      : {};
-    Object.entries(acpRunTools).forEach(([name, tool]) => { registry.register(name, tool); });
+    const acpRunTools =
+      Object.keys(config.acpAgents ?? {}).length > 0
+        ? { acp_run: this.deps.createAcpRunTool(config.acpAgents) }
+        : {};
+    Object.entries(acpRunTools).forEach(([name, tool]) => {
+      registry.register(name, tool);
+    });
 
     const webfetch = this.deps.createWebfetchTool(ctx);
     registry.register('webfetch', webfetch);
@@ -699,9 +906,13 @@ class MultiplexerComposer {
 
     const multiplexer = this.deps.getMultiplexer(multiplexerConfig);
     const multiplexerEnabled =
-      multiplexerConfig.type !== 'none' && multiplexer !== null && multiplexer.isInsideSession();
+      multiplexerConfig.type !== 'none' &&
+      multiplexer !== null &&
+      multiplexer.isInsideSession();
 
-    let multiplexerSessionManager: InstanceType<typeof import('./multiplexer').MultiplexerSessionManager> | null = null;
+    const multiplexerSessionManager: InstanceType<
+      typeof import('./multiplexer').MultiplexerSessionManager
+    > | null = null;
     if (multiplexerEnabled) {
       this.deps.startAvailabilityCheck(multiplexerConfig);
     }
@@ -721,7 +932,9 @@ class ConfigComposer {
     modelArrayMap: Record<string, Array<{ id: string; variant?: string }>>,
     runtimeChains: Record<string, string[]>,
     everModelSwitched: Set<string>,
-    foregroundFallback: InstanceType<typeof import('./hooks').ForegroundFallbackManager>,
+    foregroundFallback: InstanceType<
+      typeof import('./hooks').ForegroundFallbackManager
+    >,
     sessionAgentMap: Map<string, string>,
     ctx: Parameters<Plugin>[0],
   ) {
@@ -737,10 +950,14 @@ class ConfigComposer {
 
       // Merge Agent configs - per-agent shallow merge
       if (!opencodeConfig.agent) {
-        opencodeConfig.agent = { ...agents as Record<string, unknown> };
+        opencodeConfig.agent = { ...(agents as Record<string, unknown>) };
       } else {
-        for (const [name, pluginAgent] of Object.entries(agents as Record<string, unknown>)) {
-          const existing = (opencodeConfig.agent as Record<string, unknown>)[name] as Record<string, unknown> | undefined;
+        for (const [name, pluginAgent] of Object.entries(
+          agents as Record<string, unknown>,
+        )) {
+          const existing = (opencodeConfig.agent as Record<string, unknown>)[
+            name
+          ] as Record<string, unknown> | undefined;
           if (existing && typeof existing.model === 'string') {
             const primary = modelArrayMap[name]?.[0]?.id;
             if (primary && existing.model !== primary) {
@@ -752,12 +969,12 @@ class ConfigComposer {
           }
           if (existing) {
             (opencodeConfig.agent as Record<string, unknown>)[name] = {
-              ...pluginAgent as Record<string, unknown>,
+              ...(pluginAgent as Record<string, unknown>),
               ...existing,
             };
           } else {
             (opencodeConfig.agent as Record<string, unknown>)[name] = {
-              ...pluginAgent as Record<string, unknown>,
+              ...(pluginAgent as Record<string, unknown>),
             };
           }
         }
@@ -769,7 +986,9 @@ class ConfigComposer {
         for (const [agentName, models] of Object.entries(modelArrayMap)) {
           if (models.length === 0) continue;
           const chosen = models[0];
-          const entry = configAgent[agentName] as Record<string, unknown> | undefined;
+          const entry = configAgent[agentName] as
+            | Record<string, unknown>
+            | undefined;
           if (entry) {
             if (entry.model === undefined) {
               entry.model = chosen.id;
@@ -797,12 +1016,17 @@ class ConfigComposer {
         const runtimePreset = config.presets[runtimePresetName];
         for (const [agentName, override] of Object.entries(runtimePreset)) {
           const resolvedName = this.deps.AGENT_ALIASES[agentName] ?? agentName;
-          const entry = configAgent[resolvedName] as Record<string, unknown> | undefined;
+          const entry = configAgent[resolvedName] as
+            | Record<string, unknown>
+            | undefined;
           if (!entry) continue;
 
           if (typeof override.model === 'string') {
             entry.model = override.model;
-          } else if (Array.isArray(override.model) && override.model.length > 0) {
+          } else if (
+            Array.isArray(override.model) &&
+            override.model.length > 0
+          ) {
             const first = override.model[0];
             entry.model = typeof first === 'string' ? first : first.id;
             if (typeof first !== 'string' && first.variant) {
@@ -819,7 +1043,11 @@ class ConfigComposer {
           } else if ('temperature' in override) {
             delete entry.temperature;
           }
-          if (override.options && typeof override.options === 'object' && !Array.isArray(override.options)) {
+          if (
+            override.options &&
+            typeof override.options === 'object' &&
+            !Array.isArray(override.options)
+          ) {
             entry.options = override.options;
           } else if ('options' in override) {
             delete entry.options;
@@ -836,15 +1064,22 @@ class ConfigComposer {
         if (prevPresetName && config.presets?.[prevPresetName]) {
           const prevPreset = config.presets[prevPresetName];
           const newPresetResolved = new Set(
-            Object.keys(runtimePreset).map((k) => this.deps.AGENT_ALIASES[k] ?? k),
+            Object.keys(runtimePreset).map(
+              (k) => this.deps.AGENT_ALIASES[k] ?? k,
+            ),
           );
           for (const agentName of Object.keys(prevPreset)) {
-            const resolvedName = this.deps.AGENT_ALIASES[agentName] ?? agentName;
+            const resolvedName =
+              this.deps.AGENT_ALIASES[agentName] ?? agentName;
             if (newPresetResolved.has(resolvedName)) continue;
-            const entry = configAgent[resolvedName] as Record<string, unknown> | undefined;
+            const entry = configAgent[resolvedName] as
+              | Record<string, unknown>
+              | undefined;
             if (!entry) continue;
             const baseline = config.agents?.[resolvedName];
-            const prevOverride = prevPreset[agentName] as Record<string, unknown> | undefined;
+            const prevOverride = prevPreset[agentName] as
+              | Record<string, unknown>
+              | undefined;
             if (typeof baseline?.model === 'string') {
               entry.model = baseline.model;
             }
@@ -858,7 +1093,11 @@ class ConfigComposer {
             } else if (prevOverride && 'temperature' in prevOverride) {
               delete entry.temperature;
             }
-            if (baseline?.options && typeof baseline.options === 'object' && !Array.isArray(baseline.options)) {
+            if (
+              baseline?.options &&
+              typeof baseline.options === 'object' &&
+              !Array.isArray(baseline.options)
+            ) {
               entry.options = baseline.options;
             } else if (prevOverride && 'options' in prevOverride) {
               delete entry.options;
@@ -876,9 +1115,15 @@ class ConfigComposer {
       const tuiAgentModels: Record<string, string> = {};
       const tuiAgentVariants: Record<string, string> = {};
       for (const agentDef of agentDefs) {
-        if (agentDef.name === 'council' || agentDef.name === 'councillor' || agentDef.name.startsWith('councillor-'))
+        if (
+          agentDef.name === 'council' ||
+          agentDef.name === 'councillor' ||
+          agentDef.name.startsWith('councillor-')
+        )
           continue;
-        const entry = configAgent[agentDef.name] as Record<string, unknown> | undefined;
+        const entry = configAgent[agentDef.name] as
+          | Record<string, unknown>
+          | undefined;
         const resolvedModel =
           typeof entry?.model === 'string'
             ? entry.model
@@ -912,8 +1157,13 @@ class ConfigComposer {
       });
 
       // Merge MCP configs
-      const mcps = this.deps.createBuiltinMcps(config.disabled_mcps, config.websearch);
-      const configMcp = opencodeConfig.mcp as Record<string, unknown> | undefined;
+      const mcps = this.deps.createBuiltinMcps(
+        config.disabled_mcps,
+        config.websearch,
+      );
+      const configMcp = opencodeConfig.mcp as
+        | Record<string, unknown>
+        | undefined;
       if (!configMcp) {
         opencodeConfig.mcp = { ...mcps };
       } else {
@@ -921,16 +1171,28 @@ class ConfigComposer {
       }
 
       // Agent permission rules from MCPs
-      const mergedMcpConfig = opencodeConfig.mcp as Record<string, unknown> | undefined;
+      const mergedMcpConfig = opencodeConfig.mcp as
+        | Record<string, unknown>
+        | undefined;
       const allMcpNames = Object.keys(mergedMcpConfig ?? mcps);
-      for (const [agentName, agentConfig] of Object.entries(agents as Record<string, unknown>)) {
+      for (const [agentName, agentConfig] of Object.entries(
+        agents as Record<string, unknown>,
+      )) {
         const agentMcps = (agentConfig as { mcps?: string[] })?.mcps;
         if (!agentMcps) continue;
         if (!configAgent[agentName]) {
-          configAgent[agentName] = { ...agentConfig as Record<string, unknown> };
+          configAgent[agentName] = {
+            ...(agentConfig as Record<string, unknown>),
+          };
         }
-        const agentConfigEntry = configAgent[agentName] as Record<string, unknown>;
-        const agentPermission = (agentConfigEntry.permission ?? {}) as Record<string, unknown>;
+        const agentConfigEntry = configAgent[agentName] as Record<
+          string,
+          unknown
+        >;
+        const agentPermission = (agentConfigEntry.permission ?? {}) as Record<
+          string,
+          unknown
+        >;
         const allowedMcps = this.deps.parseList(agentMcps, allMcpNames);
         for (const mcpName of allMcpNames) {
           const sanitizedMcpName = mcpName.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -944,11 +1206,15 @@ class ConfigComposer {
       }
 
       // Register commands
-      this.deps.createInterviewManager(ctx, config).registerCommand(opencodeConfig);
+      this.deps
+        .createInterviewManager(ctx, config)
+        .registerCommand(opencodeConfig);
       this.deps.createDeepworkCommandHook().registerCommand(opencodeConfig);
       this.deps.createReflectCommandHook().registerCommand(opencodeConfig);
       this.deps.createLoopCommandHook().registerCommand(opencodeConfig);
-      this.deps.createPresetManager(ctx, config).registerCommand(opencodeConfig);
+      this.deps
+        .createPresetManager(ctx, config)
+        .registerCommand(opencodeConfig);
     };
   }
 }
@@ -963,39 +1229,83 @@ class EventComposer {
     sessionAgentMap: Map<string, string>,
     sessionDirectories: Map<string, string>,
     sessionLifecycle: InstanceType<typeof import('./hooks').SessionLifecycle>,
-    multiplexerSessionManager: InstanceType<typeof import('./multiplexer').MultiplexerSessionManager> | null,
-    foregroundFallback: InstanceType<typeof import('./hooks').ForegroundFallbackManager>,
-    autoUpdateChecker: ReturnType<typeof import('./hooks').createAutoUpdateCheckerHook>,
-    interviewManager: ReturnType<typeof import('./interview').createInterviewManager>,
-    companionManager: InstanceType<typeof import('./companion/manager').CompanionManager>,
+    multiplexerSessionManager: InstanceType<
+      typeof import('./multiplexer').MultiplexerSessionManager
+    > | null,
+    foregroundFallback: InstanceType<
+      typeof import('./hooks').ForegroundFallbackManager
+    >,
+    autoUpdateChecker: ReturnType<
+      typeof import('./hooks').createAutoUpdateCheckerHook
+    >,
+    interviewManager: ReturnType<
+      typeof import('./interview').createInterviewManager
+    >,
+    companionManager: InstanceType<
+      typeof import('./companion/manager').CompanionManager
+    >,
     cacheMonitor: ReturnType<typeof import('./hooks').createCacheMonitorHook>,
-    rewriteDisplayNameMentions: ReturnType<typeof import('./utils').createDisplayNameMentionRewriter>,
+    rewriteDisplayNameMentions: ReturnType<
+      typeof import('./utils').createDisplayNameMentionRewriter
+    >,
     disabledAgents: Set<string>,
-    resolveImageRouting: ReturnType<typeof import('./config/constants').resolveImageRouting>,
+    resolveImageRouting: ReturnType<
+      typeof import('./config/constants').resolveImageRouting
+    >,
     modelArrayMap: Record<string, Array<{ id: string; variant?: string }>>,
     agentDefs: AgentDefinition[],
-    taskSessionManagerHook: ReturnType<typeof import('./hooks').createTaskSessionManagerHook>,
+    taskSessionManagerHook: ReturnType<
+      typeof import('./hooks').createTaskSessionManagerHook
+    >,
   ) {
-    return async (input: { event: { type: string; properties?: Record<string, unknown> } }) => {
+    return async (input: {
+      event: { type: string; properties?: Record<string, unknown> };
+    }) => {
       await cacheMonitor.event(input);
 
       const event = input.event as {
         type: string;
         properties?: {
-          info?: { id?: string; parentID?: string; title?: string; agent?: string; providerID?: string; modelID?: string; model?: { providerID?: string; modelID?: string }; sessionID?: string; directory?: string };
-          sessionID?: string; id?: string; requestID?: string; status?: { type: string };
+          info?: {
+            id?: string;
+            parentID?: string;
+            title?: string;
+            agent?: string;
+            providerID?: string;
+            modelID?: string;
+            model?: { providerID?: string; modelID?: string };
+            sessionID?: string;
+            directory?: string;
+          };
+          sessionID?: string;
+          id?: string;
+          requestID?: string;
+          status?: { type: string };
         };
       };
 
-      const resolveTuiVariantForModel = (agentName: string, model: string): string | undefined => {
+      const resolveTuiVariantForModel = (
+        agentName: string,
+        model: string,
+      ): string | undefined => {
         const configEntry = config.agents?.[agentName];
-        const defaultVariant = typeof configEntry?.variant === 'string' ? configEntry.variant : undefined;
-        const chainMatches = modelArrayMap[agentName]?.filter((entry) => entry.id === model);
+        const defaultVariant =
+          typeof configEntry?.variant === 'string'
+            ? configEntry.variant
+            : undefined;
+        const chainMatches = modelArrayMap[agentName]?.filter(
+          (entry) => entry.id === model,
+        );
         if (chainMatches) {
-          if (chainMatches.length === 1) return chainMatches[0].variant ?? defaultVariant;
+          if (chainMatches.length === 1)
+            return chainMatches[0].variant ?? defaultVariant;
           return undefined;
         }
-        if (typeof configEntry?.model === 'string' && configEntry.model === model && defaultVariant) {
+        if (
+          typeof configEntry?.model === 'string' &&
+          configEntry.model === model &&
+          defaultVariant
+        ) {
           return defaultVariant;
         }
         return undefined;
@@ -1003,15 +1313,29 @@ class EventComposer {
 
       if (event.type === 'message.updated') {
         const info = event.properties?.info;
-        const providerID = typeof info?.providerID === 'string' ? info.providerID : typeof info?.model?.providerID === 'string' ? info.model.providerID : undefined;
-        const modelID = typeof info?.modelID === 'string' ? info.modelID : typeof info?.model?.modelID === 'string' ? info.model.modelID : undefined;
+        const providerID =
+          typeof info?.providerID === 'string'
+            ? info.providerID
+            : typeof info?.model?.providerID === 'string'
+              ? info.model.providerID
+              : undefined;
+        const modelID =
+          typeof info?.modelID === 'string'
+            ? info.modelID
+            : typeof info?.model?.modelID === 'string'
+              ? info.model.modelID
+              : undefined;
         if (typeof info?.agent === 'string' && providerID && modelID) {
-          const agentName = this.deps.resolveRuntimeAgentName(config, info.agent);
+          const agentName = this.deps.resolveRuntimeAgentName(
+            config,
+            info.agent,
+          );
           const model = `${providerID}/${modelID}`;
           const variant = resolveTuiVariantForModel(agentName, model);
           this.deps.recordTuiAgentModel(
             { agentName, model, variant: variant ?? null },
-            (info?.sessionID && sessionDirectories.get(info.sessionID)) ?? ctx.directory,
+            (info?.sessionID && sessionDirectories.get(info.sessionID)) ??
+              ctx.directory,
           );
         }
       }
@@ -1025,7 +1349,12 @@ class EventComposer {
       }
 
       await this.deps.handleTaskSessionEvent(
-        input as { event: { type: string; properties?: { info?: { id?: string }; sessionID?: string } } },
+        input as {
+          event: {
+            type: string;
+            properties?: { info?: { id?: string }; sessionID?: string };
+          };
+        },
         taskSessionManagerHook.event,
         async () => {
           if (multiplexerSessionManager) {
@@ -1043,16 +1372,29 @@ class EventComposer {
 
       await foregroundFallback.handleEvent(input.event);
       await autoUpdateChecker.event(input);
-      await interviewManager.handleEvent(input as { event: { type: string; properties?: Record<string, unknown> } });
+      await interviewManager.handleEvent(
+        input as {
+          event: { type: string; properties?: Record<string, unknown> };
+        },
+      );
 
-      if (event.type === 'permission.asked' || event.type === 'question.asked') {
+      if (
+        event.type === 'permission.asked' ||
+        event.type === 'question.asked'
+      ) {
         companionManager.onWaitingInput();
       }
-      if (event.type === 'permission.replied' || event.type === 'question.replied' || event.type === 'question.rejected') {
+      if (
+        event.type === 'permission.replied' ||
+        event.type === 'question.replied' ||
+        event.type === 'question.rejected'
+      ) {
         companionManager.onInputResolved();
       }
       if (input.event.type === 'session.status') {
-        const props = input.event.properties as { sessionID?: string; status?: { type?: string } } | undefined;
+        const props = input.event.properties as
+          | { sessionID?: string; status?: { type?: string } }
+          | undefined;
         const sessionID = props?.sessionID;
         companionManager.onSessionStatus({
           sessionId: sessionID,
@@ -1061,7 +1403,9 @@ class EventComposer {
         });
       }
       if (input.event.type === 'session.deleted') {
-        const props = input.event.properties as { info?: { id?: string }; sessionID?: string } | undefined;
+        const props = input.event.properties as
+          | { info?: { id?: string }; sessionID?: string }
+          | undefined;
         const sessionID = props?.info?.id || props?.sessionID;
         if (sessionID) {
           sessionLifecycle.dispatchSessionDeleted(sessionID);
@@ -1085,17 +1429,35 @@ class MessageTransformComposer {
     ctx: Parameters<Plugin>[0],
     sessionAgentMap: Map<string, string>,
     sessionDirectories: Map<string, string>,
-    taskSessionManagerHook: ReturnType<typeof import('./hooks').createTaskSessionManagerHook>,
-    postFileToolNudge: ReturnType<typeof import('./hooks').createPostFileToolNudgeHook>,
+    taskSessionManagerHook: ReturnType<
+      typeof import('./hooks').createTaskSessionManagerHook
+    >,
+    postFileToolNudge: ReturnType<
+      typeof import('./hooks').createPostFileToolNudgeHook
+    >,
     phaseReminder: ReturnType<typeof import('./hooks').createPhaseReminderHook>,
-    filterAvailableSkills: ReturnType<typeof import('./hooks').createFilterAvailableSkillsHook>,
-    rewriteDisplayNameMentions: ReturnType<typeof import('./utils').createDisplayNameMentionRewriter>,
+    filterAvailableSkills: ReturnType<
+      typeof import('./hooks').createFilterAvailableSkillsHook
+    >,
+    rewriteDisplayNameMentions: ReturnType<
+      typeof import('./utils').createDisplayNameMentionRewriter
+    >,
     disabledAgents: Set<string>,
-    resolveImageRouting: ReturnType<typeof import('./config/constants').resolveImageRouting>,
+    resolveImageRouting: ReturnType<
+      typeof import('./config/constants').resolveImageRouting
+    >,
     agentDefs: AgentDefinition[],
   ) {
-    return async (input: Record<string, never>, output: { messages: unknown[] }) => {
-      const typedOutput = output as { messages: Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }> };
+    return async (
+      input: Record<string, never>,
+      output: { messages: unknown[] },
+    ) => {
+      const typedOutput = output as {
+        messages: Array<{
+          info: { role: string };
+          parts: Array<{ type: string; text?: string }>;
+        }>;
+      };
 
       for (const message of typedOutput.messages) {
         if (message.info.role !== 'user') continue;
@@ -1135,10 +1497,7 @@ class MessageTransformComposer {
         input,
         typedOutput,
       );
-      await taskSessionManagerHook.injectBackgroundJobBoard(
-        input,
-        typedOutput,
-      );
+      await taskSessionManagerHook.injectBackgroundJobBoard(input, typedOutput);
     };
   }
 }
@@ -1153,22 +1512,31 @@ class SystemTransformComposer {
     disabledAgents: Set<string>,
     buildOrchestratorPrompt: typeof import('./agents/orchestrator').buildOrchestratorPrompt,
   ) {
-    return async (input: { sessionID?: string }, output: { system: string[] }) => {
+    return async (
+      input: { sessionID?: string },
+      output: { system: string[] },
+    ) => {
       const agentName = input.sessionID
         ? sessionAgentMap.get(input.sessionID)
         : undefined;
       if (agentName === 'orchestrator') {
         const alreadyInjected = output.system.some(
-          (s) => typeof s === 'string' && s.includes('<Role>') && s.includes('orchestrator'),
+          (s) =>
+            typeof s === 'string' &&
+            s.includes('<Role>') &&
+            s.includes('orchestrator'),
         );
         if (!alreadyInjected) {
-          const orchestratorDef = agentDefs.find((a) => a.name === 'orchestrator');
+          const orchestratorDef = agentDefs.find(
+            (a) => a.name === 'orchestrator',
+          );
           const orchestratorPrompt =
             typeof orchestratorDef?.config?.prompt === 'string'
               ? orchestratorDef.config.prompt
               : buildOrchestratorPrompt(disabledAgents);
           output.system[0] =
-            orchestratorPrompt + (output.system[0] ? `\n\n${output.system[0]}` : '');
+            orchestratorPrompt +
+            (output.system[0] ? `\n\n${output.system[0]}` : '');
         }
       }
       this.deps.collapseSystemInPlace(output.system);

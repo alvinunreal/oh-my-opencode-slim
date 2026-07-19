@@ -6,9 +6,27 @@ describe('HookRegistry', () => {
     const registry = new HookRegistry();
     const calls: number[] = [];
 
-    registry.register('test.hook', async (_, __) => { calls.push(1); }, 50);
-    registry.register('test.hook', async (_, __) => { calls.push(2); }, 10);
-    registry.register('test.hook', async (_, __) => { calls.push(3); }, 100);
+    registry.register(
+      'test.hook',
+      async (_, __) => {
+        calls.push(1);
+      },
+      50,
+    );
+    registry.register(
+      'test.hook',
+      async (_, __) => {
+        calls.push(2);
+      },
+      10,
+    );
+    registry.register(
+      'test.hook',
+      async (_, __) => {
+        calls.push(3);
+      },
+      100,
+    );
 
     await registry.dispatch('test.hook', {}, {});
 
@@ -19,9 +37,28 @@ describe('HookRegistry', () => {
     const registry = new HookRegistry();
     const calls: string[] = [];
 
-    registry.register('test.hook', async (_, __) => { calls.push('a'); throw new Error('fail'); }, 10);
-    registry.register('test.hook', async (_, __) => { calls.push('b'); }, 20);
-    registry.register('test.hook', async (_, __) => { calls.push('c'); }, 30);
+    registry.register(
+      'test.hook',
+      async (_, __) => {
+        calls.push('a');
+        throw new Error('fail');
+      },
+      10,
+    );
+    registry.register(
+      'test.hook',
+      async (_, __) => {
+        calls.push('b');
+      },
+      20,
+    );
+    registry.register(
+      'test.hook',
+      async (_, __) => {
+        calls.push('c');
+      },
+      30,
+    );
 
     await registry.dispatch('test.hook', {}, {});
 
@@ -35,7 +72,7 @@ describe('HookRegistry', () => {
     registry.register('test.hook', async (_, __) => {}, 100);
 
     const handlers = registry.getHandlers('test.hook');
-    expect(handlers.map(h => h.priority)).toEqual([10, 50, 100]);
+    expect(handlers.map((h) => h.priority)).toEqual([10, 50, 100]);
   });
 
   test('dispatch on unknown hook point does nothing', async () => {

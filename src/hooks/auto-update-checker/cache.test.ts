@@ -156,20 +156,30 @@ describe('auto-update-checker/cache', () => {
       const writeSpy = spyOn(fs, 'writeFileSync').mockImplementation(() => {});
       const rmSyncSpy = spyOn(fs, 'rmSync').mockReturnValue(undefined);
       const mkdirSyncSpy = spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
-      const { preparePackageUpdate } = await import(
-        `./cache?test=${importCounter++}`
+      const mkdtempSyncSpy = spyOn(fs, 'mkdtempSync').mockReturnValue(
+        '/mock/staging',
       );
+      try {
+        const { preparePackageUpdate } = await import(
+          `./cache?test=${importCounter++}`
+        );
 
-      const result = preparePackageUpdate('1.0.1', 'oh-my-opencode-slim', null);
+        const result = preparePackageUpdate(
+          '1.0.1',
+          'oh-my-opencode-slim',
+          null,
+        );
 
-      expect(result).not.toBeNull();
-      expect(writeSpy).toHaveBeenCalled();
-
-      existsSpy.mockRestore();
-      readSpy.mockRestore();
-      writeSpy.mockRestore();
-      rmSyncSpy.mockRestore();
-      mkdirSyncSpy.mockRestore();
+        expect(result).not.toBeNull();
+        expect(writeSpy).toHaveBeenCalled();
+      } finally {
+        existsSpy.mockRestore();
+        readSpy.mockRestore();
+        writeSpy.mockRestore();
+        rmSyncSpy.mockRestore();
+        mkdirSyncSpy.mockRestore();
+        mkdtempSyncSpy.mockRestore();
+      }
     });
   });
 

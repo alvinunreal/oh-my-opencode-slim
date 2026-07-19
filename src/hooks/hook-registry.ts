@@ -6,13 +6,21 @@ export interface HookHandler {
 export class HookRegistry {
   private handlers = new Map<string, HookHandler[]>();
 
-  register(hookPoint: string, handler: (input: unknown, output: unknown) => Promise<void>, priority = 50): void {
+  register(
+    hookPoint: string,
+    handler: (input: unknown, output: unknown) => Promise<void>,
+    priority = 50,
+  ): void {
     const existing = this.handlers.get(hookPoint) ?? [];
     existing.push({ priority, handler });
     this.handlers.set(hookPoint, existing);
   }
 
-  async dispatch(hookPoint: string, input: unknown, output: unknown): Promise<void> {
+  async dispatch(
+    hookPoint: string,
+    input: unknown,
+    output: unknown,
+  ): Promise<void> {
     const handlers = this.handlers.get(hookPoint);
     if (!handlers || handlers.length === 0) return;
 
@@ -21,7 +29,10 @@ export class HookRegistry {
       try {
         await handler(input, output);
       } catch (error) {
-        console.error(`[hook-registry] handler failed for ${hookPoint}:`, error);
+        console.error(
+          `[hook-registry] handler failed for ${hookPoint}:`,
+          error,
+        );
       }
     }
   }
