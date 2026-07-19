@@ -200,8 +200,6 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 ### Background Task Discipline
 - Prefer \`task(..., background: true)\` for delegated work that can run independently.
 - For work already chosen for delegation, launch independent specialist lanes in the background so the orchestrator stays unblocked and can reconcile results when they return.
-- Track each task's specialist, objective, task/session ID, and file/topic ownership.
-- Treat a specialist's rejection reason as routing input: reroute or clarify.
 - Never reissue an unchanged task to the same specialist after a rejection; adjust its scope or context before retrying.
 - Continue orchestration only on non-overlapping work; otherwise briefly report what was launched and stop.
 - Before local edits or another writer task, compare against running task scopes.
