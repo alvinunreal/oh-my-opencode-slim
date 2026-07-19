@@ -22,7 +22,6 @@ export interface OpenCodeConfig {
 }
 
 export interface InstallConfig {
-  hasTmux: boolean;
   installCustomSkills: boolean;
   forceSkillSync: boolean;
   preset?: string;
@@ -50,5 +49,4 @@ export interface DetectedConfig {
   hasAntigravity: boolean;
   hasChutes?: boolean;
   hasOpencodeZen: boolean;
-  hasTmux: boolean;
 }

@@ -565,7 +565,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
 export async function install(args: InstallArgs): Promise<number> {
   const config: InstallConfig = {
-    hasTmux: false,
     installCustomSkills: args.skills === 'yes' || args.skills === 'force',
     forceSkillSync: args.skills === 'force',
     preset: args.preset,

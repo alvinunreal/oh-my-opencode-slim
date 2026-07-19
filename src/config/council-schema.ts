@@ -153,36 +153,17 @@ export const CouncilConfigSchema = z
   .object({
     presets: z.record(z.string(), CouncilPresetSchema),
     default_preset: z.string().default('default'),
-    // Deprecated fields - accepted for backward compatibility but ignored.
-    // The council agent now synthesizes directly; no separate master session.
-    // Uses permissive schemas since the values are discarded - strict
-    // validation would break old configs with non-standard model IDs.
-    master: z
-      .unknown()
-      .optional()
-      .describe('DEPRECATED - ignored. Council agent synthesizes directly.'),
   })
+  .passthrough()
   .transform((data) => {
     // Detect deprecated fields and attach warning for consumers
     const deprecated: string[] = [];
-    if (data.master !== undefined) deprecated.push('master');
-
-    // Backward compat: extract master.model so the council agent can use it
-    // as a fallback when no explicit council entry exists in the active preset.
-    // See https://github.com/alvinunreal/oh-my-opencode-slim/issues/369
-    const legacyMasterModel: string | undefined =
-      typeof data.master === 'object' &&
-      data.master !== null &&
-      'model' in data.master &&
-      typeof (data.master as { model: unknown }).model === 'string'
-        ? (data.master as { model: string }).model
-        : undefined;
+    if ('master' in data) deprecated.push('master');
 
     return {
       presets: data.presets,
       default_preset: data.default_preset,
       _deprecated: deprecated.length > 0 ? deprecated : undefined,
-      _legacyMasterModel: legacyMasterModel,
     };
   });
 

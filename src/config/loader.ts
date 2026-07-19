@@ -83,6 +83,48 @@ function loadConfigFromPath(
       }
       return null;
     }
+    // Warn about deprecated tmux key
+    if (
+      typeof rawConfig === 'object' &&
+      rawConfig !== null &&
+      'tmux' in (rawConfig as Record<string, unknown>)
+    ) {
+      const tmuxMsg =
+        'Deprecated tmux config key found and ignored. Use multiplexer config instead.';
+      options?.onWarning?.({
+        path: configPath,
+        kind: 'invalid-schema' as ConfigLoadWarningKind,
+        message: tmuxMsg,
+      });
+      if (!options?.silent) {
+        console.warn(`[oh-my-opencode-slim] ${tmuxMsg}`);
+      }
+    }
+
+    // Warn about deprecated council.master key
+    if (
+      typeof rawConfig === 'object' &&
+      rawConfig !== null &&
+      typeof (rawConfig as Record<string, unknown>).council === 'object' &&
+      (rawConfig as Record<string, unknown>).council !== null &&
+      'master' in
+        ((rawConfig as Record<string, unknown>).council as Record<
+          string,
+          unknown
+        >)
+    ) {
+      const masterMsg =
+        'Deprecated council.master config key found and ignored. Configure council agents via presets instead.';
+      options?.onWarning?.({
+        path: configPath,
+        kind: 'invalid-schema' as ConfigLoadWarningKind,
+        message: masterMsg,
+      });
+      if (!options?.silent) {
+        console.warn(`[oh-my-opencode-slim] ${masterMsg}`);
+      }
+    }
+
     const result = PluginConfigSchema.safeParse(rawConfig);
 
     if (!result.success) {
@@ -223,7 +265,6 @@ export function mergePluginConfigs(
     ...override,
     agents: deepMerge(base.agents, override.agents),
     presets: deepMerge(base.presets, override.presets),
-    tmux: deepMerge(base.tmux, override.tmux),
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
@@ -285,7 +326,7 @@ export function deepMerge<T extends Record<string, unknown>>(
  * 2. Project config: <directory>/.opencode/oh-my-opencode-slim.jsonc or .json
  *
  * JSONC format is preferred over JSON (allows comments and trailing commas).
- * Project config takes precedence over user config. Nested objects (agents, tmux) are
+ * Project config takes precedence over user config. Nested objects (agents, multiplexer) are
  * deep-merged, while top-level arrays are replaced entirely by project config.
  *
  * @param directory - Project directory to search for .opencode config
@@ -309,9 +350,6 @@ export function loadPluginConfig(
   if (projectConfig) {
     config = mergePluginConfigs(config, projectConfig);
   }
-
-  // Migrate legacy tmux config to multiplexer config for backward compatibility
-  config = migrateTmuxToMultiplexer(config);
 
   // Override preset from environment variable if set
   const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
@@ -459,34 +497,4 @@ export function loadAgentPrompt(
   );
 
   return result;
-}
-
-/**
- * Migrate legacy tmux config to multiplexer config for backward compatibility.
- * If tmux.enabled is true and no multiplexer config is set, creates a multiplexer
- * config from the tmux settings.
- *
- * @param config - Plugin config to migrate
- * @returns Config with multiplexer settings applied
- */
-function migrateTmuxToMultiplexer(config: PluginConfig): PluginConfig {
-  // If multiplexer is already configured, use it as-is
-  if (config.multiplexer?.type && config.multiplexer.type !== 'none') {
-    return config;
-  }
-
-  // If tmux is enabled, migrate to multiplexer
-  if (config.tmux?.enabled) {
-    return {
-      ...config,
-      multiplexer: {
-        type: 'tmux',
-        layout: config.tmux.layout ?? 'main-vertical',
-        main_pane_size: config.tmux.main_pane_size ?? 60,
-        zellij_pane_mode: 'agent-tab',
-      },
-    };
-  }
-
-  return config;
 }

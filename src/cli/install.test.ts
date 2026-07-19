@@ -147,7 +147,6 @@ mock.module('./paths', () => {
 
 function baseConfig(): InstallConfig {
   return {
-    hasTmux: false,
     installCustomSkills: false,
     forceSkillSync: false,
     reset: false,

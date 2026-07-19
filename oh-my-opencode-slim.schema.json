@@ -973,32 +973,6 @@
         }
       }
     },
-    "tmux": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        },
-        "layout": {
-          "default": "main-vertical",
-          "type": "string",
-          "enum": [
-            "main-horizontal",
-            "main-vertical",
-            "tiled",
-            "even-horizontal",
-            "even-vertical"
-          ]
-        },
-        "main_pane_size": {
-          "default": 60,
-          "type": "number",
-          "minimum": 20,
-          "maximum": 80
-        }
-      }
-    },
     "websearch": {
       "type": "object",
       "properties": {
@@ -1127,14 +1101,12 @@
         "default_preset": {
           "default": "default",
           "type": "string"
-        },
-        "master": {
-          "description": "DEPRECATED - ignored. Council agent synthesizes directly."
         }
       },
       "required": [
         "presets"
-      ]
+      ],
+      "additionalProperties": {}
     },
     "companion": {
       "type": "object",

@@ -10,6 +10,10 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import {
+  INSTALLER_MANAGED_PLUGIN_OPTION,
+  type PluginEntry,
+} from '../plugin-entry';
 import { crossSpawn } from '../utils/compat';
 import {
   ensureConfigDir,
@@ -49,10 +53,6 @@ function getModelIds(model: unknown): string[] {
 
 function getPlugins(config: OpenCodeConfig): unknown[] {
   return Array.isArray(config.plugin) ? config.plugin : [];
-}
-
-function getPluginEntries(config: OpenCodeConfig): string[] {
-  return getPlugins(config).filter(isString);
 }
 
 function getPluginSpec(entry: unknown): string | undefined {
@@ -136,7 +136,7 @@ function isMatchingPluginEntry(entry: unknown): boolean {
   return spec ? isPluginEntry(spec) : false;
 }
 
-function getPluginEntry(): string {
+function getPluginEntry(): PluginEntry {
   const cliEntryPath = process.argv[1];
 
   if (!cliEntryPath) {
@@ -146,8 +146,20 @@ function getPluginEntry(): string {
   try {
     const packageRoot = findPackageRoot(cliEntryPath);
 
-    if (!packageRoot || isPackageManagerInstall(packageRoot)) {
+    if (!packageRoot) {
       return PACKAGE_NAME;
+    }
+
+    if (isPackageManagerInstall(packageRoot)) {
+      const version = getVersionFromPackageRoot(packageRoot);
+      const requestedTag = getRequestedPackageTag(packageRoot);
+      if (!version || !requestedTag || requestedTag === 'latest') {
+        return PACKAGE_NAME;
+      }
+      return [
+        `${PACKAGE_NAME}@${version}`,
+        { [INSTALLER_MANAGED_PLUGIN_OPTION]: true },
+      ];
     }
 
     return packageRoot;
@@ -161,19 +173,22 @@ function getPluginEntry(): string {
  * Returns the version string (e.g. "1.2.3") if pinned, or undefined
  * if the plugin is unpinned (bare name or @latest).
  */
-function getPinnedVersionFromConfig(): string | undefined {
+function getConfiguredExactVersion(): string | undefined {
   try {
     const { config } = parseConfig(getExistingConfigPath());
     if (!config) return undefined;
+    let version: string | undefined;
     for (const entry of getPlugins(config)) {
       const spec = getPluginSpec(entry);
       if (!spec) continue;
-      if (spec === PACKAGE_NAME) return undefined;
-      if (spec.startsWith(`${PACKAGE_NAME}@`)) {
-        const version = spec.slice(PACKAGE_NAME.length + 1);
-        if (version && version !== 'latest') return version;
+      if (spec === PACKAGE_NAME) {
+        version = undefined;
+      } else if (spec.startsWith(`${PACKAGE_NAME}@`)) {
+        const candidate = spec.slice(PACKAGE_NAME.length + 1);
+        version = candidate && candidate !== 'latest' ? candidate : undefined;
       }
     }
+    return version;
   } catch {}
   return undefined;
 }
@@ -311,10 +326,10 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     return null;
   }
 
-  const pinnedVersion = getPinnedVersionFromConfig();
+  const configuredVersion = getConfiguredExactVersion();
   const runningVersion = getVersionFromPackageRoot(packageRoot);
   const requestedTag = getRequestedPackageTag(packageRoot);
-  const cacheVersion = pinnedVersion ?? requestedTag ?? runningVersion;
+  const cacheVersion = configuredVersion ?? requestedTag ?? runningVersion;
   const cacheDir = getOpenCodePluginCacheDir(cacheVersion);
 
   try {
@@ -654,17 +669,17 @@ export function detectCurrentConfig(): DetectedConfig {
     hasAntigravity: false,
     hasChutes: false,
     hasOpencodeZen: false,
-    hasTmux: false,
   };
 
   const { config } = parseConfig(getExistingConfigPath());
   if (!config) return result;
 
-  const plugins = getPluginEntries(config);
-  result.isInstalled = plugins.some((p) => isPluginEntry(p));
-  result.hasAntigravity = plugins.some((p) =>
-    p.startsWith('opencode-antigravity-auth'),
-  );
+  const plugins = getPlugins(config);
+  result.isInstalled = plugins.some((p) => isMatchingPluginEntry(p));
+  result.hasAntigravity = plugins.some((p) => {
+    const spec = getPluginSpec(p);
+    return spec?.startsWith('opencode-antigravity-auth') ?? false;
+  });
 
   // Check for providers
   const providers = config.provider as Record<string, unknown> | undefined;
@@ -702,11 +717,6 @@ export function detectCurrentConfig(): DetectedConfig {
       if (models.some((m) => m.startsWith('chutes/'))) {
         result.hasChutes = true;
       }
-    }
-
-    if (configObj.tmux && typeof configObj.tmux === 'object') {
-      const tmuxConfig = configObj.tmux as { enabled?: boolean };
-      result.hasTmux = tmuxConfig.enabled === true;
     }
   }
 

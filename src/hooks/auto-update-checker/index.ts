@@ -6,7 +6,13 @@ import {
 } from '../../companion/updater';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
-import { preparePackageUpdate, resolveInstallContext } from './cache';
+import {
+  discardPreparedPackageUpdate,
+  preparePackageUpdate,
+  publishPackageUpdate,
+  resolveInstallContext,
+  verifyInstalledPackage,
+} from './cache';
 import {
   extractChannel,
   findPluginEntry,
@@ -14,6 +20,7 @@ import {
   getCurrentRuntimePackageJsonPath,
   getLatestCompatibleVersion,
   getLocalDevVersion,
+  updateInstallerManagedVersions,
 } from './checker';
 import { CACHE_DIR, PACKAGE_NAME } from './constants';
 import { syncBundledSkillsFromPackage } from './skill-sync';
@@ -209,8 +216,16 @@ async function runBackgroundUpdateCheck(
     return;
   }
 
-  const installDir = preparePackageUpdate(latestVersion, PACKAGE_NAME);
-  if (!installDir) {
+  const cacheIdentity = pluginInfo.isInstallerManaged
+    ? latestVersion
+    : 'latest';
+  const prepared = preparePackageUpdate(
+    latestVersion,
+    PACKAGE_NAME,
+    undefined,
+    cacheIdentity,
+  );
+  if (!prepared) {
     showToast(
       ctx,
       `OMO-Slim ${latestVersion}`,
@@ -223,9 +238,28 @@ async function runBackgroundUpdateCheck(
     return;
   }
 
-  const installSuccess = await runBunInstallSafe(installDir);
+  const installSuccess =
+    (await runBunInstallSafe(prepared.stagingDir)) &&
+    verifyInstalledPackage(prepared.stagingDir, latestVersion);
+  const installDir = installSuccess
+    ? publishPackageUpdate(prepared, latestVersion)
+    : null;
+  if (!installSuccess) discardPreparedPackageUpdate(prepared);
 
-  if (installSuccess) {
+  if (installDir) {
+    if (
+      pluginInfo.isInstallerManaged &&
+      !updateInstallerManagedVersions(ctx.directory, latestVersion)
+    ) {
+      showToast(
+        ctx,
+        `OMO-Slim ${latestVersion}`,
+        'Update installed in cache, but plugin configuration could not be updated.',
+        'error',
+        8000,
+      );
+      return;
+    }
     let installedSkills: string[] = [];
     let companionUpdated = false;
     let companionWillRetry = false;

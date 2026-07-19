@@ -187,7 +187,6 @@ describe('configureBackgroundSubagents', () => {
 
     try {
       const result = await configureBackgroundSubagents({
-        hasTmux: false,
         installCustomSkills: false,
         promptForStar: false,
         reset: false,
@@ -221,7 +220,6 @@ describe('configureBackgroundSubagents', () => {
 
     try {
       const result = await configureBackgroundSubagents({
-        hasTmux: false,
         installCustomSkills: false,
         promptForStar: false,
         reset: false,

@@ -622,6 +622,7 @@ export function createInterviewService(
       await ctx.client.session.promptAsync({
         path: { id: interview.sessionID },
         body: {
+          agent: 'orchestrator',
           parts: [createInternalAgentTextPart(prompt)],
           ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
         },
@@ -871,6 +872,7 @@ export function createInterviewService(
       await ctx.client.session.promptAsync({
         path: { id: interview.sessionID },
         body: {
+          agent: 'orchestrator',
           parts: [createInternalAgentTextPart(prompt)],
           ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
         },
@@ -933,6 +935,7 @@ export function createInterviewService(
       await ctx.client.session.promptAsync({
         path: { id: interview.sessionID },
         body: {
+          agent: 'orchestrator',
           parts: [createInternalAgentTextPart(prompt)],
           ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
         },
@@ -1007,6 +1010,7 @@ export function createInterviewService(
       await ctx.client.session.promptAsync({
         path: { id: interview.sessionID },
         body: {
+          agent: 'orchestrator',
           parts: [createInternalAgentTextPart(prompt)],
           ...(model ? { model: parseModelReference(model) ?? undefined } : {}),
         },

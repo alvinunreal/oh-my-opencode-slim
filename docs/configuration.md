@@ -227,8 +227,8 @@ subprocess.
   `presets.<name>.council.model`.
 - The **councillor models** are configured separately under
   `council.presets.<name>.<councillor>.model`.
-- Deprecated `council.master*` fields are legacy compatibility aliases only;
-  do not use them in new configs.
+- `council.master*` fields have been removed. A deprecation warning is
+  logged this release if a config still contains them.
 
 ### Manual Update Mode
 

@@ -536,41 +536,7 @@ describe('council agent model resolution', () => {
     expect(councillor?.config.model).toBe(DEFAULT_MODELS.councillor);
   });
 
-  test('council falls back to legacy master.model when no preset override', () => {
-    // Simulates a pre-1.0.0 config with council.master.model but no council
-    // entry in the agent preset - the exact scenario from issue #369.
-    const config: PluginConfig = {
-      agents: {
-        oracle: { model: 'openai/gpt-5.6' },
-      },
-      council: {
-        ...councilConfig(),
-        _legacyMasterModel: 'anthropic/claude-opus-4-6',
-      },
-    };
-    const agents = createAgents(config);
-    const council = agents.find((a) => a.name === 'council');
-    expect(council?.config.model).toBe('anthropic/claude-opus-4-6');
-  });
-
-  test('council preset override takes precedence over legacy master.model', () => {
-    // If user has explicit council in preset, that wins - legacy is ignored.
-    const config: PluginConfig = {
-      agents: {
-        council: { model: 'google/gemini-3-pro' },
-      },
-      council: {
-        ...councilConfig(),
-        _legacyMasterModel: 'anthropic/claude-opus-4-6',
-      },
-    };
-    const agents = createAgents(config);
-    const council = agents.find((a) => a.name === 'council');
-    expect(council?.config.model).toBe('google/gemini-3-pro');
-  });
-
-  test('council uses default when no legacy master and no preset override', () => {
-    // No legacy master, no preset override → standard default
+  test('council uses default when no preset override', () => {
     const config: PluginConfig = {
       council: councilConfig(),
     };
@@ -579,10 +545,8 @@ describe('council agent model resolution', () => {
     expect(council?.config.model).toBe(DEFAULT_MODELS.council);
   });
 
-  test('end-to-end: raw master.model config flows through schema to council agent', () => {
-    // Integration test: start from raw user config with deprecated master.model,
-    // parse through CouncilConfigSchema, then pass to createAgents.
-    // This validates the full seam between schema transform and agent resolution.
+  test('deprecated council.master field is ignored', () => {
+    // Verify that the deprecated master field is reported but not applied.
     const rawCouncilConfig = {
       master: { model: 'anthropic/claude-opus-4-6' },
       presets: {
@@ -596,13 +560,14 @@ describe('council agent model resolution', () => {
     expect(parsed.success).toBe(true);
 
     if (parsed.success) {
+      expect(parsed.data._deprecated).toEqual(['master']);
       const config: PluginConfig = {
         council: parsed.data,
       };
       const agents = createAgents(config);
       const council = agents.find((a) => a.name === 'council');
-      // Legacy master.model should flow through schema → agent
-      expect(council?.config.model).toBe('anthropic/claude-opus-4-6');
+      // Master is deprecated and no longer used for model fallback
+      expect(council?.config.model).toBe(DEFAULT_MODELS.council);
     }
   });
 });

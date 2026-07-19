@@ -66,6 +66,14 @@ const ALLOWLIST = new Map<string, string>([
     'hooks/image-hook.ts',
     'Date.now() throttles temp-image cleanup; extracted image paths are deterministic per part id.',
   ],
+  [
+    'hooks/auto-update-checker/cache.ts',
+    'Date.now() and process.pid name an on-disk quarantine directory during the atomic publish transaction; the path is filesystem bookkeeping, never serialized into prompt content.',
+  ],
+  [
+    'hooks/auto-update-checker/checker.ts',
+    'Date.now()/Math.random() compose a per-run temp token for install bookkeeping; it names local directories and never reaches the prompt prefix.',
+  ],
 ]);
 
 async function scanForViolations(): Promise<string[]> {

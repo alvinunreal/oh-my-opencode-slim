@@ -46,11 +46,14 @@ describe('config-io', () => {
     mock.restore();
   });
 
-  function writePackageJson(dir: string): void {
+  function writePackageJson(dir: string, version?: string): void {
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, 'package.json'),
-      JSON.stringify({ name: 'oh-my-opencode-slim' }),
+      JSON.stringify({
+        name: 'oh-my-opencode-slim',
+        ...(version ? { version } : {}),
+      }),
     );
   }
 
@@ -179,6 +182,51 @@ describe('config-io', () => {
     expect(result.success).toBe(true);
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeConfig leaves @latest bunx invocations unpinned', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@latest',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot, '1.2.3');
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('addPluginToOpenCodeConfig writes the resolved version as an installer-managed tuple', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@beta',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugin: [] }));
+    writePackageJson(packageRoot, '1.2.3');
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual([
+      [
+        'oh-my-opencode-slim@1.2.3',
+        { __ohMyOpencodeSlimManagedByInstaller: true },
+      ],
+    ]);
   });
 
   test('addPluginToOpenCodeConfig stores local repo path for local dev paths', async () => {
@@ -424,7 +472,6 @@ describe('config-io', () => {
     paths.ensureConfigDir();
 
     const result = writeLiteConfig({
-      hasTmux: true,
       installCustomSkills: false,
       reset: false,
     });
@@ -437,7 +484,6 @@ describe('config-io', () => {
     expect(saved.preset).toBe('openai');
     expect(saved.presets.openai).toBeDefined();
     expect(saved.presets['opencode-go']).toBeDefined();
-    expect(saved.tmux.enabled).toBe(true);
   });
 
   test('writeLiteConfig writes selected preset', () => {
@@ -445,7 +491,6 @@ describe('config-io', () => {
     paths.ensureConfigDir();
 
     const result = writeLiteConfig({
-      hasTmux: false,
       installCustomSkills: false,
       preset: 'opencode-go',
       reset: false,
@@ -568,7 +613,6 @@ describe('config-io', () => {
             librarian: { model: 'zai-coding-plan/glm-4.7' },
           },
         },
-        tmux: { enabled: true },
       }),
     );
 
@@ -579,7 +623,26 @@ describe('config-io', () => {
     expect(detected.hasAnthropic).toBe(true);
     expect(detected.hasCopilot).toBe(true);
     expect(detected.hasZaiPlan).toBe(true);
-    expect(detected.hasTmux).toBe(true);
+  });
+
+  test('detectCurrentConfig detects installed status for installer-managed tuple', () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    paths.ensureConfigDir();
+
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: [
+          [
+            'oh-my-opencode-slim@1.2.3',
+            { __ohMyOpencodeSlimManagedByInstaller: true },
+          ],
+        ],
+      }),
+    );
+
+    const detected = detectCurrentConfig();
+    expect(detected.isInstalled).toBe(true);
   });
 
   test('detectCurrentConfig detects provider models in arrays', () => {

@@ -260,7 +260,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.6-terra (medium)</code> <code>anthropic/claude-fable-5</code> <code>anthropic/claude-opus-4-8</code>
+      <b>Recommended Models:</b> <code>claude-fable-5</code> <code>claude-opus-4-8</code> <code>glm-5.2</code> <code>gpt-5.6-terra</code> <code>mimo-v2.5</code> <code>minimax-m3</code> <code>qwen3.7-plus</code>
     </td>
   </tr>
   <tr>
@@ -301,7 +301,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.3-codex</code> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p6-turbo</code>
+      <b>Recommended Models:</b> <code>deepseek-v4-flash</code> <code>gpt-5.3-codex</code>
     </td>
   </tr>
   <tr>
@@ -342,7 +342,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.6-sol (xhigh)</code> <code>anthropic/claude-fable-5</code> <code>anthropic/claude-opus-4-8 (xhigh)</code>
+      <b>Recommended Models:</b> <code>claude-fable-5</code> <code>claude-opus-4-8</code> <code>deepseek-v4-pro</code> <code>glm-5.2</code> <code>gpt-5.6-sol</code> <code>qwen3.7-max</code>
     </td>
   </tr>
   <tr>
@@ -432,7 +432,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.3-codex</code> <code>cerebras/zai-glm-4.7</code> <code>fireworks-ai/accounts/fireworks/routers/kimi-k2p6-turbo</code>
+      <b>Recommended Models:</b> <code>deepseek-v4-flash</code> <code>gpt-5.3-codex</code> <code>mimo-v2.5</code> <code>minimax-m2.7</code>
     </td>
   </tr>
   <tr>
@@ -473,7 +473,7 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>google/gemini-3.5-flash</code> <code>moonshotai/kimi-k2.7-code</code>
+      <b>Recommended Models:</b> <code>gemini-3.5-flash</code> <code>kimi-k2.7-code</code> <code>minimax-m3</code>
     </td>
   </tr>
   <tr>
@@ -509,12 +509,12 @@ If any agent fails to respond, check your provider authentication and config fil
   </tr>
   <tr>
     <td colspan="2">
-      <b>Default Model:</b> <code>openai/gpt-5.6-luna (medium)</code>
+      <b>Default Model:</b> <code>openai/gpt-5.6-luna</code>
     </td>
   </tr>
   <tr>
     <td colspan="2">
-      <b>Recommended Models:</b> <code>openai/gpt-5.6-luna (medium)</code> <code>anthropic/claude-sonnet-4-6</code>
+      <b>Recommended Models:</b> <code>claude-sonnet-4-6</code> <code>deepseek-v4-flash</code> <code>gpt-5.6-luna</code> <code>kimi-k2.7-code</code>
     </td>
   </tr>
   <tr>
@@ -557,6 +557,11 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Default Model:</b> <code>openai/gpt-5.6-luna</code> - <i>configure a vision-capable model to enable</i>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Recommended Models:</b> <code>mimo-v2.5</code> <code>qwen3.5-plus</code>
     </td>
   </tr>
   <tr>

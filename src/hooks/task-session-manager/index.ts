@@ -397,7 +397,10 @@ export function createTaskSessionManagerHook(
       continuationConsumed.add(parentSessionID);
       await sessionSdk.promptAsync({
         path: { id: parentSessionID },
-        body: { parts: [createInternalAgentTextPart(CONTINUATION_NUDGE)] },
+        body: {
+          agent: 'orchestrator',
+          parts: [createInternalAgentTextPart(CONTINUATION_NUDGE)],
+        },
         throwOnError: true,
       });
     } catch (error) {
