@@ -155,7 +155,6 @@ describe('auto-update-checker/cache', () => {
       );
       const writeSpy = spyOn(fs, 'writeFileSync').mockImplementation(() => {});
       const rmSyncSpy = spyOn(fs, 'rmSync').mockReturnValue(undefined);
-      const mkdirSyncSpy = spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
       const { preparePackageUpdate } = await import(
         `./cache?test=${importCounter++}`
       );
@@ -169,7 +168,6 @@ describe('auto-update-checker/cache', () => {
       readSpy.mockRestore();
       writeSpy.mockRestore();
       rmSyncSpy.mockRestore();
-      mkdirSyncSpy.mockRestore();
     });
   });
 
@@ -185,10 +183,6 @@ describe('auto-update-checker/cache', () => {
 
     function createPrepared(root: string, version: string) {
       const parent = join(root, 'packages');
-      fs.mkdirSync(parent, { recursive: true });
-      // ponytail: re-ensure parent exists right before mkdtemp to avoid a
-      // transient ENOENT on CI runners where the dir created above isn't
-      // yet visible to mkdtempSync in the same tick.
       fs.mkdirSync(parent, { recursive: true });
       const stagingDir = fs.mkdtempSync(join(parent, '.staging-'));
       return {
