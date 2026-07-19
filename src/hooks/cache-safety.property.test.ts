@@ -12,10 +12,10 @@
  * 2. Determinism — ambient inputs that should not matter (wall clock,
  *    randomness, background-job churn) must not change any stable byte.
  *
- * The pipeline below mirrors the composition in src/index.ts
+ * The pipeline below mirrors the composition in src/plugin-composer.ts
  * ('experimental.chat.messages.transform'). A drift guard test fails when
- * src/index.ts gains, loses, or reorders transform steps so this suite can
- * never silently fall out of sync with production.
+ * src/plugin-composer.ts gains, loses, or reorders transform steps so this
+ * suite can never silently fall out of sync with production.
  */
 
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';

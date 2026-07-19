@@ -43,7 +43,7 @@ OpenCode Core → Plugin Initialization (index.ts → plugin-composer.ts)
 
 ## Flow
 
-### Plugin Initialization Flow (index.ts)
+### Plugin Initialization Flow (plugin-composer.ts)
 
 1. **Config Loading**: `loadPluginConfig()` reads and validates plugin configuration
 2. **Agent Creation**: `createAgents()` instantiates agent definitions with prompts and permissions
@@ -81,7 +81,7 @@ OpenCode Core → Plugin Initialization (index.ts → plugin-composer.ts)
 3. **Atomic Writes**: State updates are atomic (read → mutate → write with timestamp)
 4. **Error Handling**: All operations are best-effort; failures don't crash plugin
 
-### Event Handling Flow (index.ts)
+### Event Handling Flow (plugin-composer.ts)
 
 Key event flows:
 
@@ -128,7 +128,7 @@ Key event flows:
 
 ### Cross-Directory Flow
 
-1. **Plugin Initialization**: `src/index.ts` imports and composes all subsystems
+1. **Plugin Initialization**: `src/plugin-composer.ts` imports and composes all subsystems (delegated from `src/index.ts`)
 2. **State Synchronization**: TUI state in `src/tui-state.ts` is updated during plugin init and message events
 3. **UI Integration**: TUI plugin in `src/tui.ts` reads state and renders sidebar
 4. **Event Propagation**: Events flow from OpenCode → plugin handlers → subsystems → state updates

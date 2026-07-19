@@ -52,7 +52,7 @@ Implements OpenCode lifecycle hooks that transform, process, and manage chat mes
 
 ### Hook Registration
 ```
-1. Plugin initializes (src/index.ts)
+1. Plugin initializes (src/index.ts → src/plugin-composer.ts)
 2. Hook factories are called, returning handler maps
 3. Handlers are composed in `src/plugin-composer.ts` per hook point
 4. `src/index.ts` delegates to `plugin-composer.ts` which returns the composed Plugin
@@ -62,7 +62,7 @@ Implements OpenCode lifecycle hooks that transform, process, and manage chat mes
 ## Integration
 
 ### Consumers
-- **Main Plugin**: `src/index.ts` - registers hooks with OpenCode during plugin initialization
+- **Main Plugin**: `src/plugin-composer.ts` (delegated from `src/index.ts`) - registers hooks with OpenCode during plugin initialization
 - **OpenCode Runtime**: Invokes hooks during `experimental.chat.messages.transform` API calls
 
 ### Dependencies
