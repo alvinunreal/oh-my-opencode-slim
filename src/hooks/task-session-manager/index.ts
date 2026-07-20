@@ -5,6 +5,7 @@ import {
   isInternalInitiatorPart,
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
+import { getV2Client } from '../../utils/opencode-client';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isUserMessageWithParts } from '../types';
 import {
@@ -132,13 +133,12 @@ export function createTaskSessionManagerHook(
 
   type SdkResponse = { data?: unknown };
   type SessionSdk = {
-    todo?: (input: unknown) => Promise<SdkResponse>;
-    children?: (input: unknown) => Promise<SdkResponse>;
-    status?: (input: unknown) => Promise<SdkResponse>;
-    promptAsync?: (input: unknown) => Promise<unknown>;
+    todo?: (input: unknown, opts?: unknown) => Promise<SdkResponse>;
+    children?: (input: unknown, opts?: unknown) => Promise<SdkResponse>;
+    status?: (input: unknown, opts?: unknown) => Promise<SdkResponse>;
+    promptAsync?: (input: unknown, opts?: unknown) => Promise<unknown>;
   };
-  const sessionSdk = (_ctx.client as unknown as { session?: SessionSdk })
-    .session;
+  const sessionSdk = getV2Client(_ctx).session as SessionSdk;
 
   evaluateContinuation = (parentSessionID, sessionToken) =>
     evaluateContinuationFn(parentSessionID, sessionToken, {

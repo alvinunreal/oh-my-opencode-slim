@@ -6,12 +6,13 @@ import {
 import type { BackgroundJobStore } from '../utils/background-job-store';
 import { isRecord as isObjectRecord } from '../utils/guards';
 import { log } from '../utils/logger';
+import { getV2Client } from '../utils/opencode-client';
 import { abortSessionWithTimeout, withTimeout } from '../utils/session';
 
 const z = tool.schema;
 
 interface CancelTaskToolOptions {
-  client: PluginInput['client'];
+  input: PluginInput;
   backgroundJobBoard: BackgroundJobStore;
   shouldManageSession: (sessionID: string) => boolean;
   abortTimeoutMs?: number;
@@ -97,7 +98,7 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
             );
           }
 
-          const parentID = await getSessionParentID(options.client, requested);
+          const parentID = await getSessionParentID(options.input, requested);
           if (parentID !== parentSessionID) {
             log('[cancel-task] rejected raw session without parent ownership', {
               parentSessionID,
@@ -223,8 +224,9 @@ async function abortAndVerifySession(
   log('[cancel-task] abort attempt starting', { taskID });
   const abortStartedAt = Date.now();
   try {
+    // ponytail: abortSessionWithTimeout now takes v2 OpencodeClient
     await abortSessionWithTimeout(
-      options.client,
+      getV2Client(options.input),
       taskID,
       options.abortTimeoutMs ?? 10_000,
     );
@@ -233,112 +235,11 @@ async function abortAndVerifySession(
     log('[cancel-task] abort call failed', {
       taskID,
       error: error instanceof Error ? error.message : String(error),
-      canDelete: canDeleteSession(options.client),
     });
-    if (!canDeleteSession(options.client)) throw error;
   }
 
-  if (canDeleteSession(options.client)) {
-    await deleteAndVerifySession(options, taskID, 'cancel-task-after-abort');
-    return;
-  }
-
-  const verifyAbortMs = options.verifyAbortMs ?? 8_000;
-  const stableStoppedMs = options.stableStoppedMs ?? 3_000;
-  const retryIntervalMs = options.abortRetryIntervalMs ?? 150;
-  const deadline = Date.now() + verifyAbortMs;
-  log('[cancel-task] abort verification starting', {
-    taskID,
-    verifyAbortMs,
-    stableStoppedMs,
-    retryIntervalMs,
-  });
-  let attempts = 0;
-  let stableStoppedSince: number | undefined;
-  let lastStatus: string | undefined;
-  while (Date.now() <= deadline) {
-    attempts += 1;
-    const statusSnapshot = await getSessionStatus(options.client, taskID);
-    lastStatus = statusSnapshot.status;
-    log('[cancel-task] abort verification status', {
-      taskID,
-      attempts,
-      status: statusSnapshot.status,
-      statusSource: statusSnapshot.source,
-      statusKeys: statusSnapshot.keys,
-      stableStoppedSince,
-      stableStoppedForMs: stableStoppedSince
-        ? Date.now() - stableStoppedSince
-        : 0,
-      boardState: options.backgroundJobBoard.getState(taskID),
-      boardLastLiveBusyAt: options.backgroundJobBoard.getLastLiveBusyAt(taskID),
-    });
-    const boardLastLiveBusyAt =
-      options.backgroundJobBoard.getLastLiveBusyAt(taskID);
-    if (boardLastLiveBusyAt && boardLastLiveBusyAt >= abortStartedAt) {
-      log('[cancel-task] abort verification saw board busy after abort', {
-        taskID,
-        attempts,
-        abortStartedAt,
-        boardLastLiveBusyAt,
-        status: statusSnapshot.status,
-        statusSource: statusSnapshot.source,
-      });
-      await deleteAndVerifySession(options, taskID, 'board-busy-after-abort');
-      return;
-    }
-    if (statusSnapshot.status === 'busy' || statusSnapshot.status === 'retry') {
-      if (stableStoppedSince !== undefined) {
-        log('[cancel-task] abort verification saw busy after idle', {
-          taskID,
-          attempts,
-          stableStoppedForMs: Date.now() - stableStoppedSince,
-        });
-        await deleteAndVerifySession(options, taskID, 'busy-after-idle');
-        return;
-      }
-      stableStoppedSince = undefined;
-      await abortSessionWithTimeout(
-        options.client,
-        taskID,
-        options.abortTimeoutMs ?? 10_000,
-      );
-      log('[cancel-task] abort retry returned', {
-        taskID,
-        attempts,
-        status: statusSnapshot.status,
-      });
-      await delay(retryIntervalMs);
-      continue;
-    }
-
-    stableStoppedSince ??= Date.now();
-    if (Date.now() - stableStoppedSince >= stableStoppedMs) {
-      log('[cancel-task] abort verified stopped', {
-        taskID,
-        attempts,
-        status: statusSnapshot.status,
-        stableStoppedMs,
-      });
-      return;
-    }
-
-    await delay(retryIntervalMs);
-  }
-
-  log('[cancel-task] abort verification timed out', {
-    taskID,
-    attempts,
-    lastStatus,
-    stableStoppedSince,
-  });
-  if (lastStatus === 'busy' || lastStatus === 'retry') {
-    await deleteAndVerifySession(options, taskID, 'still-busy-after-abort');
-    return;
-  }
-  throw new SessionStillRunningError(
-    `Session abort returned but task did not stay stopped: ${taskID}`,
-  );
+  // v2: delete is always available, skip polling fallback
+  await deleteAndVerifySession(options, taskID, 'cancel-task-after-abort');
 }
 
 async function deleteAndVerifySession(
@@ -346,15 +247,7 @@ async function deleteAndVerifySession(
   taskID: string,
   reason: string,
 ): Promise<void> {
-  const session = options.client.session as unknown as {
-    delete?: (args: { path: { id: string } }) => Promise<unknown>;
-  };
-  if (!session.delete) {
-    log('[cancel-task] session delete unavailable', { taskID, reason });
-    throw new SessionStillRunningError(
-      `Session resumed after abort and delete is unavailable: ${taskID}`,
-    );
-  }
+  const v2 = getV2Client(options.input);
 
   log('[cancel-task] deleting session after unstable abort', {
     taskID,
@@ -362,7 +255,10 @@ async function deleteAndVerifySession(
   });
   try {
     await withTimeout(
-      session.delete({ path: { id: taskID } }),
+      v2.session.delete({
+        sessionID: taskID,
+        directory: options.input.directory,
+      }),
       options.deleteTimeoutMs ?? 10_000,
       `Session delete timed out after ${options.deleteTimeoutMs ?? 10_000}ms`,
     );
@@ -373,7 +269,7 @@ async function deleteAndVerifySession(
       reason,
       error: error instanceof Error ? error.message : String(error),
     });
-    const status = await getSessionStatus(options.client, taskID);
+    const status = await getSessionStatus(options.input, taskID);
     log('[cancel-task] delete failure verification status', {
       taskID,
       reason,
@@ -397,7 +293,7 @@ async function deleteAndVerifySession(
   let lastStatus: string | undefined;
   while (Date.now() <= deadline) {
     attempts += 1;
-    const status = await getSessionStatus(options.client, taskID);
+    const status = await getSessionStatus(options.input, taskID);
     lastStatus = status.status;
     log('[cancel-task] delete verification status', {
       taskID,
@@ -423,13 +319,12 @@ async function deleteAndVerifySession(
   );
 }
 
-function canDeleteSession(client: PluginInput['client']): boolean {
-  const session = client.session as unknown as { delete?: unknown };
-  return typeof session.delete === 'function';
+function canDeleteSession(_input: PluginInput): boolean {
+  return true;
 }
 
 async function getSessionStatus(
-  client: PluginInput['client'],
+  input: PluginInput,
   taskID: string,
 ): Promise<{
   status: string | undefined;
@@ -437,10 +332,10 @@ async function getSessionStatus(
   keys: string[];
 }> {
   try {
-    const result = await (
-      client.session.status as unknown as () => Promise<unknown>
-    )();
-    const data = (result as { data?: unknown }).data;
+    const result = await getV2Client(input).session.status({
+      directory: input.directory,
+    });
+    const data = result.data;
     if (!isObjectRecord(data)) {
       return { status: undefined, source: 'invalid-data', keys: [] };
     }
@@ -483,19 +378,17 @@ function normalizeCancelReason(reason?: string): string {
 }
 
 async function getSessionParentID(
-  client: PluginInput['client'],
+  input: PluginInput,
   taskID: string,
 ): Promise<string | undefined> {
-  const session = client.session as unknown as {
-    get?: (args: { path: { id: string } }) => Promise<unknown>;
-  };
-  if (!session.get) return undefined;
   try {
-    const response = await session.get({ path: { id: taskID } });
-    const data = (response as { data?: unknown }).data;
-    if (!isObjectRecord(data)) return undefined;
-    const parentID = data.parentID;
-    return typeof parentID === 'string' ? parentID : undefined;
+    const response = await getV2Client(input).session.get({
+      sessionID: taskID,
+      directory: input.directory,
+    });
+    const session = response.data;
+    if (!session) return undefined;
+    return session.parentID;
   } catch (error) {
     log('[cancel-task] session metadata lookup failed', {
       taskID,

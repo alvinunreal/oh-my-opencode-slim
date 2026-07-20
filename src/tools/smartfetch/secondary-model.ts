@@ -5,10 +5,9 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import { stripJsonComments } from '../../cli/config-io';
 import { getConfigSearchDirs } from '../../cli/paths';
 import { loadPluginConfig } from '../../config/loader';
+import { getV2Client } from '../../utils/opencode-client';
 import { MAX_MODEL_CONTENT_CHARS } from './constants';
 import type { CachedFetch, SecondaryModel } from './types';
-
-type OpenCodeClient = PluginInput['client'];
 
 function parseModelRef(value: string | undefined) {
   if (!value) return undefined;
@@ -178,15 +177,15 @@ export const _testConfig = {
  * issue is visible instead of silently leaking sessions.
  */
 async function deleteSessionSafely(
-  client: OpenCodeClient,
+  input: PluginInput,
   sessionId: string,
-  directory: string,
 ): Promise<void> {
+  const v2 = getV2Client(input);
   for (let attempt = 1; attempt <= SESSION_DELETE_RETRIES; attempt++) {
     try {
-      await client.session.delete({
-        path: { id: sessionId },
-        query: { directory },
+      await v2.session.delete({
+        sessionID: sessionId,
+        directory: input.directory,
       });
       return;
     } catch (error) {
@@ -206,22 +205,21 @@ async function deleteSessionSafely(
 }
 
 async function runSecondaryModel(
-  client: OpenCodeClient,
-  directory: string,
+  input: PluginInput,
   model: SecondaryModel,
   prompt: string,
   content: string,
 ) {
-  const session = await client.session.create({
-    responseStyle: 'data',
-    throwOnError: true,
-    query: { directory },
-    body: { title: 'smartfetch-secondary' },
+  const v2 = getV2Client(input);
+  const directory = input.directory;
+
+  const sessionResponse = await v2.session.create({
+    directory,
+    title: 'smartfetch-secondary',
   });
 
-  const sessionId =
-    (session as { data?: { id?: string }; id?: string })?.data?.id ??
-    (session as { data?: { id?: string }; id?: string })?.id;
+  const session = sessionResponse.data;
+  const sessionId = session?.id;
   if (!sessionId) {
     throw new Error('Secondary model session did not return an id');
   }
@@ -234,38 +232,26 @@ async function runSecondaryModel(
     ? `${prompt}\n\nNote: only the first ${inputChars} characters of a longer fetched document were provided.`
     : prompt;
   try {
-    const toolIDsResponse = await client.tool.ids({
-      responseStyle: 'data',
-      throwOnError: true,
-    });
-    const toolIDsData = toolIDsResponse as { data?: unknown };
-    const toolIDs = Array.isArray(toolIDsData.data)
-      ? (toolIDsData.data as string[])
-      : Array.isArray(toolIDsResponse)
-        ? toolIDsResponse
-        : [];
+    const toolIDsResponse = await v2.tool.ids({ directory });
+    const toolIDs = toolIDsResponse.data ?? [];
     const disabledTools = Object.fromEntries(
       (toolIDs || []).map((id: string) => [id, false]),
     );
 
     const result = await Promise.race([
-      client.session.prompt({
-        responseStyle: 'data',
-        throwOnError: true,
-        path: { id: sessionId },
-        query: { directory },
-        body: {
-          model,
-          system:
-            'Answer only from the supplied content. Do not use tools or outside knowledge.',
-          tools: disabledTools,
-          parts: [
-            {
-              type: 'text',
-              text: buildPrompt(truncatedContent, effectivePrompt),
-            },
-          ],
-        },
+      v2.session.prompt({
+        sessionID: sessionId,
+        directory,
+        model,
+        system:
+          'Answer only from the supplied content. Do not use tools or outside knowledge.',
+        tools: disabledTools,
+        parts: [
+          {
+            type: 'text',
+            text: buildPrompt(truncatedContent, effectivePrompt),
+          },
+        ],
       }),
       new Promise<never>((_, reject) =>
         setTimeout(
@@ -277,9 +263,7 @@ async function runSecondaryModel(
 
     const parts =
       (result as { data?: { parts?: Array<{ type?: string; text?: string }> } })
-        ?.data?.parts ??
-      (result as { parts?: Array<{ type?: string; text?: string }> })?.parts ??
-      [];
+        ?.data?.parts ?? [];
     const text = parts
       .map((part) => (part?.type === 'text' ? part.text || '' : ''))
       .join('')
@@ -292,13 +276,12 @@ async function runSecondaryModel(
       sourceChars,
     };
   } finally {
-    await deleteSessionSafely(client, sessionId, directory);
+    await deleteSessionSafely(input, sessionId);
   }
 }
 
 export async function runSecondaryModelWithFallback(
-  client: OpenCodeClient,
-  directory: string,
+  input: PluginInput,
   models: SecondaryModel[],
   prompt: string,
   content: string,
@@ -306,13 +289,7 @@ export async function runSecondaryModelWithFallback(
   let lastError: unknown;
   for (const model of models) {
     try {
-      const result = await runSecondaryModel(
-        client,
-        directory,
-        model,
-        prompt,
-        content,
-      );
+      const result = await runSecondaryModel(input, model, prompt, content);
       if (!isUsableSecondaryText(result.text)) {
         lastError = new Error('Secondary model returned no usable text');
         continue;

@@ -20,6 +20,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
+import { getV2Client } from '../../utils/opencode-client';
 import {
   abortSessionWithTimeout,
   parseModelReference,
@@ -267,6 +268,7 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
+    private readonly input?: PluginInput,
   ) {
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
@@ -518,7 +520,10 @@ export class ForegroundFallbackManager {
 
     this.inProgress.add(sessionID);
     try {
-      await abortSessionWithTimeout(this.client, sessionID);
+      await abortSessionWithTimeout(
+        this.input ? getV2Client(this.input) : (this.client as any),
+        sessionID,
+      );
       await this.execFallback(sessionID);
     } finally {
       this.inProgress.delete(sessionID);
@@ -593,7 +598,10 @@ export class ForegroundFallbackManager {
             agentName,
             tried: [...tried],
           });
-          await abortSessionWithTimeout(this.client, sessionID);
+          await abortSessionWithTimeout(
+            this.input ? getV2Client(this.input) : (this.client as any),
+            sessionID,
+          );
           return;
         }
       }
@@ -611,9 +619,9 @@ export class ForegroundFallbackManager {
       }
 
       // Retrieve the last user message to re-submit with the fallback model.
-      const result = await this.client.session.messages({
-        path: { id: sessionID },
-      });
+      const result = await (this.input
+        ? getV2Client(this.input).session.messages({ sessionID })
+        : (this.client as any).session.messages({ path: { id: sessionID } }));
       // result.data may contain partial/streaming messages whose `info` is
       // undefined at runtime (OpenCode violates its own declared type), so
       // guard each entry instead of dereferencing `info` directly.
@@ -626,19 +634,9 @@ export class ForegroundFallbackManager {
 
       // promptAsync queues the prompt and returns immediately - this avoids
       // blocking the event handler while waiting for a full LLM response.
-      // Cast required: promptAsync is not in the plugin TypeScript types for
-      // oh-my-opencode-slim but IS present on the real OpenCode client at
-      // runtime (verified by opencode-rate-limit-fallback reference impl).
-      const sessionClient = this.client.session as unknown as {
-        promptAsync?: (args: {
-          path: { id: string };
-          body: {
-            agent?: string;
-            parts: unknown[];
-            model: { providerID: string; modelID: string };
-          };
-        }) => Promise<unknown>;
-      };
+      const sessionClient = this.input
+        ? getV2Client(this.input).session
+        : (this.client as any).session;
       if (typeof sessionClient.promptAsync !== 'function') {
         log('[foreground-fallback] promptAsync unavailable', { sessionID });
         return;
@@ -658,20 +656,17 @@ export class ForegroundFallbackManager {
       // transparently — no dialog, no session error shown to the user.
       // If promptAsync throws (e.g. session busy), fall back to abort+retry.
       try {
-        await sessionClient.promptAsync({
-          path: { id: sessionID },
-          body: promptBody,
-        });
+        await sessionClient.promptAsync({ sessionID, ...promptBody });
       } catch (_promptErr) {
         log('[foreground-fallback] promptAsync on busy session, aborting', {
           sessionID,
         });
-        await abortSessionWithTimeout(this.client, sessionID);
+        await abortSessionWithTimeout(
+          this.input ? getV2Client(this.input) : (this.client as any),
+          sessionID,
+        );
         await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        await sessionClient.promptAsync({
-          path: { id: sessionID },
-          body: promptBody,
-        });
+        await sessionClient.promptAsync({ sessionID, ...promptBody });
       }
 
       this.sessionModel.set(sessionID, nextModel);

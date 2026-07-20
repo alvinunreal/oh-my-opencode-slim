@@ -6,6 +6,13 @@ import type { PluginConfig } from '../config';
 import { readDashboardAuthFile } from './dashboard';
 import { createInterviewManager } from './manager';
 
+// Intercept getV2Client so the manager's service uses the same session mocks.
+mock.module('../utils/opencode-client', () => ({
+  getV2Client: (ctx: any) => ({
+    session: ctx._sessionMock ?? ctx.client.session,
+  }),
+}));
+
 // Helper to find a free port (matches interview.test.ts pattern)
 async function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -32,26 +39,28 @@ function createMockContext(overrides?: {
   promptImpl?: (args: any) => Promise<unknown>;
 }) {
   const messagesData = overrides?.messagesData ?? [];
+  const sessionMock = {
+    messages: mock(async () => ({ data: messagesData })),
+    prompt: mock(async (args: any) => {
+      if (overrides?.promptImpl) {
+        return await overrides.promptImpl(args);
+      }
+      return {};
+    }),
+    promptAsync: mock(async (args: any) => {
+      if (overrides?.promptImpl) {
+        return await overrides.promptImpl(args);
+      }
+      return {};
+    }),
+    update: mock(async () => ({})),
+  };
   return {
     client: {
-      session: {
-        messages: mock(async () => ({ data: messagesData })),
-        prompt: mock(async (args: any) => {
-          if (overrides?.promptImpl) {
-            return await overrides.promptImpl(args);
-          }
-          return {};
-        }),
-        promptAsync: mock(async (args: any) => {
-          if (overrides?.promptImpl) {
-            return await overrides.promptImpl(args);
-          }
-          return {};
-        }),
-        update: mock(async () => ({})),
-      },
+      session: sessionMock,
     },
     directory: overrides?.directory ?? '/test/directory',
+    _sessionMock: sessionMock,
   } as any;
 }
 
@@ -185,7 +194,7 @@ describe('interview manager - per-session mode', () => {
         const promptCalls = ctx.client.session.prompt.mock.calls;
         expect(promptCalls.length).toBeGreaterThan(0);
         const text =
-          promptCalls[promptCalls.length - 1][0].body?.parts?.[0]?.text ?? '';
+          promptCalls[promptCalls.length - 1][0].parts?.[0]?.text ?? '';
         const match = text.match(/interview\/([^\s]+)/);
         expect(match).not.toBeNull();
         const interviewId = match?.[1];
@@ -276,7 +285,7 @@ describe('interview manager - state push callback wiring', () => {
       const promptCalls = ctx.client.session.prompt.mock.calls;
       expect(promptCalls.length).toBeGreaterThan(0);
       const text =
-        promptCalls[promptCalls.length - 1][0].body?.parts?.[0]?.text ?? '';
+        promptCalls[promptCalls.length - 1][0].parts?.[0]?.text ?? '';
       const match = text.match(/interview\/([^\s]+)/);
       expect(match).not.toBeNull();
       const interviewId = match?.[1];
@@ -365,7 +374,7 @@ describe('interview manager - session registration', () => {
       const promptCalls = ctx.client.session.prompt.mock.calls;
       expect(promptCalls.length).toBeGreaterThan(0);
       const text =
-        promptCalls[promptCalls.length - 1][0].body?.parts?.[0]?.text ?? '';
+        promptCalls[promptCalls.length - 1][0].parts?.[0]?.text ?? '';
       const match = text.match(/interview\/([^\s]+)/);
       expect(match).not.toBeNull();
       const interviewId = match?.[1];
@@ -418,7 +427,7 @@ describe('interview manager - session registration', () => {
       const promptCalls = ctx.client.session.prompt.mock.calls;
       expect(promptCalls.length).toBeGreaterThan(0);
       const text =
-        promptCalls[promptCalls.length - 1][0].body?.parts?.[0]?.text ?? '';
+        promptCalls[promptCalls.length - 1][0].parts?.[0]?.text ?? '';
       const match = text.match(/interview\/([^\s]+)/);
       expect(match).not.toBeNull();
       const _interviewId = match?.[1];
@@ -687,14 +696,14 @@ describe('interview manager - integration with real dashboard', () => {
       // Extract interview IDs
       const promptCalls1 = ctx1.client.session.prompt.mock.calls;
       const text1 =
-        promptCalls1[promptCalls1.length - 1][0].body?.parts?.[0]?.text ?? '';
+        promptCalls1[promptCalls1.length - 1][0].parts?.[0]?.text ?? '';
       const match1 = text1.match(/interview\/([^\s]+)/);
       expect(match1).not.toBeNull();
       const interviewId1 = match1?.[1];
 
       const promptCalls2 = ctx2.client.session.prompt.mock.calls;
       const text2 =
-        promptCalls2[promptCalls2.length - 1][0].body?.parts?.[0]?.text ?? '';
+        promptCalls2[promptCalls2.length - 1][0].parts?.[0]?.text ?? '';
       const match2 = text2.match(/interview\/([^\s]+)/);
       expect(match2).not.toBeNull();
       const interviewId2 = match2?.[1];

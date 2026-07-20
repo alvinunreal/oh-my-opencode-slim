@@ -12,6 +12,14 @@ import {
 import type { InterviewAnswer } from './types';
 import { renderInterviewPage } from './ui';
 
+// Intercept getV2Client calls so service code uses the same session mocks
+// that test assertions inspect.
+mock.module('../utils/opencode-client', () => ({
+  getV2Client: (ctx: any) => ({
+    session: ctx._sessionMock ?? ctx.client.session,
+  }),
+}));
+
 // Mock the plugin context with mutable message array
 function createMockContext(overrides?: {
   directory?: string;
@@ -24,48 +32,55 @@ function createMockContext(overrides?: {
   // Use a mutable array that can be updated after creation
   const messagesData = overrides?.messagesData ?? [];
 
+  const sessionMock = {
+    messages: mock(async () => ({ data: messagesData })),
+    prompt: mock(async (args: any) => {
+      if (overrides?.promptImpl) {
+        return await overrides.promptImpl(args);
+      }
+      return {};
+    }),
+    promptAsync: mock(async (args: any) => {
+      if (overrides?.promptImpl) {
+        return await overrides.promptImpl(args);
+      }
+      return {};
+    }),
+    update: mock(async () => ({})),
+  };
+
   return {
     client: {
-      session: {
-        messages: mock(async () => ({ data: messagesData })),
-        prompt: mock(async (args: any) => {
-          if (overrides?.promptImpl) {
-            return await overrides.promptImpl(args);
-          }
-          return {};
-        }),
-        promptAsync: mock(async (args: any) => {
-          if (overrides?.promptImpl) {
-            return await overrides.promptImpl(args);
-          }
-          return {};
-        }),
-        update: mock(async () => ({})),
-      },
+      session: sessionMock,
     },
     directory: overrides?.directory ?? '/test/directory',
+    _sessionMock: sessionMock,
   } as any;
 }
 
-// Helper to extract text from prompt calls
+// Helper to extract text from prompt calls (v2 flat params: parts is top-level)
 function getPromptTexts(promptMock: {
-  mock: { calls: Array<[{ body?: { parts?: Array<{ text?: string }> } }]> };
+  mock: {
+    calls: Array<[{ parts?: Array<{ text?: string }> }]>;
+  };
 }): string[] {
   return promptMock.mock.calls
-    .map((call) => call[0].body?.parts?.[0]?.text ?? '')
+    .map((call) => call[0].parts?.[0]?.text ?? '')
     .filter(Boolean);
 }
 
 // Helper to extract interview ID from the last prompt call
 function extractInterviewIdFromLastPrompt(promptMock: {
-  mock: { calls: Array<[{ body?: { parts?: Array<{ text?: string }> } }]> };
+  mock: {
+    calls: Array<[{ parts?: Array<{ text?: string }> }]>;
+  };
 }): string | null {
   const calls = promptMock.mock.calls;
   if (calls.length === 0) return null;
 
   // Get the last call
   const lastCall = calls[calls.length - 1];
-  const text = lastCall[0].body?.parts?.[0]?.text ?? '';
+  const text = lastCall[0].parts?.[0]?.text ?? '';
   const match = text.match(/interview\/([^\s]+)/);
   return match ? match[1] : null;
 }
@@ -192,8 +207,8 @@ describe('interview service', () => {
 
       expect(ctx.client.session.update).toHaveBeenCalledTimes(1);
       expect(ctx.client.session.update.mock.calls[0][0]).toEqual({
-        path: { id: 'session-rename' },
-        body: { title: 'Interview: build a task manager' },
+        sessionID: 'session-rename',
+        title: 'Interview: build a task manager',
       });
 
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -216,7 +231,7 @@ describe('interview service', () => {
         output,
       );
 
-      const title = ctx.client.session.update.mock.calls[0][0].body.title;
+      const title = ctx.client.session.update.mock.calls[0][0].title;
       expect(title.length).toBe(50);
       expect(title.endsWith('…')).toBe(true);
 
@@ -923,7 +938,7 @@ describe('interview service', () => {
       await service.handleNudgeAction(interviewId, 'more-questions');
 
       const call = ctx.client.session.promptAsync.mock.calls[0]?.[0];
-      expect(call.body.model).toEqual({
+      expect(call.model).toEqual({
         providerID: 'openai',
         modelID: 'gpt-5.6-luna',
       });
@@ -1406,7 +1421,7 @@ describe('interview service', () => {
       ]);
 
       const call = ctx.client.session.promptAsync.mock.calls[0]?.[0];
-      expect(call.body.model).toEqual({
+      expect(call.model).toEqual({
         providerID: 'anthropic',
         modelID: 'claude-sonnet-4-6',
       });

@@ -333,6 +333,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       config.fallback?.enabled !== false,
       config.fallback?.maxRetries ?? 3,
       sessionLifecycle,
+      ctx,
     );
 
     deepworkCommandHook = createDeepworkCommandHook();
@@ -435,7 +436,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       config.companion,
     );
     cancelTaskTools = createCancelTaskTool({
-      client: ctx.client,
+      input: ctx,
       backgroundJobBoard: backgroundJobCoordinator,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',

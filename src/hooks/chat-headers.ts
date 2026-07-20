@@ -1,6 +1,7 @@
 import type { PluginInput, ProviderContext } from '@opencode-ai/plugin';
 import type { Model, UserMessage } from '@opencode-ai/sdk';
 import { isInternalInitiatorPart } from '../utils';
+import { getV2Client } from '../utils/opencode-client';
 
 interface ChatHeadersInput {
   sessionID: string;
@@ -32,7 +33,7 @@ function isCopilotProvider(providerID: string): boolean {
 }
 
 async function hasInternalMarker(
-  client: PluginInput['client'],
+  input: PluginInput,
   sessionID: string,
   messageID: string,
 ): Promise<boolean> {
@@ -43,8 +44,10 @@ async function hasInternalMarker(
   }
 
   try {
-    const response = await client.session.message({
-      path: { id: sessionID, messageID },
+    const response = await getV2Client(input).session.message({
+      sessionID,
+      messageID,
+      directory: input.directory,
     });
     const hasMarker = (response.data?.parts ?? []).some(
       isInternalInitiatorPart,
@@ -81,13 +84,7 @@ export function createChatHeadersHook(ctx: PluginInput) {
         return;
       }
 
-      if (
-        !(await hasInternalMarker(
-          ctx.client,
-          input.sessionID,
-          input.message.id,
-        ))
-      ) {
+      if (!(await hasInternalMarker(ctx, input.sessionID, input.message.id))) {
         return;
       }
 
