@@ -98,6 +98,9 @@ async function appLog(
   }
 }
 
+// Debounce: only show image-skipped toast once per 60 seconds
+let lastImageSkippedToast = 0;
+
 /** Minimum expected registrations for a healthy plugin load. */
 const HEALTH_CHECK = {
   minAgents: 5,
@@ -1228,13 +1231,31 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
-      processImageAttachments({
+      const imageResult = processImageAttachments({
         messages: typedOutput.messages,
         workDir: ctx.directory,
         imageRouting: resolveImageRouting(config.image_routing),
         disabledAgents,
         log,
       });
+      if (imageResult.dropped) {
+        // Debounce: show toast at most once per 60 seconds to avoid spam
+        const now = Date.now();
+        if (now - lastImageSkippedToast > 60_000) {
+          lastImageSkippedToast = now;
+          ctx.client.tui
+            .showToast({
+              body: {
+                title: 'Images skipped',
+                message:
+                  'Your images could not be analyzed. The observer agent is disabled. Enable it in your config, or set image_routing to "direct" to send images to your model.',
+                variant: 'warning',
+                duration: 8000,
+              },
+            })
+            .catch(() => {});
+        }
+      }
 
       // Repair session mappings before reminder gates; nudge metadata precedes phase dedup.
       await taskSessionManagerHook['experimental.chat.messages.transform'](

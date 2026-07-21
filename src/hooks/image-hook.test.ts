@@ -127,15 +127,41 @@ describe('processImageAttachments image routing', () => {
     expect(message.parts.some((part) => part.type === 'text')).toBe(true);
   });
 
-  it('keeps images when auto mode has observer disabled', () => {
+  it('reports dropped and keeps images when auto mode has observer disabled', () => {
     const message = makeUserMsg([IMG]);
-    processImageAttachments({
+    const result = processImageAttachments({
       messages: [message],
       workDir: path.join(TEST_DIR, 'disabled'),
       imageRouting: 'auto',
       disabledAgents: new Set(['observer']),
       log: () => {},
     });
+    expect(result).toEqual({ dropped: true, reason: 'observer-disabled' });
+    expect(imagePartCount(message)).toBe(1);
+  });
+
+  it('reports not dropped when auto mode has observer disabled but no images', () => {
+    const message = makeUserMsg([{ type: 'text', text: 'hello' }]);
+    const result = processImageAttachments({
+      messages: [message],
+      workDir: path.join(TEST_DIR, 'disabled-noimg'),
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: () => {},
+    });
+    expect(result).toEqual({ dropped: false });
+  });
+
+  it('reports not dropped in direct mode', () => {
+    const message = makeUserMsg([IMG]);
+    const result = processImageAttachments({
+      messages: [message],
+      workDir: path.join(TEST_DIR, 'direct-return'),
+      imageRouting: 'direct',
+      disabledAgents: new Set<string>(),
+      log: () => {},
+    });
+    expect(result).toEqual({ dropped: false });
     expect(imagePartCount(message)).toBe(1);
   });
 
