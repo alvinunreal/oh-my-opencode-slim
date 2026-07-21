@@ -221,7 +221,13 @@ async function runSecondaryModel(
   const session = sessionResponse.data;
   const sessionId = session?.id;
   if (!sessionId) {
-    throw new Error('Secondary model session did not return an id');
+    const errorDetail =
+      sessionResponse && 'error' in sessionResponse
+        ? `: ${JSON.stringify(sessionResponse.error)}`
+        : '';
+    throw new Error(
+      `Secondary model session did not return an id${errorDetail}`,
+    );
   }
 
   const sourceChars = content.length;
