@@ -169,12 +169,30 @@ export function processImageAttachments(args: {
   imageRouting: 'auto' | 'direct';
   disabledAgents: Set<string>;
   log: (msg: string) => void;
+  orchestratorSupportsImages?: boolean;
 }): { dropped: boolean; reason?: string } {
-  const { messages, workDir, imageRouting, disabledAgents, log } = args;
+  const {
+    messages,
+    workDir,
+    imageRouting,
+    disabledAgents,
+    log,
+    orchestratorSupportsImages,
+  } = args;
 
   // direct mode: never intercept attachments; the orchestrator handles them
   // inline. @observer remains available for manual delegation.
-  if (imageRouting === 'direct') return { dropped: false };
+  if (imageRouting === 'direct') {
+    if (orchestratorSupportsImages === false) {
+      const lastUserMsg = [...messages]
+        .reverse()
+        .find((m): m is MessageWithParts => isUserMessageWithParts(m));
+      if (lastUserMsg?.parts.some(isImagePart)) {
+        return { dropped: true, reason: 'model-no-vision' };
+      }
+    }
+    return { dropped: false };
+  }
 
   // auto mode: observer must be enabled (enforced at config load). Retain
   // this guard as defense-in-depth in case validation is bypassed.
@@ -185,6 +203,9 @@ export function processImageAttachments(args: {
       .reverse()
       .find((m): m is MessageWithParts => isUserMessageWithParts(m));
     if (lastUserMsg?.parts.some(isImagePart)) {
+      if (orchestratorSupportsImages === false) {
+        return { dropped: true, reason: 'model-no-vision' };
+      }
       return { dropped: true, reason: 'observer-disabled' };
     }
     return { dropped: false };
@@ -222,7 +243,6 @@ export function processImageAttachments(args: {
 
   cleanupAllSessions(saveDir);
 
-  let strippedCount = 0;
   for (const { msg, imageParts } of messagesWithImages) {
     const sessionSubdir = msg.info.sessionID
       ? sanitizeFilename(msg.info.sessionID)
@@ -288,7 +308,6 @@ export function processImageAttachments(args: {
           text: `[Image attachment detected.${pathsText} Your model may not support image input. Delegate to @observer with the file path(s) above so it can read the file with its read tool.]`,
         },
       ]);
-    strippedCount += savedImageParts.size;
   }
-  return { dropped: strippedCount > 0 };
+  return { dropped: false };
 }

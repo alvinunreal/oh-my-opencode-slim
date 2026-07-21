@@ -396,11 +396,15 @@ export function loadPluginConfig(
     };
   }
 
-  validateFinalImageRouting(
-    config,
-    projectConfigPath ?? userConfigPath ?? '',
-    options,
-  );
+  if (
+    !validateFinalImageRouting(
+      config,
+      projectConfigPath ?? userConfigPath ?? '',
+      options,
+    )
+  ) {
+    config.image_routing = 'direct';
+  }
 
   return config;
 }

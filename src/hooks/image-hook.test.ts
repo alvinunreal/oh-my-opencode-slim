@@ -108,7 +108,7 @@ describe('processImageAttachments image routing', () => {
       disabledAgents: new Set<string>(),
       log: () => {},
     });
-    expect(result).toEqual({ dropped: true });
+    expect(result).toEqual({ dropped: false });
     expect(imagePartCount(message)).toBe(0);
     const textParts = message.parts.filter((part) => part.type === 'text');
     expect(textParts).toHaveLength(1);
@@ -120,7 +120,7 @@ describe('processImageAttachments image routing', () => {
     processImageAttachments({
       messages: [message],
       workDir: path.join(TEST_DIR, 'omitted-routing'),
-      imageRouting: resolveImageRouting(undefined),
+      imageRouting: resolveImageRouting(undefined, true),
       disabledAgents: new Set<string>(),
       log: () => {},
     });
@@ -163,6 +163,34 @@ describe('processImageAttachments image routing', () => {
       log: () => {},
     });
     expect(result).toEqual({ dropped: false });
+    expect(imagePartCount(message)).toBe(1);
+  });
+
+  it('reports dropped with model-no-vision in direct mode when orchestrator does not support images', () => {
+    const message = makeUserMsg([IMG]);
+    const result = processImageAttachments({
+      messages: [message],
+      workDir: path.join(TEST_DIR, 'direct-novision'),
+      imageRouting: 'direct',
+      disabledAgents: new Set<string>(),
+      orchestratorSupportsImages: false,
+      log: () => {},
+    });
+    expect(result).toEqual({ dropped: true, reason: 'model-no-vision' });
+    expect(imagePartCount(message)).toBe(1);
+  });
+
+  it('reports dropped with model-no-vision in auto mode when observer disabled and model has no vision', () => {
+    const message = makeUserMsg([IMG]);
+    const result = processImageAttachments({
+      messages: [message],
+      workDir: path.join(TEST_DIR, 'auto-novision'),
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      orchestratorSupportsImages: false,
+      log: () => {},
+    });
+    expect(result).toEqual({ dropped: true, reason: 'model-no-vision' });
     expect(imagePartCount(message)).toBe(1);
   });
 

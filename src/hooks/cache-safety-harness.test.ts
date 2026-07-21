@@ -103,7 +103,7 @@ export function createPipeline(): Pipeline {
     processImageAttachments({
       messages: output.messages as MessageWithParts[],
       workDir: '/tmp/cache-safety-fixture',
-      imageRouting: resolveImageRouting(undefined),
+      imageRouting: resolveImageRouting(undefined, true),
       disabledAgents: new Set(),
       log: noopLog,
     });

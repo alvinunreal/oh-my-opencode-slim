@@ -1231,24 +1231,39 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
+      // ponytail: orchestratorSupportsImages always true — detecting image
+      // support per-model is a future enhancement.
       const imageResult = processImageAttachments({
         messages: typedOutput.messages,
         workDir: ctx.directory,
-        imageRouting: resolveImageRouting(config.image_routing),
+        imageRouting: resolveImageRouting(
+          config.image_routing,
+          !disabledAgents.has('observer'),
+        ),
         disabledAgents,
         log,
+        orchestratorSupportsImages: true,
       });
       if (imageResult.dropped) {
         // Debounce: show toast at most once per 60 seconds to avoid spam
         const now = Date.now();
         if (now - lastImageSkippedToast > 60_000) {
           lastImageSkippedToast = now;
+          let message: string;
+          if (imageResult.reason === 'observer-disabled') {
+            message =
+              'Your image was skipped. The observer agent is not enabled, so it cannot be analyzed. Enable observer in your config, or set image_routing to "direct" to send images straight to your model.';
+          } else if (imageResult.reason === 'model-no-vision') {
+            message =
+              'Your image was ignored. This model does not support images. Switch to a vision model, or set image_routing to "auto" with observer enabled to analyze images.';
+          } else {
+            message = 'Your image was skipped and could not be processed.';
+          }
           ctx.client.tui
             .showToast({
               body: {
                 title: 'Images skipped',
-                message:
-                  'Your images could not be analyzed. The observer agent is disabled. Enable it in your config, or set image_routing to "direct" to send images to your model.',
+                message,
                 variant: 'warning',
                 duration: 8000,
               },
