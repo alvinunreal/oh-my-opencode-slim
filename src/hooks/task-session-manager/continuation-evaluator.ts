@@ -103,7 +103,7 @@ export async function evaluateContinuation(
     };
   },
 ): Promise<void> {
-  // Opt-in only: idle reconciliation still runs; continuation SDK calls do not.
+  // Explicit opt-out: idle reconciliation still runs; continuation SDK calls do not.
   if (!deps.continueOnIdle) {
     return;
   }
