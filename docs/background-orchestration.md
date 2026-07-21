@@ -320,20 +320,43 @@ multiplexer panes attached while the parent orchestrator continues scheduling.
 
 ### Incomplete-todo continuation nudge
 
-After an orchestrator session becomes idle, the plugin may send one internal,
-delayed continuation prompt when OpenCode reports incomplete todos. It is
-suppressed when the SDK reports the parent or any direct child as active, when a
-terminal child result has not yet been reconciled, during foreground fallback,
-while OpenCode is waiting for a question or permission response, or whenever SDK
-data is unavailable or malformed. A matching reply, or a rejected question,
-clears that wait but does not itself inject a nudge; the normal session lifecycle
-decides whether a later nudge is needed. A real subsequent user message rearms
-the one-shot nudge; internal prompts and todo updates do not.
+Automatic incomplete-todo continuation is **enabled by default**. Idle
+reconciliation and background-job orchestration always run; set
+`continueOnIdle` to `false` to keep those without hidden continuation prompts:
 
-This is a best-effort runtime check, not a scheduler or persisted state. After a
-plugin restart, the in-memory job board cannot establish prior result
-reconciliation, and the SDK's current session/todo status remains the liveness
-authority.
+```jsonc
+{
+  "backgroundJobs": {
+    "continueOnIdle": false
+  }
+}
+```
+
+When `backgroundJobs.continueOnIdle` is `true` (the default), after an
+orchestrator session becomes idle the plugin may send **at most one** internal,
+delayed continuation prompt when OpenCode reports incomplete todos. That limit
+is per session between real external user messages (text/file/image).
+Synthetic/internal inputs and subsequent idle/busy events do not rearm it. A
+real user message rearms the one-shot nudge once per message identity
+(`chat.message` `messageID` / `message.id`), shared across hook instances in the
+process; observing the same message twice does not open a second epoch. Internal
+prompts and todo updates do not rearm.
+
+Continuation is suppressed when the SDK reports the parent or any direct child
+as active, when a terminal child result has not yet been reconciled, during
+foreground fallback, while OpenCode is waiting for a question or permission
+response, or whenever SDK data is unavailable or malformed. A matching reply, or
+a rejected question, clears that wait but does not itself inject a nudge; the
+normal session lifecycle decides whether a later nudge is needed.
+
+This is a best-effort runtime check, not a scheduler or persisted state. The
+one-attempt guard is process-local (shared across hook instances in the same JS
+process via an internal gate). It does not survive process restart or
+cross-process boundaries. Recreating a hook/plugin instance inside the same
+process does **not** rearm a consumed epoch; only a real external user message
+(or genuine session deletion) does. After a process restart, the in-memory job
+board cannot establish prior result reconciliation, and the SDK's current
+session/todo status remains the liveness authority.
 
 ### Background Job Board Injection
 

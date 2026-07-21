@@ -1053,6 +1053,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 100
+        },
+        "continueOnIdle": {
+          "default": true,
+          "description": "When true (default), idle orchestrator sessions with incomplete todos may receive one automatic hidden continuation prompt. Set false to keep idle reconciliation and background-job orchestration without automatic continuation prompts.",
+          "type": "boolean"
         }
       }
     },

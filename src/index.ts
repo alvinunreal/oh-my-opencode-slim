@@ -334,6 +334,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMaxFiles:
         config.backgroundJobs?.readContextMaxFiles ??
         DEFAULT_READ_CONTEXT_MAX_FILES,
+      continueOnIdle: config.backgroundJobs?.continueOnIdle !== false,
       backgroundJobBoard: backgroundJobCoordinator,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',

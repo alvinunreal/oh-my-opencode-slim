@@ -9,13 +9,15 @@
 
 The `build` agent turn with empty input is **the same class of bug** as the original `/preset` issue fixed in #818: a plugin hook calls `sessionSdk.promptAsync({ body: { parts: [createInternalAgentTextPart(...)] } })` **without specifying an `agent` field**. opencode then resolves the agent via `agents.defaultInfo()`, which falls back to the built-in `build` agent whenever `default_agent` is unset, user-overridden, or not effectively applied. The `synthetic: true` flag hides the injected text from the TUI, so the user perceives the `build` turn as having "empty input."
 
+**Update (Issue #854):** the incomplete-todo continuation path now passes `agent: 'orchestrator'`, is enabled by default via `backgroundJobs.continueOnIdle` (opt out with `false`), and uses a process-local one-attempt gate. Remaining agent-less `promptAsync` call sites are interview/smartfetch (below).
+
 ## Root cause (causal chain, cross-validated)
 
 1. **Orchestrator enters input-wait.** After emitting a confirmation question (skill flow), the assistant turn finishes. opencode's per-session Runner transitions to `Idle` (`packages/opencode/src/effect/runner.ts:115-138`, `packages/opencode/src/session/run-state.ts:60-63`). The session is no longer "busy" from the Runner's perspective.
 
-2. **Plugin hook fires `promptAsync` with a synthetic part and no `agent` field.** Two call sites in omos do this:
-   - `src/hooks/task-session-manager/index.ts:398-402` — `CONTINUATION_NUDGE` injection, fires on `session.idle` / `session.status(idle)` when the orchestrator session has incomplete todos (matches "subagent completes" / "background task finishes").
+2. **Plugin hook fires `promptAsync` with a synthetic part and historically no `agent` field.** Remaining agent-less sites:
    - `src/interview/service.ts:622, 871, 933, 1007` — interview/skill flow injections (matches "brainstorm skill flow").
+   - Continuation nudge (`continuation-evaluator.ts`) previously matched "subagent completes" / "background task finishes"; it now sets `agent: 'orchestrator'` and only runs when `continueOnIdle` is enabled.
 
 3. **opencode does not guard `promptAsync` against busy/input-wait state.** The HTTP handler at `packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts:311-329` does not call `assertNotBusy` and does not consult the Question service. It proceeds straight to `promptSvc.prompt`. The Runner, being `Idle`, immediately `startRun`s the new turn (`runner.ts:131-134`). No queue, no reject, no cancellation of the pending question.
 
@@ -38,7 +40,7 @@ The `build` agent turn with empty input is **the same class of bug** as the orig
 
 | File:line | Trigger | Body omits `agent`? | Gate |
 |---|---|---|---|
-| `src/hooks/task-session-manager/index.ts:398-402` | `session.idle` / `session.status(idle)` on orchestrator session with incomplete todos | **Yes** | `continuationConsumed`, `hasInputWait` (3×: lines 282, 362, 386), `isCurrentContinuation`, `isFallbackInProgress`, `backgroundJobBoard.hasTerminalUnreconciled` |
+| `src/hooks/task-session-manager/continuation-evaluator.ts` (`promptAsync`) | `session.idle` / `session.status(idle)` on orchestrator session with incomplete todos when `backgroundJobs.continueOnIdle` is `true` (default **on**) | **No** (`agent: 'orchestrator'`) | `continueOnIdle`, process-local one-attempt gate (reserve→commit), `hasInputWait`, `isCurrentContinuation`, `isFallbackInProgress`, `backgroundJobBoard.hasTerminalUnreconciled`, malformed/active SDK short-circuits |
 | `src/interview/service.ts:622` | User submits interview dashboard input | **Yes** | `sessionBusy` lock, interview active state |
 | `src/interview/service.ts:871` | User submits interview chat | **Yes** | same |
 | `src/interview/service.ts:933` | User submits interview answer | **Yes** | same |
@@ -60,13 +62,29 @@ This is the pattern every `promptAsync` caller in omos should follow.
 
 ## Why the `hasInputWait` gate in task-session-manager is not sufficient
 
-The gate exists and works in the common case (`task-session-manager/index.ts:282, 362, 386`, with tests at `index.test.ts:2772-2858, 3013-3048`). But:
+The gate exists and works in the common case (see `continuation-evaluator.ts` and
+`task-session-manager/index.test.ts` continuation cases). Notes:
 
-1. **Documented race window.** `IDLE_RECONCILE_DELAY_MS = 2_000` (line 54). The comment at lines 49-53 admits: "Completions arriving after the window are still dropped (the race is reduced, not eliminated)." If `session.idle` fires and the 2s timer expires before `question.asked` is delivered, and the 3 SDK calls (`todo`/`children`/`status`) in `evaluateContinuation` all resolve before `question.asked` arrives, the nudge fires.
+1. **Continuation is on by default.** `backgroundJobs.continueOnIdle` defaults
+   to `true`; set `false` to keep idle reconciliation without continuation SDK
+   calls. When enabled, a process-local reserve/commit gate allows at most one
+   `promptAsync` per session epoch between real user messages.
 
-2. **Input-wait is not the only trigger.** The interview/skill path (`src/interview/service.ts`) does **not** consult `hasInputWait` at all — it injects on user dashboard actions, which can happen while the orchestrator is mid-question.
+2. **Documented race window (when enabled).** `IDLE_RECONCILE_DELAY_MS = 2_000`.
+   The idle-reconciliation comment admits late completions can still race the
+   window. If `session.idle` fires and the timer expires before
+   `question.asked` is delivered, and the SDK liveness reads resolve before the
+   wait is tracked, a nudge can still fire.
 
-3. **The gate does not address the missing `agent` field.** Even when the nudge legitimately fires (no input-wait, real incomplete todos), the resulting turn still routes to `build` if `default_agent` is unset. The gate prevents *some* unwanted injections; it does not prevent *misrouting* when injection happens.
+3. **Input-wait is not the only trigger.** The interview/skill path
+   (`src/interview/service.ts`) does **not** consult `hasInputWait` at all — it
+   injects on user dashboard actions, which can happen while the orchestrator is
+   mid-question.
+
+4. **Continuation path sets `agent: 'orchestrator'`.** The historical missing-
+   `agent` misroute on the continuation nudge is fixed in
+   `continuation-evaluator.ts`. Remaining agent-less `promptAsync` call sites
+   are outside that path (interview/smartfetch below).
 
 ## Why this is the same class as the #818 `/preset` fix
 
@@ -77,11 +95,12 @@ This bug: other hooks still use the same `createInternalAgentTextPart` + `prompt
 ## Fix directions (not implemented — awaiting decision)
 
 ### Minimal fix
-Add `agent: 'orchestrator'` to the `promptAsync` body at all four affected call sites:
-- `src/hooks/task-session-manager/index.ts:398-402`
-- `src/interview/service.ts:622, 871, 933, 1007`
+Continuation already passes `agent: 'orchestrator'`. Add the same to remaining
+agent-less `promptAsync` bodies:
+- `src/interview/service.ts` (dashboard/chat/answer/comment injectors)
 
-This ensures the continuation nudge and interview injections always route to the orchestrator regardless of opencode's `default_agent` resolution, eliminating the path to `build`.
+This ensures interview injections always route to the orchestrator regardless of
+opencode's `default_agent` resolution, eliminating the path to `build`.
 
 ### Hardening (optional, larger scope)
 1. **Input-wait guard on the interview/skill path.** Consult `hasInputWait` (or an equivalent signal) before injecting in `src/interview/service.ts`. Do not inject while the orchestrator is waiting for user input.
@@ -92,14 +111,14 @@ This ensures the continuation nudge and interview injections always route to the
 ## Evidence index
 
 ### omos source
-- **Missing `agent` field (the bug):** `src/hooks/task-session-manager/index.ts:398-402`
+- **Continuation nudge (fixed agent + default-on + one-attempt gate):** `src/hooks/task-session-manager/continuation-evaluator.ts`, `continuation-attempt-gate.ts`, `backgroundJobs.continueOnIdle` in `src/config/schema.ts`
 - **Missing `agent` field (skill flow):** `src/interview/service.ts:622, 871, 933, 1007`
 - **Correct pattern for comparison:** `src/hooks/foreground-fallback/index.ts:635-639`
 - **omos sets `default_agent` only when absent:** `src/index.ts:546-551`
 - **`createInternalAgentTextPart` produces `synthetic: true`:** `src/utils/internal-initiator.ts:9-21`
-- **`CONTINUATION_NUDGE` is non-empty:** `src/hooks/task-session-manager/index.ts:56-57`
-- **`hasInputWait` gate (3 checks):** `src/hooks/task-session-manager/index.ts:282, 362, 386`
-- **`IDLE_RECONCILE_DELAY_MS` race window:** `src/hooks/task-session-manager/index.ts:54` (admission at lines 49-53)
+- **`CONTINUATION_NUDGE` is non-empty:** `src/hooks/task-session-manager/continuation-evaluator.ts`
+- **`hasInputWait` / continuation gates:** `continuation-evaluator.ts`, `input-wait-tracker.ts`
+- **`IDLE_RECONCILE_DELAY_MS` race window:** `src/hooks/task-session-manager/index.ts` (`IDLE_RECONCILE_DELAY_MS`)
 - **`disableDefaultAgents` preserves `build` and `plan`:** `src/cli/config-io.ts:564-600`
 
 ### opencode source (`anomalyco/opencode` @ `dev`)

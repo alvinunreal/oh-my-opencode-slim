@@ -216,6 +216,12 @@ export const BackgroundJobsConfigSchema = z.object({
     .describe(
       'Maximum board snapshots retained per checkpoint cache epoch (1–100). Exceeding the limit starts a new epoch with the current snapshot and intentionally creates one cache miss.',
     ),
+  continueOnIdle: z
+    .boolean()
+    .default(true)
+    .describe(
+      'When true (default), idle orchestrator sessions with incomplete todos may receive one automatic hidden continuation prompt. Set false to keep idle reconciliation and background-job orchestration without automatic continuation prompts.',
+    ),
 });
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;

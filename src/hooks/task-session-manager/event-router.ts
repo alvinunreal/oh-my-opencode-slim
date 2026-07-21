@@ -41,9 +41,11 @@ export async function handleEvent(
     continuationTokens: {
       clearContinuation(sessionID: string): void;
       invalidateContinuation(sessionID: string): void;
+      /** Release local uncommitted reservations only; keep global consumed. */
+      disposeLocalState(): void;
       sessionTokens: Map<string, symbol>;
       evaluations: Map<string, Set<symbol>>;
-      consumed: Set<string>;
+      consumed: { has(sessionID: string): boolean };
     };
     options: {
       shouldManageSession: (sessionID: string) => boolean;
@@ -138,15 +140,17 @@ export async function handleEvent(
   if (input.event.type === 'server.instance.disposed') {
     deps.retainedBoardSnapshots.clear();
     const idleSessionIds = deps.idleReconciler.clearAllTimers();
-    const continuationSessionIDs = new Set([
+    // Local-only: release this instance's uncommitted reservations and drop
+    // local tokens/evaluations. Do not enumerate or clear process-global
+    // consumed attempts owned by the shared gate.
+    const waitSessionIDs = new Set([
       ...idleSessionIds,
       ...deps.continuationTokens.sessionTokens.keys(),
       ...deps.continuationTokens.evaluations.keys(),
-      ...deps.continuationTokens.consumed,
       ...deps.inputWaits.waitsByParent.keys(),
     ]);
-    for (const sessionID of continuationSessionIDs) {
-      deps.continuationTokens.clearContinuation(sessionID);
+    deps.continuationTokens.disposeLocalState();
+    for (const sessionID of waitSessionIDs) {
       deps.inputWaits.clearInputWaits(sessionID);
     }
     return;
@@ -293,7 +297,14 @@ export async function handleEvent(
     input.event.properties?.info?.id || input.event.properties?.sessionID;
   if (!sessionId) return;
 
-  deps.continuationTokens.clearContinuation(sessionId);
+  // Foreground-fallback teardown recreates the session; preserve a committed
+  // continuation attempt so the epoch is not rearmed without a real user message.
+  // Genuine deletion clears process-global attempt state for the session.
+  if (deps.options.isFallbackInProgress?.(sessionId)) {
+    deps.continuationTokens.invalidateContinuation(sessionId);
+  } else {
+    deps.continuationTokens.clearContinuation(sessionId);
+  }
   deps.inputWaits.clearInputWaits(sessionId);
   deps.retainedBoardSnapshots.delete(sessionId);
 

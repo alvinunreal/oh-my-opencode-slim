@@ -46,6 +46,12 @@ export function createTaskSessionManagerHook(
     maxRetainedSnapshots: number;
     readContextMinLines?: number;
     readContextMaxFiles?: number;
+    /**
+     * When true (default), idle orchestrator sessions with incomplete todos may
+     * receive one automatic continuation promptAsync. Set false to keep idle
+     * reconciliation without continuation SDK calls.
+     */
+    continueOnIdle?: boolean;
     backgroundJobBoard?: BackgroundJobStore;
     shouldManageSession: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
@@ -62,6 +68,7 @@ export function createTaskSessionManagerHook(
     idleReconcileDelayMs?: number;
   },
 ) {
+  const continueOnIdle = options.continueOnIdle !== false;
   const backgroundJobBoard =
     options.backgroundJobBoard ??
     new BackgroundJobBoard({
@@ -135,6 +142,7 @@ export function createTaskSessionManagerHook(
 
   evaluateContinuation = (parentSessionID, sessionToken) =>
     evaluateContinuationFn(parentSessionID, sessionToken, {
+      continueOnIdle,
       backgroundJobBoard,
       continuationTokens,
       inputWaits,
@@ -144,7 +152,12 @@ export function createTaskSessionManagerHook(
 
   if (options.coordinator) {
     options.coordinator.onSessionDeleted((sessionId) => {
-      continuationTokens.clearContinuation(sessionId);
+      // Fallback teardown must not rearm a committed continuation epoch.
+      if (options.isFallbackInProgress?.(sessionId)) {
+        continuationTokens.invalidateContinuation(sessionId);
+      } else {
+        continuationTokens.clearContinuation(sessionId);
+      }
       inputWaits.clearInputWaits(sessionId);
       idleReconciler.clearIdleTimers(sessionId);
       // During a foreground fallback abort/re-prompt cycle, the session
@@ -194,8 +207,18 @@ export function createTaskSessionManagerHook(
       const parts = Array.isArray(outputRecord?.parts)
         ? outputRecord.parts
         : inputMessage?.parts;
+      // Stable identity from chat.message (input.messageID or output.message.id).
+      // Required for process-global idempotent rearm across hook instances.
+      const messageID =
+        typeof inputMessage?.messageID === 'string' &&
+        inputMessage.messageID.length > 0
+          ? inputMessage.messageID
+          : typeof outputMessage?.id === 'string' && outputMessage.id.length > 0
+            ? outputMessage.id
+            : undefined;
       if (
         !sessionID ||
+        !messageID ||
         (typeof outputMessage?.role === 'string' &&
           outputMessage.role !== 'user') ||
         !options.shouldManageSession(sessionID) ||
@@ -212,7 +235,7 @@ export function createTaskSessionManagerHook(
       ) {
         return;
       }
-      continuationTokens.clearContinuation(sessionID);
+      continuationTokens.rearmForUserMessage(sessionID, messageID);
     },
 
     'tool.execute.before': (

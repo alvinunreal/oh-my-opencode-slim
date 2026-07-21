@@ -30,7 +30,7 @@ function isEvaluationAborted(
   evaluationToken: symbol,
   deps: {
     continuationTokens: {
-      consumed: Set<string>;
+      consumed: { has: (sessionID: string) => boolean };
       isCurrentContinuation: (
         sessionID: string,
         sessionToken: symbol,
@@ -59,19 +59,35 @@ function isEvaluationAborted(
   );
 }
 
+function cleanupEvaluationToken(
+  parentSessionID: string,
+  evaluationToken: symbol,
+  evaluations: Map<string, Set<symbol>>,
+): void {
+  const active = evaluations.get(parentSessionID);
+  active?.delete(evaluationToken);
+  if (active?.size === 0) {
+    evaluations.delete(parentSessionID);
+  }
+}
+
 export async function evaluateContinuation(
   parentSessionID: string,
   sessionToken: symbol,
   deps: {
+    continueOnIdle: boolean;
     backgroundJobBoard: BackgroundJobStore;
     continuationTokens: {
       evaluations: Map<string, Set<symbol>>;
-      consumed: Set<string>;
+      consumed: { has: (sessionID: string) => boolean };
       isCurrentContinuation: (
         sessionID: string,
         sessionToken: symbol,
         evaluationToken?: symbol,
       ) => boolean;
+      tryReserveAttempt: (sessionID: string) => symbol | null;
+      commitAttempt: (sessionID: string, owner: symbol) => boolean;
+      releaseAttempt: (sessionID: string, owner: symbol) => void;
     };
     inputWaits: {
       hasInputWait: (sessionID: string) => boolean;
@@ -87,6 +103,11 @@ export async function evaluateContinuation(
     };
   },
 ): Promise<void> {
+  // Opt-in only: idle reconciliation still runs; continuation SDK calls do not.
+  if (!deps.continueOnIdle) {
+    return;
+  }
+
   const evaluationToken = Symbol(parentSessionID);
   const activeEvaluations =
     deps.continuationTokens.evaluations.get(parentSessionID) ??
@@ -110,13 +131,28 @@ export async function evaluateContinuation(
     !deps.sessionSdk.status ||
     !deps.sessionSdk.promptAsync
   ) {
-    activeEvaluations.delete(evaluationToken);
-    if (activeEvaluations.size === 0) {
-      deps.continuationTokens.evaluations.delete(parentSessionID);
-    }
+    cleanupEvaluationToken(
+      parentSessionID,
+      evaluationToken,
+      deps.continuationTokens.evaluations,
+    );
     return;
   }
 
+  // Reserve before any async SDK liveness reads so concurrent idle events and
+  // independently created hook instances cannot both proceed to promptAsync.
+  const reservationOwner =
+    deps.continuationTokens.tryReserveAttempt(parentSessionID);
+  if (!reservationOwner) {
+    cleanupEvaluationToken(
+      parentSessionID,
+      evaluationToken,
+      deps.continuationTokens.evaluations,
+    );
+    return;
+  }
+
+  let committed = false;
   try {
     const [todoResponse, childrenResponse, statusResponse] = await Promise.all([
       deps.sessionSdk.todo({
@@ -199,7 +235,15 @@ export async function evaluateContinuation(
     ) {
       return;
     }
-    deps.continuationTokens.consumed.add(parentSessionID);
+
+    // Commit immediately before promptAsync — no await between commit and call.
+    // Once invoked, never retry in this epoch even if promptAsync rejects.
+    if (
+      !deps.continuationTokens.commitAttempt(parentSessionID, reservationOwner)
+    ) {
+      return;
+    }
+    committed = true;
     await deps.sessionSdk.promptAsync({
       path: { id: parentSessionID },
       body: {
@@ -217,11 +261,13 @@ export async function evaluateContinuation(
       },
     );
   } finally {
-    const evaluations =
-      deps.continuationTokens.evaluations.get(parentSessionID);
-    evaluations?.delete(evaluationToken);
-    if (evaluations?.size === 0) {
-      deps.continuationTokens.evaluations.delete(parentSessionID);
+    if (!committed) {
+      deps.continuationTokens.releaseAttempt(parentSessionID, reservationOwner);
     }
+    cleanupEvaluationToken(
+      parentSessionID,
+      evaluationToken,
+      deps.continuationTokens.evaluations,
+    );
   }
 }

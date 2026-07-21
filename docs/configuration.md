@@ -149,6 +149,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) |
 | `backgroundJobs.maxRetainedSnapshots` | integer | `20` | Maximum board snapshots retained per checkpoint cache epoch (1–100). Adding a snapshot beyond the limit starts a new epoch with only the current snapshot, intentionally creating one cache miss |
 | `backgroundJobs.strategy` | `"latest"` \| `"checkpoint-compatible"` | `"latest"` | Board injection strategy. `latest` preserves the current strip-and-replace behavior; `checkpoint-compatible` appends only when the formatted board changes and uses `backgroundJobs.maxRetainedSnapshots` per cache epoch. Cache state resets on compaction/session boundaries and is lost on plugin restart |
+| `backgroundJobs.continueOnIdle` | boolean | `true` | When `true` (default), idle orchestrator sessions with incomplete todos may receive one automatic hidden continuation prompt. Set `false` to keep idle reconciliation and background-job orchestration without automatic continuation prompts. See [Background Orchestration](background-orchestration.md#incomplete-todo-continuation-nudge) |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
@@ -259,9 +260,11 @@ major is available, the plugin shows a migration command instead.
 
 Background job management is enabled by default and does not need to be present
 in the starter config. Add `backgroundJobs` only if you want to tune how many
-completed/reconciled child-agent sessions are reusable, how much read context is shown, or how board snapshots are injected. See
-the [Background Orchestration](background-orchestration.md) guide for the concept, defaults, and
-examples.
+completed/reconciled child-agent sessions are reusable, how much read context is
+shown, how board snapshots are injected, or to disable automatic incomplete-todo
+continuation prompts on idle (`continueOnIdle`, default `true`). See the
+[Background Orchestration](background-orchestration.md) guide for the concept,
+defaults, and examples.
 
 ### Agent Display Names
 

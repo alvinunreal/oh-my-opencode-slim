@@ -51,6 +51,37 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
   });
 
+  it('defaults continueOnIdle to true', () => {
+    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.continueOnIdle).toBe(true);
+    }
+  });
+
+  it('accepts explicit continueOnIdle true', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { continueOnIdle: true },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.continueOnIdle).toBe(true);
+    }
+  });
+
+  it('accepts explicit continueOnIdle false', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { continueOnIdle: false },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.continueOnIdle).toBe(false);
+    }
+  });
+
   it('accepts checkpoint-compatible board injection', () => {
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: { strategy: 'checkpoint-compatible' },
