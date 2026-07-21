@@ -38,7 +38,6 @@ const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 
 export const MAX_PROCESSED_INJECTED_COMPLETIONS = 500;
-const MAX_RETAINED_BOARD_SNAPSHOTS = 20;
 
 type RetainedBoardSnapshot = {
   anchorKey: string;
@@ -57,6 +56,7 @@ export type RetainedBoardSnapshotState = {
 
 export interface InjectionState {
   backgroundJobBoard: BackgroundJobStore;
+  maxRetainedSnapshots: number;
   strategy: 'latest' | 'checkpoint-compatible';
   processedInjectedCompletions: Set<string>;
   processedInjectedCompletionOrder: string[];
@@ -345,17 +345,15 @@ function injectCheckpointBoard(
     const encodedSessionID = encodeURIComponent(sessionID);
     const sequence = snapshotState.nextSnapshotSequence;
     snapshotState.nextSnapshotSequence += 1;
+    if (snapshotState.snapshots.length >= state.maxRetainedSnapshots) {
+      // Deliberately start a new cache epoch at the configured boundary.
+      snapshotState.snapshots.length = 0;
+    }
     snapshotState.snapshots.push({
       anchorKey,
       id: `oh-my-opencode-slim:background-job-board:${encodedSessionID}:${sequence}`,
       text: reminder,
     });
-    if (snapshotState.snapshots.length > MAX_RETAINED_BOARD_SNAPSHOTS) {
-      snapshotState.snapshots.splice(
-        0,
-        snapshotState.snapshots.length - MAX_RETAINED_BOARD_SNAPSHOTS,
-      );
-    }
   }
 
   rememberInjectedTerminalJobs(state, sessionID);

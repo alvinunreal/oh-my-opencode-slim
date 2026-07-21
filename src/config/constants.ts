@@ -91,6 +91,7 @@ export const DEFAULT_DISABLED_AGENTS: string[] = ['observer'];
 export const DEFAULT_MAX_SESSIONS_PER_AGENT = 2;
 export const DEFAULT_READ_CONTEXT_MIN_LINES = 10;
 export const DEFAULT_READ_CONTEXT_MAX_FILES = 8;
+export const DEFAULT_MAX_RETAINED_SNAPSHOTS = 20;
 
 export type ImageRouting = 'auto' | 'direct';
 

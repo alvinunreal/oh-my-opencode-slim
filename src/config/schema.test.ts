@@ -47,6 +47,7 @@ describe('PluginConfigSchema backgroundJobs', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.backgroundJobs?.strategy).toBe('latest');
+      expect(result.data.backgroundJobs?.maxRetainedSnapshots).toBe(20);
     }
   });
 
@@ -56,5 +57,34 @@ describe('PluginConfigSchema backgroundJobs', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it('accepts a bounded checkpoint snapshot retention limit', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { maxRetainedSnapshots: 3 },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.maxRetainedSnapshots).toBe(3);
+    }
+  });
+
+  it('rejects checkpoint snapshot retention limits outside 1–100', () => {
+    expect(
+      PluginConfigSchema.safeParse({
+        backgroundJobs: { maxRetainedSnapshots: 0 },
+      }).success,
+    ).toBe(false);
+    expect(
+      PluginConfigSchema.safeParse({
+        backgroundJobs: { maxRetainedSnapshots: 101 },
+      }).success,
+    ).toBe(false);
+    expect(
+      PluginConfigSchema.safeParse({
+        backgroundJobs: { maxRetainedSnapshots: 20.5 },
+      }).success,
+    ).toBe(false);
   });
 });

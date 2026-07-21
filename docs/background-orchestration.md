@@ -346,7 +346,8 @@ For checkpoint-oriented workflows, opt in to the append-only strategy:
 ```jsonc
 {
   "backgroundJobs": {
-    "strategy": "checkpoint-compatible"
+    "strategy": "checkpoint-compatible",
+    "maxRetainedSnapshots": 20
   }
 }
 ```
@@ -356,13 +357,14 @@ snapshot only when the formatted board changes. Re-running injection with an
 unchanged board does not create a duplicate. This changes board message history
 only; task coordination, storage, terminal reconciliation, and reusable-session
 behavior remain unchanged. The retained snapshot cache is in memory, is limited
-to the latest 20 snapshots per session, and is reset when OpenCode reports a
-session boundary or a compacted/rebased message history. The cache is lost on
-plugin restart, so snapshots are not restored beyond those present in the
-current OpenCode message history. The 20-snapshot cap deliberately bounds
-memory and prompt growth; after eviction, the retained history is no longer a
-complete prefix of the prior request, so checkpoint-cache continuity is not
-guaranteed beyond that point.
+to 20 snapshots per cache epoch, and is reset when OpenCode reports a session
+boundary or a compacted/rebased message history. `maxRetainedSnapshots` controls
+the epoch size and accepts integers from 1 to 100 (default `20`). When a changed
+snapshot would exceed the configured limit, all retained snapshots are discarded
+and only the new current snapshot is kept. This intentionally creates one cache
+miss at the epoch boundary, after which a fresh run of up to the configured limit
+can accumulate. The cache is lost on plugin restart, so snapshots are not
+restored beyond those present in the current OpenCode message history.
 
 ---
 

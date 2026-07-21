@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from './constants';
 import { CouncilConfigSchema } from './council-schema';
 
 const MANUAL_AGENT_NAMES = [
@@ -206,6 +207,15 @@ export const BackgroundJobsConfigSchema = z.object({
   maxSessionsPerAgent: z.number().int().min(1).max(10).default(2),
   readContextMinLines: z.number().int().min(0).max(1000).default(10),
   readContextMaxFiles: z.number().int().min(0).max(50).default(8),
+  maxRetainedSnapshots: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(DEFAULT_MAX_RETAINED_SNAPSHOTS)
+    .describe(
+      'Maximum board snapshots retained per checkpoint cache epoch (1–100). Exceeding the limit starts a new epoch with the current snapshot and intentionally creates one cache miss.',
+    ),
 });
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;

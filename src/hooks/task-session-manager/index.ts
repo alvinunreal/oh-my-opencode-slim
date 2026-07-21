@@ -43,6 +43,7 @@ export function createTaskSessionManagerHook(
   options: {
     strategy?: 'latest' | 'checkpoint-compatible';
     maxSessionsPerAgent: number;
+    maxRetainedSnapshots: number;
     readContextMinLines?: number;
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobStore;
@@ -165,6 +166,7 @@ export function createTaskSessionManagerHook(
 
   const injectionState: InjectionState = {
     backgroundJobBoard,
+    maxRetainedSnapshots: options.maxRetainedSnapshots,
     strategy: options.strategy ?? 'latest',
     processedInjectedCompletions,
     processedInjectedCompletionOrder,

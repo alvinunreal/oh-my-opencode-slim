@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
 import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import {
   BackgroundJobBoard,
@@ -36,6 +37,7 @@ function createHook(options?: {
   readContextMinLines?: number;
   readContextMaxFiles?: number;
   strategy?: 'latest' | 'checkpoint-compatible';
+  maxRetainedSnapshots?: number;
   backgroundJobBoard?: BackgroundJobBoard;
   sessionStatus?: unknown;
   sessionClient?: Record<string, unknown>;
@@ -56,6 +58,8 @@ function createHook(options?: {
     } as never,
     {
       maxSessionsPerAgent: 2,
+      maxRetainedSnapshots:
+        options?.maxRetainedSnapshots ?? DEFAULT_MAX_RETAINED_SNAPSHOTS,
       strategy: options?.strategy,
       readContextMinLines: options?.readContextMinLines,
       readContextMaxFiles: options?.readContextMaxFiles,
@@ -113,6 +117,16 @@ function boardText(messages: { messages: unknown[] }): string | undefined {
 
 function isBoardPartForTest(part: { metadata?: Record<string, unknown> }) {
   return part.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true;
+}
+
+function boardSnapshotIDs(messages: { messages: unknown[] }): string[] {
+  return messages.messages.flatMap((message) =>
+    message.parts.flatMap((part) =>
+      isBoardPartForTest(part) && typeof part.metadata?.snapshotID === 'string'
+        ? [part.metadata.snapshotID]
+        : [],
+    ),
+  );
 }
 
 async function transformMessages(
@@ -333,6 +347,44 @@ describe('task-session-manager hook', () => {
     expect(messages.messages[0].parts).toHaveLength(1);
     expect(messages.messages.at(-1)?.parts[0]).toBe(boardParts[0]);
     expect(messages.messages.at(-2)?.parts[0].text).toBe('second turn');
+  });
+
+  test('latest mode ignores maxRetainedSnapshots and replaces the board', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      maxRetainedSnapshots: 1,
+    });
+    const messages = createMessages('parent-1', 'first turn');
+
+    await hook.injectBackgroundJobBoard({}, messages);
+    messages.messages.push({
+      info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+      parts: [{ type: 'text', text: 'second turn' }],
+    });
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'completed',
+      resultSummary: 'finished mapping',
+    });
+
+    await hook.injectBackgroundJobBoard({}, messages);
+
+    expect(boardSnapshotIDs(messages)).toHaveLength(0);
+    const boardParts = messages.messages.flatMap((message) =>
+      message.parts.filter(
+        (part) => part.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
+      ),
+    );
+    expect(boardParts).toHaveLength(1);
+    expect(boardParts[0].text).toContain('completed, unreconciled');
+    expect(messages.messages.at(-1)?.parts[0]).toBe(boardParts[0]);
   });
 
   test('strips JSON-persisted board parts from earlier messages', async () => {
@@ -693,7 +745,7 @@ describe('task-session-manager hook', () => {
     ).toHaveLength(1);
   });
 
-  test('bounds checkpoint history to the configured snapshot limit', async () => {
+  test('starts a new checkpoint cache epoch at the snapshot limit', async () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'child-1',
@@ -707,7 +759,7 @@ describe('task-session-manager hook', () => {
     });
 
     const history: string[] = ['root'];
-    for (let turn = 0; turn < 21; turn += 1) {
+    for (let turn = 0; turn < 20; turn += 1) {
       board.updateStatus({
         taskID: 'child-1',
         state: turn % 2 === 0 ? 'completed' : 'error',
@@ -716,16 +768,36 @@ describe('task-session-manager hook', () => {
       history.push(`turn-${turn}`);
       const request = createAnchoredMessages('parent-1', history);
       await hook.injectBackgroundJobBoard({}, request);
+
+      if (turn === 19) {
+        expect(boardSnapshotIDs(request)).toHaveLength(20);
+        expect(boardSnapshotIDs(request)[0]).toEndWith(':0');
+        expect(boardSnapshotIDs(request)[19]).toEndWith(':19');
+      }
     }
 
-    history.push('final');
-    const finalRequest = createAnchoredMessages('parent-1', history);
-    await hook.injectBackgroundJobBoard({}, finalRequest);
-    expect(
-      finalRequest.messages.filter((message) =>
-        message.parts.some((part) => isBoardPartForTest(part)),
-      ),
-    ).toHaveLength(20);
+    history.push('epoch-2-turn-1');
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'completed',
+      resultSummary: 'epoch-2-result-1',
+    });
+    const epochStart = createAnchoredMessages('parent-1', history);
+    await hook.injectBackgroundJobBoard({}, epochStart);
+    expect(boardSnapshotIDs(epochStart)).toHaveLength(1);
+    expect(boardSnapshotIDs(epochStart)[0]).toEndWith(':20');
+
+    history.push('epoch-2-turn-2');
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'error',
+      resultSummary: 'epoch-2-result-2',
+    });
+    const secondEpochRequest = createAnchoredMessages('parent-1', history);
+    await hook.injectBackgroundJobBoard({}, secondEpochRequest);
+    expect(boardSnapshotIDs(secondEpochRequest)).toHaveLength(2);
+    expect(boardSnapshotIDs(secondEpochRequest)[0]).toEndWith(':20');
+    expect(boardSnapshotIDs(secondEpochRequest)[1]).toEndWith(':21');
   });
 
   test('strips existing board parts when no jobs produce a prompt', async () => {

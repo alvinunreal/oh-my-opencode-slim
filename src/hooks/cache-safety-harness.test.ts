@@ -8,7 +8,10 @@
  */
 
 import type { PluginConfig } from '../config';
-import { resolveImageRouting } from '../config/constants';
+import {
+  DEFAULT_MAX_RETAINED_SNAPSHOTS,
+  resolveImageRouting,
+} from '../config/constants';
 import { BackgroundJobBoard, createInternalAgentTextPart } from '../utils';
 import { createDisplayNameMentionRewriter } from '../utils/agent-variant';
 import { isVolatileTaggedMessage } from './cache-safe-injection';
@@ -63,6 +66,7 @@ export function createPipeline(): Pipeline {
     } as never,
     {
       maxSessionsPerAgent: 2,
+      maxRetainedSnapshots: DEFAULT_MAX_RETAINED_SNAPSHOTS,
       backgroundJobBoard: board,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
