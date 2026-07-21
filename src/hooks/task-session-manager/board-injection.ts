@@ -269,6 +269,11 @@ export async function injectBackgroundJobBoard(
     stripTaggedContent(messages, state.metadataKey);
   }
 
+  if (state.strategy === 'checkpoint-compatible') {
+    injectCheckpointBoard(state, messages);
+    return;
+  }
+
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (
@@ -297,11 +302,6 @@ export async function injectBackgroundJobBoard(
     );
     if (!textPart || isInternalInitiatorPart(textPart)) return;
 
-    if (state.strategy === 'checkpoint-compatible') {
-      injectCheckpointBoard(state, messages, message, reminder);
-      return;
-    }
-
     rememberInjectedTerminalJobs(state, message.info.sessionID);
     // Append the board as its own trailing message rather than mutating
     // an existing user message. In long tool loops the latest user
@@ -327,43 +327,69 @@ export async function injectBackgroundJobBoard(
 function injectCheckpointBoard(
   state: InjectionState,
   messages: unknown[],
-  message: MessageWithParts,
-  reminder: string,
 ): void {
-  const sessionID = message.info.sessionID;
-  if (!sessionID) return;
   const currentMessages = realMessages(messages, state.metadataKey);
+  const tailMessage = currentMessages.at(-1);
+  const sessionID = tailMessage?.info.sessionID;
+  if (!tailMessage || !sessionID || !state.shouldManageSession(sessionID)) {
+    return;
+  }
+
+  const triggeringMessage = currentMessages.findLast(
+    (message) =>
+      isUserMessageWithParts(message) && message.info.sessionID === sessionID,
+  );
+  const reminder = state.backgroundJobBoard.formatForPrompt(sessionID);
+  const textPart = triggeringMessage?.parts.find(
+    (part) => part.type === 'text' && typeof part.text === 'string',
+  );
+  const canCreateSnapshot =
+    triggeringMessage !== undefined &&
+    (!triggeringMessage.info.agent ||
+      triggeringMessage.info.agent === 'orchestrator') &&
+    textPart !== undefined &&
+    !isInternalInitiatorPart(textPart) &&
+    reminder !== undefined;
+
+  const replayBaseMessage = triggeringMessage ?? tailMessage;
   const snapshotState = updateBoardHistoryState(
     state,
     sessionID,
     currentMessages,
   );
-  const anchorKey = findMessageAnchorKey(currentMessages, message);
-  if (!anchorKey) return;
 
-  if (snapshotState.snapshots.at(-1)?.text !== reminder && reminder) {
-    const encodedSessionID = encodeURIComponent(sessionID);
-    const sequence = snapshotState.nextSnapshotSequence;
-    snapshotState.nextSnapshotSequence += 1;
-    if (snapshotState.snapshots.length >= state.maxRetainedSnapshots) {
-      // Deliberately start a new cache epoch at the configured boundary.
-      snapshotState.snapshots.length = 0;
+  if (canCreateSnapshot && reminder) {
+    const anchorKey = findLastMessageAnchorKey(currentMessages);
+    if (anchorKey && snapshotState.snapshots.at(-1)?.text !== reminder) {
+      const encodedSessionID = encodeURIComponent(sessionID);
+      const sequence = snapshotState.nextSnapshotSequence;
+      snapshotState.nextSnapshotSequence += 1;
+      if (snapshotState.snapshots.length >= state.maxRetainedSnapshots) {
+        // Deliberately start a new cache epoch at the configured boundary.
+        snapshotState.snapshots.length = 0;
+      }
+      snapshotState.snapshots.push({
+        anchorKey,
+        id: `oh-my-opencode-slim:background-job-board:${encodedSessionID}:${sequence}`,
+        text: reminder,
+      });
     }
-    snapshotState.snapshots.push({
-      anchorKey,
-      id: `oh-my-opencode-slim:background-job-board:${encodedSessionID}:${sequence}`,
-      text: reminder,
-    });
+    rememberInjectedTerminalJobs(state, sessionID);
   }
 
-  rememberInjectedTerminalJobs(state, sessionID);
   replayCheckpointBoard(
     messages,
-    message,
+    replayBaseMessage,
     sessionID,
     snapshotState,
     state.metadataKey,
   );
+}
+
+function findLastMessageAnchorKey(
+  messages: MessageWithParts[],
+): string | undefined {
+  return messageAnchorKeys(messages).at(-1);
 }
 
 function boardHistoryMessageSignature(message: MessageWithParts): string {
@@ -442,26 +468,6 @@ function updateBoardHistoryState(
   current.firstRealMessageAnchorKey = currentAnchorKeys[0];
   state.retainedBoardSnapshots.set(sessionID, current);
   return current;
-}
-
-function findMessageAnchorKey(
-  messages: MessageWithParts[],
-  message: MessageWithParts,
-): string | undefined {
-  const anchorKeys = messageAnchorKeys(messages);
-  const messageID = message.info.id;
-  if (messageID) {
-    const index = messages.findIndex(
-      (candidate) => candidate.info.id === messageID,
-    );
-    return index >= 0 ? anchorKeys[index] : undefined;
-  }
-
-  const signature = boardHistoryMessageSignature(message);
-  const index = messages.findLastIndex(
-    (candidate) => boardHistoryMessageSignature(candidate) === signature,
-  );
-  return index >= 0 ? anchorKeys[index] : undefined;
 }
 
 function createBoardMessage(

@@ -390,13 +390,16 @@ For checkpoint-oriented workflows, opt in to the append-only strategy:
 }
 ```
 
-`checkpoint-compatible` preserves prior board snapshots and appends a trailing
-snapshot only when the formatted board changes. Re-running injection with an
-unchanged board does not create a duplicate. This changes board message history
-only; task coordination, storage, terminal reconciliation, and reusable-session
-behavior remain unchanged. The retained snapshot cache is in memory, is limited
-to 20 snapshots per cache epoch, and is reset when OpenCode reports a session
-boundary or a compacted/rebased message history. `maxRetainedSnapshots` controls
+`checkpoint-compatible` preserves prior board snapshots and appends a snapshot
+anchored after the current real-message tail only when the formatted board
+changes. Once created, snapshots are replayed on every managed turn, including
+turns with an internal initiator or an empty board; those turns do not create a
+new snapshot. Re-running injection with an unchanged board does not create a
+duplicate. This changes board message history only; task coordination, storage,
+terminal reconciliation, and reusable-session behavior remain unchanged. The
+retained snapshot cache is in memory, is limited to 20 snapshots per cache epoch,
+and is reset when OpenCode reports a session boundary or a compacted/rebased
+message history. `maxRetainedSnapshots` controls
 the epoch size and accepts integers from 1 to 100 (default `20`). When a changed
 snapshot would exceed the configured limit, all retained snapshots are discarded
 and only the new current snapshot is kept. This intentionally creates one cache
