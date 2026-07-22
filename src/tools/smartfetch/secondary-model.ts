@@ -74,32 +74,34 @@ async function readEffectiveOpenCodeConfig(directory: string) {
 
 export async function readSecondaryModelFromConfig(
   directory: string,
-  webfetchModels?: string[],
+  webfetchModels?: Array<{ id: string; variant?: string }>,
 ) {
   try {
     const models: SecondaryModel[] = [];
     const seen = new Set<string>();
-    const pushModel = (value: unknown) => {
-      if (typeof value !== 'string') return;
-      const parsedModel = parseModelRef(value);
-      if (!parsedModel) return;
-      const key = `${parsedModel.providerID}/${parsedModel.modelID}`;
+    const addModel = (model: SecondaryModel) => {
+      const key = `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      models.push(parsedModel);
+      models.push(model);
     };
 
     // Dedicated webfetch model(s) take highest priority, in order
     if (webfetchModels) {
-      for (const model of webfetchModels) pushModel(model);
+      for (const ref of webfetchModels) {
+        const parsedModel = parseModelRef(ref.id);
+        if (!parsedModel) continue;
+        addModel({ ...parsedModel, variant: ref.variant });
+      }
     }
 
     const opencodeConfig = await readEffectiveOpenCodeConfig(directory);
-    pushModel(
+    const parsedSmall = parseModelRef(
       typeof opencodeConfig.small_model === 'string'
         ? opencodeConfig.small_model
         : undefined,
     );
+    if (parsedSmall) addModel(parsedSmall);
 
     const pluginConfig = loadPluginConfig(directory);
     const explorerModel = pickAgentModelRef(
@@ -109,8 +111,15 @@ export async function readSecondaryModelFromConfig(
       pluginConfig.agents?.librarian?.model,
     );
 
-    pushModel(explorerModel);
-    pushModel(librarianModel);
+    const parsedExplorer = explorerModel
+      ? parseModelRef(explorerModel)
+      : undefined;
+    if (parsedExplorer) addModel(parsedExplorer);
+
+    const parsedLibrarian = librarianModel
+      ? parseModelRef(librarianModel)
+      : undefined;
+    if (parsedLibrarian) addModel(parsedLibrarian);
 
     return models;
   } catch {
@@ -263,7 +272,8 @@ async function runSecondaryModel(
         path: { id: sessionId },
         query: { directory },
         body: {
-          model,
+          model: { providerID: model.providerID, modelID: model.modelID },
+          ...(model.variant ? { variant: model.variant } : {}),
           system:
             'Answer only from the supplied content. Do not use tools or outside knowledge.',
           tools: disabledTools,

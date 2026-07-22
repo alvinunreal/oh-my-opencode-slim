@@ -1,15 +1,24 @@
+export type ModelRef = {
+  /** Provider/model string (e.g. "openai/gpt-4o-mini"). */
+  id: string;
+  /** Optional model variant annotation. */
+  variant?: string;
+};
+
 export type SmartfetchOptions = {
   binaryDir?: string;
   /**
-   * Dedicated model(s) for secondary-model summarization (provider/model format).
+   * Dedicated model(s) for secondary-model summarization.
    * Each entry is tried in order; the first to return usable text is used.
    */
-  webfetchModels?: string[];
+  webfetchModels?: ModelRef[];
 };
 
 export type SecondaryModel = {
   providerID: string;
   modelID: string;
+  /** Optional model variant passed at the body level. */
+  variant?: string;
 };
 
 export type RedirectStep = {

@@ -294,15 +294,21 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const entries = Array.isArray(webfetchModel)
         ? webfetchModel
         : [webfetchModel];
-      const ids: string[] = [];
-      for (const entry of entries) {
-        // Object form { id, variant? } is accepted for schema consistency
-        // with agent model config. Variant is not forwarded — the secondary
-        // model API uses providerID/modelID only.
+      type ModelRefInput =
+        | string
+        | { id: string; variant?: string };
+      const models: Array<{ id: string; variant?: string }> = [];
+      for (const entry of entries as ModelRefInput[]) {
         const id = typeof entry === 'string' ? entry : entry.id;
-        if (id) ids.push(id);
+        if (!id) continue;
+        models.push({
+          id,
+          ...(typeof entry === 'object' && entry.variant
+            ? { variant: entry.variant }
+            : {}),
+        });
       }
-      return ids.length > 0 ? ids : undefined;
+      return models.length > 0 ? models : undefined;
     })();
     webfetch = createWebfetchTool(ctx, {
       binaryDir: undefined,

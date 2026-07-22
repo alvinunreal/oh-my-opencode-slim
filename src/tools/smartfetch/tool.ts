@@ -806,7 +806,7 @@ export function createWebfetchTool(
               secondary_model_input_truncated: secondaryRun.inputTruncated,
               secondary_model_input_chars: secondaryRun.inputChars,
               secondary_model_source_chars: secondaryRun.sourceChars,
-              secondary_model: `${secondaryRun.model.providerID}/${secondaryRun.model.modelID}`,
+              secondary_model: `${secondaryRun.model.providerID}/${secondaryRun.model.modelID}${secondaryRun.model.variant ? `#${secondaryRun.model.variant}` : ''}`,
             })
           : '';
         const secondaryRaw =
