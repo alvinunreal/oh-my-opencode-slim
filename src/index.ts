@@ -492,7 +492,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config.disabled_mcps && config.disabled_mcps.length > 0
       ? 0
       : HEALTH_CHECK.minMcps;
-  log(`[DEBUG] config.disabled_tools type=${typeof config.disabled_tools} value=${JSON.stringify(config.disabled_tools)}`);
+  log(
+    `[DEBUG] config.disabled_tools type=${typeof config.disabled_tools} value=${JSON.stringify(config.disabled_tools)}`,
+  );
   const toolThreshold = minimumExpectedToolCount(config.disabled_tools);
 
   if (

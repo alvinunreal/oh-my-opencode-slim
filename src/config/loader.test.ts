@@ -106,7 +106,7 @@ describe('loadPluginConfig', () => {
     expect(config.disabled_agents).toEqual([]);
   });
 
-  test('warns and corrects to direct when final auto routing disables Observer', () => {
+  test('warns but preserves config when final auto routing disables Observer', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -129,7 +129,7 @@ describe('loadPluginConfig', () => {
       silent: true,
       onWarning: (warning) => warnings.push(warning),
     });
-    expect(config.image_routing).toBe('direct');
+    expect(config.image_routing).toBe('auto');
     expect(config.autoUpdate).toBe(false);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.message).toContain(

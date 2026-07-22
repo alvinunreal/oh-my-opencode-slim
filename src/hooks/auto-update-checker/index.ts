@@ -4,6 +4,7 @@ import {
   ensureCompanionVersion,
   loadCompanionManifestFromPackageRoot,
 } from '../../companion/updater';
+import { TOAST_DURATION_MS } from '../../config/constants';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import {
@@ -23,7 +24,6 @@ import {
   updateInstallerManagedVersions,
 } from './checker';
 import { CACHE_DIR, PACKAGE_NAME } from './constants';
-import { TOAST_DURATION_MS } from '../../config/constants';
 import { syncBundledSkillsFromPackage } from './skill-sync';
 import type { AutoUpdateCheckerOptions } from './types';
 
