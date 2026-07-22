@@ -228,7 +228,14 @@ export function reconcileFallbackFalseCancel(
       });
       partState.status = terminal;
       partState.output = rendered;
-      delete partState.error;
+      if (terminal === 'error') {
+        // Preserve the `error` field for opencode's ToolPart error state
+        // (message-v2.ts consumes it as errorText for the UI). Use the
+        // board's resultSummary as the authoritative failure reason.
+        partState.error = job.resultSummary ?? 'Background task failed';
+      } else {
+        delete partState.error;
+      }
       log('[task-session-manager] reconciled false-cancelled task part', {
         taskID: childSessionId,
         alias: job.alias,

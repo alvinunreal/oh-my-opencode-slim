@@ -135,7 +135,9 @@ describe('reconcileFallbackFalseCancel', () => {
     const part = findTaskPart(result, 'call-1') as any;
 
     expect(part.state.status).toBe('error');
-    expect(part.state.error).toBeUndefined();
+    // Preserve the `error` field for opencode's ToolPart error state
+    // (UI consumes it as errorText — see opencode message-v2.ts).
+    expect(part.state.error).toBe('syntax error in foo.ts');
     expect(part.state.output).toContain('state="error"');
     expect(part.state.output).toContain('Background task failed: test fix');
     expect(part.state.output).toContain('syntax error in foo.ts');
