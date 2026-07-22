@@ -72,7 +72,10 @@ async function readEffectiveOpenCodeConfig(directory: string) {
   };
 }
 
-export async function readSecondaryModelFromConfig(directory: string) {
+export async function readSecondaryModelFromConfig(
+  directory: string,
+  webfetchModels?: string[],
+) {
   try {
     const models: SecondaryModel[] = [];
     const seen = new Set<string>();
@@ -85,6 +88,11 @@ export async function readSecondaryModelFromConfig(directory: string) {
       seen.add(key);
       models.push(parsedModel);
     };
+
+    // Dedicated webfetch model(s) take highest priority, in order
+    if (webfetchModels) {
+      for (const model of webfetchModels) pushModel(model);
+    }
 
     const opencodeConfig = await readEffectiveOpenCodeConfig(directory);
     pushModel(

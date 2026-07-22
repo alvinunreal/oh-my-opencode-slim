@@ -1,5 +1,10 @@
 export type SmartfetchOptions = {
   binaryDir?: string;
+  /**
+   * Dedicated model(s) for secondary-model summarization (provider/model format).
+   * Each entry is tried in order; the first to return usable text is used.
+   */
+  webfetchModels?: string[];
 };
 
 export type SecondaryModel = {

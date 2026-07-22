@@ -102,6 +102,7 @@ export function createWebfetchTool(
     async execute(args, ctx) {
       const secondaryModels = await readSecondaryModelFromConfig(
         ctx.directory || pluginCtx.directory,
+        options.webfetchModels,
       );
       const normalized = normalizeUrl(args.url);
       const url = new URL(normalized.url);

@@ -299,6 +299,38 @@ export const CompanionConfigSchema = z.object({
 
 export type CompanionConfig = z.infer<typeof CompanionConfigSchema>;
 
+const WebfetchModelEntrySchema = z.union([
+  ProviderModelIdSchema,
+  z
+    .object({
+      id: ProviderModelIdSchema,
+      variant: z.string().optional(),
+    })
+    .strict(),
+]);
+
+export const WebfetchConfigSchema = z
+  .object({
+    enabled: z
+      .boolean()
+      .default(true)
+      .describe(
+        'When false, skip registering this enhanced webfetch so OpenCode uses its built-in version.',
+      ),
+    model: z
+      .union([WebfetchModelEntrySchema, z.array(WebfetchModelEntrySchema).min(1)])
+      .optional()
+      .describe(
+        'Dedicated model(s) for smartfetch secondary-model summarization. ' +
+          'Accepts a single entry or an array for fallback (each entry can be ' +
+          'a provider/model string or { id, variant? }). ' +
+          'Takes priority over small_model, agents.explorer.model, and agents.librarian.model.',
+      ),
+  })
+  .strict();
+
+export type WebfetchConfig = z.infer<typeof WebfetchConfigSchema>;
+
 export const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
@@ -422,6 +454,7 @@ export const PluginConfigSchema = z
     fallback: FailoverConfigSchema.optional(),
     council: CouncilConfigSchema.optional(),
     companion: CompanionConfigSchema.optional(),
+    webfetch: WebfetchConfigSchema.optional(),
     acpAgents: AcpAgentsConfigSchema.optional(),
   })
   .superRefine((value, ctx) => {
