@@ -1,14 +1,18 @@
 # Code of Conduct
 
-## Standards
+## Encouraged Behaviors
 
-We expect contributors to:
+We agree to:
 
 - Use inclusive language
 - Accept constructive criticism gracefully
 - Focus on what is best for the community
 
-The following are prohibited:
+We understand that words may be interpreted differently than intended 
+based on culture, background, or native language. When mistakes happen, 
+we commit to acknowledging them and making amends.
+
+## Unacceptable Behaviors
 
 - Personal attacks, insults, or derogatory comments
 - Harassment, including sexual language or imagery
