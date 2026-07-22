@@ -1241,6 +1241,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         disabledAgents,
         log,
       });
+      // ponytail: toast only covers orchestrator-side image drops. Fixer/
+      // explorer delegated image tasks fail inside subagent sessions, which
+      // have their own model context and don't surface here. Upgrade path:
+      // subagent-aware toast when delegating image work to agents that lack
+      // vision. Tracked in #878.
       if (imageResult) {
         const now = Date.now();
         if (now - lastImageSkippedToast > 60_000) {
