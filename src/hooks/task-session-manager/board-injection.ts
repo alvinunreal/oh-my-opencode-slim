@@ -16,6 +16,7 @@ import {
   isInternalInitiatorPart,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
+  renderTaskTerminalFromBoard,
 } from '../../utils';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
@@ -159,6 +160,82 @@ export function stabilizeRunningTaskParts(messages: unknown[]): void {
       const placeholder = renderRunningTaskPlaceholder(taskID);
       if (state.output === placeholder) continue;
       state.output = placeholder;
+    }
+  }
+}
+
+/**
+ * Reconcile false-cancelled foreground task tool parts.
+ *
+ * When a foreground task's child session hits a rate-limit and the
+ * ForegroundFallbackManager aborts the session to swap models, opencode's
+ * `runState.cancel` poisons the BackgroundJob the task tool is awaiting →
+ * the tool returns `Effect.fail("Task cancelled")` → the assistant message's
+ * tool part is written as `status:"error"` with `"Task cancelled"` in the
+ * error field. The fallback model then completes on an orphan runLoop with
+ * no awaiter; the board later records the real outcome (completed/error).
+ *
+ * This rewrites such false-cancelled error parts to reflect the board's
+ * authoritative terminal state, so the orchestrator's history shows the
+ * true result instead of a spurious cancellation (#595).
+ *
+ * Gated: only acts when the board holds a non-cancelled terminal state
+ * (completed/reconciled/error) for the child session. True user cancels
+ * leave the board in `cancelled`, so they are preserved unchanged. Idempotent:
+ * after rewrite the part is no longer an error-with-cancelled, so subsequent
+ * transforms skip it. This is the single intentional exception to
+ * `stabilizeRunningTaskParts`' "terminal parts are immutable" rule —
+ * cancelled-by-fallback is not a genuine terminal outcome, it is a transient
+ * artifact of the abort+reprompt lifecycle split.
+ */
+export function reconcileFallbackFalseCancel(
+  state: InjectionState,
+  messages: unknown[],
+): void {
+  for (const message of messages) {
+    if (!isMessageWithParts(message)) continue;
+    for (const part of message.parts) {
+      if (part.type !== 'tool' || part.tool !== 'task') continue;
+      const partState = part.state;
+      if (!isRecord(partState)) continue;
+      if (partState.status !== 'error') continue;
+      const errorMsg = partState.error;
+      if (typeof errorMsg !== 'string' || !/cancelled/i.test(errorMsg)) {
+        continue;
+      }
+      const metadata = partState.metadata;
+      if (!isRecord(metadata)) continue;
+      const childSessionId = metadata.sessionId;
+      if (typeof childSessionId !== 'string') continue;
+
+      const job = state.backgroundJobBoard.get(childSessionId);
+      if (!job) continue;
+      // Only rewrite when the board has a non-cancelled terminal truth.
+      // `reconciled` retains a `terminalState` of completed/error.
+      const boardState = job.state;
+      const terminal =
+        job.terminalState ??
+        (boardState === 'completed' || boardState === 'error'
+          ? boardState
+          : undefined);
+      if (terminal !== 'completed' && terminal !== 'error') continue;
+
+      const rendered = renderTaskTerminalFromBoard({
+        taskID: childSessionId,
+        state: terminal,
+        description: job.description,
+        resultSummary: job.resultSummary,
+      });
+      partState.status = terminal;
+      partState.output = rendered;
+      delete partState.error;
+      log('[task-session-manager] reconciled false-cancelled task part', {
+        taskID: childSessionId,
+        alias: job.alias,
+        parentSessionID: job.parentSessionID,
+        boardState,
+        terminalState: job.terminalState,
+      });
     }
   }
 }
