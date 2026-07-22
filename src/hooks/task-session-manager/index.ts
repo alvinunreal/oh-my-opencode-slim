@@ -22,6 +22,8 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   observeSyntheticTerminalPart,
+  MAX_PROCESSED_INJECTED_COMPLETIONS,
+  reconcileFallbackFalseCancel,
   reconcileInjectedTerminalJobs,
   stabilizeRunningTaskParts,
   updateFromInjectedCompletion,
@@ -442,6 +444,13 @@ export function createTaskSessionManagerHook(
       // lane never rewrites mid-history bytes and invalidates the prompt
       // cache. Terminal results are left untouched (they materialize once).
       stabilizeRunningTaskParts(messages);
+
+      // Reconcile false-cancelled foreground task parts: when a FG-fallback
+      // abort poisoned the awaited BackgroundJob ("Task cancelled" error part)
+      // but the board later recorded the real model-2 outcome, rewrite the
+      // part to the board's terminal truth so the orchestrator's history is
+      // accurate (#595). Board-gated, idempotent, no-op for true cancels.
+      reconcileFallbackFalseCancel(injectionState, messages);
 
       const rehydratedCount = rehydrateHistoricalRunningTasks(
         messages,
