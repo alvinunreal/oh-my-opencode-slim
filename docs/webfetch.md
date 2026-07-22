@@ -94,9 +94,10 @@ questions like "summarize this page" or "extract the code examples" in one step.
 
 **Which model is used** (in priority order):
 
-1. `small_model` from the OpenCode configuration (`opencode.json` / `opencode.jsonc`)
-2. The configured `explorer` agent model
-3. The configured `librarian` agent model
+1. `webfetch.model` (dedicated — highest priority, supports array for fallback)
+2. `small_model` from the OpenCode configuration (`opencode.json` / `opencode.jsonc`)
+3. The configured `explorer` agent model
+4. The configured `librarian` agent model
 
 The secondary model is called only when all of these are true:
 - A `prompt` parameter is provided

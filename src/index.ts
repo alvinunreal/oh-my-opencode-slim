@@ -296,6 +296,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : [webfetchModel];
       const ids: string[] = [];
       for (const entry of entries) {
+        // Object form { id, variant? } is accepted for schema consistency
+        // with agent model config. Variant is not forwarded — the secondary
+        // model API uses providerID/modelID only.
         const id = typeof entry === 'string' ? entry : entry.id;
         if (id) ids.push(id);
       }
