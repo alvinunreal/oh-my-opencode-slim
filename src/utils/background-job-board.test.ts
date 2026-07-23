@@ -1171,5 +1171,78 @@ describe('BackgroundJobBoard', () => {
       board.updateStatus({ taskID: 'completed', state: 'completed' });
       expect(board.get('running')).toBeDefined();
     });
+
+    test('multi-agent isolation: bloated explorer does not evict fixer', () => {
+      const board = new BackgroundJobBoard();
+
+      // Bloated explorer session
+      board.registerLaunch({
+        taskID: 'ses_exp_bloated',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+        description: 'bloated explorer',
+      });
+      board.addContext('ses_exp_bloated', [
+        { path: '/big.ts', lineCount: 60_000, lastReadAt: 100 },
+      ]);
+      board.updateStatus({ taskID: 'ses_exp_bloated', state: 'completed' });
+      board.markReconciled('ses_exp_bloated');
+
+      // Small fixer session
+      board.registerLaunch({
+        taskID: 'ses_fix_small',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        description: 'small fixer',
+      });
+      board.addContext('ses_fix_small', [
+        { path: '/small.ts', lineCount: 50, lastReadAt: 200 },
+      ]);
+      board.updateStatus({ taskID: 'ses_fix_small', state: 'completed' });
+      board.markReconciled('ses_fix_small');
+
+      // Explorer bloated session is evicted
+      expect(board.get('ses_exp_bloated')).toBeUndefined();
+      // Fixer session is unaffected (different agent)
+      expect(board.resolveReusable('parent-1', 'fix-1', 'fixer')).toBeDefined();
+    });
+
+    test('session with empty context files is reusable', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_empty',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+        description: 'no files read',
+      });
+      // No addContext call — contextFiles stays empty
+      board.updateStatus({ taskID: 'ses_empty', state: 'completed' });
+      board.markReconciled('ses_empty');
+
+      expect(
+        board.resolveReusable('parent-1', 'exp-1', 'explorer'),
+      ).toBeDefined();
+    });
+
+    test('formatForPrompt includes context file line counts', () => {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+        description: 'test session',
+      });
+      board.addContext('ses_1', [
+        { path: '/src/main.ts', lineCount: 500, lastReadAt: 100 },
+        { path: '/src/util.ts', lineCount: 200, lastReadAt: 200 },
+      ]);
+      board.updateStatus({ taskID: 'ses_1', state: 'completed' });
+      board.markReconciled('ses_1');
+
+      const prompt = board.formatForPrompt('parent-1');
+      expect(prompt).toContain('500 lines');
+      expect(prompt).toContain('200 lines');
+      expect(prompt).toContain('Context read by');
+    });
   });
 });
