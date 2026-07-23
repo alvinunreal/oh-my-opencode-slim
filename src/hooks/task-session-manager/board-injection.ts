@@ -20,10 +20,12 @@ import {
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import {
+  appendTaggedSyntheticPart,
   appendTrailingVolatileMessage,
   createTaggedSyntheticPart,
   isTaggedPart,
   stripTaggedContent,
+  stripTailBoardContent,
 } from '../cache-safe-injection';
 import type { MessagePart, MessageWithParts } from '../types';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
@@ -316,9 +318,11 @@ export async function injectBackgroundJobBoard(
   const messages = Array.isArray(output.messages) ? output.messages : [];
 
   if (state.strategy === 'latest') {
-    // Strip previously injected board content: parts attached to real
-    // messages (legacy placement) and whole synthetic board messages.
-    stripTaggedContent(messages, state.metadataKey);
+    // Strip only the previous request's TAIL board (a trailing tagged part on
+    // the last real message, plus any whole synthetic trailing board
+    // messages). A tagged board found genuinely mid-history is left untouched:
+    // removing it would rewrite already-sent bytes and bust the whole tail.
+    stripTailBoardContent(messages, state.metadataKey);
   }
 
   if (state.strategy === 'checkpoint-compatible') {
@@ -326,54 +330,117 @@ export async function injectBackgroundJobBoard(
     return;
   }
 
+  // Find the anchor: the last real (non-fully-tagged) message. It decides
+  // orchestrator/session eligibility and is where the board attaches so it
+  // stays strictly at the tail.
+  let anchor: MessageWithParts | undefined;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
+    if (!isMessageWithParts(message)) continue;
     if (
-      isMessageWithParts(message) &&
       message.parts.length > 0 &&
       message.parts.every((part) => isTaggedPart(part, state.metadataKey))
     ) {
       continue;
     }
-    if (!isUserMessageWithParts(message)) continue;
-    if (message.info.agent && message.info.agent !== 'orchestrator') return;
-    if (
-      !message.info.sessionID ||
-      !state.shouldManageSession(message.info.sessionID)
-    ) {
-      return;
-    }
+    anchor = message;
+    break;
+  }
+  if (!anchor) return;
 
-    const reminder = state.backgroundJobBoard.formatForPrompt(
-      message.info.sessionID,
-    );
-    if (!reminder) return;
+  // Eligibility is driven by the most recent orchestrator user message (the
+  // triggering turn), which also guards against injecting on specialist
+  // sessions or internal-initiator turns.
+  const trigger = findTriggeringUserMessage(messages, state.metadataKey);
+  if (!trigger) return;
+  if (trigger.info.agent && trigger.info.agent !== 'orchestrator') return;
+  if (
+    !trigger.info.sessionID ||
+    !state.shouldManageSession(trigger.info.sessionID)
+  ) {
+    return;
+  }
 
-    const textPart = message.parts.find(
-      (part) => part.type === 'text' && typeof part.text === 'string',
-    );
-    if (!textPart || isInternalInitiatorPart(textPart)) return;
+  const reminder = state.backgroundJobBoard.formatForPrompt(
+    trigger.info.sessionID,
+  );
+  if (!reminder) return;
 
-    rememberInjectedTerminalJobs(state, message.info.sessionID);
-    // Append the board as its own trailing message rather than mutating
-    // an existing user message. In long tool loops the latest user
-    // message becomes deep history; rewriting it on board state changes
-    // would invalidate the provider prompt cache for everything after
-    // it. A trailing message keeps board churn at the end of the
-    // prompt, where it only costs itself.
+  const textPart = trigger.parts.find(
+    (part) => part.type === 'text' && typeof part.text === 'string',
+  );
+  if (!textPart || isInternalInitiatorPart(textPart)) return;
+
+  rememberInjectedTerminalJobs(state, trigger.info.sessionID);
+
+  // Placement rules (prompt-cache safety):
+  //
+  // Provider caches read from the last two messages (Anthropic:
+  // provider/transform.ts applyCaching → final.slice(-2)), and the provider
+  // SDK coalesces adjacent same-role messages. A board injected as its own
+  // trailing `user` message merges into a preceding user tool_result message,
+  // collapsing both tail breakpoints onto the merged block — so the only
+  // readable breakpoint sits on the volatile board. Because the board moves to
+  // a new tail every request, the deepest reusable breakpoint regresses to the
+  // stable system boundary and the entire tail re-writes as cache every call.
+  //
+  // - If the tail is a user message, append the board as its trailing PART:
+  //   the message COUNT stays identical to a board-free render, so the second
+  //   tail breakpoint lands on the previous (byte-stable, real) message.
+  // - If the tail is an assistant message, a separate trailing user board
+  //   message does NOT merge (different role), so the assistant message keeps
+  //   its own readable breakpoint.
+  //
+  // Either way the board never invalidates already-sent bytes: it is never
+  // persisted, so the next request rebuilds real history board-free.
+  if (anchor.info.role === 'user') {
+    appendTaggedSyntheticPart(anchor, {
+      text: reminder,
+      metadataKey: state.metadataKey,
+    });
+  } else {
     appendTrailingVolatileMessage(
       messages,
       {
-        ...message.info,
-        id: `${message.info.id}-background-job-board`,
+        ...trigger.info,
+        id: `${trigger.info.id ?? 'board'}-background-job-board`,
       },
       {
         text: reminder,
         metadataKey: state.metadataKey,
       },
     );
-    return;
   }
+}
+
+/**
+ * The most recent real (non-board) user message that carries a text part —
+ * used only to validate injection eligibility and derive session/text context.
+ * Tool-result-only user turns (no text part) are skipped so a long tool loop
+ * still resolves the triggering orchestrator turn. Board placement targets the
+ * tail (see injectBackgroundJobBoard).
+ */
+function findTriggeringUserMessage(
+  messages: unknown[],
+  metadataKey: string,
+): MessageWithParts | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!isMessageWithParts(message)) continue;
+    if (
+      message.parts.length > 0 &&
+      message.parts.every((part) => isTaggedPart(part, metadataKey))
+    ) {
+      continue;
+    }
+    if (!isUserMessageWithParts(message)) continue;
+    const hasText = message.parts.some(
+      (part) => part.type === 'text' && typeof part.text === 'string',
+    );
+    if (!hasText) continue;
+    return message;
+  }
+  return undefined;
 }
 
 function injectCheckpointBoard(

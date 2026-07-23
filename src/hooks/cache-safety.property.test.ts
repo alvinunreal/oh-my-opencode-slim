@@ -22,7 +22,7 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { BackgroundJobsConfigSchema } from '../config';
-import { isVolatileTaggedMessage } from './cache-safe-injection';
+import { isTaggedPart, isVolatileTaggedMessage } from './cache-safe-injection';
 import {
   assistantTurn,
   type BoardStrategy,
@@ -227,15 +227,34 @@ describe('cache-safety: volatile content isolation', () => {
       stableFingerprints(withoutJobs.messages),
     );
 
-    // The volatile zone is exactly one tagged message, strictly trailing.
-    const volatile = withJobs.messages.filter((message) =>
-      isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
+    // The board is a single tagged part appended to the very end of the last
+    // message (never a separate trailing message that the provider SDK would
+    // coalesce into the last real message and rob of its cache breakpoint).
+    // Keeping the message COUNT identical to the no-board render lets the
+    // provider's last-two-messages breakpoint land on stable real content.
+    expect(withJobs.messages).toHaveLength(withoutJobs.messages.length);
+
+    const allTaggedParts = withJobs.messages.flatMap((message, index) =>
+      (message as MessageWithParts).parts
+        .map((part, partIndex) => ({ index, partIndex, part }))
+        .filter(({ part }) =>
+          isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY),
+        ),
     );
-    expect(volatile).toHaveLength(1);
-    expect(withJobs.messages.at(-1)).toBe(volatile[0]);
+    expect(allTaggedParts).toHaveLength(1);
+
+    const lastMessage = withJobs.messages.at(-1) as MessageWithParts;
+    const boardHit = allTaggedParts[0];
+    // The one board part lives on the last message and is its last part.
+    expect(boardHit.index).toBe(withJobs.messages.length - 1);
+    expect(boardHit.partIndex).toBe(lastMessage.parts.length - 1);
+
+    // The no-board render carries no board part anywhere.
     expect(
       withoutJobs.messages.some((message) =>
-        isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
+        (message as MessageWithParts).parts.some((part) =>
+          isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY),
+        ),
       ),
     ).toBe(false);
   });
