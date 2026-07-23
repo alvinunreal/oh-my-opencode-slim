@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MAX_CONTEXT_LINES,
   DEFAULT_MAX_SESSIONS_PER_AGENT,
   DEFAULT_READ_CONTEXT_MAX_FILES,
   DEFAULT_READ_CONTEXT_MIN_LINES,
@@ -46,6 +47,7 @@ export interface BackgroundJobRecord {
 
 export interface BackgroundJobBoardOptions {
   maxReusablePerAgent?: number;
+  maxContextLines?: number;
   readContextMinLines?: number;
   readContextMaxFiles?: number;
 }
@@ -93,12 +95,14 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   private terminalStateListeners: TerminalStateListener[] = [];
 
   private readonly maxReusablePerAgent: number;
+  private readonly maxContextLines: number;
   private readonly readContextMinLines: number;
   private readonly readContextMaxFiles: number;
 
   constructor(options: BackgroundJobBoardOptions = {}) {
     this.maxReusablePerAgent =
       options.maxReusablePerAgent ?? DEFAULT_MAX_SESSIONS_PER_AGENT;
+    this.maxContextLines = options.maxContextLines ?? DEFAULT_MAX_CONTEXT_LINES;
     this.readContextMinLines =
       options.readContextMinLines ?? DEFAULT_READ_CONTEXT_MIN_LINES;
     this.readContextMaxFiles =
@@ -400,7 +404,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     agent?: string,
   ): BackgroundJobRecord | undefined {
     const job = this.resolve(parentSessionID, taskIDOrAlias);
-    if (!job || !isReusable(job)) return undefined;
+    if (!job || !isReusable(job, this.maxContextLines)) return undefined;
     if (agent && job.agent !== agent) return undefined;
     return job;
   }
@@ -484,10 +488,11 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   }
 
   formatForPrompt(parentSessionID: string, _now?: number): string | undefined {
-    const active = this.list(parentSessionID).filter(
+    const jobs = this.list(parentSessionID);
+    const active = jobs.filter(
       (job) => job.state === 'running' || job.terminalUnreconciled,
     );
-    const reusable = this.list(parentSessionID).filter(isReusable);
+    const reusable = jobs.filter((j) => isReusable(j, this.maxContextLines));
 
     if (active.length === 0 && reusable.length === 0) return undefined;
 
@@ -536,10 +541,30 @@ export class BackgroundJobBoard implements BackgroundJobStore {
 
   private trimReusable(taskID: string): void {
     const job = this.jobs.get(taskID);
-    if (!job || !isReusable(job)) return;
+    if (!job) return;
+
+    // Evict sessions exceeding context budget before count cap.
+    // Runs regardless of the triggering job's reusability so that a
+    // bloated session cleans up after itself (and its peers) on
+    // completion.
+    for (const entry of this.list(job.parentSessionID)) {
+      if (
+        entry.agent === job.agent &&
+        TERMINAL_STATES.has(entry.state) &&
+        sumContextLines(entry) > this.maxContextLines
+      ) {
+        this.jobs.delete(entry.taskID);
+      }
+    }
+
+    // Only apply the count cap when the triggering job is reusable
+    if (!isReusable(job, this.maxContextLines)) return;
+
     const reusable = this.list(job.parentSessionID)
       .filter(
-        (candidate) => candidate.agent === job.agent && isReusable(candidate),
+        (candidate) =>
+          candidate.agent === job.agent &&
+          isReusable(candidate, this.maxContextLines),
       )
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
     for (const stale of reusable.slice(this.maxReusablePerAgent)) {
@@ -590,9 +615,18 @@ export function deriveTaskSessionLabel(input: {
     : `recent ${input.agentType} task`;
 }
 
-function isReusable(job: BackgroundJobRecord): boolean {
+function sumContextLines(record: BackgroundJobRecord): number {
+  return record.contextFiles.reduce((sum, f) => sum + (f.lineCount ?? 0), 0);
+}
+
+function isReusable(
+  job: BackgroundJobRecord,
+  maxContextLines: number,
+): boolean {
   const terminal = job.terminalState ?? terminalStateOf(job.state);
-  return terminal === 'completed' && !job.terminalUnreconciled;
+  if (terminal !== 'completed' || job.terminalUnreconciled) return false;
+
+  return sumContextLines(job) <= maxContextLines;
 }
 
 function terminalStateOf(

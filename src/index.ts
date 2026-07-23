@@ -17,6 +17,7 @@ import {
 import { parseList } from './config/agent-mcps';
 import {
   AGENT_ALIASES,
+  DEFAULT_MAX_CONTEXT_LINES,
   DEFAULT_MAX_RETAINED_SNAPSHOTS,
   DEFAULT_MAX_SESSIONS_PER_AGENT,
   DEFAULT_READ_CONTEXT_MAX_FILES,
@@ -287,6 +288,8 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       maxReusablePerAgent:
         config.backgroundJobs?.maxSessionsPerAgent ??
         DEFAULT_MAX_SESSIONS_PER_AGENT,
+      maxContextLines:
+        config.backgroundJobs?.maxContextLines ?? DEFAULT_MAX_CONTEXT_LINES,
       readContextMinLines:
         config.backgroundJobs?.readContextMinLines ??
         DEFAULT_READ_CONTEXT_MIN_LINES,

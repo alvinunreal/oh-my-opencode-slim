@@ -1035,6 +1035,12 @@
           "minimum": 1,
           "maximum": 10
         },
+        "maxContextLines": {
+          "default": 50000,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500000
+        },
         "readContextMinLines": {
           "default": 10,
           "type": "integer",
