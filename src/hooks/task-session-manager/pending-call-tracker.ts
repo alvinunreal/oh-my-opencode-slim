@@ -3,6 +3,7 @@ export interface PendingTaskCall {
   parentSessionId: string;
   agentType: string;
   label: string;
+  background: boolean;
   resumedTaskId?: string;
 }
 

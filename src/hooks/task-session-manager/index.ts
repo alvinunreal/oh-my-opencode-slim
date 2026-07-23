@@ -2,6 +2,7 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import {
   BackgroundJobBoard,
   type BackgroundJobStore,
+  type BackgroundJobSupervisor,
   isInternalInitiatorPart,
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
@@ -54,6 +55,7 @@ export function createTaskSessionManagerHook(
      */
     continueOnIdle?: boolean;
     backgroundJobBoard?: BackgroundJobStore;
+    backgroundJobSupervisor?: BackgroundJobSupervisor;
     shouldManageSession: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
@@ -167,8 +169,14 @@ export function createTaskSessionManagerHook(
       // lose track of the task and report it as cancelled even though the
       // oracle actually completed.
       if (!options.isFallbackInProgress?.(sessionId)) {
-        backgroundJobBoard.drop(sessionId);
+        options.backgroundJobSupervisor?.onSessionDeleted(sessionId);
+        const hardTimedOut =
+          backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
+          undefined;
+        if (!hardTimedOut) backgroundJobBoard.drop(sessionId);
+        options.backgroundJobSupervisor?.clearParent(sessionId);
         backgroundJobBoard.clearParent(sessionId);
+        if (!hardTimedOut) options.backgroundJobSupervisor?.drop(sessionId);
       }
       terminalJobsInjectedByParent.delete(sessionId);
       injectionState.retainedBoardSnapshots.delete(sessionId);
@@ -252,6 +260,7 @@ export function createTaskSessionManagerHook(
         shouldManageSession: options.shouldManageSession,
         registerSessionAsOrchestrator: options.registerSessionAsOrchestrator,
         backgroundJobBoard,
+        backgroundJobSupervisor: options.backgroundJobSupervisor,
         pendingCallTracker,
         taskContextTracker,
       }),
@@ -263,6 +272,7 @@ export function createTaskSessionManagerHook(
       handleToolExecuteAfter(input, output, {
         directory: _ctx.directory,
         backgroundJobBoard,
+        backgroundJobSupervisor: options.backgroundJobSupervisor,
         pendingCallTracker,
         taskContextTracker,
       }),
@@ -335,6 +345,7 @@ export function createTaskSessionManagerHook(
         taskContextTracker,
         terminalJobsInjectedByParent,
         retainedBoardSnapshots: injectionState.retainedBoardSnapshots,
+        backgroundJobSupervisor: options.backgroundJobSupervisor,
       }),
   };
 }

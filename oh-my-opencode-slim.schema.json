@@ -1058,6 +1058,28 @@
           "default": false,
           "description": "Beta opt-in. When true, idle orchestrator sessions with incomplete todos may receive one automatic hidden continuation prompt. Disabled by default; idle reconciliation and background-job orchestration continue without automatic continuation prompts.",
           "type": "boolean"
+        },
+        "wallClockTimeoutMs": {
+          "default": 0,
+          "description": "Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. 0 disables supervision; finite values are 60,000–2,147,483,647ms.",
+          "anyOf": [
+            {
+              "type": "number",
+              "const": 0
+            },
+            {
+              "type": "integer",
+              "minimum": 60000,
+              "maximum": 2147483647
+            }
+          ]
+        },
+        "abortGraceMs": {
+          "default": 10000,
+          "description": "Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
         }
       }
     },

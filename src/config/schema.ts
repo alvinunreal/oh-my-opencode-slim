@@ -222,6 +222,21 @@ export const BackgroundJobsConfigSchema = z.object({
     .describe(
       'Beta opt-in. When true, idle orchestrator sessions with incomplete todos may receive one automatic hidden continuation prompt. Disabled by default; idle reconciliation and background-job orchestration continue without automatic continuation prompts.',
     ),
+  wallClockTimeoutMs: z
+    .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
+    .default(0)
+    .describe(
+      'Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. 0 disables supervision; finite values are 60,000–2,147,483,647ms.',
+    ),
+  abortGraceMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .default(10_000)
+    .describe(
+      'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
+    ),
 });
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;

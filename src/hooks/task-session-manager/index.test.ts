@@ -3,6 +3,7 @@ import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
 import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import {
   BackgroundJobBoard,
+  BackgroundJobSupervisor,
   createInternalAgentTextPart,
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
@@ -35,6 +36,44 @@ async function flushChildIdleReconcile(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
+function createSupervisorClock() {
+  let now = 0;
+  let nextID = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+
+  const setTimeout = (callback: () => void, delay: number) => {
+    const id = ++nextID;
+    timers.set(id, { at: now + delay, callback });
+    return id;
+  };
+  const clearTimeout = (id: number) => timers.delete(id);
+  const advanceTo = async (target: number) => {
+    now = target;
+    while (true) {
+      const due = [...timers.entries()]
+        .filter(([, timer]) => timer.at <= now)
+        .sort(([, left], [, right]) => left.at - right.at)[0];
+      if (!due) break;
+      timers.delete(due[0]);
+      due[1].callback();
+      await Promise.resolve();
+    }
+  };
+
+  return { now: () => now, setTimeout, clearTimeout, advanceTo };
+}
+
+function taskLaunchOutput(taskID: string): string {
+  return [
+    `task_id: ${taskID}`,
+    'state: running',
+    '',
+    '<task_result>',
+    'Background task started.',
+    '</task_result>',
+  ].join('\n');
+}
+
 type HookOptions = {
   shouldManageSession?: (sessionID: string) => boolean;
   registerSessionAsOrchestrator?: (sessionID: string) => void;
@@ -49,6 +88,7 @@ type HookOptions = {
   idleReconcileDelayMs?: number;
   isFallbackInProgress?: (sessionID: string) => boolean;
   coordinator?: SessionLifecycle;
+  backgroundJobSupervisor?: BackgroundJobSupervisor;
 };
 
 function createHook(options?: HookOptions) {
@@ -72,6 +112,7 @@ function createHook(options?: HookOptions) {
       readContextMaxFiles: options?.readContextMaxFiles,
       continueOnIdle: options?.continueOnIdle ?? false,
       backgroundJobBoard: options?.backgroundJobBoard,
+      backgroundJobSupervisor: options?.backgroundJobSupervisor,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
       isFallbackInProgress: options?.isFallbackInProgress,
@@ -222,6 +263,7 @@ describe('task-session-manager hook', () => {
       {
         args: {
           subagent_type: 'explorer',
+          background: true,
           description: 'map scheduler hooks',
           prompt: 'inspect scheduler hooks',
         },
@@ -272,6 +314,43 @@ describe('task-session-manager hook', () => {
     expect(boardPart.text).toEndWith('</system-reminder>');
     expect(boardPart.text).toContain('exp-1 / child-1 / explorer / running');
     expect(boardPart.text).toContain('Objective: map scheduler hooks');
+  });
+
+  test('records background=true explicitly and leaves foreground launches unsupervised', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    for (const [callID, taskID, background] of [
+      ['background-call', 'background-child', true],
+      ['foreground-call', 'foreground-child', false],
+    ] as const) {
+      await hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID },
+        {
+          args: {
+            subagent_type: 'explorer',
+            background,
+            description: taskID,
+          },
+        },
+      );
+      await hook['tool.execute.after'](
+        { tool: 'task', sessionID: 'parent-1', callID },
+        {
+          output: [
+            `task_id: ${taskID}`,
+            'state: running',
+            '',
+            '<task_result>',
+            'started',
+            '</task_result>',
+          ].join('\n'),
+        },
+      );
+    }
+
+    expect(board.get('background-child')?.background).toBe(true);
+    expect(board.get('foreground-child')?.background).toBe(false);
   });
 
   test('does not let user-visible sentinel text suppress board injection', async () => {
@@ -3259,6 +3338,261 @@ describe('task-session-manager hook', () => {
     expect(board.get('child-c')).toMatchObject({
       agent: 'fixer',
       description: 'audit fix',
+    });
+  });
+
+  test.each([
+    ['foreground-created-first', ['foreground-child', 'background-child']],
+    ['background-created-first', ['background-child', 'foreground-child']],
+  ])(
+    'ambiguous early created events never supervise the foreground child (%s)',
+    async (_, createdOrder) => {
+      const board = new BackgroundJobBoard();
+      const clock = createSupervisorClock();
+      const abort = mock(async () => undefined);
+      const supervisor = new BackgroundJobSupervisor({
+        backgroundJobStore: board,
+        wallClockTimeoutMs: 100,
+        abortGraceMs: 10,
+        abort,
+        now: clock.now,
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
+      });
+      const { hook } = createHook({
+        backgroundJobBoard: board,
+        backgroundJobSupervisor: supervisor,
+      });
+
+      await hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
+        {
+          args: {
+            subagent_type: 'explorer',
+            background: true,
+            description: 'background child',
+          },
+        },
+      );
+      await hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
+        {
+          args: {
+            subagent_type: 'explorer',
+            background: false,
+            description: 'foreground child',
+          },
+        },
+      );
+
+      for (const taskID of createdOrder) {
+        await hook.event({
+          event: {
+            type: 'session.created',
+            properties: { info: { id: taskID, parentID: 'parent-1' } },
+          },
+        });
+      }
+
+      expect(board.get('background-child')?.background).toBe(false);
+      expect(board.get('foreground-child')?.background).toBe(false);
+      expect(abort).not.toHaveBeenCalled();
+
+      await hook['tool.execute.after'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
+        { output: taskLaunchOutput('foreground-child') },
+      );
+      await hook['tool.execute.after'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
+        { output: taskLaunchOutput('background-child') },
+      );
+
+      expect(board.get('foreground-child')?.background).toBe(false);
+      expect(board.get('background-child')?.background).toBe(true);
+      const backgroundJob = board.get('background-child');
+      expect(backgroundJob).toBeDefined();
+      const deadline = (backgroundJob?.runStartedAt ?? 0) + 100;
+      await clock.advanceTo(deadline);
+
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(abort).toHaveBeenCalledWith('background-child');
+    },
+  );
+
+  test('missing after-hook callID fails closed while an exact background call remains', async () => {
+    const board = new BackgroundJobBoard();
+    const clock = createSupervisorClock();
+    const abort = mock(async () => undefined);
+    const supervisor = new BackgroundJobSupervisor({
+      backgroundJobStore: board,
+      wallClockTimeoutMs: 100,
+      abortGraceMs: 10,
+      abort,
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundJobSupervisor: supervisor,
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          background: false,
+          description: 'foreground child',
+        },
+      },
+    );
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          background: true,
+          description: 'background child',
+        },
+      },
+    );
+    for (const taskID of ['background-child', 'foreground-child']) {
+      await hook.event({
+        event: {
+          type: 'session.created',
+          properties: { info: { id: taskID, parentID: 'parent-1' } },
+        },
+      });
+    }
+
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1' },
+      { output: taskLaunchOutput('foreground-child') },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
+      { output: taskLaunchOutput('background-child') },
+    );
+
+    expect(board.get('foreground-child')?.background).toBe(false);
+    expect(board.get('background-child')?.background).toBe(true);
+    const deadline = (board.get('background-child')?.runStartedAt ?? 0) + 100;
+    await clock.advanceTo(deadline);
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledWith('background-child');
+  });
+
+  test('fallback delete/recreate/busy preserves an unclaimed absolute deadline', async () => {
+    const board = new BackgroundJobBoard();
+    const coordinator = new SessionLifecycle(() => {});
+    const clock = createSupervisorClock();
+    const abort = mock(async () => undefined);
+    const supervisor = new BackgroundJobSupervisor({
+      backgroundJobStore: board,
+      wallClockTimeoutMs: 100,
+      abortGraceMs: 10,
+      abort,
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    });
+    const job = board.registerLaunch({
+      taskID: 'fallback-child',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      background: true,
+      now: 0,
+    });
+    supervisor.onLaunch(job);
+    let fallback = true;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundJobSupervisor: supervisor,
+      coordinator,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => fallback,
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'fallback-child' },
+      },
+    });
+    coordinator.dispatchSessionDeleted('fallback-child');
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: { id: 'fallback-child', parentID: 'parent-1' },
+        },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'fallback-child',
+          status: { type: 'busy' },
+        },
+      },
+    });
+    fallback = false;
+    await clock.advanceTo(100);
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledWith('fallback-child');
+    expect(board.get('fallback-child')?.deadlineExceededAt).toBe(100);
+  });
+
+  test('fallback deletion during grace confirms rather than clears a hard timeout', async () => {
+    const board = new BackgroundJobBoard();
+    const coordinator = new SessionLifecycle(() => {});
+    const clock = createSupervisorClock();
+    const abort = mock(async () => undefined);
+    const supervisor = new BackgroundJobSupervisor({
+      backgroundJobStore: board,
+      wallClockTimeoutMs: 100,
+      abortGraceMs: 20,
+      abort,
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    });
+    const job = board.registerLaunch({
+      taskID: 'fallback-grace-child',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      background: true,
+      now: 0,
+    });
+    supervisor.onLaunch(job);
+    let fallback = false;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundJobSupervisor: supervisor,
+      coordinator,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => fallback,
+    });
+
+    await clock.advanceTo(100);
+    fallback = true;
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'fallback-grace-child' },
+      },
+    });
+    coordinator.dispatchSessionDeleted('fallback-grace-child');
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(board.get('fallback-grace-child')).toMatchObject({
+      state: 'error',
+      timedOut: true,
+      deadlineExceededAt: 100,
     });
   });
 

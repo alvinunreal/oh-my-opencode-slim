@@ -118,4 +118,59 @@ describe('PluginConfigSchema backgroundJobs', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('defaults the wall-clock supervisor to disabled with a 10 second grace', () => {
+    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.wallClockTimeoutMs).toBe(0);
+      expect(result.data.backgroundJobs?.abortGraceMs).toBe(10_000);
+    }
+  });
+
+  it('accepts the documented wall-clock supervisor bounds', () => {
+    expect(
+      PluginConfigSchema.safeParse({
+        backgroundJobs: {
+          wallClockTimeoutMs: 0,
+          abortGraceMs: 1_000,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      PluginConfigSchema.safeParse({
+        backgroundJobs: {
+          wallClockTimeoutMs: 60_000,
+          abortGraceMs: 60_000,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      PluginConfigSchema.safeParse({
+        backgroundJobs: {
+          wallClockTimeoutMs: 2_147_483_647,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects wall-clock supervisor values outside the safe integer bounds', () => {
+    const invalid = [
+      { wallClockTimeoutMs: -1 },
+      { wallClockTimeoutMs: 1 },
+      { wallClockTimeoutMs: 59_999 },
+      { wallClockTimeoutMs: 2_147_483_648 },
+      { wallClockTimeoutMs: 60_000.5 },
+      { abortGraceMs: 999 },
+      { abortGraceMs: 60_001 },
+      { abortGraceMs: 1_000.5 },
+    ];
+
+    for (const backgroundJobs of invalid) {
+      expect(PluginConfigSchema.safeParse({ backgroundJobs }).success).toBe(
+        false,
+      );
+    }
+  });
 });

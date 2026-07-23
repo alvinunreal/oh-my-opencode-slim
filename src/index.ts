@@ -68,6 +68,7 @@ import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
+  BackgroundJobSupervisor,
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
@@ -195,6 +196,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
+  let backgroundJobSupervisor: BackgroundJobSupervisor;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let companionManager: CompanionManager;
   let cancelTaskTools: ReturnType<typeof createCancelTaskTool>;
@@ -299,6 +301,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     const backgroundJobCoordinator = new BackgroundJobCoordinator(
       backgroundJobBoard,
     );
+    backgroundJobSupervisor = new BackgroundJobSupervisor({
+      backgroundJobStore: backgroundJobCoordinator,
+      wallClockTimeoutMs: config.backgroundJobs?.wallClockTimeoutMs ?? 0,
+      abortGraceMs: config.backgroundJobs?.abortGraceMs ?? 10_000,
+      abort: (taskID) =>
+        ctx.client.session.abort({
+          path: { id: taskID },
+        }),
+    });
+    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+      backgroundJobSupervisor.onTerminal(record);
+    });
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
@@ -309,6 +323,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     );
     backgroundJobCoordinator.addTerminalStateListener((taskID) => {
       void multiplexerSessionManager.closeSessionFromCoordinator(taskID);
+    });
+    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+      if (record.deadlineExceededAt === undefined) return;
+      void multiplexerSessionManager.closeSessionPermanentlyFromCoordinator(
+        record.taskID,
+      );
     });
 
     sessionLifecycle = new SessionLifecycle(log);
@@ -354,6 +374,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         DEFAULT_READ_CONTEXT_MAX_FILES,
       continueOnIdle: config.backgroundJobs?.continueOnIdle === true,
       backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobSupervisor,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
