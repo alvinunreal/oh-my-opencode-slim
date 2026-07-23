@@ -114,7 +114,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 |-----------|--------|---|-----------------------------|
 | `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
 | `presets.<name>.<agent>.temperature` | number | - | Temperature (0–2) |
-| `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"` |
+| `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
 | `presets.<name>.<agent>.displayName` | string | - | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
 | `presets.<name>.<agent>.skills` | string[] | - | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.mcps` | string[] | - | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
@@ -124,54 +124,54 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
 | `agents.<agent>.permission` | object \| string | - | Tool-level permission rules enforced by the SDK. See [Agent Permissions](#agent-permissions) |
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
-| `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` |
-| `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command |
-| `acpAgents.<name>.env` | object | `{}` | Extra environment variables for the ACP subprocess |
-| `acpAgents.<name>.cwd` | string | session directory | Working directory override for this ACP subprocess; protocol paths should be absolute |
-| `acpAgents.<name>.description` | string | - | Description shown to OpenCode and injected into the orchestrator routing prompt |
-| `acpAgents.<name>.prompt` | string | generated wrapper prompt | Optional full prompt for the lightweight wrapper subagent |
-| `acpAgents.<name>.orchestratorPrompt` | string | generated routing block | Optional exact routing block injected into the orchestrator prompt |
-| `acpAgents.<name>.wrapperModel` | string | fixer default | Cheap OpenCode model used by the wrapper subagent that calls `acp_run` |
-| `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` |
-| `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) |
-| `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset |
+| `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.env` | object | `{}` | Extra environment variables for the ACP subprocess See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.cwd` | string | session directory | Working directory override for this ACP subprocess; protocol paths should be absolute See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.description` | string | - | Description shown to OpenCode and injected into the orchestrator routing prompt See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.prompt` | string | generated wrapper prompt | Optional full prompt for the lightweight wrapper subagent See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.orchestratorPrompt` | string | generated routing block | Optional exact routing block injected into the orchestrator prompt See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.wrapperModel` | string | orchestrator default | Cheap OpenCode model used by the wrapper subagent that calls `acp_run` See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
+| `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
 | `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, images are intercepted only when Observer is enabled, preserving existing behavior. Explicit `"auto"` requires Observer enabled and saves image attachments to disk before nudging delegation to @observer. `"direct"`: always pass images to the orchestrator. |
 | `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
-| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux`, `kitty`, or `none` |
-| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Tmux applies full layouts; Zellij and Herdr map supported layouts to split directions; cmux maintains a right-hand agent column |
-| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij, Herdr, and cmux |
-| `multiplexer.zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `agent-tab` creates/reuses a dedicated `opencode-agents` tab; `current-tab` opens subagents as panes in the tab containing the parent OpenCode pane, falling back to the focused tab if the parent pane cannot be resolved |
-| `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` |
-| `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` |
-| `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` |
-| `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) |
-| `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) |
-| `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) |
-| `backgroundJobs.maxRetainedSnapshots` | integer | `20` | Maximum board snapshots retained per checkpoint cache epoch (1–100). Adding a snapshot beyond the limit starts a new epoch with only the current snapshot, intentionally creating one cache miss |
-| `backgroundJobs.strategy` | `"latest"` \| `"checkpoint-compatible"` | `"latest"` | Board injection strategy. `latest` preserves the current strip-and-replace behavior; `checkpoint-compatible` appends only when the formatted board changes and uses `backgroundJobs.maxRetainedSnapshots` per cache epoch. Cache state resets on compaction/session boundaries and is lost on plugin restart |
-| `backgroundJobs.continueOnIdle` | boolean | `false` | **Beta opt-in.** Set `true` to let idle orchestrator sessions with incomplete todos receive one automatic hidden continuation prompt. When omitted or `false`, idle reconciliation and background-job orchestration remain active without automatic continuation prompts. See [Background Orchestration](background-orchestration.md#incomplete-todo-continuation-nudge) |
+| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux`, `kitty`, or `none` See [Multiplexer Integration](multiplexer-integration.md). |
+| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Tmux applies full layouts; Zellij and Herdr map supported layouts to split directions; cmux maintains a right-hand agent column See [Multiplexer Integration](multiplexer-integration.md). |
+| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij, Herdr, and cmux See [Multiplexer Integration](multiplexer-integration.md). |
+| `multiplexer.zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `agent-tab` creates/reuses a dedicated `opencode-agents` tab; `current-tab` opens subagents as panes in the tab containing the parent OpenCode pane, falling back to the focused tab if the parent pane cannot be resolved See [Multiplexer Integration](multiplexer-integration.md). |
+| `tmux.enabled` | boolean | `false` | Legacy alias for `multiplexer.type = "tmux"` See [Multiplexer Integration](multiplexer-integration.md). |
+| `tmux.layout` | string | `"main-vertical"` | Legacy alias for `multiplexer.layout` See [Multiplexer Integration](multiplexer-integration.md). |
+| `tmux.main_pane_size` | number | `60` | Legacy alias for `multiplexer.main_pane_size` See [Multiplexer Integration](multiplexer-integration.md). |
+| `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
+| `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) See [Background Job Management](#background-job-management). |
+| `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) See [Background Job Management](#background-job-management). |
+| `backgroundJobs.maxRetainedSnapshots` | integer | `20` | Maximum board snapshots retained per checkpoint cache epoch (1–100). Adding a snapshot beyond the limit starts a new epoch with only the current snapshot, intentionally creating one cache miss See [Background Job Management](#background-job-management). |
+| `backgroundJobs.strategy` | `"latest"` \| `"checkpoint-compatible"` | `"latest"` | Board injection strategy. `latest` preserves the current strip-and-replace behavior; `checkpoint-compatible` appends only when the formatted board changes and uses `backgroundJobs.maxRetainedSnapshots` per cache epoch. Cache state resets on compaction/session boundaries and is lost on plugin restart See [Background Job Management](#background-job-management). |
+| `backgroundJobs.continueOnIdle` | boolean | `false` | **Beta opt-in.** Set `true` to let idle orchestrator sessions with incomplete todos receive one automatic hidden continuation prompt. When omitted or `false`, idle reconciliation and background-job orchestration remain active without automatic continuation prompts. See [Background Orchestration](background-orchestration.md#incomplete-todo-continuation-nudge) See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
 | `fallback.retryDelayMs` | number | `500` | Delay between retry attempts |
 | `fallback.maxRetries` | number | `3` | Maximum failover attempts before giving up |
-| `fallback.runtimeOverride` | boolean | `true` | Allow per-call model overrides to bypass the fallback chain |
+| `fallback.runtimeOverride` | boolean | `true` | **Deprecated.** No longer used. Fallback is always disabled when a user explicitly selects a model via `/model`. |
 | `fallback.retry_on_empty` | boolean | `true` | Treat silent empty provider responses (0 tokens) as failures and retry. Set `false` to accept empty responses |
-| `council.presets` | object | - | **Required if using council.** Named councillor presets |
-| `council.presets.<name>.<councillor>.model` | string | - | Councillor model |
-| `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant |
-| `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor |
-| `council.default_preset` | string | `"default"` | Default preset when none is specified |
+| `council.presets` | object | - | **Required if using council.** Named councillor presets See [Council configuration note](#council-configuration-note). |
+| `council.presets.<name>.<councillor>.model` | string | - | Councillor model See [Council configuration note](#council-configuration-note). |
+| `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant See [Council configuration note](#council-configuration-note). |
+| `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor See [Council configuration note](#council-configuration-note). |
+| `council.default_preset` | string | `"default"` | Default preset when none is specified See [Council configuration note](#council-configuration-note). |
 | — | — | — | *Timeouts, execution mode, and retries are now handled by the orchestrator's council-mode prompt instructions; see `src/agents/council.ts`.* |
-| `interview.maxQuestions` | integer | `2` | Max questions per interview round (1–10) |
-| `interview.outputFolder` | string | `"interview"` | Directory where interview markdown files are written (relative to project root) |
-| `interview.autoOpenBrowser` | boolean | `true` | Automatically open the interview UI in your default browser during interactive runs; suppressed in tests and CI |
-| `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) |
-| `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence |
-| `companion.enabled` | boolean | `false` | Enable/disable the floating window Rust companion |
-| `companion.binaryPath` | string | - | Optional path to a custom companion binary to launch instead of the default install path |
-| `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` |
-| `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) |
+| `interview.maxQuestions` | integer | `2` | Max questions per interview round (1–10) See [Interview configuration](interview.md). |
+| `interview.outputFolder` | string | `"interview"` | Directory where interview markdown files are written (relative to project root) See [Interview configuration](interview.md). |
+| `interview.autoOpenBrowser` | boolean | `true` | Automatically open the interview UI in your default browser during interactive runs; suppressed in tests and CI See [Interview configuration](interview.md). |
+| `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) See [Interview configuration](interview.md). |
+| `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence See [Interview configuration](interview.md). |
+| `companion.enabled` | boolean | `false` | Enable/disable the floating window Rust companion See [Desktop Companion App](#desktop-companion-app). |
+| `companion.binaryPath` | string | - | Optional path to a custom companion binary to launch instead of the default install path See [Desktop Companion App](#desktop-companion-app). |
+| `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` See [Desktop Companion App](#desktop-companion-app). |
+| `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) See [Desktop Companion App](#desktop-companion-app). |
 
 > **niri note:** `companion-v0.1.3` includes the fixed native companion release.
 > To make it open as a bottom-right overlay, add a niri rule matching its stable
@@ -218,6 +218,9 @@ and troubleshooting.
 }
 ```
 
+> **Tip:** Use ACP to connect local agent CLIs. For example, `ollama` or `llama.cpp`
+> can be exposed as ACP agents by wrapping them in a lightweight ACP adapter.
+
 After restart, the orchestrator can delegate to `@claude-research` or
 `@gemini-acp`. Use safe names matching `^[a-z][a-z0-9_-]*$`; names cannot
 conflict with built-in or custom agents. `permissionMode` controls ACP
@@ -230,8 +233,30 @@ subprocess.
   `presets.<name>.council.model`.
 - The **councillor models** are configured separately under
   `council.presets.<name>.<councillor>.model`.
-- `council.master*` fields have been removed. A deprecation warning is
-  logged this release if a config still contains them.
+- `council.master` (exact key) has been removed; a deprecation warning is
+  logged if a config still contains it. Other `council.master_*` variants
+  (e.g., `council.master_timeout`, `council.master_fallback`) are silently
+  dropped without warning — remove them manually.
+
+```jsonc
+{
+  "council": {
+    "default_preset": "balanced",
+    "presets": {
+      "balanced": {
+        "alpha": {
+          "model": "openai/gpt-5.6-sol",
+          "variant": "high"
+        },
+        "beta": {
+          "model": "anthropic/claude-sonnet-4-5",
+          "variant": "medium"
+        }
+      }
+    }
+  }
+}
+```
 
 ### Manual Update Mode
 
@@ -262,11 +287,17 @@ Background job management is enabled by default and does not need to be present
 in the starter config. Add `backgroundJobs` only if you want to tune how many
 completed/reconciled child-agent sessions are reusable, how much read context is
 shown, how board snapshots are injected, or to opt into beta automatic
-incomplete-todo continuation prompts on idle:
+incomplete-todo continuation prompts on idle. For glossary definitions of
+background-job terms (board snapshot, checkpoint cache epoch, injection
+strategy, etc.), see [CONTEXT.md — Background
+Jobs](../CONTEXT.md#background-jobs).
 
 ```jsonc
 {
   "backgroundJobs": {
+    "maxSessionsPerAgent": 3,
+    "strategy": "checkpoint-compatible",
+    "maxRetainedSnapshots": 10,
     "continueOnIdle": true
   }
 }
@@ -328,6 +359,9 @@ Notes:
 - Custom agent names must be safe identifiers such as `janitor` or `security-reviewer`
 - Custom agents without a `model` are skipped with a warning
 - Disabled custom agents are not registered or injected into the orchestrator prompt
+
+> **Tip:** Keep `orchestratorPrompt` concise — the orchestrator reads it every turn.
+> Include: when to delegate, when NOT to delegate, and the agent's role in one paragraph.
 
 ### Agent Permissions
 
@@ -417,6 +451,10 @@ When a user supplies `permission` and also uses the `skills` or `mcps` arrays on
 4. **User-supplied keys for standard tools** (`edit`, `bash`, `webfetch`, `task`, etc.) survive the merge untouched.
 
 Use the `skills`/`mcps` arrays for skill and MCP gating. Use `permission` for everything else (file access, bash, web, task delegation).
+
+### Multiplexer
+
+The multiplexer hosts child agent sessions in terminal panes. See [Multiplexer Integration](multiplexer-integration.md) for backend setup, layout configuration, and troubleshooting.
 
 ### Desktop Companion App
 
