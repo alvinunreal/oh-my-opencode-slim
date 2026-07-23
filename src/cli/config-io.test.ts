@@ -504,11 +504,11 @@ describe('config-io', () => {
     expect(saved.presets['opencode-go'].orchestrator.model).toBe(
       'opencode-go/minimax-m3',
     );
-    expect(saved.presets['opencode-go'].orchestrator.variant).toBe('max');
+    expect(saved.presets['opencode-go'].orchestrator.variant).toBe('thinking');
     expect(saved.presets['opencode-go'].observer.model).toBe(
       'opencode-go/mimo-v2.5',
     );
-    expect(saved.presets['opencode-go'].observer.variant).toBe('max');
+    expect(saved.presets['opencode-go'].observer.variant).toBeUndefined();
   });
 
   test('disableDefaultAgents disables conflicting OpenCode built-in agents', () => {

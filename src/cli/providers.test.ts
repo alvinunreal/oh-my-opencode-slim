@@ -74,7 +74,7 @@ describe('providers', () => {
     const agents = (config.presets as any)['opencode-go'];
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('opencode-go/minimax-m3');
-    expect(agents.orchestrator.variant).toBe('max');
+    expect(agents.orchestrator.variant).toBe('thinking');
     expect(agents.oracle.model).toBe('opencode-go/qwen3.7-max');
     expect(agents.oracle.variant).toBe('max');
     expect(agents.council).toBeUndefined();
@@ -82,11 +82,13 @@ describe('providers', () => {
     expect(agents.librarian.variant).toBe('high');
     expect(agents.librarian.mcps).toEqual(['websearch', 'context7', 'gh_grep']);
     expect(agents.explorer.model).toBe('opencode-go/deepseek-v4-flash');
+    expect(agents.explorer.variant).toBe('high');
     expect(agents.designer.model).toBe('opencode-go/kimi-k2.7-code');
+    expect(agents.designer.variant).toBeUndefined();
     expect(agents.fixer.model).toBe('opencode-go/deepseek-v4-flash');
     expect(agents.fixer.variant).toBe('high');
     expect(agents.observer.model).toBe('opencode-go/mimo-v2.5');
-    expect(agents.observer.variant).toBe('max');
+    expect(agents.observer.variant).toBeUndefined();
   });
 
   test('generateLiteConfig rejects unsupported preset', () => {
