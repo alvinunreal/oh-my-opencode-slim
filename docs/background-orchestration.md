@@ -406,6 +406,49 @@ miss at the epoch boundary, after which a fresh run of up to the configured limi
 can accumulate. The cache is lost on plugin restart, so snapshots are not
 restored beyond those present in the current OpenCode message history.
 
+### Opt-in Wall-clock Supervisor
+
+The plugin can apply a one-shot wall-clock deadline to native background task
+child sessions. It is disabled by default:
+
+```jsonc
+{
+  "backgroundJobs": {
+    "wallClockTimeoutMs": 900000,
+    "abortGraceMs": 10000
+  }
+}
+```
+
+This supervisor recognizes only an explicit `task(..., background: true)` call.
+Foreground tasks and calls where `background` is omitted or `false` are not
+supervised. The deadline begins at the first launch observation for the current
+run. Duplicate `session.created`/tool-hook observations, busy activity, tool
+activity, and liveness timestamps do not renew it. An explicit relaunch or reuse
+starts a new run generation.
+
+When the deadline wins a race with a real terminal transition, the board records
+a persistent hard-deadline marker, marks cancellation as requested, starts the
+bounded abort grace period, and issues exactly one native session abort. The
+grace timer is independent of whether the SDK abort resolves, rejects, or hangs.
+An error, cancellation, or child deletion during grace publishes one stable
+timed-out terminal outcome. If no terminal confirmation arrives before grace
+expires, the outcome is `error`, `timedOut: true`, and `statusUncertain: true`,
+with a summary stating that abort was not confirmed.
+
+Late completion, busy, retry, or error events cannot replace a published hard
+timeout, and a hard wall-clock timeout is not recoverable through the existing
+external task-wait timeout path. The timeout outcome remains visible to the
+parent through the normal terminal-unreconciled Background Job Board flow; no
+prompt or raw task-result rewrite is used. Timeout terminals also issue a
+permanent logical pane-close intent so generic and cmux multiplexer paths do not
+respawn a pane on late busy events.
+
+`wallClockTimeoutMs` accepts `0` or integers from `60000` through `2147483647`;
+`abortGraceMs` accepts integers from `1000` through `60000`. This feature is
+wall-clock-only: no no-progress/plateau policy, foreground fallback, model swap,
+session deletion retry, or worker-death guarantee is implied.
+
 ---
 
 ## Startup Behavior

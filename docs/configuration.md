@@ -150,6 +150,8 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.maxRetainedSnapshots` | integer | `20` | Maximum board snapshots retained per checkpoint cache epoch (1–100). Adding a snapshot beyond the limit starts a new epoch with only the current snapshot, intentionally creating one cache miss |
 | `backgroundJobs.strategy` | `"latest"` \| `"checkpoint-compatible"` | `"latest"` | Board injection strategy. `latest` preserves the current strip-and-replace behavior; `checkpoint-compatible` appends only when the formatted board changes and uses `backgroundJobs.maxRetainedSnapshots` per cache epoch. Cache state resets on compaction/session boundaries and is lost on plugin restart |
 | `backgroundJobs.continueOnIdle` | boolean | `false` | **Beta opt-in.** Set `true` to let idle orchestrator sessions with incomplete todos receive one automatic hidden continuation prompt. When omitted or `false`, idle reconciliation and background-job orchestration remain active without automatic continuation prompts. See [Background Orchestration](background-orchestration.md#incomplete-todo-continuation-nudge) |
+| `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds |
+| `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable model failover on timeout/error |
 | `fallback.timeoutMs` | number | `15000` | Time before aborting and trying next model |
@@ -262,12 +264,15 @@ Background job management is enabled by default and does not need to be present
 in the starter config. Add `backgroundJobs` only if you want to tune how many
 completed/reconciled child-agent sessions are reusable, how much read context is
 shown, how board snapshots are injected, or to opt into beta automatic
-incomplete-todo continuation prompts on idle:
+incomplete-todo continuation prompts on idle. The wall-clock supervisor is
+separately opt-in and remains disabled unless `wallClockTimeoutMs` is set:
 
 ```jsonc
 {
   "backgroundJobs": {
-    "continueOnIdle": true
+    "continueOnIdle": true,
+    "wallClockTimeoutMs": 900000,
+    "abortGraceMs": 10000
   }
 }
 ```
@@ -275,7 +280,10 @@ incomplete-todo continuation prompts on idle:
 Without that opt-in, idle reconciliation and background-job orchestration remain
 enabled but no hidden continuation prompts are sent. See the
 [Background Orchestration](background-orchestration.md) guide for the concept,
-defaults, and examples.
+defaults, and examples. `wallClockTimeoutMs` is a hard deadline for explicitly
+background native task calls; foreground or omitted `background` values are not
+supervised. It is independent from OpenCode's external task-wait timeout: a
+wall-clock timeout is not recoverable by reusing the running session.
 
 ### Agent Display Names
 
