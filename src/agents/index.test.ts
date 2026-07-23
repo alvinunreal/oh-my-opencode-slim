@@ -836,12 +836,78 @@ describe('AgentOverrideConfigSchema options validation', () => {
     expect(result.success).toBe(false);
   });
 
-  test('rejects description field on overrides', () => {
+  test('accepts description field on overrides', () => {
     const result = AgentOverrideConfigSchema.safeParse({
       model: 'openai/gpt-5.6',
-      description: 'not supported for custom agents',
-    } as Record<string, unknown>);
+      description: 'A custom reviewer agent',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBe('A custom reviewer agent');
+    }
+  });
+
+  test('rejects empty description field', () => {
+    const result = AgentOverrideConfigSchema.safeParse({
+      model: 'openai/gpt-5.6',
+      description: '',
+    });
     expect(result.success).toBe(false);
+  });
+
+  test('description propagates through buildCustomAgentDefinition', () => {
+    const config: PluginConfig = {
+      agents: {
+        reviewer: {
+          model: 'openai/gpt-5.6',
+          description: 'Code review specialist',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const reviewer = agents.find((a) => a.name === 'reviewer');
+    expect(reviewer).toBeDefined();
+    expect(reviewer?.description).toBe('Code review specialist');
+  });
+
+  test('description defaults to generated string when not provided', () => {
+    const config: PluginConfig = {
+      agents: {
+        reviewer: {
+          model: 'openai/gpt-5.6',
+        },
+      },
+    };
+    const agents = createAgents(config);
+    const reviewer = agents.find((a) => a.name === 'reviewer');
+    expect(reviewer).toBeDefined();
+    expect(reviewer?.description).toBe("Custom subagent 'reviewer'");
+  });
+
+  test('description propagates through getAgentConfigs to SDK output', () => {
+    const config: PluginConfig = {
+      agents: {
+        reviewer: {
+          model: 'openai/gpt-5.6',
+          description: 'SDK reviewer agent',
+        },
+      },
+    };
+    const configs = getAgentConfigs(config);
+    expect(configs.reviewer.description).toBe('SDK reviewer agent');
+  });
+
+  test('description override applies to built-in agents', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: {
+          model: 'openai/gpt-5.6',
+          description: 'Custom oracle description',
+        },
+      },
+    };
+    const configs = getAgentConfigs(config);
+    expect(configs.oracle.description).toBe('Custom oracle description');
   });
 });
 
