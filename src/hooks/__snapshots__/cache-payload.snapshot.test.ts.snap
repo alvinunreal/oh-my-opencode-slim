@@ -455,16 +455,6 @@ exports[`cache-impact snapshots (update deliberately — see file header) transf
 ,
         "type": "text",
       },
-    ],
-  },
-  {
-    "info": {
-      "agent": "orchestrator",
-      "id": "m09-background-job-board",
-      "role": "user",
-      "sessionID": "ses_cache_safety_fixture",
-    },
-    "parts": [
       {
         "metadata": {
           "oh-my-opencode-slim.backgroundJobBoard": true,

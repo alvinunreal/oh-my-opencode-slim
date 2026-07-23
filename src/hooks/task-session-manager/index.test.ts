@@ -116,6 +116,9 @@ function createAnchoredMessages(sessionID: string, texts = ['R1']) {
 }
 
 function boardText(messages: { messages: unknown[] }): string | undefined {
+  // The board is injected as a trailing tagged PART on the last message
+  // (keeping the message count stable so the provider's tail cache
+  // breakpoint lands on stable real content). It is always the last part.
   const last = messages.messages.at(-1) as
     | {
         parts?: {
@@ -124,7 +127,7 @@ function boardText(messages: { messages: unknown[] }): string | undefined {
         }[];
       }
     | undefined;
-  const part = last?.parts?.[0];
+  const part = last?.parts?.at(-1);
   return part?.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true
     ? part.text
     : undefined;
@@ -202,7 +205,9 @@ describe('task-session-manager hook', () => {
 
     await transformMessages(hook, messages as never);
 
-    expect(messages.messages).toHaveLength(6);
+    // Board is appended as a trailing part on the last user message, not as a
+    // new message, so the message count is unchanged.
+    expect(messages.messages).toHaveLength(5);
     expect(boardText(messages)).toContain('### Background Job Board');
     expect(boardText(messages)).toContain(
       'exp-1 / child-1 / explorer / running',
@@ -249,17 +254,20 @@ describe('task-session-manager hook', () => {
     const messages = createMessages('parent-1', 'do something');
     await hook.injectBackgroundJobBoard({}, messages);
 
+    // Board is appended as a trailing part on the last (only) user message.
+    // The message count is unchanged; the real text part is preserved and the
+    // board part follows it.
     const userMessage = messages.messages[0];
-    expect(userMessage.parts).toHaveLength(1);
+    expect(messages.messages).toHaveLength(1);
+    expect(userMessage.parts).toHaveLength(2);
     expect(userMessage.parts[0].text).toBe('do something');
     const boardMessage = messages.messages.at(-1) as {
       info: { role?: string; sessionID?: string };
       parts: { text?: string; synthetic?: boolean }[];
     };
-    expect(messages.messages).toHaveLength(2);
     expect(boardMessage.info.role).toBe('user');
     expect(boardMessage.info.sessionID).toBe('parent-1');
-    const boardPart = boardMessage.parts[0] as {
+    const boardPart = boardMessage.parts.at(-1) as {
       text?: string;
       synthetic?: boolean;
     };
@@ -303,7 +311,9 @@ describe('task-session-manager hook', () => {
     expect(boardText(messages)).toContain(
       'exp-1 / child-1 / explorer / running',
     );
-    expect(messages.messages[0].parts).toHaveLength(1);
+    // The real sentinel-bearing part is preserved; the board is appended after
+    // it as a trailing part on the same (last) message.
+    expect(messages.messages[0].parts).toHaveLength(2);
     expect(messages.messages[0].parts[0].text).toBe(
       'SENTINEL: background-job-board-v2',
     );
@@ -333,7 +343,10 @@ describe('task-session-manager hook', () => {
     expect(messages.messages.at(-1)).toBe(boardMessages[0]);
   });
 
-  test('strips stale board parts from history before injecting the latest state', async () => {
+  test('strips the tail board and re-appends the latest state on the new tail', async () => {
+    // Production never sees a board in storage (synthetic parts are not
+    // persisted), so the tail board from the previous request is the only one
+    // present and is stripped in place before re-injection.
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'child-1',
@@ -344,11 +357,10 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({ backgroundJobBoard: board });
     const messages = createMessages('parent-1', 'first turn');
 
+    // Simulate the realistic path: the board is transient, so a fresh request
+    // rebuilds real messages only and the tail (now "second turn") carries the
+    // previous board as its trailing part before re-injection.
     await hook.injectBackgroundJobBoard({}, messages);
-    messages.messages.push({
-      info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
-      parts: [{ type: 'text', text: 'second turn' }],
-    });
     board.updateStatus({
       taskID: 'child-1',
       state: 'completed',
@@ -362,11 +374,52 @@ describe('task-session-manager hook', () => {
         (part) => part.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
       ),
     );
+    // The stale tail board is stripped and exactly one fresh board remains.
     expect(boardParts).toHaveLength(1);
     expect(boardParts[0].text).toContain('completed, unreconciled');
-    expect(messages.messages[0].parts).toHaveLength(1);
-    expect(messages.messages.at(-1)?.parts[0]).toBe(boardParts[0]);
-    expect(messages.messages.at(-2)?.parts[0].text).toBe('second turn');
+    // Board is the last part of the last (real) message; the real text part is
+    // preserved before it.
+    expect(messages.messages).toHaveLength(1);
+    expect(messages.messages[0].parts).toHaveLength(2);
+    expect(messages.messages[0].parts[0].text).toBe('first turn');
+    expect(messages.messages.at(-1)?.parts.at(-1)).toBe(boardParts[0]);
+  });
+
+  test('leaves a genuinely mid-history stale board untouched (cache invariant)', async () => {
+    // If a board is found mid-history (e.g. a legacy/persisted block), removing
+    // it would rewrite already-sent bytes and bust the whole tail. It is left
+    // in place; the fresh board is appended to the current tail.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+    const { hook } = createHook({ backgroundJobBoard: board });
+    const messages = createMessages('parent-1', 'first turn');
+
+    await hook.injectBackgroundJobBoard({}, messages);
+    // A NEW real message arrives after the previous board, pushing it
+    // mid-history (this only happens if a board was persisted into storage).
+    messages.messages.push({
+      info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+      parts: [{ type: 'text', text: 'second turn' }],
+    });
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'completed',
+      resultSummary: 'finished mapping',
+    });
+
+    await hook.injectBackgroundJobBoard({}, messages);
+
+    // The mid-history board (on message[0]) is preserved; a fresh board is
+    // appended to the current tail (message[1]).
+    expect(messages.messages[0].parts.at(-1)?.text).toContain('running');
+    const tailBoard = messages.messages.at(-1)?.parts.at(-1);
+    expect(tailBoard?.text).toContain('completed, unreconciled');
+    expect(messages.messages.at(-1)?.parts[0].text).toBe('second turn');
   });
 
   test('latest mode ignores maxRetainedSnapshots and replaces the board', async () => {
@@ -384,16 +437,14 @@ describe('task-session-manager hook', () => {
     const messages = createMessages('parent-1', 'first turn');
 
     await hook.injectBackgroundJobBoard({}, messages);
-    messages.messages.push({
-      info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
-      parts: [{ type: 'text', text: 'second turn' }],
-    });
     board.updateStatus({
       taskID: 'child-1',
       state: 'completed',
       resultSummary: 'finished mapping',
     });
 
+    // Re-injecting on the same tail strips the previous tail board and
+    // re-appends the updated state — no retained snapshots in latest mode.
     await hook.injectBackgroundJobBoard({}, messages);
 
     expect(boardSnapshotIDs(messages)).toHaveLength(0);
@@ -404,10 +455,10 @@ describe('task-session-manager hook', () => {
     );
     expect(boardParts).toHaveLength(1);
     expect(boardParts[0].text).toContain('completed, unreconciled');
-    expect(messages.messages.at(-1)?.parts[0]).toBe(boardParts[0]);
+    expect(messages.messages.at(-1)?.parts.at(-1)).toBe(boardParts[0]);
   });
 
-  test('strips JSON-persisted board parts from earlier messages', async () => {
+  test('leaves a JSON-persisted mid-history board message untouched (cache invariant)', async () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: 'child-1',
@@ -420,8 +471,10 @@ describe('task-session-manager hook', () => {
 
     await hook.injectBackgroundJobBoard({}, messages);
     const persistedBoard = JSON.parse(
-      JSON.stringify(messages.messages.at(-1)?.parts[0]),
+      JSON.stringify(messages.messages.at(-1)?.parts.at(-1)),
     );
+    // A board persisted mid-history (not at the tail): stripping it would
+    // rewrite already-sent bytes, so it must be left in place.
     messages.messages = [
       {
         info: { role: 'assistant' },
@@ -435,9 +488,13 @@ describe('task-session-manager hook', () => {
 
     await hook.injectBackgroundJobBoard({}, messages);
 
+    // Mid-history board message preserved; fresh board appended to the tail.
     expect(messages.messages).toHaveLength(2);
-    expect(messages.messages[0].parts[0].text).toBe('current turn');
-    expect(messages.messages[1].parts[0].metadata).toEqual({
+    expect(messages.messages[0].parts[0].metadata).toEqual({
+      [BACKGROUND_JOB_BOARD_METADATA_KEY]: true,
+    });
+    expect(messages.messages[1].parts[0].text).toBe('current turn');
+    expect(messages.messages[1].parts.at(-1)?.metadata).toEqual({
       [BACKGROUND_JOB_BOARD_METADATA_KEY]: true,
     });
   });
@@ -820,30 +877,36 @@ describe('task-session-manager hook', () => {
     expect(boardSnapshotIDs(secondEpochRequest)[1]).toEndWith(':21');
   });
 
-  test('strips existing board parts when no jobs produce a prompt', async () => {
+  test('strips the tail board when no jobs produce a prompt, leaving mid-history', async () => {
     const { hook } = createHook({
       backgroundJobBoard: new BackgroundJobBoard(),
     });
-    const staleBoard = {
+    const staleBoard = () => ({
       type: 'text',
       synthetic: true,
       text: '<system-reminder>stale</system-reminder>',
       metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
-    };
+    });
     const messages = {
       messages: [
-        { info: { role: 'assistant' }, parts: [staleBoard] },
+        { info: { role: 'assistant' }, parts: [staleBoard()] },
         {
           info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
-          parts: [{ type: 'text', text: 'current turn' }, staleBoard],
+          parts: [{ type: 'text', text: 'current turn' }, staleBoard()],
         },
       ],
     };
 
     await hook.injectBackgroundJobBoard({}, messages);
 
-    expect(messages.messages).toHaveLength(1);
-    expect(messages.messages[0].parts).toEqual([
+    // With no jobs there is nothing to inject. The tail board part is stripped
+    // from the last message; the mid-history board message is left untouched
+    // (removing it would rewrite already-sent bytes).
+    expect(messages.messages).toHaveLength(2);
+    expect(messages.messages[0].parts[0].metadata).toEqual({
+      [BACKGROUND_JOB_BOARD_METADATA_KEY]: true,
+    });
+    expect(messages.messages[1].parts).toEqual([
       { type: 'text', text: 'current turn' },
     ]);
   });
@@ -875,18 +938,22 @@ describe('task-session-manager hook', () => {
     );
     await hook.injectBackgroundJobBoard({}, nextRequest);
 
+    // The board is a trailing PART on the last (only) message, so the message
+    // count stays 1. The previous tail board part is stripped and re-appended,
+    // leaving exactly one board — the last part of the message.
     const parts = nextRequest.messages[0].parts;
     expect(
       parts.filter(
         (part) => part.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true,
       ),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
+    expect(nextRequest.messages).toHaveLength(1);
     expect(parts.at(-1)?.metadata).toEqual({
-      [PHASE_REMINDER_METADATA_KEY]: true,
-    });
-    expect(nextRequest.messages).toHaveLength(2);
-    expect(nextRequest.messages.at(-1)?.parts[0].metadata).toEqual({
       [BACKGROUND_JOB_BOARD_METADATA_KEY]: true,
+    });
+    // The phase reminder is preserved (immediately before the board).
+    expect(parts.at(-2)?.metadata).toEqual({
+      [PHASE_REMINDER_METADATA_KEY]: true,
     });
   });
 
@@ -919,7 +986,9 @@ describe('task-session-manager hook', () => {
     expect(boardText(messages)).toContain(
       'exp-1 / child-1 / explorer / running',
     );
-    expect(messages.messages[0].parts).toHaveLength(1);
+    // The original marker-bearing part is preserved; the board is appended
+    // after it as a trailing part on the same message.
+    expect(messages.messages[0].parts).toHaveLength(2);
     expect(messages.messages[0].parts[0].text).toBe(
       SLIM_INTERNAL_INITIATOR_MARKER,
     );
