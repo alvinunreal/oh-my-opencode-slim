@@ -27,6 +27,8 @@ Or use non-interactive mode:
 bunx oh-my-opencode-slim@latest install --no-tui --skills=yes --background-subagents=yes
 ```
 
+> **Running in Docker or a sandbox?** Install inside the container with `--no-tui` (headless environments can't run the interactive TUI), and mount `~/.config/opencode` for persistence. Pass `--companion=no` to skip the desktop companion (it requires a display server). Auto-updates write to `~/.cache/opencode/packages/`, which is separate from config — mount that too if you want updates to survive container restarts.
+
 ### Configuration Options
 
 The installer supports the following options:
