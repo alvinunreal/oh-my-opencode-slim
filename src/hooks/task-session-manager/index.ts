@@ -172,6 +172,7 @@ export function createTaskSessionManagerHook(
       }
       terminalJobsInjectedByParent.delete(sessionId);
       injectionState.retainedBoardSnapshots.delete(sessionId);
+      injectionState.retainedTailBoards.delete(sessionId);
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);
       pendingCallTracker.clearSession(sessionId);
@@ -190,6 +191,7 @@ export function createTaskSessionManagerHook(
     shouldManageSession: options.shouldManageSession,
     taskContextTracker,
     retainedBoardSnapshots: new Map(),
+    retainedTailBoards: new Map(),
   };
 
   return {

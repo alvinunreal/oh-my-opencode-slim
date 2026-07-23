@@ -326,6 +326,67 @@ describe('background job board cache breakpoint stability', () => {
     expect(outN1.slice(0, outN.length)).toEqual(outN);
   });
 
+  test('an already-sent tail board is not stripped when the tail advances (dumps 000086->000087)', async () => {
+    // Faithful reconstruction of the live cache bust (ses_11145863, dumps
+    // 000086 A -> 000087 B). In A the tail was a user tool_result message that
+    // carried the board as an appended trailing part; that request was SENT to
+    // the provider and cached with the board on that message. B then advanced
+    // by two new messages (assistant + user tool_result). The provider caches a
+    // byte prefix, so every message it already received in A must be byte-
+    // identical in B — INCLUDING the board bytes on the old tail. The #889
+    // append-on-tail placement dropped that board when the tail advanced,
+    // rewriting the already-sent old-tail message (A: 1376B -> B: 652B in the
+    // field dump) and busting the cache prefix from that message onward.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_child',
+      parentSessionID: SESSION,
+      agent: 'librarian',
+      description: 'grok research',
+    });
+    const hook = createHook(board);
+
+    // FULL serialization including the board part — a byte-exact fingerprint of
+    // what the provider actually received for each message.
+    const fullSerialize = (messages: unknown[]): string[] =>
+      (messages as Msg[]).map((m) => JSON.stringify(m));
+
+    // Request A: tail is a user tool_result turn; board rides on it as a
+    // trailing part (the #889 "tail is user" branch, matching dump 000086).
+    const historyA = [userMsg('u1', 'Coordinate'), ...toolTurn('t1', 'r1')];
+    const outA = await inject(hook, historyA);
+    const serA = fullSerialize(outA);
+
+    // The old tail carried the board (as sent to the provider in request A).
+    const oldTailA = outA.at(-1) as Msg;
+    expect(oldTailA.info.role).toBe('user');
+    expect(
+      oldTailA.parts.at(-1)?.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY],
+    ).toBe(true);
+
+    // Request B: the loop advanced by exactly two new messages (assistant +
+    // user tool_result), matching dump 000087's two extra tail messages.
+    const historyB = [
+      userMsg('u1', 'Coordinate'),
+      ...toolTurn('t1', 'r1'),
+      ...toolTurn('t2', 'r2'),
+    ];
+    const outB = await inject(hook, historyB);
+    const serB = fullSerialize(outB);
+
+    // Every message the provider received in request A must be byte-identical
+    // in request B, board bytes included. In particular the old tail (index
+    // serA.length - 1) must still carry its board — it must NOT be stripped.
+    expect(serB.slice(0, serA.length)).toEqual(serA);
+
+    // Explicit guard on the exact failure the field dump showed: the old-tail
+    // message keeps its board trailing part in B.
+    const oldTailB = outB[serA.length - 1] as Msg;
+    expect(
+      oldTailB.parts.at(-1)?.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY],
+    ).toBe(true);
+  });
+
   test('field-dump scenario: tail is a tool_result user turn preceded by an assistant turn', async () => {
     // Reconstructs the real bust (2026-07-23 dumps 000166→000167): the tail was
     // a user tool_result message preceded by an assistant tool-call message,

@@ -107,45 +107,6 @@ export function stripTaggedContent(
 }
 
 /**
- * Remove tagged parts only from the trailing zone of the payload — the
- * contiguous run of whole synthetic tagged messages at the end plus the
- * single real message immediately before them (where per-request volatile
- * content is appended as a trailing part).
- *
- * A tagged part found genuinely mid-history (e.g. a legacy or accidentally
- * persisted board) is LEFT in place: removing it would rewrite the bytes of
- * an already-sent message and invalidate the provider cache for the entire
- * tail after it. Leaving it costs nothing (it is already part of the cached
- * prefix), while removing it costs a full tail re-cache.
- */
-export function stripTailBoardContent(
-  messages: unknown[],
-  metadataKey: string,
-): void {
-  let i = messages.length - 1;
-
-  // Drop whole trailing synthetic tagged messages.
-  while (i >= 0) {
-    const message = messages[i];
-    if (!isVolatileTaggedMessage(message, metadataKey)) break;
-    messages.splice(i, 1);
-    i -= 1;
-  }
-
-  // Strip a tagged trailing part from the now-last real message only.
-  if (i >= 0) {
-    const message = messages[i];
-    if (isMessageWithParts(message)) {
-      const hadParts = message.parts.length > 0;
-      message.parts = message.parts.filter(
-        (part) => !isTaggedPart(part, metadataKey),
-      );
-      if (hadParts && message.parts.length === 0) messages.splice(i, 1);
-    }
-  }
-}
-
-/**
  * Append volatile content as its own synthetic message at the very end of
  * the payload. Call `stripTaggedContent` first so at most one instance
  * exists; the volatile zone must stay strictly behind all stable content.
