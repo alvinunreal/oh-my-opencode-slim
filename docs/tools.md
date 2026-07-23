@@ -10,11 +10,17 @@ Slim only intercepts `apply_patch` before the native tool runs. It rewrites reco
 
 ## Web Fetch
 
-Fetch remote pages with content extraction tuned for docs/static sites.
+Enhanced version of OpenCode's built-in `webfetch`. Overrides the default when
+this plugin is active. Fetch remote pages with content extraction tuned for
+docs/static sites.
 
 | Tool | Description |
 |------|-------------|
-| `webfetch` | Fetch a URL, optionally prefer `llms.txt`, extract main content from HTML, include metadata, and optionally save binary responses |
+| `webfetch` | Fetch a URL, optionally prefer `llms.txt`, extract main content from HTML, include metadata, optionally save binary responses, and optionally run secondary-model extraction |
+
+See the full [Webfetch documentation](webfetch.md) for parameters, output
+format, caching, llms.txt probing, redirect policy, secondary-model
+summarization, binary detection, and implementation details.
 
 `webfetch` blocks cross-origin redirects unless the requested URL or derived permission patterns explicitly allow them, and it can fall back to the raw fetched content when secondary-model summarization is unavailable.
 

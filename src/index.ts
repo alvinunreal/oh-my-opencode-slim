@@ -118,11 +118,14 @@ const BASELINE_TOOL_NAMES = new Set([
 /** @internal Exposed for deterministic health-threshold tests. */
 export function minimumExpectedToolCount(
   disabledTools: readonly string[] = [],
+  webfetchEnabled = true,
 ): number {
+  let count = HEALTH_CHECK.minTools;
+  if (!webfetchEnabled) count -= 1;
   const disabledBaselineTools = new Set(
     disabledTools.filter((toolName) => BASELINE_TOOL_NAMES.has(toolName)),
   );
-  return HEALTH_CHECK.minTools - disabledBaselineTools.size;
+  return count - disabledBaselineTools.size;
 }
 
 /**
@@ -282,7 +285,32 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       Object.keys(config.acpAgents ?? {}).length > 0
         ? { acp_run: createAcpRunTool(config.acpAgents) }
         : {};
-    webfetch = createWebfetchTool(ctx);
+    const webfetchModel = config.webfetch?.model;
+    const webfetchModels = (() => {
+      if (!webfetchModel) return undefined;
+      const entries = Array.isArray(webfetchModel)
+        ? webfetchModel
+        : [webfetchModel];
+      type ModelRefInput =
+        | string
+        | { id: string; variant?: string };
+      const models: Array<{ id: string; variant?: string }> = [];
+      for (const entry of entries as ModelRefInput[]) {
+        const id = typeof entry === 'string' ? entry : entry.id;
+        if (!id) continue;
+        models.push({
+          id,
+          ...(typeof entry === 'object' && entry.variant
+            ? { variant: entry.variant }
+            : {}),
+        });
+      }
+      return models.length > 0 ? models : undefined;
+    })();
+    webfetch = createWebfetchTool(ctx, {
+      binaryDir: undefined,
+      webfetchModels,
+    });
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent:
         config.backgroundJobs?.maxSessionsPerAgent ??
@@ -451,11 +479,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         taskSessionManagerHook.beginUserWait(sessionID),
     });
 
+    const shouldRegisterWebfetch = config.webfetch?.enabled !== false;
     tools = {
       ...cancelTaskTools,
       ...waitForUserTools,
       ...acpRunTools,
-      webfetch,
+      ...(shouldRegisterWebfetch ? { webfetch } : {}),
       ast_grep_search,
       ast_grep_replace,
     };
@@ -487,7 +516,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config.disabled_mcps && config.disabled_mcps.length > 0
       ? 0
       : HEALTH_CHECK.minMcps;
-  const toolThreshold = minimumExpectedToolCount(config.disabled_tools);
+  const toolThreshold = minimumExpectedToolCount(
+    config.disabled_tools,
+    config.webfetch?.enabled !== false,
+  );
 
   if (
     agentCount < HEALTH_CHECK.minAgents ||
