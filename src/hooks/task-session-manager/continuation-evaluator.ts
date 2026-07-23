@@ -96,10 +96,10 @@ export async function evaluateContinuation(
       isFallbackInProgress?: (sessionID: string) => boolean;
     };
     sessionSdk?: {
-      todo?: (input: unknown) => Promise<{ data?: unknown }>;
-      children?: (input: unknown) => Promise<{ data?: unknown }>;
-      status?: (input: unknown) => Promise<{ data?: unknown }>;
-      promptAsync?: (input: unknown) => Promise<unknown>;
+      todo?: (...args: unknown[]) => Promise<{ data?: unknown }>;
+      children?: (...args: unknown[]) => Promise<{ data?: unknown }>;
+      status?: (...args: unknown[]) => Promise<{ data?: unknown }>;
+      promptAsync?: (...args: unknown[]) => Promise<unknown>;
     };
   },
 ): Promise<void> {
@@ -155,15 +155,15 @@ export async function evaluateContinuation(
   let committed = false;
   try {
     const [todoResponse, childrenResponse, statusResponse] = await Promise.all([
-      deps.sessionSdk.todo({
-        path: { id: parentSessionID },
-        throwOnError: true,
-      }),
-      deps.sessionSdk.children({
-        path: { id: parentSessionID },
-        throwOnError: true,
-      }),
-      deps.sessionSdk.status({ throwOnError: true }),
+      deps.sessionSdk.todo(
+        { sessionID: parentSessionID },
+        { throwOnError: true },
+      ),
+      deps.sessionSdk.children(
+        { sessionID: parentSessionID },
+        { throwOnError: true },
+      ),
+      deps.sessionSdk.status({}, { throwOnError: true }),
     ]);
     if (
       !Array.isArray(todoResponse.data) ||
@@ -203,11 +203,11 @@ export async function evaluateContinuation(
     // Re-read liveness immediately before queuing work; board state is only
     // authoritative for terminal results observed by this plugin instance.
     const [latestChildrenResponse, latestStatusResponse] = await Promise.all([
-      deps.sessionSdk.children({
-        path: { id: parentSessionID },
-        throwOnError: true,
-      }),
-      deps.sessionSdk.status({ throwOnError: true }),
+      deps.sessionSdk.children(
+        { sessionID: parentSessionID },
+        { throwOnError: true },
+      ),
+      deps.sessionSdk.status({}, { throwOnError: true }),
     ]);
     if (
       !Array.isArray(latestChildrenResponse.data) ||
@@ -245,13 +245,12 @@ export async function evaluateContinuation(
     }
     committed = true;
     await deps.sessionSdk.promptAsync({
-      path: { id: parentSessionID },
-      body: {
+      sessionID: parentSessionID,
         agent: 'orchestrator',
         parts: [createInternalAgentTextPart(CONTINUATION_NUDGE)],
       },
-      throwOnError: true,
-    });
+      { throwOnError: true },
+    );
   } catch (error) {
     log(
       '[task-session-manager] continuation nudge suppressed after SDK error',

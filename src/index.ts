@@ -328,9 +328,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Agents without a chain (e.g. councillor, owned by CouncilManager) are
     // left alone — FG only aborts/re-prompts when it has a model to switch to.
     foregroundFallback = new ForegroundFallbackManager(
-      ctx.client,
       runtimeChains,
       config.fallback?.enabled !== false,
+      ctx,
       config.fallback?.maxRetries ?? 3,
       sessionLifecycle,
     );
@@ -435,7 +435,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       config.companion,
     );
     cancelTaskTools = createCancelTaskTool({
-      client: ctx.client,
+      input: ctx,
       backgroundJobBoard: backgroundJobCoordinator,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',

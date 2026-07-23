@@ -20,6 +20,12 @@ import {
   createTaskSessionManagerHook,
 } from './index';
 
+// Route getClient back to _ctx.client so existing _ctx.client.session
+// mocks continue to work through the new v2 lookup path.
+mock.module('../../utils/opencode-client', () => ({
+  getClient: (input: { client: unknown }) => input.client as never,
+}));
+
 /** Wait for the idle reconciliation delay (2s + margin) to flush. */
 function flushIdleReconcileDelay() {
   return new Promise((resolve) => setTimeout(resolve, 2100));
@@ -3582,10 +3588,9 @@ describe('task-session-manager hook', () => {
     expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: expect.objectContaining({
-          parts: [expect.objectContaining({ synthetic: true })],
-        }),
+        parts: [expect.objectContaining({ synthetic: true })],
       }),
+      expect.anything(),
     );
   });
 

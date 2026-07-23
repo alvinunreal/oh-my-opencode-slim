@@ -1,14 +1,19 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { parseTaskStatusOutput } from '../utils';
 import { BackgroundJobBoard } from '../utils/background-job-board';
 import { createCancelTaskTool } from './cancel-task';
+
+let mockV2Client: Record<string, unknown>;
+
+mock.module('../utils/opencode-client', () => ({
+  getClient: () => mockV2Client,
+}));
 
 function createTool(overrides?: {
   abort?: () => Promise<unknown>;
   delete?: () => Promise<unknown>;
   get?: () => Promise<unknown>;
   status?: () => Promise<unknown>;
-  includeDelete?: boolean;
   shouldManageSession?: (sessionID: string) => boolean;
   abortTimeoutMs?: number;
   verifyAbortMs?: number;
@@ -24,10 +29,9 @@ function createTool(overrides?: {
     overrides?.get ?? (async () => ({ data: { parentID: 'parent-1' } })),
   );
   const status = mock(overrides?.status ?? (async () => ({ data: {} })));
-  const session: Record<string, unknown> = { abort, get, status };
-  if (overrides?.includeDelete !== false) session.delete = deleteSession;
+  mockV2Client = { session: { abort, delete: deleteSession, get, status } };
   const tools = createCancelTaskTool({
-    client: { session } as any,
+    input: { directory: '/test/project' } as any,
     backgroundJobBoard: board,
     shouldManageSession: overrides?.shouldManageSession ?? (() => true),
     abortTimeoutMs: overrides?.abortTimeoutMs,
@@ -50,6 +54,10 @@ function createTool(overrides?: {
 
 const context = { sessionID: 'parent-1', agent: 'orchestrator' } as any;
 
+afterEach(() => {
+  mock.restore();
+});
+
 describe('cancel_task tool', () => {
   test('cancels a tracked running task by task ID', async () => {
     const { board, abort, cancelTask } = createTool();
@@ -64,7 +72,7 @@ describe('cancel_task tool', () => {
       context,
     );
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_1' });
     expect(String(output)).toContain('state: cancelled');
     expect(String(output)).toContain('cancelled: obsolete');
     expect(parseTaskStatusOutput(String(output))).toMatchObject({
@@ -85,7 +93,7 @@ describe('cancel_task tool', () => {
 
     await cancelTask.execute({ task_id: 'ora-1' }, context);
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_1' });
   });
 
   test('does not abort raw session IDs tracked by a different parent', async () => {
@@ -122,7 +130,7 @@ describe('cancel_task tool', () => {
 
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_1' });
     expect(String(output)).toContain('state: cancelled');
     expect(board.get('ses_1')).toMatchObject({ state: 'cancelled' });
   });
@@ -135,7 +143,7 @@ describe('cancel_task tool', () => {
       context,
     );
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_lost' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_lost' });
     expect(String(output)).toContain('state: cancelled');
     expect(String(output)).toContain('cancelled: stop ghost worker');
   });
@@ -177,7 +185,7 @@ describe('cancel_task tool', () => {
       context,
     );
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_1' });
     expect(String(output)).toContain('state: cancelled');
   });
 
@@ -196,16 +204,19 @@ describe('cancel_task tool', () => {
       context,
     );
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_1' });
     expect(String(output)).toContain('state: cancelled');
   });
 
   test('does not terminalize board when abort fails without delete', async () => {
     const { board, abort, cancelTask } = createTool({
-      includeDelete: false,
       abort: async () => {
         throw new Error('abort failed');
       },
+      delete: async () => {
+        throw new Error('delete failed');
+      },
+      status: async () => ({ data: { ses_1: { type: 'busy' } } }),
     });
     board.registerLaunch({
       taskID: 'ses_1',
@@ -239,7 +250,10 @@ describe('cancel_task tool', () => {
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
     expect(abort).toHaveBeenCalled();
-    expect(deleteSession).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      directory: '/test/project',
+    });
     expect(String(output)).toContain('state: cancelled');
     expect(board.get('ses_1')).toMatchObject({ state: 'cancelled' });
   });
@@ -259,7 +273,10 @@ describe('cancel_task tool', () => {
 
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
-    expect(deleteSession).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      directory: '/test/project',
+    });
     expect(String(output)).toContain('state: cancelled');
     expect(board.get('ses_1')).toMatchObject({ state: 'cancelled' });
   });
@@ -279,7 +296,10 @@ describe('cancel_task tool', () => {
 
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
-    expect(deleteSession).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      directory: '/test/project',
+    });
     expect(String(output)).toContain('state: running');
     expect(board.get('ses_1')).toMatchObject({
       state: 'running',
@@ -290,9 +310,12 @@ describe('cancel_task tool', () => {
 
   test('keeps running/status uncertain when abort times out without delete', async () => {
     const { board, cancelTask } = createTool({
-      includeDelete: false,
       abort: () => new Promise(() => {}),
       abortTimeoutMs: 1,
+      delete: async () => {
+        throw new Error('delete failed');
+      },
+      status: async () => ({ data: { ses_1: { type: 'busy' } } }),
     });
     board.registerLaunch({
       taskID: 'ses_1',
@@ -334,7 +357,10 @@ describe('cancel_task tool', () => {
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
     expect(abort).toHaveBeenCalled();
-    expect(deleteSession).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      directory: '/test/project',
+    });
     expect(String(output)).toContain('state: cancelled');
     expect(board.get('ses_1')).toMatchObject({
       state: 'cancelled',
@@ -366,7 +392,10 @@ describe('cancel_task tool', () => {
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
     expect(abort).toHaveBeenCalled();
-    expect(deleteSession).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      directory: '/test/project',
+    });
     expect(String(output)).toContain('state: cancelled');
     expect(board.get('ses_1')).toMatchObject({
       state: 'cancelled',
@@ -398,7 +427,10 @@ describe('cancel_task tool', () => {
 
     const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
 
-    expect(deleteSession).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      directory: '/test/project',
+    });
     expect(String(output)).toContain('state: cancelled');
     expect(board.get('ses_1')).toMatchObject({
       state: 'cancelled',
@@ -428,10 +460,13 @@ describe('cancel_task tool', () => {
 
   test('cancelSessionByID returns state: error when abort throws non-SessionStillRunningError, even if board shows running', async () => {
     const { board, abort, cancelTask } = createTool({
-      includeDelete: false,
       abort: async () => {
         throw new Error('network timeout');
       },
+      delete: async () => {
+        throw new Error('delete failed');
+      },
+      status: async () => ({ data: { ses_running: 'active' } }),
     });
     // Register a running job so that isRunning(taskID) would be true
     // if the function incorrectly checks it.
@@ -449,7 +484,7 @@ describe('cancel_task tool', () => {
       context,
     );
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_running' } });
+    expect(abort).toHaveBeenCalledWith({ sessionID: 'ses_running' });
     // cancelSessionByID must return state: error for non-SessionStillRunningError,
     // NOT state: running (which would happen if || isRunning() were present).
     expect(String(output)).toContain('state: error');

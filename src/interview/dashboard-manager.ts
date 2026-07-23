@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { PluginConfig } from '../config';
 import { log } from '../utils';
+import { getClient } from '../utils/opencode-client';
 import {
   probeDashboard,
   readDashboardAuthFile,
@@ -70,7 +71,7 @@ export function createDashboardManager(
       dashboard = await tryBecomeDashboard({
         port: dashboardPort,
         outputFolder,
-        sessionClient: ctx.client.session,
+        sessionClient: getClient(ctx).session,
       });
 
       if (dashboard) {

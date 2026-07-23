@@ -712,8 +712,7 @@ export function createWebfetchTool(
         let secondaryModelError: string | undefined;
         try {
           secondaryRun = await runSecondaryModelWithFallback(
-            pluginCtx.client,
-            ctx.directory || process.cwd(),
+            pluginCtx,
             secondaryModels,
             args.prompt || '',
             fetchResult.markdown,
