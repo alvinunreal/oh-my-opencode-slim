@@ -1,6 +1,6 @@
 # Desktop Companion App
 
-The desktop companion app provides a floating status overlay showing running and active agents.
+The desktop companion is a floating status overlay that shows running and active agents.
 
 ## How to Enable in Configuration
 
@@ -74,8 +74,7 @@ During interactive installation, the installer asks whether to download and
 enable the native Companion binary. The prompt defaults to `no`, so pressing
 Enter skips it.
 
-On niri, Companion can install normally when enabled now that the native binary
-is fixed.
+On niri, Companion installs and works once enabled.
 
 Companion installation is best-effort. If the binary cannot be downloaded or
 installed, the installer prints a warning and continues installing the core
@@ -119,6 +118,40 @@ oh-my-opencode-slim doctor
 
 ---
 
+## Known Limitations
+
+### Wayland Click-Through (GNOME, KDE)
+
+On Wayland compositors, the companion window captures mouse clicks in its
+bounding box, preventing interaction with windows underneath. This affects
+GNOME, KDE Plasma, and other Wayland desktops that do not implement the
+`zwlr-layer-shell` protocol with `pass_through_pointer` support.
+
+**Affected environments:** Ubuntu 24.04+ (GNOME Wayland), KDE Plasma on Wayland,
+most non-wlroots compositors.
+
+**Workaround:** Disable the companion on Wayland desktops that do not support
+layer-shell input pass-through:
+
+```jsonc
+{
+  "companion": {
+    "enabled": false
+  }
+}
+```
+
+On wlroots-based compositors (Sway, Hyprland, labwc) and Smithay-based
+compositors (niri), use compositor window rules to prevent the companion from
+grabbing focus. See the niri section above for an example.
+
+On macOS and X11, click-through works without issues.
+
+Upstream needs to add native Wayland input region support before this can be
+fixed in the companion.
+
+---
+
 ## Expected Binary Install Path
 
 The runtime looks for the companion binary at:
@@ -158,8 +191,7 @@ Custom binaries configured with `companion.binaryPath` are never overwritten.
 
 ## V2 Release Strategy
 
-For the desktop companion app, the release workflow follows the V2 distribution
-plan:
+The release workflow follows the V2 distribution plan:
 
 1. **GitHub Release Assets**: companion binaries are uploaded to the
    `companion-v0.1.3` GitHub release.
