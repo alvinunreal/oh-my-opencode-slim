@@ -401,6 +401,11 @@ export function loadPluginConfig(
     projectConfigPath ?? userConfigPath ?? '',
     options,
   );
+  // Note: we intentionally do NOT override image_routing to 'direct' here.
+  // The observer-disabled guard in processImageAttachments handles the
+  // auto+observer-disabled case by returning true, which triggers the
+  // debounced toast in index.ts. Overriding to 'direct' here would prevent
+  // processImageAttachments from returning true and suppress the toast.
 
   return config;
 }

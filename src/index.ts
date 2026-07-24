@@ -22,6 +22,7 @@ import {
   DEFAULT_READ_CONTEXT_MAX_FILES,
   DEFAULT_READ_CONTEXT_MIN_LINES,
   resolveImageRouting,
+  TOAST_DURATION_MS,
 } from './config/constants';
 import {
   getActiveRuntimePreset,
@@ -97,6 +98,10 @@ async function appLog(
     console.error(`[oh-my-opencode-slim] ${prefix}: ${message}`);
   }
 }
+
+// Debounce: only show image-skipped toast once per 60 seconds per project
+const lastImageSkippedToastByDir = new Map<string, number>();
+const IMAGE_SKIPPED_DEBOUNCE_MS = 60_000;
 
 /** Minimum expected registrations for a healthy plugin load. */
 const HEALTH_CHECK = {
@@ -487,6 +492,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     config.disabled_mcps && config.disabled_mcps.length > 0
       ? 0
       : HEALTH_CHECK.minMcps;
+  log(
+    `[DEBUG] config.disabled_tools type=${typeof config.disabled_tools} value=${JSON.stringify(config.disabled_tools)}`,
+  );
   const toolThreshold = minimumExpectedToolCount(config.disabled_tools);
 
   if (
@@ -1228,13 +1236,39 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
-      processImageAttachments({
+      const imageResult = processImageAttachments({
         messages: typedOutput.messages,
         workDir: ctx.directory,
-        imageRouting: resolveImageRouting(config.image_routing),
+        imageRouting: resolveImageRouting(
+          config.image_routing,
+          !disabledAgents.has('observer'),
+        ),
         disabledAgents,
         log,
       });
+      if (imageResult) {
+        const now = Date.now();
+        const last = lastImageSkippedToastByDir.get(ctx.directory) ?? 0;
+        if (now - last > IMAGE_SKIPPED_DEBOUNCE_MS) {
+          ctx.client.tui
+            .showToast({
+              body: {
+                title: 'Images skipped',
+                message:
+                  'Observer agent is disabled, so images can\'t be analyzed. Set image_routing to "direct" to send images to your model, or enable observer.',
+                variant: 'warning',
+                duration: TOAST_DURATION_MS,
+              },
+            })
+            .then(() => {
+              // Only advance the debounce window on a successful toast
+              // so a failed attempt doesn't suppress the next warning.
+              // Greptile: "Failed Toast Starts Debounce Window".
+              lastImageSkippedToastByDir.set(ctx.directory, now);
+            })
+            .catch(() => {});
+        }
+      }
 
       // Repair session mappings before reminder gates; nudge metadata precedes phase dedup.
       await taskSessionManagerHook['experimental.chat.messages.transform'](

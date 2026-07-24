@@ -16,6 +16,14 @@ import { isUserMessageWithParts, type MessageWithParts } from './types';
 const lastCleanupByDir = new Map<string, number>();
 const CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
+// Track how many user messages we've already checked for images per directory.
+// Without this, the observer-disabled guard re-checks ALL messages on every
+// transform. Once an image is sent, it stays in the messages array forever,
+// causing the hook to fire on every subsequent text-only message. This
+// suppresses duplicate toasts while still catching images in non-last messages
+// (Greptile #1 fix).
+const lastProcessedUserMsgCountByDir = new Map<string, number>();
+
 interface ImagePart {
   type: string;
   url?: string;
@@ -169,17 +177,57 @@ export function processImageAttachments(args: {
   imageRouting: 'auto' | 'direct';
   disabledAgents: Set<string>;
   log: (msg: string) => void;
-}): void {
+}): boolean {
   const { messages, workDir, imageRouting, disabledAgents, log } = args;
 
   // direct mode: never intercept attachments; the orchestrator handles them
   // inline. @observer remains available for manual delegation.
-  if (imageRouting === 'direct') return;
+  if (imageRouting === 'direct') {
+    return false;
+  }
 
   // auto mode: observer must be enabled (enforced at config load). Retain
   // this guard as defense-in-depth in case validation is bypassed.
   const observerEnabled = !disabledAgents.has('observer');
-  if (!observerEnabled) return;
+  if (!observerEnabled) {
+    // Check only NEW user messages for images. We track how many user messages
+    // we've already processed per session. Without this, the guard re-checks
+    // ALL messages on every transform — once an image is sent, it stays in the
+    // messages array forever, causing the hook to fire on every subsequent
+    // text-only message (regression from Greptile #1 fix).
+    //
+    // Keyed by workDir:sessionID so multiple sessions in the same project
+    // don't collide (Greptile P1: "Scope tracking by conversation").
+    const firstUserMsg = messages.find(isUserMessageWithParts);
+    const sessionId = firstUserMsg?.info.sessionID ?? 'default';
+    const counterKey = `${workDir}:${sessionId}`;
+    const userMsgCount = messages.filter(isUserMessageWithParts).length;
+    let lastProcessed = lastProcessedUserMsgCountByDir.get(counterKey) ?? 0;
+    // ponytail: reset after history compaction; re-checking old messages is harmless
+    if (userMsgCount < lastProcessed) {
+      lastProcessed = 0;
+      lastProcessedUserMsgCountByDir.set(counterKey, 0);
+    }
+    if (userMsgCount > lastProcessed) {
+      // Check only the new user messages (those we haven't seen yet)
+      let userIndex = 0;
+      for (const msg of messages) {
+        if (!isUserMessageWithParts(msg)) continue;
+        if (userIndex >= lastProcessed) {
+          // This is a new user message — check for images
+          if (msg.parts.some(isImagePart)) {
+            log('[image-hook] dropped images: observer disabled');
+            lastProcessedUserMsgCountByDir.set(counterKey, userMsgCount);
+            return true;
+          }
+        }
+        userIndex++;
+      }
+      // No images in new messages — update counter so we don't re-check them
+      lastProcessedUserMsgCountByDir.set(counterKey, userMsgCount);
+    }
+    return false;
+  }
 
   const messagesWithImages: Array<{
     msg: MessageWithParts;
@@ -200,7 +248,7 @@ export function processImageAttachments(args: {
 
   if (messagesWithImages.length === 0) {
     if (existsSync(saveDir)) cleanupAllSessions(saveDir);
-    return;
+    return false;
   }
 
   const gitignorePath = join(workDir, '.opencode', '.gitignore');
@@ -279,4 +327,5 @@ export function processImageAttachments(args: {
         },
       ]);
   }
+  return false;
 }

@@ -89,25 +89,27 @@ describe('image-hook catch logging', () => {
 describe('processImageAttachments image routing', () => {
   it('direct mode leaves image parts untouched', () => {
     const message = makeUserMsg([IMG]);
-    processImageAttachments({
+    const result = processImageAttachments({
       messages: [message],
       workDir: path.join(TEST_DIR, 'direct'),
       imageRouting: 'direct',
       disabledAgents: new Set<string>(),
       log: () => {},
     });
+    expect(result).toBe(false);
     expect(imagePartCount(message)).toBe(1);
   });
 
   it('auto mode saves image parts and adds an @observer nudge', () => {
     const message = makeUserMsg([IMG]);
-    processImageAttachments({
+    const result = processImageAttachments({
       messages: [message],
       workDir: path.join(TEST_DIR, 'auto'),
       imageRouting: 'auto',
       disabledAgents: new Set<string>(),
       log: () => {},
     });
+    expect(result).toBe(false);
     expect(imagePartCount(message)).toBe(0);
     const textParts = message.parts.filter((part) => part.type === 'text');
     expect(textParts).toHaveLength(1);
@@ -119,7 +121,7 @@ describe('processImageAttachments image routing', () => {
     processImageAttachments({
       messages: [message],
       workDir: path.join(TEST_DIR, 'omitted-routing'),
-      imageRouting: resolveImageRouting(undefined),
+      imageRouting: resolveImageRouting(undefined, true),
       disabledAgents: new Set<string>(),
       log: () => {},
     });
@@ -127,16 +129,70 @@ describe('processImageAttachments image routing', () => {
     expect(message.parts.some((part) => part.type === 'text')).toBe(true);
   });
 
-  it('keeps images when auto mode has observer disabled', () => {
+  it('returns true when observer disabled and message has images', () => {
     const message = makeUserMsg([IMG]);
-    processImageAttachments({
+    const result = processImageAttachments({
       messages: [message],
       workDir: path.join(TEST_DIR, 'disabled'),
       imageRouting: 'auto',
       disabledAgents: new Set(['observer']),
       log: () => {},
     });
+    expect(result).toBe(true);
     expect(imagePartCount(message)).toBe(1);
+  });
+
+  it('returns false when observer disabled but no images present', () => {
+    const message = makeUserMsg([{ type: 'text', text: 'hello' }]);
+    const result = processImageAttachments({
+      messages: [message],
+      workDir: path.join(TEST_DIR, 'disabled-noimg'),
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: () => {},
+    });
+    expect(result).toBe(false);
+  });
+
+  it('returns true when observer disabled and an earlier (non-last) user message has images', () => {
+    const earlierMsg = makeUserMsg([IMG]);
+    const lastMsg = makeUserMsg([{ type: 'text', text: 'follow-up question' }]);
+    const result = processImageAttachments({
+      messages: [earlierMsg, lastMsg],
+      workDir: path.join(TEST_DIR, 'earlier-image'),
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: () => {},
+    });
+    expect(result).toBe(true);
+  });
+
+  it('does not re-trigger on text-only messages after image was processed', () => {
+    // Regression test: Greptile #1 fix checked ALL messages, causing the hook
+    // to fire on every transform once an image was in the conversation history.
+    const workDir = path.join(TEST_DIR, 'no-rere-trigger');
+    const imageMsg = makeUserMsg([IMG]);
+    const textMsg = makeUserMsg([{ type: 'text', text: 'follow-up' }]);
+
+    // First call: image present → should return true
+    const result1 = processImageAttachments({
+      messages: [imageMsg, textMsg],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: () => {},
+    });
+    expect(result1).toBe(true);
+
+    // Second call: same messages, no new image → should return false
+    const result2 = processImageAttachments({
+      messages: [imageMsg, textMsg],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: () => {},
+    });
+    expect(result2).toBe(false);
   });
 
   it('keeps images when auto mode cannot save them', () => {
@@ -205,5 +261,23 @@ describe('processImageAttachments image routing', () => {
     });
     expect(userText.parts).toHaveLength(1);
     expect(assistant.parts).toHaveLength(1);
+  });
+});
+
+describe('resolveImageRouting', () => {
+  it('returns auto when omitted and observer enabled', () => {
+    expect(resolveImageRouting(undefined, true)).toBe('auto');
+  });
+
+  it('returns direct when omitted and observer disabled', () => {
+    expect(resolveImageRouting(undefined, false)).toBe('direct');
+  });
+
+  it('preserves explicit auto even when observer disabled', () => {
+    expect(resolveImageRouting('auto', false)).toBe('auto');
+  });
+
+  it('preserves explicit direct even when observer enabled', () => {
+    expect(resolveImageRouting('direct', true)).toBe('direct');
   });
 });
