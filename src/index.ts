@@ -119,8 +119,9 @@ const BASELINE_TOOL_NAMES = new Set([
 export function minimumExpectedToolCount(
   disabledTools: unknown = [],
 ): number {
+  const disabledToolList = Array.isArray(disabledTools) ? disabledTools : [];
   const disabledBaselineTools = new Set(
-    (Array.isArray(disabledTools) ? disabledTools : []).filter((toolName) => BASELINE_TOOL_NAMES.has(toolName)),
+    disabledToolList.filter((toolName) => BASELINE_TOOL_NAMES.has(toolName)),
   );
   return HEALTH_CHECK.minTools - disabledBaselineTools.size;
 }
