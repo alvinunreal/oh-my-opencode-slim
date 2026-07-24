@@ -3,6 +3,8 @@ import type {
   BackgroundJobRecord,
   BackgroundJobStatusInput,
   ContextFile,
+  WallClockTimeoutClaimInput,
+  WallClockTimeoutFinalizeInput,
 } from './background-job-board';
 import type { TaskOutputState } from './task';
 
@@ -19,6 +21,12 @@ export interface BackgroundJobStore {
     input: BackgroundJobStatusInput,
   ): BackgroundJobRecord | undefined;
   updateFromStatusOutput(output: string): BackgroundJobRecord | undefined;
+  claimWallClockDeadline(
+    input: WallClockTimeoutClaimInput,
+  ): BackgroundJobRecord | undefined;
+  finalizeWallClockTimeout(
+    input: WallClockTimeoutFinalizeInput,
+  ): BackgroundJobRecord | undefined;
   markRunningFromLiveSession(
     taskID: string,
     now?: number,

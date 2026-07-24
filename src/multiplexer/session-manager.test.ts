@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../utils/background-job-board';
 import { BackgroundJobCoordinator } from '../utils/background-job-coordinator';
+import { CmuxSessionStore } from './cmux/session-state';
 import {
   MultiplexerSessionManager,
   resetMultiplexerSessionManagerState,
@@ -609,6 +610,215 @@ describe('MultiplexerSessionManager', () => {
       await Promise.resolve();
 
       expect(mockMultiplexer.closePane).not.toHaveBeenCalled();
+    });
+
+    test('wall-clock timeout closes a live pane permanently and blocks late busy respawn', async () => {
+      const ctx = createMockContext();
+      const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
+      board.registerLaunch({
+        taskID: 'wall-clock-pane',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+        background: true,
+      });
+      mockMultiplexer.spawnPane.mockResolvedValue({
+        success: true,
+        paneId: 'p-wall-clock-pane',
+      });
+      const manager = new MultiplexerSessionManager(
+        ctx,
+        defaultMultiplexerConfig,
+        coordinator,
+      );
+      coordinator.addTerminalOutcomeListener((record) => {
+        if (record.deadlineExceededAt !== undefined) {
+          void manager.closeSessionPermanentlyFromCoordinator(record.taskID);
+        }
+      });
+
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'wall-clock-pane', parentID: 'parent-1' },
+        },
+      });
+      board.claimWallClockDeadline({
+        taskID: 'wall-clock-pane',
+        generation: 1,
+        now: 100,
+      });
+      board.finalizeWallClockTimeout({
+        taskID: 'wall-clock-pane',
+        generation: 1,
+        now: 120,
+        statusUncertain: true,
+        resultSummary: 'abort was not confirmed',
+      });
+      await flushPromises();
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith(
+        'p-wall-clock-pane',
+      );
+      const spawns = mockMultiplexer.spawnPane.mock.calls.length;
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'wall-clock-pane',
+          status: { type: 'busy' },
+        },
+      });
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(spawns);
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'wall-clock-pane', parentID: 'parent-1' },
+        },
+      });
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(spawns);
+    });
+
+    test('generic tombstone wins a duplicate created event awaiting an existing close', async () => {
+      const close = createDeferred<boolean>();
+      mockMultiplexer.closePane.mockImplementationOnce(() => close.promise);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        defaultMultiplexerConfig,
+      );
+      const created = {
+        type: 'session.created' as const,
+        properties: {
+          info: { id: 'created-race', parentID: 'parent-1' },
+        },
+      };
+
+      await manager.onSessionCreated(created);
+      const deleting = manager.onSessionDeleted({
+        type: 'session.deleted',
+        properties: { sessionID: 'created-race' },
+      });
+      await flushPromises();
+      const duplicate = manager.onSessionCreated(created);
+      await flushPromises();
+
+      const permanent =
+        manager.closeSessionPermanentlyFromCoordinator('created-race');
+      close.resolve(true);
+      await Promise.all([deleting, duplicate, permanent]);
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+      const state = manager as unknown as {
+        knownSessions: Map<string, unknown>;
+        sessions: Map<string, unknown>;
+      };
+      expect(state.knownSessions.has('created-race')).toBe(false);
+      expect(state.sessions.has('created-race')).toBe(false);
+    });
+
+    test('generic tombstone is rechecked after server health await', async () => {
+      const health = createDeferred<boolean>();
+      mockIsServerRunning.mockImplementationOnce(() => health.promise);
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        defaultMultiplexerConfig,
+      );
+
+      const creating = manager.onSessionCreated({
+        type: 'session.created',
+        properties: {
+          info: { id: 'health-race', parentID: 'parent-1' },
+        },
+      });
+      await flushPromises();
+      await manager.closeSessionPermanentlyFromCoordinator('health-race');
+      health.resolve(true);
+      await creating;
+
+      expect(mockMultiplexer.spawnPane).not.toHaveBeenCalled();
+      const state = manager as unknown as {
+        knownSessions: Map<string, unknown>;
+      };
+      expect(state.knownSessions.has('health-race')).toBe(false);
+    });
+
+    test('generic tombstone is rechecked across busy respawn health await', async () => {
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        defaultMultiplexerConfig,
+      );
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'respawn-race', parentID: 'parent-1' } },
+      });
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'respawn-race',
+          status: { type: 'idle' },
+        },
+      });
+      const health = createDeferred<boolean>();
+      mockIsServerRunning.mockImplementationOnce(() => health.promise);
+
+      const respawning = manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'respawn-race',
+          status: { type: 'busy' },
+        },
+      });
+      await flushPromises();
+      await manager.closeSessionPermanentlyFromCoordinator('respawn-race');
+      health.resolve(true);
+      await respawning;
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+      const state = manager as unknown as {
+        knownSessions: Map<string, unknown>;
+      };
+      expect(state.knownSessions.has('respawn-race')).toBe(false);
+    });
+
+    test('disposing another generic manager does not clear a process-shared tombstone', async () => {
+      const managerA = new MultiplexerSessionManager(
+        createMockContext(),
+        defaultMultiplexerConfig,
+      );
+      const managerB = new MultiplexerSessionManager(
+        createMockContext(),
+        defaultMultiplexerConfig,
+      );
+      const created = {
+        type: 'session.created' as const,
+        properties: {
+          info: { id: 'shared-tombstone', parentID: 'parent-1' },
+        },
+      };
+
+      await managerA.onSessionCreated(created);
+      await managerA.closeSessionPermanentlyFromCoordinator('shared-tombstone');
+      await managerB.cleanupOnInstanceDisposed();
+      await managerA.onSessionCreated(created);
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+    });
+
+    test('backfills permanentlyClosedSessions for an older shared state shape', () => {
+      const key = Symbol.for(
+        'oh-my-opencode-slim.multiplexer-session-manager.state',
+      );
+      (globalThis as Record<PropertyKey, unknown>)[key] = {
+        sessions: new Map(),
+        knownSessions: new Map(),
+        spawningSessions: new Set(),
+        closingSessions: new Map(),
+      };
+
+      expect(() => resetMultiplexerSessionManagerState()).not.toThrow();
+      const state = (globalThis as Record<PropertyKey, unknown>)[key] as {
+        permanentlyClosedSessions?: unknown;
+      };
+      expect(state.permanentlyClosedSessions).toBeInstanceOf(Set);
     });
 
     test('deleted clears deferred idle close and later terminal update is no-op', async () => {
@@ -2142,6 +2352,101 @@ describe('MultiplexerSessionManager', () => {
       board.updateStatus({ taskID: 'cmux-background', state: 'completed' });
       await (manager as any).pollSessions();
       expect(mockMultiplexer.closePane).toHaveBeenCalledTimes(1);
+    });
+
+    test('cmux wall-clock close is permanent and late busy does not respawn', async () => {
+      mockMultiplexerType = 'cmux';
+      const board = new BackgroundJobBoard();
+      const coordinator = new BackgroundJobCoordinator(board);
+      board.registerLaunch({
+        taskID: 'cmux-wall-clock',
+        parentSessionID: 'parent',
+        agent: 'explorer',
+        background: true,
+      });
+      const manager = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+        coordinator,
+      );
+      coordinator.addTerminalOutcomeListener((record) => {
+        if (record.deadlineExceededAt !== undefined) {
+          void manager.closeSessionPermanentlyFromCoordinator(record.taskID);
+        }
+      });
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'cmux-wall-clock', parentID: 'parent' } },
+      });
+      board.claimWallClockDeadline({
+        taskID: 'cmux-wall-clock',
+        generation: 1,
+        now: 100,
+      });
+      board.finalizeWallClockTimeout({
+        taskID: 'cmux-wall-clock',
+        generation: 1,
+        now: 120,
+        statusUncertain: true,
+        resultSummary: 'abort was not confirmed',
+      });
+      await flushPromises();
+
+      expect(mockMultiplexer.closePane).toHaveBeenCalledWith('%mock-pane');
+      const spawns = mockMultiplexer.spawnPane.mock.calls.length;
+      await manager.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'cmux-wall-clock',
+          status: { type: 'busy' },
+        },
+      });
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(spawns);
+      await manager.onSessionCreated({
+        type: 'session.created',
+        properties: { info: { id: 'cmux-wall-clock', parentID: 'parent' } },
+      });
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(spawns);
+    });
+
+    test('cmux permanent tombstone blocks duplicate created and busy across managers', async () => {
+      mockMultiplexerType = 'cmux';
+      const created = {
+        type: 'session.created' as const,
+        properties: {
+          info: { id: 'cmux-shared-tombstone', parentID: 'parent' },
+        },
+      };
+      const managerA = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+      );
+      await managerA.onSessionCreated(created);
+      await managerA.closeSessionPermanentlyFromCoordinator(
+        'cmux-shared-tombstone',
+      );
+
+      expect(
+        new CmuxSessionStore().get('cmux-shared-tombstone'),
+      ).toBeUndefined();
+
+      const managerB = new MultiplexerSessionManager(
+        createMockContext(),
+        cmuxConfig,
+      );
+      await managerB.onSessionCreated(created);
+      await managerB.onSessionStatus({
+        type: 'session.status',
+        properties: {
+          sessionID: 'cmux-shared-tombstone',
+          status: { type: 'busy' },
+        },
+      });
+
+      expect(mockMultiplexer.spawnPane).toHaveBeenCalledTimes(1);
+      expect(
+        new CmuxSessionStore().get('cmux-shared-tombstone'),
+      ).toBeUndefined();
     });
 
     test('session.deleted closes immediately', async () => {

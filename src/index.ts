@@ -68,6 +68,7 @@ import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
+  BackgroundJobSupervisor,
   createDisplayNameMentionRewriter,
   resolveRuntimeAgentName,
 } from './utils';
@@ -195,6 +196,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
+  let backgroundJobSupervisor: BackgroundJobSupervisor;
   let interviewManager: ReturnType<typeof createInterviewManager>;
   let companionManager: CompanionManager;
   let cancelTaskTools: ReturnType<typeof createCancelTaskTool>;
@@ -212,11 +214,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   try {
     config = loadPluginConfig(ctx.directory);
 
-    // Safety net: if a runtime preset was set via /preset command and
-    // OpenCode ever fully re-runs the plugin function (not just the
-    // config() hook), override config.preset so agents are created with
-    // the correct models. Currently only the config() hook re-runs after
-    // Instance.dispose(), so this is a defensive guard.
+    // Safety net: instance disposal reruns the plugin factory and rebuilds
+    // factory-local state, while module-level runtime preset state may persist.
+    // Reapply that persisted preset so each fresh generation creates agents
+    // with the correct models.
     const runtimePreset = getActiveRuntimePreset();
     if (runtimePreset && config.presets?.[runtimePreset]) {
       config.preset = runtimePreset;
@@ -299,6 +300,18 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     const backgroundJobCoordinator = new BackgroundJobCoordinator(
       backgroundJobBoard,
     );
+    backgroundJobSupervisor = new BackgroundJobSupervisor({
+      backgroundJobStore: backgroundJobCoordinator,
+      wallClockTimeoutMs: config.backgroundJobs?.wallClockTimeoutMs ?? 0,
+      abortGraceMs: config.backgroundJobs?.abortGraceMs ?? 10_000,
+      abort: (taskID) =>
+        ctx.client.session.abort({
+          path: { id: taskID },
+        }),
+    });
+    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+      backgroundJobSupervisor.onTerminal(record);
+    });
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
@@ -309,6 +322,12 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     );
     backgroundJobCoordinator.addTerminalStateListener((taskID) => {
       void multiplexerSessionManager.closeSessionFromCoordinator(taskID);
+    });
+    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+      if (record.deadlineExceededAt === undefined) return;
+      void multiplexerSessionManager.closeSessionPermanentlyFromCoordinator(
+        record.taskID,
+      );
     });
 
     sessionLifecycle = new SessionLifecycle(log);
@@ -354,6 +373,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         DEFAULT_READ_CONTEXT_MAX_FILES,
       continueOnIdle: config.backgroundJobs?.continueOnIdle === true,
       backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobSupervisor,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
@@ -683,11 +703,10 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Runtime preset override: if /preset switched to a runtime preset,
-      // override the model/variant/temperature from the preset's agent
-      // config. This runs after the normal model resolution because the
-      // config() hook re-runs with stale modelArrayMap after dispose(),
-      // but the runtime preset data is in the captured `config` closure.
+      // Runtime preset override: instance disposal recreates the plugin
+      // factory and its factory-local state, while module-level runtime
+      // preset data may persist. Apply that persisted selection after normal
+      // model resolution for the current generation.
       const runtimePresetName = getActiveRuntimePreset();
       if (runtimePresetName && config.presets?.[runtimePresetName]) {
         const runtimePreset = config.presets[runtimePresetName];
@@ -1054,6 +1073,13 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
           sessionDirectories.delete(sessionID);
         }
       }
+    },
+
+    dispose: async () => {
+      await taskSessionManagerHook.event({
+        event: { type: 'server.instance.disposed' },
+      });
+      await multiplexerSessionManager.cleanupOnInstanceDisposed();
     },
 
     'tool.execute.before': async (input, output) => {

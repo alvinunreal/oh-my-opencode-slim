@@ -6,6 +6,7 @@
  * the appropriate subsystems.
  */
 import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import { log } from '../../utils/logger';
 import { isFailoverError } from '../foreground-fallback/index';
 import type { RetainedBoardSnapshotState } from './board-injection';
@@ -76,6 +77,7 @@ export async function handleEvent(
     };
     terminalJobsInjectedByParent: Map<string, Set<string>>;
     retainedBoardSnapshots: Map<string, RetainedBoardSnapshotState>;
+    backgroundJobSupervisor?: BackgroundJobSupervisor;
   },
 ): Promise<void> {
   deps.inputWaits.trackInputWait(input.event);
@@ -122,9 +124,13 @@ export async function handleEvent(
           agent: pending.agentType,
           description: pending.label,
           objective: pending.label,
+          // session.created has no reliable call identity. Keep this
+          // registration tentative so an unrelated foreground call cannot
+          // accidentally arm wall-clock supervision.
+          background: false,
         });
         log(
-          '[task-session-manager] early board registration from session.created',
+          '[task-session-manager] tentative early board registration from session.created',
           {
             taskID: record.taskID,
             alias: record.alias,
@@ -138,6 +144,7 @@ export async function handleEvent(
   }
 
   if (input.event.type === 'server.instance.disposed') {
+    deps.backgroundJobSupervisor?.dispose();
     deps.retainedBoardSnapshots.clear();
     const idleSessionIds = deps.idleReconciler.clearAllTimers();
     // Local-only: release this instance's uncommitted reservations and drop
@@ -307,6 +314,12 @@ export async function handleEvent(
   }
   deps.inputWaits.clearInputWaits(sessionId);
   deps.retainedBoardSnapshots.delete(sessionId);
+  const fallbackInProgress =
+    deps.options.isFallbackInProgress?.(sessionId) === true;
+  const job = deps.backgroundJobBoard.get(sessionId);
+  if (!fallbackInProgress || job?.deadlineExceededAt !== undefined) {
+    deps.backgroundJobSupervisor?.onSessionDeleted(sessionId);
+  }
 
   log('[task-session-manager] session.deleted observed', {
     sessionID: sessionId,
