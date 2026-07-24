@@ -10,6 +10,11 @@ describe('plugin health thresholds', () => {
     );
     expect(minimumExpectedToolCount(['unknown_tool'])).toBe(5);
   });
+
+  test('treats malformed disabled tool lists as empty', () => {
+    expect(minimumExpectedToolCount(null)).toBe(5);
+    expect(minimumExpectedToolCount({ wait_for_user: true })).toBe(5);
+  });
 });
 
 describe('plugin env disable', () => {
