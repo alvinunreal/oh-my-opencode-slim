@@ -117,10 +117,10 @@ const BASELINE_TOOL_NAMES = new Set([
 
 /** @internal Exposed for deterministic health-threshold tests. */
 export function minimumExpectedToolCount(
-  disabledTools: readonly string[] = [],
+  disabledTools: unknown = [],
 ): number {
   const disabledBaselineTools = new Set(
-    disabledTools.filter((toolName) => BASELINE_TOOL_NAMES.has(toolName)),
+    (Array.isArray(disabledTools) ? disabledTools : []).filter((toolName) => BASELINE_TOOL_NAMES.has(toolName)),
   );
   return HEALTH_CHECK.minTools - disabledBaselineTools.size;
 }
