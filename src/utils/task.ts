@@ -36,6 +36,40 @@ export function renderRunningTaskPlaceholder(taskID: string): string {
   ].join('\n');
 }
 
+/**
+ * Render a terminal task tool output from a background job board record.
+ * Used to reconcile a false-cancelled foreground task part (opencode marked
+ * it "error" because the FG-fallback abort poisoned the awaited BackgroundJob)
+ * once the board later records the real model-2 outcome (#595).
+ *
+ * Mirrors opencode task.ts `renderOutput` shape so the orchestrator's history
+ * reads as a normal terminal result. Content is the board's resultSummary
+ * (the authoritative outcome the board captured); full model-2 text is not
+ * recoverable from the orphan runLoop, but the board truth is what matters.
+ */
+export function renderTaskTerminalFromBoard(input: {
+  taskID: string;
+  state: 'completed' | 'error';
+  description: string;
+  resultSummary?: string;
+}): string {
+  const { taskID, state, description, resultSummary } = input;
+  const tag = state === 'error' ? 'task_error' : 'task_result';
+  const summary =
+    state === 'completed'
+      ? `Background task completed: ${description}`
+      : `Background task failed: ${description}`;
+  const body = resultSummary ?? (state === 'completed' ? 'Task completed.' : 'Task failed.');
+  return [
+    `<task id="${taskID}" state="${state}">`,
+    `<summary>${summary}</summary>`,
+    `<${tag}>`,
+    body,
+    `</${tag}>`,
+    '</task>',
+  ].join('\n');
+}
+
 export function parseTaskIdFromTaskOutput(output: string): string | undefined {
   const xmlMatch = /<task\s+[^>]*\bid=["']([^"']+)["'][^>]*>/i.exec(output);
   if (xmlMatch) return xmlMatch[1];
