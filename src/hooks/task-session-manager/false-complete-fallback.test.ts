@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils';
 import { createTaskSessionManagerHook } from './index';
 
@@ -50,7 +50,11 @@ function userMessage(id: string, text: string) {
 function findTaskPart(messages: unknown[], callID: string) {
   for (const message of messages as { parts?: any[] }[]) {
     for (const part of message?.parts ?? []) {
-      if (part?.type === 'tool' && part?.tool === 'task' && part?.callID === callID) {
+      if (
+        part?.type === 'tool' &&
+        part?.tool === 'task' &&
+        part?.callID === callID
+      ) {
         return part;
       }
     }
@@ -67,7 +71,10 @@ async function transform(
   return request.messages;
 }
 
-function setupCompletedBoard(board: BackgroundJobBoard, description = 'test task') {
+function setupCompletedBoard(
+  board: BackgroundJobBoard,
+  description = 'test task',
+) {
   board.registerLaunch({
     taskID: CHILD,
     parentSessionID: PARENT,
@@ -85,7 +92,10 @@ function setupCompletedBoard(board: BackgroundJobBoard, description = 'test task
 
 function mockClient(
   childMessages:
-    | Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>
+    | Array<{
+        info?: { role: string };
+        parts?: Array<{ type: string; text?: string }>;
+      }>
     | (() => Promise<unknown>),
 ) {
   const messages =
@@ -132,7 +142,9 @@ describe('reconcileFalseCompleteFallback', () => {
 
     expect(part.state.status).toBe('completed');
     expect(part.state.output).toContain('state="completed"');
-    expect(part.state.output).toContain('Background task completed: audit DATA.md');
+    expect(part.state.output).toContain(
+      'Background task completed: audit DATA.md',
+    );
     expect(part.state.output).toContain('# Audit Report');
     expect(part.state.output).toContain('All claims verified.');
   });
@@ -141,7 +153,10 @@ describe('reconcileFalseCompleteFallback', () => {
     const board = new BackgroundJobBoard();
     setupCompletedBoard(board, 'test task');
     const childMessages = [
-      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'real output' }] },
+      {
+        info: { role: 'assistant' },
+        parts: [{ type: 'text', text: 'real output' }],
+      },
     ];
     const hook = createTaskSessionManagerHook(
       { client: mockClient(childMessages), directory: '/tmp' } as never,
@@ -204,7 +219,10 @@ describe('reconcileFalseCompleteFallback', () => {
     const board = new BackgroundJobBoard();
     setupCompletedBoard(board, 'test task');
     const childMessages = [
-      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'real output' }] },
+      {
+        info: { role: 'assistant' },
+        parts: [{ type: 'text', text: 'real output' }],
+      },
     ];
     const hook = createTaskSessionManagerHook(
       { client: mockClient(childMessages), directory: '/tmp' } as never,
@@ -249,7 +267,12 @@ describe('reconcileFalseCompleteFallback', () => {
     const history = [
       userMessage('u1', 'run task'),
       {
-        info: { role: 'assistant', agent: 'orchestrator', sessionID: PARENT, id: 'call-2' },
+        info: {
+          role: 'assistant',
+          agent: 'orchestrator',
+          sessionID: PARENT,
+          id: 'call-2',
+        },
         parts: [
           { type: 'text', text: ' ' },
           {
@@ -258,7 +281,8 @@ describe('reconcileFalseCompleteFallback', () => {
             callID: 'call-2',
             state: {
               status: 'completed',
-              output: '<task id="child-1" state="completed"><task_result></task_result></task>',
+              output:
+                '<task id="child-1" state="completed"><task_result></task_result></task>',
               metadata: { sessionId: CHILD },
             },
           },
@@ -282,7 +306,10 @@ describe('reconcileFalseCompleteFallback', () => {
       description: 'still running',
     });
     const childMessages = [
-      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'partial draft' }] },
+      {
+        info: { role: 'assistant' },
+        parts: [{ type: 'text', text: 'partial draft' }],
+      },
     ];
     const hook = createTaskSessionManagerHook(
       { client: mockClient(childMessages), directory: '/tmp' } as never,

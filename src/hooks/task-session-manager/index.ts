@@ -301,7 +301,6 @@ export function createTaskSessionManagerHook(
         _ctx.directory,
       );
 
-
       for (const [messageIndex, message] of messages.entries()) {
         if (!isUserMessageWithParts(message)) continue;
         if (message.info.agent && message.info.agent !== 'orchestrator') {

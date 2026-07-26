@@ -20,9 +20,9 @@ import {
   renderTaskCompletedWithText,
   renderTaskTerminalFromBoard,
 } from '../../utils';
-import { extractSessionResult } from '../../utils/session';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import { extractSessionResult } from '../../utils/session';
 import {
   appendTrailingVolatileMessage,
   createTaggedSyntheticPart,

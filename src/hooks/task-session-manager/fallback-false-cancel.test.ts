@@ -6,15 +6,12 @@ const PARENT = 'parent-1';
 const CHILD = 'child-1';
 
 function createHook(board: BackgroundJobBoard) {
-  return createTaskSessionManagerHook(
-    { client: { session: {} } } as never,
-    {
-      maxSessionsPerAgent: 2,
-      maxRetainedSnapshots: 2,
-      backgroundJobBoard: board,
-      shouldManageSession: () => true,
-    },
-  );
+  return createTaskSessionManagerHook({ client: { session: {} } } as never, {
+    maxSessionsPerAgent: 2,
+    maxRetainedSnapshots: 2,
+    backgroundJobBoard: board,
+    shouldManageSession: () => true,
+  });
 }
 
 /**
@@ -62,7 +59,11 @@ function userMessage(id: string, text: string) {
 function findTaskPart(messages: unknown[], callID: string) {
   for (const message of messages as { parts?: any[] }[]) {
     for (const part of message?.parts ?? []) {
-      if (part?.type === 'tool' && part?.tool === 'task' && part?.callID === callID) {
+      if (
+        part?.type === 'tool' &&
+        part?.tool === 'task' &&
+        part?.callID === callID
+      ) {
         return part;
       }
     }
@@ -70,7 +71,10 @@ function findTaskPart(messages: unknown[], callID: string) {
   return undefined;
 }
 
-async function transform(hook: ReturnType<typeof createTaskSessionManagerHook>, history: unknown[]) {
+async function transform(
+  hook: ReturnType<typeof createTaskSessionManagerHook>,
+  history: unknown[],
+) {
   const request = { messages: structuredClone(history) };
   await hook['experimental.chat.messages.transform']({}, request as never);
   return request.messages;
@@ -237,7 +241,12 @@ describe('reconcileFallbackFalseCancel', () => {
     const history = [
       userMessage('u1', 'fix the bug'),
       {
-        info: { role: 'assistant', agent: 'orchestrator', sessionID: PARENT, id: 'call-2' },
+        info: {
+          role: 'assistant',
+          agent: 'orchestrator',
+          sessionID: PARENT,
+          id: 'call-2',
+        },
         parts: [
           { type: 'text', text: ' ' },
           {
