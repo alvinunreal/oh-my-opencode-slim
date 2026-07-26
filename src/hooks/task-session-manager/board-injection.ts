@@ -683,14 +683,32 @@ export async function reconcileFalseCompleteFallback(
       const childSessionId = status.taskID;
       const job = state.backgroundJobBoard.get(childSessionId);
       if (!job) continue;
+      // Wait until the board is no longer actively running so we do not
+      // promote mid-generation fallback text into a "completed" part.
+      // False-complete already settles the board as completed+empty while
+      // the orphan runLoop continues — that terminal board state is enough.
+      if (job.state === 'running') continue;
+      if (job.state === 'cancelled' || job.terminalState === 'cancelled') {
+        continue;
+      }
 
-      // Read the child session's real assistant text. Non-blocking: returns
-      // empty when the fallback model has not yet produced output, and the
-      // next transform turn re-evaluates naturally (idempotent polling).
-      const extracted = await extractSessionResult(client, childSessionId, {
-        directory,
-        includeReasoning: false,
-      });
+      // Fail-open: a transient child-session read must never abort the
+      // parent messages transform (Greptile P1). Empty/error → leave part
+      // unchanged; the next transform turn re-evaluates naturally.
+      let extracted: { text: string; empty: boolean };
+      try {
+        extracted = await extractSessionResult(client, childSessionId, {
+          directory,
+          includeReasoning: false,
+        });
+      } catch (error) {
+        log('[task-session-manager] false-complete extract failed', {
+          taskID: childSessionId,
+          alias: job.alias,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
       if (extracted.empty) continue;
 
       const summary = `Background task completed: ${job.description}`;
