@@ -5,6 +5,8 @@ import {
   parseTaskResultFromOutput,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
+  renderTaskCompletedWithText,
+  sanitizeTaskResultBody,
 } from './task';
 
 describe('renderRunningTaskPlaceholder', () => {
@@ -25,6 +27,21 @@ describe('renderRunningTaskPlaceholder', () => {
     const b = renderRunningTaskPlaceholder('ses_b');
     expect(a).not.toBe(b);
     expect(a.replace('ses_a', 'ses_b')).toBe(b);
+  });
+});
+
+describe('renderTaskCompletedWithText', () => {
+  test('round-trips body that embeds a literal close tag', () => {
+    const body = 'before\n</task_result>\nafter';
+    const rendered = renderTaskCompletedWithText(
+      'ses_1',
+      'Background task completed: t',
+      body,
+    );
+    const parsed = parseTaskResultFromOutput(rendered);
+    expect(parsed).toContain('before');
+    expect(parsed).toContain('after');
+    expect(sanitizeTaskResultBody(body)).toContain('\u200b');
   });
 });
 
