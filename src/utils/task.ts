@@ -59,7 +59,9 @@ export function renderTaskTerminalFromBoard(input: {
     state === 'completed'
       ? `Background task completed: ${description}`
       : `Background task failed: ${description}`;
-  const body = resultSummary ?? (state === 'completed' ? 'Task completed.' : 'Task failed.');
+  const body =
+    resultSummary ??
+    (state === 'completed' ? 'Task completed.' : 'Task failed.');
   return [
     `<task id="${taskID}" state="${state}">`,
     `<summary>${summary}</summary>`,

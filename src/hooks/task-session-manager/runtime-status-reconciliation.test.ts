@@ -287,11 +287,12 @@ describe('runtime status reconciliation', () => {
   });
 
   test('repeated idle beyond confirmation grace becomes stopped exactly once', async () => {
-    const { board, reconciler, contextFilesForPrompt, prune } = createReconciler(
-      async () => ({ data: { 'child-1': { type: 'idle' } } }),
-      undefined,
-      0,
-    );
+    const { board, reconciler, contextFilesForPrompt, prune } =
+      createReconciler(
+        async () => ({ data: { 'child-1': { type: 'idle' } } }),
+        undefined,
+        0,
+      );
     const listener = mock(() => {});
     board.addTerminalStateListener(listener);
 

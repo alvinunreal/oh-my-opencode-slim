@@ -97,7 +97,10 @@ export function createRuntimeStatusReconciler(options: {
         );
         continue;
       }
-      if (status === undefined && snapshot.malformedSessionIDs.has(job.taskID)) {
+      if (
+        status === undefined &&
+        snapshot.malformedSessionIDs.has(job.taskID)
+      ) {
         options.backgroundJobBoard.markStatusUncertain(
           job.taskID,
           'Runtime status response did not contain a recognized session state.',

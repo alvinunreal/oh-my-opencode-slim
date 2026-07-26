@@ -26,12 +26,12 @@ import {
   parseTaskStateFromOutput,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
-  renderTaskTerminalFromBoard,
   renderTaskCompletedWithText,
+  renderTaskTerminalFromBoard,
 } from '../../utils';
-import { extractSessionResult } from '../../utils/session';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import { extractSessionResult } from '../../utils/session';
 import {
   appendTaggedSyntheticPart,
   appendTrailingVolatileMessage,
@@ -676,7 +676,7 @@ export async function reconcileFalseCompleteFallback(
       if (typeof partState.output !== 'string') continue;
 
       const status = parseTaskStatusOutput(partState.output);
-      if (!status || status.state !== 'completed') continue;
+      if (status?.state !== 'completed') continue;
       // Only reconcile empty results — real completions are intact.
       if (status.result && status.result.trim().length > 0) continue;
 
