@@ -12,6 +12,7 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   MAX_PROCESSED_INJECTED_COMPLETIONS,
+  reconcileFalseCompleteFallback,
   reconcileInjectedTerminalJobs,
   stabilizeRunningTaskParts,
   updateFromInjectedCompletion,
@@ -277,6 +278,20 @@ export function createTaskSessionManagerHook(
       // lane never rewrites mid-history bytes and invalidates the prompt
       // cache. Terminal results are left untouched (they materialize once).
       stabilizeRunningTaskParts(messages);
+
+      // Reconcile false-completed foreground task parts: when the primary
+      // model halts on a non-retryable error, opencode settles the task as
+      // completed with an empty output while the fallback model still
+      // produces the real result on an orphan runLoop (#863). Fill the empty
+      // output with the child session's real assistant text once available.
+      // Idempotent and non-blocking — empty extractions are skipped and
+      // re-evaluated on the next transform turn.
+      await reconcileFalseCompleteFallback(
+        injectionState,
+        messages,
+        _ctx.client,
+        _ctx.directory,
+      );
 
       for (const [messageIndex, message] of messages.entries()) {
         if (!isUserMessageWithParts(message)) continue;

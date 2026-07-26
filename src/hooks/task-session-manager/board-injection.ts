@@ -7,6 +7,7 @@
  * All injection logic must go through the cache-safe helpers in
  * ../cache-safe-injection.ts to ensure prompt cache safety.
  */
+import type { PluginInput } from '@opencode-ai/plugin';
 import type {
   BackgroundJobRecord,
   BackgroundJobStore,
@@ -16,7 +17,9 @@ import {
   isInternalInitiatorPart,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
+  renderTaskCompletedWithText,
 } from '../../utils';
+import { extractSessionResult } from '../../utils/session';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import {
@@ -159,6 +162,82 @@ export function stabilizeRunningTaskParts(messages: unknown[]): void {
       const placeholder = renderRunningTaskPlaceholder(taskID);
       if (state.output === placeholder) continue;
       state.output = placeholder;
+    }
+  }
+}
+
+/**
+ * Reconcile false-completed foreground task tool parts.
+ *
+ * When a foreground task's primary model halts on a non-retryable error
+ * (e.g. 403 quota exhausted), opencode's `halt` produces an empty assistant
+ * message and `runTask` settles the BackgroundJob as `completed` with an
+ * empty output (`result.parts.findLast(text)?.text ?? ""`). omos's
+ * `tryFallback` then re-prompts with the fallback model on an orphan runLoop
+ * that produces the real result, but the parent task part already says
+ * `completed` with an empty `<task_result>` — the orchestrator reads the
+ * empty output, mis-judges the task as failed/empty, and self-amplifies by
+ * launching redundant replacement tasks (#863).
+ *
+ * This in-place rewrites such false-completed parts with the child session's
+ * real assistant text once the fallback model has produced it. The pass is
+ * idempotent and non-blocking: if the child session has not yet produced
+ * non-empty text, `extractSessionResult` returns empty and the part is left
+ * unchanged — the next transform turn re-evaluates naturally, so no explicit
+ * wait/poll is needed. Because the transform hook only mutates the
+ * in-memory `output.messages` (not the persisted DB), the rewrite is
+ * per-turn but the real output eventually lands in history once the child
+ * session completes and opencode writes it itself.
+ *
+ * Gated: only acts on `status:"completed"` task parts whose parsed
+ * `<task_result>` is empty. True completions with real text are preserved
+ * unchanged.
+ */
+export async function reconcileFalseCompleteFallback(
+  state: InjectionState,
+  messages: unknown[],
+  client: PluginInput['client'],
+  directory?: string,
+): Promise<void> {
+  for (const message of messages) {
+    if (!isMessageWithParts(message)) continue;
+    for (const part of message.parts) {
+      if (part.type !== 'tool' || part.tool !== 'task') continue;
+      const partState = part.state;
+      if (!isRecord(partState)) continue;
+      if (partState.status !== 'completed') continue;
+      if (typeof partState.output !== 'string') continue;
+
+      const status = parseTaskStatusOutput(partState.output);
+      if (!status || status.state !== 'completed') continue;
+      // Only reconcile empty results — real completions are intact.
+      if (status.result && status.result.trim().length > 0) continue;
+
+      const childSessionId = status.taskID;
+      const job = state.backgroundJobBoard.get(childSessionId);
+      if (!job) continue;
+
+      // Read the child session's real assistant text. Non-blocking: returns
+      // empty when the fallback model has not yet produced output, and the
+      // next transform turn re-evaluates naturally (idempotent polling).
+      const extracted = await extractSessionResult(client, childSessionId, {
+        directory,
+        includeReasoning: false,
+      });
+      if (extracted.empty) continue;
+
+      const summary = `Background task completed: ${job.description}`;
+      partState.output = renderTaskCompletedWithText(
+        childSessionId,
+        summary,
+        extracted.text,
+      );
+      log('[task-session-manager] reconciled false-completed task part', {
+        taskID: childSessionId,
+        alias: job.alias,
+        parentSessionID: job.parentSessionID,
+        textLength: extracted.text.length,
+      });
     }
   }
 }
