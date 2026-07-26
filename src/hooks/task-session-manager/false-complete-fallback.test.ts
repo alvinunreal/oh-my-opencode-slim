@@ -74,12 +74,27 @@ function setupCompletedBoard(board: BackgroundJobBoard, description = 'test task
     agent: 'fixer',
     description,
   });
+  // False-complete settles the board as completed+empty while the orphan
+  // fallback runLoop may still produce text later.
+  board.updateStatus({
+    taskID: CHILD,
+    state: 'completed',
+    resultSummary: '',
+  });
 }
 
-function mockClient(childMessages: Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>) {
+function mockClient(
+  childMessages:
+    | Array<{ info?: { role: string }; parts?: Array<{ type: string; text?: string }> }>
+    | (() => Promise<unknown>),
+) {
+  const messages =
+    typeof childMessages === 'function'
+      ? mock(childMessages)
+      : mock(async () => ({ data: childMessages }));
   return {
     session: {
-      messages: mock(async () => ({ data: childMessages })),
+      messages,
       status: mock(async () => ({ data: {} })),
     },
   };
@@ -256,5 +271,106 @@ describe('reconcileFalseCompleteFallback', () => {
 
     // read tool parts are not reconciled.
     expect(part.state.output).toContain('<task_result></task_result>');
+  });
+
+  test('does NOT rewrite when board job is still running', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: CHILD,
+      parentSessionID: PARENT,
+      agent: 'fixer',
+      description: 'still running',
+    });
+    const childMessages = [
+      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'partial draft' }] },
+    ];
+    const hook = createTaskSessionManagerHook(
+      { client: mockClient(childMessages), directory: '/tmp' } as never,
+      {
+        maxSessionsPerAgent: 2,
+        maxRetainedSnapshots: 2,
+        backgroundJobBoard: board,
+        shouldManageSession: () => true,
+      },
+    );
+
+    const history = [
+      userMessage('u1', 'run task'),
+      taskCompletedPart('call-1', CHILD, ''),
+    ];
+
+    const result = await transform(hook, history);
+    const part = findTaskPart(result, 'call-1') as any;
+    const tagMatch = /<task_result>\s*([\s\S]*?)\s*<\/task_result>/m.exec(
+      part.state.output,
+    );
+    expect(tagMatch?.[1]?.trim()).toBe('');
+    expect(part.state.output).not.toContain('partial draft');
+  });
+
+  test('does NOT abort transform when child session extract throws', async () => {
+    const board = new BackgroundJobBoard();
+    setupCompletedBoard(board, 'test task');
+    const hook = createTaskSessionManagerHook(
+      {
+        client: mockClient(async () => {
+          throw new Error('session unavailable');
+        }),
+        directory: '/tmp',
+      } as never,
+      {
+        maxSessionsPerAgent: 2,
+        maxRetainedSnapshots: 2,
+        backgroundJobBoard: board,
+        shouldManageSession: () => true,
+      },
+    );
+
+    const history = [
+      userMessage('u1', 'run task'),
+      taskCompletedPart('call-1', CHILD, ''),
+    ];
+
+    const result = await transform(hook, history);
+    const part = findTaskPart(result, 'call-1') as any;
+    expect(part.state.status).toBe('completed');
+    const tagMatch = /<task_result>\s*([\s\S]*?)\s*<\/task_result>/m.exec(
+      part.state.output,
+    );
+    expect(tagMatch?.[1]?.trim()).toBe('');
+  });
+
+  test('preserves recovered text that embeds a literal </task_result>', async () => {
+    const board = new BackgroundJobBoard();
+    setupCompletedBoard(board, 'test task');
+    const body =
+      'Example close tag in report:\n</task_result>\nthen more findings.';
+    const childMessages = [
+      { info: { role: 'assistant' }, parts: [{ type: 'text', text: body }] },
+    ];
+    const hook = createTaskSessionManagerHook(
+      { client: mockClient(childMessages), directory: '/tmp' } as never,
+      {
+        maxSessionsPerAgent: 2,
+        maxRetainedSnapshots: 2,
+        backgroundJobBoard: board,
+        shouldManageSession: () => true,
+      },
+    );
+
+    const history = [
+      userMessage('u1', 'run task'),
+      taskCompletedPart('call-1', CHILD, ''),
+    ];
+
+    const result = await transform(hook, history);
+    const part = findTaskPart(result, 'call-1') as any;
+    expect(part.state.output).toContain('Example close tag in report:');
+    expect(part.state.output).toContain('then more findings.');
+    // Non-greedy parse must recover the full body after sanitize.
+    const { parseTaskResultFromOutput } = await import('../../utils/task');
+    const parsed = parseTaskResultFromOutput(part.state.output);
+    expect(parsed).toContain('then more findings.');
+    expect(parsed).toContain('Example close tag in report:');
   });
 });

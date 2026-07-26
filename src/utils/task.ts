@@ -54,6 +54,15 @@ export function renderRunningTaskPlaceholder(taskID: string): string {
  * true outcome once the fallback model has produced it. Mirrors the
  * `state:"completed"` branch of opencode `renderOutput` (task.ts:64-76).
  */
+/**
+ * Neutralize embedded task close tags so non-greedy
+ * `parseTaskResultFromOutput` cannot truncate recovered body early.
+ * Zero-width space after `</` keeps the visible text intact.
+ */
+export function sanitizeTaskResultBody(text: string): string {
+  return text.replace(/<\/(task_(?:result|error))>/gi, '</\u200b$1>');
+}
+
 export function renderTaskCompletedWithText(
   taskID: string,
   summary: string,
@@ -63,7 +72,7 @@ export function renderTaskCompletedWithText(
     `<task id="${taskID}" state="completed">`,
     `<summary>${summary}</summary>`,
     '<task_result>',
-    text,
+    sanitizeTaskResultBody(text),
     '</task_result>',
     '</task>',
   ].join('\n');
