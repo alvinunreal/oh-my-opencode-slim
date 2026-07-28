@@ -125,6 +125,7 @@ export function isFailoverError(error: unknown): boolean {
   if (
     statusCode === 429 ||
     statusCode === 403 ||
+    statusCode === 400 ||
     (statusCode !== undefined && OUTAGE_STATUS_CODES.has(statusCode))
   ) {
     return true;
