@@ -342,7 +342,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (config.dryRun) {
     printInfo('Dry run mode - skipping plugin installation');
   } else {
-    const pluginResult = await addPluginToOpenCodeConfig();
+    const pluginResult = await addPluginToOpenCodeConfig(config);
     if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
   }
 

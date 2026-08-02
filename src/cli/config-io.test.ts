@@ -138,6 +138,46 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
+  test('addPluginToOpenCodeConfig configures Atlas Cloud without overwriting user settings', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    paths.ensureConfigDir();
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: ['other'],
+        provider: {
+          existing: { name: 'Existing Provider' },
+          'atlas-cloud': {
+            env: ['CUSTOM_ATLAS_KEY'],
+            options: { baseURL: 'https://atlas.example/v1', timeout: 30_000 },
+            models: { 'custom/model': { name: 'Custom Model' } },
+          },
+        },
+      }),
+    );
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeConfig({ preset: 'openai' });
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.provider.existing).toEqual({ name: 'Existing Provider' });
+    expect(saved.provider['atlas-cloud']).toEqual({
+      npm: '@ai-sdk/openai-compatible',
+      name: 'Atlas Cloud',
+      env: ['CUSTOM_ATLAS_KEY', 'ATLASCLOUD_API_KEY'],
+      options: {
+        baseURL: 'https://atlas.example/v1',
+        timeout: 30_000,
+      },
+      models: {
+        'deepseek-ai/deepseek-v4-pro': { name: 'DeepSeek V4 Pro' },
+        'custom/model': { name: 'Custom Model' },
+      },
+    });
+    expect(JSON.stringify(saved)).not.toContain('apiKey');
+  });
+
   test('addPluginToOpenCodeConfig respects OPENCODE_CONFIG_DIR', async () => {
     const customConfigDir = join(tmpDir, 'custom-opencode');
     const defaultConfigDir = join(tmpDir, 'opencode');

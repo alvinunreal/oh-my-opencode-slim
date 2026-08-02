@@ -134,13 +134,13 @@ bun run build
 
 ### Getting Started
 
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
+The installer generates OpenAI, OpenCode Go, and Atlas Cloud presets, with OpenAI active by default.
 
 > [!TIP]
 > Tune the models and agents for your own workflow. The defaults are only a
 > starting point; the plugin is designed for deep flexibility and customization.
 
-To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go` or change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
+To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. For Atlas Cloud, set `ATLASCLOUD_API_KEY` and use `--preset=atlas-cloud`. You can also change the default preset name in `~/.config/opencode/oh-my-opencode-slim.json` after installation.
 
 Then:
 
@@ -164,7 +164,7 @@ Then:
 > [!TIP]
 > Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, or kitty pane, so you can watch specialists work live while the Orchestrator continues coordinating the session.
 
-The default generated configuration includes both `openai` and `opencode-go` presets.
+The default generated configuration includes `openai`, `opencode-go`, and `atlas-cloud` presets.
 
 ```jsonc
 {
@@ -187,6 +187,14 @@ The default generated configuration includes both `openai` and `opencode-go` pre
       "designer": { "model": "opencode-go/kimi-k2.7-code" },
       "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
       "observer": { "model": "opencode-go/mimo-v2.5" }
+    },
+    "atlas-cloud": {
+      "orchestrator": { "model": "atlas-cloud/deepseek-ai/deepseek-v4-pro" },
+      "oracle": { "model": "atlas-cloud/deepseek-ai/deepseek-v4-pro" },
+      "librarian": { "model": "atlas-cloud/deepseek-ai/deepseek-v4-pro" },
+      "explorer": { "model": "atlas-cloud/deepseek-ai/deepseek-v4-pro" },
+      "designer": { "model": "atlas-cloud/deepseek-ai/deepseek-v4-pro" },
+      "fixer": { "model": "atlas-cloud/deepseek-ai/deepseek-v4-pro" }
     }
   }
 }

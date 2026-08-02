@@ -7,12 +7,33 @@ describe('providers', () => {
   test('MODEL_MAPPINGS includes supported providers', () => {
     const keys = Object.keys(MODEL_MAPPINGS);
     expect(keys.sort()).toEqual([
+      'atlas-cloud',
       'copilot',
       'kimi',
       'openai',
       'opencode-go',
       'zai-plan',
     ]);
+  });
+
+  test('generateLiteConfig can set Atlas Cloud as active preset', () => {
+    const config = generateLiteConfig({
+      installCustomSkills: false,
+      preset: 'atlas-cloud',
+      backgroundSubagents: 'no',
+      reset: false,
+    });
+
+    expect(config.preset).toBe('atlas-cloud');
+    const agents = (config.presets as any)['atlas-cloud'];
+    expect(agents).toBeDefined();
+    expect(agents.orchestrator.model).toBe(
+      'atlas-cloud/deepseek-ai/deepseek-v4-pro',
+    );
+    expect(agents.orchestrator.variant).toBeUndefined();
+    expect(agents.orchestrator.skills).toEqual(['*']);
+    expect(agents.librarian.mcps).toEqual(['context7', 'gh_grep']);
+    expect(agents.fixer.model).toBe('atlas-cloud/deepseek-ai/deepseek-v4-pro');
   });
 
   test('generateLiteConfig defaults to openai and includes generated presets', () => {

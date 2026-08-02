@@ -37,7 +37,7 @@ The installer supports the following options:
 |--------|-------------|
 | `--skills=yes|no` | Install bundled skills (default: yes) |
 | `--companion=ask\|yes\|no` | Install and enable the desktop Companion (`ask` by default; prompt defaults to no) |
-| `--preset=<name>` | Active generated config preset: `openai` or `opencode-go` (default: `openai`) |
+| `--preset=<name>` | Active generated config preset: `openai`, `opencode-go`, or `atlas-cloud` (default: `openai`) |
 | `--background-subagents=ask\|yes\|no` | Configure the required background-subagents environment export (`ask` by default; prompt defaults to yes) |
 | `--background-subagents-target=<path>` | Write the background-subagents export to a specific shell/profile file |
 | `--no-tui` | Non-interactive mode |
@@ -99,7 +99,21 @@ bunx oh-my-opencode-slim@latest install --reset
 
 ### After Installation
 
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using variant-aware GPT-5.6 models, including `gpt-5.6-terra (medium)` for Orchestrator, `gpt-5.6-sol (high)` for Oracle, `gpt-5.6-luna (medium)` for Fixer, and `gpt-5.6-luna` variants for other specialists). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. That preset uses Minimax-M3 for Orchestrator, so the installer also enables Observer with `opencode-go/mimo-v2.5` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
+The installer generates OpenAI, OpenCode Go, and Atlas Cloud presets, with OpenAI active by default (using variant-aware GPT-5.6 models, including `gpt-5.6-terra (medium)` for Orchestrator, `gpt-5.6-sol (high)` for Oracle, `gpt-5.6-luna (medium)` for Fixer, and `gpt-5.6-luna` variants for other specialists). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. That preset uses Minimax-M3 for Orchestrator, so the installer also enables Observer with `opencode-go/mimo-v2.5` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
+
+### Atlas Cloud Preset
+
+Set `ATLASCLOUD_API_KEY` and select `atlas-cloud` during installation:
+
+```bash
+ATLASCLOUD_API_KEY=... bunx oh-my-opencode-slim@latest install --preset=atlas-cloud
+```
+
+The installer adds an OpenAI-compatible `atlas-cloud` provider to the OpenCode
+config without storing the key, so the generated preset is also ready for
+later `/preset atlas-cloud` switching. It defaults to
+`https://api.atlascloud.ai/v1` and `deepseek-ai/deepseek-v4-pro`, while
+preserving any existing Atlas endpoint, model, or environment overrides.
 
 The plugin safely reconciles bundled skills on startup and after successful
 auto-updates. Missing bundled skills are installed, and previously managed skills

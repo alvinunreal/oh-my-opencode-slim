@@ -82,10 +82,10 @@ mock.module('./config-manager', () => {
       enableInstallMocks
         ? '/usr/local/bin/opencode'
         : originalGetOpenCodePath(),
-    addPluginToOpenCodeConfig: async () =>
+    addPluginToOpenCodeConfig: async (cfg?: any) =>
       enableInstallMocks
         ? { success: true, configPath: '/path' }
-        : originalAddPluginToOpenCodeConfig(),
+        : originalAddPluginToOpenCodeConfig(cfg),
     addPluginToOpenCodeTuiConfig: async () =>
       enableInstallMocks
         ? { success: true, configPath: '/path' }

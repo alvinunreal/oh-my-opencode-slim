@@ -5,7 +5,16 @@ import type { InstallConfig } from './types';
 const SCHEMA_URL =
   'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json';
 
-export const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
+export const ATLAS_CLOUD_PROVIDER_ID = 'atlas-cloud';
+export const ATLAS_CLOUD_API_KEY_ENV = 'ATLASCLOUD_API_KEY';
+export const ATLAS_CLOUD_BASE_URL = 'https://api.atlascloud.ai/v1';
+export const ATLAS_CLOUD_DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro';
+
+export const GENERATED_PRESETS = [
+  'openai',
+  'opencode-go',
+  ATLAS_CLOUD_PROVIDER_ID,
+] as const;
 
 // Model mappings by provider/preset.
 export const MODEL_MAPPINGS = {
@@ -53,6 +62,14 @@ export const MODEL_MAPPINGS = {
     fixer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
     observer: { model: 'opencode-go/mimo-v2.5' },
   },
+  'atlas-cloud': {
+    orchestrator: { model: 'atlas-cloud/deepseek-ai/deepseek-v4-pro' },
+    oracle: { model: 'atlas-cloud/deepseek-ai/deepseek-v4-pro' },
+    librarian: { model: 'atlas-cloud/deepseek-ai/deepseek-v4-pro' },
+    explorer: { model: 'atlas-cloud/deepseek-ai/deepseek-v4-pro' },
+    designer: { model: 'atlas-cloud/deepseek-ai/deepseek-v4-pro' },
+    fixer: { model: 'atlas-cloud/deepseek-ai/deepseek-v4-pro' },
+  },
 } as const;
 
 export type PresetName = keyof typeof MODEL_MAPPINGS;
@@ -74,6 +91,22 @@ export function isGeneratedPresetName(
 
 export function getGeneratedPresetNames(): GeneratedPresetName[] {
   return [...GENERATED_PRESETS];
+}
+
+export function getAtlasCloudProviderConfig(): Record<string, unknown> {
+  return {
+    npm: '@ai-sdk/openai-compatible',
+    name: 'Atlas Cloud',
+    env: [ATLAS_CLOUD_API_KEY_ENV],
+    options: {
+      baseURL: ATLAS_CLOUD_BASE_URL,
+    },
+    models: {
+      [ATLAS_CLOUD_DEFAULT_MODEL]: {
+        name: 'DeepSeek V4 Pro',
+      },
+    },
+  };
 }
 
 export function generateLiteConfig(
