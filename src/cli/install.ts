@@ -21,6 +21,7 @@ import {
   getOpenCodePath,
   getOpenCodeVersion,
   isOpenCodeInstalled,
+  mergeGeneratedPresetsIntoLiteConfig,
   warmOpenCodePluginCache,
   writeLiteConfig,
 } from './config-manager';
@@ -408,10 +409,11 @@ async function runInstall(config: InstallConfig): Promise<number> {
     const configExists = existsSync(configPath);
 
     if (configExists && !config.reset) {
-      printInfo(
-        `Configuration already exists at ${configPath}. ` +
-          'Use --reset to overwrite.',
+      const liteResult = mergeGeneratedPresetsIntoLiteConfig(
+        config,
+        configPath,
       );
+      if (!handleStepResult(liteResult, 'Config presets updated')) return 1;
     } else {
       const liteResult = writeLiteConfig(
         config,

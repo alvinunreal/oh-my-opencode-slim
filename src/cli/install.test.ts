@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { shouldInstallCompanion } from './install';
 import type { InstallConfig } from './types';
 
@@ -27,6 +30,8 @@ const originalEnableLspByDefault = actualConfigManager.enableLspByDefault;
 const originalDetectCurrentConfig = actualConfigManager.detectCurrentConfig;
 const originalGenerateLiteConfig = actualConfigManager.generateLiteConfig;
 const originalWriteLiteConfig = actualConfigManager.writeLiteConfig;
+const originalMergeGeneratedPresetsIntoLiteConfig =
+  actualConfigManager.mergeGeneratedPresetsIntoLiteConfig;
 
 const originalIsBackgroundSubagentsEnabled =
   actualBackgroundSubagents.isBackgroundSubagentsEnabled;
@@ -50,6 +55,8 @@ let mockAdoptedResult: string[] = [];
 let mockCustomizedResult: string[] = [];
 let receivedSkillSyncOptions: unknown;
 let enableInstallMocks = false;
+let mockLiteConfigPath = '/path/lite-config.json';
+let receivedPresetMerge: { config: InstallConfig; path: string } | undefined;
 
 mock.module('../hooks/auto-update-checker/skill-sync', () => {
   return {
@@ -112,6 +119,13 @@ mock.module('./config-manager', () => {
       enableInstallMocks
         ? { success: true, configPath: '/path' }
         : originalWriteLiteConfig(cfg, path),
+    mergeGeneratedPresetsIntoLiteConfig: (cfg: any, path: string) => {
+      if (enableInstallMocks) {
+        receivedPresetMerge = { config: cfg, path };
+        return { success: true, configPath: path };
+      }
+      return originalMergeGeneratedPresetsIntoLiteConfig(cfg, path);
+    },
   };
 });
 
@@ -142,9 +156,44 @@ mock.module('./paths', () => {
     ...actualPaths,
     getExistingLiteConfigPath: () =>
       enableInstallMocks
-        ? '/path/lite-config.json'
+        ? mockLiteConfigPath
         : originalGetExistingLiteConfigPath(),
   };
+});
+
+describe('install existing configuration updates', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    enableInstallMocks = true;
+    receivedPresetMerge = undefined;
+    tempDir = mkdtempSync(join(tmpdir(), 'slim-install-test-'));
+    mockLiteConfigPath = join(tempDir, 'oh-my-opencode-slim.json');
+    writeFileSync(mockLiteConfigPath, JSON.stringify({ preset: 'openai' }));
+  });
+
+  afterEach(() => {
+    enableInstallMocks = false;
+    mockLiteConfigPath = '/path/lite-config.json';
+    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test('merges generated presets when an existing config is kept', async () => {
+    const { install } = await import(`./install?test=${importCounter++}`);
+
+    const result = await install({
+      skills: 'no',
+      tui: false,
+      companion: 'no',
+      preset: 'atlas-cloud',
+      backgroundSubagents: 'no',
+    });
+
+    expect(result).toBe(0);
+    expect(receivedPresetMerge?.path).toBe(mockLiteConfigPath);
+    expect(receivedPresetMerge?.config.preset).toBe('atlas-cloud');
+    expect(receivedPresetMerge?.config.reset).toBe(false);
+  });
 });
 
 function baseConfig(): InstallConfig {

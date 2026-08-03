@@ -615,6 +615,51 @@ export function writeLiteConfig(
   }
 }
 
+export function mergeGeneratedPresetsIntoLiteConfig(
+  installConfig: InstallConfig,
+  targetPath: string,
+): ConfigMergeResult {
+  try {
+    const { config: parsedConfig, error } = parseConfigFile(targetPath);
+    if (error) {
+      return {
+        success: false,
+        configPath: targetPath,
+        error: `Failed to parse lite config: ${error}`,
+      };
+    }
+
+    const existing = parsedConfig ?? {};
+    const generated = generateLiteConfig(installConfig);
+    const existingPresets = isRecord(existing.presets) ? existing.presets : {};
+    const generatedPresets = isRecord(generated.presets)
+      ? generated.presets
+      : {};
+    const merged: OpenCodeConfig = {
+      ...existing,
+      $schema: existing.$schema ?? generated.$schema,
+      preset: existing.preset ?? generated.preset,
+      presets: {
+        ...generatedPresets,
+        ...existingPresets,
+      },
+    };
+
+    if (installConfig.preset !== undefined) {
+      merged.preset = generated.preset;
+    }
+
+    writeConfig(targetPath, merged);
+    return { success: true, configPath: targetPath };
+  } catch (err) {
+    return {
+      success: false,
+      configPath: targetPath,
+      error: `Failed to merge generated presets: ${err}`,
+    };
+  }
+}
+
 export function disableDefaultAgents(): ConfigMergeResult {
   const configPath = getExistingConfigPath();
 
