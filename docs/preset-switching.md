@@ -1,6 +1,6 @@
 # Preset Switching
 
-Switch agent model presets at runtime using the `/preset` TUI slash command.
+Select and persist a preset using the `/preset` TUI slash command. Effective agent/model changes apply only after plugin reload or a new conversation.
 
 ## Controls
 
@@ -22,8 +22,8 @@ the built-in `/models`, so it triggers no LLM turn.
 1. Define named presets in `oh-my-opencode-slim.jsonc` under the `presets`
    field, or create them interactively from the manager
 2. The manager writes preset changes to the user config file
-3. **Apply** persists the preset name to the config file only — the
-   sidebar is NOT refreshed mid-session (the agent registry is unchanged
+3. **Apply** persists the preset name to the config file only —
+   the sidebar is NOT refreshed mid-session (the agent registry is unchanged
    until reload; showing new models against running agents would be
    misleading)
 4. **Reload OpenCode** (or start a new conversation) for the new preset to
@@ -35,6 +35,103 @@ the built-in `/models`, so it triggers no LLM turn.
    definitions, or shift tool/skill availability. A future path to true
    in-session switching without reset requires a host API for atomic
    agent-registry refresh with session compatibility checks.
+
+## Preset Inheritance
+
+One preset can extend another by declaring an optional `$extends` field:
+
+```jsonc
+{
+  "presets": {
+    "base": {
+      "orchestrator": { "model": "openai/gpt-5.6-terra" },
+      "oracle": { "model": "openai/gpt-5.6-sol" }
+    },
+    "cheap": {
+      "$extends": "base",
+      "orchestrator": { "model": "anthropic/claude-3.5-haiku" }
+    },
+    "standalone": {
+      "oracle": { "model": "openai/gpt-5.6-sol" }
+    }
+  }
+}
+```
+
+`standalone` has no `$extends` and works as before. `cheap` extends `base`: it
+inherits `oracle.model` and overrides `orchestrator.model`.
+
+### Syntax
+
+- `$extends` accepts a single, non-empty preset name, or `null`.
+- `$extends: null` detaches a parent inherited from a lower-priority config
+  layer (user config → project config). It does not delete any other fields.
+- Existing presets without `$extends` are valid and behave identically to
+  before — no migration needed.
+
+### Layered Parent Resolution
+
+User and project config layers are merged before inheritance resolution. When
+both layers define the same preset:
+
+- **Omitted `$extends`** in the higher layer preserves the lower layer's parent.
+- **String `$extends`** in the higher layer replaces the lower layer's parent.
+- **`null` `$extends`** in the higher layer detaches the lower layer's parent.
+
+### Merge Precedence
+
+Effective configuration applies in this order (later wins):
+
+1. Oldest ancestor → … → immediate parent → selected child
+2. Root `agents` overrides are applied last
+
+Arrays and primitive values are replaced by the higher-precedence value.
+Nested objects are deep-merged (keys from both sides are combined).
+
+### Parent-Only Presets
+
+A preset that exists only as an inheritance target is itself selectable.
+`base` above can be chosen as the active preset and applies its own
+configuration.
+
+### Inheritance Graph Validation
+
+Every preset in the merged user/project graph is validated eagerly at
+startup. Missing parents and inheritance cycles are fatal: the entire
+merged configuration is rejected and plugin startup fails with a diagnostic
+naming the missing parent or cycle path.
+
+This is a separate error class from malformed JSON or schema-invalid
+configuration, which continue to produce warnings with an empty-config
+fallback as before.
+
+### Prompt Inheritance
+
+Inline `prompt` and `orchestratorPrompt` fields are ordinary agent override
+values, so they inherit through the parent chain. Parent preset **prompt
+directories** (`oh-my-opencode-slim/<preset>/<agent>.md`) do **not** inherit —
+prompt-file lookup remains scoped to the active preset and its existing
+project/user search roots.
+
+### TUI Behavior
+
+- The TUI /preset manager preserves raw `$extends` metadata when reading,
+  editing, saving, or deleting presets. `$extends` is not treated as an
+  agent in summaries, counts, or aliases.
+- Before saving, overwriting, or deleting a preset, the TUI validates the
+  merged candidate graph (user layer + current project layer). A mutation
+  that would introduce a missing parent or cycle is rejected, and the
+  on-disk configuration is left unchanged.
+- Selecting a parent-only preset works — the TUI uses the resolved
+  inherited configuration for switching.
+
+### Reload Behavior
+
+Startup and reload-based disk switching apply resolved inheritance. The
+resolved effective map (metadata-free) is used for agent construction,
+model selection, and summaries. V1 does not define live runtime-preset
+switching — the module-level runtime state in `runtime-preset.ts` is
+outside this feature's scope.
 
 ### Level 3 — model and variant selection
 
@@ -82,9 +179,9 @@ The following fields are applied when the preset is loaded on restart:
 | `variant` | Model variant (e.g. `"thinking"`) |
 | `options` | Provider-specific options (e.g. thinking budget) |
 
-Fields not applied at runtime (require restart): `prompt`, `skills`, `mcps`, `displayName`.
+These fields take effect only after reload: `prompt`, `skills`, `mcps`, `displayName`.
 
-## Startup Preset vs Runtime Switching
+## Preset Activation Methods
 
 There are two ways to activate a preset:
 

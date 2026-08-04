@@ -105,4 +105,5 @@ companion/target/
 .worktrees/
 
 # openspec
-openspec/
+openspec/.worktrees/
+.worktrees/

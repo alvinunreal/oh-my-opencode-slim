@@ -110,12 +110,13 @@ All config files support **JSONC** (JSON with Comments):
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
 
-### Runtime Preset Switching
+### In-Session Preset Selection
 
-Presets can also be switched at runtime without restarting using the `/preset` command. See [Preset Switching](preset-switching.md) for details.
+The `/preset` command opens the TUI preset manager to select and persist a preset name. The effective agent/model changes apply only after plugin reload or a new conversation. See [Preset Switching](preset-switching.md) for details.
 
 | `presets` | object | - | Named preset configurations |
 |-----------|--------|---|-----------------------------|
+| `presets.<name>.$extends` | string\|null | - | **Optional.** Single parent preset name to inherit from, or `null` to detach a parent inherited from a lower config layer. Must be a non-empty trimmed name. See [Preset Inheritance](preset-switching.md#preset-inheritance). |
 | `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
 | `presets.<name>.<agent>.temperature` | number | - | Optional temperature (0–2); when omitted, OpenCode chooses its default |
 | `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
@@ -512,11 +513,6 @@ for that agent ignored — the agent becomes global instead of per-preset.
 Root `agents` is the escape hatch for values that should never vary by
 preset.
 
-**Runtime presets reverse this.** When a preset is activated at runtime
-via the `/preset` command, the merge at `src/index.ts:227` is
-`deepMerge(config.agents, presetAgents)` — the runtime preset is the
-override and wins. Root `agents` only guarantees precedence for
-config-file presets resolved at startup.
 
 #### Sharing a prompt across presets (custom agents)
 

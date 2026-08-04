@@ -27,8 +27,19 @@
       },
       "additionalProperties": {
         "type": "object",
-        "propertyNames": {
-          "type": "string"
+        "properties": {
+          "$extends": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
         },
         "additionalProperties": {
           "type": "object",

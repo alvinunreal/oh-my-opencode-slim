@@ -1,4 +1,4 @@
-import type { PluginConfig, Preset } from './schema';
+import type { ResolvedPreset } from './schema';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -7,7 +7,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function stripOrchestratorModel(
   agents: Record<string, unknown>,
   enabled: boolean | undefined,
-  preset: Preset | undefined,
+  preset: ResolvedPreset | undefined,
 ): void {
   if (enabled !== true || preset?.orchestrator?.model !== undefined) return;
 
@@ -21,7 +21,7 @@ export function stripOrchestratorModel(
 export function applyOrchestratorModelConfig(input: {
   agents: Record<string, unknown>;
   enabled: boolean | undefined;
-  presets: PluginConfig['presets'];
+  resolvedPresets?: Record<string, ResolvedPreset>;
   configPreset: string | undefined;
   runtimePreset: string | null;
 }): void {
@@ -29,6 +29,6 @@ export function applyOrchestratorModelConfig(input: {
   stripOrchestratorModel(
     input.agents,
     input.enabled,
-    presetName ? input.presets?.[presetName] : undefined,
+    presetName ? input.resolvedPresets?.[presetName] : undefined,
   );
 }

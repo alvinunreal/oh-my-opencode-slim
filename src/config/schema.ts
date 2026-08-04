@@ -138,9 +138,89 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 /** Normalized model entry with optional per-model variant. */
 export type ModelEntry = { id: string; variant?: string };
 
-export const PresetSchema = z.record(z.string(), AgentOverrideConfigSchema);
+export const PresetParentSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/\S/, { message: '$extends must be a non-empty preset name or null' })
+  .nullable();
 
-export type Preset = z.infer<typeof PresetSchema>;
+export const PresetSchema = z
+  .object({
+    $extends: PresetParentSchema.optional(),
+  })
+  .catchall(AgentOverrideConfigSchema);
+
+export type RawPreset = z.infer<typeof PresetSchema>;
+
+const PRESET_KEY_PREFIX = '\u0000oh-my-opencode-slim:preset:';
+
+function encodePresetMapKeys(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value;
+
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    (prototype !== Object.prototype && prototype !== null) ||
+    Object.getOwnPropertySymbols(value).some((symbol) =>
+      Object.prototype.propertyIsEnumerable.call(value, symbol),
+    )
+  ) {
+    return value;
+  }
+
+  const encoded = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(encoded, `${PRESET_KEY_PREFIX}${key}`, {
+      configurable: true,
+      enumerable: true,
+      value: (value as Record<string, unknown>)[key],
+      writable: true,
+    });
+  }
+  return encoded;
+}
+
+function decodePresetMapKeys(
+  encoded: Record<string, RawPreset>,
+): Record<string, RawPreset> {
+  const presets = Object.create(null) as Record<string, RawPreset>;
+  for (const [encodedName, preset] of Object.entries(encoded)) {
+    Object.defineProperty(
+      presets,
+      encodedName.slice(PRESET_KEY_PREFIX.length),
+      {
+        configurable: true,
+        enumerable: true,
+        value: preset,
+        writable: true,
+      },
+    );
+  }
+  return presets;
+}
+
+const PresetMapInputSchema = z.preprocess(
+  encodePresetMapKeys,
+  z.record(z.string(), PresetSchema),
+);
+
+// Zod intentionally skips __proto__ when constructing ordinary record output.
+// Validate through the generated-schema-compatible input record, then restore
+// exact names into a prototype-free output map.
+const PresetMapSchema = z.codec(
+  PresetMapInputSchema,
+  z.custom<Record<string, RawPreset>>(() => true),
+  {
+    decode: decodePresetMapKeys,
+    encode: (value) => value,
+  },
+);
+
+// Preset remains the raw shape for persistence-oriented consumers. Resolved
+// runtime maps use ResolvedPreset so the reserved metadata cannot leak into
+// agent overrides.
+export type Preset = RawPreset;
+export type ResolvedPreset = Record<string, AgentOverrideConfig>;
 
 // MCP names
 export const McpNameSchema = z.enum(['context7', 'gh_grep']);
@@ -435,12 +515,16 @@ export type AcpAgentConfig = z.infer<typeof AcpAgentConfigSchema>;
 export type AcpAgentsConfig = z.infer<typeof AcpAgentsConfigSchema>;
 
 function rejectOrchestratorPromptOnOrchestrator(
-  overrides: Record<string, z.infer<typeof AgentOverrideConfigSchema>>,
+  overrides: Record<string, unknown>,
   ctx: z.RefinementCtx,
   pathPrefix: Array<string | number>,
 ): void {
   for (const [name, override] of Object.entries(overrides)) {
-    if (name === 'orchestrator' && override.orchestratorPrompt !== undefined) {
+    const orchestratorPrompt =
+      typeof override === 'object' && override !== null
+        ? (override as { orchestratorPrompt?: unknown }).orchestratorPrompt
+        : undefined;
+    if (name === 'orchestrator' && orchestratorPrompt !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [...pathPrefix, name, 'orchestratorPrompt'],
@@ -473,7 +557,7 @@ export const PluginConfigSchema = z
       .describe(
         'Disable automatic installation of plugin updates when false. Defaults to true.',
       ),
-    presets: z.record(z.string(), PresetSchema).optional(),
+    presets: PresetMapSchema.optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
     disabled_agents: z
       .array(z.string())
@@ -539,7 +623,10 @@ export const PluginConfigSchema = z
     }
   });
 
-export type PluginConfig = z.infer<typeof PluginConfigSchema>;
+export type PluginConfig = z.infer<typeof PluginConfigSchema> & {
+  /** Derived after layered config parsing; omitted from serialized schema. */
+  resolvedPresets?: Record<string, ResolvedPreset>;
+};
 
 // Agent names - re-exported from constants for convenience
 export type { AgentName } from './constants';
