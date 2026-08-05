@@ -493,11 +493,20 @@ export class ForegroundFallbackManager {
     agentName?: string,
     label?: string,
   ): Promise<void> {
-    const result = await getClient(this.input!).session.messages({
-      sessionID,
-    });
-    const messages = (result.data ?? []) as unknown[];
-    const lastUser = [...messages].reverse().find(isUserMessageWithParts);
+    let lastUser: any;
+    // ponytail: retry up to 3 times, 500ms apart — the message may still
+    // be in-flight when the stream error fires; a short wait usually lands it.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await getClient(this.input!).session.messages({
+        sessionID,
+      });
+      const messages = (result.data ?? []) as unknown[];
+      lastUser = [...messages].reverse().find(isUserMessageWithParts);
+      if (lastUser) break;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+      }
+    }
     if (!lastUser) {
       log('[foreground-fallback] no user message found', { sessionID });
       return;
@@ -511,7 +520,7 @@ export class ForegroundFallbackManager {
 
     const promptBody = {
       parts: [
-        ...(lastUser.parts as Array<{ type: 'text'; text: string }>),
+        ...(lastUser.parts as any[]),
         createInternalAgentTextPart(
           label ?? 'Foreground fallback replay.',
         ),
