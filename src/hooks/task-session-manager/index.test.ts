@@ -4622,80 +4622,77 @@ describe('task-session-manager hook', () => {
   test.each([
     ['foreground-created-first', ['foreground-child', 'background-child']],
     ['background-created-first', ['background-child', 'foreground-child']],
-  ])(
-    'ambiguous early created events never supervise the foreground child (%s)',
-    async (_, createdOrder) => {
-      const board = new BackgroundJobBoard();
-      const clock = createSupervisorClock();
-      const abort = mock(async () => undefined);
-      const supervisor = new BackgroundJobSupervisor({
-        backgroundJobStore: board,
-        wallClockTimeoutMs: 100,
-        abortGraceMs: 10,
-        abort,
-        now: clock.now,
-        setTimeout: clock.setTimeout,
-        clearTimeout: clock.clearTimeout,
-      });
-      const { hook } = createHook({
-        backgroundJobBoard: board,
-        backgroundJobSupervisor: supervisor,
-      });
+  ])('ambiguous early created events never supervise the foreground child (%s)', async (_, createdOrder) => {
+    const board = new BackgroundJobBoard();
+    const clock = createSupervisorClock();
+    const abort = mock(async () => undefined);
+    const supervisor = new BackgroundJobSupervisor({
+      backgroundJobStore: board,
+      wallClockTimeoutMs: 100,
+      abortGraceMs: 10,
+      abort,
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundJobSupervisor: supervisor,
+    });
 
-      await hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
-        {
-          args: {
-            subagent_type: 'explorer',
-            background: true,
-            description: 'background child',
-          },
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          background: true,
+          description: 'background child',
         },
-      );
-      await hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
-        {
-          args: {
-            subagent_type: 'explorer',
-            background: false,
-            description: 'foreground child',
-          },
+      },
+    );
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
+      {
+        args: {
+          subagent_type: 'explorer',
+          background: false,
+          description: 'foreground child',
         },
-      );
+      },
+    );
 
-      for (const taskID of createdOrder) {
-        await hook.event({
-          event: {
-            type: 'session.created',
-            properties: { info: { id: taskID, parentID: 'parent-1' } },
-          },
-        });
-      }
+    for (const taskID of createdOrder) {
+      await hook.event({
+        event: {
+          type: 'session.created',
+          properties: { info: { id: taskID, parentID: 'parent-1' } },
+        },
+      });
+    }
 
-      expect(board.get('background-child')?.background).toBe(false);
-      expect(board.get('foreground-child')?.background).toBe(false);
-      expect(abort).not.toHaveBeenCalled();
+    expect(board.get('background-child')?.background).toBe(false);
+    expect(board.get('foreground-child')?.background).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
 
-      await hook['tool.execute.after'](
-        { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
-        { output: taskLaunchOutput('foreground-child') },
-      );
-      await hook['tool.execute.after'](
-        { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
-        { output: taskLaunchOutput('background-child') },
-      );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'foreground-call' },
+      { output: taskLaunchOutput('foreground-child') },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'background-call' },
+      { output: taskLaunchOutput('background-child') },
+    );
 
-      expect(board.get('foreground-child')?.background).toBe(false);
-      expect(board.get('background-child')?.background).toBe(true);
-      const backgroundJob = board.get('background-child');
-      expect(backgroundJob).toBeDefined();
-      const deadline = (backgroundJob?.runStartedAt ?? 0) + 100;
-      await clock.advanceTo(deadline);
+    expect(board.get('foreground-child')?.background).toBe(false);
+    expect(board.get('background-child')?.background).toBe(true);
+    const backgroundJob = board.get('background-child');
+    expect(backgroundJob).toBeDefined();
+    const deadline = (backgroundJob?.runStartedAt ?? 0) + 100;
+    await clock.advanceTo(deadline);
 
-      expect(abort).toHaveBeenCalledTimes(1);
-      expect(abort).toHaveBeenCalledWith('background-child');
-    },
-  );
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledWith('background-child');
+  });
 
   test('missing after-hook callID fails closed while an exact background call remains', async () => {
     const board = new BackgroundJobBoard();

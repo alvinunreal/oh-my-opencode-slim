@@ -134,32 +134,29 @@ describe('BackgroundJobSupervisor', () => {
     ['resolve', async () => undefined],
     ['reject', async () => Promise.reject(new Error('abort failed'))],
     ['hang', () => new Promise<never>(() => {})],
-  ])(
-    'abort %s is requested once and grace remains independent',
-    async (_, abortCall) => {
-      const { board, supervisor, timers, abort } = createSupervisor({
-        abort: abortCall,
-      });
-      const job = launch(board, true);
-      supervisor.onLaunch(job);
-      await timers.advanceTo(100);
-      await timers.advanceTo(119);
+  ])('abort %s is requested once and grace remains independent', async (_, abortCall) => {
+    const { board, supervisor, timers, abort } = createSupervisor({
+      abort: abortCall,
+    });
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    await timers.advanceTo(100);
+    await timers.advanceTo(119);
 
-      expect(abort).toHaveBeenCalledTimes(1);
-      expect(board.get(job.taskID)?.state).toBe('running');
-      await timers.advanceTo(120);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(board.get(job.taskID)?.state).toBe('running');
+    await timers.advanceTo(120);
 
-      expect(board.get(job.taskID)).toMatchObject({
-        state: 'error',
-        timedOut: true,
-        statusUncertain: true,
-        cancellationRequested: true,
-      });
-      expect(board.getResultSummary(job.taskID)).toContain(
-        'abort was not confirmed',
-      );
-    },
-  );
+    expect(board.get(job.taskID)).toMatchObject({
+      state: 'error',
+      timedOut: true,
+      statusUncertain: true,
+      cancellationRequested: true,
+    });
+    expect(board.getResultSummary(job.taskID)).toContain(
+      'abort was not confirmed',
+    );
+  });
 
   test('completion after the deadline claim cannot replace the timeout', async () => {
     const { board, coordinator, supervisor, timers, abort } =

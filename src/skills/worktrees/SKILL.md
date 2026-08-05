@@ -135,7 +135,9 @@ keeps them readable to OpenCode.
 
 ### Phase 3: Integration & Validation
 Before merging or integrating the worktree branch:
-1. Run lint, build, formatting, and unit tests inside the worktree directory.
+1. Apply a proportionate final-state verification plan to the changed behavior
+   and its important boundaries. Run checks required by repository or release
+   instructions.
 2. Generate and display a clear diff comparing the worktree branch to the
    integration base branch.
 3. Ask the user for confirmation to integrate.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { _testConfig, runSecondaryModelWithFallback } from './secondary-model';
 import type { SecondaryModel } from './types';
 

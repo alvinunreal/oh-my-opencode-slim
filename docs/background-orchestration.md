@@ -173,17 +173,14 @@ against each other and the original user goal.
 
 ### 5. Verify
 
-Verification remains orchestrator-owned, but not necessarily orchestrator-run.
+Verification remains orchestrator-owned and should be proportionate to the
+change. Use focused checks against the final state, broadening them only when
+risk or uncertainty warrants it. Oracle review is conditional: dispatch it for
+material semantic or architectural risk, unresolved uncertainty, or another
+high-cost decision—not automatically.
 
-Examples:
-
-- route UI review to `designer`,
-- route code review to `oracle`,
-- route test writing or test updates to `fixer`,
-- run final shell checks directly only when appropriate.
-
-The final response should only happen after relevant background work is terminal
-and reconciled.
+The final response should only happen after relevant background work is terminal,
+reconciled, and supported by final-state evidence.
 
 ---
 
@@ -485,16 +482,19 @@ Make background subagents first-class in this plugin.
 
 The orchestrator should do something like:
 
-1. Create todos for discovery, design, implementation, docs, tests, review.
+1. Create todos for discovery, design, implementation, docs, tests, and
+   verification.
 2. Launch Explorer in background to map task-session hooks and task lifecycle.
-3. Launch Oracle in background to review architecture risks.
+3. Launch Oracle in background only if the change has material semantic or
+   architectural risk or unresolved uncertainty.
 4. Continue by preparing the dependency graph and file ownership plan.
-5. Wait for Explorer and Oracle via hook-driven completion.
+5. Wait for the launched specialists via hook-driven completion.
 6. Dispatch Fixer to implement prompt/config/hook changes with clear ownership.
 7. Dispatch a second Fixer for tests if file ownership is separate.
 8. Wait for implementation results.
-9. Dispatch Oracle for final review.
-10. Run final checks.
+9. Reconcile the implementation and dispatch Oracle only if remaining risk or
+   uncertainty makes independent review worthwhile.
+10. Run proportionate checks against the final state.
 11. Report final state.
 
 At no point does the orchestrator become the main implementer.

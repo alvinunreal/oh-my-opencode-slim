@@ -223,8 +223,10 @@ describe('isFailoverError', () => {
 
 describe('ForegroundFallbackManager (disabled)', () => {
   test('does nothing when enabled=false', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), false, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), false, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -243,13 +245,14 @@ describe('ForegroundFallbackManager (disabled)', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager session.error', () => {
-  let client: ReturnType<typeof createMockClient>['client'];
   let mocks: ReturnType<typeof createMockClient>['mocks'];
   let mgr: ForegroundFallbackManager;
 
   beforeEach(() => {
-    ({ client, mocks } = createMockClient());
-    mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    ({ mocks } = createMockClient());
+    mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
   });
 
   test('triggers fallback on rate-limit session.error', async () => {
@@ -347,9 +350,7 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
-    const call = mocks.promptAsync.mock.calls[0] as [
-      { parts: unknown[] },
-    ];
+    const call = mocks.promptAsync.mock.calls[0] as [{ parts: unknown[] }];
     expect(call[0].parts.some(isInternalInitiatorPart)).toBe(true);
   });
 
@@ -357,7 +358,7 @@ describe('ForegroundFallbackManager session.error', () => {
     // OpenCode may return partial/streaming messages whose `info` is undefined;
     // the fallback must ignore those rather than crash, and still re-submit the
     // real last user message.
-    ({ client, mocks } = createMockClient({
+    ({ mocks } = createMockClient({
       messagesData: [
         {},
         { info: { role: 'assistant' }, parts: [] },
@@ -368,7 +369,9 @@ describe('ForegroundFallbackManager session.error', () => {
         },
       ],
     }));
-    mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -410,7 +413,9 @@ describe('ForegroundFallbackManager session.error', () => {
   });
 
   test('does nothing when no chain configured for session', async () => {
-    const emptyMgr = new ForegroundFallbackManager({}, true, { directory: '/test' } as any);
+    const emptyMgr = new ForegroundFallbackManager({}, true, {
+      directory: '/test',
+    } as any);
     await emptyMgr.handleEvent({
       type: 'session.error',
       properties: {
@@ -424,8 +429,10 @@ describe('ForegroundFallbackManager session.error', () => {
   });
 
   test('does not abort when promptAsync is unavailable', async () => {
-    const { client, mocks } = createMockClient({ includePromptAsync: false });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient({ includePromptAsync: false });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -440,7 +447,7 @@ describe('ForegroundFallbackManager session.error', () => {
   });
 
   test('falls back to abort+retry when promptAsync fails on busy session', async () => {
-    const { client, mocks } = createMockClient({
+    const { mocks } = createMockClient({
       promptAsyncImpl: async () => {
         throw new Error('session busy');
       },
@@ -448,7 +455,9 @@ describe('ForegroundFallbackManager session.error', () => {
         // abort succeeds on first call
       },
     });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -470,8 +479,10 @@ describe('ForegroundFallbackManager session.error', () => {
 
 describe('ForegroundFallbackManager message.updated', () => {
   test('tracks model from message.updated and falls back on error', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -496,8 +507,10 @@ describe('ForegroundFallbackManager message.updated', () => {
   });
 
   test('uses agent name from message.updated to select correct chain', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     // explorer message with its model
     await mgr.handleEvent({
@@ -533,7 +546,7 @@ describe('ForegroundFallbackManager message.updated', () => {
 describe('ForegroundFallbackManager session.status', () => {
   test('aborts session before fallback re-prompt on first failover retry', async () => {
     const calls: string[] = [];
-    const { client, mocks } = createMockClient({
+    const { mocks } = createMockClient({
       abortImpl: async () => {
         calls.push('abort');
       },
@@ -542,7 +555,12 @@ describe('ForegroundFallbackManager session.status', () => {
         return {};
       },
     });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -573,7 +591,7 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('keeps registered child agent identity sticky for retry fallback chain', async () => {
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains({
         oracle: ['anthropic/claude-sonnet-4-5', 'openai/o3'],
@@ -612,7 +630,7 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('includes the sticky child agent in fallback promptAsync body', async () => {
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains({
         oracle: ['anthropic/claude-sonnet-4-5', 'openai/o3'],
@@ -654,8 +672,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers fallback on retry status with rate limit message', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 1);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      1,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -680,8 +703,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers fallback on retry status with insufficient balance message', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 1);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      1,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -706,8 +734,10 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('ignores session.status with non-rate-limit retry message', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'session.status',
@@ -721,8 +751,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('does not abort or switch after retries without a failover reason', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -750,8 +785,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers immediate fallback on first failover retry', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -779,8 +819,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('switches to fallback model on first failover retry', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -808,8 +853,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers fallback when rate-limit text is in props.error instead of status.message', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 1);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      1,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -835,8 +885,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers fallback when props.error is a plain string', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 1);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      1,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -862,8 +917,13 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('non-rate-limit retry does not trigger fallback but rate-limit does', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -907,7 +967,7 @@ describe('ForegroundFallbackManager session.status', () => {
     // loop (already in-flight when the abort happened) should NOT trigger a
     // second fallback — it carries the old model's error, not model B's.
     const calls: string[] = [];
-    const { client, mocks } = createMockClient({
+    const { mocks } = createMockClient({
       abortImpl: async () => {
         calls.push('abort');
       },
@@ -916,7 +976,12 @@ describe('ForegroundFallbackManager session.status', () => {
         return {};
       },
     });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     // Seed session with model A (anthropic/claude-opus-4-5)
     await mgr.handleEvent({
@@ -978,7 +1043,7 @@ describe('ForegroundFallbackManager session.status', () => {
     // The previous fix used lastTriggerModel which still held model A, causing
     // model B's genuine retry to be mistaken for a stale retry from model A.
     const calls: string[] = [];
-    const { client, mocks } = createMockClient({
+    const { mocks } = createMockClient({
       abortImpl: async () => {
         calls.push('abort');
       },
@@ -987,7 +1052,12 @@ describe('ForegroundFallbackManager session.status', () => {
         return {};
       },
     });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 1); // maxRetries=1 for immediate fallback
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      1,
+    ); // maxRetries=1 for immediate fallback
 
     // Seed session with model A
     await mgr.handleEvent({
@@ -1060,7 +1130,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
   test('does not call promptAsync when the only chain model is already the current model', async () => {
     // Scenario: chain = ['openai/gpt-b'], current model IS 'openai/gpt-b'.
     // tryFallback adds 'openai/gpt-b' to tried → chain.find() returns undefined → exhausted.
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       { orchestrator: ['openai/gpt-b'] },
       true,
@@ -1096,13 +1166,11 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
     // Use agent name tracking so we can target the right chain, then seed tried
     // by having the manager go through both models via sequential events
     // (each on a distinct session so dedup does not interfere).
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const chain = ['openai/model-x', 'openai/model-y'];
-    const mgr = new ForegroundFallbackManager(
-      { orchestrator: chain },
-      true,
-      { directory: '/test' } as any,
-    );
+    const mgr = new ForegroundFallbackManager({ orchestrator: chain }, true, {
+      directory: '/test',
+    } as any);
 
     // Session A: current model is model-x, which IS in the chain → picks model-y ✓
     await mgr.handleEvent({
@@ -1122,7 +1190,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
     // Session B (fresh session, different ID): only model-y is in chain and it IS
     // the current model → tried gets model-y → chain.find() = undefined → exhausted
     // → abort called to stop the freeze
-    const { client: client2, mocks: mocks2 } = createMockClient();
+    const { mocks: mocks2 } = createMockClient();
     const mgr2 = new ForegroundFallbackManager(
       { orchestrator: ['openai/model-y'] }, // single-entry chain already in use
       true,
@@ -1151,8 +1219,10 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
 
 describe('ForegroundFallbackManager deduplication', () => {
   test('ignores a second trigger within dedup window for same session', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     const event = {
       type: 'session.error',
@@ -1169,8 +1239,10 @@ describe('ForegroundFallbackManager deduplication', () => {
   });
 
   test('different sessions are not deduplicated against each other', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -1185,8 +1257,10 @@ describe('ForegroundFallbackManager deduplication', () => {
   });
 
   test('cascade continues when second error arrives within dedup window after model switch', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     // Seed session: current model is first entry in orchestrator chain
     await mgr.handleEvent({
@@ -1244,8 +1318,10 @@ describe('ForegroundFallbackManager deduplication', () => {
 
 describe('ForegroundFallbackManager subagent.session.created', () => {
   test('records agent name from subagent.session.created and falls back correctly', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     // Register the session as 'explorer' via subagent creation event
     await mgr.handleEvent({
@@ -1280,7 +1356,7 @@ describe('ForegroundFallbackManager subagent.session.created', () => {
 describe('ForegroundFallbackManager session.deleted', () => {
   test('cleans up session state on session.deleted via coordinator', async () => {
     const coordinator = new SessionLifecycle(() => {});
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains(),
       true,
@@ -1328,8 +1404,9 @@ describe('ForegroundFallbackManager session.deleted', () => {
   });
 
   test('ignores session.deleted with no sessionID', async () => {
-    const { client } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
     // Should not throw
     await expect(
       mgr.handleEvent({ type: 'session.deleted', properties: {} }),
@@ -1338,7 +1415,7 @@ describe('ForegroundFallbackManager session.deleted', () => {
 
   test('cleans up state using info.id shape via coordinator', async () => {
     const coordinator = new SessionLifecycle(() => {});
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains(),
       true,
@@ -1378,7 +1455,6 @@ describe('ForegroundFallbackManager session.deleted', () => {
 
   test('does NOT clear inProgress when session.deleted fires', () => {
     const coordinator = new SessionLifecycle(() => {});
-    const { client } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains(),
       true,
@@ -1429,7 +1505,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
     // oracle has no chain in runtimeChains; without the fix resolveChain would
     // fall through to the cross-agent "last resort" and pick a model from
     // orchestrator's chain - re-prompting oracle with an orchestrator model.
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       {
         // oracle intentionally absent - no chain configured
@@ -1465,7 +1541,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
   test('uses cross-agent last-resort only when agent name is unknown', async () => {
     // When the agent name is genuinely unknown AND current model is not in any
     // chain, the last-resort flattened chain is acceptable.
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       { orchestrator: ['openai/gpt-4o'] },
       true,
@@ -1494,7 +1570,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
     // A user-defined agent (e.g. Build) shares its model with the orchestrator
     // chain but has no chain of its own. It must NOT inherit the orchestrator
     // chain — that would switch the session from Build to Orchestrator.
-    const { client, mocks } = createMockClient();
+    const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       { orchestrator: ['openai/gpt-5.6', 'new-api/glm-5.2'] },
       true,
@@ -1534,8 +1610,13 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
     // Councillor is owned by CouncilManager (own model chain + timeout).
     // FG must not abort or re-prompt — that races the council lifecycle and
     // previously produced "[foreground-fallback] no chain configured" noise.
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -1567,8 +1648,10 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
   });
 
   test('councillor session.error: no abort and no re-prompt', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -1596,8 +1679,13 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
   });
 
   test('disableChain agent on session.status: no abort (not just no re-prompt)', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any, 3);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
     mgr.disableChain('orchestrator');
 
     await mgr.handleEvent({
@@ -1635,8 +1723,10 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
 
 describe('ForegroundFallbackManager disableChain', () => {
   test('after disableChain, rate-limit error surfaces instead of falling back', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     mgr.disableChain('orchestrator');
 
@@ -1660,8 +1750,10 @@ describe('ForegroundFallbackManager disableChain', () => {
   });
 
   test('other agents chains are unaffected by disableChain', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, { directory: '/test' } as any);
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
 
     mgr.disableChain('orchestrator');
 

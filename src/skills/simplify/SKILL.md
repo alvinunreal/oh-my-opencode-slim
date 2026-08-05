@@ -36,7 +36,7 @@ Before every change, ask:
 - Does this produce the same output for every input?
 - Does this maintain the same error behavior?
 - Does this preserve the same side effects and ordering?
-- Do all existing tests still pass without modification?
+- What proportionate final-state verification will reveal a behavior change?
 
 ### 2. Follow Project Conventions
 
@@ -108,8 +108,8 @@ Make one simplification at a time.
 For each simplification:
 
 1. Make the change
-2. Run relevant tests
-3. Keep it only if behavior is preserved
+2. Use the proportionate final-state verification plan to check preservation
+3. Keep it only when the evidence supports preservation
 
 Separate refactoring from feature work whenever possible.
 
@@ -129,10 +129,8 @@ After simplifying, confirm:
 - Favor explicit names and smaller focused helpers when they improve readability
 - Keep refactors tightly scoped to the task or review feedback
 
-## Verification Checklist
+## Final-state verification
 
-- [ ] Existing tests pass without modification
-- [ ] Build/typecheck/lint still pass
-- [ ] No unrelated files were refactored
-- [ ] No error handling was weakened or removed
-- [ ] The result is simpler to review than the original
+Use a proportionate final-state verification plan for the final diff. Run checks
+required by repository and release instructions; add or repeat evidence only
+when the changed scope or a stated uncertainty warrants it.

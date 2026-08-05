@@ -747,7 +747,7 @@ export class ForegroundFallbackManager {
             agentName,
             tried: [...tried],
           });
-          await abortSessionWithTimeout(getClient(this.input!), sessionID);
+          await abortSessionWithTimeout(getClient(this.input), sessionID);
           return;
         }
       }

@@ -136,11 +136,7 @@ describe('session utilities', () => {
     process.on('unhandledRejection', handler);
     try {
       await expect(
-        promptWithTimeout(
-          client,
-          { sessionID: 's1', parts: [] },
-          5,
-        ),
+        promptWithTimeout(client, { sessionID: 's1', parts: [] }, 5),
       ).rejects.toThrow('Prompt timed out after 5ms');
 
       // Timeout behavior is unchanged — abort is called

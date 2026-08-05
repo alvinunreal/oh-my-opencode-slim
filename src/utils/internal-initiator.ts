@@ -36,6 +36,6 @@ export function isInternalInitiatorPart(part: unknown): boolean {
     // prevent board injection on the continuation turn (#922).
     // Upstream key is not a stable plugin contract — graceful degradation
     // if renamed: injection resumes, loop returns, no crash.
-    part.metadata['compaction_continue'] === true
+    part.metadata.compaction_continue === true
   );
 }

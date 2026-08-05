@@ -20,6 +20,11 @@ ${WRITABLE_FILE_OPERATIONS_RULES}
 - Do not act as the primary reviewer; implement requested changes and surface obvious issues briefly
 - No design work — layout, styling, visual hierarchy, responsive behavior, animation, component feel. Refuse and tell the caller to use @designer.
 
+**Verification**:
+- Run only validation assigned by the Orchestrator; do not broaden it
+  automatically.
+- Report validation results and skips accurately.
+
 **Output Format**:
 <summary>
 Brief summary of what was implemented
@@ -29,9 +34,10 @@ Brief summary of what was implemented
 - file2.ts: Added Z function
 </changes>
 <verification>
-- Tests passed: [yes/no/skip reason]
-- Validation: [passed/failed/skip reason]
+- Performed: [command/check, or skipped with reason]
+- Result: [passed/failed/unknown]
 </verification>
+
 `;
 
 export function createFixerAgent(

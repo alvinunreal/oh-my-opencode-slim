@@ -16,6 +16,8 @@ import type {
 } from '../../utils';
 import {
   isInternalInitiatorPart,
+  parseTaskIdFromTaskOutput,
+  parseTaskStateFromOutput,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
 } from '../../utils';
@@ -261,9 +263,14 @@ export function updateFromInjectedCompletion(
 
   const status = parseTaskStatusOutput(part.text);
   if (!status) {
-    log('[task-session-manager] synthetic part missing task status', {
-      textPreview: part.text.slice(0, 120),
-    });
+    // Only flag text shaped like task-status output that failed to parse.
+    // Native delegation prompts (e.g. OpenCode's "@agent" expansion) are
+    // synthetic but never task-status shaped — skip silently.
+    if (parseTaskIdFromTaskOutput(part.text) || parseTaskStateFromOutput(part.text)) {
+      log('[task-session-manager] synthetic part missing task status', {
+        textPreview: part.text.slice(0, 120),
+      });
+    }
     return undefined;
   }
   if (status.state !== 'completed' && status.state !== 'error') {

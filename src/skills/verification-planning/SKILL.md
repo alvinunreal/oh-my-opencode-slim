@@ -37,6 +37,15 @@ trustworthy conclusion with proportionate cost, safety, and effort.
 **Complete when:** there is a preferred path, its limitations are understood,
 and a weaker or stronger alternative is available if circumstances change.
 
+## Set a verification budget
+
+At the final state, state the distinct claims, assign one owner to establish or
+refute each, and choose the minimum non-duplicative evidence that covers the
+claims and important boundaries. Reuse evidence only while its relevant code,
+inputs, environment, and state remain valid. Required repository and release
+checks still apply; broaden or repeat verification only when a stated condition
+justifies it.
+
 ## 3. Create a verification affordance when needed
 
 When the existing system leaves the decisive truth too indirect or ambiguous,

@@ -12,6 +12,14 @@ new bundled versions for customized skills are staged under
 
 ---
 
+## Verification and Review Budget
+
+Use a proportionate final-state verification plan for each change. Run checks
+required by repository and release instructions; add independent review or
+broader evidence only when the change's risk or uncertainty warrants it.
+
+---
+
 ## Available Skills
 
 ### Bundled in repo
@@ -220,7 +228,8 @@ Safety defaults:
 - Pre-flight check on Git repo status and dirty worktrees.
 - Strict confirmation gates for all git modifications (`worktree add/remove`, `merge`, `rebase`, `cherry-pick`, `reset --hard`, branch operations).
 - Branch names default to `omo/<slug>` but respect custom user patterns.
-- Automated diff validation and compilation/test check before final integration.
+- Use a proportionate final-state verification plan before final integration,
+  including checks required by repository and release instructions.
 
 See **[Worktrees](worktrees.md)** for the detailed safety protocol.
 
