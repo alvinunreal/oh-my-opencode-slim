@@ -1452,8 +1452,14 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       },
     });
 
-    // oracle has no chain → should not fall back at all
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    // oracle has no chain → retries with its own model, never
+    // cross-bleeds into orchestrator's chain.
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { model: { providerID: string; modelID: string } },
+    ];
+    expect(call[0].model.providerID).toBe('anthropic');
+    expect(call[0].model.modelID).toBe('claude-opus-4-5');
   });
 
   test('uses cross-agent last-resort only when agent name is unknown', async () => {
@@ -1508,8 +1514,14 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       },
     });
 
-    // build has no configured chain and must not inherit orchestrator's
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    // build has no configured chain → retries with its own model, never
+    // inherits orchestrator's chain.
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { model: { providerID: string; modelID: string } },
+    ];
+    expect(call[0].model.providerID).toBe('openai');
+    expect(call[0].model.modelID).toBe('gpt-5.6');
   });
 });
 
@@ -1549,8 +1561,9 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
       },
     });
 
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    // Councillor has no chain → same-model retry with current model.
+    expect(mocks.abort).toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('councillor session.error: no abort and no re-prompt', async () => {
@@ -1577,8 +1590,9 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
       },
     });
 
+    // Councillor has no chain → same-model retry with current model.
     expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('disableChain agent on session.status: no abort (not just no re-prompt)', async () => {

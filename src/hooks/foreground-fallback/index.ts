@@ -56,7 +56,7 @@ const RETRYABLE_ERROR_PATTERNS = [
   /blocked by gateway/i,
 ];
 
-const OUTAGE_STATUS_CODES = new Set([500, 502, 503, 504]);
+const OUTAGE_STATUS_CODES = new Set([500, 502, 503, 504, 524]);
 // (ponytail) validated against real OpenCode error shapes
 const TRANSPORT_CODES = new Set([
   'ECONNREFUSED',
@@ -86,6 +86,10 @@ const PROVIDER_OUTAGE_PATTERNS = [
   /\bmodel is not available\b/i,
   /\bunsupported model\b/i,
   /\bunknown model\b/i,
+  /\bupstream error\b/i,
+  /\bstreaming response failed\b/i,
+  /\brequest queue is full\b/i,
+  /\bworker local total request limit reached\b/i,
 ];
 
 function extractStatusCode(error: {
@@ -480,24 +484,115 @@ export class ForegroundFallbackManager {
   }
 
   // ---------------------------------------------------------------------------
+  // Re-prompt helper (shared by fallback and same-model retry paths)
+  // ---------------------------------------------------------------------------
+
+  private async rePromptWithModel(
+    sessionID: string,
+    model: { providerID: string; modelID: string },
+    agentName?: string,
+    label?: string,
+  ): Promise<void> {
+    const result = await getClient(this.input!).session.messages({
+      sessionID,
+    });
+    const messages = (result.data ?? []) as unknown[];
+    const lastUser = [...messages].reverse().find(isUserMessageWithParts);
+    if (!lastUser) {
+      log('[foreground-fallback] no user message found', { sessionID });
+      return;
+    }
+
+    const sessionClient = getClient(this.input!).session;
+    if (typeof sessionClient.promptAsync !== 'function') {
+      log('[foreground-fallback] promptAsync unavailable', { sessionID });
+      return;
+    }
+
+    const promptBody = {
+      parts: [
+        ...(lastUser.parts as Array<{ type: 'text'; text: string }>),
+        createInternalAgentTextPart(
+          label ?? 'Foreground fallback replay.',
+        ),
+      ],
+      model,
+      ...(agentName ? { agent: agentName } : {}),
+    };
+
+    try {
+      await sessionClient.promptAsync({ sessionID, ...promptBody });
+    } catch (_promptErr) {
+      log('[foreground-fallback] promptAsync on busy session, aborting', {
+        sessionID,
+      });
+      await abortSessionWithTimeout(getClient(this.input!), sessionID);
+      await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+      await sessionClient.promptAsync({ sessionID, ...promptBody });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Core fallback logic
   // ---------------------------------------------------------------------------
 
   private async tryFallback(sessionID: string): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
-    // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
-    if (!this.hasFallbackChain(sessionID)) return;
 
-    // Deduplicate: multiple events can fire for a single rate-limit event.
-    // Bypass dedup when the model changed since the last trigger - the new
-    // model's failure is a separate incident and the cascade should continue.
+    // Has a fallback chain: switch models as before.
+    if (this.hasFallbackChain(sessionID)) {
+      if (this.isDeduped(sessionID)) return;
+
+      this.inProgress.add(sessionID);
+      try {
+        await this.execFallback(sessionID);
+      } finally {
+        this.inProgress.delete(sessionID);
+      }
+      return;
+    }
+
+    // No chain — retry with the current model (transient upstream errors
+    // like 502/503/504 ResourceExhausted / queue full are often resolved
+    // by a simple retry hitting a different worker).
+    const currentModel = this.sessionModel.get(sessionID);
+    if (!currentModel) return;
+
+    // Agent chain explicitly disabled — skip same-model retry.
+    const agentName = this.sessionAgent.get(sessionID);
+    if (agentName && Array.isArray(this.chains[agentName]) && this.chains[agentName].length === 0) return;
+
+    const tried = this.sessionRetries.get(sessionID) ?? 0;
+    if (tried >= this.maxRetries) {
+      log(
+        '[foreground-fallback] same-model retries exhausted, giving up',
+        { sessionID, currentModel, tried },
+      );
+      this.sessionRetries.delete(sessionID);
+      return;
+    }
+
     if (this.isDeduped(sessionID)) return;
+
+    this.sessionRetries.set(sessionID, tried + 1);
 
     this.inProgress.add(sessionID);
     try {
-      await this.execFallback(sessionID);
+      const ref = parseModelReference(currentModel);
+      if (!ref) return;
+      log('[foreground-fallback] retrying with current model', {
+        sessionID,
+        model: currentModel,
+        attempt: tried + 1,
+        maxRetries: this.maxRetries,
+      });
+      await this.rePromptWithModel(
+        sessionID,
+        ref,
+        agentName,
+        'Same-model retry after transient error.',
+      );
     } finally {
       this.inProgress.delete(sessionID);
     }
@@ -510,20 +605,66 @@ export class ForegroundFallbackManager {
    * task-session-manager sees isFallbackInProgress()=true during the
    * abort idle window and does not cancel the pending task call.
    *
-   * When no chain is available, do nothing (no abort, no log). Aborting
-   * without a replacement model only races owners that manage their own
-   * lifecycle (e.g. CouncilManager for councillor) and produces noise.
+   * When no chain is available, retries the current model (up to maxRetries)
+   * — transient upstream errors like 502/503/504 often resolve with a retry
+   * to a different worker.
    */
   private async tryFallbackWithAbort(sessionID: string): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    if (!this.hasFallbackChain(sessionID)) return;
+
+    if (this.hasFallbackChain(sessionID)) {
+      if (this.isDeduped(sessionID)) return;
+
+      this.inProgress.add(sessionID);
+      try {
+        await abortSessionWithTimeout(getClient(this.input!), sessionID);
+        await this.execFallback(sessionID);
+      } finally {
+        this.inProgress.delete(sessionID);
+      }
+      return;
+    }
+
+    // No chain — retry with current model after abort.
+    const currentModel = this.sessionModel.get(sessionID);
+    if (!currentModel) return;
+
+    // Agent chain explicitly disabled — skip same-model retry.
+    const agentName = this.sessionAgent.get(sessionID);
+    if (agentName && Array.isArray(this.chains[agentName]) && this.chains[agentName].length === 0) return;
+
+    const tried = this.sessionRetries.get(sessionID) ?? 0;
+    if (tried >= this.maxRetries) {
+      log(
+        '[foreground-fallback] same-model retries exhausted, giving up',
+        { sessionID, currentModel, tried },
+      );
+      this.sessionRetries.delete(sessionID);
+      return;
+    }
+
     if (this.isDeduped(sessionID)) return;
+
+    this.sessionRetries.set(sessionID, tried + 1);
 
     this.inProgress.add(sessionID);
     try {
+      const ref = parseModelReference(currentModel);
+      if (!ref) return;
       await abortSessionWithTimeout(getClient(this.input!), sessionID);
-      await this.execFallback(sessionID);
+      log('[foreground-fallback] retrying with current model after abort', {
+        sessionID,
+        model: currentModel,
+        attempt: tried + 1,
+        maxRetries: this.maxRetries,
+      });
+      await this.rePromptWithModel(
+        sessionID,
+        ref,
+        agentName,
+        'Same-model retry after transient error.',
+      );
     } finally {
       this.inProgress.delete(sessionID);
     }
@@ -614,54 +755,8 @@ export class ForegroundFallbackManager {
         return;
       }
 
-      // Retrieve the last user message to re-submit with the fallback model.
-      const result = await getClient(this.input!).session.messages({
-        sessionID,
-      });
-      // result.data may contain partial/streaming messages whose `info` is
-      // undefined at runtime (OpenCode violates its own declared type), so
-      // guard each entry instead of dereferencing `info` directly.
-      const messages = (result.data ?? []) as unknown[];
-      const lastUser = [...messages].reverse().find(isUserMessageWithParts);
-      if (!lastUser) {
-        log('[foreground-fallback] no user message found', { sessionID });
-        return;
-      }
-
-      // promptAsync queues the prompt and returns immediately - this avoids
-      // blocking the event handler while waiting for a full LLM response.
-      const sessionClient = getClient(this.input!).session;
-      if (typeof sessionClient.promptAsync !== 'function') {
-        log('[foreground-fallback] promptAsync unavailable', { sessionID });
-        return;
-      }
-
-      const promptBody = {
-        // ponytail: lastUser.parts are MessagePart[] from API, but v2
-        // promptAsync expects TextPartInput[] — runtime-compatible, TS
-        // doesn't know the `type` field is already 'text'.
-        parts: [
-          ...(lastUser.parts as Array<{ type: 'text'; text: string }>),
-          createInternalAgentTextPart('Foreground fallback replay.'),
-        ],
-        model: ref,
-        ...(agentName ? { agent: agentName } : {}),
-      };
-
-      // Try queuing the fallback prompt without aborting first. If OpenCode
-      // accepts it (204), the fallback model replaces the retry loop
-      // transparently — no dialog, no session error shown to the user.
-      // If promptAsync throws (e.g. session busy), fall back to abort+retry.
-      try {
-        await sessionClient.promptAsync({ sessionID, ...promptBody });
-      } catch (_promptErr) {
-        log('[foreground-fallback] promptAsync on busy session, aborting', {
-          sessionID,
-        });
-        await abortSessionWithTimeout(getClient(this.input!), sessionID);
-        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        await sessionClient.promptAsync({ sessionID, ...promptBody });
-      }
+      // Re-prompt with the fallback model.
+      await this.rePromptWithModel(sessionID, ref, agentName);
 
       this.sessionModel.set(sessionID, nextModel);
       log('[foreground-fallback] switched to fallback model', {
