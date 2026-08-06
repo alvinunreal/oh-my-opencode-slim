@@ -97,7 +97,7 @@ Doctor options:
 
 Available presets: ${getGeneratedPresetNames().join(', ')}
 
-The installer generates OpenAI and OpenCode Go presets by default.
+The installer generates OpenAI, OpenCode Go, and Atlas Cloud presets by default.
 OpenAI is active unless --preset selects another generated preset.
 For the full config reference, see docs/configuration.md.
 
@@ -106,6 +106,7 @@ Examples:
   bunx oh-my-opencode-slim install --no-tui --skills=yes
   bunx oh-my-opencode-slim install --background-subagents=yes
   bunx oh-my-opencode-slim install --preset=opencode-go
+  ATLASCLOUD_API_KEY=... bunx oh-my-opencode-slim install --preset=atlas-cloud
   bunx oh-my-opencode-slim install --reset
   bunx oh-my-opencode-slim doctor
 `);

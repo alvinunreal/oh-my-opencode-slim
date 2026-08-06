@@ -23,7 +23,11 @@ import {
   getExistingTuiConfigPath,
   getLiteConfig,
 } from './paths';
-import { generateLiteConfig } from './providers';
+import {
+  ATLAS_CLOUD_PROVIDER_ID,
+  generateLiteConfig,
+  getAtlasCloudProviderConfig,
+} from './providers';
 import type {
   ConfigMergeResult,
   DetectedConfig,
@@ -36,6 +40,35 @@ const DEFAULT_OPENCODE_AGENTS_TO_DISABLE = ['explore', 'general'] as const;
 
 function isString(value: unknown): value is string {
   return typeof value === 'string';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeAtlasCloudProvider(config: OpenCodeConfig): void {
+  const providers = isRecord(config.provider) ? config.provider : {};
+  const defaults = getAtlasCloudProviderConfig();
+  const existing = isRecord(providers[ATLAS_CLOUD_PROVIDER_ID])
+    ? providers[ATLAS_CLOUD_PROVIDER_ID]
+    : {};
+  const defaultEnv = Array.isArray(defaults.env) ? defaults.env : [];
+  const existingEnv = Array.isArray(existing.env) ? existing.env : [];
+
+  providers[ATLAS_CLOUD_PROVIDER_ID] = {
+    ...defaults,
+    ...existing,
+    env: [...new Set([...existingEnv, ...defaultEnv])],
+    options: {
+      ...(isRecord(defaults.options) ? defaults.options : {}),
+      ...(isRecord(existing.options) ? existing.options : {}),
+    },
+    models: {
+      ...(isRecord(defaults.models) ? defaults.models : {}),
+      ...(isRecord(existing.models) ? existing.models : {}),
+    },
+  };
+  config.provider = providers;
 }
 
 function getModelIds(model: unknown): string[] {
@@ -450,7 +483,9 @@ export function writeConfig(configPath: string, config: OpenCodeConfig): void {
   renameSync(tmpPath, configPath);
 }
 
-export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
+export async function addPluginToOpenCodeConfig(
+  installConfig?: Pick<InstallConfig, 'preset'>,
+): Promise<ConfigMergeResult> {
   const configPath = getExistingConfigPath();
 
   try {
@@ -485,6 +520,10 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     // Add fresh entry
     filteredPlugins.push(pluginEntry);
     config.plugin = filteredPlugins;
+
+    if (installConfig) {
+      mergeAtlasCloudProvider(config);
+    }
 
     writeConfig(configPath, config);
     return { success: true, configPath };
@@ -572,6 +611,51 @@ export function writeLiteConfig(
       success: false,
       configPath,
       error: `Failed to write lite config: ${err}`,
+    };
+  }
+}
+
+export function mergeGeneratedPresetsIntoLiteConfig(
+  installConfig: InstallConfig,
+  targetPath: string,
+): ConfigMergeResult {
+  try {
+    const { config: parsedConfig, error } = parseConfigFile(targetPath);
+    if (error) {
+      return {
+        success: false,
+        configPath: targetPath,
+        error: `Failed to parse lite config: ${error}`,
+      };
+    }
+
+    const existing = parsedConfig ?? {};
+    const generated = generateLiteConfig(installConfig);
+    const existingPresets = isRecord(existing.presets) ? existing.presets : {};
+    const generatedPresets = isRecord(generated.presets)
+      ? generated.presets
+      : {};
+    const merged: OpenCodeConfig = {
+      ...existing,
+      $schema: existing.$schema ?? generated.$schema,
+      preset: existing.preset ?? generated.preset,
+      presets: {
+        ...generatedPresets,
+        ...existingPresets,
+      },
+    };
+
+    if (installConfig.preset !== undefined) {
+      merged.preset = generated.preset;
+    }
+
+    writeConfig(targetPath, merged);
+    return { success: true, configPath: targetPath };
+  } catch (err) {
+    return {
+      success: false,
+      configPath: targetPath,
+      error: `Failed to merge generated presets: ${err}`,
     };
   }
 }

@@ -17,6 +17,7 @@ import {
   detectCurrentConfig,
   disableDefaultAgents,
   enableLspByDefault,
+  mergeGeneratedPresetsIntoLiteConfig,
   parseConfig,
   parseConfigFile,
   stripJsonComments,
@@ -136,6 +137,46 @@ describe('config-io', () => {
     expect(saved.plugin).toContain('oh-my-opencode-slim');
     expect(saved.plugin).not.toContain('oh-my-opencode-slim@1.0.0');
     expect(saved.plugin.length).toBe(2);
+  });
+
+  test('addPluginToOpenCodeConfig configures Atlas Cloud without overwriting user settings', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    paths.ensureConfigDir();
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: ['other'],
+        provider: {
+          existing: { name: 'Existing Provider' },
+          'atlas-cloud': {
+            env: ['CUSTOM_ATLAS_KEY'],
+            options: { baseURL: 'https://atlas.example/v1', timeout: 30_000 },
+            models: { 'custom/model': { name: 'Custom Model' } },
+          },
+        },
+      }),
+    );
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeConfig({ preset: 'openai' });
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.provider.existing).toEqual({ name: 'Existing Provider' });
+    expect(saved.provider['atlas-cloud']).toEqual({
+      npm: '@ai-sdk/openai-compatible',
+      name: 'Atlas Cloud',
+      env: ['CUSTOM_ATLAS_KEY', 'ATLASCLOUD_API_KEY'],
+      options: {
+        baseURL: 'https://atlas.example/v1',
+        timeout: 30_000,
+      },
+      models: {
+        'deepseek-ai/deepseek-v4-pro': { name: 'DeepSeek V4 Pro' },
+        'custom/model': { name: 'Custom Model' },
+      },
+    });
+    expect(JSON.stringify(saved)).not.toContain('apiKey');
   });
 
   test('addPluginToOpenCodeConfig respects OPENCODE_CONFIG_DIR', async () => {
@@ -509,6 +550,68 @@ describe('config-io', () => {
       'opencode-go/mimo-v2.5',
     );
     expect(saved.presets['opencode-go'].observer.variant).toBeUndefined();
+  });
+
+  test('mergeGeneratedPresetsIntoLiteConfig adds missing presets without overwriting user config', () => {
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+    const existing = {
+      preset: 'custom',
+      custom_option: true,
+      presets: {
+        custom: { oracle: { model: 'custom/model' } },
+        openai: { oracle: { model: 'custom/openai' } },
+      },
+    };
+    writeFileSync(litePath, JSON.stringify(existing));
+
+    const result = mergeGeneratedPresetsIntoLiteConfig(
+      {
+        installCustomSkills: false,
+        reset: false,
+      },
+      litePath,
+    );
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
+    expect(saved.preset).toBe('custom');
+    expect(saved.custom_option).toBe(true);
+    expect(saved.presets.custom).toEqual(existing.presets.custom);
+    expect(saved.presets.openai).toEqual(existing.presets.openai);
+    expect(saved.presets['opencode-go']).toBeDefined();
+    expect(saved.presets['atlas-cloud']).toBeDefined();
+  });
+
+  test('mergeGeneratedPresetsIntoLiteConfig honors an explicitly selected Atlas preset', () => {
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+    writeFileSync(
+      litePath,
+      JSON.stringify({
+        preset: 'openai',
+        presets: {
+          openai: { oracle: { model: 'custom/openai' } },
+        },
+      }),
+    );
+
+    const result = mergeGeneratedPresetsIntoLiteConfig(
+      {
+        installCustomSkills: false,
+        preset: 'atlas-cloud',
+        reset: false,
+      },
+      litePath,
+    );
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(litePath, 'utf-8'));
+    expect(saved.preset).toBe('atlas-cloud');
+    expect(saved.presets.openai.oracle.model).toBe('custom/openai');
+    expect(saved.presets['atlas-cloud'].orchestrator.model).toBe(
+      'atlas-cloud/deepseek-ai/deepseek-v4-pro',
+    );
   });
 
   test('disableDefaultAgents disables conflicting OpenCode built-in agents', () => {
