@@ -12,6 +12,17 @@ export type SmartfetchOptions = {
    * Each entry is tried in order; the first to return usable text is used.
    */
   webfetchModels?: ModelRef[];
+  /**
+   * Getter for the host's `small_model` from the already-loaded merged
+   * OpenCode config. Read once into memory at plugin construction; the
+   * getter only keeps the value in sync when the host config hook fires
+   * after tool construction. Never touches disk.
+   */
+  smallModelRef?: () => string | undefined;
+  /** Explorer agent model id, resolved from in-memory config at construction. */
+  explorerModel?: string;
+  /** Librarian agent model id, resolved from in-memory config at construction. */
+  librarianModel?: string;
 };
 
 export type SecondaryModel = {

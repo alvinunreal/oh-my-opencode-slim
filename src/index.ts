@@ -66,6 +66,7 @@ import {
   createWaitForUserTool,
   createWebfetchTool,
 } from './tools';
+import { pickAgentModelRef } from './tools/smartfetch/secondary-model';
 import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
 import {
   BackgroundJobBoard,
@@ -185,6 +186,7 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let waitForUserTools: ReturnType<typeof createWaitForUserTool>;
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
+  let hostSmallModel: string | undefined;
   let tools: Record<string, ToolDefinition>;
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
@@ -288,6 +290,9 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     webfetch = createWebfetchTool(ctx, {
       binaryDir: undefined,
       webfetchModels,
+      smallModelRef: () => hostSmallModel,
+      explorerModel: pickAgentModelRef(config.agents?.explorer?.model),
+      librarianModel: pickAgentModelRef(config.agents?.librarian?.model),
     });
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent:
@@ -607,6 +612,15 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcp: mcps,
 
     config: async (opencodeConfig: Record<string, unknown>) => {
+      // Capture `small_model` from the host's already-loaded merged OpenCode
+      // config. This is the only config-file read for webfetch's secondary
+      // model resolution: the host parsed opencode.json before invoking this
+      // hook, so per-call resolution stays disk-free.
+      const rawSmallModel = (opencodeConfig as { small_model?: unknown })
+        .small_model;
+      hostSmallModel =
+        typeof rawSmallModel === 'string' ? rawSmallModel : undefined;
+
       // Force default_agent to 'orchestrator' when unset, and also when the
       // user pointed it at an omos subagent name (opencode rejects subagent
       // names as default_agent with "default agent must be a primary agent").
