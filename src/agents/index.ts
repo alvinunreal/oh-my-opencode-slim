@@ -6,15 +6,13 @@ import {
   ALL_AGENT_NAMES,
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
-  getAcpAgentNames,
-  getAgentOverride,
-  getCustomAgentNames,
   loadAgentPrompt,
   type PluginConfig,
   PROTECTED_AGENTS,
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
+import type { RuntimeConfig } from '../config/runtime';
 import { escapeRegExp, normalizeAgentName } from '../utils/agent-variant';
 
 import { createCouncilAgent } from './council';
@@ -58,37 +56,22 @@ function getPrimaryModelFromOverride(
   return undefined;
 }
 
-function getActivePresetPrimaryModel(
-  config: PluginConfig | undefined,
-): string | undefined {
-  const activePreset = config?.preset
-    ? config.presets?.[config.preset]
-    : undefined;
-  if (!activePreset) {
-    return undefined;
-  }
-
-  const orchestratorModel = getPrimaryModelFromOverride(
-    activePreset.orchestrator,
+/**
+ * Alias-aware override lookup inside a merged (preset-aware) agents record.
+ * Mirrors getAgentOverride semantics without the host layer, which the
+ * config hook applies separately at merge time.
+ */
+function getOverrideFromAgents(
+  agents: Record<string, AgentOverrideConfig>,
+  name: string,
+): AgentOverrideConfig | undefined {
+  return (
+    agents[name] ??
+    agents[
+      Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name) ??
+        ''
+    ]
   );
-  if (orchestratorModel) {
-    return orchestratorModel;
-  }
-
-  for (const name of SUBAGENT_NAMES) {
-    const model = getPrimaryModelFromOverride(activePreset[name]);
-    if (model) {
-      return model;
-    }
-  }
-
-  return undefined;
-}
-
-function getConfigPrimaryModel(
-  config: PluginConfig | undefined,
-): string | undefined {
-  return getActivePresetPrimaryModel(config);
 }
 
 function buildAcpAgentDefinition(
@@ -278,8 +261,8 @@ function injectDisplayNames(
  */
 function applyDefaultPermissions(
   agent: AgentDefinition,
-  configuredSkills?: string[],
-  disabledSkills?: string[],
+  configuredSkills?: readonly string[],
+  disabledSkills?: readonly string[],
 ): void {
   // If the user supplied a shorthand string permission (e.g. "ask"),
   // it already applies to all tools — preserve it as-is and skip the
@@ -350,25 +333,32 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * Create all agent definitions with optional configuration overrides.
  * Instantiates the orchestrator and all subagents, applying user config and defaults.
  *
- * @param config - Optional plugin configuration with agent overrides
+ * @param runtime - Runtime configuration interface (plugin layer, preset-aware)
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
 export function createAgents(
-  config?: PluginConfig,
+  runtime: RuntimeConfig,
   options?: { projectDirectory?: string },
 ): AgentDefinition[] {
-  const disabled = getDisabledAgents(config);
-  if (!config?.council) {
+  const mergedAgents = runtime.agents();
+  const disabled = new Set(runtime.disabledAgents);
+  if (!runtime.council) {
     disabled.add('council');
   }
 
-  const primaryModel = getConfigPrimaryModel(config);
+  const primaryModel = runtime.primaryModel;
 
   // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
   // existing users who don't have fixer in their config yet
   const getModelForAgent = (name: SubagentName): string => {
-    if (name === 'fixer' && !getAgentOverride(config, 'fixer')?.model) {
-      const librarianOverride = getAgentOverride(config, 'librarian')?.model;
+    if (
+      name === 'fixer' &&
+      !getOverrideFromAgents(mergedAgents, 'fixer')?.model
+    ) {
+      const librarianOverride = getOverrideFromAgents(
+        mergedAgents,
+        'librarian',
+      )?.model;
       let librarianModel: string | undefined;
       if (Array.isArray(librarianOverride)) {
         const first = librarianOverride[0];
@@ -393,11 +383,11 @@ export function createAgents(
       const agent = factory(getModelForAgent(name), undefined, undefined);
 
       const customPrompts = loadAgentPrompt(name, {
-        preset: config?.preset,
+        preset: runtime.preset,
         projectDirectory: options?.projectDirectory,
       });
 
-      const override = getAgentOverride(config, name);
+      const override = getOverrideFromAgents(mergedAgents, name);
       const inlinePrompt = override?.prompt;
       const defaultPrompt = appendTaskRejectionInstruction(
         agent.config.prompt ?? '',
@@ -415,7 +405,7 @@ export function createAgents(
     });
 
   // 1b. Discover unknown keys in config.agents as custom subagents.
-  const customAgentNames = getCustomAgentNames(config)
+  const customAgentNames = runtime.customAgentNames
     .map(normalizeCustomAgentName)
     .filter((name) => name.length > 0)
     .filter((name) => {
@@ -429,7 +419,7 @@ export function createAgents(
     });
 
   const protoCustomAgents = customAgentNames.flatMap((name) => {
-    const override = getAgentOverride(config, name);
+    const override = getOverrideFromAgents(mergedAgents, name);
     if (!hasCustomAgentModel(override)) {
       console.warn(
         `[oh-my-opencode] Custom agent '${name}' skipped: 'model' is required`,
@@ -438,7 +428,7 @@ export function createAgents(
     }
 
     const customPrompts = loadAgentPrompt(name, {
-      preset: config?.preset,
+      preset: runtime.preset,
       projectDirectory: options?.projectDirectory,
     });
 
@@ -452,7 +442,7 @@ export function createAgents(
     ];
   });
 
-  const acpAgentNames = getAcpAgentNames(config)
+  const acpAgentNames = Object.keys(runtime.acpAgents)
     .map(normalizeCustomAgentName)
     .filter((name) => name.length > 0)
     .filter((name) => {
@@ -475,41 +465,41 @@ export function createAgents(
     });
 
   const protoAcpAgents = acpAgentNames.map((name) => {
-    const acp = config?.acpAgents?.[name];
+    const acp = runtime.acpAgents[name];
     if (!acp) throw new Error(`ACP agent '${name}' is missing config`);
     return buildAcpAgentDefinition(name, acp, primaryModel);
   });
 
   // 2. Apply overrides and default permissions to built-in subagents
   const builtInSubAgents = protoSubAgents.map((agent) => {
-    const override = getAgentOverride(config, agent.name);
+    const override = getOverrideFromAgents(mergedAgents, agent.name);
     if (override) {
       applyOverrides(agent, override);
     }
-    applyDefaultPermissions(agent, override?.skills, config?.disabled_skills);
+    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
     return agent;
   });
 
   const customSubAgents = protoCustomAgents.map((agent) => {
-    const override = getAgentOverride(config, agent.name);
+    const override = getOverrideFromAgents(mergedAgents, agent.name);
     if (override) {
       applyOverrides(agent, override);
     }
-    applyDefaultPermissions(agent, override?.skills, config?.disabled_skills);
+    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
     return agent;
   });
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
-    applyDefaultPermissions(agent, undefined, config?.disabled_skills);
+    applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
     return agent;
   });
 
   // Build dynamic councillor agents from council config (flatten mode).
   // Each councillor becomes a dispatchable subagent with its own model,
   // so the orchestrator can task() them with native panes at depth 1.
-  const councillorAgents = buildCouncillorAgents(config, disabled).map(
+  const councillorAgents = buildCouncillorAgents(runtime, disabled).map(
     (agent) => {
-      applyDefaultPermissions(agent, undefined, config?.disabled_skills);
+      applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
       return agent;
     },
   );
@@ -530,11 +520,14 @@ export function createAgents(
   // 3. Create Orchestrator (with its own overrides and custom prompts)
   // DEFAULT_MODELS.orchestrator is undefined; model is resolved via override or
   // left unset so the runtime chat.message hook can pick it from _modelArray.
-  const orchestratorOverride = getAgentOverride(config, 'orchestrator');
+  const orchestratorOverride = getOverrideFromAgents(
+    mergedAgents,
+    'orchestrator',
+  );
   const orchestratorModel =
     orchestratorOverride?.model ?? DEFAULT_MODELS.orchestrator;
   const orchestratorPrompts = loadAgentPrompt('orchestrator', {
-    preset: config?.preset,
+    preset: runtime.preset,
     projectDirectory: options?.projectDirectory,
   });
   const orchestrator = createOrchestratorAgent(
@@ -543,10 +536,7 @@ export function createAgents(
     undefined,
     disabled,
     councillorAgents.length > 0 ? ['council'] : undefined,
-    !(
-      Array.isArray(config?.disabled_tools) &&
-      config.disabled_tools.includes('wait_for_user')
-    ),
+    !runtime.disabledTools.includes('wait_for_user'),
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
@@ -566,7 +556,7 @@ export function createAgents(
   applyDefaultPermissions(
     orchestrator,
     orchestratorOverride?.skills,
-    config?.disabled_skills,
+    runtime.disabledSkills,
   );
 
   // Collect all display names from orchestrator and all subagents
@@ -583,13 +573,13 @@ export function createAgents(
   // 3b. Append custom orchestrator hints from built-in and custom agent overrides.
   const extraOrchestratorPromptsList = [...builtInSubAgents, ...customSubAgents]
     .map((agent) => {
-      const override = getAgentOverride(config, agent.name);
+      const override = getOverrideFromAgents(mergedAgents, agent.name);
       return override?.orchestratorPrompt;
     })
     .filter((prompt): prompt is string => Boolean(prompt));
 
   const acpOrchestratorPrompts = acpSubAgents.map((agent) => {
-    const acp = config?.acpAgents?.[agent.name];
+    const acp = runtime.acpAgents[agent.name];
     if (acp?.orchestratorPrompt) return acp.orchestratorPrompt;
     return [
       `@${agent.name}`,
@@ -680,15 +670,15 @@ export function createAgents(
  * Get agent configurations formatted for the OpenCode SDK.
  * Converts agent definitions to SDK config format and applies classification metadata.
  *
- * @param config - Optional plugin configuration with agent overrides
+ * @param runtime - Runtime configuration interface (plugin layer, preset-aware)
  * @param options - Optional options including projectDirectory
  * @returns Record mapping agent names to their SDK configurations
  */
 export function getAgentConfigs(
-  config?: PluginConfig,
+  runtime: RuntimeConfig,
   options?: { projectDirectory?: string },
 ): Record<string, SDKAgentConfig> {
-  const agents = createAgents(config, options);
+  const agents = createAgents(runtime, options);
 
   const applyClassification = (
     name: string,
@@ -729,7 +719,7 @@ export function getAgentConfigs(
     } = {
       ...a.config,
       description: a.description,
-      mcps: getAgentMcpList(a.name, config),
+      mcps: getAgentMcpList(a.name, runtime),
     };
 
     if (a.displayName) {

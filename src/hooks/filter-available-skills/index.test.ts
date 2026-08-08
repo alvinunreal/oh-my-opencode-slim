@@ -1,12 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { PluginConfig } from '../../config';
+import { RuntimeConfig } from '../../config/runtime';
 import {
   createFilterAvailableSkillsHook,
   filterAvailableSkillsText,
 } from './index';
 
 const mockCtx = {} as PluginInput;
+const TEST_DIRECTORY = 'runtime-test-filter-skills';
+
+function runtimeFor(config: PluginConfig | undefined = {}) {
+  RuntimeConfig.reset(TEST_DIRECTORY);
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  return RuntimeConfig.get(TEST_DIRECTORY);
+}
 
 function skillBlock(name: string): string {
   return `<skill>
@@ -48,7 +56,7 @@ describe('filterAvailableSkillsText', () => {
 
 describe('createFilterAvailableSkillsHook', () => {
   test('ignores messages without OpenCode info or parts', async () => {
-    const hook = createFilterAvailableSkillsHook(mockCtx, {});
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor());
     const output = {
       messages: [
         {},
@@ -74,7 +82,7 @@ describe('createFilterAvailableSkillsHook', () => {
       },
     };
 
-    const hook = createFilterAvailableSkillsHook(mockCtx, config);
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
     const output = {
       messages: [
         {
@@ -110,7 +118,7 @@ describe('createFilterAvailableSkillsHook', () => {
       },
     };
 
-    const hook = createFilterAvailableSkillsHook(mockCtx, config);
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
     const output = {
       messages: [
         {
@@ -132,7 +140,7 @@ describe('createFilterAvailableSkillsHook', () => {
   });
 
   test('preserves orchestrator default wildcard allow', async () => {
-    const hook = createFilterAvailableSkillsHook(mockCtx, {});
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor());
     const output = {
       messages: [
         {
@@ -164,7 +172,7 @@ describe('createFilterAvailableSkillsHook', () => {
       },
     };
 
-    const hook = createFilterAvailableSkillsHook(mockCtx, config);
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
     const output = {
       messages: [
         {
@@ -188,7 +196,7 @@ describe('createFilterAvailableSkillsHook', () => {
   });
 
   test('defaults to orchestrator when no agent is present', async () => {
-    const hook = createFilterAvailableSkillsHook(mockCtx, {});
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor());
     const output = {
       messages: [
         {
@@ -216,7 +224,7 @@ describe('createFilterAvailableSkillsHook', () => {
       },
     };
 
-    const hook = createFilterAvailableSkillsHook(mockCtx, config);
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
     const output = {
       messages: [
         {
@@ -259,7 +267,7 @@ describe('createFilterAvailableSkillsHook', () => {
       },
     };
 
-    const hook = createFilterAvailableSkillsHook(mockCtx, config);
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor(config));
     const firstOutput = {
       messages: [
         {

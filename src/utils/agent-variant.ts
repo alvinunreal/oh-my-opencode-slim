@@ -1,9 +1,9 @@
 import {
+  AGENT_ALIASES,
+  type AgentOverrideConfig,
   ALL_AGENT_NAMES,
-  getAgentOverride,
-  getCustomAgentNames,
-  type PluginConfig,
 } from '../config';
+import type { RuntimeConfig } from '../config/runtime';
 
 /**
  * Normalizes an agent name by trimming whitespace and removing the optional @ prefix.
@@ -20,12 +20,27 @@ export function normalizeAgentName(agentName: string): string {
   return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
 }
 
-function getRuntimeAgentNames(config?: PluginConfig): string[] {
+function getRuntimeAgentNames(runtime: RuntimeConfig): string[] {
   const unique = new Set<string>([
     ...ALL_AGENT_NAMES,
-    ...getCustomAgentNames(config),
+    ...runtime.customAgentNames,
   ]);
   return [...unique];
+}
+
+/** Plugin-layer override for a name, alias-aware (no host merge). */
+function getPluginOverride(
+  runtime: RuntimeConfig,
+  name: string,
+): AgentOverrideConfig | undefined {
+  const agents = runtime.agents();
+  return (
+    agents[name] ??
+    agents[
+      Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name) ??
+        ''
+    ]
+  );
 }
 
 /**
@@ -37,7 +52,7 @@ function getRuntimeAgentNames(config?: PluginConfig): string[] {
  * - displayName aliases (e.g. "advisor" -> "oracle")
  */
 export function resolveRuntimeAgentName(
-  config: PluginConfig | undefined,
+  runtime: RuntimeConfig,
   agentName: string,
 ): string {
   const normalized = normalizeAgentName(agentName);
@@ -49,8 +64,8 @@ export function resolveRuntimeAgentName(
     return normalized;
   }
 
-  for (const internalName of getRuntimeAgentNames(config)) {
-    const displayName = getAgentOverride(config, internalName)?.displayName;
+  for (const internalName of getRuntimeAgentNames(runtime)) {
+    const displayName = getPluginOverride(runtime, internalName)?.displayName;
     if (!displayName) {
       continue;
     }
@@ -70,12 +85,12 @@ export function escapeRegExp(value: string): string {
 export type DisplayNameMentionRewriter = (text: string) => string;
 
 export function createDisplayNameMentionRewriter(
-  config: PluginConfig | undefined,
+  runtime: RuntimeConfig,
 ): DisplayNameMentionRewriter {
   const replacements: Array<{ regex: RegExp; internalName: string }> = [];
 
-  for (const internalName of getRuntimeAgentNames(config)) {
-    const displayName = getAgentOverride(config, internalName)?.displayName;
+  for (const internalName of getRuntimeAgentNames(runtime)) {
+    const displayName = getPluginOverride(runtime, internalName)?.displayName;
     if (!displayName) {
       continue;
     }

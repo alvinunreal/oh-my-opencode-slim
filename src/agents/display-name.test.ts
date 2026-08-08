@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import { CouncilConfigSchema } from '../config/council-schema';
+import { RuntimeConfig } from '../config/runtime';
 import { createAgents, getAgentConfigs } from './index';
+
+const TEST_DIRECTORY = 'runtime-test-agents-display-name';
+function runtimeFor(config: PluginConfig | undefined = {}) {
+  RuntimeConfig.reset(TEST_DIRECTORY);
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  return RuntimeConfig.get(TEST_DIRECTORY);
+}
 
 describe('displayName', () => {
   test('stores displayName on agent when configured', () => {
@@ -11,11 +19,11 @@ describe('displayName', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const explorer = agents.find((a) => a.name === 'explorer');
     expect(explorer?.displayName).toBe('researcher');
 
-    const sdkConfigs = getAgentConfigs(config);
+    const sdkConfigs = getAgentConfigs(runtimeFor(config));
     expect((sdkConfigs.explorer as { displayName?: string }).displayName).toBe(
       'researcher',
     );
@@ -28,7 +36,7 @@ describe('displayName', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const prompt = orchestrator?.config.prompt ?? '';
 
@@ -43,7 +51,7 @@ describe('displayName', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const prompt = orchestrator?.config.prompt ?? '';
 
@@ -59,7 +67,7 @@ describe('displayName', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const prompt = orchestrator?.config.prompt ?? '';
 
@@ -76,7 +84,7 @@ describe('displayName', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "Duplicate displayName 'helper' assigned to multiple agents",
     );
   });
@@ -89,7 +97,7 @@ describe('displayName', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "Duplicate displayName 'advisor' assigned to multiple agents",
     );
   });
@@ -101,7 +109,7 @@ describe('displayName', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "displayName 'oracle' conflicts with an agent name",
     );
   });
@@ -113,7 +121,7 @@ describe('displayName', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "displayName 'oracle' conflicts with an agent name",
     );
   });
@@ -125,7 +133,7 @@ describe('displayName', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       /displayName.*conflicts with an agent name/,
     );
   });
@@ -137,7 +145,7 @@ describe('displayName', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "displayName 'senior reviewer' must match /^[a-z][a-z0-9_-]*$/i",
     );
   });
@@ -149,7 +157,7 @@ describe('displayName', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const explorer = agents.find((a) => a.name === 'explorer');
 
     expect(explorer?.displayName).toBe('researcher');
@@ -162,7 +170,7 @@ describe('displayName', () => {
       },
     };
 
-    const sdkConfigs = getAgentConfigs(config) as Record<
+    const sdkConfigs = getAgentConfigs(runtimeFor(config)) as Record<
       string,
       { hidden?: boolean; mode?: string }
     >;
@@ -183,7 +191,7 @@ describe('displayName', () => {
       },
     };
 
-    const sdkConfigs = getAgentConfigs(config) as Record<
+    const sdkConfigs = getAgentConfigs(runtimeFor(config)) as Record<
       string,
       { hidden?: boolean; mode?: string }
     >;
@@ -205,7 +213,7 @@ describe('displayName', () => {
       },
     };
 
-    const sdkConfigs = getAgentConfigs(config);
+    const sdkConfigs = getAgentConfigs(runtimeFor(config));
 
     expect(sdkConfigs.reviewer).toBeUndefined();
     expect(sdkConfigs.councillor?.hidden).toBe(true);
@@ -219,7 +227,7 @@ describe('displayName', () => {
       }),
     };
 
-    const sdkConfigs = getAgentConfigs(config);
+    const sdkConfigs = getAgentConfigs(runtimeFor(config));
 
     expect(sdkConfigs['councillor-alpha']?.hidden).toBe(true);
     expect(sdkConfigs['councillor-alpha']?.mode).toBe('subagent');

@@ -127,7 +127,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
  * @returns The complete orchestrator prompt string
  */
 export function buildOrchestratorPrompt(
-  disabledAgents?: Set<string>,
+  disabledAgents?: ReadonlySet<string>,
   excludeDescriptions?: string[],
   waitForUserEnabled = true,
 ): string {

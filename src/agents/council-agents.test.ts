@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
+import { RuntimeConfig } from '../config/runtime';
 import { buildCouncillorAgents } from './council-agents';
+
+const TEST_DIRECTORY = 'runtime-test-council-agents';
+function runtimeFor(config: PluginConfig | undefined = {}) {
+  RuntimeConfig.reset(TEST_DIRECTORY);
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  return RuntimeConfig.get(TEST_DIRECTORY);
+}
 
 /**
  * Build a minimal CouncilConfig for use in tests.
@@ -20,12 +28,15 @@ function makeConfig(overrides: Record<string, unknown>): PluginConfig {
 
 describe('buildCouncillorAgents', () => {
   test('returns empty array when config is undefined', () => {
-    const agents = buildCouncillorAgents(undefined, new Set());
+    const agents = buildCouncillorAgents(runtimeFor(undefined), new Set());
     expect(agents).toEqual([]);
   });
 
   test('returns empty array when no council config', () => {
-    const agents = buildCouncillorAgents({} as PluginConfig, new Set());
+    const agents = buildCouncillorAgents(
+      runtimeFor({} as PluginConfig),
+      new Set(),
+    );
     expect(agents).toEqual([]);
   });
 
@@ -51,7 +62,7 @@ describe('buildCouncillorAgents', () => {
       },
     });
 
-    const agents = buildCouncillorAgents(config, new Set());
+    const agents = buildCouncillorAgents(runtimeFor(config), new Set());
     expect(agents).toHaveLength(1);
 
     const [agent] = agents;
@@ -74,7 +85,7 @@ describe('buildCouncillorAgents', () => {
       },
     });
 
-    const agents = buildCouncillorAgents(config, new Set());
+    const agents = buildCouncillorAgents(runtimeFor(config), new Set());
     expect(agents).toHaveLength(1);
 
     const [agent] = agents;
@@ -98,7 +109,7 @@ describe('buildCouncillorAgents', () => {
       },
     });
 
-    const agents = buildCouncillorAgents(config, new Set());
+    const agents = buildCouncillorAgents(runtimeFor(config), new Set());
     expect(agents).toHaveLength(1);
 
     const [agent] = agents;
@@ -130,7 +141,10 @@ describe('buildCouncillorAgents', () => {
       },
     });
 
-    const agents = buildCouncillorAgents(config, new Set(['councillor-alpha']));
+    const agents = buildCouncillorAgents(
+      runtimeFor(config),
+      new Set(['councillor-alpha']),
+    );
     expect(agents).toHaveLength(1);
     expect(agents[0].name).toBe('councillor-beta');
   });
@@ -158,7 +172,7 @@ describe('buildCouncillorAgents', () => {
       default_preset: 'custom',
     });
 
-    const agents = buildCouncillorAgents(config, new Set());
+    const agents = buildCouncillorAgents(runtimeFor(config), new Set());
     expect(agents).toHaveLength(1);
     expect(agents[0].name).toBe('councillor-gamma');
   });

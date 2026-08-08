@@ -34,8 +34,8 @@ export const PERMISSION_ONLY_SKILLS: PermissionOnlySkill[] = [
  */
 export function getSkillPermissionsForAgent(
   agentName: string,
-  skillList?: string[],
-  disabledSkillNames?: string[],
+  skillList?: readonly string[],
+  disabledSkillNames?: readonly string[],
 ): Record<string, 'allow' | 'ask' | 'deny'> {
   const disabledSkills = new Set(
     Array.isArray(disabledSkillNames) ? disabledSkillNames : [],

@@ -116,7 +116,7 @@ Key event flows:
 
 ### Dependencies
 
-- **Config System** (`src/config/`): Configuration loading, validation, and runtime presets
+- **Config System** (`src/config/`): Configuration loading, validation, the `RuntimeConfig` runtime-state singleton, and runtime presets
 - **Agents** (`src/agents/`): Agent personalities and permission sets
 - **Tools** (`src/tools/`): Tool implementations (council, webfetch, AST operations)
 - **Hooks** (`src/hooks/`): Lifecycle hooks for auto-update, phase reminders, etc.

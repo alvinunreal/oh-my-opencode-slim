@@ -41,7 +41,7 @@ import {
 } from './network';
 import {
   decideSecondaryModelUse,
-  readSecondaryModelFromConfig,
+  resolveSecondaryModels,
   runSecondaryModelWithFallback,
 } from './secondary-model';
 import type { RedirectStep, SmartfetchOptions } from './types';
@@ -100,10 +100,12 @@ export function createWebfetchTool(
         ),
     },
     async execute(args, ctx) {
-      const secondaryModels = await readSecondaryModelFromConfig(
-        ctx.directory || pluginCtx.directory,
-        options.webfetchModels,
-      );
+      const secondaryModels = resolveSecondaryModels({
+        webfetchModels: options.webfetchModels,
+        smallModel: options.smallModelRef?.() ?? undefined,
+        explorerModel: options.explorerModel,
+        librarianModel: options.librarianModel,
+      });
       const normalized = normalizeUrl(args.url);
       const url = new URL(normalized.url);
       const cacheKey = buildCacheKey(

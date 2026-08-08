@@ -1,6 +1,14 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import { DEFAULT_MODELS, type PluginConfig } from '../config';
+import { RuntimeConfig } from '../config/runtime';
 import { createAgents, getAgentConfigs } from './index';
+
+const TEST_DIRECTORY = 'runtime-test-agents-custom';
+function runtimeFor(config: PluginConfig | undefined = {}) {
+  RuntimeConfig.reset(TEST_DIRECTORY);
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  return RuntimeConfig.get(TEST_DIRECTORY);
+}
 
 describe('custom-agent creation', () => {
   test('infers custom agents from unknown keys', () => {
@@ -14,7 +22,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const names = agents.map((agent) => agent.name);
 
     expect(names).toContain('reviewer');
@@ -39,7 +47,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const customAgent = agents.find((agent) => agent.name === 'test-auditor');
 
     expect(customAgent).toBeDefined();
@@ -66,7 +74,7 @@ describe('custom-agent creation', () => {
         },
       };
 
-      const agentDefs = createAgents(config);
+      const agentDefs = createAgents(runtimeFor(config));
       expect(
         agentDefs.find((agent) => agent.name === 'janitor'),
       ).toBeUndefined();
@@ -89,11 +97,11 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agentDefs = createAgents(config);
+    const agentDefs = createAgents(runtimeFor(config));
     const names = agentDefs.map((agent) => agent.name);
     expect(names).not.toContain('test-auditor');
 
-    const sdkConfigs = getAgentConfigs(config);
+    const sdkConfigs = getAgentConfigs(runtimeFor(config));
     expect(sdkConfigs['test-auditor']).toBeUndefined();
   });
 
@@ -106,7 +114,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow();
+    expect(() => createAgents(runtimeFor(config))).toThrow();
   });
 
   test('accepts arbitrary orchestratorPrompt text for custom agents', () => {
@@ -119,7 +127,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
     expect(orchestrator?.config.prompt).toContain(
       '@cleanup\n- Role: Cleanup specialist',
@@ -141,7 +149,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const wrapper = agents.find((agent) => agent.name === 'claude-research');
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
 
@@ -174,7 +182,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const wrapper = agents.find((agent) => agent.name === 'bridge');
 
     expect(wrapper?.config.model).toBe('opencode-go/glm-5.2');
@@ -203,7 +211,7 @@ describe('custom-agent creation', () => {
         },
       };
 
-      const agents = createAgents(config);
+      const agents = createAgents(runtimeFor(config));
       const wrapper = agents.find((agent) => agent.name === 'bridge');
 
       expect(wrapper?.config.model).toBe(DEFAULT_MODELS.oracle);
@@ -230,7 +238,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "ACP agent 'bridge' conflicts with a custom agent of the same name",
     );
   });
@@ -248,7 +256,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    expect(() => createAgents(config)).toThrow(
+    expect(() => createAgents(runtimeFor(config))).toThrow(
       "ACP agent 'fixer' conflicts with a built-in agent name or alias",
     );
   });
@@ -279,7 +287,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
     const prompt = orchestrator?.config.prompt ?? '';
 
@@ -331,7 +339,7 @@ describe('custom-agent creation', () => {
       },
     };
 
-    const agentsOnlyAcp = createAgents(configOnlyAcp);
+    const agentsOnlyAcp = createAgents(runtimeFor(configOnlyAcp));
     const orchestratorOnlyAcp = agentsOnlyAcp.find(
       (agent) => agent.name === 'orchestrator',
     );
@@ -355,7 +363,7 @@ describe('custom-agent permission passthrough', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const planner = agents.find((a) => a.name === 'planner');
 
     expect(planner).toBeDefined();
@@ -375,7 +383,7 @@ describe('custom-agent permission passthrough', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const explorer = agents.find((a) => a.name === 'explorer');
 
     expect(explorer).toBeDefined();
@@ -395,7 +403,7 @@ describe('custom-agent permission passthrough', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const planner = agents.find((a) => a.name === 'planner');
 
     expect(planner).toBeDefined();
@@ -420,7 +428,7 @@ describe('custom-agent permission passthrough', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const researcher = agents.find((a) => a.name === 'researcher');
 
     expect(researcher).toBeDefined();
@@ -440,7 +448,7 @@ describe('custom-agent permission passthrough', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const reviewer = agents.find((a) => a.name === 'reviewer');
 
     expect(reviewer).toBeDefined();
@@ -464,7 +472,7 @@ describe('permission edge cases', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const planner = agents.find((a) => a.name === 'planner');
 
     expect(planner).toBeDefined();
@@ -483,7 +491,7 @@ describe('permission edge cases', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
 
     expect(orchestrator).toBeDefined();

@@ -1,4 +1,4 @@
-import type { PluginConfig } from '../config';
+import type { RuntimeConfig } from '../config/runtime';
 import { createCouncillorAgent } from './councillor';
 import type { AgentDefinition } from './orchestrator';
 
@@ -12,10 +12,10 @@ const COUNCILLOR_AGENT_PREFIX = 'councillor-';
  * (e.g. "alpha") can collide with OpenCode-reserved agent type names.
  */
 export function buildCouncillorAgents(
-  config: PluginConfig | undefined,
+  runtime: RuntimeConfig,
   disabled: Set<string>,
 ): AgentDefinition[] {
-  const council = config?.council;
+  const council = runtime.council;
   if (!council) return [];
 
   const presetName = council.default_preset ?? 'default';

@@ -1,13 +1,18 @@
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
-import { stripJsonComments } from '../../cli/config-io';
-import { getConfigSearchDirs } from '../../cli/paths';
-import { loadPluginConfig } from '../../config/loader';
 import { getClient } from '../../utils/opencode-client';
 import { MAX_MODEL_CONTENT_CHARS } from './constants';
 import type { CachedFetch, SecondaryModel } from './types';
+
+export interface SecondaryModelResolutionInput {
+  /** Dedicated webfetch model(s) from the plugin config (highest priority). */
+  webfetchModels?: Array<{ id: string; variant?: string }>;
+  /** `small_model` from the host's already-loaded merged OpenCode config. */
+  smallModel?: string;
+  /** Explorer agent model id, resolved from in-memory config at construction. */
+  explorerModel?: string;
+  /** Librarian agent model id, resolved from in-memory config at construction. */
+  librarianModel?: string;
+}
 
 function parseModelRef(value: string | undefined) {
   if (!value) return undefined;
@@ -17,7 +22,7 @@ function parseModelRef(value: string | undefined) {
   return { providerID, modelID };
 }
 
-function pickAgentModelRef(value: unknown): string | undefined {
+export function pickAgentModelRef(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -35,95 +40,49 @@ function pickAgentModelRef(value: unknown): string | undefined {
   return undefined;
 }
 
-function findPreferredOpenCodeConfigPath(baseDir: string) {
-  for (const file of ['opencode.jsonc', 'opencode.json']) {
-    const fullPath = path.join(baseDir, file);
-    if (existsSync(fullPath)) return fullPath;
-  }
-  return undefined;
-}
-
-async function readOpenCodeConfigFile(configPath: string | undefined) {
-  if (!configPath) return undefined;
-  try {
-    const content = await readFile(configPath, 'utf8');
-    return JSON.parse(stripJsonComments(content)) as {
-      small_model?: unknown;
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-async function readEffectiveOpenCodeConfig(directory: string) {
-  const projectDir = path.join(directory, '.opencode');
-  const userDirs = getConfigSearchDirs();
-  const projectPath = findPreferredOpenCodeConfigPath(projectDir);
-  const userPath = userDirs
-    .map((configDir) => findPreferredOpenCodeConfigPath(configDir))
-    .find(Boolean);
-
-  const userConfig = await readOpenCodeConfigFile(userPath);
-  const projectConfig = await readOpenCodeConfigFile(projectPath);
-
-  return {
-    small_model: projectConfig?.small_model ?? userConfig?.small_model,
+/**
+ * Resolve the secondary-model chain purely from in-memory inputs.
+ *
+ * No filesystem or config-file access: every value is captured once at
+ * plugin construction (`src/index.ts`) from the already-loaded plugin config
+ * and the host's merged OpenCode config. Keeps the webfetch hot path free of
+ * disk reads.
+ */
+export function resolveSecondaryModels(
+  input: SecondaryModelResolutionInput = {},
+): SecondaryModel[] {
+  const models: SecondaryModel[] = [];
+  const seen = new Set<string>();
+  const addModel = (model: SecondaryModel) => {
+    const key = `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    models.push(model);
   };
-}
 
-export async function readSecondaryModelFromConfig(
-  directory: string,
-  webfetchModels?: Array<{ id: string; variant?: string }>,
-) {
-  try {
-    const models: SecondaryModel[] = [];
-    const seen = new Set<string>();
-    const addModel = (model: SecondaryModel) => {
-      const key = `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ''}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      models.push(model);
-    };
-
-    // Dedicated webfetch model(s) take highest priority, in order
-    if (webfetchModels) {
-      for (const ref of webfetchModels) {
-        const parsedModel = parseModelRef(ref.id);
-        if (!parsedModel) continue;
-        addModel({ ...parsedModel, variant: ref.variant });
-      }
+  // Dedicated webfetch model(s) take highest priority, in order
+  if (input.webfetchModels) {
+    for (const ref of input.webfetchModels) {
+      const parsedModel = parseModelRef(ref.id);
+      if (!parsedModel) continue;
+      addModel({ ...parsedModel, variant: ref.variant });
     }
-
-    const opencodeConfig = await readEffectiveOpenCodeConfig(directory);
-    const parsedSmall = parseModelRef(
-      typeof opencodeConfig.small_model === 'string'
-        ? opencodeConfig.small_model
-        : undefined,
-    );
-    if (parsedSmall) addModel(parsedSmall);
-
-    const pluginConfig = loadPluginConfig(directory);
-    const explorerModel = pickAgentModelRef(
-      pluginConfig.agents?.explorer?.model,
-    );
-    const librarianModel = pickAgentModelRef(
-      pluginConfig.agents?.librarian?.model,
-    );
-
-    const parsedExplorer = explorerModel
-      ? parseModelRef(explorerModel)
-      : undefined;
-    if (parsedExplorer) addModel(parsedExplorer);
-
-    const parsedLibrarian = librarianModel
-      ? parseModelRef(librarianModel)
-      : undefined;
-    if (parsedLibrarian) addModel(parsedLibrarian);
-
-    return models;
-  } catch {
-    return [];
   }
+
+  const parsedSmall = parseModelRef(input.smallModel);
+  if (parsedSmall) addModel(parsedSmall);
+
+  const parsedExplorer = input.explorerModel
+    ? parseModelRef(input.explorerModel)
+    : undefined;
+  if (parsedExplorer) addModel(parsedExplorer);
+
+  const parsedLibrarian = input.librarianModel
+    ? parseModelRef(input.librarianModel)
+    : undefined;
+  if (parsedLibrarian) addModel(parsedLibrarian);
+
+  return models;
 }
 
 function buildPrompt(content: string, prompt: string) {

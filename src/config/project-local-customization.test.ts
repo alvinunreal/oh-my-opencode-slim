@@ -4,7 +4,15 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createAgents } from '../agents';
 import { loadAgentPrompt, mergePluginConfigs } from './loader';
-import { PluginConfigSchema } from './schema';
+import { RuntimeConfig } from './runtime';
+import { type PluginConfig, PluginConfigSchema } from './schema';
+
+const TEST_DIRECTORY = 'runtime-test-project-local';
+function runtimeFor(config: PluginConfig | undefined = {}) {
+  RuntimeConfig.reset(TEST_DIRECTORY);
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  return RuntimeConfig.get(TEST_DIRECTORY);
+}
 
 describe('Project-local customization - 15 core cases', () => {
   let tempDir: string;
@@ -106,7 +114,9 @@ describe('Project-local customization - 15 core cases', () => {
       'append prompt',
     );
 
-    const agents = createAgents(undefined, { projectDirectory: projectDir });
+    const agents = createAgents(runtimeFor(undefined), {
+      projectDirectory: projectDir,
+    });
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe('replacement prompt\n\nappend prompt');
   });
@@ -122,7 +132,7 @@ describe('Project-local customization - 15 core cases', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe(
       'You are the inline oracle prompt override.',
@@ -148,7 +158,7 @@ describe('Project-local customization - 15 core cases', () => {
       'File prompt override content',
     );
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe(
       'You are the inline oracle prompt override.',
@@ -171,7 +181,7 @@ describe('Project-local customization - 15 core cases', () => {
     fs.mkdirSync(userDir, { recursive: true });
     fs.writeFileSync(path.join(userDir, 'oracle_append.md'), 'append content');
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe(
       'You are the inline oracle prompt override.\n\nappend content',
@@ -190,7 +200,7 @@ describe('Project-local customization - 15 core cases', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator?.config.prompt).toContain(
       '# Project-specific routing guidance',
@@ -213,7 +223,7 @@ describe('Project-local customization - 15 core cases', () => {
       },
     };
 
-    const agents = createAgents(config);
+    const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator?.config.prompt).not.toContain(
       'Please routing to @oracle',

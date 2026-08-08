@@ -175,7 +175,7 @@ export function processImageAttachments(args: {
   messages: MessageWithParts[];
   workDir: string;
   imageRouting: 'auto' | 'direct';
-  disabledAgents: Set<string>;
+  disabledAgents: ReadonlySet<string>;
   log: (msg: string) => void;
 }): boolean {
   const { messages, workDir, imageRouting, disabledAgents, log } = args;

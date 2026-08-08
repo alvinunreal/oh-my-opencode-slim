@@ -5,7 +5,8 @@
  */
 import type { PluginInput } from '@opencode-ai/plugin';
 import { getSkillPermissionsForAgent } from '../../cli/skills';
-import { getAgentOverride, type PluginConfig } from '../../config';
+import { AGENT_ALIASES, type AgentOverrideConfig } from '../../config';
+import type { RuntimeConfig } from '../../config/runtime';
 import {
   isMessageWithParts,
   isUserMessageWithParts,
@@ -94,7 +95,7 @@ function filterAvailableSkillsText(
  */
 export function createFilterAvailableSkillsHook(
   _ctx: PluginInput,
-  config: PluginConfig,
+  runtime: RuntimeConfig,
 ) {
   const permissionRulesByAgent = new Map<string, Record<string, SkillRule>>();
 
@@ -104,11 +105,18 @@ export function createFilterAvailableSkillsHook(
       return cached;
     }
 
-    const configuredSkills = getAgentOverride(config, agentName)?.skills;
+    const agents = runtime.agents();
+    const agentConfig: AgentOverrideConfig | undefined =
+      agents[agentName] ??
+      agents[
+        Object.keys(AGENT_ALIASES).find(
+          (key) => AGENT_ALIASES[key] === agentName,
+        ) ?? ''
+      ];
     const permissionRules = getSkillPermissionsForAgent(
       agentName,
-      configuredSkills,
-      config.disabled_skills,
+      agentConfig?.skills,
+      runtime.disabledSkills,
     );
     permissionRulesByAgent.set(agentName, permissionRules);
     return permissionRules;
