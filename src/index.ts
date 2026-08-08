@@ -78,6 +78,7 @@ import { isPluginDisabledByEnv } from './utils/env';
 import { initLogger, log } from './utils/logger';
 import { SessionMetadataStore } from './utils/session-metadata';
 import { collapseSystemInPlace } from './utils/system-collapse';
+import { createV2Setup } from './v2';
 
 /**
  * Best-effort log to opencode's app logger.
@@ -126,7 +127,7 @@ async function probeJSDOM(): Promise<string | null> {
 // re-runs, it checks this variable and applies the runtime preset instead
 // of the config file's preset. State lives in config/runtime-preset.ts.
 
-const OhMyOpenCodeLite: Plugin = async (ctx) => {
+export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   initLogger(sessionId);
 
@@ -1329,7 +1330,11 @@ const OhMyOpenCodeLite: Plugin = async (ctx) => {
   };
 };
 
-export default OhMyOpenCodeLite;
+export default {
+  id: 'oh-my-opencode-slim',
+  server: OhMyOpenCodeLite,
+  setup: createV2Setup(),
+};
 
 export type {
   AgentName,

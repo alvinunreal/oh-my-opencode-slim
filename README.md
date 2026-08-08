@@ -132,6 +132,34 @@ bun install
 bun run build
 ```
 
+### OpenCode v2 (`opencode2`) Compatibility
+
+The plugin is **dual-compatible**: the same published package installs and runs
+on both OpenCode v1 (`opencode`) and OpenCode v2 (`opencode2`).
+
+- The package default export is `{ id, server, setup }`. v1 loads `server` (the
+  classic plugin function); v2 loads `setup` (the v2 promise-plugin adapter).
+- v2 loads the self-contained `./server` build (`dist/server.js`) via the
+  `server` export subpath, so no extra dependencies need to be resolvable on the
+  v2 host (except the optional native `@ast-grep/napi` and `jsdom` for the
+  ast-grep / webfetch tools).
+
+To use it with `opencode2`, add the package to your v2 config
+(`~/.config/opencode2/opencode.json`):
+
+```json
+{
+  "plugin": ["oh-my-opencode-slim@latest"]
+}
+```
+
+Then run `opencode2`. The orchestrator + specialist agents, tools, slash
+commands (`/deepwork`, `/reflect`, `/loop`), and the system-prompt / message
+transforms all work on v2. Configure agent models and any MCP servers in your
+v2 `opencode.json` (v2 has no programmatic MCP-registration hook, so built-in
+MCPs must be declared in config). See `docs/opencode-v2-compatibility.md` for the full
+feature matrix and limitations.
+
 ### Getting Started
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.

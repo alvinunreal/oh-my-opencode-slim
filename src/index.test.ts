@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
-import plugin from './index';
+import { OhMyOpenCodeLite as plugin } from './index';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
