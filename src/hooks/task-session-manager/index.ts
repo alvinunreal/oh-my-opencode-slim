@@ -143,6 +143,8 @@ export function createTaskSessionManagerHook(
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobStore;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
+    /** Background-task child sessions must not be re-prompted by foreground fallback. */
+    managedTaskSessionIDs?: Set<string>;
     shouldManageSession: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
@@ -444,11 +446,26 @@ export function createTaskSessionManagerHook(
         };
       };
     }): Promise<void> => {
+      if (input.event.type === 'session.created') {
+        const info = input.event.properties?.info;
+        // Every OpenCode child session is owned by its parent task lifecycle.
+        // Do not limit this to orchestrator parents: a specialist may itself
+        // dispatch a child, and foreground fallback would otherwise abort and
+        // re-prompt that child outside its task awaiter.
+        if (info?.id && info.parentID) {
+          options.managedTaskSessionIDs?.add(info.id);
+        }
+      }
+
       if (input.event.type === 'session.deleted') {
         const sessionID =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
         if (sessionID) {
           deferredInlineErrors.delete(sessionID);
+          options.managedTaskSessionIDs?.delete(sessionID);
+          for (const childJob of backgroundJobBoard.list(sessionID)) {
+            options.managedTaskSessionIDs?.delete(childJob.taskID);
+          }
         }
       }
 
