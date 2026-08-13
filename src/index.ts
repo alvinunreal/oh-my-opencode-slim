@@ -14,6 +14,7 @@ import { RuntimeConfig } from './config/runtime';
 import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
 import { HEALTH_CHECK, minimumExpectedToolCount } from './health-check';
 import {
+  collectManagedChildSessionIDs,
   createApplyPatchHook,
   createAutoUpdateCheckerHook,
   createCacheMonitorHook,
@@ -319,6 +320,29 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       revivedRunTracker.onTerminal(record);
     });
     managedBackgroundTaskSessionIDs = new Set<string>();
+
+    // Restart recovery: after a plugin reload (OpenCode restart or config
+    // change), pre-existing child sessions do not re-emit session.created,
+    // so foreground fallback would treat them as unmanaged and could abort
+    // or re-prompt them outside their task awaiter. Seed ownership from the
+    // session list snapshot; live session.created tracking covers new
+    // children. Best-effort: a failed list call only disables seeding, never
+    // plugin init.
+    void ctx.client.session
+      .list({ query: {} })
+      .then((result) => {
+        for (const id of collectManagedChildSessionIDs(result.data ?? [])) {
+          managedBackgroundTaskSessionIDs.add(id);
+        }
+        log('[task-session-manager] seeded managed child session ownership', {
+          count: managedBackgroundTaskSessionIDs.size,
+        });
+      })
+      .catch((err) => {
+        log('[task-session-manager] could not seed managed child sessions', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions

@@ -15,6 +15,7 @@ import {
 import { createPostFileToolNudgeHook } from '../post-file-tool-nudge';
 import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
+  collectManagedChildSessionIDs,
   createTaskSessionManagerHook,
 } from './index';
 import { resetUserWaitGateForTests } from './user-wait-gate';
@@ -253,6 +254,42 @@ describe('task-session-manager hook', () => {
     });
 
     expect(managedTaskSessionIDs.has('child-1')).toBe(true);
+  });
+
+  test('restart recovery: collects pre-existing child session ids from a session list snapshot', () => {
+    // After a plugin reload, pre-existing child sessions do not re-emit
+    // session.created; ownership must be seeded from session.list() so
+    // foreground fallback leaves them to their task lifecycle.
+    expect(
+      collectManagedChildSessionIDs([
+        { id: 'child-1', parentID: 'parent-1' },
+        { id: 'child-2', parentID: 'specialist-1' },
+        // Sessions without a parent are not task-owned.
+        { id: 'root-session', parentID: undefined },
+        // Malformed entries are ignored.
+        { id: undefined, parentID: 'parent-2' },
+        undefined,
+      ]),
+    ).toEqual(['child-1', 'child-2']);
+  });
+
+  test('restart recovery: seeded ownership is removed when the child session is deleted', async () => {
+    const managedTaskSessionIDs = new Set<string>(
+      collectManagedChildSessionIDs([{ id: 'child-1', parentID: 'parent-1' }]),
+    );
+    const { hook } = createHook({
+      managedTaskSessionIDs,
+      shouldManageSession: () => false,
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
+      },
+    });
+
+    expect(managedTaskSessionIDs.has('child-1')).toBe(false);
   });
 
   test('ignores messages without OpenCode info or parts', async () => {
