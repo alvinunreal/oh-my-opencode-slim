@@ -13,8 +13,8 @@
       "import": "./dist/server.js"
     },
     "./tui": {
-      "import": "./dist/tui.js",
-      "types": "./dist/tui.d.ts"
+      "import": "./dist/v2/tui.js",
+      "types": "./dist/v2/tui.d.ts"
     }
   },
   "bin": {
@@ -55,9 +55,10 @@
   "scripts": {
     "clean:dist": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "build:plugin": "bun build src/index.ts src/tui.ts --outdir dist --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external @opentui/core --external @opentui/solid --external jsdom --external zod",
+    "build:v2-tui": "bun build src/v2/tui.ts --outfile dist/v2/tui.js --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external @opentui/core --external @opentui/solid --external jsdom --external zod",
     "build:v2": "bun build src/index.ts --outfile dist/server.js --target node --format esm --external @ast-grep/napi --external jsdom",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external jsdom --external zod",
-    "build": "bun run clean:dist && bun run build:plugin && bun run build:v2 && bun run build:cli && tsc --emitDeclarationOnly && bun run generate-schema",
+    "build": "bun run clean:dist && bun run build:plugin && bun run build:v2 && bun run build:v2-tui && bun run build:cli && tsc --emitDeclarationOnly && bun run generate-schema",
     "prepare": "bun run build",
     "contributors:add": "all-contributors add",
     "contributors:check": "all-contributors check",
@@ -92,7 +93,8 @@
     "turndown": "^7.2.4"
   },
   "optionalDependencies": {
-    "@opentui/solid": "^0.1.97"
+    "@opentui/solid": "0.5.2",
+    "solid-js": "1.9.12"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

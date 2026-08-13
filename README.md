@@ -144,21 +144,30 @@ on both OpenCode v1 (`opencode`) and OpenCode v2 (`opencode2`).
   v2 host (except the optional native `@ast-grep/napi` and `jsdom` for the
   ast-grep / webfetch tools).
 
-To use it with `opencode2`, add the package to your v2 config
-(`~/.config/opencode2/opencode.json`):
+To use it with `opencode2`, register the package in both v2 configuration files:
+
+Server config (`~/.config/opencode/opencode.jsonc`):
 
 ```json
 {
-  "plugin": ["oh-my-opencode-slim@latest"]
+  "plugins": ["oh-my-opencode-slim@latest"]
+}
+```
+
+TUI config (`~/.config/opencode/cli.json`) for the sidebar and `/preset`:
+
+```json
+{
+  "plugins": ["oh-my-opencode-slim@latest"]
 }
 ```
 
 Then run `opencode2`. The orchestrator + specialist agents, tools, slash
-commands (`/deepwork`, `/reflect`, `/loop`), and the system-prompt / message
-transforms all work on v2. Configure agent models and any MCP servers in your
-v2 `opencode.json` (v2 has no programmatic MCP-registration hook, so built-in
-MCPs must be declared in config). See `docs/opencode-v2-compatibility.md` for the full
-feature matrix and limitations.
+commands (`/deepwork`, `/reflect`, `/loop`, `/preset`), and the system-prompt /
+message transforms all work on v2. Configure agent models and any MCP servers
+in your v2 `opencode.jsonc` (v2 has no programmatic MCP-registration hook, so
+built-in MCPs must be declared in config). See
+`docs/opencode-v2-compatibility.md` for the full feature matrix and limitations.
 
 ### Getting Started
 

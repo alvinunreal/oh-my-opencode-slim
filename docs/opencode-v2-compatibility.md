@@ -25,16 +25,18 @@ export default {
   `{ id, setup }` (Effect Schema 4 rejects function defaults) and calls
   `setup(ctx)` via the promise-plugin bridge.
 
-Two builds are produced:
+Three builds are produced:
 
 | Export | File | Build | Externals |
 |---|---|---|---|
 | `.` (main) | `dist/index.js` | `build:plugin` | zod, jsdom, @ast-grep/napi, @opencode-ai/* (shared with v1 host) |
 | `./server` | `dist/server.js` | `build:v2` | @ast-grep/napi, jsdom only (self-contained for v2) |
+| `./tui` | `dist/v2/tui.js` | `build:v2-tui` | @opentui/*, @opencode-ai/*, zod, jsdom (v2 TUI plugin Definition) |
 
 v2's plugin resolver tries the `server` subpath first
 (`subpaths: ["server", ""]`), so a v2 package install loads the self-contained
-`dist/server.js`. v1 uses the main entry.
+`dist/server.js`. v1 uses the main entry. The v2 TUI plugin is loaded from
+`./tui` when registered in `cli.json`.
 
 ## The v2 adapter (`src/v2/setup.ts`)
 
@@ -75,7 +77,7 @@ the rest.
 | Event handling (session tracking, lifecycle) | ✅ | ✅ | |
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ | |
 | Built-in MCPs (context7, grep.app) | ✅ | ⚠️ config-only | v2 has no programmatic MCP hook; add 2 lines to `opencode.json` — see [below](#restoring-built-in-mcps-on-v2) |
-| `/preset` (interactive switcher) | ✅ | ❌ at load only | the switcher is a v1-TUI 3-level UI; on v2 set `"preset"` in the config file (applies at load) |
+| `/preset` (interactive switcher) | ✅ | ✅ | v2 uses the v2 TUI plugin entrypoint (`./tui` export) with promise-based dialogs |
 | Foreground model fallback (rate-limit failover) | ✅ | ❌ | v2 locks the model at session creation; the plugin API has no per-prompt model override, session model-setter, or `/model` command, so mid-flight switching is impossible |
 | Orchestrator wake scheduler (`backgroundJobs.orchestratorWake`) | ✅ | ❌ | Requires host `session.get` / `todo` / `children` / `status` / `promptAsync`; the v2 shim lacks these APIs so the capability-gated feature stays inactive |
 | Multiplexer (tmux/zellij/herdr/cmux panes) | ✅ | ❌ | v1-TUI-pane integration; v2 renders subagents natively instead |
@@ -84,11 +86,13 @@ the rest.
 
 ## Installing on v2
 
-Add to `~/.config/opencode2/opencode.json`:
+### Server plugin
+
+Add to `~/.config/opencode/opencode.jsonc`:
 
 ```json
 {
-  "plugin": ["oh-my-opencode-slim@latest"]
+  "plugins": ["oh-my-opencode-slim@latest"]
 }
 ```
 
@@ -96,20 +100,35 @@ For local development, point at the built `dist/server.js` directly:
 
 ```json
 {
-  "plugin": ["/path/to/oh-my-opencode-slim/dist/server.js"]
+  "plugins": ["/path/to/oh-my-opencode-slim/dist/server.js"]
 }
 ```
+
+### TUI plugin (sidebar + `/preset`)
+
+The TUI plugin provides the OMO-Slim agent status sidebar and the `/preset`
+slash command in the command palette. Register it in
+`~/.config/opencode/cli.json`:
+
+```json
+{
+  "plugins": ["oh-my-opencode-slim"]
+}
+```
+
+The `./tui` package export resolves to `dist/v2/tui.js`, a v2 TUI plugin
+Definition (`{ id, setup(context) }`) that registers a `sidebar.content` slot
+and a `/preset` keymap command with `palette: true`.
 
 Then build:
 
 ```bash
 bun install
-bun run build   # produces dist/index.js (v1) AND dist/server.js (v2)
+bun run build   # produces dist/index.js (v1), dist/server.js (v2 server), dist/v2/tui.js (v2 TUI)
 ```
 
 Verify with `opencode2 run "list your specialist agents" --standalone` — the
 orchestrator should name explorer, librarian, oracle, designer, fixer.
-
 ## Configuring models on v2
 
 Agent models are resolved the same way as v1 (per-agent `model` in
@@ -127,7 +146,7 @@ delegated subagents can run.
 
 v2 has no programmatic MCP-registration hook, so the plugin's two built-in
 remote MCPs are not auto-registered. They are plain remote URLs — copy this into
-your `~/.config/opencode2/opencode.json` to restore them:
+your `~/.config/opencode/opencode.jsonc` to restore them:
 
 ```json
 {
@@ -166,11 +185,13 @@ plugin without v2 adding the corresponding capability:
   and there is no `/model` command. A session's model is fixed at creation, so
   the plugin cannot switch models on a rate-limited foreground session.
   v1-only.
-- **Interactive `/preset` switcher impossible.** The switcher is a three-level
-  v1-TUI UI (`@opentui/solid`). v2 slash commands are template-only (no
-  interactive UI, no execute handler). **Workaround:** set `"preset"` in
-  `oh-my-opencode-slim.json` — it applies at plugin load and resolves all agent
-  models correctly.
+- **Interactive `/preset` switcher.** The v2 TUI plugin entrypoint
+  (`src/v2/tui.ts`, exported via `./tui`) registers `/preset` as a v2 keymap
+  command with `palette: true` and `slash`. The three-level preset manager
+  uses the v2 promise-based dialog API (`context.ui.dialog.select/prompt/confirm`)
+  instead of the v1 callback-based `Dialog` components. The on-disk preset
+  switching logic (`switchPresetOnDisk`) is shared with v1. The new preset
+  takes effect on the next conversation/reload, same as v1.
 - **No programmatic MCP registration.** v2's plugin context has no MCP domain.
   Declare MCPs in `opencode.json` (snippet above).
 - **Multiplexer panes.** tmux/zellij/herdr integration is a v1-TUI feature; v2

@@ -12,6 +12,7 @@ import {
   default as tuiPlugin,
 } from './tui';
 import type { TuiSnapshot } from './tui-state';
+import v2TuiPlugin from './v2/tui';
 
 function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
   return {
@@ -22,6 +23,11 @@ function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
     ...overrides,
   };
 }
+
+test('tui package entrypoint supports both host contracts', () => {
+  expect(typeof v2TuiPlugin.setup).toBe('function');
+  expect(v2TuiPlugin.tui).toBe(tuiPlugin.tui);
+});
 
 describe('tui sidebar agents', () => {
   test('hides disabled agents when models are persisted explicitly', () => {
