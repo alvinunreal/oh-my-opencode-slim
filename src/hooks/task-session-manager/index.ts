@@ -37,6 +37,26 @@ import {
 export { BACKGROUND_JOB_BOARD_METADATA_KEY } from './board-injection';
 
 /**
+ * Collect the IDs of sessions owned by a parent task lifecycle from a
+ * `session.list()` snapshot. Used for restart recovery: after a plugin reload
+ * (OpenCode restart or config change), pre-existing child sessions do not
+ * re-emit `session.created`, so without seeding they would be treated as
+ * unmanaged and foreground fallback could abort/re-prompt them outside their
+ * task awaiter.
+ */
+export function collectManagedChildSessionIDs(
+  sessions: ReadonlyArray<{ id?: string; parentID?: string } | undefined>,
+): string[] {
+  const ids: string[] = [];
+  for (const session of sessions) {
+    if (session?.id && session.parentID) {
+      ids.push(session.id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Delay before reconciling idle sessions.
  * Gives late injected completions time to arrive within this window.
  * Completions arriving after the window are still dropped (the race is reduced, not eliminated).
