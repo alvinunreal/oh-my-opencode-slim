@@ -162,6 +162,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let reflectCommandHook: ReturnType<typeof createReflectCommandHook>;
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
+  let managedBackgroundTaskSessionIDs: Set<string>;
   let orchestratorWakeScheduler: ReturnType<
     typeof createOrchestratorWakeScheduler
   >;
@@ -317,6 +318,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       revivedRunTracker.onTerminal(record);
     });
+    managedBackgroundTaskSessionIDs = new Set<string>();
 
     // Initialize MultiplexerSessionManager to handle OpenCode's built-in
     // Task tool sessions
@@ -354,6 +356,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ctx,
       runtime.fallback.maxRetries,
       sessionLifecycle,
+      {
+        shouldHandleSession: (sessionID) =>
+          !backgroundJobCoordinator.get(sessionID) &&
+          !managedBackgroundTaskSessionIDs.has(sessionID),
+      },
     );
 
     deepworkCommandHook = createDeepworkCommandHook();
@@ -367,6 +374,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
       backgroundJobBoard: backgroundJobCoordinator,
       backgroundJobSupervisor,
+      managedTaskSessionIDs: managedBackgroundTaskSessionIDs,
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {

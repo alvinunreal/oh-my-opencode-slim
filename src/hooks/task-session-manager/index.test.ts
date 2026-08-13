@@ -106,6 +106,7 @@ type HookOptions = {
   strategy?: 'latest' | 'checkpoint-compatible';
   maxRetainedSnapshots?: number;
   backgroundJobBoard?: BackgroundJobBoard;
+  managedTaskSessionIDs?: Set<string>;
   sessionStatus?: unknown;
   sessionClient?: Record<string, unknown>;
   idleReconcileDelayMs?: number;
@@ -136,6 +137,7 @@ function createHook(options?: HookOptions) {
       readContextMinLines: options?.readContextMinLines,
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
+      managedTaskSessionIDs: options?.managedTaskSessionIDs,
       backgroundJobSupervisor: options?.backgroundJobSupervisor,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
@@ -234,6 +236,23 @@ describe('task-session-manager hook', () => {
   beforeEach(() => {
     // Process-global gate only — never reset inside createHook/production paths.
     resetUserWaitGateForTests();
+  });
+
+  test('tracks background child sessions before task output registration', async () => {
+    const managedTaskSessionIDs = new Set<string>();
+    const { hook } = createHook({
+      managedTaskSessionIDs,
+      shouldManageSession: () => false,
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: { info: { id: 'child-1', parentID: 'parent-1' } },
+      },
+    });
+
+    expect(managedTaskSessionIDs.has('child-1')).toBe(true);
   });
 
   test('ignores messages without OpenCode info or parts', async () => {

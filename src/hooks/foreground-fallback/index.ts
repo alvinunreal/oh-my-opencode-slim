@@ -28,6 +28,11 @@ import {
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isReplayableUserMessage, partsFromReplayMessage } from '../types';
 
+interface ForegroundFallbackOptions {
+  /** Skip sessions whose background-task lifecycle owns completion delivery. */
+  shouldHandleSession?: (sessionID: string) => boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Retryable error detection
 // ---------------------------------------------------------------------------
@@ -254,6 +259,45 @@ export function isInlineFailoverError(error: unknown): boolean {
   );
 }
 
+/**
+ * True when an assistant message carries meaningful (non-whitespace) text
+ * output. Used by the replay guard: when the failed attempt already emitted
+ * a partial answer before the error (e.g. a mid-stream rate limit), replaying
+ * the user turn would duplicate that output in the conversation.
+ *
+ * Handles both the v2 HTTP shape (`{ type: 'assistant', text }` and
+ * `{ type: 'assistant', parts }`) and the v1 transform shape
+ * (`{ info: { role: 'assistant' }, parts }`). Tool-only parts are not
+ * meaningful output.
+ */
+export function hasMeaningfulAssistantOutput(message: unknown): boolean {
+  if (!message || typeof message !== 'object') return false;
+  const candidate = message as {
+    type?: unknown;
+    info?: { role?: unknown };
+    text?: unknown;
+    parts?: unknown;
+  };
+  const isAssistant =
+    candidate.type === 'assistant' || candidate.info?.role === 'assistant';
+  if (!isAssistant) return false;
+  if (typeof candidate.text === 'string' && candidate.text.trim().length > 0) {
+    return true;
+  }
+  if (Array.isArray(candidate.parts)) {
+    return candidate.parts.some((part): boolean => {
+      if (!part || typeof part !== 'object') return false;
+      const p = part as { type?: unknown; text?: unknown };
+      return (
+        p.type === 'text' &&
+        typeof p.text === 'string' &&
+        p.text.trim().length > 0
+      );
+    });
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -365,6 +409,7 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
+    private readonly options: ForegroundFallbackOptions = {},
   ) {
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
@@ -582,6 +627,12 @@ export class ForegroundFallbackManager {
 
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
+    if (this.options.shouldHandleSession?.(sessionID) === false) {
+      log('[foreground-fallback] skipped externally owned session', {
+        sessionID,
+      });
+      return;
+    }
     if (this.inProgress.has(sessionID)) return;
     // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
@@ -616,6 +667,12 @@ export class ForegroundFallbackManager {
     error?: unknown,
   ): Promise<void> {
     if (!sessionID) return;
+    if (this.options.shouldHandleSession?.(sessionID) === false) {
+      log('[foreground-fallback] skipped externally owned session', {
+        sessionID,
+      });
+      return;
+    }
     if (this.inProgress.has(sessionID)) return;
     if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
@@ -757,6 +814,30 @@ export class ForegroundFallbackManager {
           messageCount: messages.length,
           requestError: result.error ?? undefined,
         });
+        return;
+      }
+
+      // Replay guard: when the failed attempt already emitted meaningful
+      // assistant output before the error (e.g. a partial answer streamed
+      // before a mid-stream rate limit), re-queuing the user turn would
+      // duplicate that output in the conversation. Keep the partial output
+      // and skip the replay. Fallback still applies when the attempt failed
+      // before producing any output (first-token rate limits, pre-stream
+      // errors), because then there is nothing to duplicate.
+      const lastUserIndex = messages.indexOf(lastUser);
+      const failedAttempt = messages
+        .slice(lastUserIndex + 1)
+        .reverse()
+        .find(hasMeaningfulAssistantOutput);
+      if (failedAttempt) {
+        log(
+          '[foreground-fallback] skipping replay: failed attempt already emitted output',
+          {
+            sessionID,
+            agentName,
+            currentModel,
+          },
+        );
         return;
       }
 

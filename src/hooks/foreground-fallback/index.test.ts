@@ -3,6 +3,7 @@ import { isInternalInitiatorPart } from '../../utils';
 import { SessionLifecycle } from '../session-lifecycle';
 import {
   ForegroundFallbackManager,
+  hasMeaningfulAssistantOutput,
   isFailoverError,
   isRetryableError,
 } from './index';
@@ -331,6 +332,68 @@ describe('isFailoverError', () => {
 });
 
 // ---------------------------------------------------------------------------
+// hasMeaningfulAssistantOutput
+// ---------------------------------------------------------------------------
+
+describe('hasMeaningfulAssistantOutput', () => {
+  test('true for v2 assistant message with text', () => {
+    expect(
+      hasMeaningfulAssistantOutput({
+        type: 'assistant',
+        text: 'Here is my partial answer',
+      }),
+    ).toBe(true);
+  });
+
+  test('true for v1 assistant message with text part', () => {
+    expect(
+      hasMeaningfulAssistantOutput({
+        info: { role: 'assistant' },
+        parts: [{ type: 'text', text: 'partial' }],
+      }),
+    ).toBe(true);
+  });
+
+  test('false for assistant message with empty or whitespace-only text', () => {
+    expect(hasMeaningfulAssistantOutput({ type: 'assistant', text: '' })).toBe(
+      false,
+    );
+    expect(
+      hasMeaningfulAssistantOutput({ type: 'assistant', text: '   ' }),
+    ).toBe(false);
+    expect(
+      hasMeaningfulAssistantOutput({
+        info: { role: 'assistant' },
+        parts: [{ type: 'text', text: ' \n ' }],
+      }),
+    ).toBe(false);
+  });
+
+  test('false for assistant message with tool parts only', () => {
+    expect(
+      hasMeaningfulAssistantOutput({
+        type: 'assistant',
+        parts: [{ type: 'tool', tool: 'bash', input: {} }],
+      }),
+    ).toBe(false);
+  });
+
+  test('false for non-assistant messages and non-messages', () => {
+    expect(hasMeaningfulAssistantOutput({ type: 'user', text: 'hello' })).toBe(
+      false,
+    );
+    expect(
+      hasMeaningfulAssistantOutput({
+        info: { role: 'user' },
+        parts: [{ type: 'text', text: 'hello' }],
+      }),
+    ).toBe(false);
+    expect(hasMeaningfulAssistantOutput(null)).toBe(false);
+    expect(hasMeaningfulAssistantOutput('assistant text')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ForegroundFallbackManager - disabled
 // ---------------------------------------------------------------------------
 
@@ -366,6 +429,63 @@ describe('ForegroundFallbackManager session.error', () => {
     mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
+  });
+
+  test('does not detach fallback for externally owned sessions', async () => {
+    const { mocks } = createMockClient();
+    const managedSessions = new Set(['background-child']);
+    const manager = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+      undefined,
+      { shouldHandleSession: (sessionID) => !managedSessions.has(sessionID) },
+    );
+
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'background-child',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'background-child',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('does not abort externally owned sessions on retry status', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+      undefined,
+      { shouldHandleSession: () => false },
+    );
+
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'background-child',
+        status: { type: 'retry', message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
   test('triggers fallback on rate-limit session.error', async () => {
@@ -624,14 +744,15 @@ describe('ForegroundFallbackManager session.error', () => {
     // OpenCode 1.18+ session.messages() returns v2 SessionMessage objects
     // ({ type, text }) instead of the v1 { info, parts } shape. The fallback
     // must locate and re-submit the v2 user text even when an assistant
-    // message appears after it.
+    // message appears after it (here: a failed attempt that emitted no
+    // output, so the replay guard does not apply).
     ({ mocks } = createMockClient({
       messagesData: [
         { id: 'm1', type: 'user', text: 'v2 prompt' },
         {
           id: 'm2',
           type: 'assistant',
-          parts: [{ type: 'text', text: 'reply' }],
+          parts: [],
         },
       ],
     }));
@@ -1992,6 +2113,136 @@ describe('ForegroundFallbackManager deduplication', () => {
         }),
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ForegroundFallbackManager - replay guard
+// ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager replay guard', () => {
+  const ERROR_EVENT = {
+    type: 'session.error',
+    properties: { sessionID: 'sess-guard', error: { message: 'rate limit' } },
+  };
+
+  async function seedModel(mgr: ForegroundFallbackManager): Promise<void> {
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-guard',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+        },
+      },
+    });
+  }
+
+  test('skips replay when the failed attempt already emitted text output (v2 shape)', async () => {
+    const { mocks } = createMockClient({
+      messagesData: [
+        { type: 'user', text: 'hello' },
+        {
+          type: 'assistant',
+          text: 'Here is the partial answer before the rate limit.',
+          error: { message: 'rate limit' },
+        },
+      ],
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedModel(mgr);
+
+    await mgr.handleEvent(ERROR_EVENT);
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('skips replay when the failed attempt already emitted text output (v1 shape)', async () => {
+    const { mocks } = createMockClient({
+      messagesData: [
+        { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
+        {
+          info: { role: 'assistant' },
+          parts: [{ type: 'text', text: 'partial answer' }],
+        },
+      ],
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedModel(mgr);
+
+    await mgr.handleEvent(ERROR_EVENT);
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('falls back normally when the attempt failed before emitting output', async () => {
+    const { mocks } = createMockClient({
+      messagesData: [
+        { type: 'user', text: 'hello' },
+        { type: 'assistant', text: '', error: { message: 'rate limit' } },
+      ],
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedModel(mgr);
+
+    await mgr.handleEvent(ERROR_EVENT);
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.model.providerID).toBe('openai');
+    expect(call[0].body.model.modelID).toBe('gpt-4o');
+  });
+
+  test('falls back normally when the attempt only emitted tool calls', async () => {
+    const { mocks } = createMockClient({
+      messagesData: [
+        { type: 'user', text: 'hello' },
+        {
+          type: 'assistant',
+          parts: [{ type: 'tool', tool: 'bash', input: {} }],
+          error: { message: 'rate limit' },
+        },
+      ],
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedModel(mgr);
+
+    await mgr.handleEvent(ERROR_EVENT);
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not guard on assistant output from an earlier completed turn', async () => {
+    // Assistant output BEFORE the last user message belongs to a previous
+    // turn; only the attempt after the replayed user message matters.
+    const { mocks } = createMockClient({
+      messagesData: [
+        { type: 'user', text: 'first turn' },
+        { type: 'assistant', text: 'completed answer' },
+        { type: 'user', text: 'second turn' },
+        { type: 'assistant', text: '', error: { message: 'rate limit' } },
+      ],
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedModel(mgr);
+
+    await mgr.handleEvent(ERROR_EVENT);
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 });
 
