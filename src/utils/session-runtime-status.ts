@@ -75,7 +75,7 @@ export function runtimeSessionStatus(
   if (snapshot.error) return undefined;
   if (snapshot.malformedSessionIDs.has(sessionID)) return undefined;
   const status = snapshot.statuses.get(sessionID);
-  if (status === undefined) return 'idle';
+  if (status === undefined) return undefined;
   return status;
 }
 

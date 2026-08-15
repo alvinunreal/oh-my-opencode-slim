@@ -43,7 +43,7 @@ export { BACKGROUND_JOB_BOARD_METADATA_KEY } from './board-injection';
  * ponytail: fixed timeout — event-driven confirmation would fully close the race but adds
  * significant complexity for a case that rarely exceeds this window in practice.
  */
-const IDLE_RECONCILE_DELAY_MS = 2_000;
+const IDLE_RECONCILE_DELAY_MS = 15_000;
 
 const RECOVERED_TASK_AGENT_FALLBACK = 'unknown';
 

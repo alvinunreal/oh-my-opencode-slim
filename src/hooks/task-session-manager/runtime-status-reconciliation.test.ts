@@ -60,21 +60,41 @@ describe('runtime status reconciliation', () => {
     });
   });
 
-  test('marks an absent runtime session stopped instead of completed', async () => {
+  test('marks an absent runtime session uncertain instead of stopped', async () => {
     const { board, reconciler, contextFilesForPrompt, prune } =
       createReconciler(async () => ({ data: {} }));
 
     await reconciler.reconcile();
 
     expect(board.get('child-1')).toMatchObject({
-      state: 'stopped',
-      terminalUnreconciled: true,
-      resultSummary:
-        'Background session stopped before a terminal task result was received.',
+      state: 'running',
+      statusUncertain: true,
+      lastStatusError:
+        'Runtime status response did not contain a recognized session state.',
     });
     expect(board.resolveReusable('parent-1', 'fix-1', 'fixer')).toBeUndefined();
-    expect(contextFilesForPrompt).toHaveBeenCalledWith('child-1');
-    expect(prune).toHaveBeenCalledWith(board);
+    expect(contextFilesForPrompt).not.toHaveBeenCalled();
+    expect(prune).not.toHaveBeenCalled();
+  });
+
+  test('requires four consecutive idle observations before stopping', async () => {
+    const { board, reconciler } = createReconciler(async () => ({
+      data: { 'child-1': { type: 'idle' } },
+    }));
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await reconciler.reconcile();
+      expect(board.get('child-1')).toMatchObject({
+        state: 'running',
+        statusUncertain: true,
+      });
+    }
+
+    await reconciler.reconcile();
+    expect(board.get('child-1')).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: true,
+    });
   });
 
   test('keeps the board running but explicitly uncertain when lookup fails', async () => {
@@ -182,8 +202,8 @@ describe('runtime status reconciliation', () => {
 
     expect(status).toHaveBeenCalledTimes(2);
     expect(board.get('child-2')).toMatchObject({
-      state: 'stopped',
-      terminalUnreconciled: true,
+      state: 'running',
+      statusUncertain: true,
     });
     reconciler.dispose();
   });

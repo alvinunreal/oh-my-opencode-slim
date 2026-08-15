@@ -7,6 +7,7 @@ import {
 import { log } from '../../utils/logger';
 
 export const RUNTIME_STATUS_RECONCILE_DELAY_MS = 5_000;
+const RUNTIME_IDLE_CONFIRMATIONS = 4;
 
 export function createRuntimeStatusReconciler(options: {
   input: PluginInput;
@@ -24,6 +25,7 @@ export function createRuntimeStatusReconciler(options: {
   let disposed = false;
   let activeReconcile: Promise<void> | undefined;
   let rerunRequested = false;
+  const idleConfirmations = new Map<string, number>();
 
   function schedule(): void {
     if (disposed) return;
@@ -91,12 +93,26 @@ export function createRuntimeStatusReconciler(options: {
         continue;
       }
       if (status === 'busy' || status === 'retry') {
+        idleConfirmations.delete(job.taskID);
         options.backgroundJobBoard.markRunningFromLiveSession(
           job.taskID,
           observedAt,
           job.generation,
         );
         continue;
+      }
+
+      if (status === 'idle') {
+        const confirmations = (idleConfirmations.get(job.taskID) ?? 0) + 1;
+        idleConfirmations.set(job.taskID, confirmations);
+        if (confirmations < RUNTIME_IDLE_CONFIRMATIONS) {
+          options.backgroundJobBoard.markStatusUncertain(
+            job.taskID,
+            'Runtime session is idle; waiting for a terminal task result.',
+            job.generation,
+          );
+          continue;
+        }
       }
 
       const stopped = options.backgroundJobBoard.markStopped(
@@ -106,6 +122,7 @@ export function createRuntimeStatusReconciler(options: {
         job.generation,
       );
       if (stopped?.state !== 'stopped') continue;
+      idleConfirmations.delete(job.taskID);
       options.taskContextTracker.pendingManagedTaskIds.delete(job.taskID);
       options.backgroundJobBoard.addContext(
         job.taskID,
