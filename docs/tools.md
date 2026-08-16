@@ -51,6 +51,8 @@ Fast, structural code search and refactoring - more powerful than plain text gre
 the current orchestrator session, and it does not roll back partial edits. After
 cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
+Recent live-busy tasks are protected for 10 seconds; use `force: true` only for
+user-requested or otherwise confirmed cancellation.
 
 `wait_for_user` is also orchestrator-only. The orchestrator uses it as the final
 tool action after providing concrete instructions for external manual work. Its

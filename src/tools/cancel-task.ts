@@ -27,10 +27,14 @@ interface CancelTaskToolOptions {
   verifyAbortMs?: number;
   abortRetryIntervalMs?: number;
   stableStoppedMs?: number;
+  liveBusyGraceMs?: number;
   deleteTimeoutMs?: number;
   deleteVerifyMs?: number;
   deleteStableStoppedMs?: number;
 }
+
+// Covers two runtime status cycles of approximately 5 seconds each.
+const CANCEL_LIVE_BUSY_GRACE_MS = 10_000;
 
 class SessionStillRunningError extends Error {}
 
@@ -46,6 +50,12 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
         .string()
         .describe('Tracked background task ID or Background Job Board alias'),
       reason: z.string().optional().describe('Short cancellation reason'),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          'Only use when the user explicitly requests cancellation or confirms it is required',
+        ),
     },
     async execute(args, toolContext) {
       const parentSessionID = toolContext?.sessionID;
@@ -130,6 +140,35 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. Accep
           requested,
           'unknown or unowned background task',
         );
+      }
+
+      const lastLiveBusyAt = job.lastLiveBusyAt;
+      const liveBusyGraceMs =
+        options.liveBusyGraceMs ?? CANCEL_LIVE_BUSY_GRACE_MS;
+      if (
+        job.state === 'running' &&
+        lastLiveBusyAt !== undefined &&
+        Date.now() - lastLiveBusyAt < liveBusyGraceMs &&
+        !args.force &&
+        job.deadlineExceededAt === undefined &&
+        !job.timedOut &&
+        !job.statusUncertain
+      ) {
+        const message =
+          'Task has a recent live busy signal; wait until the task is no longer active or pass force: true to cancel.';
+        log('[cancel-task] rejected recent live busy cancellation', {
+          taskID: job.taskID,
+          lastLiveBusyAt,
+          liveBusyGraceMs,
+        });
+        return [
+          `task_id: ${job.taskID}`,
+          'state: running',
+          '',
+          '<task_error>',
+          message,
+          '</task_error>',
+        ].join('\n');
       }
 
       const generation = job.generation;
