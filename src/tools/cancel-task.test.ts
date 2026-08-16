@@ -19,6 +19,7 @@ function createTool(overrides?: {
   verifyAbortMs?: number;
   abortRetryIntervalMs?: number;
   stableStoppedMs?: number;
+  liveBusyGraceMs?: number;
   deleteVerifyMs?: number;
   deleteStableStoppedMs?: number;
 }) {
@@ -38,6 +39,7 @@ function createTool(overrides?: {
     verifyAbortMs: overrides?.verifyAbortMs ?? 1,
     abortRetryIntervalMs: overrides?.abortRetryIntervalMs ?? 0,
     stableStoppedMs: overrides?.stableStoppedMs ?? 0,
+    liveBusyGraceMs: overrides?.liveBusyGraceMs ?? 0,
     deleteVerifyMs: overrides?.deleteVerifyMs ?? 1,
     deleteStableStoppedMs: overrides?.deleteStableStoppedMs ?? 0,
   });
@@ -94,6 +96,148 @@ describe('cancel_task tool', () => {
     await cancelTask.execute({ task_id: 'ora-1' }, context);
 
     expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+  });
+
+  test('rejects cancellation after a recent live busy signal without force', async () => {
+    const now = Date.now();
+    const { board, abort, deleteSession, cancelTask } = createTool({
+      liveBusyGraceMs: 10_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 20_000,
+    });
+    board.markRunningFromLiveSession('ses_1', now);
+
+    const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
+
+    expect(abort).not.toHaveBeenCalled();
+    expect(deleteSession).not.toHaveBeenCalled();
+    expect(String(output)).toContain('state: running');
+    expect(String(output)).toContain('force: true');
+    expect(board.get('ses_1')).toMatchObject({
+      state: 'running',
+      statusUncertain: false,
+    });
+  });
+
+  test('forces cancellation after a recent live busy signal', async () => {
+    const now = Date.now();
+    const { board, abort, cancelTask } = createTool({
+      liveBusyGraceMs: 10_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 20_000,
+    });
+    board.markRunningFromLiveSession('ses_1', now);
+
+    const output = await cancelTask.execute(
+      { task_id: 'ses_1', force: true },
+      context,
+    );
+
+    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(String(output)).toContain('state: cancelled');
+  });
+
+  test('cancels a recent live busy job when status is uncertain', async () => {
+    const now = Date.now();
+    const { board, abort, cancelTask } = createTool({
+      liveBusyGraceMs: 10_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 20_000,
+    });
+    board.markRunningFromLiveSession('ses_1', now - 1);
+    board.markStatusUncertain('ses_1', 'status uncertain', undefined, now);
+
+    const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
+
+    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(String(output)).toContain('state: cancelled');
+  });
+
+  test('rejects fresh live busy cancellation after timeout recovery', async () => {
+    const now = Date.now();
+    const { board, abort, cancelTask } = createTool({
+      liveBusyGraceMs: 10_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 20_000,
+    });
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'running',
+      timedOut: true,
+      now: now - 1,
+    });
+    board.markRunningFromLiveSession('ses_1', now);
+
+    const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
+
+    expect(board.get('ses_1')?.recoverableAfterLiveBusy).toBe(true);
+    expect(abort).not.toHaveBeenCalled();
+    expect(String(output)).toContain('state: running');
+  });
+
+  test('rejects fresh live busy cancellation with historical errors', async () => {
+    const now = Date.now();
+    const { board, abort, cancelTask } = createTool({
+      liveBusyGraceMs: 10_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 30_000,
+    });
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'error',
+      now: now - 20_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 10_000,
+    });
+    board.markRunningFromLiveSession('ses_1', now);
+
+    const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
+
+    expect(board.get('ses_1')?.totalErrors).toBe(1);
+    expect(abort).not.toHaveBeenCalled();
+    expect(String(output)).toContain('state: running');
+  });
+
+  test('cancels a stale live busy job without force', async () => {
+    const now = Date.now();
+    const { board, abort, cancelTask } = createTool({
+      liveBusyGraceMs: 10_000,
+    });
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: now - 20_000,
+    });
+
+    const output = await cancelTask.execute({ task_id: 'ses_1' }, context);
+
+    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    expect(String(output)).toContain('state: cancelled');
   });
 
   test('does not abort raw session IDs tracked by a different parent', async () => {
