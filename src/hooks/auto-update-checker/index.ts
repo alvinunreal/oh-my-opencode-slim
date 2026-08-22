@@ -388,7 +388,9 @@ export function getAutoUpdateInstallDir(): string {
 
 /**
  * Spawns a background process to run 'bun install'.
- * Includes a 60-second timeout to prevent stalling OpenCode.
+ * Includes a timeout to prevent stalling OpenCode. The install runs in
+ * the background and does not block startup, so the limit is generous:
+ * a cold bun cache on a slow registry link can exceed a minute.
  * @param installDir The directory whose package manager context should be refreshed.
  * @returns True if the installation succeeded within the timeout.
  */
@@ -401,7 +403,7 @@ async function runBunInstallSafe(installDir: string): Promise<boolean> {
     });
 
     const timeoutPromise = new Promise<'timeout'>((resolve) =>
-      setTimeout(() => resolve('timeout'), 60_000),
+      setTimeout(() => resolve('timeout'), 300_000),
     );
     const exitPromise = proc.exited.then(() => 'completed' as const);
     const result = await Promise.race([exitPromise, timeoutPromise]);
