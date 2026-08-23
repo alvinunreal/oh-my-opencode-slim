@@ -28,6 +28,11 @@ import {
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isReplayableUserMessage, partsFromReplayMessage } from '../types';
 
+interface ForegroundFallbackOptions {
+  /** Skip sessions whose background-task lifecycle owns completion delivery. */
+  shouldHandleSession?: (sessionID: string) => boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Retryable error detection
 // ---------------------------------------------------------------------------
@@ -254,6 +259,71 @@ export function isInlineFailoverError(error: unknown): boolean {
   );
 }
 
+/**
+ * True when an assistant message shows the failed attempt was active: it
+ * already emitted meaningful (non-whitespace) text output, or it issued a
+ * tool call. Used by the replay guard: when the failed attempt produced
+ * output before the error (e.g. a mid-stream rate limit), replaying the user
+ * turn would duplicate that output; when it issued tool calls, replaying
+ * would re-execute those tools with duplicate side effects.
+ *
+ * Handles both the v2 HTTP shape (`{ type: 'assistant', text }` and
+ * `{ type: 'assistant', parts }`) and the v1 transform shape
+ * (`{ info: { role: 'assistant' }, parts }`). Reasoning/retry parts are not
+ * user-visible output and do not count as activity.
+ */
+export function hasAssistantActivity(message: unknown): boolean {
+  if (!message || typeof message !== 'object') return false;
+  const candidate = message as {
+    type?: unknown;
+    info?: { role?: unknown };
+    text?: unknown;
+    parts?: unknown;
+  };
+  const isAssistant =
+    candidate.type === 'assistant' || candidate.info?.role === 'assistant';
+  if (!isAssistant) return false;
+  if (typeof candidate.text === 'string' && candidate.text.trim().length > 0) {
+    return true;
+  }
+  if (Array.isArray(candidate.parts)) {
+    return candidate.parts.some((part): boolean => {
+      if (!part || typeof part !== 'object') return false;
+      const p = part as { type?: unknown; text?: unknown };
+      if (p.type === 'tool') return true;
+      return (
+        p.type === 'text' &&
+        typeof p.text === 'string' &&
+        p.text.trim().length > 0
+      );
+    });
+  }
+  return false;
+}
+
+/**
+ * True when an assistant message has started streaming but not completed
+ * (`time.created` present without `time.completed`). Such a message is still
+ * settling: its partial output may not have landed in `session.messages()`
+ * yet, so a replay decision made right now could duplicate output that
+ * arrives a moment later.
+ */
+export function isUnsettledAssistantMessage(message: unknown): boolean {
+  if (!message || typeof message !== 'object') return false;
+  const candidate = message as {
+    type?: unknown;
+    info?: { role?: unknown; time?: unknown };
+    time?: unknown;
+  };
+  const isAssistant =
+    candidate.type === 'assistant' || candidate.info?.role === 'assistant';
+  if (!isAssistant) return false;
+  const time = candidate.time ?? candidate.info?.time;
+  if (!time || typeof time !== 'object') return false;
+  const t = time as { created?: unknown; completed?: unknown };
+  return typeof t.created === 'number' && typeof t.completed !== 'number';
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -261,6 +331,14 @@ export function isInlineFailoverError(error: unknown): boolean {
 /** Prevent re-triggering within this window for the same session. */
 const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
+/**
+ * How long to wait for a failed attempt's stream to settle before deciding
+ * to replay. When the error event races the persistence of the streamed
+ * output, the replay guard may not see the partial text yet; waiting once
+ * closes that race without adding a fixed delay to every fallback (the wait
+ * only happens when an unsettled assistant message is present).
+ */
+const STREAM_SETTLE_DELAY_MS = 150;
 const FALLBACK_IN_PROGRESS_KEY = Symbol.for(
   'oh-my-opencode-slim.foreground-fallback.in-progress',
 );
@@ -365,6 +443,7 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
+    private readonly options: ForegroundFallbackOptions = {},
   ) {
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
@@ -582,6 +661,12 @@ export class ForegroundFallbackManager {
 
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
+    if (this.options.shouldHandleSession?.(sessionID) === false) {
+      log('[foreground-fallback] skipped externally owned session', {
+        sessionID,
+      });
+      return;
+    }
     if (this.inProgress.has(sessionID)) return;
     // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
@@ -616,6 +701,12 @@ export class ForegroundFallbackManager {
     error?: unknown,
   ): Promise<void> {
     if (!sessionID) return;
+    if (this.options.shouldHandleSession?.(sessionID) === false) {
+      log('[foreground-fallback] skipped externally owned session', {
+        sessionID,
+      });
+      return;
+    }
     if (this.inProgress.has(sessionID)) return;
     if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
@@ -728,10 +819,6 @@ export class ForegroundFallbackManager {
           return;
         }
       }
-      tried.add(nextModel);
-      // Reset retry count on model switch — the new model starts fresh.
-      this.sessionRetries.delete(sessionID);
-
       const ref = parseModelReference(nextModel);
       if (!ref) {
         log('[foreground-fallback] invalid model format', {
@@ -759,6 +846,70 @@ export class ForegroundFallbackManager {
         });
         return;
       }
+
+      // Replay guard: when the failed attempt already emitted meaningful
+      // assistant output or tool calls before the error (e.g. a partial
+      // answer streamed before a mid-stream rate limit), re-queuing the user
+      // turn would duplicate that output or re-execute those tools. Keep the
+      // partial output and skip the replay. Fallback still applies when the
+      // attempt failed before producing any activity (first-token rate
+      // limits, pre-stream errors), because then there is nothing to
+      // duplicate.
+      const lastUserIndex = messages.indexOf(lastUser);
+      const attemptMessages = messages.slice(lastUserIndex + 1);
+      if (attemptMessages.some(hasAssistantActivity)) {
+        log(
+          '[foreground-fallback] skipping replay: failed attempt already emitted output',
+          {
+            sessionID,
+            agentName,
+            currentModel,
+          },
+        );
+        return;
+      }
+
+      // Stream-settlement hardening: the failed attempt's stream may still
+      // be settling when the error event fires, so its partial output may
+      // not have landed in session.messages() yet. When an attempt message
+      // is open (started but not completed), wait once for it to settle and
+      // re-check before replaying — replaying into a settling stream
+      // duplicates output that arrives a moment later. No fixed delay is
+      // added when nothing is in flight.
+      if (attemptMessages.some(isUnsettledAssistantMessage)) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, STREAM_SETTLE_DELAY_MS),
+        );
+        const refreshed = await session.messages({ path: { id: sessionID } });
+        const refreshedMessages = (refreshed.data ?? []) as unknown[];
+        const refreshedLastUser = [...refreshedMessages]
+          .reverse()
+          .find(isReplayableUserMessage);
+        if (refreshedLastUser) {
+          const refreshedAttempt = refreshedMessages.slice(
+            refreshedMessages.indexOf(refreshedLastUser) + 1,
+          );
+          if (refreshedAttempt.some(hasAssistantActivity)) {
+            log(
+              '[foreground-fallback] skipping replay: partial output landed during stream settlement',
+              {
+                sessionID,
+                agentName,
+                currentModel,
+              },
+            );
+            return;
+          }
+        }
+      }
+
+      // The replay is going to happen: only now consume the fallback model
+      // (record it as tried) and reset the retry budget. Skipping the replay
+      // above must not consume either — a later retryable failure would
+      // otherwise bypass or exhaust a model that was never actually attempted.
+      tried.add(nextModel);
+      // Reset retry count on model switch — the new model starts fresh.
+      this.sessionRetries.delete(sessionID);
 
       // promptAsync queues the prompt and returns immediately - this avoids
       // blocking the event handler while waiting for a full LLM response.
