@@ -98,3 +98,53 @@ To disable specific MCPs for all agents regardless of preset, add them to `disab
 ```
 
 This is useful when you want to cut external network calls entirely (e.g. air-gapped environments or cost control).
+
+---
+
+## Optional: Build Remote Agent
+
+Pair a phone running [Build Remote Agent](https://grokbuildremote.com/) as a **spectator** for this OpenCode session. Protocol `gbr/1`. Independent product; not affiliated with xAI or SpaceX. The phone does not orchestrate oh-my-opencode-slim agents.
+
+This is **not** a built-in MCP. Add it only if you want a pairing device.
+
+```bash
+curl -fsSL https://grokbuildremote.com/install.sh | bash
+gbr-agent version    # need v0.6.0+
+gbr-agent pair && gbr-agent run
+```
+
+```bash
+git clone https://github.com/LinespottingOrg/GrokBuildRemote-Agents.git
+cd GrokBuildRemote-Agents/mcp/gbr-mcp && npm install
+```
+
+OpenCode config (`~/.config/opencode/opencode.json` or project `opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "gbr": {
+      "type": "local",
+      "command": ["node", "GrokBuildRemote-Agents/mcp/gbr-mcp/bin/gbr-mcp.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Allow it per agent with the existing `mcps` array, for example on `orchestrator`:
+
+```json
+{
+  "presets": {
+    "my-preset": {
+      "orchestrator": {
+        "mcps": ["*", "!context7", "gbr"]
+      }
+    }
+  }
+}
+```
+
+After `gbr-agent run`, Bot API is `http://127.0.0.1:8788` (`/health`, `/v1/sessions`). Never put mailbox keys in slim config. Agent source: [GrokBuildRemote-Agents](https://github.com/LinespottingOrg/GrokBuildRemote-Agents).
