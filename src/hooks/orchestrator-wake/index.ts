@@ -38,7 +38,7 @@ import {
 } from './wake-gate';
 
 export const ORCHESTRATOR_WAKE_TEXT =
-  '<system-reminder>\nFinish any incomplete TODOs. Await running agents; if one appears stuck, assess it and cancel/respawn only when justified. Do not respond to this reminder.\n</system-reminder>';
+  '<system-reminder>\nFinish any incomplete TODOs. Await running agents; if one appears stuck, steer it with task_steer to redirect its existing work, and cancel/respawn only when justified. Do not respond to this reminder.\n</system-reminder>';
 
 export const ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT =
   '<system-reminder>\nA background job stopped without a terminal result. Consult the Background Job Board, recover or reroute the work as needed, and do not wait for that job as if it were still running. Do not respond to this reminder.\n</system-reminder>';

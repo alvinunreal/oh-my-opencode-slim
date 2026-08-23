@@ -50,6 +50,7 @@ Fast, structural code search and refactoring - more powerful than plain text gre
 | `task_message` | Queue a non-interrupting message and return `queued` |
 | `task_cancel` | Stop a generation while retaining its session |
 | `task_revive` | Resume a retained session with a new instruction |
+| `task_steer` | Interrupt a running task and relaunch it in the same session with a steering instruction |
 | `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message |
 
 The task controls use the task ID or Background Job Board alias for the task being
@@ -62,6 +63,12 @@ launching replacement work.
 errored retained session may be revived immediately once its retained state has
 been verified safe. Acknowledgement controls parent and job-board consumption and
 reusable-pool display, not same-session revival.
+
+`task_steer` redirects a task that is still running: it aborts the current
+generation (the session and its accumulated context are retained) and relaunches
+the same session with the steering instruction. Use it when a running child
+appears stuck, loops, or drifts from its objective. It is a no-op for tasks that
+already finished; use `task_revive` for those.
 
 `wait_for_user` is also orchestrator-only. The orchestrator uses it as the final
 tool action after providing concrete instructions for external manual work. Its

@@ -41,6 +41,7 @@ The task API and background-control tools are:
 | `task_message` | Queue a non-interrupting message and return `queued` |
 | `task_cancel` | Stop a generation while retaining its session |
 | `task_revive` | Resume a retained session with a new instruction |
+| `task_steer` | Interrupt a running task and relaunch it in the same session with a steering instruction |
 | `wait_for_user` | Plugin-provided orchestrator tool that pauses automatic orchestrator wakes while the user performs external manual work |
 
 If these are not available, the scheduler cannot use the default background
@@ -165,7 +166,11 @@ Use `task_status` to inspect a task and `task_result` to collect its result.
 not stop the current generation. Use `task_cancel` to stop a generation while
 retaining its session, then inspect and reconcile any partial file changes before
 launching replacement work. Use `task_revive` to resume a retained session with a
-new instruction.
+new instruction. Use `task_steer` when a running task appears stuck or drifts
+from its objective: it interrupts the current generation and relaunches the same
+retained session with a steering instruction, preserving accumulated context.
+`task_steer` is a no-op on finished tasks; it does not replace `task_revive`,
+which handles retained terminal sessions.
 
 A cancelled or errored retained session may be revived immediately once its
 retained state has been verified safe. Acknowledgement controls parent and

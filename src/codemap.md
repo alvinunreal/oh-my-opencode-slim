@@ -47,7 +47,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 1. **Config Loading**: `loadPluginConfig()` reads and validates plugin configuration
 2. **Agent Creation**: `createAgents()` instantiates agent definitions with prompts and permissions
 3. **Agent Configuration**: `getAgentConfigs()` merges defaults with user overrides and runtime presets
-4. **Tool Registration**: Tools are created conditionally based on config (council, task_cancel, task_message, task_revive, webfetch, AST-grep)
+4. **Tool Registration**: Tools are created conditionally based on config (council, task_cancel, task_message, task_revive, task_steer, webfetch, AST-grep)
 5. **MCP Registration**: Built-in MCPs are created (filesystem, resource, tools, etc.)
 6. **Multiplexer Setup**: Multiplexer session manager initialized for task tool sessions
 7. **Hook Initialization**: Auto-update checker, phase reminders, skill filters, etc.

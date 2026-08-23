@@ -7,4 +7,5 @@ export { createTaskMessageTool } from './task-message';
 export { createTaskResultTool } from './task-result';
 export { createTaskReviveTool } from './task-revive';
 export { createTaskStatusTool } from './task-status';
+export { createTaskSteerTool } from './task-steer';
 export { createWaitForUserTool } from './wait-for-user';

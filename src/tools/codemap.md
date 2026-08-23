@@ -91,6 +91,13 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
    ├─> Launches a new prompt in the existing child session
    ├─> Registers the new generation and tracks its completion
    └─> Returns the new running generation
+
+4. Orchestrator invokes task_steer
+   ├─> Gates on a running BackgroundJobBoard entry (no-op for finished tasks)
+   ├─> Cancels the current generation, retaining the child session
+   ├─> Launches the steering instruction in the existing child session
+   ├─> Registers the new generation and tracks its completion
+   └─> Returns the new running generation
 ```
 
 ### Explicit User-Wait Flow
@@ -178,6 +185,7 @@ Tools Layer → Background Layer
 ├─ task_cancel → BackgroundJobBoard.resolve() → abortSessionWithTimeout()
 ├─ task_message → BackgroundJobBoard.resolve() → no-reply prompt transport
 ├─ task_revive → BackgroundJobBoard.resolve() → retained-session relaunch
+├─ task_steer → BackgroundJobBoard.resolve() → running-generation interrupt + relaunch
 └─> Returns lifecycle or transport status
 
 Tools Layer → Config Layer

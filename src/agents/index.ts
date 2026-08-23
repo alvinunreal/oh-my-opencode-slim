@@ -43,6 +43,7 @@ const TASK_CONTROL_TOOL_NAMES = [
   'task_cancel',
   'task_message',
   'task_revive',
+  'task_steer',
   'task_status',
   'task_result',
 ] as const;

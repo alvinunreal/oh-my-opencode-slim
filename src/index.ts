@@ -50,6 +50,7 @@ import {
   createTaskResultTool,
   createTaskReviveTool,
   createTaskStatusTool,
+  createTaskSteerTool,
   createWaitForUserTool,
   createWebfetchTool,
 } from './tools';
@@ -181,6 +182,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let taskMessageTools: ReturnType<typeof createTaskMessageTool>;
   let taskResultTools: ReturnType<typeof createTaskResultTool>;
   let taskReviveTools: ReturnType<typeof createTaskReviveTool>;
+  let taskSteerTools: ReturnType<typeof createTaskSteerTool>;
   let revivedRunTracker: ReturnType<typeof createRevivedRunTracker>;
   let markRevivedRunPending: (taskID: string) => void = () => {};
   let markRevivedRunSettled: (taskID: string) => void = () => {};
@@ -488,6 +490,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       backgroundJobSupervisor,
       revivedRunTracker,
     });
+    taskSteerTools = createTaskSteerTool({
+      input: ctx,
+      backgroundJobBoard: backgroundJobCoordinator,
+      shouldManageSession: (sessionID) =>
+        sessionMetadata.getAgent(sessionID) === 'orchestrator',
+      backgroundJobSupervisor,
+      revivedRunTracker,
+    });
     taskStatusTools = createTaskStatusTool({
       input: ctx,
       backgroundJobBoard: backgroundJobCoordinator,
@@ -512,6 +522,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...taskMessageTools,
       ...taskResultTools,
       ...taskReviveTools,
+      ...taskSteerTools,
       ...taskStatusTools,
       ...waitForUserTools,
       ...acpRunTools,
