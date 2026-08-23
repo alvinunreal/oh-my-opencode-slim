@@ -212,6 +212,15 @@ export const BackgroundJobsConfigSchema = z.object({
     .describe(
       'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
     ),
+  stopConfirmationMs: z
+    .number()
+    .int()
+    .min(10_000)
+    .max(300_000)
+    .default(30_000)
+    .describe(
+      'Grace period a job must remain host-declared idle before it is marked stopped (10,000–300,000ms). Default 30,000, covering reasoning-model pauses. Sessions absent from the runtime status map are never treated as stop evidence.',
+    ),
 });
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;

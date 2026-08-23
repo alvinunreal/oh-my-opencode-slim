@@ -16,6 +16,7 @@ import {
 import type {
   InjectedTerminalJobs,
   RetainedBoardSnapshotState,
+  RevivalCorrection,
 } from './board-injection';
 import type { PendingTaskCall } from './pending-call-tracker';
 import type { RevivedRunTracker } from './revived-run-tracker';
@@ -288,6 +289,8 @@ export async function handleEvent(
     retainedBoardSnapshots: Map<string, RetainedBoardSnapshotState>;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     observeSyntheticTerminalPart?: (part: unknown) => void;
+    /** Called when a stopped job revives to running on live activity. */
+    enqueueRevivalCorrection?: (correction: RevivalCorrection) => void;
     revivedRunTracker?: RevivedRunTracker;
   },
 ): Promise<void> {
@@ -626,6 +629,17 @@ export async function handleEvent(
           observation?.generation,
         )
       : undefined;
+    if (
+      before?.state === 'stopped' &&
+      before.terminalUnreconciled &&
+      updated?.state === 'running'
+    ) {
+      deps.enqueueRevivalCorrection?.({
+        parentSessionID: before.parentSessionID,
+        taskID: before.taskID,
+        alias: before.alias,
+      });
+    }
     if (before?.cancellationRequested) {
       log('[task-session-manager] busy observed after cancel request', {
         sessionID: sessionId,

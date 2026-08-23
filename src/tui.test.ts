@@ -392,10 +392,11 @@ describe('dual-contract plugin module', () => {
           };
         },
         router: {
-          current: () => ({ type: 'home' }) as {
-            type?: string;
-            sessionID?: string;
-          },
+          current: () =>
+            ({ type: 'home' }) as {
+              type?: string;
+              sessionID?: string;
+            },
         },
       },
     };

@@ -4,7 +4,12 @@ import type {
   ContextFile,
 } from '../../utils';
 
-export const STOP_CONFIRMATION_GRACE_MS = 5_000;
+/**
+ * Fallback default for the stop-confirmation window when the plugin config
+ * does not supply `backgroundJobs.stopConfirmationMs`. The config default is
+ * 30s; absence of a session in the runtime status map is never stop evidence.
+ */
+export const DEFAULT_STOP_CONFIRMATION_MS = 30_000;
 
 export const STOPPED_WITHOUT_TERMINAL_RESULT =
   'Background session stopped before a terminal task result was received.';
@@ -39,9 +44,12 @@ export function applyConfirmedStop(options: {
 }
 
 /**
- * Idle/absent/non-busy is only a stop candidate. The first observation
- * starts a grace clock; a later observation after the grace confirms
- * the stop. Live busy after the observation wins and leaves the job running.
+ * Host-declared idle is the only stop candidate fed here. The first
+ * observation starts a grace clock; a later observation after the grace
+ * confirms the stop. Live busy after the observation wins and leaves the job
+ * running. Absence is never passed to this function: callers route a session
+ * missing from the runtime status map to uncertainty-only, because absence
+ * does not prove termination.
  */
 export function observeNonBusyRuntime(options: {
   backgroundJobBoard: BackgroundJobStore;

@@ -2,8 +2,8 @@ import type { BackgroundJobStore, ContextFile } from '../../utils';
 import { log } from '../../utils/logger';
 import type { RevivedRunTracker } from './revived-run-tracker';
 import {
+  DEFAULT_STOP_CONFIRMATION_MS,
   observeNonBusyRuntime,
-  STOP_CONFIRMATION_GRACE_MS,
 } from './stop-confirmation';
 
 export function createIdleReconciler(options: {
@@ -94,7 +94,8 @@ export function createIdleReconciler(options: {
         taskID: sessionID,
         observedAt: idleObservedAt,
         generation: observedGeneration,
-        graceMs: options.stopConfirmationGraceMs ?? STOP_CONFIRMATION_GRACE_MS,
+        graceMs:
+          options.stopConfirmationGraceMs ?? DEFAULT_STOP_CONFIRMATION_MS,
         lastStatusError:
           'Runtime session is idle; task termination is unconfirmed.',
         taskContextTracker: options.taskContextTracker,

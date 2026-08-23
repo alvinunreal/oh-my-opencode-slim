@@ -180,10 +180,12 @@ on the local job board.
 
 After a full OpenCode or plugin restart, persisted running background-task
 history is rehydrated into the local job board and immediately reconciled against
-live host session status. A missing or idle child is a stop candidate: after a
-5s confirmation grace it is surfaced as `stopped, unreconciled`, while a busy
-child remains running; status lookup failures remain uncertain rather than being
-treated as completion.
+live host session status. A host-declared idle child is a stop candidate: after
+the `stopConfirmationMs` grace (default 30s, covering reasoning-model pauses) it
+is surfaced as `stopped, unreconciled`, while a busy child remains running; a
+session missing from the status map is never stop evidence (uncertainty only),
+and status lookup failures remain uncertain rather than being treated as
+completion.
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
@@ -455,15 +457,20 @@ checks that single map for every board job still marked `running`, while normal
 session events remain the fast path.
 
 `busy` and `retry` confirm that a job is live and reset any pending stop
-confirmation. An explicit `idle` state or an absent session in an otherwise
-valid map is not immediately terminal: the first observation starts a 5s
-confirmation grace and keeps the job `running, status uncertain`. Repeat
-non-busy evidence after that grace records `stopped, unreconciled` rather than
-`completed`: it means execution ended before a native terminal task result was
-delivered, not that the task succeeded. Stopped sessions are never reusable and
-stay visible to the parent for recovery. A later live `busy` observation can
-revive an unreconciled stopped job. After the parent has been woken and the stop
-acknowledged, stale busy cannot flip the job back to running. Only explicit
+confirmation. An explicit host-declared `idle` state is not immediately
+terminal: the first observation starts the `stopConfirmationMs` grace
+(default 30s, configured 10s-300s) and keeps the job `running, status
+uncertain`. Repeat idle evidence after that grace records `stopped,
+unreconciled` rather than `completed`: it means execution ended before a
+native terminal task result was delivered, not that the task succeeded.
+Stopped sessions are never reusable and stay visible to the parent for
+recovery. A later live `busy` observation can revive an unreconciled stopped
+job; the parent then receives a corrective notice telling it to disregard the
+earlier stopped report. After the parent has been woken and the stop
+acknowledged, stale busy cannot flip the job back to running. A session that
+is simply absent from the status map only marks the job `status uncertain`;
+absence is never treated as stop evidence, so slow reasoning-model pauses or a
+briefly missing map entry cannot false-stop a live job. Only explicit
 terminal task output proves completion, error, or cancellation.
 
 Malformed status entries and failed status requests are surfaced as `status
@@ -480,7 +487,8 @@ child sessions. It is disabled by default:
 {
   "backgroundJobs": {
     "wallClockTimeoutMs": 900000,
-    "abortGraceMs": 10000
+    "abortGraceMs": 10000,
+    "stopConfirmationMs": 30000
   }
 }
 ```

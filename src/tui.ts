@@ -473,8 +473,7 @@ async function setup(ctx: V2TuiContext): Promise<void | (() => void)> {
       if (disposed) return;
       if (currentDirectory !== configDirectory) {
         configDirectory = currentDirectory;
-        ({ configInvalid, compactSidebar } =
-          readConfigState(configDirectory));
+        ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
       }
       ctx.renderer.requestRender();
     } catch {

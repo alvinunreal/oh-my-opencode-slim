@@ -6656,4 +6656,181 @@ describe('task-session-manager hook', () => {
     });
     expect(next.hasInputWait('parent-1')).toBe(false);
   });
+
+  test('delivers a corrective notice when a stopped job revives on live activity', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'revive correction',
+      now: 0,
+    });
+    const generation = board.get('child-1')?.generation;
+    board.markStopped(
+      'child-1',
+      'stopped without terminal result',
+      150,
+      generation,
+      150,
+    );
+    expect(board.get('child-1')).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: true,
+    });
+
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-1', status: { type: 'busy' } },
+      },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+
+    // Internal-initiator turn: the normal board placement bails, but the
+    // correction must still land — the recovery wake itself created the
+    // contradiction.
+    const messages = {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [createInternalAgentTextPart('stopped-job recovery wake')],
+        },
+      ],
+    };
+    await hook.injectBackgroundJobBoard({}, messages as never);
+
+    const parts = (
+      messages.messages as { parts: { type?: string; text?: string }[] }[]
+    ).flatMap((message) => message.parts);
+    const correction = parts.find(
+      (part) =>
+        part.type === 'text' &&
+        typeof part.text === 'string' &&
+        part.text.startsWith('Correction: background job'),
+    );
+    expect(correction).toBeDefined();
+    expect(correction?.text).toContain('child-1');
+    expect(correction?.text).toContain('disregard the earlier stopped notice');
+
+    // The correction is volatile: the next turn strips it from the tail.
+    await hook.injectBackgroundJobBoard({}, messages as never);
+    const after = (
+      messages.messages as { parts: { type?: string; text?: string }[] }[]
+    ).flatMap((message) => message.parts);
+    expect(
+      after.find(
+        (part) =>
+          part.type === 'text' &&
+          typeof part.text === 'string' &&
+          part.text.startsWith('Correction: background job'),
+      ),
+    ).toBeUndefined();
+  });
+
+  test('delivers revival corrections as separate trailing messages and keeps delivering after a prior placement pass', async () => {
+    const board = new BackgroundJobBoard();
+    for (const taskID of ['child-1', 'child-2']) {
+      board.registerLaunch({
+        taskID,
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        description: 'revive correction',
+        now: 0,
+      });
+      const generation = board.get(taskID)?.generation;
+      board.markStopped(
+        taskID,
+        'stopped without terminal result',
+        150,
+        generation,
+        150,
+      );
+    }
+
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    for (const taskID of ['child-1', 'child-2']) {
+      await hook.event({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: taskID, status: { type: 'busy' } },
+        },
+      });
+    }
+
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [createInternalAgentTextPart('stopped-job recovery wake')],
+        },
+      ],
+    };
+    await hook.injectBackgroundJobBoard({}, messages as never);
+
+    // H1 lock: corrections ride a SEPARATE trailing message, never a part on the
+    // already-sent anchor — so advancing the tail never rewrites cached bytes.
+    const delivered = messages.messages as {
+      parts: { type?: string; text?: string }[];
+    }[];
+    expect(
+      delivered[0].parts.find(
+        (p) =>
+          p.type === 'text' &&
+          typeof p.text === 'string' &&
+          p.text.startsWith('Correction:'),
+      ),
+    ).toBeUndefined();
+    expect(
+      delivered
+        .flatMap((m) => m.parts)
+        .filter((p) => p.text?.startsWith('Correction:')).length,
+    ).toBe(2);
+
+    // Queue-aliasing lock: a correction enqueued after a placement pass must
+    // still be delivered (the array identity is preserved across passes).
+    board.registerLaunch({
+      taskID: 'child-3',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'revive correction',
+      now: 0,
+    });
+    const gen3 = board.get('child-3')?.generation;
+    board.markStopped(
+      'child-3',
+      'stopped without terminal result',
+      150,
+      gen3,
+      150,
+    );
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-3', status: { type: 'busy' } },
+      },
+    });
+    await hook.injectBackgroundJobBoard({}, messages as never);
+    const after = messages.messages as {
+      parts: { type?: string; text?: string }[];
+    }[];
+    // The two earlier corrections were volatile and stripped on this turn; only
+    // the post-placement correction remains delivered.
+    expect(
+      after
+        .flatMap((m) => m.parts)
+        .filter((p) => p.text?.startsWith('Correction:')).length,
+    ).toBe(1);
+  });
 });

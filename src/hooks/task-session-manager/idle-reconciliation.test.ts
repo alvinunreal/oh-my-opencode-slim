@@ -71,8 +71,13 @@ describe('idle reconciliation stop confirmation', () => {
   });
 
   test('repeated idle beyond confirmation grace becomes stopped exactly once', async () => {
-    const { board, reconciler, terminalListener, contextFilesForPrompt, prune } =
-      createHarness();
+    const {
+      board,
+      reconciler,
+      terminalListener,
+      contextFilesForPrompt,
+      prune,
+    } = createHarness();
     const generation = board.get('child-1')?.generation ?? 1;
 
     await observeIdle(reconciler, 10, generation);

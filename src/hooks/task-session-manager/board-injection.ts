@@ -163,7 +163,20 @@ export interface InjectionState {
    * onward - the field bust in dumps 000086->000087).
    */
   retainedTailBoards: Map<string, Map<string, RetainedTailBoard>>;
+  /**
+   * Jobs that were marked stopped and later revived by live activity. Each
+   * entry yields one corrective trailing notice for its parent session,
+   * delivered even on internal-initiator turns (the recovery wake itself
+   * created the contradiction). Entries are removed once placed.
+   */
+  pendingRevivalCorrections?: RevivalCorrection[];
 }
+
+export type RevivalCorrection = {
+  parentSessionID: string;
+  taskID: string;
+  alias: string;
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -996,6 +1009,8 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
   const shapeKey = promptShapeKey(realMessages(messages, state.metadataKey));
   reconcileConsumedTerminalJobs(state, sessionID, shapeKey);
 
+  placePendingRevivalCorrections(state, messages, sessionID);
+
   const boardMeta =
     state.backgroundJobBoard.formatForPromptWithMetadata(sessionID);
   const reminder = boardMeta?.text;
@@ -1096,6 +1111,43 @@ function findBoardAnchor(
   metadataKey: string,
 ): BoardAnchor | undefined {
   return boardAnchors(messages, metadataKey).at(-1);
+}
+
+/**
+ * Deliver corrective notices for jobs wrongly marked stopped that later came
+ * back live. Placement deliberately bypasses the internal-initiator bail in
+ * injectLatestBoard: the contradiction is created by an internal recovery-wake
+ * turn, and an unattended session may never see another external turn.
+ *
+ * Each correction is delivered as a WHOLE synthetic trailing message
+ * (appendTrailingVolatileMessage), never as a part appended to an already-sent
+ * anchor message. A trailing message is stripped wholesale on the next turn (it
+ * is never persisted or replayed), so removing it only truncates the payload
+ * end — every earlier message's bytes stay byte-stable and the provider cache
+ * prefix is preserved. Text is deterministic and timestamp-free.
+ */
+function placePendingRevivalCorrections(
+  state: InjectionState,
+  messages: unknown[],
+  sessionID: string,
+): void {
+  const pending = state.pendingRevivalCorrections;
+  if (!pending || pending.length === 0) return;
+  // Deliver in place: splice delivered entries instead of rebinding the array,
+  // so the array identity that enqueueRevivalCorrection pushes to is preserved
+  // (rebinding would orphan every correction enqueued after a prior placement
+  // pass).
+  for (let i = pending.length - 1; i >= 0; i--) {
+    const correction = pending[i];
+    if (correction.parentSessionID !== sessionID) continue;
+    const text = `Correction: background job ${correction.alias} (${correction.taskID}) was incorrectly reported stopped and is running again; disregard the earlier stopped notice.`;
+    appendTrailingVolatileMessage(
+      messages,
+      { role: 'user', sessionID: correction.parentSessionID },
+      { text, metadataKey: state.metadataKey },
+    );
+    pending.splice(i, 1);
+  }
 }
 
 /**
@@ -1335,6 +1387,10 @@ function injectCheckpointBoard(
   if (!tailMessage || !sessionID || !state.shouldManageSession(sessionID)) {
     return;
   }
+
+  // Corrective notices for revived jobs are strategy-independent: deliver them
+  // here too so checkpoint-compatible sessions are not left contradicted.
+  placePendingRevivalCorrections(state, messages, sessionID);
 
   const triggeringMessage = currentMessages.findLast(
     (message) =>

@@ -6,8 +6,8 @@ import {
 } from '../../utils';
 import { log } from '../../utils/logger';
 import {
+  DEFAULT_STOP_CONFIRMATION_MS,
   observeNonBusyRuntime,
-  STOP_CONFIRMATION_GRACE_MS,
 } from './stop-confirmation';
 
 export const RUNTIME_STATUS_RECONCILE_DELAY_MS = 5_000;
@@ -63,7 +63,7 @@ export function createRuntimeStatusReconciler(options: {
     if (disposed) return;
     const observedAt = Date.now();
     const graceMs =
-      options.stopConfirmationGraceMs ?? STOP_CONFIRMATION_GRACE_MS;
+      options.stopConfirmationGraceMs ?? DEFAULT_STOP_CONFIRMATION_MS;
     if (snapshot.error) {
       for (const job of running) {
         options.backgroundJobBoard.markStatusUncertain(
@@ -97,7 +97,10 @@ export function createRuntimeStatusReconciler(options: {
         );
         continue;
       }
-      if (status === undefined && snapshot.malformedSessionIDs.has(job.taskID)) {
+      if (
+        status === undefined &&
+        snapshot.malformedSessionIDs.has(job.taskID)
+      ) {
         options.backgroundJobBoard.markStatusUncertain(
           job.taskID,
           'Runtime status response did not contain a recognized session state.',
@@ -105,18 +108,27 @@ export function createRuntimeStatusReconciler(options: {
         );
         continue;
       }
+      if (status === undefined) {
+        // Absence is never negative evidence: a session missing from the
+        // runtime status map only means liveness is unknown. Route it to
+        // uncertainty-only and never start or advance the stop clock, so a
+        // reasoning-model pause or a slow status map cannot false-stop a job.
+        options.backgroundJobBoard.markStatusUncertain(
+          job.taskID,
+          'Runtime status response did not contain a live session state; task termination is unconfirmed.',
+          job.generation,
+        );
+        continue;
+      }
 
-      const lastStatusError =
-        status === undefined
-          ? 'Runtime status response did not contain a live session state; task termination is unconfirmed.'
-          : 'Runtime session is idle; task termination is unconfirmed.';
       const updated = observeNonBusyRuntime({
         backgroundJobBoard: options.backgroundJobBoard,
         taskID: job.taskID,
         observedAt: requestStartedAt,
         generation: job.generation,
         graceMs,
-        lastStatusError,
+        lastStatusError:
+          'Runtime session is idle; task termination is unconfirmed.',
         taskContextTracker: options.taskContextTracker,
       });
       if (updated?.state === 'stopped') {
