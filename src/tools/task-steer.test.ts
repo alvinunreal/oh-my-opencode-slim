@@ -147,6 +147,30 @@ describe('task_steer tool', () => {
     expect(String(output)).toContain('status: no-op');
   });
 
+  test('when relaunch fails after a successful interrupt, the task is retained cancelled and the error names the recovery path', async () => {
+    const { board, abort, promptAsync, taskSteer } = createTool({
+      promptAsync: async () => {
+        throw new Error('host promptAsync rejected');
+      },
+    });
+    registerRunning(board);
+
+    await expect(
+      taskSteer.execute({ task_id: 'ses_1', prompt: 'redirect' }, context),
+    ).rejects.toThrow('task_revive');
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    // The generation was interrupted but the session is retained and
+    // revivable — this is the designed recovery state, not a lost task.
+    expect(board.get('ses_1')).toMatchObject({
+      generation: 1,
+      state: 'cancelled',
+      terminalUnreconciled: true,
+    });
+    expect(board.get('ses_1')?.resultSummary).toContain('steered');
+  });
+
   test('surfaces abort failure without relaunching', async () => {
     const { board, abort, promptAsync, taskSteer } = createTool({
       abort: async () => {

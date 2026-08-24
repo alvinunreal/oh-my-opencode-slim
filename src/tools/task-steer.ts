@@ -106,15 +106,28 @@ export function createTaskSteerTool(
         captured.generation,
       );
 
-      // Errors from relaunch already carry the task/verb context; only
-      // the cancel step gets wrapped, since its raw errors are tool-agnostic.
-      const steered = await relaunchInExistingSession(options, {
-        parentSessionID,
-        requested,
-        prompt: `The orchestrator has interrupted this task to redirect it. Steer the current work as follows:\n\n${prompt}`,
-        current: steeredJob,
-        verb: 'steer',
-      });
+      // A relaunch failure here means the previous generation WAS
+      // interrupted but the steering instruction never landed. The child
+      // session is retained (state 'cancelled' / 'steered'), and the
+      // recoverable path is task_revive — say so in the error instead of
+      // letting the operator assume the work is lost.
+      let steered = steeredJob;
+      try {
+        steered = await relaunchInExistingSession(options, {
+          parentSessionID,
+          requested,
+          prompt: `The orchestrator has interrupted this task to redirect it. Steer the current work as follows:\n\n${prompt}`,
+          current: steeredJob,
+          verb: 'steer',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Task ${requested} interrupted but could not be steered: ${message}. ` +
+            `The running generation was aborted; the child session is retained (cancelled: steered) and the accumulated context is preserved. ` +
+            `Resume it with task_revive.`,
+        );
+      }
       return renderRelaunchOutput(steered);
     },
   });
