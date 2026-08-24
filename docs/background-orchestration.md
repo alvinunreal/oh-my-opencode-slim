@@ -398,7 +398,7 @@ Behavior:
 
 ```text
 <system-reminder>
-Finish any incomplete TODOs. Await running agents; if one appears stuck, assess it and cancel/respawn only when justified. Do not respond to this reminder.
+Finish any incomplete TODOs. Await running agents; if one appears stuck, resume it with task_revive using a corrective prompt; cancel/respawn only when revival will not work. Do not respond to this reminder.
 </system-reminder>
 ```
 
