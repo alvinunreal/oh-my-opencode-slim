@@ -6,6 +6,7 @@ function createHarness(
   messages: () => unknown,
   prompt = mock(async () => ({})),
   assertBound = false,
+  shouldManageSession?: (sessionID: string) => boolean,
 ) {
   const board = new BackgroundJobBoard();
   board.registerLaunch({
@@ -59,6 +60,7 @@ function createHarness(
     notificationRetryDelayMs: 0,
     onSettled: settled,
     pruneContext: pruned,
+    shouldManageSession,
   });
   return {
     board,
@@ -320,6 +322,31 @@ describe('revived run tracker', () => {
     harness.tracker.onTerminal(terminal);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(harness.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  test('skips parent notification when shouldManageSession returns false', async () => {
+    const harness = createHarness(
+      () => ({ data: [] }),
+      undefined,
+      false,
+      () => false,
+    );
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      description: 'inspect the change',
+    });
+    const terminal = harness.board.updateStatus({
+      taskID: harness.run.taskID,
+      expectedGeneration: harness.run.generation,
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    if (!terminal) throw new Error('missing terminal record');
+    harness.tracker.onTerminal(terminal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.prompt).toHaveBeenCalledTimes(0);
   });
 
   test('discards a retry when the task generation is relaunched', async () => {
