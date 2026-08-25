@@ -1,5 +1,10 @@
 import type { Plugin, ToolDefinition } from '@opencode-ai/plugin';
-import { createAgents, getAgentConfigs, isSubagent } from './agents';
+import {
+  applyModelInheritanceToConfig,
+  createAgents,
+  getAgentConfigs,
+  isSubagent,
+} from './agents';
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
@@ -27,11 +32,13 @@ import {
   createPostFileToolNudgeHook,
   createReflectCommandHook,
   createTaskSessionManagerHook,
+  createToolLoopGuardHook,
   ForegroundFallbackManager,
   SessionLifecycle,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
 import { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
+import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
 import { isMessageWithParts, type MessageWithParts } from './hooks/types';
 import { handleTaskSessionEvent } from './index-event';
 import { createInterviewManager } from './interview';
@@ -170,6 +177,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
+  let toolLoopGuard: ToolLoopGuardHook;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
@@ -450,6 +458,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     applyPatch = createApplyPatchHook(ctx);
 
     jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
+    toolLoopGuard = createToolLoopGuardHook();
 
     // Pre-created wrapped handlers for tool.execute.after (error-isolated)
     postFileToolNudgeAfter = wrapPostToolHook('post-file-tool-nudge', (i, o) =>
@@ -505,6 +514,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         taskSessionManagerHook.beginUserWait(sessionID);
         orchestratorWakeScheduler.suppress(sessionID);
       },
+      waitForUserGuardEnabled: runtime.backgroundJobs.waitForUserGuard,
+      hasOutstandingBackgroundTasks: (sessionID) =>
+        runtime.backgroundJobs.orchestratorWake.enabled &&
+        backgroundJobCoordinator.hasRunning(sessionID),
     });
 
     const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
@@ -700,6 +713,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
       const configAgent = opencodeConfig.agent as Record<string, unknown>;
+      applyModelInheritanceToConfig(configAgent, runtime);
 
       // Model resolution for foreground agents: use _modelArray entries
       // to pick the first model for startup-time selection.
@@ -1111,6 +1125,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.before': async (input, output) => {
+      await toolLoopGuard['tool.execute.before'](
+        input as never,
+        output as never,
+      );
       await applyPatch['tool.execute.before'](input as never, output as never);
       await taskSessionManagerHook['tool.execute.before'](
         input as never,
@@ -1345,6 +1363,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'tool.execute.after': async (input, output) => {
       await postFileToolNudgeAfter(input, output);
       await jsonErrorRecoveryAfter(input, output);
+      await toolLoopGuard['tool.execute.after'](
+        input as never,
+        output as never,
+      );
       await taskSessionManagerAfter(input, output);
     },
   };

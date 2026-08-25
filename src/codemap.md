@@ -4,8 +4,12 @@
 
 Core plugin implementation for **oh-my-opencode-slim**, providing:
 - Main plugin initialization and OpenCode integration (`index.ts`)
+- Dual v1/v2 host export: `default.server` (v1) + `default.setup` (v2 adapter via `src/v2/`)
 - Terminal User Interface (TUI) sidebar plugin for agent status display (`tui.ts`)
 - TUI state persistence and synchronization across sessions (`tui-state.ts`)
+- Three-level TUI `/preset` manager (`tui-preset.ts`)
+- Installer-managed plugin-entry marker (`plugin-entry.ts`)
+- Plugin init health-check thresholds and helpers (`health-check.ts`)
 
 This directory serves as the primary entry point for the plugin's runtime behavior, configuration system, and user-facing UI components.
 
@@ -26,34 +30,38 @@ OpenCode Core → Plugin Initialization (index.ts)
   → Agent Registration (createAgents/getAgentConfigs)
   → Tool Registration (createCancelTaskTool, etc.)
   → MCP Registration (createBuiltinMcps)
-  → Hook Registration (auto-update, phase reminders, etc.)
+  → Hook Registration (auto-update, phase reminders, cache monitor, etc.)
   → Event Subscription (session lifecycle, message updates, tool execution)
   → Runtime State Tracking (tui-state.ts)
   → TUI Rendering (tui.ts → sidebar_content slot)
+  → TUI /preset Management (tui-preset.ts → preset-switch.ts)
 ```
 
 ### Key Components
 
 | File | Role | Dependencies |
 |------|------|--------------|
-| `index.ts` | Main plugin entry, orchestrates all subsystems | Config system, agent factories, tool creators, multiplexer |
-| `tui.ts` | TUI sidebar plugin for agent model display | tui-state.ts, config constants |
+| `index.ts` | Main plugin entry, orchestrates all subsystems; exports dual `server`/`setup` default | Config system, agent factories, tool creators, multiplexer, hooks, v2 adapter |
+| `tui.ts` | TUI sidebar plugin for agent model display | tui-state.ts, config constants, tmux-pane-registry |
 | `tui-state.ts` | Persistent state management for TUI | Node.js fs/promises, os module |
+| `tui-preset.ts` | Three-level `/preset` manager (preset list → agents → agent edit) using `api.ui` dialogs | preset-switch.ts, config loader/constants |
+| `plugin-entry.ts` | Installer-managed plugin entry marker and `PluginEntry` type | none |
+| `health-check.ts` | Init health-check thresholds and disabled-tool-aware minimum tool count | none (kept internal, not re-exported) |
 
 ## Flow
 
 ### Plugin Initialization Flow (index.ts)
 
-1. **Config Loading**: `loadPluginConfig()` reads and validates plugin configuration
-2. **Agent Creation**: `createAgents()` instantiates agent definitions with prompts and permissions
+1. **Config Loading**: `loadPluginConfig()` reads and validates plugin configuration; `RuntimeConfig` singleton seeded and host config captured
+2. **Agent Creation**: `createAgents()` instantiates agent definitions (incl. dynamic councillors) with prompts and permissions
 3. **Agent Configuration**: `getAgentConfigs()` merges defaults with user overrides and runtime presets
-4. **Tool Registration**: Tools are created conditionally based on config (council, task_cancel, task_message, task_revive, webfetch, AST-grep)
-5. **MCP Registration**: Built-in MCPs are created (filesystem, resource, tools, etc.)
+4. **Tool Registration**: Tools are created conditionally based on config (task_cancel, task_message, task_revive, task_status, task_result, wait_for_user, webfetch, AST-grep, acp_run)
+5. **MCP Registration**: Built-in MCPs are created (context7, gh_grep)
 6. **Multiplexer Setup**: Multiplexer session manager initialized for task tool sessions
-7. **Hook Initialization**: Auto-update checker, phase reminders, skill filters, etc.
+7. **Hook Initialization**: Auto-update checker, phase reminders, skill filters, task-session manager, cache monitor, orchestrator-wake scheduler, etc.
 8. **Runtime Model Resolution**: Resolves model arrays to single models for startup
 9. **TUI State Sync**: `recordTuiAgentModels()` captures resolved models/variants for TUI display
-10. **Health Check**: Validates minimum agent/tool/MCP registrations
+10. **Health Check**: Validates agent/tool/MCP counts against `HEALTH_CHECK` thresholds, adjusted for disabled baseline tools via `minimumExpectedToolCount`
 11. **Companion Management**: Ensures companion version compatibility
 
 ### TUI Rendering Flow (tui.ts)
@@ -104,7 +112,10 @@ Key event flows:
    - `experimental.chat.messages.transform` → phase reminders, skill filtering, image attachment processing
 
 5. **Command Execution**:
-   - `command.execute.before` → interview, preset, deepwork, and reflect command hooks
+   - `command.execute.before` → interview, deepwork, reflect, and loop command hooks (preset switching moved to the TUI)
+
+6. **Cache Telemetry**:
+   - `message.updated` (completed assistant requests) → cache monitor observes `tokens.cache.read/write` and logs prompt-cache bust/plateau warnings
 
 ## Integration
 
@@ -120,12 +131,13 @@ Key event flows:
 
 - **Config System** (`src/config/`): Configuration loading, validation, the `RuntimeConfig` runtime-state singleton, and runtime presets
 - **Agents** (`src/agents/`): Agent personalities and permission sets
-- **Tools** (`src/tools/`): Tool implementations (council, webfetch, AST operations)
-- **Hooks** (`src/hooks/`): Lifecycle hooks for auto-update, phase reminders, etc.
+- **Tools** (`src/tools/`): Tool implementations (task lifecycle controls, webfetch, AST operations, ACP)
+- **Hooks** (`src/hooks/`): Lifecycle hooks for auto-update, phase reminders, cache monitor, orchestrator wake, etc.
 - **Multiplexer** (`src/multiplexer/`): Tmux/Zellij session management for child sessions
 - **Council** (`src/agents/council.ts`, `src/agents/council-agents.ts`): Multi-LLM council orchestration
 - **Companion** (`src/companion/`): Companion version management
-- **Utils** (`src/utils/`): Logger, environment checks
+- **Utils** (`src/utils/`): Logger, environment checks, background job board/supervisor, session status
+- **V2 Adapter** (`src/v2/`): Wraps the v1 factory for the v2 host via `default.setup`
 
 ### Cross-Directory Flow
 
@@ -138,7 +150,7 @@ Key event flows:
 
 - Plugin config loaded via `loadPluginConfig()` with support for:
   - User overrides from `~/.config/opencode/oh-my-opencode-slim.json`
-  - Runtime presets via `/preset` command
+  - Preset switching via the TUI `/preset` manager (persisted to the config file, applied on next reload)
   - Environment-based disablement via `OH_MY_OPENCODE_SLIM_DISABLE`
 - Agent configurations merged with user settings from OpenCode config
 - Model resolution supports both string models and array-based fallback chains

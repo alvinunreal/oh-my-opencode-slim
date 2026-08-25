@@ -3,13 +3,15 @@
 ## Responsibility
 
 Centralized utilities and shared abstractions used across the oh-my-opencode-slim plugin. This folder provides:
-- Background job lifecycle management via BackgroundJobBoard
+- Background job lifecycle management (board + store + coordinator + supervisor)
+- Live session-status reads and session metadata tracking
+- In-process opencode client access and client call-shape contracts
 - Environment and configuration utilities
 - Type guards and validation helpers
 - Session and timeout utilities for council dispatch
 - Logging infrastructure with automatic rotation
 - Task output parsing utilities
-- System message utilities
+- System message utilities, agent-variant/model helpers, and platform compat
 
 ## Design
 
@@ -17,7 +19,19 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 - **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks spawned by sub-agents. Implements a reusable session pool pattern with automatic cleanup and reconciliation hooks. Tracks task state (running, stopped, completed, error, cancelled), maintains context files, and provides prompt-ready summaries for agent coordination. `stopped` records an ended runtime session without fabricated task success and is never reusable. Host-declared idle starts a configurable stop-confirmation clock (`backgroundJobs.stopConfirmationMs`, default 30s); live busy resets it. A session absent from the runtime status map is treated as uncertainty-only and never starts the stop clock. After a confirmed stop has been acknowledged, stale busy cannot reopen the job.
 
-- **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map once per observation. It distinguishes a valid absent session (`idle`) from malformed data or lookup failure (`unknown`) so lifecycle policy never treats schema drift as completion.
+- **BackgroundJobStore** (`background-job-store.ts`): Atomic state-store contract (terminal transitions, leases, wall-clock deadline claims) implemented by the board; the single terminal-publication boundary.
+
+- **BackgroundJobCoordinator** (`background-job-coordinator.ts`): Lifecycle policy layer between the board and its consumers — terminal-state subscriptions (replaces fire-and-forget), deferred-close policy, and prompt-metadata shaping.
+
+- **BackgroundJobSupervisor** (`background-job-supervisor.ts`): One-shot wall-clock deadline supervision for background task runs: deadline timer → abort → grace timer → terminal finalization. Owns only timer/generation/abort mechanics.
+
+- **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map once per observation (5s bounded timeout). It distinguishes a valid absent session (`idle`) from malformed data or lookup failure (`unknown`) so lifecycle policy never treats schema drift as completion.
+
+- **Session Metadata** (`session-metadata.ts`): `SessionMetadataStore` — bounded session → agent/directory map with LRU eviction that never evicts active orchestrator sessions.
+
+- **Opencode Client** (`opencode-client.ts`): `getClient(input)` returns the in-process host client (no loopback HTTP, no caching).
+
+- **Session Calls Contract** (`session-calls.contract.ts`): Type-only compile-time contract pinning the nested `{ path, query, body }` client call shapes and asserting the v2-flat shapes are rejected; compiled by `bun run typecheck`.
 
 - **Logger** (`logger.ts`): File-based logging with 7-day retention, automatic directory creation, and write queuing. Logs are written to `~/.local/share/opencode/log/oh-my-opencode-slim.<sessionId>.log` and cleaned up on initialization.
 
@@ -33,6 +47,16 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 - **System Collapse** (`system-collapse.ts`): Utility for collapsing multiple system messages into a single entry by joining with double-newlines.
 
+- **Agent Variant** (`agent-variant.ts`): `normalizeAgentName` (`@`-strip/trim) and `escapeRegExp` for display-name rewriting.
+
+- **Councillor Models** (`councillor-models.ts`): Pure helpers resolving councillor model fallback chains without pulling zod/schema into runtime consumers.
+
+- **Polling** (`polling.ts`): Generic `poll()` helper with interval/max-time/stable-threshold/abort options.
+
+- **Compat & Zip** (`compat.ts`, `zip-extractor.ts`): `crossSpawn` (cross-platform spawn with stdout/stderr collection) and `extractZip` (Windows-aware tar/pwsh fallbacks).
+
+- **Misc** (`escape-html.ts`, `frontmatter.ts`): HTML escaping (interview UI) and frontmatter parsing (interview documents).
+
 ### Design Patterns
 
 - **Singleton**: BackgroundJobBoard is a singleton registry with global state for all background tasks
@@ -43,11 +67,12 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 ## Flow
 
 ### Background Job Lifecycle
-1. Agent launches a background task via BackgroundJobBoard.registerLaunch()
+1. Agent launches a background task via BackgroundJobBoard.registerLaunch() (supervisor arms the wall-clock deadline)
 2. Task runs and updates status via BackgroundJobBoard.updateStatus()
-3. On completion/error/cancellation, task is marked terminal and added to reusable pool
+3. On completion/error/cancellation, task is marked terminal and added to reusable pool; supervisor timers are cleared
 4. Subsequent tasks from same agent/session can reuse completed sessions via aliases
 5. Unused reusable sessions are automatically trimmed based on maxReusablePerAgent
+6. A deadline exceeded while running → coordinator claims it, supervisor aborts the session, and a grace timer finalizes the terminal state
 
 ### Logging Flow
 1. Plugin initializes logger with session ID via initLogger(sessionId)
@@ -90,25 +115,49 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 `src/utils/index.ts` re-exports all utilities, providing a single entry point:
 ```typescript
+export * from './agent-variant';
 export * from './background-job-board';
+export * from './background-job-coordinator';
+export * from './background-job-store';
+export * from './background-job-supervisor';
 export * from './internal-initiator';
-export { getLogDir, initLogger, log } from './logger';
+export { initLogger, log } from './logger';
+export * from './polling';
 export * from './session';
+export * from './session-runtime-status';
 export * from './task';
+export { extractZip } from './zip-extractor';
 ```
 
 This allows consumers to import from `src/utils` rather than individual files.
+Session metadata, the opencode client accessor, and the type-only call-shape
+contract are intentionally imported directly from their modules (not
+re-exported).
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Public API re-exporting all utilities |
+| `index.ts` | Public API re-exporting most utilities |
+| `agent-variant.ts` | Agent name normalization and regex escaping |
 | `background-job-board.ts` | Background task registry and lifecycle manager |
+| `background-job-coordinator.ts` | Lifecycle policy and terminal-state subscriptions |
+| `background-job-store.ts` | Atomic store contract and terminal transitions |
+| `background-job-supervisor.ts` | Wall-clock deadline supervision and abort grace |
+| `compat.ts` | Cross-platform spawn with output collection |
+| `councillor-models.ts` | Councillor model fallback chain helpers |
 | `env.ts` | Environment variable utilities |
+| `escape-html.ts` | HTML escaping helper |
+| `frontmatter.ts` | Frontmatter parsing for interview documents |
 | `guards.ts` | Type guard utilities |
 | `internal-initiator.ts` | Internal agent message marker system |
 | `logger.ts` | File-based logging with rotation |
+| `opencode-client.ts` | In-process host client accessor |
+| `polling.ts` | Generic poll helper |
+| `session-calls.contract.ts` | Compile-time client call-shape contract (type-only) |
+| `session-metadata.ts` | Bounded session → agent/directory store |
+| `session-runtime-status.ts` | Bounded live session-status map reads |
 | `session.ts` | Session timeout, abort, and extraction utilities |
 | `system-collapse.ts` | System message collapsing utility |
 | `task.ts` | Task output parsing utilities |
+| `zip-extractor.ts` | Cross-platform zip extraction |

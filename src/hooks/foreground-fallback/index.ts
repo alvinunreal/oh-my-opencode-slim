@@ -778,7 +778,9 @@ export class ForegroundFallbackManager {
         body: {
           parts: [
             ...replayParts,
-            createInternalAgentTextPart('Foreground fallback replay.'),
+            createInternalAgentTextPart(
+              "<system-reminder>\nThe previous model request failed and is being retried with a fallback model. Continue processing the user's original request above. Do not respond to this reminder.\n</system-reminder>",
+            ),
           ],
           model: ref,
           ...(agentName ? { agent: agentName } : {}),

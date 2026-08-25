@@ -156,6 +156,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
 | `backgroundJobs.stopConfirmationMs` | integer | `30000` | How long a job must stay host-declared idle before it is marked stopped. Accepted values are `10000`–`300000` milliseconds; the default covers reasoning-model pauses. Sessions absent from the runtime status map are never treated as stop evidence. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. |
 | `fallback.maxRetries` | number | `3` | Consecutive retryable 429 responses allowed for the same foreground model before Slim aborts or selects the next configured fallback model. It does not cap OpenCode provider retries or background subagent retries. |
@@ -360,6 +361,47 @@ Notes:
 - `@` prefixes and surrounding whitespace are normalized automatically
 - Display names must be unique
 - Display names cannot conflict with internal agent names like `oracle` or `explorer`
+
+### Independent agent model inheritance
+
+By default, the `fixer` agent inherits the `librarian` model when no fixer
+model is configured. To decouple agents, set `inheritModelFrom` on the agent
+that should follow the current session or the configured orchestrator model:
+
+```jsonc
+{
+  "agents": {
+    "librarian": {
+      "model": "ollama/qwen3.8:27B"
+    },
+    "fixer": {
+      "inheritModelFrom": "session"
+    }
+  }
+}
+```
+
+Supported values are:
+
+- `session`: omit the agent model so OpenCode uses the current session model
+- `orchestrator`: use the orchestrator model resolved during configuration; if
+  none is configured, fall back to the current session model
+
+`orchestrator` means the model resolved during plugin configuration. It does
+not dynamically follow a later foreground fallback to another model.
+Runtime fallback behavior is independent of `inheritModelFrom`.
+
+Model selection follows these rules:
+
+- If the same effective agent override contains both `model` and
+  `inheritModelFrom`, the explicit `model` wins.
+- If `model` is omitted, `inheritModelFrom` is an explicit higher-layer
+  directive: it clears a lower-layer `model` value, including a model supplied
+  by the host agent configuration, and resolves the requested source.
+- If neither field is present, the existing model precedence and the historical
+  fixer-to-librarian fallback remain unchanged.
+
+The setting works in both root `agents` overrides and preset agent overrides.
 
 ### Per-preset agent configuration
 

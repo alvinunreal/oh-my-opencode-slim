@@ -177,10 +177,15 @@ describe('buildOrchestratorWakeFingerprint', () => {
 });
 
 describe('orchestrator wake scheduler', () => {
-  test('immediately wakes an idle parent after a stopped child', async () => {
+  test('immediately wakes an idle parent after a stopped child with an active sibling', async () => {
     const promptAsync = mock(async () => ({}));
     const { scheduler } = createScheduler({
-      sessionClient: makeClient({ todos: [], promptAsync }),
+      sessionClient: makeClient({
+        todos: [],
+        promptAsync,
+        childrenData: [{ id: 'child-2' }],
+        statusData: { 'child-2': { type: 'busy' } },
+      }),
     });
 
     scheduler.triggerStoppedJobRecovery('p1');
@@ -320,13 +325,74 @@ describe('orchestrator wake scheduler', () => {
     expect(promptAsync).toHaveBeenCalledTimes(1);
   });
 
-  test('does not consult a job board and wakes while children are active', async () => {
+  test('suppresses a periodic wake when the initial snapshot has an active child', async () => {
+    const promptAsync = mock(async () => ({}));
+    let statusReads = 0;
+    const { scheduler } = createScheduler({
+      sessionClient: makeClient({
+        promptAsync,
+        childrenData: [{ id: 'child-1', time: { updated: 1 } }],
+        status: mock(async () => ({
+          data: statusReads++ === 0 ? { 'child-1': { type: 'busy' } } : {},
+        })),
+      }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).not.toHaveBeenCalled();
+    expect(clock.pendingCount()).toBe(1);
+
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('suppresses a periodic wake when a child becomes active before the latest snapshot', async () => {
+    const promptAsync = mock(async () => ({}));
+    let statusReads = 0;
+    let releaseFirstGet!: () => void;
+    const firstGet = new Promise<void>((resolve) => {
+      releaseFirstGet = resolve;
+    });
+    let getCalls = 0;
+    const { scheduler } = createScheduler({
+      sessionClient: makeClient({
+        promptAsync,
+        childrenData: [{ id: 'child-1' }],
+        status: mock(async () => ({
+          data: statusReads++ === 0 ? {} : { 'child-1': { type: 'busy' } },
+        })),
+        get: mock(async () => {
+          if (getCalls++ === 0) await firstGet;
+          return {
+            data: {
+              model: { providerID: 'test', id: 'model-a', variant: 'high' },
+            },
+          };
+        }),
+      }),
+    });
+
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(statusReads).toBe(1);
+
+    releaseFirstGet();
+    await clock.advance(0);
+
+    expect(promptAsync).not.toHaveBeenCalled();
+    expect(clock.pendingCount()).toBe(1);
+  });
+
+  test('wakes when host children have no active status', async () => {
     const promptAsync = mock(async () => ({}));
     const { scheduler } = createScheduler({
       sessionClient: makeClient({
         promptAsync,
         childrenData: [{ id: 'child-1', time: { updated: 1 } }],
-        statusData: { 'child-1': { type: 'busy' } },
       }),
     });
     await scheduler.event({

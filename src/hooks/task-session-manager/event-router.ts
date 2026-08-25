@@ -349,7 +349,7 @@ export async function handleEvent(
               parentSessionID: pending.parentSessionId,
               agent: pending.agentType,
               description: pending.label,
-              objective: pending.label,
+              objective: pending.fullObjective ?? pending.label,
               // session.created has no reliable call identity. Keep this
               // registration tentative so an unrelated foreground call cannot
               // accidentally arm wall-clock supervision.

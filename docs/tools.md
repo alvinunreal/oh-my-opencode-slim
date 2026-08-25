@@ -76,6 +76,33 @@ lifecycle, cancellation, and explicit-wait edge cases behind these tools.
 
 ---
 
+## Repeated Tool-Call Loop Guard
+
+A safety net for model-side infinite loops where a sub-agent (e.g. a model
+that can degenerate, such as DeepSeek V4 Flash in Explorer) re-issues the
+exact same tool call with identical arguments and gets identical results,
+making no progress. The plugin watches each session's consecutive identical
+tool calls — counting only calls that return results identical to the
+previous call, so a call returning new information (e.g. a file that was
+modified) never counts toward a block — and responds:
+
+- After the 3rd confirmed-identical result: appends a corrective notice to
+  the tool output telling the model to stop repeating and change approach.
+  Applies to all tools.
+- After the 5th confirmed-identical result: refuses the next identical call
+  for the read-only file tools `read`, `grep`, and `glob`, terminating the
+  loop. Other tools stay warn-only.
+
+The count is confirmed in `tool.execute.after`, so overlapping parallel
+calls cannot inflate it before their results are known.
+
+Exempt from the entire guard: the task-control and wait tools (`task`,
+`task_status`, `task_result`, `task_cancel`, `task_message`, `task_revive`,
+`wait_for_user`, `wait_for_background_tasks`) — those legitimately re-issue
+identical calls while polling a long-running background task.
+
+---
+
 ## Formatters
 
 OpenCode automatically formats files after they are written or edited, using language-specific formatters. No manual step needed.

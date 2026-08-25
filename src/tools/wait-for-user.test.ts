@@ -79,4 +79,60 @@ describe('wait_for_user tool', () => {
 
     expect(beginUserWait).not.toHaveBeenCalled();
   });
+
+  test('intercepts wait_for_user when background tasks are outstanding', async () => {
+    const beginUserWait = mock((_sessionID: string) => {});
+    const waitForUser = createWaitForUserTool({
+      shouldManageSession: () => true,
+      beginUserWait,
+      waitForUserGuardEnabled: true,
+      hasOutstandingBackgroundTasks: () => true,
+    }).wait_for_user;
+
+    const output = await waitForUser.execute(
+      { reason: 'External approval needed' },
+      { sessionID: 'parent-1', agent: 'orchestrator' } as never,
+    );
+
+    expect(beginUserWait).not.toHaveBeenCalled();
+    expect(String(output)).toContain('state: waiting_for_user_skipped');
+    expect(String(output)).toContain('Background tasks are still outstanding');
+    expect(String(output)).toContain('end this turn now');
+  });
+
+  test('passes through when no background tasks are outstanding', async () => {
+    const beginUserWait = mock((_sessionID: string) => {});
+    const waitForUser = createWaitForUserTool({
+      shouldManageSession: () => true,
+      beginUserWait,
+      waitForUserGuardEnabled: true,
+      hasOutstandingBackgroundTasks: () => false,
+    }).wait_for_user;
+
+    const output = await waitForUser.execute(
+      { reason: 'Run the deployment steps' },
+      { sessionID: 'parent-1', agent: 'orchestrator' } as never,
+    );
+
+    expect(beginUserWait).toHaveBeenCalledWith('parent-1');
+    expect(String(output)).toContain('state: waiting_for_user');
+  });
+
+  test('passes through when guard is disabled', async () => {
+    const beginUserWait = mock((_sessionID: string) => {});
+    const waitForUser = createWaitForUserTool({
+      shouldManageSession: () => true,
+      beginUserWait,
+      waitForUserGuardEnabled: false,
+      hasOutstandingBackgroundTasks: () => true,
+    }).wait_for_user;
+
+    const output = await waitForUser.execute(
+      { reason: 'Run the deployment steps' },
+      { sessionID: 'parent-1', agent: 'orchestrator' } as never,
+    );
+
+    expect(beginUserWait).toHaveBeenCalledWith('parent-1');
+    expect(String(output)).toContain('state: waiting_for_user');
+  });
 });

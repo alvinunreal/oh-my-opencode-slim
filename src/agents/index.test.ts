@@ -10,6 +10,7 @@ import {
 } from '../config';
 import { RuntimeConfig } from '../config/runtime';
 import {
+  applyModelInheritanceToConfig,
   createAgents,
   getAgentConfigs,
   getDisabledAgents,
@@ -162,6 +163,104 @@ describe('fixer agent fallback', () => {
     expect(fixer?.config.model).toBe(librarian?.config.model);
   });
 
+  test('fixer can follow the session model independently of librarian', () => {
+    const config: PluginConfig = {
+      preset: 'balanced',
+      presets: {
+        balanced: {
+          orchestrator: { model: 'orchestrator-model' },
+        },
+      },
+      agents: {
+        librarian: { model: 'librarian-local-model' },
+        fixer: { inheritModelFrom: 'session' },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const fixer = agents.find((a) => a.name === 'fixer');
+    const librarian = agents.find((a) => a.name === 'librarian');
+
+    expect(librarian?.config.model).toBe('librarian-local-model');
+    expect(fixer?.config.model).toBeUndefined();
+  });
+
+  test('librarian can follow the orchestrator model independently of fixer', () => {
+    const config: PluginConfig = {
+      preset: 'balanced',
+      presets: {
+        balanced: {
+          orchestrator: { model: 'orchestrator-model' },
+        },
+      },
+      agents: {
+        librarian: { inheritModelFrom: 'orchestrator' },
+        fixer: { model: 'fixer-local-model' },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const librarian = agents.find((a) => a.name === 'librarian');
+    const fixer = agents.find((a) => a.name === 'fixer');
+
+    expect(librarian?.config.model).toBe('orchestrator-model');
+    expect(fixer?.config.model).toBe('fixer-local-model');
+  });
+
+  test('model inheritance works when configured inside a preset', () => {
+    const config: PluginConfig = {
+      preset: 'split',
+      presets: {
+        split: {
+          orchestrator: { model: 'orchestrator-model' },
+          librarian: { model: 'librarian-local-model' },
+          fixer: { inheritModelFrom: 'session' },
+        },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const fixer = agents.find((a) => a.name === 'fixer');
+    const librarian = agents.find((a) => a.name === 'librarian');
+
+    expect(librarian?.config.model).toBe('librarian-local-model');
+    expect(fixer?.config.model).toBeUndefined();
+  });
+
+  test('root inheritance clears a preset model for the same agent', () => {
+    const config: PluginConfig = {
+      preset: 'split',
+      presets: {
+        split: {
+          orchestrator: { model: 'orchestrator-model' },
+          fixer: { model: 'preset-fixer-model' },
+        },
+      },
+      agents: {
+        fixer: { inheritModelFrom: 'session' },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const fixer = agents.find((a) => a.name === 'fixer');
+
+    expect(fixer?.config.model).toBeUndefined();
+  });
+
+  test('legacy alias inheritance clears a canonical lower-layer model', () => {
+    const config: PluginConfig = {
+      preset: 'split',
+      presets: {
+        split: {
+          explorer: { model: 'preset/explorer' },
+        },
+      },
+      agents: {
+        explore: { inheritModelFrom: 'session' },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const explorer = agents.find((a) => a.name === 'explorer');
+
+    expect(explorer?.config.model).toBeUndefined();
+  });
+
   test('fixer uses its own model when explicitly configured', () => {
     const config: PluginConfig = {
       agents: {
@@ -172,6 +271,85 @@ describe('fixer agent fallback', () => {
     const agents = createAgents(runtimeFor(config));
     const fixer = agents.find((a) => a.name === 'fixer');
     expect(fixer?.config.model).toBe('fixer-specific-model');
+  });
+
+  test('explicit fixer model takes precedence over inheritance policy', () => {
+    const config: PluginConfig = {
+      agents: {
+        librarian: { model: 'librarian-model' },
+        fixer: {
+          model: 'fixer-specific-model',
+          inheritModelFrom: 'session',
+        },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const fixer = agents.find((a) => a.name === 'fixer');
+
+    expect(fixer?.config.model).toBe('fixer-specific-model');
+  });
+
+  test('custom agents can follow the session model', () => {
+    const config: PluginConfig = {
+      agents: {
+        reviewer: { inheritModelFrom: 'session' },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const reviewer = agents.find((a) => a.name === 'reviewer');
+
+    expect(reviewer).toBeDefined();
+    expect(reviewer?.config.model).toBeUndefined();
+  });
+
+  test('session inheritance clears a stale host model after config merging', () => {
+    const runtime = runtimeFor({
+      agents: {
+        librarian: { model: 'librarian-local-model' },
+        fixer: { inheritModelFrom: 'session' },
+      },
+    });
+    const configAgent: Record<string, unknown> = {
+      fixer: { model: 'stale-host-model', temperature: 0.2 },
+    };
+
+    applyModelInheritanceToConfig(configAgent, runtime);
+
+    expect(configAgent.fixer).toEqual({ temperature: 0.2 });
+  });
+
+  test('orchestrator inheritance replaces a stale host model', () => {
+    const runtime = runtimeFor({
+      agents: {
+        orchestrator: { model: 'orchestrator-model' },
+        librarian: { inheritModelFrom: 'orchestrator' },
+      },
+    });
+    const configAgent: Record<string, unknown> = {
+      librarian: { model: 'stale-host-model' },
+    };
+
+    applyModelInheritanceToConfig(configAgent, runtime);
+
+    expect(configAgent.librarian).toEqual({ model: 'orchestrator-model' });
+  });
+
+  test('orchestrator inheritance follows the host orchestrator model', () => {
+    const runtime = runtimeFor({
+      agents: {
+        librarian: { inheritModelFrom: 'orchestrator' },
+      },
+    });
+    runtime.captureHostConfig({
+      agent: { orchestrator: { model: 'host-orchestrator-model' } },
+    });
+    const configAgent: Record<string, unknown> = {
+      librarian: { model: 'stale-host-model' },
+    };
+
+    applyModelInheritanceToConfig(configAgent, runtime);
+
+    expect(configAgent.librarian).toEqual({ model: 'host-orchestrator-model' });
   });
 });
 
@@ -877,6 +1055,27 @@ describe('options passthrough', () => {
 });
 
 describe('AgentOverrideConfigSchema options validation', () => {
+  test('accepts supported model inheritance sources', () => {
+    expect(
+      AgentOverrideConfigSchema.safeParse({
+        inheritModelFrom: 'session',
+      }).success,
+    ).toBe(true);
+    expect(
+      AgentOverrideConfigSchema.safeParse({
+        inheritModelFrom: 'orchestrator',
+      }).success,
+    ).toBe(true);
+  });
+
+  test('rejects unsupported model inheritance sources', () => {
+    expect(
+      AgentOverrideConfigSchema.safeParse({
+        inheritModelFrom: 'librarian',
+      }).success,
+    ).toBe(false);
+  });
+
   test('accepts valid options object', () => {
     const result = AgentOverrideConfigSchema.safeParse({
       options: { textVerbosity: 'low' },

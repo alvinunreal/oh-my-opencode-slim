@@ -4,12 +4,13 @@
 
 Centralized tool factory and registry for the OpenCode plugin system. This directory defines all executable tools exposed to OpenCode agents, including:
 
-- **Agent orchestration tools**: Multi-LLM council synthesis, background task lifecycle controls, and ACP agent execution
+- **Task lifecycle tools**: Background task communication, cancellation, status (with live-status policy), results, revival, and HITL continuation control
 - **Code intelligence tools**: AST-grep pattern matching and transformation across languages
 - **Web capabilities**: Smart web fetching with caching and secondary model processing
-- **Runtime configuration**: Preset management for dynamic agent configuration switching
+- **ACP integration**: External agent protocol execution
+- **Preset switching**: On-disk preset persistence helpers used by the TUI `/preset` manager
 
-These tools enable agents to perform file operations, orchestrate multi-model consensus, manage background tasks, and interact with external systems while maintaining security boundaries through the OpenCode tool schema.
+These tools enable agents to perform file operations, manage background tasks, and interact with external systems while maintaining security boundaries through the OpenCode tool schema. Multi-LLM council orchestration is agent-level (dynamic `councillor-<name>` subagents in `src/agents/`), not a tool.
 
 ## Design
 
@@ -26,12 +27,12 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 | Tool Family | Purpose | Key Components |
 |------------|---------|----------------|
-| **Council** | Multi-LLM consensus synthesis (orchestrator dispatches councillors as subagents) | `agents/council.ts`, `agents/index.ts` |
-| **Task Management** | Background task communication, cancellation, status, results, revival, and HITL continuation control | `task-message.ts`, `cancel-task.ts`, `task-status.ts`, `task-result.ts`, `task-revive.ts`, `wait-for-user.ts`, `background-job-board.ts` |
+| **Task Management** | Background task communication, cancellation, status, results, revival, and HITL continuation control | `task-message.ts`, `cancel-task.ts`, `task-status.ts`, `task-result.ts`, `task-revive.ts`, `wait-for-user.ts` |
+| **Task Policy & Activity** | Shared live-status policy and activity tracking consumed by `task_status` and event wiring | `task-policy.ts` (`summarizeTaskStatus`), `task-activity.ts` (`TaskActivityTracker`) |
 | **ACP Integration** | External agent protocol execution | `acp-run.ts`, ACP client implementation |
 | **Code Intelligence** | AST-based code manipulation | `ast-grep/` directory, `tools.ts` |
 | **Web Fetching** | Intelligent web content retrieval | `smartfetch/` directory, `tool.ts` |
-| **Preset Management** | Runtime agent configuration | `preset-manager.ts`, TUI state integration |
+| **Preset Switching** | On-disk preset persistence for the TUI `/preset` manager | `preset-switch.ts`, TUI state integration |
 
 ### Security & Validation
 
@@ -42,9 +43,8 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 ### State Management
 
-- **Runtime Presets**: Preset state persists across plugin reloads via `RuntimeConfig` (`src/config/runtime.ts`)
-- **TUI Integration**: Preset changes persist to the config file only; the sidebar is NOT refreshed mid-session (the agent registry is unchanged until reload) — hot-swapping the agent tree during an active conversation risks context truncation, drifted prior turns, and stale subagent references
-- **Background Jobs**: Task communication, cancellation, status, results, and revival use a centralized job board for tracking and lifecycle coordination
+- **Runtime Presets**: Preset switching (`preset-switch.ts`) persists the preset name to the user config file; the sidebar is NOT refreshed mid-session (the agent registry is unchanged until reload) — hot-swapping the agent tree during an active conversation risks context truncation, drifted prior turns, and stale subagent references
+- **Background Jobs**: Task communication, cancellation, status, results, and revival use a centralized job board for tracking and lifecycle coordination; `task_status` reports live-confirmed host status with explicit uncertainty when the live read is unavailable
 
 ## Flow
 
@@ -99,9 +99,21 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 1. Orchestrator gives the user concrete manual steps
    └─> Invokes wait_for_user as its final tool action
        ├─> Validates session ID, agent identity, and managed-session ownership
-       ├─> Arms task-session-manager.beginUserWait()
+       ├─> Arms task-session-manager.beginUserWait() (process-global latch)
        ├─> Revokes pending automatic-continuation reservations
        └─> Returns the versioned waiting_for_user protocol marker
+```
+
+### Task Status Policy Flow
+
+```
+1. Agent invokes task_status
+   ├─> Resolves task_id to a BackgroundJobBoard entry
+   ├─> Reads the bounded live session-status snapshot (session-runtime-status)
+   ├─> summarizeTaskStatus() (task-policy.ts) prefers the live-confirmed host
+   │   status; board state is only reported with explicit uncertainty
+   └─> possibly_stuck requires a live-confirmed busy/retry signal beyond the
+       STUCK_IDLE_THRESHOLD_MS idle threshold
 ```
 
 ### ACP Agent Execution Flow
@@ -150,13 +162,12 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
   - `getToolDefinitions()` - Composes tool set for plugin initialization
   
 - **Agents** (`src/agents/`):
-  - Orchestrator dispatches councillors as subagents
-  - Council agent synthesizes councillor responses
+  - Orchestrator dispatches councillors as subagents (agent-level, not a tool)
   - Individual agents use `acp_run` tool for specialized tasks
   - All agents use `ast_grep_search`/`ast_grep_replace` for code manipulation
 
-- **CLI** (`src/cli/`):
-  - Preset manager integrates with `/preset` command
+- **TUI** (`src/tui-preset.ts`):
+  - `/preset` manager uses `switchPresetOnDisk` / `writePreset` / `deletePreset` from `preset-switch.ts`
   - Tool factories receive CLI configuration for ACP agents
 
 ### Dependencies
@@ -164,8 +175,8 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 | Dependency | Purpose |
 |------------|---------|
 | `@opencode-ai/plugin` | Tool schema and execution framework |
-| `Council Config` (`src/config/council-schema.ts`) | Councillor model/preset definitions |
 | `BackgroundJobBoard` (`src/utils/`) | Background task tracking and cleanup |
+| `Session Runtime Status` (`src/utils/session-runtime-status.ts`) | Bounded live session-status reads for `task_status` |
 | `Config System` (`src/config/`) | ACP agent configurations and presets |
 | `TUI State` (`src/tui-state.ts`) | Preset visualization in terminal UI |
 | `AST-grep CLI` | Pattern matching and transformation engine |
@@ -178,12 +189,13 @@ Tools Layer → Background Layer
 ├─ task_cancel → BackgroundJobBoard.resolve() → abortSessionWithTimeout()
 ├─ task_message → BackgroundJobBoard.resolve() → no-reply prompt transport
 ├─ task_revive → BackgroundJobBoard.resolve() → retained-session relaunch
-└─> Returns lifecycle or transport status
+├─ task_status → BackgroundJobBoard.resolve() → live session-status snapshot
+└─> Returns lifecycle, transport, or status report
 
 Tools Layer → Config Layer
 ├─ acp_run tool → AcpAgentsConfig from config system
-├─ preset-manager → Preset configurations from plugin config
-└─> Validates and applies runtime configuration
+├─ preset-switch → reads/writes the user config file's `presets`/`preset` fields
+└─> Validates and persists preset state
 
 Tools Layer → AST-grep Layer
 ├─ ast_grep_search/ast_grep_replace → CLI binary execution
@@ -196,8 +208,8 @@ Tools Layer → Web Layer
 ### Configuration Integration
 
 - **ACP Agents**: Defined in `src/config/agents.ts`, consumed by `acp_run.ts`
-- **Presets**: Defined in plugin config (`oh-my-opencode-slim.jsonc`), managed by `preset-manager.ts`
-- **Council**: Configured via council presets, validated by `council.ts`
+- **Presets**: Defined in plugin config (`oh-my-opencode-slim.jsonc`), persisted by `preset-switch.ts` for the TUI `/preset` manager
+- **Task Status**: `task-status.ts` consumes `summarizeTaskStatus` from `task-policy.ts` and the live session-status snapshot
 
 
 ### Error Handling & Recovery
@@ -216,22 +228,19 @@ Tools Layer → Web Layer
 // AST-grep tools
 export { createAcpRunTool } from './acp-run';
 export { ast_grep_replace, ast_grep_search } from './ast-grep';
-
-// Task management
 export { createCancelTaskTool } from './cancel-task';
+export { createWebfetchTool } from './smartfetch';
 export { createTaskMessageTool } from './task-message';
 export { createTaskResultTool } from './task-result';
 export { createTaskReviveTool } from './task-revive';
 export { createTaskStatusTool } from './task-status';
 export { createWaitForUserTool } from './wait-for-user';
-
-// Preset management
-export type { PresetManager } from './preset-manager';
-export { createPresetManager } from './preset-manager';
-
-// Web fetching
-export { createWebfetchTool } from './smartfetch';
 ```
+
+Preset switching is not a tool: `preset-switch.ts` exposes on-disk helpers
+(`switchPresetOnDisk`, `writePreset`, `deletePreset`, `setAgentOverride`,
+`removeAgentFromPreset`) consumed by the TUI `/preset` manager
+(`src/tui-preset.ts`).
 
 ### Tool-Specific Configuration
 
@@ -241,15 +250,15 @@ export { createWebfetchTool } from './smartfetch';
 - Each agent requires: `command`, `args`, `cwd`, `permissionMode`
 - Supports: `ask` (prompt user), `reject` (auto-deny), `allow` (auto-approve)
 
-#### Council Sessions
+#### Council Sessions (agent-level, not a tool)
 - Configured via council presets in plugin config
-- Orchestrator dispatches each councillor as a prefixed subagent (`councillor-<name>`)
-- Council agent synthesizes responses into a consensus report
+- `src/agents/council-agents.ts` builds a prefixed `councillor-<name>` subagent per preset seat
+- Orchestrator dispatches each councillor as a subagent; the council agent synthesizes responses into a consensus report
 
-#### Presets (preset-manager.ts)
+#### Presets (preset-switch.ts)
 - Defined in plugin config under `presets` field
 - Each preset maps agent names to `AgentOverrideConfig`
-- Changes persist across plugin reloads via user config file
+- `switchPresetOnDisk` persists the preset name to the user config file; changes take effect on the next reload
 
 #### AST-grep (ast-grep/)
 - Auto-downloads CLI binary on first use

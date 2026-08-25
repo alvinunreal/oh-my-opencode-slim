@@ -938,6 +938,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "JoJohanse",
+      "name": "JoJohanse",
+      "avatar_url": "https://avatars.githubusercontent.com/u/97782983?v=4",
+      "profile": "https://github.com/JoJohanse",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

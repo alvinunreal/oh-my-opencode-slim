@@ -11,14 +11,17 @@ The CLI follows a command pattern with two primary commands:
 - `doctor`: Diagnoses plugin configuration issues and validates setup
 
 ### Architecture Pattern: Command Router
-- **index.ts**: Routes CLI arguments to appropriate command handlers
+- **index.ts**: Routes CLI arguments to appropriate command handlers (install/doctor)
 - **install.ts**: Orchestrates multi-step installation workflow
 - **doctor.ts**: Validates configuration and environment
+- **types.ts**: Shared CLI argument types (`InstallArgs`, `BooleanArg`, `SkillsArg`, `CompanionArg`, `OpenCodeConfig`, `InstallConfig`)
 
 ### Configuration Management Pattern
+- **config-manager.ts**: Barrel re-exporting `config-io`, `paths`, `providers`, and `system` for a single import surface
 - **config-io.ts**: Handles reading, parsing, and writing configuration files (supports both .json and .jsonc)
 - **paths.ts**: Resolves configuration file paths across different environments (XDG_CONFIG_HOME, custom paths, defaults)
 - **providers.ts**: Generates configuration presets and manages model mappings for different providers
+- **system.ts**: Resolves the `opencode` binary path (Windows-aware `where`/`which` + shell handling) and related system checks
 
 ### Permission and Skill Management
 - **custom-skills.ts**: Registry of custom skills bundled with the plugin and their installation logic

@@ -50,6 +50,11 @@ export const PermissionConfigSchema = z.union([
 ]);
 
 // Agent override configuration (distinct from SDK's AgentConfig)
+export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
+export type ModelInheritanceSource = z.infer<
+  typeof ModelInheritanceSourceSchema
+>;
+
 export const AgentOverrideConfigSchema = z
   .object({
     model: z
@@ -68,6 +73,7 @@ export const AgentOverrideConfigSchema = z
           .min(1),
       ])
       .optional(),
+    inheritModelFrom: ModelInheritanceSourceSchema.optional(),
     temperature: z.number().min(0).max(2).optional(),
     variant: z.string().optional().catch(undefined),
     skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
@@ -220,6 +226,12 @@ export const BackgroundJobsConfigSchema = z.object({
     .default(30_000)
     .describe(
       'Grace period a job must remain host-declared idle before it is marked stopped (10,000–300,000ms). Default 30,000, covering reasoning-model pauses. Sessions absent from the runtime status map are never treated as stop evidence.',
+    ),
+  waitForUserGuard: z
+    .boolean()
+    .default(true)
+    .describe(
+      'When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.',
     ),
 });
 

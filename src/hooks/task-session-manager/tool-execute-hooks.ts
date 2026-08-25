@@ -11,6 +11,7 @@ import type {
   ContextFile,
 } from '../../utils';
 import {
+  deriveFullObjective,
   deriveTaskSessionLabel,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
@@ -33,6 +34,9 @@ interface TaskArgs {
 }
 
 const earlyRegistrationGenerations = new WeakMap<PendingTaskCall, number>();
+function normalizeObjectiveKey(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
 
 /**
  * session.created writes earlyRegisteredTaskID through the pending-call
@@ -123,6 +127,11 @@ export async function handleToolExecuteBefore(
     background,
     lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,
   };
+  pendingCall.fullObjective = deriveFullObjective({
+    description:
+      typeof args.description === 'string' ? args.description : undefined,
+    prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+  });
   installEarlyRegistrationGenerationFence(pendingCall, deps.backgroundJobBoard);
   if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
     const requested = args.task_id.trim();
@@ -171,6 +180,36 @@ export async function handleToolExecuteBefore(
       deps.backgroundJobBoard.markUsed(input.sessionID, remembered.taskID);
       pendingCall.resumedTaskId = remembered.taskID;
       pendingCall.relaunchLease = relaunchLease;
+    }
+  }
+
+  // New spawns only: block re-dispatch of an objective already owned by an
+  // unreconciled terminal job from this parent (self-reinforcing dispatch
+  // loop, #1070). The full objective text is compared, not the 48-char display
+  // label, so long exact duplicates match while distinct objectives that only
+  // share a truncated prefix stay unaffected.
+  // Escape hatch: task_result retrieval after completion updates lastUsedAt
+  // beyond completedAt, marking the result as consumed and authorizing retry.
+  if (!pendingCall.resumedTaskId) {
+    const objectiveKey = normalizeObjectiveKey(
+      pendingCall.fullObjective ?? label,
+    );
+    const duplicate = deps.backgroundJobBoard
+      .list(input.sessionID)
+      .find(
+        (job) =>
+          job.agent === agentType &&
+          job.terminalUnreconciled &&
+          !(
+            job.completedAt !== undefined && job.lastUsedAt > job.completedAt
+          ) &&
+          normalizeObjectiveKey(job.objective || job.description) ===
+            objectiveKey,
+      );
+    if (duplicate) {
+      throw new Error(
+        `A background task with the same objective already finished and its result is awaiting acknowledgment: ${duplicate.alias} / ${duplicate.taskID}. Call task_result with task_id "${duplicate.taskID}" to retrieve it instead of spawning a duplicate. If the retrieved result is insufficient, retry the spawn after retrieval — retrieval authorizes the retry.`,
+      );
     }
   }
 
@@ -435,7 +474,7 @@ function registerTaskOutputLaunch(
       parentSessionID: pending.parentSessionId,
       agent: pending.agentType,
       description: pending.label,
-      objective: pending.label,
+      objective: pending.fullObjective ?? pending.label,
       background: exactCallConfirmed && pending.background,
       preserveRun:
         pending.earlyRegisteredTaskID === taskID ||

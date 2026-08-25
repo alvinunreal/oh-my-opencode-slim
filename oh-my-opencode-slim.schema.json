@@ -65,6 +65,13 @@
                 }
               ]
             },
+            "inheritModelFrom": {
+              "type": "string",
+              "enum": [
+                "session",
+                "orchestrator"
+              ]
+            },
             "temperature": {
               "type": "number",
               "minimum": 0,
@@ -502,6 +509,13 @@
                   ]
                 }
               }
+            ]
+          },
+          "inheritModelFrom": {
+            "type": "string",
+            "enum": [
+              "session",
+              "orchestrator"
             ]
           },
           "temperature": {
@@ -1106,6 +1120,11 @@
           "type": "integer",
           "minimum": 10000,
           "maximum": 300000
+        },
+        "waitForUserGuard": {
+          "default": true,
+          "description": "When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.",
+          "type": "boolean"
         }
       }
     },

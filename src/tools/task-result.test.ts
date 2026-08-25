@@ -206,6 +206,37 @@ describe('task_result', () => {
     expect(messages).not.toHaveBeenCalled();
   });
 
+  test('marks a terminal job used even when retrieval finds no text result', async () => {
+    const { board, tool } = createTool();
+    board.registerLaunch({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'trace bug',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_child1',
+      state: 'error',
+      resultSummary: undefined,
+      now: 200,
+    });
+    mockClient.session.messages.mockResolvedValue({ data: [] });
+
+    await expect(
+      tool.execute({ task_id: 'exp-1' }, {
+        sessionID: 'parent-1',
+        agent: 'orchestrator',
+      } as any),
+    ).rejects.toThrow('ended in error');
+
+    // Retrieval attempt must still count as consumption so the
+    // duplicate-spawn guard's escape hatch opens for failed terminals.
+    const job = board.get('ses_child1');
+    expect(job?.completedAt).toBe(200);
+    expect(job?.lastUsedAt).toBeGreaterThan(job?.completedAt ?? 0);
+  });
+
   test('rejects a tracked task that was cancelled', async () => {
     const { board, tool, messages } = createTool();
     board.registerLaunch({

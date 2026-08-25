@@ -5,6 +5,9 @@ export interface PendingTaskCall {
   parentSessionId: string;
   agentType: string;
   label: string;
+  /** Untruncated objective text the label was derived from; board comparison
+   *  uses this so long exact duplicates are not missed. */
+  fullObjective?: string;
   background: boolean;
   /** Deletion epoch observed when this native task call started. */
   lifecycleEpoch: number;

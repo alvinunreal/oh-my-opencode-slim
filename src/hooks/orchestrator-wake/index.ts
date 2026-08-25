@@ -3,7 +3,7 @@
  *
  * After continuous parent-idle time, capability-gated host session APIs may
  * receive a static internal wake prompt when incomplete todos remain. Active
- * children do not suppress wakes. Host responses are authoritative; the local
+ * children suppress periodic wakes. Host responses are authoritative; the local
  * job board is never consulted. Progress/reservation state is process-global
  * so independently created hook instances share one-flight and the two-wake
  * no-progress cap.
@@ -113,6 +113,15 @@ function hasIncompleteTodos(todos: Array<Record<string, unknown>>): boolean {
   return todos.some(
     (todo) =>
       typeof todo.status === 'string' && isIncompleteTodoStatus(todo.status),
+  );
+}
+
+function hasActiveChild(
+  children: Array<Record<string, unknown>>,
+  status: Record<string, unknown>,
+): boolean {
+  return children.some(
+    (child) => typeof child.id === 'string' && isActiveStatus(status, child.id),
   );
 }
 
@@ -453,6 +462,10 @@ export function createOrchestratorWakeScheduler(
         endIdleSpell(sessionID, true);
         return;
       }
+      if (!recoveryWake && hasActiveChild(snapshot.children, snapshot.status)) {
+        schedule(sessionID);
+        return;
+      }
       if (!recoveryWake && !hasIncompleteTodos(snapshot.todos)) {
         // No incomplete work: end the spell; do not keep polling.
         endIdleSpell(sessionID, false);
@@ -487,6 +500,10 @@ export function createOrchestratorWakeScheduler(
       }
       if (isActiveStatus(latest.status, sessionID)) {
         endIdleSpell(sessionID, true);
+        return;
+      }
+      if (!recoveryWake && hasActiveChild(latest.children, latest.status)) {
+        schedule(sessionID);
         return;
       }
       if (!recoveryWake && !hasIncompleteTodos(latest.todos)) {

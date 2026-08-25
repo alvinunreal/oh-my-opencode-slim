@@ -197,6 +197,68 @@ function applyOverrides(
   }
 }
 
+/**
+ * Apply an explicit model inheritance policy after the agent factory has
+ * supplied its built-in fallback model. OpenCode uses the parent session model
+ * when an agent config does not specify `model`.
+ */
+function applyModelInheritance(
+  agent: AgentDefinition,
+  override: AgentOverrideConfig | undefined,
+  orchestratorModel: string | undefined,
+): void {
+  if (override?.model !== undefined) return;
+
+  if (
+    override?.inheritModelFrom === 'session' ||
+    (override?.inheritModelFrom === 'orchestrator' &&
+      orchestratorModel === undefined)
+  ) {
+    delete agent.config.model;
+  }
+}
+
+/**
+ * Apply model inheritance to the final host agent config after the host layer
+ * has been merged. This clears stale host models for `session` inheritance,
+ * which cannot be handled by the agent definition alone.
+ */
+export function applyModelInheritanceToConfig(
+  configAgent: Record<string, unknown>,
+  runtime: RuntimeConfig,
+): void {
+  const mergedAgents = runtime.agents();
+  const orchestratorModel = getPrimaryModelFromOverride(
+    runtime.agent('orchestrator'),
+  );
+
+  for (const agentName of Object.keys(configAgent)) {
+    const override = getOverrideFromAgents(mergedAgents, agentName);
+    if (!override) continue;
+    if (
+      override.model !== undefined ||
+      override.inheritModelFrom === undefined
+    ) {
+      continue;
+    }
+
+    const resolvedName = AGENT_ALIASES[agentName] ?? agentName;
+    const entry = configAgent[resolvedName];
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+
+    const agentConfig = entry as Record<string, unknown>;
+    if (override.inheritModelFrom === 'session') {
+      delete agentConfig.model;
+    } else if (orchestratorModel === undefined) {
+      delete agentConfig.model;
+    } else {
+      agentConfig.model = orchestratorModel;
+    }
+  }
+}
+
 function isKnownAgentName(name: string): boolean {
   return (ALL_AGENT_NAMES as readonly string[]).includes(name);
 }
@@ -226,6 +288,7 @@ function buildCustomAgentDefinition(
   override: AgentOverrideConfig,
   filePrompt?: string,
   fileAppendPrompt?: string,
+  fallbackModel?: string,
 ): AgentDefinition {
   const defaultPrompt = appendTaskRejectionInstruction(
     `You are the ${name} specialist.`,
@@ -237,7 +300,7 @@ function buildCustomAgentDefinition(
     name,
     description,
     config: {
-      model: primaryModel ?? DEFAULT_MODELS.oracle,
+      model: primaryModel ?? fallbackModel ?? DEFAULT_MODELS.oracle,
       prompt: resolvePrompt(
         name,
         override.prompt,
@@ -366,14 +429,27 @@ export function createAgents(
   }
 
   const primaryModel = runtime.primaryModel;
+  const orchestratorOverride = getOverrideFromAgents(
+    mergedAgents,
+    'orchestrator',
+  );
+  const configuredOrchestratorModel =
+    getPrimaryModelFromOverride(orchestratorOverride);
 
-  // TEMP: If fixer has no config, inherit from librarian's model to avoid breaking
-  // existing users who don't have fixer in their config yet
+  // Preserve the historical fixer → librarian fallback unless an explicit
+  // inheritance policy opts the fixer into a different source.
   const getModelForAgent = (name: SubagentName): string => {
-    if (
-      name === 'fixer' &&
-      !getOverrideFromAgents(mergedAgents, 'fixer')?.model
-    ) {
+    const override = getOverrideFromAgents(mergedAgents, name);
+    if (override?.model === undefined) {
+      if (override?.inheritModelFrom === 'orchestrator') {
+        return configuredOrchestratorModel ?? (DEFAULT_MODELS[name] as string);
+      }
+      if (override?.inheritModelFrom === 'session') {
+        return primaryModel ?? (DEFAULT_MODELS[name] as string);
+      }
+    }
+
+    if (name === 'fixer' && override?.model === undefined) {
       const librarianOverride = getOverrideFromAgents(
         mergedAgents,
         'librarian',
@@ -439,7 +515,10 @@ export function createAgents(
 
   const protoCustomAgents = customAgentNames.flatMap((name) => {
     const override = getOverrideFromAgents(mergedAgents, name);
-    if (!hasCustomAgentModel(override)) {
+    if (
+      !hasCustomAgentModel(override) &&
+      override?.inheritModelFrom === undefined
+    ) {
       console.warn(
         `[oh-my-opencode] Custom agent '${name}' skipped: 'model' is required`,
       );
@@ -457,6 +536,9 @@ export function createAgents(
         override,
         customPrompts.prompt,
         customPrompts.appendPrompt,
+        override.inheritModelFrom === 'orchestrator'
+          ? configuredOrchestratorModel
+          : primaryModel,
       ),
     ];
   });
@@ -495,6 +577,7 @@ export function createAgents(
     if (override) {
       applyOverrides(agent, override);
     }
+    applyModelInheritance(agent, override, configuredOrchestratorModel);
     applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
     return agent;
   });
@@ -504,6 +587,7 @@ export function createAgents(
     if (override) {
       applyOverrides(agent, override);
     }
+    applyModelInheritance(agent, override, configuredOrchestratorModel);
     applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
     return agent;
   });
@@ -539,10 +623,6 @@ export function createAgents(
   // 3. Create Orchestrator (with its own overrides and custom prompts)
   // DEFAULT_MODELS.orchestrator is undefined; model is resolved via override or
   // left unset so the runtime chat.message hook can pick it from _modelArray.
-  const orchestratorOverride = getOverrideFromAgents(
-    mergedAgents,
-    'orchestrator',
-  );
   const orchestratorModel =
     orchestratorOverride?.model ?? DEFAULT_MODELS.orchestrator;
   const orchestratorPrompts = loadAgentPrompt('orchestrator', {
@@ -573,6 +653,11 @@ export function createAgents(
   if (orchestratorOverride) {
     applyOverrides(orchestrator, orchestratorOverride);
   }
+  applyModelInheritance(
+    orchestrator,
+    orchestratorOverride,
+    configuredOrchestratorModel,
+  );
   applyDefaultPermissions(
     orchestrator,
     orchestratorOverride?.skills,

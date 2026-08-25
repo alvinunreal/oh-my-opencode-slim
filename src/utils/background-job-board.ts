@@ -64,6 +64,8 @@ export interface BackgroundJobRecord {
   lastLaunchedAt: number;
   /** Monotonic run identity. Explicit relaunch/reuse increments it. */
   generation: number;
+  /** Task-local run identity; unlike generation, unrelated tasks do not affect it. */
+  taskGeneration: number;
   /** First launch observation for the current generation. */
   runStartedAt: number;
   /** Persistent hard wall-clock marker; distinct from external task wait timeout. */
@@ -263,6 +265,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       const updated = {
         ...existing,
         generation,
+        taskGeneration: existing.taskGeneration + 1,
         agent: input.agent || existing.agent,
         description: input.description || existing.description,
         objective: input.objective ?? existing.objective,
@@ -294,6 +297,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     const record: BackgroundJobRecord = {
       taskID: input.taskID,
       generation,
+      taskGeneration: 1,
       parentSessionID: input.parentSessionID,
       agent: input.agent,
       description: input.description || `background ${input.agent} task`,
@@ -944,7 +948,16 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   markUsed(parentSessionID: string, key: string, now = Date.now()): void {
     const job = this.resolve(parentSessionID, key);
     if (!job) return;
-    this.jobs.set(job.taskID, { ...job, lastUsedAt: now, updatedAt: now });
+    // A use must land strictly after the job's completion so the
+    // duplicate-spawn guard's escape hatch opens even when the retrieval and
+    // the terminal transition share a millisecond.
+    const usedAt =
+      job.completedAt === undefined ? now : Math.max(now, job.completedAt + 1);
+    this.jobs.set(job.taskID, {
+      ...job,
+      lastUsedAt: usedAt,
+      updatedAt: now,
+    });
   }
 
   taskIDs(): Set<string> {
@@ -1129,7 +1142,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       : 'reconciled';
     const lines = [
       `- ${promptSafe(job.alias)} / ${promptSafe(job.taskID)} / ${promptSafe(job.agent)} / ${promptSafe(terminal ?? job.state)}, ${reconciliation}`,
-      `  Objective: ${promptSafe(job.objective || job.description)}`,
+      `  Objective: ${promptSafe(job.description || job.objective || '')}`,
     ];
     const context = formatContextFiles(
       job.contextFiles,
@@ -1168,6 +1181,24 @@ export function deriveTaskSessionLabel(input: {
   return firstPromptLine
     ? firstPromptLine.slice(0, 48)
     : `recent ${input.agentType} task`;
+}
+/**
+ * Full objective text before deriveTaskSessionLabel truncates it: the
+ * whitespace-normalized description, else the first non-empty prompt line.
+ * Board records store this untruncated so the duplicate-spawn guard can
+ * match long exact duplicates without colliding on shared 48-char prefixes.
+ */
+export function deriveFullObjective(input: {
+  description?: string;
+  prompt?: string;
+}): string | undefined {
+  const preferred = normalizeWhitespace(input.description ?? '');
+  if (preferred) return preferred;
+  const firstPromptLine = (input.prompt ?? '')
+    .split(/\r?\n/)
+    .map((line) => normalizeWhitespace(line))
+    .find(Boolean);
+  return firstPromptLine ?? undefined;
 }
 
 function sumContextLines(record: BackgroundJobRecord): number {
@@ -1238,7 +1269,7 @@ function formatJob(job: BackgroundJobRecord): string {
         : displayState;
   const lines = [
     `- ${promptSafe(job.alias)} / ${promptSafe(job.taskID)} / ${promptSafe(job.agent)} / ${promptSafe(status)}`,
-    `  Objective: ${promptSafe(job.objective || job.description)}`,
+    `  Objective: ${promptSafe(job.description || job.objective || '')}`,
   ];
 
   if (job.resultSummary && job.terminalUnreconciled) {

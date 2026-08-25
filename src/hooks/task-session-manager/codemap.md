@@ -37,6 +37,10 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
      are reusable by alias, while timed-out running jobs become recoverable
      only after a live busy signal confirms they are safe to resume
    - If no reusable task exists, allows fresh task creation
+   - Refuses a brand-new spawn whose objective exactly matches an
+     unreconciled terminal job from the same parent and agent (dispatch
+     loop guard, #1070); a `task_result` retrieval after that job's
+     completion (`lastUsedAt > completedAt`) authorizes the retry
 
 2. **Task Launch (`tool.execute.after`)**
    - Registers task launches in the job board with task ID, parent session ID, agent type, and description

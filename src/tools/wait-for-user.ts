@@ -7,6 +7,8 @@ interface WaitForUserToolOptions {
   resolveAgentName?: (agent: string) => string;
   registerSessionAsOrchestrator?: (sessionID: string) => void;
   beginUserWait: (sessionID: string) => void;
+  hasOutstandingBackgroundTasks?: (sessionID: string) => boolean;
+  waitForUserGuardEnabled?: boolean;
 }
 
 export function createWaitForUserTool(
@@ -49,6 +51,18 @@ Use this only as the final tool action after you have already given the user con
 
       const reason = args.reason.replace(/\s+/g, ' ').trim();
       if (!reason) throw new Error('wait_for_user requires a non-empty reason');
+
+      if (
+        options.waitForUserGuardEnabled &&
+        options.hasOutstandingBackgroundTasks?.(sessionID)
+      ) {
+        return [
+          'state: waiting_for_user_skipped',
+          `reason: ${reason}`,
+          '',
+          'Background tasks are still outstanding for this session. Do not block on manual input — end this turn now. The system resumes automatically via the Background Job Board and orchestrator wake scheduler when the background tasks complete.',
+        ].join('\n');
+      }
 
       options.beginUserWait(sessionID);
       return [

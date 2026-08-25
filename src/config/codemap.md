@@ -28,7 +28,8 @@ The config system follows a layered architecture:
 | `AgentOverrideConfig` | Per-agent configuration (model, temperature, skills, MCPs) | schema.ts |
 | `CouncilConfig` | Multi-LLM council configuration with presets and execution modes | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
-| `RuntimeConfig` | Per-directory runtime config singleton with derived getters and preset state | runtime.ts |
+| `AgentMcpPolicy` | Per-agent default MCP lists and wildcard/exclusion parsing | agent-mcps.ts |
+| `RuntimeConfig` | Per-directory runtime config singleton with derived getters, host-config snapshot, and preset/model overrides | runtime.ts |
 
 ## Flow
 
@@ -53,6 +54,7 @@ The config system follows a layered architecture:
 
 4. Runtime Phase
    ├─ RuntimeConfig seeded with deep-frozen plugin config snapshot
+   ├─ captureHostConfig() snapshots the host opencode.json BEFORE the config hook mutates it
    └─ Derived getters (agents, modelArrays, disabled*, presets) computed on demand
 ```
 
@@ -129,6 +131,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `getCustomAgentNames(config)`: List custom agents declared in config.agents
 - `getAcpAgentNames(config)`: List ACP agent names from config.acpAgents
 - `loadAgentPrompt(agentName, preset?)`: Load custom prompt files for agents
+- `stripOrchestratorModel` / `applyOrchestratorModelConfig` (strip-orchestrator-model.ts): Strip the orchestrator's single model/variant when a fallback chain is configured
 
 ### Runtime State
 
@@ -136,14 +139,13 @@ This allows consumers to import directly from `src/config` rather than individua
 - `RuntimeConfig.get(directory)`: Get (lazily creating) the singleton for a directory
 - `RuntimeConfig.reset(directory)`: Clear the singleton for a directory
 - `RuntimeConfig.captureHostConfig(opencodeConfig)`: Capture host-side config before the config hook mutates it
-- `setRuntimePreset(name)`: Set the currently active runtime preset (stale names clear it)
-- `getRuntimePreset()`: Get the currently active runtime preset
-- Derived getters: `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs`, `fallback`, `webfetch`, `acpAgents`, `companion`, `council`, `modelArrays`, `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
+- `setRuntimePreset(name)` / `getRuntimePreset()`: Runtime preset override (stale names clear it)
+- Derived getters: `plugin`, `preset`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `webfetch`, `acpAgents`, `companion`, `council`, `autoUpdate`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
 
 ### MCP Management
 
-- `getAgentMcpList(agentName, config?)`: Resolve MCP permissions for an agent
-- `parseList(items, allAvailable)`: Parse wildcard and exclusion syntax in MCP lists
+- `DEFAULT_AGENT_MCPS` + `parseList` (agent-mcps.ts): Per-agent default MCP lists and wildcard/exclusion parsing
+- `getAgentMcpList(agentName, config?)`: Resolve effective MCP permissions for an agent
 
 ## Configuration Schema Overview
 
@@ -168,6 +170,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ### AgentOverrideConfig
 - `model`: Model ID or array of model IDs
+- `inheritModelFrom`: Explicitly inherit the current `session` model or the configured `orchestrator` model when `model` is omitted; supported for built-in and custom agents
 - `temperature`: Sampling temperature (0-2)
 - `variant`: Model variant identifier
 - `skills`: Skill allow/deny list ("*" = all, "!item" = exclude)

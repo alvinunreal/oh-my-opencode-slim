@@ -20,21 +20,29 @@
 - `index.ts` exports `createInterviewManager`.
 
 - `runtime.ts` defines the interview-only session boundary (`messages`,
-  `notify`, `continue`, and `rename`). v1 uses nested SDK calls; v2 supplies a
-  context-backed implementation without expanding the global client shim.
+  `notify`, `continue`, and `rename`). v1 uses nested SDK calls
+  (`createV1InterviewSessionRuntime`); v2 supplies a context-backed
+  implementation without expanding the global client shim.
 
 - `manager.ts` (composition root)
-  - Creates `createInterviewService(ctx, interviewConfig)` once.
-  - Chooses mode via
-    `interview.dashboard === true || interview.port > 0`.
-  - In dashboard mode:
-    - calls `tryBecomeDashboard(...)` to elect one process as dashboard,
-    - non-dashboard processes read auth token via `readDashboardAuthFile(port)`,
-    - sessions are registered with `/api/register`, unregister during cleanup via
-      `/api/unregister`, and sync state back via `/api/interviews/{id}/state`,
-    - 10-second fallback polling keeps answer/nudge delivery active if needed.
+  - Chooses mode via `interview.dashboard === true || interview.port > 0`:
+    - per-session mode → `createPerSessionInterviewServer` (`session-server.ts`)
+    - dashboard mode → `createDashboardManager` (`dashboard-manager.ts`)
   - Returns event hooks:
-    `registerCommand`, `handleCommandExecuteBefore`, `handleEvent`.
+    `registerCommand`, `handleCommandExecuteBefore`, `handleEvent`, `dispose`.
+
+- `session-server.ts`
+  - Per-session composition: binds a lazy `createInterviewServer({ port: 0 })`
+    to a single `createInterviewService`, wiring command/event hooks and
+    cleanup.
+
+- `dashboard-manager.ts`
+  - Dashboard composition: creates the dashboard server and service, calls
+    `tryBecomeDashboard(...)` to elect one process as dashboard,
+    non-dashboard processes read auth token via `readDashboardAuthFile(port)`,
+    registers/unregisters sessions over HTTP, and pushes state back via
+    `/api/interviews/{id}/state`; 10-second fallback polling keeps
+    answer/nudge delivery active if needed.
 
 - `createInterviewService` (`service.ts`)
   - Manages interview domain maps:
@@ -59,13 +67,18 @@
     - optional `openBrowser` for initial UI open.
 
 - `createInterviewServer` (`server.ts`)
-  - Owns the per-session HTTP endpoints and HTML renderer binding.
+  - Owns the per-session HTTP endpoints; HTML rendering lives in `ui.ts`.
   - Supports:
     - `GET /`, `GET /api/interviews`, `GET /interview/{id}`
     - `GET /api/interviews/{id}/state`
     - `POST /api/interviews/{id}/answers`
     - `POST /api/interviews/{id}/nudge`
   - Maps domain errors to HTTP status in `getSubmissionStatus`.
+
+- `ui.ts`
+  - HTML/JS renderers for interview pages (list/detail), shared
+    client-side helpers (clipboard, polling), and the dashboard brand UI;
+    uses `escapeHtml` from `src/utils/escape-html.ts`.
 
 - `dashboard.ts`
   - Implements a shared dashboard server and state cache.

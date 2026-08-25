@@ -91,6 +91,15 @@ function assertStableTrackedGeneration(
     );
   }
 
+  // A retrieval attempt on a terminal job counts as consuming its state,
+  // even when the retrieval below is refused (error/cancelled/stopped with
+  // no result text). This opens the duplicate-spawn guard's escape hatch for
+  // failed terminals: the caller saw the terminal outcome, so re-dispatch is
+  // authorized. Running jobs are never acked here.
+  if (getTrackedTerminalState(current) !== 'running') {
+    backgroundJobBoard.markUsed(parentSessionID, current.taskID);
+  }
+
   assertRetrievableState(requested, current);
   return current;
 }

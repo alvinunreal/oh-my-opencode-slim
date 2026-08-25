@@ -24,6 +24,30 @@ describe('BackgroundJobBoard', () => {
     });
     expect(board.hasRunning('parent-1')).toBe(true);
   });
+  test('markUsed lands strictly after completion even with equal timestamps', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_1',
+      state: 'completed',
+      resultSummary: 'done',
+      now: 200,
+    });
+
+    // Retrieval in the same millisecond as the terminal transition must
+    // still open the duplicate-spawn guard's escape hatch.
+    board.markUsed('parent-1', 'ses_1', 200);
+
+    const job = board.get('ses_1');
+    expect(job?.completedAt).toBe(200);
+    expect(job?.lastUsedAt).toBe(201);
+  });
 
   test('cancellation lease fences a same-ID relaunch', () => {
     const board = new BackgroundJobBoard();

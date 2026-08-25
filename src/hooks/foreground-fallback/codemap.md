@@ -2,11 +2,12 @@
 
 ## Responsibility
 Runtime model fallback system for foreground (interactive) agent sessions. When OpenCode emits rate-limit signals via `message.updated`, `session.error`, or `session.status` events, this manager:
-- Detects rate-limit conditions using pattern matching against error messages and status codes
-- Aborts the rate-limited prompt via `client.session.abort()`
+- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
+- Aborts the rate-limited prompt via `client.session.abort()` on the `session.status` retry path; `session.error` and `message.updated` paths re-prompt directly without abort
 - Retrieves the last user message from the session history
 - Re-prompts the session with the next available model from the agent's configured fallback chain
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
+- Defers terminal job-board bookkeeping for inline 401/410 errors while recovery is still possible (cooperates with task-session-manager's `willAttemptFallback`)
 
 ## Design
 
@@ -27,8 +28,8 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   3. Merged list (last resort) → preserve insertion order across all agents
 - **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
 
-### Rate-Limit Detection
-- **Pattern matching**: Comprehensive regex patterns for rate-limit error messages (429, "rate limit", "too many requests", "quota exceeded", etc.)
+### Retryable Error Detection
+- **Pattern matching**: Comprehensive regex patterns for rate-limit error messages (429, "rate limit", "too many requests", "quota exceeded", etc.) plus `isFailoverError` / `isInlineFailoverError` classification for persistent 401/410 provider-model errors
 - **Event coverage**: Handles three OpenCode event types:
   - `message.updated`: Error in message metadata
   - `session.error`: Session-level error event
@@ -47,15 +48,15 @@ OpenCode Event (message.updated/session.error/session.status)
     ↓
 ForegroundFallbackManager.handleEvent()
     ↓
-Retryable error detection via isRetryableError()
+Retryable error detection via isRetryableError() / isFailoverError()
     ↓
 tryFallback(sessionID) [deduplicated, in-progress guarded]
     ↓
 Resolve fallback chain for session
     ↓
-Abort current rate-limited prompt (with timeout)
+Abort current rate-limited prompt (session.status retry path only, with timeout)
     ↓
-Retrieve last user message from session history
+Retrieve last user message from session history (replayed via isReplayableUserMessage/partsFromReplayMessage)
     ↓
 Re-prompt session with next model via promptAsync()
     ↓
@@ -69,6 +70,7 @@ Log fallback event
 2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
 3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
 4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking); appends trusted internal-initiator provenance so the replay is not mistaken for new external user input
+5. **Failover deferral**: 401/410 errors (`isFailoverError`) leave terminal job-board bookkeeping to the task-session-manager event router, which defers it while `willAttemptFallback` holds
 
 ## Integration
 
@@ -77,11 +79,14 @@ Log fallback event
 - **Event source**: OpenCode plugin event system provides `message.updated`, `session.error`, `session.status`, `session.deleted` events
 
 ### Dependencies
-- **OpenCode SDK**: `PluginInput['client']` for session management and event handling
+- **OpenCode SDK**: `PluginInput['client']` for session management and event handling (accessed via `getClient()` from `src/utils/opencode-client.ts`)
 - **Utilities**:
   - `abortSessionWithTimeout()`: Graceful session termination
   - `parseModelReference()`: Model string parsing ("providerID/modelID")
+  - `createInternalAgentTextPart()`: Internal-initiator provenance for replays
   - `log()`: Structured logging for observability
+- **SessionLifecycle** (`src/hooks/session-lifecycle.ts`): registers `session.deleted` cleanup
+- **Message types** (`src/hooks/types.ts`): `isReplayableUserMessage` / `partsFromReplayMessage` for safe replay
 - **Configuration**: Fallback chains provided at construction from agent configurations
 
 ### Configuration Schema

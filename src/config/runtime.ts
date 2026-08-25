@@ -83,6 +83,7 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   wallClockTimeoutMs: 0,
   abortGraceMs: 10_000,
   stopConfirmationMs: 30_000,
+  waitForUserGuard: true,
 };
 
 const DEFAULT_FALLBACK: FailoverConfig = {
@@ -103,6 +104,44 @@ function primaryModelFromOverride(
     return typeof first === 'string' ? first : first?.id;
   }
   return undefined;
+}
+
+/**
+ * Merge agent layers while allowing an explicit inheritance policy to clear a
+ * model supplied by a lower-precedence layer. A missing `model` normally
+ * means "keep the lower layer", but `inheritModelFrom` is an intentional
+ * request to use another source instead.
+ */
+function mergeAgentOverrides(
+  base: Record<string, AgentOverrideConfig>,
+  override: Record<string, AgentOverrideConfig>,
+): Record<string, AgentOverrideConfig> {
+  const merged = deepMerge(base, override) ?? base;
+  for (const [name, agentOverride] of Object.entries(override)) {
+    if (
+      agentOverride.model !== undefined ||
+      agentOverride.inheritModelFrom === undefined
+    ) {
+      continue;
+    }
+    const resolvedName = AGENT_ALIASES[name] ?? name;
+    // A canonical key in the same layer remains authoritative over its
+    // legacy alias. Otherwise, apply the alias directive to the canonical
+    // lower-layer entry so getOverrideFromAgents sees the effective policy.
+    if (resolvedName !== name && Object.hasOwn(override, resolvedName)) {
+      continue;
+    }
+    const entry = merged[resolvedName] ?? merged[name];
+    if (entry) {
+      const updatedEntry = { ...entry };
+      delete updatedEntry.model;
+      if (resolvedName !== name) {
+        updatedEntry.inheritModelFrom = agentOverride.inheritModelFrom;
+      }
+      merged[resolvedName] = updatedEntry;
+    }
+  }
+  return merged;
 }
 
 /** Recursive clone of plain JSON data (drops prototypes, no functions). */
@@ -221,13 +260,13 @@ export class RuntimeConfig {
       ? this.pluginConfig.presets?.[this.pluginConfig.preset]
       : undefined;
     if (filePreset) {
-      base = deepMerge(filePreset, base) ?? base;
+      base = mergeAgentOverrides(filePreset, base);
     }
     const runtimePreset = this.runtimePresetAgents();
     if (!runtimePreset) {
       return base;
     }
-    return deepMerge(base, runtimePreset) ?? base;
+    return mergeAgentOverrides(base, runtimePreset);
   }
 
   /**

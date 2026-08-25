@@ -20,22 +20,24 @@ Each agent is a **prompt-driven specialist** with a factory function that create
 | **fixer** | `createFixerAgent()` | Fast implementation specialist for bounded tasks | Read/write (read, glob, grep, write, edit) | DEFAULT_MODELS.fixer |
 | **observer** | `createObserverAgent()` | Visual analysis specialist (images, PDFs, diagrams) | Read-only (read, glob, grep, ast_grep_search) | DEFAULT_MODELS.observer |
 | **council** | `createCouncilAgent()` | Multi-LLM consensus synthesis from councillor responses | Read-only | DEFAULT_MODELS.council |
-| **councillor** | `createCouncillorAgent()` | Read-only council advisor; registered dynamically per preset seat as `councillor-<name>` | Read-only (read, glob, grep, ast_grep_search) | Inherited from council preset |
+| **councillor** | `createCouncillorAgent()` | Read-only council advisor; registered dynamically per preset seat as `councillor-<name>` by `buildCouncillorAgents()` (`council-agents.ts`) | Read-only (read, glob, grep, ast_grep_search) | Inherited from council preset |
 
 ### Configuration System
 
 - **Default prompts**: Each agent factory has a base prompt defined in its file (e.g., `explorer.ts`, `oracle.ts`)
 - **User overrides**: From `~/.config/opencode/oh-my-opencode-slim.json` via `loadAgentPrompt()`
 - **Permission wildcards**: Applied via `applyDefaultPermissions()` in `index.ts`
-- **Model resolution**: Supports both string models and priority-ordered arrays (`_modelArray`) for runtime fallback
+- **Model resolution**: Supports string models, explicit `inheritModelFrom` policies, and priority-ordered arrays (`_modelArray`) for runtime fallback
 - **Skill permissions**: Per-agent MCP and tool access controlled via `getSkillPermissionsForAgent()`
 
 ### Agent Lifecycle
 
 1. **Agent creation**: `createAgents(config)` instantiates all agents with merged configuration
-2. **Permission application**: `applyDefaultPermissions()` sets read/write permissions based on agent type
-3. **Display name injection**: Orchestrator prompt rewrites `@agent` mentions to user-configured display names
-4. **Configuration export**: `getAgentConfigs()` converts `AgentDefinition` to OpenCode SDK format with classification metadata
+2. **Dynamic councillors**: `buildCouncillorAgents()` (`council-agents.ts`) creates one `councillor-<name>` subagent per council preset seat, attaching `_modelArray` fallback chains for multi-model councillors
+3. **Permission application**: `applyDefaultPermissions()` sets read/write permissions based on agent type
+4. **Task-rejection instruction**: `appendTaskRejectionInstruction()` appends the "outside your role" instruction to specialist prompts (`task-rejection.ts`)
+5. **Display name injection**: Orchestrator prompt rewrites `@agent` mentions to user-configured display names
+6. **Configuration export**: `getAgentConfigs()` converts `AgentDefinition` to OpenCode SDK format with classification metadata
 
 ## Flow
 
@@ -118,6 +120,7 @@ export function getAgentConfigs(config?: PluginConfig): Record<string, SDKAgentC
 ### Model Resolution and Fallback
 
 - **Priority arrays**: When `model` is configured as an array in user config, it's stored as `_modelArray`
+- **Explicit inheritance**: `inheritModelFrom: "session"` leaves the agent model unset so OpenCode uses the parent session model; `"orchestrator"` follows the model resolved during configuration, not later runtime fallback
 - **Runtime fallback**: ForegroundFallbackManager resolves models at runtime when API errors occur
 - **Preset overrides**: Runtime presets can override model/variant/temperature per agent
 
@@ -180,6 +183,8 @@ These rules are filtered based on disabled agents and injected into the orchestr
 - `observer.ts` - Visual analysis specialist
 - `council.ts` - Multi-LLM council agent
 - `councillor.ts` - Read-only council advisor (internal)
+- `council-agents.ts` - Dynamic `councillor-<name>` agent builders from council presets
+- `task-rejection.ts` - Task-rejection instruction appended to specialist prompts
 - `permissions.ts` - Permission factory for read-only agents
 
 ## Design Patterns

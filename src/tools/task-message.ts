@@ -3,6 +3,10 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
+import {
+  type ContinuationModelSelection,
+  parseContinuationModelSelection,
+} from '../hooks/task-session-manager/continuation-model-selection';
 import type { BackgroundJobStore } from '../utils/background-job-store';
 import { getClient } from '../utils/opencode-client';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
@@ -10,6 +14,7 @@ import { OperationTimeoutError, withTimeout } from '../utils/session';
 const z = tool.schema;
 const MAX_MESSAGE_LENGTH = 500;
 const DEFAULT_MESSAGE_TIMEOUT_MS = 10_000;
+const MODEL_LOOKUP_HISTORY_LIMIT = 20;
 
 class MessageLeaseOperationTimeoutError extends Error {
   constructor(
@@ -82,27 +87,66 @@ export function createTaskMessageTool(options: {
 
         const session = getClient(options.input).session;
         const prompt = session.prompt.bind(session);
-        const transportJob = getCurrentTaskMessageJob(
-          options.backgroundJobBoard,
-          parentSessionID,
-          requested,
-          lease.taskID,
-          lease.generation,
+        const messageTimeoutMs = Math.max(
+          1,
+          options.messageTimeoutMs ?? DEFAULT_MESSAGE_TIMEOUT_MS,
         );
+        const deadline = Date.now() + messageTimeoutMs;
+        const lookupController = new AbortController();
+        let modelSelection: ContinuationModelSelection | undefined;
+        try {
+          modelSelection = await withTimeout(
+            readCurrentChildModel(
+              session,
+              lease.taskID,
+              options.input.directory,
+              lookupController.signal,
+            ),
+            messageTimeoutMs,
+            `Task message model lookup timed out after ${messageTimeoutMs}ms`,
+          );
+        } finally {
+          lookupController.abort();
+        }
+        if (!modelSelection) {
+          throw new Error(
+            `Task ${requested} has no authoritative model identity; refusing message`,
+          );
+        }
+
+        const remainingTimeoutMs = deadline - Date.now();
+        if (remainingTimeoutMs <= 0) {
+          throw new OperationTimeoutError(
+            `Task message transport timed out after ${messageTimeoutMs}ms`,
+          );
+        }
+
         const response = await awaitMessageTransport(
           options.backgroundJobBoard,
           lease,
-          () =>
-            prompt({
+          () => {
+            assertMessageLease(options.backgroundJobBoard, lease, requested);
+            const currentJob = getCurrentTaskMessageJob(
+              options.backgroundJobBoard,
+              parentSessionID,
+              requested,
+              lease.taskID,
+              lease.generation,
+            );
+            const body = {
+              agent: currentJob.agent,
+              model: modelSelection.model,
+              variant: modelSelection.variant ?? 'default',
+              noReply: true,
+              parts: [{ type: 'text', text: args.message.trim() }],
+            } as Parameters<typeof prompt>[0]['body'];
+            return prompt({
               path: { id: lease.taskID },
-              body: {
-                agent: transportJob.agent,
-                noReply: true,
-                parts: [{ type: 'text', text: args.message.trim() }],
-              },
+              body,
               throwOnError: true,
-            }),
-          options.messageTimeoutMs ?? DEFAULT_MESSAGE_TIMEOUT_MS,
+            });
+          },
+          remainingTimeoutMs,
         );
         assertMessageLease(options.backgroundJobBoard, lease, requested);
         assertSuccessfulMessageResponse(response);
@@ -199,6 +243,78 @@ function errorText(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+async function readCurrentChildModel(
+  session: unknown,
+  taskID: string,
+  directory: string | undefined,
+  signal: AbortSignal,
+): Promise<ContinuationModelSelection | undefined> {
+  if (!isRecord(session)) return undefined;
+
+  const query = directory ? { directory } : undefined;
+  let get: unknown;
+  try {
+    get = session.get;
+  } catch {
+    get = undefined;
+  }
+  if (typeof get === 'function') {
+    try {
+      const response = await get.call(session, {
+        path: { id: taskID },
+        query,
+        signal,
+      });
+      if (isRecord(response) && isRecord(response.data)) {
+        const selection = parseContinuationModelSelection(
+          response.data.model,
+          response.data.variant,
+        );
+        if (selection) return selection;
+      }
+    } catch {
+      // Fall through to the authoritative latest user message.
+      if (signal.aborted) return undefined;
+    }
+  }
+  if (signal.aborted) return undefined;
+
+  let messages: unknown;
+  try {
+    messages = session.messages;
+  } catch {
+    messages = undefined;
+  }
+  if (typeof messages !== 'function') return undefined;
+
+  try {
+    const messageQuery = {
+      ...(directory ? { directory } : {}),
+      limit: MODEL_LOOKUP_HISTORY_LIMIT,
+    };
+    const response = await messages.call(session, {
+      path: { id: taskID },
+      query: messageQuery,
+      signal,
+    });
+    if (!isRecord(response) || !Array.isArray(response.data)) return undefined;
+
+    for (let index = response.data.length - 1; index >= 0; index -= 1) {
+      const message = response.data[index];
+      if (!isRecord(message) || !isRecord(message.info)) continue;
+      if (message.info.role !== 'user') continue;
+      return parseContinuationModelSelection(
+        message.info.model,
+        message.info.variant,
+      );
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
 }
 
 function getCurrentTaskMessageJob(

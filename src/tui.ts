@@ -451,7 +451,7 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
  * V2 entry point: sidebar slot + refresh loop; returns cleanup.
  * `/preset` stays v1-only (`api.command` is absent on v2).
  */
-async function setup(ctx: V2TuiContext): Promise<void | (() => void)> {
+async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
   if (isPluginDisabledByEnv()) return;
 
   const version = (await readPackageVersion()) ?? 'dev';
@@ -534,7 +534,7 @@ function buildPresetCommand(
 interface TuiDualContractModule {
   id: string;
   tui: TuiPlugin;
-  setup: (ctx: V2TuiContext) => Promise<void | (() => void)>;
+  setup: (ctx: V2TuiContext) => Promise<undefined | (() => void)>;
 }
 
 const plugin: TuiDualContractModule = {
