@@ -447,3 +447,93 @@ respawn, bounded by the same no-progress cap as v1.
   must be isolated per bridged transform) inside the v2 bridge only — v1
   callers never set it, so the v1 payload (and its snapshots) stay
   byte-identical.
+
+## Native v2 migration plan
+
+The current v2 implementation is a transitional v1-to-v2 adapter. It preserves
+the shared plugin behavior while native migration remains a separate effort;
+the adapter is not itself a native Promise-plugin implementation.
+
+### Adapter boundaries
+
+The adapter constructs v1-shaped input and translates v1 hook payloads, so it
+cannot provide the type or lifecycle guarantees of native v2 code. Its client
+shim and interview projection intentionally cover only the operations described
+above, and registration failures are isolated so supported features can still
+load independently. Native migration should use the official v2 domains rather
+than expanding this shim.
+
+The beta Promise-plugin API provides native opportunities for agent and tool
+catalogues, executable commands, MCP registration, session context and model
+hooks, tool lifecycle hooks, event subscriptions, and TUI integration. Session
+`context` is the native replacement for v1 raw message transforms: native code
+should mutate v2 `system`, `messages`, and `tools` directly instead of converting
+through v1 `{ info, parts }` objects.
+
+### Native target architecture
+
+The target is a separate native Promise-plugin composition, not a more capable
+adapter:
+
+1. Keep host-neutral configuration, agent definitions, prompt construction, and
+   tool definitions in shared modules.
+2. Move the v1 composition behind an explicit `src/v1` boundary.
+3. Implement native `define({ id, setup })` registration for agents, tools,
+   commands, MCPs, session hooks, tool hooks, and events.
+4. Replace the client shim, local v2 type mirror, and interview bridge with
+   native context and lifecycle modules.
+5. Make required native registration failures observable instead of silently
+   installing a partial native plugin.
+
+The native implementation must not invoke the v1 factory, convert v2 values to
+v1 hook payloads, or retain legacy lifecycle ownership merely to preserve
+parity.
+
+### Behaviors to evaluate for retirement
+
+Exact v1 parity is not presumed for the native v2 target. During migration,
+explicitly classify these behaviors as native, adapter-only, or retired rather
+than emulating them indefinitely:
+
+- legacy background-job ownership and orchestrator wake scheduling;
+- child-pane multiplexer integration (tmux, zellij, herdr, and cmux);
+- runtime foreground-model failover;
+- tool permission prompt/cancellation interception;
+- initiator-header injection; and
+- interview-history reconstruction after a plugin reload.
+
+Compaction prompt replacement, permission-prompt interception, and synthetic
+text completion also need a product-level replacement or explicit retirement
+where the native API has no exact equivalent. TUI controls and small-model
+selection are migration decisions, not predeclared retirements. The official
+API's MCP registration, model switching, and executable command registration
+are migration opportunities.
+
+### Verification gates
+
+Validation is required at each migration boundary:
+
+1. **Architecture:** approve the host-neutral boundary, native domain mapping,
+   parity definition, and deliberate retirements.
+2. **Static/runtime:** compile, lint, and run unit tests for shared code, the v1
+   host, and native registrations; required failures must be observable.
+3. **v2 host smoke:** prove plugin loading, agent/tool/command/MCP registration,
+   session-context transforms, tool lifecycle hooks, event handling, and cleanup
+   against the target host.
+4. **v1 compatibility:** retain the existing v1 load/smoke path until cutover
+   is complete and verify that the v1 factory remains intact during transition.
+5. **Release readiness:** verify published entry points, install paths, native
+   smoke artifacts, documented retirements, and absence of adapter-only claims
+   before removing the transitional path.
+
+### Migration roadmap
+
+1. Inventory each v1 behavior against an official v2 domain and obtain approval
+   for behaviors classified as retired.
+2. Separate shared logic, the v1 composition, and the native Promise-plugin
+   composition with strict registration and cleanup.
+3. Prove both hosts in parallel without expanding the adapter's scope.
+4. Cut over v2 to the native composition only after its smoke and v1
+   compatibility gates pass; retain v1 for the verified cutover period.
+5. After release-readiness review, decide whether the v1 host can be retired
+   and remove remaining compatibility-only code.
