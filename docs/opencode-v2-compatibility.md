@@ -8,6 +8,14 @@ register it.
 > **Capability details:** see the [OpenCode v2 capability-gap report](opencode-v2-gap-report.md)
 > for the verified matrix, source citations, and migration dispositions.
 
+## Current status
+
+OpenCode v2 compatibility is currently provided by a **v1-to-v2 adapter**. It
+is not a native v2 implementation. The adapter preserves the shared agent,
+tool, command, and hook behavior while allowing both hosts to use one package;
+the native Promise-plugin composition described in the migration plan remains
+the target.
+
 ## How it works
 
 The package's default export is an object:
