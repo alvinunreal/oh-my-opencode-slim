@@ -5,6 +5,9 @@ and OpenCode v2 (`opencode2`) from a single published package. This document
 describes how each host loads the plugin, what is supported where, and how to
 register it.
 
+> **Capability details:** see the [OpenCode v2 capability-gap report](opencode-v2-gap-report.md)
+> for the verified matrix, source citations, and migration dispositions.
+
 ## How it works
 
 The package's default export is an object:
