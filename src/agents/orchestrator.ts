@@ -41,68 +41,39 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
   explorer: `@explorer
 - Lane: Fast codebase recon that returns compressed context
 - Permissions: read_files
-- Stats: 2x faster codebase search than orchestrator, 1/2 cost of orchestrator
-- Capabilities: Glob, grep, AST queries to locate files, symbols, patterns
-- **Delegate when:** Need to discover what exists before planning • Parallel searches speed discovery • Need summarized map vs full contents • Broad/uncertain scope`,
+- Capabilities: Glob, grep, AST queries to locate files, symbols, patterns`,
 
   librarian: `@librarian
 - Lane: External knowledge and library research, fast web research
-- Role: Authoritative source for current library docs, API references, examples, bug investigations, and web retrieval
-- Stats: 2x faster web research than orchestrator, 1/2 cost of orchestrator
-- **Delegate when:** Libraries with frequent API changes (React, Next.js, AI SDKs) • Complex APIs needing official examples (ORMs, auth) • Version-specific behavior matters • Unfamiliar library • Edge cases or advanced features • Nuanced best practices • Working on fixing tricky bug or problem and need latest web research information
-- **Rule of thumb:** "How does this library work?" → @librarian. "How do others solve or workaround this tricky issue?" → @librarian.`,
+- Permissions: context7, gh_grep
+- Capabilities: Current library docs, API references, examples, bug investigations, web retrieval`,
 
   oracle: `@oracle
 - Lane: Architecture, risk, debugging strategy, and review
-- Role: Strategic advisor for high-stakes decisions and persistent problems, code reviewer
 - Permissions: read_files
-- Stats: 5x better decision maker, problem solver, investigator than orchestrator, 0.8x speed of orchestrator, same cost.
-- Capabilities: Deep architectural reasoning, system-level trade-offs, complex debugging, code review, simplification, maintainability review
-- **Delegate when:** Major architectural decisions with long-term impact • Problems persisting after 2+ fix attempts • High-risk multi-system refactors • Costly trade-offs (performance vs maintainability) • Complex debugging with unclear root cause • Security/scalability/data integrity decisions • Genuinely uncertain and cost of wrong choice is high • Code needs simplification or YAGNI scrutiny
-- **Review use:** @oracle is an escalation, not a default verification step. Request independent @oracle review only when its analysis is expected to materially reduce risk or uncertainty.
-- **Rule of thumb:** Need senior architect review? → @oracle. Need code review or simplification? → @oracle.`,
+- Capabilities: Deep architectural reasoning, system-level trade-offs, complex debugging, code review, simplification, maintainability review`,
 
   designer: `@designer
 - Lane: UI/UX design, related edits, design polish and review
 - Permissions: read_files, write_files
-- Stats: 10x better UI/UX than orchestrator
-- Capabilities: Good design taste, visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge.
-- Owns visual and interaction quality: layout, hierarchy, spacing, motion, affordances, responsive behavior, and overall feel.
-- Weakness: copywriting. Ask @designer to use grounded, normal wording, then have orchestrator review/fix copy after design work without changing visual or interaction intent.
-- Avoid: "Let me ask @designer how it should look and implement yourself" → instead: "Let me ask @designer to design and implement the UI/UX changes for me"
-- **Delegate when:** User-facing interfaces needing polish • Responsive layouts • UX-critical components (forms, nav, dashboards) • Visual consistency systems • Animations/micro-interactions • Landing/marketing pages • Refining functional→delightful • Reviewing existing UI/UX quality
-- **Rule of thumb:** Users see it and polish matters? → @designer. Headless/functional implementation? → schedule @fixer.`,
+- Capabilities: Good design taste, visual edits, interactions, responsive layouts, design systems, deep UI/UX knowledge
+- Owns visual and interaction quality: layout, hierarchy, spacing, motion, affordances, responsive behavior, and overall feel`,
 
   fixer: `@fixer
 - Lane: Bounded implementation and executioner
-- Role: Fast execution specialist for well-defined tasks
 - Permissions: read_files, write_files
-- Stats: 2x faster code edits, 1/2 cost of orchestrator
-- Weakness: design, taste
-- Tools/Constraints: Execution-focused-no research, no architectural decisions
-- **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixer instances for each folder.
-- **Rule of thumb:** Headless/mechanical implementation → @fixer. User-visible design or polish → @designer. If @designer already set direction, @fixer may only do bounded mechanical follow-up that preserves that design exactly.`,
+- Capabilities: Fast implementation of well-defined tasks
+- Constraints: Execution-focused — no research, no architectural decisions`,
 
   council: `@council
 - Lane: High-stakes multi-model decision support
-- Role: Multi-LLM consensus engine that receives raw councillor responses and synthesizes them into a structured council report.
 - Permissions: Read files
-- Stats: 3x slower than orchestrator, 3x or more cost of orchestrator
-- Capabilities: Synthesizes responses from independently-dispatched councillors, compares their answers, resolves disagreements, and produces a final synthesized answer plus councillor details and consensus summary.
-- **Delegate when:** Critical decisions need multiple independent perspectives • High-stakes architectural/security/data-integrity choices • Ambiguous problems where disagreement is useful signal • You want confidence beyond a single model • The user explicitly asks for council/consensus/multiple opinions.
-- **How to call:** Send the full question/task and relevant context. Be explicit about what decision, trade-off, or answer the council should resolve. Do not ask council to do routine code edits.
-- **Result handling:** Council returns a structured response that may include: synthesized Council Response, individual Per-Councillor Details, and Council Summary/confidence. Preserve that structure when the user asked for council output. Do not pretend the council only returned a final answer. If you need to act on the council result, first briefly state the council's recommendation, then proceed.
-- **Rule of thumb:** Need second/third opinions from different models? → @council. Need one expert lane? → use the specialist.`,
+- Capabilities: Synthesizes responses from independently-dispatched councillors, compares answers, resolves disagreements`,
 
   observer: `@observer
 - Lane: Visual/media analysis isolated from orchestrator context
-- Role: Visual analysis specialist for images, PDFs, and diagrams
 - Permissions: Read files
-- Stats: Saves main context tokens - @observer processes raw files, returns structured observations
-- Capabilities: Interprets images, screenshots, PDFs, and diagrams via native read tool; extracts UI elements, layouts, text, relationships
-- **Delegate when:** Need to analyze a multimedia file• Extract information
-- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer - it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for routing? → Read only the minimal context yourself.
-- **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png - describe the UI elements and error messages."`,
+- Capabilities: Interprets images, screenshots, PDFs, and diagrams via read tool; extracts UI elements, layouts, text, relationships`,
 };
 
 // Parallel delegation examples
@@ -176,7 +147,6 @@ Review available agents and lane rules. Before beginning work, identify which pa
 **Routing:**
 - The user wants a coding result → that result is produced by a specialist. Your work is choosing the specialist, scoping the lane, and combining results.
 - UI/design work always routes to @designer.
-- Discovery routes to @explorer. Library and web research routes to @librarian. Architecture, debugging strategy, and review route to @oracle. Implementation routes to @fixer.
 - If two or more parts can proceed independently, dispatch them in parallel before starting dependent work.
 
 **Dispatch efficiency:**

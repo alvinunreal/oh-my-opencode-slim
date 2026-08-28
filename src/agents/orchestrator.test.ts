@@ -66,20 +66,50 @@ describe('orchestrator prompt', () => {
   test('no "handle directly" or "answer directly" permissions for orchestrator', () => {
     const prompt = buildOrchestratorPrompt();
 
-    // These are the Escape hatches that let the orchestrator self-assign work
     expect(prompt).not.toContain('handle directly');
     expect(prompt).not.toContain('answer directly');
     expect(prompt).not.toContain('delegation overhead exceeds');
   });
 
-  test('routing section directs work to specialists', () => {
+  test('no "Delegate when" sections in agent descriptions', () => {
     const prompt = buildOrchestratorPrompt();
 
+    expect(prompt).not.toMatch(/\*\*Delegate when:\*\*/);
+  });
+
+  test('no "Rule of thumb" patterns in agent descriptions', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toMatch(/\*\*Rule of thumb:\*\*/);
+  });
+
+  test('no "Stats:" comparisons in agent descriptions', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toMatch(/\*\*Stats:\*\*/);
+    expect(prompt).not.toContain('2x faster');
+  });
+
+  test('no example-based instructions in agent descriptions', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toContain('Avoid:');
+    expect(prompt).not.toContain('IMPORTANT:');
+    expect(prompt).not.toContain('How to call:');
+    expect(prompt).not.toContain('Result handling:');
+  });
+
+  test('routing section keeps identity frame and design guardrail, no explicit agent routing table', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    // Identity frame stays
     expect(prompt).toContain('produced by a specialist');
-    expect(prompt).toContain('routes to @designer');
-    expect(prompt).toContain('routes to @explorer');
-    expect(prompt).toContain('routes to @librarian');
-    expect(prompt).toContain('route to @oracle');
-    expect(prompt).toContain('routes to @fixer');
+    // Hard design guardrail stays
+    expect(prompt).toContain('always routes to @designer');
+    // Explicit routing table removed
+    expect(prompt).not.toContain('routes to @explorer');
+    expect(prompt).not.toContain('routes to @librarian');
+    expect(prompt).not.toContain('route to @oracle');
+    expect(prompt).not.toContain('routes to @fixer');
   });
 });
