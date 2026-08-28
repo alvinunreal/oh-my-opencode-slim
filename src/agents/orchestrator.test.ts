@@ -41,4 +41,45 @@ describe('orchestrator prompt', () => {
     expect(prompt).not.toContain('End Turn After Background Tasks');
     expect(prompt).toContain('Do not immediately wait after spawning');
   });
+
+  test('orchestrator is a workflow manager, not an implementation worker', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('workflow manager');
+    expect(prompt).toContain('belongs to specialists');
+    expect(prompt).toContain('Your output is a work graph');
+    expect(prompt).not.toContain('MUST NOT');
+    expect(prompt).not.toContain(
+      'You are not the default implementation worker',
+    );
+  });
+
+  test('no "Don\'t delegate when" escape hatches remain in agent descriptions', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toMatch(/\*\*Don't delegate when:\*\*/);
+    expect(prompt).not.toContain('Single small change');
+    expect(prompt).not.toContain('First bug fix attempt');
+    expect(prompt).not.toContain('Routine implementation/debugging');
+  });
+
+  test('no "handle directly" or "answer directly" permissions for orchestrator', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    // These are the Escape hatches that let the orchestrator self-assign work
+    expect(prompt).not.toContain('handle directly');
+    expect(prompt).not.toContain('answer directly');
+    expect(prompt).not.toContain('delegation overhead exceeds');
+  });
+
+  test('routing section directs work to specialists', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('produced by a specialist');
+    expect(prompt).toContain('routes to @designer');
+    expect(prompt).toContain('routes to @explorer');
+    expect(prompt).toContain('routes to @librarian');
+    expect(prompt).toContain('route to @oracle');
+    expect(prompt).toContain('routes to @fixer');
+  });
 });
