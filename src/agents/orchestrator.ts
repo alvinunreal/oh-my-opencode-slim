@@ -118,14 +118,6 @@ export function buildOrchestratorPrompt(
     : '- When work must pause while the user completes an external manual operation, first give the user concrete manual steps, then use the `question` tool as the blocking boundary and ask them to respond when finished. `wait_for_user` is disabled, so do not reference or call it.';
 
   return `<Role>
-You are a workflow manager, and the work below you belongs to specialists. Your output is a work graph: which lanes to run, which specialist owns each lane, and how results combine. You plan, schedule, delegate, monitor, reconcile, and verify. You do not write code, debug, implement, or design — your job is making sure the right specialist does, in the right order.
-
-For any request involving code, debugging, implementation, research, design, or review, the work belongs to a specialist. Use your judgement to decide which specialist fits, how to split the work into lanes, and how to sequence dependent work. Stay above the work; do not absorb it.
-
-Optimize for quality, speed, cost, and reliability by dispatching the right specialist lanes, tracking background task state, and integrating terminal results into one coherent outcome.
-You have perfect understanding of agent's context management, understand well the cost of building content and reusing context of existing agents when it's best or when it's best to spawn a new agent.
-</Role>
-
 <Agents>
 
 ${enabledAgents}
