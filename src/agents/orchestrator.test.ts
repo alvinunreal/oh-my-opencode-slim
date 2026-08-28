@@ -41,4 +41,54 @@ describe('orchestrator prompt', () => {
     expect(prompt).not.toContain('End Turn After Background Tasks');
     expect(prompt).toContain('Do not immediately wait after spawning');
   });
+
+  test('role identity defines orchestrator as workflow manager', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('workflow manager for coding work');
+    expect(prompt).toContain('You are not the default implementation worker');
+  });
+
+  test('routing section describes task() mechanism', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('Dispatch work to a specialist');
+    expect(prompt).toContain('calling the `task` tool');
+    expect(prompt).toContain('subagent_type');
+  });
+
+  test('no "Don\'t delegate when" escape hatches remain', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toMatch(/\*\*Don't delegate when:\*\*/);
+    expect(prompt).not.toContain('Single small change');
+    expect(prompt).not.toContain('First bug fix attempt');
+    expect(prompt).not.toContain('Routine implementation/debugging');
+  });
+
+  test('no "handle directly" or "answer directly" permissions', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toContain('handle directly');
+    expect(prompt).not.toContain('answer directly');
+    expect(prompt).not.toContain('delegation overhead exceeds');
+  });
+
+  test('no "Do not delegate merely because an agent exists"', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).not.toContain('Do not delegate merely because');
+  });
+
+  test('"Delegate when" sections are still present', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toMatch(/\*\*Delegate when:\*\*/);
+  });
+
+  test('design guardrail is present', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('Never handle UI/design work directly');
+  });
 });

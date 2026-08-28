@@ -5909,7 +5909,9 @@ describe('task-session-manager hook', () => {
       },
     });
     const hostOrigin = [
-      ...getBackgroundJobLifecycleLedger(board).syntheticTerminalOccurrences.values(),
+      ...getBackgroundJobLifecycleLedger(
+        board,
+      ).syntheticTerminalOccurrences.values(),
     ][0];
     if (!hostOrigin) throw new Error('host origin was not recorded');
 

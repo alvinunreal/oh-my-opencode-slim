@@ -120,10 +120,7 @@ type SyntheticTerminalOccurrenceLookup =
       reason: string;
     };
 
-type SyntheticTerminalProvenanceKind =
-  | 'explicit'
-  | 'host-message'
-  | 'legacy';
+type SyntheticTerminalProvenanceKind = 'explicit' | 'host-message' | 'legacy';
 
 const HOST_MESSAGE_OCCURRENCE_PREFIX = 'host-message:';
 
@@ -428,7 +425,10 @@ function findSyntheticTerminalOccurrence(
           origin.generationAtObservation === currentGeneration,
       )
       .map(([, origin]) => origin);
-    if (candidates.length === 1 && candidates[0].occurrenceID === occurrenceID) {
+    if (
+      candidates.length === 1 &&
+      candidates[0].occurrenceID === occurrenceID
+    ) {
       return { kind: 'matched', origin: candidates[0] };
     }
     if (candidates.length > 1) {
