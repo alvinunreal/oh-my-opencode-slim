@@ -83,8 +83,9 @@ oh-my-opencode-slim/
 
 ## Key Dependencies
 
-- `@modelcontextprotocol/sdk` - MCP protocol implementation
+- `@opencode-ai/plugin` - OpenCode server and TUI plugin contracts
 - `@opencode-ai/sdk` - OpenCode AI SDK
+- `@opentui/core` / `@opentui/solid` - Optional TUI rendering stack
 - `zod` - Runtime validation
 
 ## Development Workflow

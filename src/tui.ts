@@ -6,6 +6,7 @@ import type {
 import { type ColorInput, parseColor, RGBA } from '@opentui/core';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
+import { createSignal } from 'solid-js';
 import { DEFAULT_DISABLED_AGENTS, SUBAGENT_NAMES } from './config/constants';
 import { loadPluginConfig } from './config/loader';
 import {
@@ -30,6 +31,19 @@ const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
 );
 const BORDER = { type: 'single' };
 const TMUX_PANE_HEARTBEAT_MS = 10_000;
+const ACTIVITY_FRAME_MS = 100;
+const ACTIVITY_FRAMES = [
+  '⠋',
+  '⠙',
+  '⠹',
+  '⠸',
+  '⠼',
+  '⠴',
+  '⠦',
+  '⠧',
+  '⠇',
+  '⠏',
+] as const;
 
 type Child = JSX.Element | string | number | null | undefined | false;
 
@@ -72,6 +86,12 @@ function text(props: Record<string, unknown>, children: Child[]) {
 
 function box(props: Record<string, unknown>, children: Child[] = []) {
   return element('box', props, children);
+}
+
+function reactiveElement(render: () => JSX.Element): JSX.Element {
+  const root = box({ width: '100%', flexDirection: 'column' });
+  insert(root, render);
+  return root;
 }
 
 function getTuiDirectory(api: {
@@ -177,11 +197,48 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
+export function getActiveSidebarAgentNames(
+  snapshot: TuiSnapshot,
+): ReadonlySet<string> {
+  return new Set(Object.values(snapshot.activeSessions));
+}
+
+export function getSidebarActivityIndicator(
+  active: boolean,
+  now = Date.now(),
+): string {
+  if (!active) return ' ';
+  const frame = Math.floor(now / ACTIVITY_FRAME_MS) % ACTIVITY_FRAMES.length;
+  return ACTIVITY_FRAMES[frame];
+}
+
+interface AgentRowTheme {
+  accent: unknown;
+  text: unknown;
+  textMuted: unknown;
+}
+
+function activityIndicator(
+  active: boolean,
+  now: number,
+  theme: AgentRowTheme,
+): JSX.Element {
+  return text(
+    {
+      fg: active ? (theme.accent ?? theme.text) : theme.textMuted,
+      width: 2,
+    },
+    [getSidebarActivityIndicator(active, now)],
+  );
+}
+
 function agentRow(
   label: string,
   model: string,
   variant: string | undefined,
-  theme: { textMuted: unknown },
+  active: boolean,
+  now: number,
+  theme: AgentRowTheme,
 ): JSX.Element {
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
@@ -202,7 +259,10 @@ function agentRow(
   }
 
   return box({ width: '100%', flexDirection: 'column', marginBottom: 1 }, [
-    text({ fg: theme.textMuted }, [label]),
+    box({ width: '100%', flexDirection: 'row' }, [
+      text({ fg: theme.textMuted, width: 14 }, [label]),
+      activityIndicator(active, now, theme),
+    ]),
     ...detailRows,
   ]);
 }
@@ -211,7 +271,9 @@ function compactAgentRow(
   label: string,
   model: string,
   _variant: string | undefined,
-  theme: { textMuted: unknown },
+  active: boolean,
+  now: number,
+  theme: AgentRowTheme,
 ): JSX.Element {
   const modelName = splitSidebarModelId(model).model;
   return box(
@@ -221,7 +283,10 @@ function compactAgentRow(
       justifyContent: 'space-between',
     },
     [
-      text({ fg: theme.textMuted, width: 14 }, [label]),
+      box({ width: 16, flexDirection: 'row' }, [
+        text({ fg: theme.textMuted, width: 14 }, [label]),
+        activityIndicator(active, now, theme),
+      ]),
       text({ fg: theme.textMuted }, [modelName]),
     ],
   );
@@ -294,8 +359,10 @@ function renderSidebar(
   },
   configInvalid: boolean,
   compactSidebar: boolean,
+  now = Date.now(),
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
+  const activeAgents = getActiveSidebarAgentNames(snapshot);
   return box(
     {
       width: '100%',
@@ -341,10 +408,11 @@ function renderSidebar(
       ...getSidebarAgentNames(snapshot).map((agentName) => {
         const model = snapshot.agentModels[agentName] ?? 'pending';
         const variant = snapshot.agentVariants[agentName];
+        const active = activeAgents.has(agentName);
         if (compactSidebar) {
-          return compactAgentRow(agentName, model, variant, theme);
+          return compactAgentRow(agentName, model, variant, active, now, theme);
         }
-        return agentRow(agentName, model, variant, theme);
+        return agentRow(agentName, model, variant, active, now, theme);
       }),
     ],
   );
@@ -457,7 +525,10 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
   const version = (await readPackageVersion()) ?? 'dev';
   let configDirectory = ctx.location?.directory ?? process.cwd();
   let { configInvalid, compactSidebar } = readConfigState(configDirectory);
-  let snapshot = readTuiSnapshot(configDirectory);
+  const [snapshot, setSnapshot] = createSignal(
+    readTuiSnapshot(configDirectory),
+  );
+  const [animationNow, setAnimationNow] = createSignal(Date.now());
   const tmuxRegistration: ActiveTmuxPaneRegistration = {
     ownerPid: process.pid,
     lastRecordedAt: 0,
@@ -469,27 +540,36 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     try {
       const currentDirectory = ctx.location?.directory ?? process.cwd();
       syncTmuxPaneRegistration(ctx.ui.router.current(), tmuxRegistration);
-      snapshot = await readTuiSnapshotAsync(currentDirectory);
+      const nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
       if (disposed) return;
       if (currentDirectory !== configDirectory) {
         configDirectory = currentDirectory;
         ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
       }
+      setSnapshot(nextSnapshot);
       ctx.renderer.requestRender();
     } catch {
       // Ignore render errors; this is best-effort live status.
     }
   }, 1000);
+  const animationTimer = setInterval(() => {
+    if (!disposed && Object.keys(snapshot().activeSessions).length > 0) {
+      setAnimationNow(Date.now());
+    }
+  }, ACTIVITY_FRAME_MS);
 
   const disposeSlot = ctx.ui.slot({
     append: 'sidebar.content',
     render: () =>
-      renderSidebar(
-        snapshot,
-        version,
-        v2ThemeView(ctx.theme),
-        configInvalid,
-        compactSidebar,
+      reactiveElement(() =>
+        renderSidebar(
+          snapshot(),
+          version,
+          v2ThemeView(ctx.theme),
+          configInvalid,
+          compactSidebar,
+          animationNow(),
+        ),
       ),
   });
 
@@ -497,6 +577,7 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     disposed = true;
     disposeSlot();
     clearInterval(renderTimer);
+    clearInterval(animationTimer);
     clearTmuxPaneRegistration(tmuxRegistration);
   };
 }
@@ -545,7 +626,10 @@ const plugin: TuiDualContractModule = {
     const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
     let configDirectory = getTuiDirectory(api);
     let { configInvalid, compactSidebar } = readConfigState(configDirectory);
-    let snapshot = readTuiSnapshot(configDirectory);
+    const [snapshot, setSnapshot] = createSignal(
+      readTuiSnapshot(configDirectory),
+    );
+    const [animationNow, setAnimationNow] = createSignal(Date.now());
     const tmuxRegistration: ActiveTmuxPaneRegistration = {
       ownerPid: process.pid,
       lastRecordedAt: 0,
@@ -555,20 +639,27 @@ const plugin: TuiDualContractModule = {
       try {
         const currentDirectory = getTuiDirectory(api);
         syncTmuxPaneRegistration(api.route.current, tmuxRegistration);
-        snapshot = await readTuiSnapshotAsync(currentDirectory);
+        const nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
         if (currentDirectory !== configDirectory) {
           configDirectory = currentDirectory;
           ({ configInvalid, compactSidebar } =
             readConfigState(configDirectory));
         }
+        setSnapshot(nextSnapshot);
         api.renderer.requestRender();
       } catch {
         // Ignore render errors; this is best-effort live status.
       }
     }, 1000);
+    const animationTimer = setInterval(() => {
+      if (Object.keys(snapshot().activeSessions).length > 0) {
+        setAnimationNow(Date.now());
+      }
+    }, ACTIVITY_FRAME_MS);
 
     api.lifecycle.onDispose(() => {
       clearInterval(renderTimer);
+      clearInterval(animationTimer);
       clearTmuxPaneRegistration(tmuxRegistration);
     });
 
@@ -576,12 +667,15 @@ const plugin: TuiDualContractModule = {
       order: 900,
       slots: {
         sidebar_content() {
-          return renderSidebar(
-            snapshot,
-            version,
-            api.theme.current,
-            configInvalid,
-            compactSidebar,
+          return reactiveElement(() =>
+            renderSidebar(
+              snapshot(),
+              version,
+              api.theme.current,
+              configInvalid,
+              compactSidebar,
+              animationNow(),
+            ),
           );
         },
       },
@@ -595,10 +689,10 @@ const plugin: TuiDualContractModule = {
     if (api.command) {
       const snapshotRef: { snapshot: TuiSnapshot } = {
         get snapshot() {
-          return snapshot;
+          return snapshot();
         },
         set snapshot(value: TuiSnapshot) {
-          snapshot = value;
+          setSnapshot(value);
         },
       };
       const disposeCommands = api.command.register(() => [

@@ -37,6 +37,7 @@ const RETRYABLE_ERROR_PATTERNS = [
   /rate.?limit/i,
   /too many requests/i,
   /quota.?exceeded/i,
+  /\bquota\b.*\bexhausted/i,
   /quota.?threshold/i,
   /usage.?exceeded/i,
   /ExceededBudget/i,
@@ -678,6 +679,12 @@ export class ForegroundFallbackManager {
       // biome-ignore lint/style/noNonNullAssertion: We just set this above
       let tried = this.sessionTried.get(sessionID)!;
       if (currentModel) tried.add(currentModel);
+      // ponytail: seed chain entries at or before the current model's index
+      // to prevent backward fallback onto models the session already left.
+      if (currentModel) {
+        const idx = chain.indexOf(currentModel);
+        for (let i = 0; i < idx; i++) tried.add(chain[i]);
+      }
 
       let nextModel = chain.find((m) => !tried.has(m));
       if (!nextModel) {

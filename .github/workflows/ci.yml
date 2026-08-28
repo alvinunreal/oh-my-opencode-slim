@@ -20,11 +20,9 @@ concurrency:
 
 jobs:
   test:
+    name: Required / Bun from package.json
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        bun-version: [latest]
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code
@@ -32,14 +30,61 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ matrix.bun-version }}
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun ci
 
-      - name: Run lint
-        run: bun run lint
+      - name: Run formatting and lint checks
+        run: bun run check:ci
+
+      - name: Run typecheck
+        run: bun run typecheck
+
+      - name: Run tests
+        run: |
+          mkdir -p reports
+          bun test \
+            --coverage \
+            --coverage-reporter=text \
+            --coverage-reporter=lcov \
+            --coverage-dir=coverage \
+            --reporter=junit \
+            --reporter-outfile=reports/junit.xml
+
+      - name: Upload test and coverage reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-bun-pinned
+          path: |
+            reports/junit.xml
+            coverage/lcov.info
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Build
+        run: bun run build
+
+  bun-latest-canary:
+    name: Canary / Bun latest
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup latest Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Run formatting and lint checks
+        run: bun run check:ci
 
       - name: Run typecheck
         run: bun run typecheck

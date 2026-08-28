@@ -22,6 +22,7 @@ export type {
   ModelRef,
   V2AgentDraft,
   V2Cleanup,
+  V2CommandDefinition,
   V2CommandDraft,
   V2Context,
   V2Registration,

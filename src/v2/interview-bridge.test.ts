@@ -2,19 +2,22 @@ import { describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
 import { createServer } from 'node:http';
 import {
+  applyInterviewCommandParts,
   createV2InterviewBridge,
-  INTERVIEW_COMMAND_MARKER,
+  markerText,
 } from './interview-bridge';
 
 function createContext(overrides?: {
   synthetic?: (input: Record<string, unknown>) => Promise<unknown>;
-  update?: (input: Record<string, unknown>) => Promise<unknown>;
+  rename?: (input: Record<string, unknown>) => Promise<unknown>;
+  prompt?: (input: Record<string, unknown>) => Promise<unknown>;
 }): any {
   return {
     session: {
       hook: mock(async () => ({ dispose() {} })),
       synthetic: overrides?.synthetic,
-      update: overrides?.update,
+      rename: overrides?.rename,
+      prompt: overrides?.prompt,
     },
   };
 }
@@ -34,29 +37,54 @@ async function findFreePort(): Promise<number> {
   });
 }
 
+describe('markerText', () => {
+  test('renders args byte-exact', () => {
+    expect(markerText('build a notes app')).toBe(
+      '<omos-interview-command>build a notes app</omos-interview-command>',
+    );
+    expect(markerText('')).toBe(
+      '<omos-interview-command></omos-interview-command>',
+    );
+  });
+
+  test('does not mangle $-sequences in args (regression)', () => {
+    // A string replacer would turn $$ into $, $& into the whole match, and
+    // $` into the preceding text. Function replacer keeps them byte-exact.
+    expect(markerText('pay $$ now')).toBe(
+      '<omos-interview-command>pay $$ now</omos-interview-command>',
+    );
+    expect(markerText('a $& b')).toBe(
+      '<omos-interview-command>a $& b</omos-interview-command>',
+    );
+    expect(markerText('a $` b')).toBe(
+      '<omos-interview-command>a $` b</omos-interview-command>',
+    );
+  });
+});
+
 describe('v2 interview bridge', () => {
-  test('registers an orchestrator-owned marker command and rewrites only the tail', async () => {
+  test('registers an add-only marker command and rewrites only the tail', async () => {
     const directory = `.tmp-v2-interview-${Date.now()}`;
     const synthetic = mock(async () => ({}));
-    const update = mock(async () => ({}));
+    const rename = mock(async () => ({}));
     const bridge = createV2InterviewBridge(
-      createContext({ synthetic, update }),
+      createContext({ synthetic, rename }),
       {
         outputFolder: directory,
       } as never,
     );
-    const commands: Record<string, Record<string, unknown>> = {};
+    const added: Array<{ name: string; description?: string }> = [];
     bridge.registerCommand({
-      update(name, apply) {
-        commands[name] = {};
-        apply(commands[name]);
-      },
+      add: (def) =>
+        added.push({ name: def.name, description: def.description }),
     });
 
-    expect(commands.interview).toMatchObject({
-      agent: 'orchestrator',
-      template: INTERVIEW_COMMAND_MARKER,
-    });
+    expect(added).toEqual([
+      {
+        name: 'interview',
+        description: 'Open a localhost interview UI for a feature idea',
+      },
+    ]);
 
     const earlier = {
       id: 'old',
@@ -77,7 +105,7 @@ describe('v2 interview bridge', () => {
           content: [
             {
               type: 'text',
-              text: '<omos-interview-command>build a notes app</omos-interview-command>',
+              text: markerText('build a notes app'),
             },
           ],
         },
@@ -90,7 +118,7 @@ describe('v2 interview bridge', () => {
     expect(event.messages[1].content[0].text).toContain('build a notes app');
     expect(event.messages[1].content[0].text).toContain('<interview_state>');
     expect(synthetic).toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({
+    expect(rename).toHaveBeenCalledWith({
       sessionID: 'ses_v2',
       title: 'Interview: build a notes app',
     });
@@ -100,6 +128,133 @@ describe('v2 interview bridge', () => {
       recursive: true,
       force: true,
     });
+  });
+
+  test('registerCommand is a no-op when the draft has no add', () => {
+    const bridge = createV2InterviewBridge(createContext());
+    expect(() => bridge.registerCommand({} as never)).not.toThrow();
+    bridge.dispose();
+  });
+
+  test('embedded interview markers are not dispatched (whole-text anchor)', async () => {
+    const synthetic = mock(async () => ({}));
+    const bridge = createV2InterviewBridge(createContext({ synthetic }), {
+      outputFolder: `.tmp-v2-embedded-${Date.now()}`,
+    } as never);
+    const trailing = {
+      id: 't',
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `before ${markerText('hijack')} after`,
+        },
+      ],
+    };
+    const before = structuredClone(trailing.content);
+
+    await bridge.handleContext({
+      sessionID: 'ses_embed',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [trailing],
+    });
+
+    expect(trailing.content).toEqual(before);
+    expect(synthetic).not.toHaveBeenCalled();
+    bridge.dispose();
+  });
+
+  test('runtime methods probe the v2 session domain with flat inputs', async () => {
+    const calls: Array<{ method: string; input: Record<string, unknown> }> = [];
+    const track =
+      (method: string) =>
+      async (input: Record<string, unknown>): Promise<unknown> => {
+        calls.push({ method, input });
+        return {};
+      };
+    const bridge = createV2InterviewBridge({
+      session: {
+        prompt: track('prompt'),
+        synthetic: track('synthetic'),
+        switchAgent: track('switchAgent'),
+        rename: track('rename'),
+      },
+    } as never);
+
+    await bridge.runtime.notify('ses_n', 'ready');
+    expect(calls).toContainEqual({
+      method: 'synthetic',
+      input: { sessionID: 'ses_n', text: 'ready' },
+    });
+
+    await bridge.runtime.continue('ses_c', 'go on');
+    expect(calls).toContainEqual({
+      method: 'switchAgent',
+      input: { sessionID: 'ses_c', agent: 'orchestrator' },
+    });
+    expect(calls).toContainEqual({
+      method: 'prompt',
+      input: { sessionID: 'ses_c', text: 'go on' },
+    });
+
+    await bridge.runtime.rename('ses_r', 'Interview: x');
+    expect(calls).toContainEqual({
+      method: 'rename',
+      input: { sessionID: 'ses_r', title: 'Interview: x' },
+    });
+
+    bridge.dispose();
+  });
+
+  test('notify is a no-op (no prompt fallback) when synthetic is unavailable', async () => {
+    const prompt = mock(async () => ({}));
+    const bridge = createV2InterviewBridge({
+      session: { prompt },
+    } as never);
+    await bridge.runtime.notify('ses_f', 'hey');
+    expect(prompt).not.toHaveBeenCalled();
+    bridge.dispose();
+  });
+
+  test('rename logs and skips when unavailable', async () => {
+    const prompt = mock(async () => ({}));
+    const bridge = createV2InterviewBridge({
+      session: { prompt },
+    } as never);
+    await expect(
+      bridge.runtime.rename('ses_ru', 'Interview: x'),
+    ).resolves.toBeUndefined();
+    expect(prompt).not.toHaveBeenCalled();
+    bridge.dispose();
+  });
+
+  test('applyInterviewCommandParts: empty parts strip the marker, keep args', () => {
+    const trailing = {
+      role: 'user',
+      content: [{ type: 'text', text: markerText('standup notes') }],
+    };
+    applyInterviewCommandParts(
+      trailing,
+      trailing.content[0].text as string,
+      [],
+    );
+    expect(trailing.content).toEqual([{ type: 'text', text: 'standup notes' }]);
+  });
+
+  test('applyInterviewCommandParts: non-empty parts replace the content', () => {
+    const trailing = {
+      role: 'user',
+      content: [{ type: 'text', text: markerText('idea') }],
+    };
+    applyInterviewCommandParts(trailing, trailing.content[0].text as string, [
+      { type: 'text', text: 'EXPANDED', synthetic: true },
+    ]);
+    expect(trailing.content).toEqual([
+      { type: 'text', text: 'EXPANDED', synthetic: true },
+    ]);
   });
 
   test('projects text events and removes a deleted session', async () => {
@@ -176,7 +331,7 @@ describe('v2 interview bridge', () => {
             content: [
               {
                 type: 'text',
-                text: `<omos-interview-command>${idea}</omos-interview-command>`,
+                text: markerText(idea),
               },
             ],
           },

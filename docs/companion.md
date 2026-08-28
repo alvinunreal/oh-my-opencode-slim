@@ -36,7 +36,9 @@ You can enable the companion by adding a `companion` section to your setting con
 
 - **`companion.gifPack`**:
   - `default` (default) - the bundled companion animation set generated from
-    the MP4 sources in `companion/VIDEOS/`.
+    tracked MP4 sources in `companion/VIDEOS/`. See
+    [source-video README](../companion/VIDEOS/README.md) for mappings and
+    regeneration instructions.
 
 - **`companion.loopStyle`**:
   - `classic` (default) - forward playback that loops back to the first frame.

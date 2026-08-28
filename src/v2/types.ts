@@ -17,14 +17,26 @@ export interface V2AgentDraft {
 export interface V2ToolDraft {
   add(tool: Record<string, unknown>): void;
 }
+/** A v2 command definition passed to `command.transform` drafts. The command
+ * body runs `execute` directly (no template field). */
+export interface V2CommandDefinition {
+  name: string;
+  description?: string;
+  execute: (input: {
+    sessionID: string;
+    prompt: {
+      text: string;
+      files?: unknown[];
+      agents?: unknown[];
+      skills?: unknown[];
+    };
+    delivery?: unknown;
+  }) => Promise<void>;
+}
+/** Command transform draft. v2 command drafts are add-only;
+ * `V2CommandDraft` mirrors the `add()` shape. */
 export interface V2CommandDraft {
-  list(): Array<Record<string, unknown>>;
-  get(name: string): Record<string, unknown> | undefined;
-  update(
-    name: string,
-    update: (command: Record<string, unknown>) => void,
-  ): void;
-  remove(name: string): void;
+  add(def: V2CommandDefinition): void;
 }
 export interface V2SessionContextEvent {
   readonly sessionID: string;
@@ -84,11 +96,24 @@ export interface V2Context {
       name: 'context',
       cb: (event: V2SessionContextEvent) => Promise<void>,
     ): Promise<V2Registration>;
+    /** v2 session.prompt — flat PromptInput ({sessionID, text, files?,
+     * agents?, skills?, metadata?, delivery?, resume?}). */
+    prompt?(input: Record<string, unknown>): Promise<unknown>;
+    /** v2 session.synthetic — like prompt but not persisted as user input. */
+    synthetic?(input: Record<string, unknown>): Promise<unknown>;
+    /** v2 session.rename ({sessionID, title}). */
+    rename?(input: Record<string, unknown>): Promise<unknown>;
+    /** v2 session.switchAgent ({sessionID, agent}). */
+    switchAgent?(input: Record<string, unknown>): Promise<unknown>;
   };
   event: {
     subscribe(): AsyncIterable<Record<string, unknown>>;
   };
 }
+
+/** The v2 session domain (context hook + runtime-probed methods), declared
+ * once so adapters share the exact shape. */
+export type V2Session = V2Context['session'];
 
 export type V2Cleanup = () => Promise<void> | void;
 

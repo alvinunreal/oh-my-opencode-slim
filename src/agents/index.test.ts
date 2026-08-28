@@ -3,6 +3,7 @@ import type { PluginConfig } from '../config';
 import {
   AgentOverrideConfigSchema,
   CouncilConfigSchema,
+  DEFAULT_AGENT_COLORS,
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   PluginConfigSchema,
@@ -902,6 +903,74 @@ describe('getAgentConfigs', () => {
 
     expect(configs.explorer.temperature).toBe(0.5);
     expect(configs.fixer.temperature).toBe(0);
+  });
+
+  test('applies default colors to every built-in agent', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({ disabled_agents: [], council: councilConfig() }),
+    );
+
+    for (const [name, color] of Object.entries(DEFAULT_AGENT_COLORS)) {
+      expect(configs[name]?.color).toBe(color);
+    }
+    expect(configs['councillor-alpha']?.color).toBe(
+      DEFAULT_AGENT_COLORS.councillor,
+    );
+  });
+
+  test('configured colors override defaults and flow to custom agents', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({
+        agents: {
+          oracle: { color: '#A1b2C3' },
+          reviewer: {
+            model: 'openai/gpt-5.6',
+            color: 'warning',
+          },
+        },
+      }),
+    );
+
+    expect(configs.oracle.color).toBe('#A1b2C3');
+    expect(configs.reviewer.color).toBe('warning');
+  });
+
+  test('dynamic councillors inherit configured council color', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({
+        council: councilConfig(),
+        agents: { council: { color: '#123ABC' } },
+      }),
+    );
+
+    expect(configs.council.color).toBe('#123ABC');
+    expect(configs['councillor-alpha']?.color).toBe('#123ABC');
+  });
+});
+
+describe('AgentOverrideConfigSchema color validation', () => {
+  test('accepts OpenCode theme colors and six-digit hex colors', () => {
+    for (const color of [
+      'primary',
+      'secondary',
+      'accent',
+      'success',
+      'warning',
+      'error',
+      'info',
+      '#FF5733',
+      '#a1B2c3',
+    ]) {
+      expect(AgentOverrideConfigSchema.safeParse({ color }).success).toBe(true);
+    }
+  });
+
+  test('rejects unsupported color formats', () => {
+    for (const color of ['red', '#FFF', '#GG5733', 'FF5733']) {
+      expect(AgentOverrideConfigSchema.safeParse({ color }).success).toBe(
+        false,
+      );
+    }
   });
 });
 

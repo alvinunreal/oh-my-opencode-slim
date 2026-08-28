@@ -32,6 +32,7 @@ yarn-error.log*
 
 # Test coverage
 coverage/
+reports/
 
 # Temporary files
 tmp/
@@ -101,5 +102,4 @@ companion/target/
 # Deepwork session artifacts
 .slim/deepwork/
 .codegraph/
-companion/VIDEOS/
 .worktrees/

@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v2.webp" alt="oh-my-opencode-slim V2 Release" style="border-radius: 10px;">
+    <img src="img/v2.jpg" alt="oh-my-opencode-slim V2 Release" style="border-radius: 10px;">
   </a>
   <h3>✨ oh-my-opencode-slim ✨</h3>
 
@@ -236,7 +236,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/orchestrator.png" width="240" style="border-radius: 10px;">
+      <img src="img/orchestrator.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>Forged in the void of complexity.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -277,7 +277,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/explorer.png" width="240" style="border-radius: 10px;">
+      <img src="img/explorer.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The wind that carries knowledge.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -318,7 +318,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/oracle.png" width="240" style="border-radius: 10px;">
+      <img src="img/oracle.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The voice at the crossroads.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -362,7 +362,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/council.png" width="240" style="border-radius: 10px;">
+      <img src="img/council.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>Many minds, one verdict.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -408,7 +408,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/librarian.png" width="240" style="border-radius: 10px;">
+      <img src="img/librarian.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The weaver of understanding.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -449,7 +449,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/designer.png" width="240" style="border-radius: 10px;">
+      <img src="img/designer.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>Beauty is essential.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -490,7 +490,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/fixer.png" width="240" style="border-radius: 10px;">
+      <img src="img/fixer.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The final step between vision and reality.</i></sub>
     </td>
     <td width="70%" valign="top">

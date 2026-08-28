@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from './constants';
+import {
+  AGENT_THEME_COLORS,
+  DEFAULT_MAX_RETAINED_SNAPSHOTS,
+} from './constants';
 import { CouncilConfigSchema } from './council-schema';
 
 export const ProviderModelIdSchema = z
@@ -49,6 +52,13 @@ export const PermissionConfigSchema = z.union([
   PermissionObjectSchema,
 ]);
 
+export const AgentColorSchema = z.union([
+  z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Expected a six-digit hex color (#RRGGBB)'),
+  z.enum(AGENT_THEME_COLORS),
+]);
+
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
 export type ModelInheritanceSource = z.infer<
@@ -82,6 +92,9 @@ export const AgentOverrideConfigSchema = z
     orchestratorPrompt: z.string().min(1).optional(),
     options: z.record(z.string(), z.unknown()).optional(), // provider-specific model options (e.g., textVerbosity, thinking budget)
     displayName: z.string().min(1).optional(),
+    color: AgentColorSchema.optional().describe(
+      'Agent display color as #RRGGBB or an OpenCode theme color',
+    ),
     description: z.string().min(1).optional(),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })

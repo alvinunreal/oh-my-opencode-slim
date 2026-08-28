@@ -26,6 +26,7 @@ Each agent is a **prompt-driven specialist** with a factory function that create
 
 - **Default prompts**: Each agent factory has a base prompt defined in its file (e.g., `explorer.ts`, `oracle.ts`)
 - **User overrides**: From `~/.config/opencode/oh-my-opencode-slim.json` via `loadAgentPrompt()`
+- **Agent colors**: Built-in theme-aware defaults with per-agent hex or theme-color overrides
 - **Permission wildcards**: Applied via `applyDefaultPermissions()` in `index.ts`
 - **Model resolution**: Supports string models, explicit `inheritModelFrom` policies, and priority-ordered arrays (`_modelArray`) for runtime fallback
 - **Skill permissions**: Per-agent MCP and tool access controlled via `getSkillPermissionsForAgent()`

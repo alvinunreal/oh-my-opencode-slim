@@ -28,6 +28,9 @@ const packagedRequiredFiles = [
   'LICENSE',
   'dist/index.js',
   'dist/index.d.ts',
+  'dist/server.js',
+  'dist/tui.js',
+  'dist/tui.d.ts',
   'dist/cli/index.js',
   'oh-my-opencode-slim.schema.json',
   'src/companion/companion-manifest.json',
@@ -188,6 +191,17 @@ function verifyFreshInstall(tarballPath: string) {
     run('node', ['--input-type=module', '--eval', smokeScript], {
       cwd: installDir,
     });
+
+    const tuiSmokeScript = [
+      "import pkg from 'oh-my-opencode-slim/tui';",
+      "if (pkg?.id !== 'oh-my-opencode-slim:tui') throw new Error('TUI export has an unexpected plugin id');",
+      "if (typeof pkg.tui !== 'function') throw new Error('TUI export is missing its v1 factory');",
+      "if (typeof pkg.setup !== 'function') throw new Error('TUI export is missing its v2 setup factory');",
+      "console.log('TUI package loads');",
+      'process.exit(0);',
+    ].join('\n');
+    console.log('Importing installed TUI entrypoint...');
+    run('bun', ['--eval', tuiSmokeScript], { cwd: installDir });
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

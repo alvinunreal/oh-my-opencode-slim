@@ -6,26 +6,28 @@ import { createInterviewServer } from '../interview/server';
 import { createInterviewService } from '../interview/service';
 import type { InterviewMessage } from '../interview/types';
 import { log } from '../utils/logger';
-import type { V2Context, V2SessionContextEvent } from './types';
+import { createSessionSubmit, textFromContent } from './session-submit';
+import type {
+  V2CommandDraft,
+  V2Context,
+  V2Session,
+  V2SessionContextEvent,
+} from './types';
 
 export const INTERVIEW_COMMAND_MARKER =
   '<omos-interview-command>$ARGUMENTS</omos-interview-command>';
 
+// Whole-text anchored: v2 writes the marker as the entire submitted prompt,
+// so whole-text anchoring is the contract. A user-typed embedded marker must
+// not hijack dispatch in the merged session context hook.
 const MARKER_PATTERN =
-  /<omos-interview-command>\s*([\s\S]*?)\s*<\/omos-interview-command>/i;
+  /^\s*<omos-interview-command>\s*([\s\S]*?)\s*<\/omos-interview-command>\s*$/;
 
-type V2SessionMethods = {
-  prompt?: (input: Record<string, unknown>) => Promise<unknown>;
-  promptAsync?: (input: Record<string, unknown>) => Promise<unknown>;
-  synthetic?: (input: Record<string, unknown>) => Promise<unknown>;
-  update?: (input: Record<string, unknown>) => Promise<unknown>;
-};
-
-function textFromContent(content: Array<Record<string, unknown>>): string {
-  return content
-    .filter((part) => part.type === 'text')
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
-    .join('');
+/** Render the `/interview` command marker with the given arguments. */
+export function markerText(args: string): string {
+  // Function replacer: a string replacer would interpret `$`-sequences in
+  // args (`$&`, `` $` ``, `$$`, ...) instead of emitting them byte-exact.
+  return INTERVIEW_COMMAND_MARKER.replace('$ARGUMENTS', () => args);
 }
 
 function toInterviewMessages(event: V2SessionContextEvent): InterviewMessage[] {
@@ -41,16 +43,33 @@ function toInterviewMessages(event: V2SessionContextEvent): InterviewMessage[] {
 export interface V2InterviewBridge {
   readonly service: ReturnType<typeof createInterviewService>;
   readonly runtime: InterviewSessionRuntime;
-  registerCommand(draft: {
-    update(
-      name: string,
-      update: (command: Record<string, unknown>) => void,
-    ): void;
-  }): void;
+  registerCommand(draft: V2CommandDraft): void;
   handleContext(event: V2SessionContextEvent): Promise<void>;
   handleEvent(event: Record<string, unknown>): Promise<void>;
   getTranscript(sessionID: string): InterviewMessage[];
   dispose(): void;
+}
+
+/** Mutate the trailing command message from hook-produced parts. When the
+ * hook produced nothing, strip the marker and leave the raw args text.
+ * Only the trailing message is mutated; earlier messages are left
+ * byte-for-byte untouched so provider prompt prefixes remain cacheable. */
+export function applyInterviewCommandParts(
+  trailing: { role: string; content: Array<Record<string, unknown>> },
+  text: string,
+  parts: Array<Record<string, unknown>>,
+): void {
+  if (parts.length > 0) {
+    trailing.content = parts.map((part) => ({ ...part }));
+    return;
+  }
+  trailing.content = [
+    {
+      type: 'text',
+      // Function replacer: a string replacer would interpret `$`-sequences.
+      text: text.replace(MARKER_PATTERN, (_match, args: string) => args),
+    },
+  ];
 }
 
 export function createV2InterviewBridge(
@@ -59,37 +78,53 @@ export function createV2InterviewBridge(
 ): V2InterviewBridge {
   const transcripts = new Map<string, InterviewMessage[]>();
   const activeText = new Map<string, string>();
-  const methods = ctx.session as V2SessionMethods;
+  // Reduced hosts may omit the session domain entirely.
+  const methods = (ctx.session ?? {}) as V2Session;
+  const submitUserText = createSessionSubmit(ctx);
 
   const runtime: InterviewSessionRuntime = {
     messages: async (sessionID) => transcripts.get(sessionID) ?? [],
     notify: async (sessionID, text) => {
-      if (methods.synthetic) {
-        await methods.synthetic({ sessionID, text });
+      // synthetic only — no prompt fallback: synthetic avoids triggering an
+      // agent turn; a prompt fallback would double-send and wake the loop.
+      if (typeof methods.synthetic !== 'function') {
+        log('[v2][interview] synthetic unavailable for notify', { sessionID });
         return;
       }
-      if (methods.prompt) {
-        await methods.prompt({
+      try {
+        await methods.synthetic({ sessionID, text });
+      } catch (err) {
+        log('[v2][interview] synthetic notify failed', {
           sessionID,
-          noReply: true,
-          parts: [{ type: 'text', text }],
+          err: String(err),
         });
       }
     },
     continue: async (sessionID, text) => {
-      const input = {
-        sessionID,
-        agent: 'orchestrator',
-        parts: [{ type: 'text', text, synthetic: true }],
-      };
-      if (methods.promptAsync) {
-        await methods.promptAsync(input);
-        return;
+      // Best-effort switch to the orchestrator agent, then a flat prompt.
+      try {
+        await methods.switchAgent?.({ sessionID, agent: 'orchestrator' });
+      } catch (err) {
+        log('[v2][interview] switchAgent failed (best-effort)', {
+          sessionID,
+          err: String(err),
+        });
       }
-      if (methods.prompt) await methods.prompt(input);
+      await submitUserText(sessionID, text);
     },
     rename: async (sessionID, title) => {
-      if (methods.update) await methods.update({ sessionID, title });
+      if (typeof methods.rename !== 'function') {
+        log('[v2][interview] session rename unavailable', { sessionID });
+        return;
+      }
+      try {
+        await methods.rename({ sessionID, title });
+      } catch (err) {
+        log('[v2][interview] session rename failed', {
+          sessionID,
+          err: String(err),
+        });
+      }
     },
   };
 
@@ -135,17 +170,27 @@ export function createV2InterviewBridge(
       });
   if (server) service.setBaseUrlResolver(() => server.ensureStarted());
 
-  function registerCommand(draft: {
-    update(
-      name: string,
-      update: (command: Record<string, unknown>) => void,
-    ): void;
-  }): void {
-    draft.update('interview', (command) => {
-      command.name = 'interview';
-      command.agent = 'orchestrator';
-      command.description = 'Open a localhost interview UI for a feature idea';
-      command.template = INTERVIEW_COMMAND_MARKER;
+  function registerCommand(draft: V2CommandDraft): void {
+    // v2 command drafts are add-only. `/interview` renders its marker as a
+    // user prompt; the context hook below consumes it.
+    if (typeof draft.add !== 'function') {
+      log('[v2][interview] command draft has no add');
+      return;
+    }
+    draft.add({
+      name: 'interview',
+      description: 'Open a localhost interview UI for a feature idea',
+      execute: async (invocation) => {
+        // Never throw: v2 surfaces command execution errors to the user.
+        try {
+          await submitUserText(
+            invocation?.sessionID ?? '',
+            markerText(invocation?.prompt?.text ?? ''),
+          );
+        } catch (err) {
+          log('[v2][interview] command execute failed', String(err));
+        }
+      },
     });
   }
 
@@ -176,9 +221,7 @@ export function createV2InterviewBridge(
       output,
     );
 
-    // Only replace the current command message. Earlier messages are left
-    // byte-for-byte untouched so provider prompt prefixes remain cacheable.
-    trailing.content = output.parts.map((part) => ({ ...part }));
+    applyInterviewCommandParts(trailing, text, output.parts);
     transcripts.set(event.sessionID, toInterviewMessages(event));
   }
 

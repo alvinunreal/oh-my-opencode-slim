@@ -4,6 +4,7 @@ import {
   AGENT_ALIASES,
   type AgentOverrideConfig,
   ALL_AGENT_NAMES,
+  DEFAULT_AGENT_COLORS,
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   loadAgentPrompt,
@@ -180,6 +181,7 @@ function applyOverrides(
   if (override.variant) agent.config.variant = override.variant;
   if (override.temperature !== undefined)
     agent.config.temperature = override.temperature;
+  if (override.color) agent.config.color = override.color;
   if (override.options) {
     agent.config.options = {
       ...agent.config.options,
@@ -476,6 +478,7 @@ export function createAgents(
     .map(([name, factory]) => {
       // Get base agent definition using the subagent factory with undefined prompts
       const agent = factory(getModelForAgent(name), undefined, undefined);
+      agent.config.color ??= DEFAULT_AGENT_COLORS[name];
 
       const customPrompts = loadAgentPrompt(name, {
         preset: runtime.preset,
@@ -600,8 +603,13 @@ export function createAgents(
   // Build dynamic councillor agents from council config (flatten mode).
   // Each councillor becomes a dispatchable subagent with its own model,
   // so the orchestrator can task() them with native panes at depth 1.
+  const councillorColor =
+    getOverrideFromAgents(mergedAgents, 'councillor')?.color ??
+    getOverrideFromAgents(mergedAgents, 'council')?.color ??
+    DEFAULT_AGENT_COLORS.councillor;
   const councillorAgents = buildCouncillorAgents(runtime, disabled).map(
     (agent) => {
+      agent.config.color ??= councillorColor;
       applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
       return agent;
     },
@@ -638,6 +646,7 @@ export function createAgents(
     !runtime.disabledTools.includes('wait_for_user'),
     runtime.backgroundJobs.orchestratorWake.enabled,
   );
+  orchestrator.config.color ??= DEFAULT_AGENT_COLORS.orchestrator;
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
   const defaultOrchestratorPrompt = orchestrator.config.prompt ?? '';

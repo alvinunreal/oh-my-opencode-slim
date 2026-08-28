@@ -3,10 +3,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { RGBA } from '@opentui/core';
+import { testRender } from '@opentui/solid';
 import { readTmuxPane } from './multiplexer/tmux-pane-registry';
 import {
   type ActiveTmuxPaneRegistration,
+  getActiveSidebarAgentNames,
   getContrastForeground,
+  getSidebarActivityIndicator,
   getSidebarAgentNames,
   readCompactSidebar,
   readConfigInvalid,
@@ -14,7 +17,13 @@ import {
   syncTmuxPaneRegistration,
   default as tuiPlugin,
 } from './tui';
-import type { TuiSnapshot } from './tui-state';
+import {
+  recordTuiAgentActivity,
+  recordTuiAgentModels,
+  type TuiSnapshot,
+} from './tui-state';
+
+const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
 
 function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
   return {
@@ -22,6 +31,7 @@ function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
     updatedAt: 0,
     agentModels: {},
     agentVariants: {},
+    activeSessions: {},
     ...overrides,
   };
 }
@@ -50,6 +60,118 @@ describe('tui sidebar agents', () => {
     expect(agentNames).not.toContain('observer');
     expect(agentNames).not.toContain('council');
     expect(agentNames).not.toContain('councillor');
+  });
+
+  test('derives active agents from concurrent session activity', () => {
+    const activeAgents = getActiveSidebarAgentNames(
+      createSnapshot({
+        activeSessions: {
+          'fixer-a': 'fixer',
+          'fixer-b': 'fixer',
+          'oracle-a': 'oracle',
+        },
+      }),
+    );
+
+    expect([...activeAgents]).toEqual(['fixer', 'oracle']);
+  });
+
+  test('renders a stable blank column or deterministic braille frame', () => {
+    expect(getSidebarActivityIndicator(false, 0)).toBe(' ');
+    expect(getSidebarActivityIndicator(true, 0)).toBe('⠋');
+    expect(getSidebarActivityIndicator(true, 100)).toBe('⠙');
+    expect(getSidebarActivityIndicator(true, 1_000)).toBe('⠋');
+  });
+});
+
+describe('live TUI activity rendering', () => {
+  test('updates a mounted v1 sidebar when an agent becomes active', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-spinner-live-'));
+    const projectDir = path.join(root, 'project');
+    const originalDataHome = process.env.XDG_DATA_HOME;
+    const disposers: Array<() => void> = [];
+    let slotPlugin: { slots: { sidebar_content: () => unknown } } | undefined;
+    let setup: Awaited<ReturnType<typeof testRender>> | undefined;
+
+    try {
+      fs.mkdirSync(projectDir, { recursive: true });
+      process.env.XDG_DATA_HOME = path.join(root, 'data');
+      recordTuiAgentModels(
+        { agentModels: { explorer: 'openai/gpt-5.6-luna-fast' } },
+        projectDir,
+      );
+
+      await tuiPlugin.tui(
+        {
+          state: { path: { directory: projectDir } },
+          route: { current: { name: 'home' } },
+          lifecycle: {
+            onDispose: (callback: () => void) => {
+              disposers.push(callback);
+              return () => {};
+            },
+          },
+          renderer: { requestRender: () => {} },
+          slots: {
+            register: (plugin: typeof slotPlugin) => {
+              slotPlugin = plugin;
+              return 'activity-test-slot';
+            },
+          },
+          theme: {
+            current: {
+              accent: '#22c55e',
+              background: '#111111',
+              borderActive: '#555555',
+              text: '#ffffff',
+              textMuted: '#aaaaaa',
+            },
+          },
+        } as Parameters<typeof tuiPlugin.tui>[0],
+        {},
+        { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
+      );
+
+      setup = await testRender(
+        () => slotPlugin?.slots.sidebar_content() as never,
+        { width: 52, height: 14 },
+      );
+      await setup.renderOnce();
+      expect(setup.captureCharFrame()).not.toMatch(ACTIVITY_FRAME_PATTERN);
+
+      recordTuiAgentActivity(
+        {
+          sessionID: 'explorer-session',
+          agentName: 'explorer',
+          active: true,
+        },
+        projectDir,
+      );
+      await Bun.sleep(1_100);
+      await setup.renderOnce();
+
+      const firstFrame = setup
+        .captureCharFrame()
+        .match(ACTIVITY_FRAME_PATTERN)?.[0];
+      expect(firstFrame).toBeDefined();
+
+      await Bun.sleep(200);
+      await setup.renderOnce();
+      const nextFrame = setup
+        .captureCharFrame()
+        .match(ACTIVITY_FRAME_PATTERN)?.[0];
+      expect(nextFrame).toBeDefined();
+      expect(nextFrame).not.toBe(firstFrame);
+    } finally {
+      setup?.renderer.destroy();
+      for (const dispose of disposers) dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+      if (originalDataHome === undefined) {
+        delete process.env.XDG_DATA_HOME;
+      } else {
+        process.env.XDG_DATA_HOME = originalDataHome;
+      }
+    }
   });
 });
 

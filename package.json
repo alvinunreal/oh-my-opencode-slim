@@ -1,6 +1,7 @@
 {
   "name": "oh-my-opencode-slim",
   "version": "2.2.17",
+  "packageManager": "bun@1.3.14",
   "description": "Lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -54,9 +55,9 @@
   ],
   "scripts": {
     "clean:dist": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
-    "build:plugin": "bun build src/index.ts src/tui.ts --outdir dist --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external @opentui/core --external @opentui/solid --external jsdom --external zod",
-    "build:v2": "bun build src/index.ts --outfile dist/server.js --target node --format esm --external @ast-grep/napi --external jsdom",
-    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @ast-grep/napi --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external jsdom --external zod",
+    "build:plugin": "bun build src/index.ts src/tui.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external @opentui/core --external @opentui/solid --external solid-js --external jsdom --external zod",
+    "build:v2": "bun build src/index.ts --outfile dist/server.js --target node --format esm --external jsdom",
+    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external jsdom --external zod",
     "build": "bun run clean:dist && bun run build:plugin && bun run build:v2 && bun run build:cli && tsc --emitDeclarationOnly && bun run generate-schema",
     "prepare": "bun run build",
     "contributors:add": "all-contributors add",
@@ -83,16 +84,17 @@
   },
   "dependencies": {
     "@ast-grep/cli": "^0.44.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "@mozilla/readability": "^0.6.0",
-    "@opencode-ai/plugin": "1.18.13",
-    "@opencode-ai/sdk": "1.18.13",
+    "@opencode-ai/plugin": "1.18.23",
+    "@opencode-ai/sdk": "1.18.23",
     "jsdom": "^29.0.0",
     "lru-cache": "^11.5.2",
     "turndown": "^7.2.4"
   },
   "optionalDependencies": {
-    "@opentui/solid": "^0.1.97"
+    "@opentui/core": "0.5.8",
+    "@opentui/solid": "0.5.8",
+    "solid-js": "1.9.12"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

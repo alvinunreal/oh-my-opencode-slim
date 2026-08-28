@@ -66,7 +66,12 @@ import {
   resolveEventSessionID,
   TaskActivityTracker,
 } from './tools/task-activity';
-import { recordTuiAgentModel, recordTuiAgentModels } from './tui-state';
+import {
+  clearTuiAgentActivities,
+  recordTuiAgentActivity,
+  recordTuiAgentModel,
+  recordTuiAgentModels,
+} from './tui-state';
 import {
   BackgroundJobBoard,
   BackgroundJobCoordinator,
@@ -161,6 +166,29 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
     },
   });
+  const ownedTuiActivitySessions = new Map<string, string>();
+  const tuiActivityDirectory = (sessionID: string): string => {
+    return sessionMetadata.getDirectory(sessionID) ?? ctx.directory;
+  };
+  const markTuiAgentActive = (sessionID: string, agentName: string): void => {
+    const directory = tuiActivityDirectory(sessionID);
+    recordTuiAgentActivity({ sessionID, agentName, active: true }, directory);
+    ownedTuiActivitySessions.set(sessionID, directory);
+  };
+  const markTuiAgentInactive = (sessionID: string): void => {
+    const directory =
+      ownedTuiActivitySessions.get(sessionID) ??
+      tuiActivityDirectory(sessionID);
+    recordTuiAgentActivity({ sessionID, active: false }, directory);
+    ownedTuiActivitySessions.delete(sessionID);
+  };
+  const clearTuiActivities = (): void => {
+    for (const [sessionID, directory] of ownedTuiActivitySessions) {
+      recordTuiAgentActivity({ sessionID, active: false }, directory);
+    }
+    ownedTuiActivitySessions.clear();
+  };
+  clearTuiAgentActivities(ctx.directory);
   let sessionLifecycle: SessionLifecycle;
 
   let chatHeadersHook: ReturnType<typeof createChatHeadersHook>;
@@ -973,12 +1001,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           (statusType === 'busy' || statusType === 'retry')
         ) {
           sessionMetadata.markOrchestratorActive(eventSessionID);
+          const agentName = sessionMetadata.getAgent(eventSessionID);
+          if (agentName) {
+            markTuiAgentActive(eventSessionID, agentName);
+          }
         } else if (
           event.type === 'session.idle' ||
           (event.type === 'session.status' && statusType === 'idle') ||
           event.type === 'session.deleted'
         ) {
           sessionMetadata.markOrchestratorIdle(eventSessionID);
+          markTuiAgentInactive(eventSessionID);
         }
       }
 
@@ -1043,6 +1076,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           await multiplexerSessionManager.cleanupOnInstanceDisposed();
         },
       );
+      if (event.type === 'server.instance.disposed') {
+        clearTuiActivities();
+      }
 
       await orchestratorWakeScheduler.event(
         input as {
@@ -1121,6 +1157,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
       await interviewManager.dispose();
       await multiplexerSessionManager.cleanupOnInstanceDisposed();
+      clearTuiActivities();
     },
 
     'tool.execute.before': async (input, output) => {
@@ -1221,6 +1258,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (agent) {
         foregroundFallback.registerSessionAgent(input.sessionID, agent);
         sessionMetadata.setAgent(input.sessionID, agent);
+        markTuiAgentActive(input.sessionID, agent);
         // A chat message means this session is actively working. This also
         // covers the race where session.status busy fires before the
         // session's agent is known.

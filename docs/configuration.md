@@ -37,6 +37,10 @@ The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 }
 ```
 
+While an agent session reports `busy` or `retry`, the sidebar shows an
+animated Braille indicator after that agent's name. The indicator disappears
+after every active session for that agent becomes idle or is deleted.
+
 ---
 
 ## Prompt Overriding
@@ -116,6 +120,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `presets.<name>.<agent>.temperature` | number | - | Optional temperature (0–2); when omitted, OpenCode chooses its default |
 | `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
 | `presets.<name>.<agent>.displayName` | string | - | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
+| `presets.<name>.<agent>.color` | string | built-in agent default | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `presets.<name>.<agent>.skills` | string[] | - | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.mcps` | string[] | - | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.options` | object | - | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
@@ -124,6 +129,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
 | `agents.<agent>.permission` | object \| string | - | Tool-level permission rules enforced by the SDK. See [Agent Permissions](#agent-permissions) |
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
+| `agents.<agent>.color` | string | built-in agent default | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `agents.<agent>.description` | string | generated | Description shown to OpenCode and the orchestrator; defaults to `Custom subagent '<name>'` for custom agents |
 | `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command See [ACP-connected agents](#acp-connected-agents). |
@@ -401,6 +407,41 @@ Model selection follows these rules:
   fixer-to-librarian fallback remain unchanged.
 
 The setting works in both root `agents` overrides and preset agent overrides.
+
+### Agent Colors
+
+Built-in agents use theme-aware colors by default:
+
+| Agent | Default color |
+|-------|---------------|
+| `orchestrator` | `primary` |
+| `explorer` | `info` |
+| `librarian` | `secondary` |
+| `oracle` | `accent` |
+| `designer` | `success` |
+| `fixer` | `warning` |
+| `observer` | `info` |
+| `council` and councillors | `accent` |
+
+Override a built-in color or color a custom agent with a six-digit hex value
+or an OpenCode theme color:
+
+```jsonc
+{
+  "agents": {
+    "oracle": { "color": "#FF5733" },
+    "reviewer": {
+      "model": "openai/gpt-5.6",
+      "color": "info"
+    }
+  }
+}
+```
+
+Theme colors adapt to the active OpenCode theme. Dynamic councillors inherit
+the configured `council` color unless `agents.councillor.color` overrides it.
+Custom agents have no default color. `color` works in top-level `agents`
+overrides and inside `presets`.
 
 ### Per-preset agent configuration
 

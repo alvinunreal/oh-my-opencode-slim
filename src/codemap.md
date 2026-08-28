@@ -69,15 +69,18 @@ OpenCode Core → Plugin Initialization (index.ts)
 1. **Plugin Registration**: TUI plugin registered with OpenCode's TUI system via `tui` export
 2. **Version Detection**: Reads plugin version from package.json or uses 'dev'
 3. **Config Validation**: Checks if current directory has valid plugin config
-4. **Snapshot Loading**: Reads agent models/variants from `tui-state.ts`
-5. **Live Updates**: Sets up interval to refresh snapshot every 1000ms
+4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
+   from `tui-state.ts`
+5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
+   advances 100ms animation frames only while agents are active
 6. **Tmux registration**: Refreshes the active session-to-`TMUX_PANE`
    registration for parent-aware child-pane routing
 7. **Sidebar Rendering**: Renders sidebar with:
    - Plugin header (OMO-Slim + version)
    - Config status warning (if invalid)
-   - Agent list with model/variant details
-8. **Lifecycle Management**: Cleans up interval and owned tmux registration on dispose
+   - Agent list with model/variant details and Braille activity indicators
+8. **Lifecycle Management**: Cleans up refresh/animation timers and owned tmux
+   registration on dispose
 
 ### State Persistence Flow (tui-state.ts)
 
@@ -87,8 +90,14 @@ OpenCode Core → Plugin Initialization (index.ts)
    - `readTuiSnapshotAsync()`: Async variant for TUI rendering
    - `recordTuiAgentModels()`: Updates both agent models and variants atomically
    - `recordTuiAgentModel()`: Updates single agent's model/variant
-3. **Atomic Writes**: State updates are atomic (read → mutate → write with timestamp)
+   - `recordTuiAgentActivity()`: Tracks active agents by session so concurrent
+     runs of the same agent remain visible until all runs finish
+   - `clearTuiAgentActivities()`: Removes stale activity during startup
+3. **Atomic Writes**: Cross-process file locking serializes each read → mutate →
+   atomic rename transaction, with dead-owner and aged-lock recovery
 4. **Error Handling**: All operations are best-effort; failures don't crash plugin
+5. **Instance Cleanup**: On shutdown, each plugin instance removes only sessions
+   it marked active, preserving activity owned by other running instances
 
 ### Event Handling Flow (index.ts)
 
@@ -96,8 +105,10 @@ Key event flows:
 
 1. **Session Lifecycle**:
    - `session.created` → register child session
-   - `session.status` → multiplexer session management and companion updates
-   - `session.deleted` → cleanup session agent map and companion state
+   - `session.status` → multiplexer session management, Companion updates, and
+     TUI activity state
+   - `session.deleted` → cleanup session agent map, Companion state, and TUI
+     activity state
 
 2. **Message Updates**:
    - `message.updated` → record agent/model usage in TUI state
@@ -107,7 +118,7 @@ Key event flows:
    - `tool.execute.after` → post-tool hooks (retry guidance, JSON error recovery, file-tool nudges)
 
 4. **Chat Integration**:
-   - `chat.message` → track session → agent mapping
+   - `chat.message` → track session → agent mapping and mark TUI activity
    - `experimental.chat.system.transform` → inject orchestrator prompt for serve mode
    - `experimental.chat.messages.transform` → phase reminders, skill filtering, image attachment processing
 
@@ -171,7 +182,8 @@ Key event flows:
 
 ## Performance Considerations
 
-- **Live Updates**: TUI refreshes every 1000ms (configurable via interval)
+- **Live Updates**: TUI reads state every 1000ms and animates active Braille
+  indicators every 100ms without extra disk reads
 - **Atomic State**: State writes are atomic to prevent corruption
 - **Lazy Initialization**: Some subsystems (e.g., webfetch probe) run async without blocking init
 - **Event-Driven**: Minimal polling; relies on OpenCode's event system

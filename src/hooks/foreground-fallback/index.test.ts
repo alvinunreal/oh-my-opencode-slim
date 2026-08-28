@@ -121,6 +121,15 @@ describe('isFailoverError', () => {
     );
   });
 
+  test('returns true for bailian "quota has been exhausted" (issue #1083)', () => {
+    expect(
+      isRetryableError({
+        message:
+          'Your token-plan 1-week quota has been exhausted. The quota will reset at 08-27 15:33:00 UTC.',
+      }),
+    ).toBe(true);
+  });
+
   test('returns true for codex quota-threshold errors', () => {
     expect(
       isFailoverError({
