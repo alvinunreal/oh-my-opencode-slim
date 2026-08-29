@@ -18,6 +18,7 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
+import type { BackgroundJobStore } from '../../utils/background-job-store';
 import { responseError } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import { createInternalAgentTextPart } from '../../utils/internal-initiator';
@@ -742,6 +743,9 @@ export class ForegroundFallbackManager {
      *  unmanaged — the handoff is not applicable, never a wildcard).
      *  Captured before ANY await in the fallback preparation. */
     readBackgroundGeneration?: (sessionID: string) => number | undefined,
+    /** True when this task's background siblings are still running;
+     *  aborting the session would cascade-cancel them. */
+    private readonly backgroundJobBoard?: BackgroundJobStore,
   ) {
     this.onSessionModelChanged = onSessionModelChanged;
     this.backgroundFallbackHandoff = backgroundFallbackHandoff;
@@ -1204,6 +1208,11 @@ export class ForegroundFallbackManager {
     return false;
   }
 
+  /** True if the session has running background siblings — aborting would cascade-kill them. */
+  private hasRunningSiblings(sessionID: string): boolean {
+    return this.backgroundJobBoard?.hasRunning(sessionID) === true;
+  }
+
   private async retrySameModel(
     sessionID: string,
     error?: unknown,
@@ -1255,6 +1264,7 @@ export class ForegroundFallbackManager {
       // If the counter was cleared during backoff, the session recovered
       // (successful assistant response handler deletes it). Don't abort.
       if (!this.sessionSameModelRetries.has(sessionID)) return;
+      if (this.hasRunningSiblings(sessionID)) return;
       await abortSessionWithTimeout(getClient(this.input), sessionID);
 
       const replayParts = partsFromReplayMessage(lastUser) as Array<{
@@ -1278,6 +1288,7 @@ export class ForegroundFallbackManager {
       try {
         await session.promptAsync(promptBody);
       } catch {
+        if (this.hasRunningSiblings(sessionID)) return;
         await abortSessionWithTimeout(getClient(this.input), sessionID);
         const { promise, resolve } = Promise.withResolvers<void>();
         setTimeout(resolve, 500);
