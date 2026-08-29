@@ -147,55 +147,50 @@ const PAYLOAD_REJECTED_PATTERNS = [
 const TRANSIENT_INTERVAL_PATTERN = /\bper\s+(?:second|minute)\b/i;
 
 /** Concurrent request cap — shed then retry, don't advance chain. */
-const CONCURRENT_LIMIT_PATTERN =
-  new RegExp(
-    "\\btoo many\\s+concurren\\w*\\s+(?:requests?|invocations?)\\b|" +
-    "\\bconcurren\\w*\\b[^\\n]{0,60}\\b(?:limit|quota|exceed\\w*|reach\\w*)\\b|" +
-    "\\b(?:limit|quota|exceed\\w*|reach\\w*)\\b[^\\n]{0,60}\\bconcurren\\w*\\b|" +
-    "\\bconcurren[a-z]*[-_](?:[a-z]+[_-])*(?:limit|quota|exceed\\w*|reach\\w*)",
-    "i"
-  );
+const CONCURRENT_LIMIT_PATTERN = new RegExp(
+  '\\btoo many\\s+concurren\\w*\\s+(?:requests?|invocations?)\\b|' +
+    '\\bconcurren\\w*\\b[^\\n]{0,60}\\b(?:limit|quota|exceed\\w*|reach\\w*)\\b|' +
+    '\\b(?:limit|quota|exceed\\w*|reach\\w*)\\b[^\\n]{0,60}\\bconcurren\\w*\\b|' +
+    '\\bconcurren[a-z]*[-_](?:[a-z]+[_-])*(?:limit|quota|exceed\\w*|reach\\w*)',
+  'i',
+);
 
 /** Subscription/plan/membership rate-limit — persistent, needs credential rotation. */
-const SUBSCRIPTION_CAP_PATTERN =
-  new RegExp(
-    "\\b(?:subscription|plan|membership)\\b[^\\n]{0,80}\\b(?:rate.?limits?|quota|cap)\\b|" +
-    "\\b(?:rate.?limits?|quota|cap)\\b[^\\n]{0,80}\\b(?:subscription|plan|membership)\\b",
-    "i"
-  );
+const SUBSCRIPTION_CAP_PATTERN = new RegExp(
+  '\\b(?:subscription|plan|membership)\\b[^\\n]{0,80}\\b(?:rate.?limits?|quota|cap)\\b|' +
+    '\\b(?:rate.?limits?|quota|cap)\\b[^\\n]{0,80}\\b(?:subscription|plan|membership)\\b',
+  'i',
+);
 
 /** Account-scoped 403 — "your limit will reset", "overall message limit". */
-const ACCOUNT_SCOPED_403_PATTERN =
-  new RegExp(
-    "\\b(?:overall|account|organization|team|workspace)\\b[^\\n]{0,40}\\b(?:message |request )?rate.?limit\\b|" +
-    "\\byour\\b[^\\n]{0,30}\\b(?:limit )?will reset\\b",
-    "i"
-  );
+const ACCOUNT_SCOPED_403_PATTERN = new RegExp(
+  '\\b(?:overall|account|organization|team|workspace)\\b[^\\n]{0,40}\\b(?:message |request )?rate.?limit\\b|' +
+    '\\byour\\b[^\\n]{0,30}\\b(?:limit )?will reset\\b',
+  'i',
+);
 
 /** Chinese quota exhaustion — persistent account-local caps. */
 const CN_QUOTA_EXHAUSTED_PATTERN =
   /使用.{0,30}?上限|(?:额度|配额)已?(?:用|耗)(?:完|尽)|限额.{0,30}重置|余额不足/;
 
 /** Chinese transient caps — per-minute/concurrent, absorb not fallback. */
-const CN_TRANSIENT_CAP_PATTERN =
-  new RegExp(
-    "速率.{0,30}上限|频率.{0,30}上限|每分钟.{0,30}上限|并发.{0,30}上限|" +
-    "使用.{0,30}(?:速率|频率|每分钟|并发).{0,30}上限",
-    "i"
-  );
+const CN_TRANSIENT_CAP_PATTERN = new RegExp(
+  '速率.{0,30}上限|频率.{0,30}上限|每分钟.{0,30}上限|并发.{0,30}上限|' +
+    '使用.{0,30}(?:速率|频率|每分钟|并发).{0,30}上限',
+  'i',
+);
 
 /** Chinese throttle phrasing — absorb, same model retry. */
 const CN_THROTTLE_PATTERN =
   /速率(?:限制|过快)|频率(?:过高|过快)|过于频繁|稍后[重再]试/;
 
 /** HTTP/2 stream reset / premature stream close — transient transport fault. */
-const HTTP2_STREAM_RESET_PATTERN =
-  new RegExp(
-    "stream closed with error code\\s+nghttp2_(?:internal_error|refused_stream)|" +
-    "nghttp2_(?:internal_error|refused_stream)|" +
-    "HTTP2(?:StreamReset|RefusedStream)",
-    "i"
-  );
+const HTTP2_STREAM_RESET_PATTERN = new RegExp(
+  'stream closed with error code\\s+nghttp2_(?:internal_error|refused_stream)|' +
+    'nghttp2_(?:internal_error|refused_stream)|' +
+    'HTTP2(?:StreamReset|RefusedStream)',
+  'i',
+);
 
 const PREMATURE_STREAM_CLOSE_PATTERN =
   /stream closed before a (?:finish_reason|terminal response event)/i;
@@ -204,24 +199,23 @@ const PREMATURE_STREAM_CLOSE_PATTERN =
 // Fallback action
 // ---------------------------------------------------------------------------
 
-type FallbackAction =
-  | "surface"
-  | "absorb"
-  | "retry_same_model"
-  | "fallback";
+type FallbackAction = 'surface' | 'absorb' | 'retry_same_model' | 'fallback';
 
 /** Extract the error message string from any error shape OpenCode surfaces. */
 function extractErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (typeof error !== "object" || !error) return "";
+  if (typeof error === 'string') return error;
+  if (typeof error !== 'object' || !error) return '';
   const e = error as Record<string, unknown>;
   const parts: string[] = [];
-  if (typeof e.message === "string") parts.push(e.message);
-  if (typeof (e as { data?: { message?: string } }).data?.message === "string")
+  if (typeof e.message === 'string') parts.push(e.message);
+  if (typeof (e as { data?: { message?: string } }).data?.message === 'string')
     parts.push((e as { data: { message: string } }).data.message);
-  if (typeof (e as { data?: { responseBody?: string } }).data?.responseBody === "string")
+  if (
+    typeof (e as { data?: { responseBody?: string } }).data?.responseBody ===
+    'string'
+  )
     parts.push((e as { data: { responseBody: string } }).data.responseBody);
-  return parts.join(" ");
+  return parts.join(' ');
 }
 
 /**
@@ -231,10 +225,19 @@ function extractErrorMessage(error: unknown): string {
 function isQuotaExhaustedError(error: unknown): boolean {
   const msg = extractErrorMessage(error);
   if (!msg) return false;
-  if (SUBSCRIPTION_CAP_PATTERN.test(msg) && !TRANSIENT_INTERVAL_PATTERN.test(msg)) return true;
+  if (
+    SUBSCRIPTION_CAP_PATTERN.test(msg) &&
+    !TRANSIENT_INTERVAL_PATTERN.test(msg)
+  )
+    return true;
   if (CN_QUOTA_EXHAUSTED_PATTERN.test(msg)) return true;
   if (ACCOUNT_SCOPED_403_PATTERN.test(msg)) return true;
-  if (/\b(?:monthly|weekly|5-hour|daily?)\b.{0,40}\b(?:usage|limit|quota)\b/i.test(msg)) return true;
+  if (
+    /\b(?:monthly|weekly|5-hour|daily?)\b.{0,40}\b(?:usage|limit|quota)\b/i.test(
+      msg,
+    )
+  )
+    return true;
   return false;
 }
 
@@ -248,7 +251,9 @@ function isTransientCappedError(error: unknown): boolean {
   if (TRANSIENT_INTERVAL_PATTERN.test(msg)) return true;
   if (CN_TRANSIENT_CAP_PATTERN.test(msg)) return true;
   if (CN_THROTTLE_PATTERN.test(msg)) return true;
-  const sc = extractStatusCode(error as { statusCode?: unknown; data?: { statusCode?: unknown } });
+  const sc = extractStatusCode(
+    error as { statusCode?: unknown; data?: { statusCode?: unknown } },
+  );
   return CONCURRENT_LIMIT_PATTERN.test(msg) && sc !== 402;
 }
 
@@ -256,41 +261,61 @@ function isTransientCappedError(error: unknown): boolean {
  * Classify error into a fallback action for handleEvent routing.
  */
 function classifyError(error: unknown): FallbackAction {
-  if (!error) return "surface";
+  if (!error) return 'surface';
   const msg = extractErrorMessage(error);
-  const sc = extractStatusCode(error as { statusCode?: unknown; data?: { statusCode?: unknown } });
+  const sc = extractStatusCode(
+    error as { statusCode?: unknown; data?: { statusCode?: unknown } },
+  );
 
-  if (msg && CONTEXT_OVERFLOW_PATTERNS.some((p) => p.test(msg))) return "surface";
-  if (msg && PAYLOAD_REJECTED_PATTERNS.some((p) => p.test(msg))) return "surface";
-  if (isTransientCappedError(error)) return "absorb";
-  if (isQuotaExhaustedError(error)) return "fallback";
+  if (msg && CONTEXT_OVERFLOW_PATTERNS.some((p) => p.test(msg)))
+    return 'surface';
+  if (msg && PAYLOAD_REJECTED_PATTERNS.some((p) => p.test(msg)))
+    return 'surface';
+  if (isTransientCappedError(error)) return 'absorb';
+  if (isQuotaExhaustedError(error)) return 'fallback';
 
   if (sc !== undefined) {
-    if (sc === 401 || sc === 410) return "fallback";
-    if (sc === 403 && !isTransientCappedError(error)) return "fallback";
-    if (sc === 429 && msg && !isTransientCappedError(error) && !isQuotaExhaustedError(error)) return "fallback";
-    if (OUTAGE_STATUS_CODES.has(sc)) return "retry_same_model";
+    if (sc === 401 || sc === 410) return 'fallback';
+    if (sc === 403 && !isTransientCappedError(error)) return 'fallback';
+    if (
+      sc === 429 &&
+      msg &&
+      !isTransientCappedError(error) &&
+      !isQuotaExhaustedError(error)
+    )
+      return 'fallback';
+    if (OUTAGE_STATUS_CODES.has(sc)) return 'retry_same_model';
   }
 
-  const e = error as { code?: unknown; cause?: { code?: unknown }; data?: { code?: unknown } };
+  const e = error as {
+    code?: unknown;
+    cause?: { code?: unknown };
+    data?: { code?: unknown };
+  };
   // Transport code errors — advance chain (provider may be down)
-  if ([e.code, e.cause?.code, e.data?.code].some((c) => typeof c === "string" && TRANSPORT_CODES.has(c)))
-    return "fallback";
+  if (
+    [e.code, e.cause?.code, e.data?.code].some(
+      (c) => typeof c === 'string' && TRANSPORT_CODES.has(c),
+    )
+  )
+    return 'fallback';
 
   if (msg) {
     // Transport message patterns — advance chain, not same-model retry
-    if (TRANSPORT_MESSAGE_PATTERNS.some((p) => p.test(msg))) return "fallback";
+    if (TRANSPORT_MESSAGE_PATTERNS.some((p) => p.test(msg))) return 'fallback';
     // Transient server faults — retry same model
-    if (HTTP2_STREAM_RESET_PATTERN.test(msg)) return "retry_same_model";
-    if (PREMATURE_STREAM_CLOSE_PATTERN.test(msg)) return "retry_same_model";
-    if (/\bupstream error\b/i.test(msg)) return "retry_same_model";
-    if (/\bstreaming response failed\b/i.test(msg)) return "retry_same_model";
-    if (/\brequest queue is full\b/i.test(msg)) return "retry_same_model";
+    if (HTTP2_STREAM_RESET_PATTERN.test(msg)) return 'retry_same_model';
+    if (PREMATURE_STREAM_CLOSE_PATTERN.test(msg)) return 'retry_same_model';
+    if (/\bupstream error\b/i.test(msg)) return 'retry_same_model';
+    if (/\bstreaming response failed\b/i.test(msg)) return 'retry_same_model';
+    if (/\brequest queue is full\b/i.test(msg)) return 'retry_same_model';
   }
 
-  if (msg && PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(msg))) return "fallback";
-  if (msg && RETRYABLE_ERROR_PATTERNS.some((p) => p.test(msg))) return "fallback";
-  return "surface";
+  if (msg && PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(msg)))
+    return 'fallback';
+  if (msg && RETRYABLE_ERROR_PATTERNS.some((p) => p.test(msg)))
+    return 'fallback';
+  return 'surface';
 }
 const PROVIDER_OUTAGE_PATTERNS = [
   /\binternal server error\b/i,
@@ -980,8 +1005,8 @@ export class ForegroundFallbackManager {
 
 
     const action = classifyError(error);
-    if (action === "surface" || action === "absorb") return;
-    if (action === "retry_same_model") {
+    if (action === 'surface' || action === 'absorb') return;
+    if (action === 'retry_same_model') {
       await this.retrySameModel(sessionID, error);
       return;
     }
@@ -1105,8 +1130,8 @@ export class ForegroundFallbackManager {
     if (this.inProgress.has(sessionID)) return;
 
     const action = classifyError(error);
-    if (action === "surface" || action === "absorb") return;
-    if (action === "retry_same_model") {
+    if (action === 'surface' || action === 'absorb') return;
+    if (action === 'retry_same_model') {
       await this.retrySameModel(sessionID, error);
       return;
     }
@@ -1151,14 +1176,20 @@ export class ForegroundFallbackManager {
     return false;
   }
 
-  private async retrySameModel(sessionID: string, error?: unknown): Promise<void> {
+  private async retrySameModel(
+    sessionID: string,
+    error?: unknown,
+  ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
     this.inProgress.add(sessionID);
     try {
       const tried = this.sessionRetries.get(sessionID) ?? 0;
       if (tried >= this.maxRetries) {
-        log("[foreground-fallback] same-model retry budget exhausted", { sessionID, attempts: tried });
+        log('[foreground-fallback] same-model retry budget exhausted', {
+          sessionID,
+          attempts: tried,
+        });
         this.sessionRetries.delete(sessionID);
         if (this.hasFallbackChain(sessionID)) {
           await this.execFallback(sessionID, error);
@@ -1166,8 +1197,12 @@ export class ForegroundFallbackManager {
         return;
       }
 
-      const delay = Math.min(500 * (2 ** tried), 8000);
-      log("[foreground-fallback] retrying same model", { sessionID, attempt: tried + 1, delayMs: delay });
+      const delay = Math.min(500 * 2 ** tried, 8000);
+      log('[foreground-fallback] retrying same model', {
+        sessionID,
+        attempt: tried + 1,
+        delayMs: delay,
+      });
       this.sessionRetries.set(sessionID, tried + 1);
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, delay);
@@ -1181,7 +1216,10 @@ export class ForegroundFallbackManager {
   }
 
   /** Re-prompt session with the same model after transient failure. */
-  private async execSameModelReprompt(sessionID: string, error?: unknown): Promise<void> {
+  private async execSameModelReprompt(
+    sessionID: string,
+    _error?: unknown,
+  ): Promise<void> {
     const session = getClient(this.input).session;
     try {
       if (this.chainExhaustion.get(sessionID) === 2) return;
@@ -1194,9 +1232,12 @@ export class ForegroundFallbackManager {
       const lastUser = [...messages].reverse().find(isReplayableUserMessage);
       if (!lastUser) return;
 
-      if (typeof session.promptAsync !== "function") return;
+      if (typeof session.promptAsync !== 'function') return;
 
-      const replayParts = partsFromReplayMessage(lastUser) as Array<{ type: "text"; text: string }>;
+      const replayParts = partsFromReplayMessage(lastUser) as Array<{
+        type: 'text';
+        text: string;
+      }>;
       const ref = parseModelReference(currentModel);
       if (!ref) return;
 
@@ -1224,7 +1265,7 @@ export class ForegroundFallbackManager {
         await session.promptAsync(promptBody);
       }
     } catch (err) {
-      log("[foreground-fallback] same-model retry failed", {
+      log('[foreground-fallback] same-model retry failed', {
         sessionID,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1322,10 +1363,13 @@ export class ForegroundFallbackManager {
           // Quota exhaustion is permanent — never reset the tried set.
           if (isQuotaExhaustedError(error)) {
             this.chainExhaustion.set(sessionID, 2);
-            log('[foreground-fallback] quota exhausted — aborting permanently', {
-              sessionID,
-              agentName,
-            });
+            log(
+              '[foreground-fallback] quota exhausted — aborting permanently',
+              {
+                sessionID,
+                agentName,
+              },
+            );
             await abortSessionWithTimeout(getClient(this.input), sessionID);
             return;
           }
