@@ -1213,6 +1213,22 @@ export class ForegroundFallbackManager {
         return;
       }
 
+      // Check prerequisites BEFORE aborting — aborting without a viable
+      // reprompt strands the session.
+      if (this.chainExhaustion.get(sessionID) === 2) return;
+      const currentModel = this.sessionModel.get(sessionID);
+      if (!currentModel) return;
+      const agentName = this.sessionAgent.get(sessionID);
+      const ref = parseModelReference(currentModel);
+      if (!ref) return;
+
+      const session = getClient(this.input).session;
+      const result = await session.messages({ path: { id: sessionID } });
+      const messages = (result.data ?? []) as unknown[];
+      const lastUser = [...messages].reverse().find(isReplayableUserMessage);
+      if (!lastUser) return;
+      if (typeof session.promptAsync !== 'function') return;
+
       const delay = Math.min(500 * 2 ** tried, 8000);
       log('[foreground-fallback] retrying same model', {
         sessionID,
@@ -1225,38 +1241,11 @@ export class ForegroundFallbackManager {
       await promise;
 
       await abortSessionWithTimeout(getClient(this.input), sessionID);
-      await this.execSameModelReprompt(sessionID, error);
-    } finally {
-      this.inProgress.delete(sessionID);
-    }
-  }
-
-  /** Re-prompt session with the same model after transient failure. */
-  private async execSameModelReprompt(
-    sessionID: string,
-    _error?: unknown,
-  ): Promise<void> {
-    const session = getClient(this.input).session;
-    try {
-      if (this.chainExhaustion.get(sessionID) === 2) return;
-      const agentName = this.sessionAgent.get(sessionID);
-      const currentModel = this.sessionModel.get(sessionID);
-      if (!currentModel) return;
-
-      const result = await session.messages({ path: { id: sessionID } });
-      const messages = (result.data ?? []) as unknown[];
-      const lastUser = [...messages].reverse().find(isReplayableUserMessage);
-      if (!lastUser) return;
-
-      if (typeof session.promptAsync !== 'function') return;
 
       const replayParts = partsFromReplayMessage(lastUser) as Array<{
         type: 'text';
         text: string;
       }>;
-      const ref = parseModelReference(currentModel);
-      if (!ref) return;
-
       const promptBody = {
         path: { id: sessionID },
         body: {
@@ -1285,9 +1274,12 @@ export class ForegroundFallbackManager {
         sessionID,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      this.inProgress.delete(sessionID);
     }
   }
 
+  /** Re-prompt session with the same model after transient failure. */
   private async execFallback(
     sessionID: string,
     error?: unknown,
