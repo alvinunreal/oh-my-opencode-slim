@@ -1151,31 +1151,33 @@ export class ForegroundFallbackManager {
     return false;
   }
 
-  /** Retry same model with exponential backoff (502/503/transport/H2 reset). */
   private async retrySameModel(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    if (this.isDeduped(sessionID)) return;
-
-    const tried = this.sessionRetries.get(sessionID) ?? 0;
-    if (tried >= this.maxRetries) {
-      log("[foreground-fallback] same-model retry budget exhausted", { sessionID, attempts: tried });
-      this.sessionRetries.delete(sessionID);
-      if (this.hasFallbackChain(sessionID)) {
-        await this.execFallback(sessionID, error);
+    this.inProgress.add(sessionID);
+    try {
+      const tried = this.sessionRetries.get(sessionID) ?? 0;
+      if (tried >= this.maxRetries) {
+        log("[foreground-fallback] same-model retry budget exhausted", { sessionID, attempts: tried });
+        this.sessionRetries.delete(sessionID);
+        if (this.hasFallbackChain(sessionID)) {
+          await this.execFallback(sessionID, error);
+        }
+        return;
       }
-      return;
+
+      const delay = Math.min(500 * (2 ** tried), 8000);
+      log("[foreground-fallback] retrying same model", { sessionID, attempt: tried + 1, delayMs: delay });
+      this.sessionRetries.set(sessionID, tried + 1);
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, delay);
+      await promise;
+
+      await abortSessionWithTimeout(getClient(this.input), sessionID);
+      await this.execSameModelReprompt(sessionID, error);
+    } finally {
+      this.inProgress.delete(sessionID);
     }
-
-    const delay = Math.min(500 * (2 ** tried), 8000);
-    log("[foreground-fallback] retrying same model", { sessionID, attempt: tried + 1, delayMs: delay });
-    this.sessionRetries.set(sessionID, tried + 1);
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, delay);
-    await promise;
-
-    await abortSessionWithTimeout(getClient(this.input), sessionID);
-    await this.execSameModelReprompt(sessionID, error);
   }
 
   /** Re-prompt session with the same model after transient failure. */
