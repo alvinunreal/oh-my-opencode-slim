@@ -318,7 +318,14 @@ function classifyError(error: unknown): FallbackAction {
   // Status-code-only fallback: bare 429/401/403/410/5xx with no message
   // body still counts as a recoverable error (isFailoverError already
   // passed the event gate). Without this, a bare 429 silently drops.
-  if (sc !== undefined && (sc === 429 || sc === 401 || sc === 403 || sc === 410 || OUTAGE_STATUS_CODES.has(sc)))
+  if (
+    sc !== undefined &&
+    (sc === 429 ||
+      sc === 401 ||
+      sc === 403 ||
+      sc === 410 ||
+      OUTAGE_STATUS_CODES.has(sc))
+  )
     return 'fallback';
   return 'surface';
 }
