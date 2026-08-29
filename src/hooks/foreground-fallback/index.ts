@@ -1282,6 +1282,7 @@ export class ForegroundFallbackManager {
         const { promise, resolve } = Promise.withResolvers<void>();
         setTimeout(resolve, 500);
         await promise;
+        await session.promptAsync(promptBody);
       }
     } catch (err) {
       log('[foreground-fallback] same-model retry failed', {
