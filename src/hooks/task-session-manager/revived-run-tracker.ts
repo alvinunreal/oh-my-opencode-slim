@@ -68,6 +68,7 @@ export function createRevivedRunTracker(options: {
   onSettled?: (taskID: string) => void;
   contextFilesForPrompt?: (taskID: string) => ContextFile[];
   pruneContext?: () => void;
+  shouldManageSession?: (sessionID: string) => boolean;
 }): RevivedRunTracker {
   const runs = new Map<string, RevivedRun>();
   const maxNotificationRetries =
@@ -230,6 +231,11 @@ export function createRevivedRunTracker(options: {
     record: BackgroundJobRecord,
   ): Promise<void> {
     if (disposed || run.notification.sent || run.notification.pending) return;
+    if (
+      options.shouldManageSession &&
+      !options.shouldManageSession(run.parentSessionID)
+    )
+      return;
     run.notification.pending = true;
     run.notification.attempts += 1;
     try {
