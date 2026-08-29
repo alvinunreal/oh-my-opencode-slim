@@ -1034,6 +1034,7 @@ export class ForegroundFallbackManager {
     // dispose() must not start a new chain through the dead context.
     if (this.abandonedByDispose(sessionID)) return;
     if (this.inProgress.has(sessionID)) return;
+    if (this.hasRunningSiblings(sessionID)) return;
 
 
     const action = classifyError(error);
@@ -1160,6 +1161,7 @@ export class ForegroundFallbackManager {
     // Reload fence at entry (same rationale as tryFallback).
     if (this.abandonedByDispose(sessionID)) return;
     if (this.inProgress.has(sessionID)) return;
+    if (this.hasRunningSiblings(sessionID)) return;
 
     const action = classifyError(error);
     if (action === 'surface' || action === 'absorb') return;
@@ -1219,6 +1221,7 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    if (this.hasRunningSiblings(sessionID)) return;
     this.inProgress.add(sessionID);
     try {
       const tried = this.sessionSameModelRetries.get(sessionID) ?? 0;
@@ -1264,7 +1267,6 @@ export class ForegroundFallbackManager {
       // If the counter was cleared during backoff, the session recovered
       // (successful assistant response handler deletes it). Don't abort.
       if (!this.sessionSameModelRetries.has(sessionID)) return;
-      if (this.hasRunningSiblings(sessionID)) return;
       await abortSessionWithTimeout(getClient(this.input), sessionID);
 
       const replayParts = partsFromReplayMessage(lastUser) as Array<{
@@ -1288,7 +1290,6 @@ export class ForegroundFallbackManager {
       try {
         await session.promptAsync(promptBody);
       } catch {
-        if (this.hasRunningSiblings(sessionID)) return;
         await abortSessionWithTimeout(getClient(this.input), sessionID);
         const { promise, resolve } = Promise.withResolvers<void>();
         setTimeout(resolve, 500);
