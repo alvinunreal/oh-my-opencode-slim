@@ -110,6 +110,188 @@ const TRANSPORT_MESSAGE_PATTERNS = [
   // transport code. Match the narrow phrase only.
   /cannot connect to api/i,
 ];
+// ---------------------------------------------------------------------------
+// Error classification — sub-classifies errors into action types
+// ---------------------------------------------------------------------------
+
+/** Context overflow — same prompt on any model hits the same window limit. */
+const CONTEXT_OVERFLOW_PATTERNS = [
+  /prompt is too long/i,
+  /input is too long for requested model/i,
+  /exceeds the context window/i,
+  /input token count.*exceeds the maximum/i,
+  /maximum prompt length is \d+/i,
+  /reduce the length of the messages/i,
+  /maximum context length is \d+ tokens/i,
+  /context (window|length|size).*(exceeded|overflow|too small)/i,
+  /(prompt|input).*(too long|too large).*(context|n_ctx)/i,
+  /greater than the context length/i,
+  /context window exceeds limit/i,
+  /exceeded model token limit/i,
+  /context[_ ]length[_ ]exceeded/i,
+  /too many tokens/i,
+  /token limit exceeded/i,
+  /model_context_window_exceeded/i,
+  /chat history exceeds the \d+-message limit/i,
+];
+
+/** HTTP 413 payload/byte rejection — compaction can't shrink bytes. */
+const PAYLOAD_REJECTED_PATTERNS = [
+  /\b413\s*(?:status code\s*)?\(no body\)/i,
+  /\b413\b[^.\n]{0,120}\b(?:request|payload|entity|body)\b[^.\n]{0,60}\b(?:exceed|too large|limit)/i,
+  /(?:payload|entity) too large/i,
+  /request exceeds the maximum (?:size|number of bytes)/i,
+];
+
+/** Per-minute/second rate-limit — short-lived, same model can retry. */
+const TRANSIENT_INTERVAL_PATTERN = /\bper\s+(?:second|minute)\b/i;
+
+/** Concurrent request cap — shed then retry, don't advance chain. */
+const CONCURRENT_LIMIT_PATTERN =
+  new RegExp(
+    "\\btoo many\\s+concurren\\w*\\s+(?:requests?|invocations?)\\b|" +
+    "\\bconcurren\\w*\\b[^\\n]{0,60}\\b(?:limit|quota|exceed\\w*|reach\\w*)\\b|" +
+    "\\b(?:limit|quota|exceed\\w*|reach\\w*)\\b[^\\n]{0,60}\\bconcurren\\w*\\b|" +
+    "\\bconcurren[a-z]*[-_](?:[a-z]+[_-])*(?:limit|quota|exceed\\w*|reach\\w*)",
+    "i"
+  );
+
+/** Subscription/plan/membership rate-limit — persistent, needs credential rotation. */
+const SUBSCRIPTION_CAP_PATTERN =
+  new RegExp(
+    "\\b(?:subscription|plan|membership)\\b[^\\n]{0,80}\\b(?:rate.?limits?|quota|cap)\\b|" +
+    "\\b(?:rate.?limits?|quota|cap)\\b[^\\n]{0,80}\\b(?:subscription|plan|membership)\\b",
+    "i"
+  );
+
+/** Account-scoped 403 — "your limit will reset", "overall message limit". */
+const ACCOUNT_SCOPED_403_PATTERN =
+  new RegExp(
+    "\\b(?:overall|account|organization|team|workspace)\\b[^\\n]{0,40}\\b(?:message |request )?rate.?limit\\b|" +
+    "\\byour\\b[^\\n]{0,30}\\b(?:limit )?will reset\\b",
+    "i"
+  );
+
+/** Chinese quota exhaustion — persistent account-local caps. */
+const CN_QUOTA_EXHAUSTED_PATTERN =
+  /使用.{0,30}?上限|(?:额度|配额)已?(?:用|耗)(?:完|尽)|限额.{0,30}重置|余额不足/;
+
+/** Chinese transient caps — per-minute/concurrent, absorb not fallback. */
+const CN_TRANSIENT_CAP_PATTERN =
+  new RegExp(
+    "速率.{0,30}上限|频率.{0,30}上限|每分钟.{0,30}上限|并发.{0,30}上限|" +
+    "使用.{0,30}(?:速率|频率|每分钟|并发).{0,30}上限",
+    "i"
+  );
+
+/** Chinese throttle phrasing — absorb, same model retry. */
+const CN_THROTTLE_PATTERN =
+  /速率(?:限制|过快)|频率(?:过高|过快)|过于频繁|稍后[重再]试/;
+
+/** HTTP/2 stream reset / premature stream close — transient transport fault. */
+const HTTP2_STREAM_RESET_PATTERN =
+  new RegExp(
+    "stream closed with error code\\s+nghttp2_(?:internal_error|refused_stream)|" +
+    "nghttp2_(?:internal_error|refused_stream)|" +
+    "HTTP2(?:StreamReset|RefusedStream)",
+    "i"
+  );
+
+const PREMATURE_STREAM_CLOSE_PATTERN =
+  /stream closed before a (?:finish_reason|terminal response event)/i;
+
+// ---------------------------------------------------------------------------
+// Fallback action
+// ---------------------------------------------------------------------------
+
+type FallbackAction =
+  | "surface"
+  | "absorb"
+  | "retry_same_model"
+  | "fallback";
+
+/** Extract the error message string from any error shape OpenCode surfaces. */
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (typeof error !== "object" || !error) return "";
+  const e = error as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof e.message === "string") parts.push(e.message);
+  if (typeof (e as { data?: { message?: string } }).data?.message === "string")
+    parts.push((e as { data: { message: string } }).data.message);
+  if (typeof (e as { data?: { responseBody?: string } }).data?.responseBody === "string")
+    parts.push((e as { data: { responseBody: string } }).data.responseBody);
+  return parts.join(" ");
+}
+
+/**
+ * True when the error will NOT recover by retrying the same model.
+ * These are account/plan caps — the session can't proceed.
+ */
+function isQuotaExhaustedError(error: unknown): boolean {
+  const msg = extractErrorMessage(error);
+  if (!msg) return false;
+  if (SUBSCRIPTION_CAP_PATTERN.test(msg) && !TRANSIENT_INTERVAL_PATTERN.test(msg)) return true;
+  if (CN_QUOTA_EXHAUSTED_PATTERN.test(msg)) return true;
+  if (ACCOUNT_SCOPED_403_PATTERN.test(msg)) return true;
+  if (/\b(?:monthly|weekly|5-hour|daily?)\b.{0,40}\b(?:usage|limit|quota)\b/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * True for transient per-minute interval caps or concurrency caps.
+ * Same model can retry after a short pause — no chain advance needed.
+ */
+function isTransientCappedError(error: unknown): boolean {
+  const msg = extractErrorMessage(error);
+  if (!msg) return false;
+  if (TRANSIENT_INTERVAL_PATTERN.test(msg)) return true;
+  if (CN_TRANSIENT_CAP_PATTERN.test(msg)) return true;
+  if (CN_THROTTLE_PATTERN.test(msg)) return true;
+  const sc = extractStatusCode(error as { statusCode?: unknown; data?: { statusCode?: unknown } });
+  return CONCURRENT_LIMIT_PATTERN.test(msg) && sc !== 402;
+}
+
+/**
+ * Classify error into a fallback action for handleEvent routing.
+ */
+function classifyError(error: unknown): FallbackAction {
+  if (!error) return "surface";
+  const msg = extractErrorMessage(error);
+  const sc = extractStatusCode(error as { statusCode?: unknown; data?: { statusCode?: unknown } });
+
+  if (msg && CONTEXT_OVERFLOW_PATTERNS.some((p) => p.test(msg))) return "surface";
+  if (msg && PAYLOAD_REJECTED_PATTERNS.some((p) => p.test(msg))) return "surface";
+  if (isTransientCappedError(error)) return "absorb";
+  if (isQuotaExhaustedError(error)) return "fallback";
+
+  if (sc !== undefined) {
+    if (sc === 401 || sc === 410) return "fallback";
+    if (sc === 403 && !isTransientCappedError(error)) return "fallback";
+    if (sc === 429 && msg && !isTransientCappedError(error) && !isQuotaExhaustedError(error)) return "fallback";
+    if (OUTAGE_STATUS_CODES.has(sc)) return "retry_same_model";
+  }
+
+  const e = error as { code?: unknown; cause?: { code?: unknown }; data?: { code?: unknown } };
+  // Transport code errors — advance chain (provider may be down)
+  if ([e.code, e.cause?.code, e.data?.code].some((c) => typeof c === "string" && TRANSPORT_CODES.has(c)))
+    return "fallback";
+
+  if (msg) {
+    // Transport message patterns — advance chain, not same-model retry
+    if (TRANSPORT_MESSAGE_PATTERNS.some((p) => p.test(msg))) return "fallback";
+    // Transient server faults — retry same model
+    if (HTTP2_STREAM_RESET_PATTERN.test(msg)) return "retry_same_model";
+    if (PREMATURE_STREAM_CLOSE_PATTERN.test(msg)) return "retry_same_model";
+    if (/\bupstream error\b/i.test(msg)) return "retry_same_model";
+    if (/\bstreaming response failed\b/i.test(msg)) return "retry_same_model";
+    if (/\brequest queue is full\b/i.test(msg)) return "retry_same_model";
+  }
+
+  if (msg && PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(msg))) return "fallback";
+  if (msg && RETRYABLE_ERROR_PATTERNS.some((p) => p.test(msg))) return "fallback";
+  return "surface";
+}
 const PROVIDER_OUTAGE_PATTERNS = [
   /\binternal server error\b/i,
   /\bbad gateway\b/i,
@@ -795,13 +977,17 @@ export class ForegroundFallbackManager {
     // dispose() must not start a new chain through the dead context.
     if (this.abandonedByDispose(sessionID)) return;
     if (this.inProgress.has(sessionID)) return;
-    // No chain -> no fallback. Skip before dedup so we don't stamp lastTrigger
-    // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
-    if (!this.hasFallbackChain(sessionID)) return;
 
-    // Deduplicate: multiple events can fire for a single rate-limit event.
-    // Bypass dedup when the model changed since the last trigger - the new
-    // model's failure is a separate incident and the cascade should continue.
+
+    const action = classifyError(error);
+    if (action === "surface" || action === "absorb") return;
+    if (action === "retry_same_model") {
+      await this.retrySameModel(sessionID, error);
+      return;
+    }
+
+    // Fallback — needs a chain
+    if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
 
     // Set inProgress before delay to prevent concurrent fallback attempts
@@ -917,6 +1103,15 @@ export class ForegroundFallbackManager {
     // Reload fence at entry (same rationale as tryFallback).
     if (this.abandonedByDispose(sessionID)) return;
     if (this.inProgress.has(sessionID)) return;
+
+    const action = classifyError(error);
+    if (action === "surface" || action === "absorb") return;
+    if (action === "retry_same_model") {
+      await this.retrySameModel(sessionID, error);
+      return;
+    }
+
+    // Fallback — needs a chain
     if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
 
@@ -954,6 +1149,84 @@ export class ForegroundFallbackManager {
       this.lastTriggerModel.set(sessionID, curModel);
     }
     return false;
+  }
+
+  /** Retry same model with exponential backoff (502/503/transport/H2 reset). */
+  private async retrySameModel(sessionID: string, error?: unknown): Promise<void> {
+    if (!sessionID) return;
+    if (this.inProgress.has(sessionID)) return;
+    if (this.isDeduped(sessionID)) return;
+
+    const tried = this.sessionRetries.get(sessionID) ?? 0;
+    if (tried >= this.maxRetries) {
+      log("[foreground-fallback] same-model retry budget exhausted", { sessionID, attempts: tried });
+      this.sessionRetries.delete(sessionID);
+      if (this.hasFallbackChain(sessionID)) {
+        await this.execFallback(sessionID, error);
+      }
+      return;
+    }
+
+    const delay = Math.min(500 * (2 ** tried), 8000);
+    log("[foreground-fallback] retrying same model", { sessionID, attempt: tried + 1, delayMs: delay });
+    this.sessionRetries.set(sessionID, tried + 1);
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, delay);
+    await promise;
+
+    await abortSessionWithTimeout(getClient(this.input), sessionID);
+    await this.execSameModelReprompt(sessionID, error);
+  }
+
+  /** Re-prompt session with the same model after transient failure. */
+  private async execSameModelReprompt(sessionID: string, error?: unknown): Promise<void> {
+    const session = getClient(this.input).session;
+    try {
+      if (this.chainExhaustion.get(sessionID) === 2) return;
+      const agentName = this.sessionAgent.get(sessionID);
+      const currentModel = this.sessionModel.get(sessionID);
+      if (!currentModel) return;
+
+      const result = await session.messages({ path: { id: sessionID } });
+      const messages = (result.data ?? []) as unknown[];
+      const lastUser = [...messages].reverse().find(isReplayableUserMessage);
+      if (!lastUser) return;
+
+      if (typeof session.promptAsync !== "function") return;
+
+      const replayParts = partsFromReplayMessage(lastUser) as Array<{ type: "text"; text: string }>;
+      const ref = parseModelReference(currentModel);
+      if (!ref) return;
+
+      const promptBody = {
+        path: { id: sessionID },
+        body: {
+          parts: [
+            ...replayParts,
+            createInternalAgentTextPart(
+              `<system-reminder>\nThe previous request failed due to a transient server error. Continuing with the same model. Do not respond to this reminder.\n</system-reminder>`,
+            ),
+          ],
+          model: ref,
+          ...(agentName ? { agent: agentName } : {}),
+        },
+      };
+
+      try {
+        await session.promptAsync(promptBody);
+      } catch {
+        await abortSessionWithTimeout(getClient(this.input), sessionID);
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 500);
+        await promise;
+        await session.promptAsync(promptBody);
+      }
+    } catch (err) {
+      log("[foreground-fallback] same-model retry failed", {
+        sessionID,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async execFallback(
@@ -1044,6 +1317,16 @@ export class ForegroundFallbackManager {
           // reset re-prompt would loop forever on a fully dead chain.
           const primary = chain[0];
           const stickyFallback = chain[chain.length - 1];
+          // Quota exhaustion is permanent — never reset the tried set.
+          if (isQuotaExhaustedError(error)) {
+            this.chainExhaustion.set(sessionID, 2);
+            log('[foreground-fallback] quota exhausted — aborting permanently', {
+              sessionID,
+              agentName,
+            });
+            await abortSessionWithTimeout(getClient(this.input), sessionID);
+            return;
+          }
           if ((this.chainExhaustion.get(sessionID) ?? 0) >= 1) {
             this.chainExhaustion.set(sessionID, 2);
             log(
