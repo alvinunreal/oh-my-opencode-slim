@@ -125,6 +125,28 @@ describe('runtime status reconciliation', () => {
     });
   });
 
+  test('repeated absence never starts the stop clock or stops the job', async () => {
+    const { board, reconciler, contextFilesForPrompt, prune } =
+      createReconciler(async () => ({ data: {} }));
+    const listener = mock(() => {});
+    board.addTerminalStateListener(listener);
+
+    for (let i = 0; i < 5; i += 1) {
+      await reconciler.reconcile();
+    }
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+      lastStatusError:
+        'Runtime status response did not contain a live session state; task termination is unconfirmed.',
+    });
+    expect(board.get('child-1')?.stopConfirmationStartedAt).toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
+    expect(contextFilesForPrompt).not.toHaveBeenCalled();
+    expect(prune).not.toHaveBeenCalled();
+  });
+
   test('keeps the board running but explicitly uncertain when lookup fails', async () => {
     const { board, reconciler } = createReconciler(async () => {
       throw new Error('server restarting');

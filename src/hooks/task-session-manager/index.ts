@@ -22,6 +22,7 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   observeSyntheticTerminalPart,
+  type RevivalCorrection,
   reconcileInjectedTerminalJobs,
   stabilizeRunningTaskParts,
   updateFromInjectedCompletion,
@@ -172,6 +173,9 @@ export function createTaskSessionManagerHook(
     idleReconcileDelayMs?: number;
     /** Test seam only; production uses the runtime reconciliation delay. */
     runtimeStatusReconcileDelayMs?: number;
+    /** How long a host-declared idle job must stay idle before it is
+     *  marked stopped (config: `backgroundJobs.stopConfirmationMs`). */
+    stopConfirmationMs?: number;
     revivedRunTracker?: RevivedRunTracker;
   },
 ) {
@@ -210,6 +214,9 @@ export function createTaskSessionManagerHook(
   >();
   /** Managed sessions with a deferred inline 401/410 awaiting fallback outcome. */
   const deferredInlineErrors = new Set<string>();
+  /** Jobs wrongly reported stopped that later came back live; the board
+   *  injection delivers one corrective notice per parent session. */
+  const pendingRevivalCorrections: RevivalCorrection[] = [];
 
   // Forward refs for circular deps — set after corresponding managers exist.
   // These are captured by closure in createIdleReconciler and only called
@@ -237,6 +244,7 @@ export function createTaskSessionManagerHook(
     },
     idleReconcileDelayMs:
       options.idleReconcileDelayMs ?? IDLE_RECONCILE_DELAY_MS,
+    stopConfirmationGraceMs: options.stopConfirmationMs,
     isFallbackInProgress: options.isFallbackInProgress,
     hasInputWait: (s) => hasInputWait(s),
     getIdleSessionToken: (s) => getIdleSessionToken(s),
@@ -248,6 +256,7 @@ export function createTaskSessionManagerHook(
     input: _ctx,
     backgroundJobBoard,
     delayMs: options.runtimeStatusReconcileDelayMs,
+    stopConfirmationGraceMs: options.stopConfirmationMs,
     taskContextTracker,
   });
 
@@ -297,6 +306,11 @@ export function createTaskSessionManagerHook(
       pendingInjectedTerminalJobsByParent.delete(sessionId);
       injectionState.retainedBoardSnapshots.delete(sessionId);
       injectionState.retainedTailBoards.delete(sessionId);
+      for (let i = pendingRevivalCorrections.length - 1; i >= 0; i--) {
+        if (pendingRevivalCorrections[i].parentSessionID === sessionId) {
+          pendingRevivalCorrections.splice(i, 1);
+        }
+      }
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);
       pendingCallTracker.clearSession(sessionId);
@@ -324,6 +338,7 @@ export function createTaskSessionManagerHook(
     taskContextTracker,
     retainedBoardSnapshots: new Map(),
     retainedTailBoards: new Map(),
+    pendingRevivalCorrections,
   };
 
   return {
@@ -535,6 +550,9 @@ export function createTaskSessionManagerHook(
         backgroundJobSupervisor: options.backgroundJobSupervisor,
         observeSyntheticTerminalPart: (part) =>
           observeSyntheticTerminalPart(injectionState, part),
+        enqueueRevivalCorrection: (correction: RevivalCorrection) => {
+          pendingRevivalCorrections.push(correction);
+        },
         revivedRunTracker: options.revivedRunTracker,
       }).then(() => runtimeStatusReconciler.schedule());
     },

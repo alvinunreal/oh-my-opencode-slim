@@ -9,7 +9,7 @@ Manages V2 background job-board state for task execution and injected completion
 The directory follows a **Facade + Strategy** pattern where `index.ts` acts as the facade that composes and orchestrates behavior across specialized strategy modules:
 
 - **index.ts**: Main facade that wires hooks into OpenCode's lifecycle and coordinates between the job board, pending calls, task context tracking, and explicit user waits. Implements the plugin hook interface (`tool.execute.before`, `tool.execute.after`, `experimental.chat.messages.transform`, `event`) and exposes `beginUserWait()` to the `wait_for_user` tool.
-- **stop-confirmation.ts**: Shared 5s grace for idle/absent runtime observations. Transient non-busy evidence stays provisional; confirmed durable stop evidence calls `markStopped` and can wake the parent. Busy/retry/live-busy reset the clock.
+- **stop-confirmation.ts**: Configurable stop-confirmation clock (`backgroundJobs.stopConfirmationMs`, default 30s) for host-declared idle runtime observations. Absence from the runtime status map is uncertainty-only and never starts the clock. Transient non-busy evidence stays provisional; confirmed durable stop evidence calls `markStopped` and can wake the parent. Busy/retry/live-busy reset the clock.
 - **input-wait-tracker.ts**: Provides the single `hasInputWait()` seam used by idle reconciliation and continuation evaluation. It combines local question/permission waits with the process-global explicit user-wait latch.
 - **continuation-attempt-gate.ts**: Owns process-global continuation epochs, reservations, and explicit user waits across hook recreation. The wait is encoded as an `attempts` sentinel so pre-upgrade #856 hooks sharing the store also fail closed. Distinct external user-message identity rearms both states.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
@@ -61,7 +61,7 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
 
 5. **Lifecycle Events (`event`)**
     - `session.created`: Adds new task IDs to pending managed set
-    - `session.idle` / `session.status` (idle): Reconciles injected terminal jobs for the parent session (backstop path), then can run the opt-in continuation evaluator in the same idle cycle under its existing guards. Child idle is a stop candidate: the first observation stays provisional, and only a confirmed idle/absent after the 5s grace marks `stopped`
+    - `session.idle` / `session.status` (idle): Reconciles injected terminal jobs for the parent session (backstop path), then can run the opt-in continuation evaluator in the same idle cycle under its existing guards. Child idle is a stop candidate: the first observation stays provisional, and only a confirmed idle after the `stopConfirmationMs` grace marks `stopped`. Absence from the runtime status map never marks `stopped`.
     - `session.status` (busy): Marks sessions as running from live session state and resets pending stop confirmation
     - `session.deleted`: Clears job state, child jobs, and pending call records for the session
 
