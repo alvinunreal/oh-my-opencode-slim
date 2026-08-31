@@ -434,6 +434,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ctx,
       runtime.fallback.maxRetries,
       sessionLifecycle,
+      backgroundJobCoordinator,
     );
 
     deepworkCommandHook = createDeepworkCommandHook();

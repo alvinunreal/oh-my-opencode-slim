@@ -2,10 +2,10 @@
 
 ## Responsibility
 Runtime model fallback system for foreground (interactive) agent sessions. When OpenCode emits rate-limit signals via `message.updated`, `session.error`, or `session.status` events, this manager:
-- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
+- Sub-classifies errors into four action types (surface, absorb, retry_same_model, fallback) using pattern matching, status codes, and transport codes
 - Aborts the rate-limited prompt via `client.session.abort()` on the `session.status` retry path; `session.error` and `message.updated` paths re-prompt directly without abort
 - Retrieves the last user message from the session history
-- Re-prompts the session with the next available model from the agent's configured fallback chain
+- Re-prompts the session with the next available model (fallback chain) or same model (transient error retry)
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
 - Defers terminal job-board bookkeeping for inline 401/410 errors while recovery is still possible (cooperates with task-session-manager's `willAttemptFallback`)
 
@@ -28,6 +28,21 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   3. Merged list (last resort) → preserve insertion order across all agents
 - **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
 
+### Error Classification
+- **`classifyError()`**: Sub-classifies every error into one of four actions:
+  - `surface`: Deterministic errors (context overflow, 413 payload rejection) — retrying or chain-advancing is useless
+  - `absorb`: Transient interval caps (per-minute rate limits, concurrent caps) — let OpenCode's own retry handle it
+  - `retry_same_model`: Server/transport transients (5xx, HTTP/2 reset, premature stream close, upstream errors) — exponential backoff, same model
+  - `fallback`: Persistent failures (quota exhaustion, 401/410, 403, model outages, generic rate-limit patterns) — advance chain
+- **Patterns from omp**: Context overflow, 413 rejection, concurrent limit, subscription/plan quota, account-scoped 403, Chinese quota/transient/throttle, HTTP/2 stream reset, premature stream close
+- **Quota exhaustion guard**: Permanently prevents chain-exhaustion reset loop — `isQuotaExhaustedError()` marks `chainExhaustion=2` and aborts, never resets the tried set
+
+### Same-Model Retry
+- **`retrySameModel()`**: Exponential backoff (500ms × 2^n, capped at 8s) for transient server errors
+- **`execSameModelReprompt()`**: Re-prompts with the current model (no chain advance) after abort
+- **Budget**: Up to `maxRetries` attempts before escalating to fallback chain or surfacing error
+- Fixes #947: agents without a fallback chain (councillors, explorer) now retry instead of failing silently
+
 ### Retryable Error Detection
 - **Pattern matching**: Comprehensive regex patterns for rate-limit error messages (429, "rate limit", "too many requests", "quota exceeded", etc.) plus `isFailoverError` / `isInlineFailoverError` classification for persistent 401/410 provider-model errors
 - **Event coverage**: Handles three OpenCode event types:
@@ -48,9 +63,12 @@ OpenCode Event (message.updated/session.error/session.status)
     ↓
 ForegroundFallbackManager.handleEvent()
     ↓
-Retryable error detection via isRetryableError() / isFailoverError()
+classifyError() → surface | absorb | retry_same_model | fallback
     ↓
-tryFallback(sessionID) [deduplicated, in-progress guarded]
+surface → return (no action)
+absorb → return (let OpenCode retry)
+retry_same_model → retrySameModel() (backoff, same model)
+fallback → tryFallback() / tryFallbackWithAbort()
     ↓
 Resolve fallback chain for session
     ↓
@@ -100,16 +118,21 @@ Fallback chains are provided as `Record<string, string[]>` where:
 
 ### Observability
 - **Logging**: Structured logs at key points:
+  - Error classification
   - Rate-limit detection
   - Fallback initiation
   - Model switching
+  - Same-model retry backoff
   - Chain exhaustion
+  - Quota exhaustion abort
   - Abort failures
   - PromptAsync unavailability
 
 ## Error Handling
 - **Graceful degradation**: Best-effort approach; abort may be slow or incomplete
 - **Validation**: Checks for `promptAsync` availability before attempting re-prompt
-- **Fallback exhaustion**: Logs when entire chain has been attempted without success
+- **Fallback exhaustion**: Logs when entire chain has been attempted without success; quota exhaustion aborts permanently
+- **Quota exhaustion guard**: Permanently prevents chain-exhaustion reset loop (fixes #966)
+- **Same-model retry**: Transient server errors retry with backoff before advancing chain (fixes #947)
 - **Invalid model format**: Skips malformed model references
 - **Missing user message**: Aborts fallback attempt if no user message found in history
