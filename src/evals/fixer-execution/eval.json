@@ -1,0 +1,149 @@
+{
+  "name": "fixer-execution",
+  "description": "Evals for fixer agent behavior via orchestrator delegation — does it execute bounded tasks correctly? Covers execution, research constraints, output format, and code quality.",
+  "version": "3.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "no-research",
+      "prompt": "@fixer Create src/utils/validation.ts with a validateEmail function that checks for valid email format using regex.",
+      "agent": "orchestrator",
+      "description": "Orchestrator delegates to fixer; fixer should implement directly without spawning subagents or doing research",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should delegate to fixer for code implementation"
+        },
+        {
+          "type": "contains",
+          "value": "validateEmail",
+          "description": "Output should contain validateEmail function"
+        },
+        {
+          "type": "contains",
+          "value": "validation.ts",
+          "description": "Fixer output should mention the validation.ts file"
+        },
+        {
+          "type": "contains",
+          "value": "src/utils/validation.ts",
+          "description": "Fixer output should mention the validation.ts file"
+        },
+        {
+          "type": "file_exists",
+          "value": "src/utils/validation.ts",
+          "filePath": "src/utils/validation.ts",
+          "description": "Should create src/utils/validation.ts"
+        },
+        {
+          "type": "file_contains",
+          "value": "validateEmail",
+          "filePath": "src/utils/validation.ts",
+          "description": "Created file should contain validateEmail function"
+        }
+      ],
+      "category": "execution",
+      "tags": ["execution", "constraints"],
+      "smoke": true
+    },
+    {
+      "id": "output-format",
+      "prompt": "@fixer Add a helloWorld function to src/utils/helpers.ts that returns the string 'Hello, World!'.",
+      "agent": "orchestrator",
+      "description": "Fixer output should include summary, changes, and verification sections",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should delegate to fixer for code implementation"
+        },
+        {
+          "type": "contains",
+          "value": "Hello, World!",
+          "description": "Output should return correct greeting"
+        },
+        {
+          "type": "contains",
+          "value": "helloWorld",
+          "description": "Fixer output should mention the helloWorld function"
+        },
+        {
+          "type": "contains",
+          "value": "src/utils/helpers.ts",
+          "description": "Fixer output should mention the helpers.ts file"
+        },
+        {
+          "type": "contains",
+          "value": "Typecheck passes",
+          "description": "Fixer output should indicate typecheck passes"
+        }
+      ],
+      "category": "execution",
+      "tags": ["execution", "output"]
+    },
+    {
+      "id": "edge-case-handling",
+      "prompt": "@fixer Create src/utils/serialization.ts with a safeParseJson function that parses JSON strings gracefully, returning null on invalid input.",
+      "agent": "orchestrator",
+      "description": "Fixer should handle edge cases without research delegation",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should delegate to fixer for code implementation"
+        },
+        {
+          "type": "contains",
+          "value": "safeParseJson",
+          "description": "Output should contain safeParseJson function"
+        },
+        {
+          "type": "regex",
+          "value": "return null|return undefined|try|catch|throw",
+          "description": "Output should handle invalid JSON gracefully"
+        }
+      ],
+      "category": "execution",
+      "tags": ["execution", "edge-cases"]
+    },
+    {
+      "id": "code-quality",
+      "prompt": "@fixer Create src/utils/formatters.ts with a formatCurrency function that formats a number as currency string (e.g., 1234.56 → '$1,234.56').",
+      "agent": "orchestrator",
+      "description": "Fixer should produce high-quality code without research delegation",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should delegate to fixer for code implementation"
+        },
+        {
+          "type": "contains",
+          "value": "formatCurrency",
+          "description": "Output should contain formatCurrency function"
+        },
+        {
+          "type": "file_exists",
+          "value": "src/utils/formatters.ts",
+          "filePath": "src/utils/formatters.ts",
+          "description": "Should create src/utils/formatters.ts"
+        },
+        {
+          "type": "file_contains",
+          "value": "formatCurrency",
+          "filePath": "src/utils/formatters.ts",
+          "description": "Created file should contain formatCurrency function"
+        },
+        {
+          "type": "contains",
+          "value": "formatters.ts",
+          "description": "Fixer output should mention the created formatters.ts file"
+        }
+      ],
+      "category": "execution",
+      "tags": ["execution", "code-quality"],
+      "smoke": true
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "name": "orchestrator-direct-execution",
+  "description": "Evals for tasks the orchestrator should handle directly, without delegating to any subagent.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "trivial-edit-direct",
+      "prompt": "Make the last line of src/cli/eval.ts the comment `// eval scoring CLI entrypoint`.",
+      "agent": "orchestrator",
+      "description": "Trivial single-file edit should be handled directly, not delegated",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should handle a trivial comment addition directly, without delegating"
+        },
+        {
+          "type": "file_contains",
+          "value": "// eval scoring CLI entrypoint",
+          "filePath": "src/cli/eval.ts",
+          "description": "The comment should actually be written into src/cli/eval.ts"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["routing", "trivial"]
+    },
+    {
+      "id": "trivial-should-handle-directly",
+      "prompt": "What does the package.json scripts section do? List the available npm scripts.",
+      "agent": "orchestrator",
+      "description": "Trivia about the codebase should be handled directly, not delegated",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should answer trivial knowledge directly, without delegating"
+        },
+        {
+          "type": "contains",
+          "value": "scripts",
+          "description": "Output should mention scripts"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["routing", "trivia"],
+      "smoke": true
+    },
+    {
+      "id": "verification-command-direct",
+      "prompt": "Run bun run typecheck in the repository and report the result.",
+      "agent": "orchestrator",
+      "description": "Running a verification command is a direct task, not implementation work \u2014 should not delegate to @fixer",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should run the verification command directly, without delegating to @fixer"
+        },
+        {
+          "type": "tool_used",
+          "value": "bash",
+          "description": "Should run the verification command directly via bash"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["routing", "verification"]
+    },
+    {
+      "id": "non-substantial-updates-orchestrator",
+      "prompt": "Change the VERSION constant in src/skills/codemap/scripts/codemap.mjs from '1.0.0' to '1.0.1', and update the version field in src/skills/codemap/README.md from \"1.0.0\" to \"1.0.1\".",
+      "agent": "orchestrator",
+      "description": "Trivial multi-file comment edits should be handled directly, not delegated",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should handle trivial multi-file edits directly without delegating"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "fixer",
+          "description": "Should not engage @fixer for trivial multi-file edits"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["routing", "delegation"],
+      "smoke": true
+    }
+  ]
+}

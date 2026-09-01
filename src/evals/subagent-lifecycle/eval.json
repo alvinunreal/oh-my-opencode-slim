@@ -1,0 +1,86 @@
+{
+  "name": "subagent-lifecycle",
+  "description": "Tests for multi-agent orchestration dynamics — routing, delegation, background task lifecycle, and cross-agent result integration.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "small-change-lands-in-file",
+      "prompt": "Create src/utils/validation.ts with a validateEmail function.",
+      "agent": "orchestrator",
+      "description": "Small single-file change lands in the target file, whether handled directly or delegated",
+      "assertions": [
+        {
+          "type": "file_contains",
+          "filePath": "src/utils/validation.ts",
+          "value": "validateEmail",
+          "description": "The validateEmail function must land in src/utils/validation.ts"
+        }
+      ],
+      "tags": ["routing", "delegation", "direct-execution"],
+      "category": "natural-routing",
+      "smoke": true
+    },
+    {
+      "id": "explorer-before-implementation",
+      "prompt": "Find all error handling patterns in src/hooks/ and suggest improvements. Then implement the top suggestion.",
+      "agent": "orchestrator",
+      "description": "Should use @explorer for discovery, then @fixer for implementation",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "explorer",
+          "description": "Should route to @explorer for discovery"
+        },
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should route to @fixer for implementation"
+        }
+      ],
+      "tags": ["routing", "multi-agent"],
+      "category": "natural-routing"
+    },
+    {
+      "id": "external-research",
+      "prompt": "Look up how the Anthropic SDK handles streaming responses and what the latest API changes are.",
+      "agent": "orchestrator",
+      "description": "External research should route to @librarian",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "librarian",
+          "description": "Should route to @librarian for external research"
+        }
+      ],
+      "tags": ["routing", "research"],
+      "category": "natural-routing",
+      "smoke": true
+    },
+    {
+      "id": "multi-agent-parallel",
+      "prompt": "Research the latest MCP spec changes and implement a simple wrapper function.",
+      "agent": "orchestrator",
+      "description": "Independent tasks should be delegated in parallel to @librarian and @fixer",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "librarian",
+          "description": "Should route research to @librarian"
+        },
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should route implementation to @fixer"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "oracle",
+          "description": "Should not pull in @oracle for a research+implementation task"
+        }
+      ],
+      "tags": ["routing", "parallel"],
+      "category": "natural-routing"
+    }
+  ]
+}

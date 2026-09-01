@@ -1,0 +1,81 @@
+{
+  "name": "cost-and-model-gates",
+  "description": "Tests that cost_under and model_switches assertions work over real transcripts. Direct-execution prompts should stay under a reasonable cost cap and not trigger model fallback.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "cheap-direct-answer",
+      "prompt": "What is the capital of France?",
+      "agent": "orchestrator",
+      "description": "A trivial factual question should cost under $0.02",
+      "assertions": [
+        {
+          "type": "cost_under",
+          "value": "0.02",
+          "description": "Trivial direct answer should cost under $0.02"
+        },
+        {
+          "type": "model_switches",
+          "value": "0",
+          "description": "Should not trigger model fallback for a trivial question"
+        },
+        {
+          "type": "contains",
+          "value": "Paris",
+          "description": "Should answer correctly"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["cost", "model"],
+      "smoke": true
+    },
+    {
+      "id": "typecheck-under-cost",
+      "prompt": "Run bun run typecheck and report the result.",
+      "agent": "orchestrator",
+      "description": "Running a verification command directly should cost under $0.03",
+      "assertions": [
+        {
+          "type": "cost_under",
+          "value": "0.03",
+          "description": "Running a simple command should cost under $0.03"
+        },
+        {
+          "type": "model_switches",
+          "value": "0",
+          "description": "Should not need model fallback for a bash command"
+        },
+        {
+          "type": "tool_used",
+          "value": "bash",
+          "description": "Should run the command via bash"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["cost", "verification"],
+      "smoke": true
+    },
+    {
+      "id": "codebase-trivia-cheap",
+      "prompt": "How many eval suites are in the src/evals/ directory?",
+      "agent": "orchestrator",
+      "description": "A codebase fact question should be answered directly and cost under $0.02",
+      "assertions": [
+        {
+          "type": "cost_under",
+          "value": "0.02",
+          "description": "Codebase trivia should cost under $0.02"
+        },
+        {
+          "type": "model_switches",
+          "value": "0",
+          "description": "Should not trigger model fallback"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["cost", "trivia"],
+      "smoke": true
+    }
+  ]
+}

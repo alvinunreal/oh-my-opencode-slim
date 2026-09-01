@@ -1,0 +1,126 @@
+{
+  "name": "orchestrator-natural-routing",
+  "description": "Evals for delegation decisions — does the orchestrator route each task type to the right specialist agent?",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "substantial-updates-to-fixer",
+      "prompt": "Create a small date-formatting module under src/utils/date-format/ with two files:\n- src/utils/date-format/types.ts: exports a DateFormatOptions interface with fields locale: string, timeZone?: string, includeTime: boolean\n- src/utils/date-format/index.ts: exports a formatDate(date: Date, options: DateFormatOptions): string function that imports DateFormatOptions from ./types\nNeither file exists yet. Create both.",
+      "agent": "orchestrator",
+      "description": "Substantive interdependent multi-file implementation should route to @fixer",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should delegate multi-file implementation to @fixer"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "oracle",
+          "description": "Should not delegate to oracle for implementation"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "implementation"],
+      "smoke": true
+    },
+    {
+      "id": "simple-architecture-answered-directly",
+      "prompt": "For our plugin session cache, is a Map or a plain object the better choice? Give a brief one-paragraph recommendation.",
+      "agent": "orchestrator",
+      "description": "Simple architecture questions are answered directly (no @oracle escalation); a single grounding lookup is allowed",
+      "assertions": [
+        {
+          "type": "agent_not_routed",
+          "value": "oracle",
+          "description": "Should not escalate a straightforward trade-off to @oracle"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "architecture"],
+      "smoke": true
+    },
+    {
+      "id": "major-architecture-to-oracle",
+      "prompt": "We're considering a major architectural change: replacing our in-memory session cache with a persistent store that every hook depends on. This is a high-risk refactor affecting all session lookups. Should we do it, and what are the long-term trade-offs?",
+      "agent": "orchestrator",
+      "description": "Major architecture decisions should route to @oracle",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "oracle",
+          "description": "Should delegate major architecture decisions to @oracle"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "fixer",
+          "description": "Should not do implementation work"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "architecture"]
+    },
+    {
+      "id": "codebase-search-to-explorer",
+      "prompt": "Find the file that defines the emitEvent function.",
+      "agent": "orchestrator",
+      "description": "Codebase file search should route to @explorer, not handle inline or do external research",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "observability.ts",
+          "description": "Should find the file that defines emitEvent"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "librarian",
+          "description": "Should not do external research"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "search"]
+    },
+    {
+      "id": "broad-search-to-explorer",
+      "prompt": "Where does the plugin decide which agent handles a request, and what files are involved in that routing?",
+      "agent": "orchestrator",
+      "description": "Broad multi-file codebase search should route to @explorer",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "explorer",
+          "description": "Should delegate broad codebase search to @explorer"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "librarian",
+          "description": "Should not do external research"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "search"]
+    },
+    {
+      "id": "ui-work-to-designer",
+      "prompt": "Polish the visual alignment and spacing of the agent rows in the OMO-Slim TUI sidebar (src/tui.ts) so labels and model details line up cleanly.",
+      "agent": "orchestrator",
+      "description": "UI work routes to @designer (no explorer prerequisite — designer rule allows direct routing for pure UI work)",
+      "assertions": [
+        {
+          "type": "agent_not_routed",
+          "value": "fixer",
+          "description": "Designer implements the UI itself, so fixer is not needed"
+        },
+        {
+          "type": "agent_routed",
+          "value": "designer",
+          "description": "Should route the design to @designer"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "ui"],
+      "smoke": true
+    }
+  ]
+}

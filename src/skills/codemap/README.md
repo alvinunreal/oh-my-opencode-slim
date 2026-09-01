@@ -32,7 +32,7 @@ node codemap.mjs update --root /repo
 ```json
 {
   "metadata": {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "last_run": "2026-01-25T19:00:00Z",
     "include_patterns": ["src/**/*.ts"],
     "exclude_patterns": ["node_modules/**"]

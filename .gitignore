@@ -23,6 +23,8 @@ Thumbs.db
 
 # Logs
 *.log
+# Eval run artifacts
+src/evals/results/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -39,6 +41,9 @@ tmp/
 temp/
 local
 .loop-history-*.md
+
+# Eval results (must survive git clean between suite runs)
+src/evals/results/
 .opencode/loop-history/
 
 .sisyphus/

@@ -3,6 +3,7 @@
  */
 
 import type { OpencodeClient } from '@opencode-ai/sdk';
+import { createOpencodeClient } from '@opencode-ai/sdk';
 import { log } from './logger';
 
 export const SESSION_ABORT_TIMEOUT_MS = 1_000;
@@ -252,4 +253,86 @@ export async function extractSessionResult(
 
   const text = extractedContent.filter((t) => t.length > 0).join('\n\n');
   return { text, empty: text.length === 0 };
+}
+
+export function isTerminalSession(
+  messages: Array<{
+    info?: { role?: string; finish?: string };
+    parts?: Array<{
+      type?: string;
+      state?: { status?: string };
+      text?: string;
+    }>;
+  }>,
+): boolean {
+  const last = messages[messages.length - 1];
+  if (last?.info?.role !== 'assistant') return false;
+  const finish = last.info.finish;
+  if (!finish || finish === 'tool-calls' || finish === 'unknown') return false;
+  const pendingTool = (last.parts ?? []).some(
+    (p) =>
+      p.type === 'tool' &&
+      (p.state?.status === 'pending' || p.state?.status === 'running'),
+  );
+  return !pendingTool;
+}
+
+export function assistantText(
+  messages: Array<{
+    info?: { role?: string };
+    parts?: Array<{ type?: string; text?: string }>;
+  }>,
+): string {
+  return messages
+    .filter((m) => m.info?.role === 'assistant')
+    .map((m) =>
+      (m.parts ?? [])
+        .filter((p) => p.type === 'text' && typeof p.text === 'string')
+        .map((p) => p.text as string)
+        .join(''),
+    )
+    .join('')
+    .trim();
+}
+
+export async function runPromptCli(
+  prompt: string,
+  agent: string,
+  directory: string,
+  timeoutMs = 300_000,
+): Promise<string> {
+  const baseUrl = process.env.OPENCODE_URL ?? 'http://localhost:4096';
+  const client = createOpencodeClient({ baseUrl, directory });
+
+  const created = await client.session.create({
+    body: { title: `judge: ${prompt.slice(0, 40)}` },
+    query: { directory },
+  });
+  const sid = created.data?.id;
+  if (!sid) throw new Error('session.create returned no id');
+
+  await client.session.promptAsync({
+    path: { id: sid },
+    body: {
+      parts: [{ type: 'text', text: prompt }],
+      agent,
+    },
+    query: { directory },
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await Bun.sleep(1000);
+    const msgs =
+      (
+        await client.session
+          .messages({ path: { id: sid }, query: { directory } })
+          .catch(() => null)
+      )?.data ?? [];
+    if (isTerminalSession(msgs)) {
+      const text = assistantText(msgs);
+      if (text.length > 0) return text;
+    }
+  }
+  throw new Error(`judge timed out after ${timeoutMs / 1000}s`);
 }

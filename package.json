@@ -76,6 +76,9 @@
     "format": "biome format . --write",
     "check": "biome check --write .",
     "check:ci": "biome check .",
+    "eval": "bun run src/cli/eval.ts",
+    "eval:smoke": "bun run src/cli/eval.ts --smoke",
+    "ci:eval": "bun run eval --suite orchestrator-direct-execution --outputs-file /tmp/eval-outputs.json",
     "dev": "bun run build && opencode",
     "prepublishOnly": "bun run build",
     "release:patch": "npm version patch && git push --follow-tags && npm publish",
@@ -85,6 +88,7 @@
     "release:beta:next": "npm version prerelease --preid beta && git push --follow-tags && npm publish --tag beta"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.0",
     "@ast-grep/cli": "^0.44.1",
     "@mozilla/readability": "^0.6.0",
     "@opencode-ai/plugin": "1.18.23",

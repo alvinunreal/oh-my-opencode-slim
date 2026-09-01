@@ -13,7 +13,7 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.0.1';
 export const STATE_DIR = '.slim';
 export const STATE_FILE = 'codemap.json';
 export const LEGACY_STATE_FILE = 'cartography.json';

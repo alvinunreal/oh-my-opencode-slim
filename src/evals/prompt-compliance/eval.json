@@ -1,0 +1,101 @@
+{
+  "name": "prompt-compliance",
+  "description": "Tests that the orchestrator follows its own prompt instructions — uses question tool for blocking input, calls wait_for_user for manual steps, routes design work to @designer, and avoids unnecessary flattery.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "defer-decision-to-user",
+      "prompt": "We need to pick a name for the new utility module. It could be utils/helpers.ts or utils/misc.ts. Which one should I create?",
+      "agent": "orchestrator",
+      "description": "When user input is required to proceed with work, orchestrator should use the question tool for blocking input",
+      "assertions": [
+        {
+          "type": "tool_used",
+          "value": "question",
+          "description": "Should use the question tool when user must decide before work proceeds"
+        }
+      ],
+      "category": "instruction-following",
+      "tags": ["compliance", "communication", "deferral"],
+      "smoke": true
+    },
+    {
+      "id": "design-routes-to-designer",
+      "prompt": "Add a new settings page at src/utils/evals/settings-page.tsx with a form, some styling, and a clean layout.",
+      "agent": "orchestrator",
+      "description": "UI/design work should route to @designer, not be handled directly or by @fixer",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "designer",
+          "description": "Should route UI/design work to @designer"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "fixer",
+          "description": "Should not route design work to @fixer"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["compliance", "design", "routing"]
+    },
+    {
+      "id": "no-flattery-in-output",
+      "prompt": "What is the time complexity of Array.prototype.sort in V8?",
+      "agent": "orchestrator",
+      "description": "Orchestrator prompt says 'No Flattery' — output should not contain praise phrases",
+      "assertions": [
+        {
+          "type": "not_contains",
+          "value": "great question",
+          "description": "Should not contain 'great question'"
+        },
+        {
+          "type": "not_contains",
+          "value": "excellent",
+          "description": "Should not contain 'excellent' as praise"
+        },
+        {
+          "type": "not_contains",
+          "value": "excellent idea",
+          "description": "Should not contain 'excellent idea'"
+        },
+        {
+          "type": "not_contains",
+          "value": "smart choice",
+          "description": "Should not contain 'smart choice'"
+        },
+        {
+          "type": "contains",
+          "value": "O(n",
+          "description": "Should actually answer the question about complexity"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["compliance", "communication"],
+      "smoke": true
+    },
+    {
+      "id": "verify-with-bash",
+      "prompt": "Run the TypeScript type checker and report the result.",
+      "agent": "orchestrator",
+      "description": "Verification commands should use bash tool directly, not delegate or narrate",
+      "assertions": [
+        {
+          "type": "tool_used",
+          "value": "bash",
+          "description": "Should run verification via bash tool"
+        },
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should handle verification directly, not delegate to a subagent"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["compliance", "verification"],
+      "smoke": true
+    }
+  ]
+}

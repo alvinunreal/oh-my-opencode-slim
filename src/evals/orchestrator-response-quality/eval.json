@@ -1,0 +1,125 @@
+{
+  "name": "orchestrator-response-quality",
+  "description": "Evals for response quality \u2014 the orchestrator should give substantive answers, never placeholder or dismissive text.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "helpful-response-check",
+      "prompt": "What is the capital of France? Answer with just the city name.",
+      "agent": "orchestrator",
+      "description": "Orchestrator should provide helpful, substantive responses, not placeholder text",
+      "assertions": [
+        {
+          "type": "contains",
+          "value": "Paris",
+          "description": "Should provide the correct answer"
+        },
+        {
+          "type": "not_contains",
+          "value": "Standing by. What's next?",
+          "description": "Should not contain the exact placeholder phrase"
+        },
+        {
+          "type": "not_contains",
+          "value": "Standing by",
+          "description": "Should not contain placeholder text"
+        },
+        {
+          "type": "not_contains",
+          "value": "What's next?",
+          "description": "Should not contain prompting for next steps"
+        },
+        {
+          "type": "not_contains",
+          "value": "tell me nothing",
+          "description": "Should not contain dismissive language"
+        }
+      ],
+      "category": "response-quality",
+      "tags": ["response-quality", "helpfulness"]
+    },
+    {
+      "id": "no-placeholder-response",
+      "prompt": "Explain what the orchestrator agent does in this system in one or two sentences.",
+      "agent": "orchestrator",
+      "description": "Orchestrator should give substantive explanations, not placeholder text",
+      "assertions": [
+        {
+          "type": "not_contains",
+          "value": "Standing by. What's next?",
+          "description": "Should not contain the exact placeholder phrase"
+        },
+        {
+          "type": "not_contains",
+          "value": "Standing by",
+          "description": "Should not contain the partial phrase"
+        },
+        {
+          "type": "not_contains",
+          "value": "What's next",
+          "description": "Should not contain the prompting phrase"
+        },
+        {
+          "type": "not_contains",
+          "value": "tell me nothing",
+          "description": "Should not contain dismissive language"
+        },
+        {
+          "type": "contains",
+          "value": "orchestrator",
+          "description": "Should mention the orchestrator agent"
+        },
+        {
+          "type": "agent_invocations_count",
+          "value": "{\"max\": 0}",
+          "description": "Orchestrator should answer directly, not delegate"
+        }
+      ],
+      "category": "response-quality",
+      "tags": ["response-quality", "anti-placeholder"],
+      "smoke": true
+    },
+    {
+      "id": "code-review-quality",
+      "prompt": "Review this function for potential issues:\n\nfunction processUser(data) {\n  if (data) {\n    console.log(\"Processing: \" + data.name);\n    db.save(data);\n    return true;\n  }\n}",
+      "agent": "orchestrator",
+      "description": "Code review should identify multiple issues, not just one",
+      "assertions": [
+        {
+          "type": "regex",
+          "value": "null|undefined|throw|return false|validation",
+          "description": "Should flag the missing return / null handling"
+        },
+        {
+          "type": "agent_invocations_count",
+          "value": "{\"max\": 0}",
+          "description": "Orchestrator should review directly, not delegate"
+        }
+      ],
+      "category": "response-quality",
+      "tags": ["response-quality", "code-review"],
+      "smoke": true
+    },
+    {
+      "id": "architecture-explanation-quality",
+      "prompt": "Explain the tradeoffs between using a Map vs a plain object for caching in JavaScript.",
+      "agent": "orchestrator",
+      "description": "Architecture explanations should cover multiple tradeoffs with concrete detail",
+      "assertions": [
+        {
+          "type": "regex",
+          "value": "Map",
+          "description": "Should mention Map"
+        },
+        {
+          "type": "regex",
+          "value": "key|memory|performance|garbage|lookup|iteration",
+          "description": "Should discuss at least one concrete tradeoff dimension"
+        }
+      ],
+      "category": "response-quality",
+      "tags": ["response-quality", "architecture"]
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "name": "background-task-lifecycle",
+  "description": "Tests that delegated tasks complete their full lifecycle (spawn → completion) via the orchestrator. Uses background_task_completed assertion to verify the task result state reflects terminal status.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "fixer-delegation-completes",
+      "prompt": "@fixer Create src/utils/evals/background-test.ts that exports a function formatTimestamp(date: Date): string that returns an ISO string.",
+      "agent": "orchestrator",
+      "description": "A @fixer task should complete its lifecycle — the task tool call result must show terminal state",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should route to @fixer"
+        },
+        {
+          "type": "background_task_completed",
+          "value": "fixer",
+          "description": "The fixer task must reach completed state in the transcript"
+        },
+        {
+          "type": "file_contains",
+          "value": "formatTimestamp",
+          "filePath": "src/utils/evals/background-test.ts",
+          "description": "The file should actually be created with the function"
+        }
+      ],
+      "category": "execution",
+      "tags": ["lifecycle", "delegation"],
+      "smoke": true
+    },
+    {
+      "id": "explorer-delegation-completes",
+      "prompt": "@explorer Find all files in src/hooks/ that import from '../config' and list their imports.",
+      "agent": "orchestrator",
+      "description": "An @explorer task should complete its lifecycle",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "explorer",
+          "description": "Should route to @explorer"
+        },
+        {
+          "type": "background_task_completed",
+          "value": "explorer",
+          "description": "The explorer task must reach completed state"
+        }
+      ],
+      "category": "execution",
+      "tags": ["lifecycle", "delegation"]
+    },
+    {
+      "id": "oracle-delegation-completes",
+      "prompt": "@oracle For a small in-memory cache, is a Map or a plain object the better choice? Give a one-sentence answer.",
+      "agent": "orchestrator",
+      "description": "An @oracle task should complete its lifecycle",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "oracle",
+          "description": "Should route to @oracle"
+        },
+        {
+          "type": "background_task_completed",
+          "value": "oracle",
+          "description": "The oracle task must reach completed state"
+        }
+      ],
+      "category": "execution",
+      "tags": ["lifecycle", "delegation"],
+      "smoke": true
+    },
+    {
+      "id": "multi-agent-all-complete",
+      "prompt": "Research what the latest MCP spec changes are, then create a simple wrapper at src/utils/evals/mcp-wrapper.ts.",
+      "agent": "orchestrator",
+      "description": "When multiple agents are delegated, all task lifecycle events should complete",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "librarian",
+          "description": "Should route research to @librarian"
+        },
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Should route implementation to @fixer"
+        },
+        {
+          "type": "background_task_completed",
+          "value": "",
+          "description": "All background tasks must reach completed state"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["lifecycle", "multi-agent"]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "name": "parallel-delegation",
+  "description": "Tests that the orchestrator dispatches independent work lanes in parallel rather than serializing or collapsing them. Verifies both lanes route to different specialists and that neither blocks the other.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "research-plus-implement-parallel",
+      "prompt": "Research the latest version of the Anthropic TypeScript SDK, and separately rewrite src/utils/evals/old-code.ts to be cleaner. Do both.",
+      "agent": "orchestrator",
+      "description": "Research and implementation are independent — should dispatch to @librarian and @fixer in parallel",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "librarian",
+          "description": "Research lane should route to @librarian"
+        },
+        {
+          "type": "agent_routed",
+          "value": "fixer",
+          "description": "Implementation lane should route to @fixer"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "oracle",
+          "description": "Should not pull @oracle into a two-lane parallel task"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "parallel"],
+      "smoke": true
+    },
+    {
+      "id": "two-explorers-parallel",
+      "prompt": "Find all files that import from '../config' and also find all TypeScript files that use 'any'. Report both lists.",
+      "agent": "orchestrator",
+      "description": "Two independent search lanes — should dispatch both to @explorer in parallel",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "explorer",
+          "description": "Search lanes should route to @explorer"
+        },
+        {
+          "type": "background_task_completed",
+          "value": "explorer",
+          "description": "The explorer task must reach completed state"
+        }
+      ],
+      "category": "natural-routing",
+      "tags": ["routing", "parallel", "search"]
+    },
+    {
+      "id": "dependent-work-not-parallel",
+      "prompt": "Create src/utils/evals/generate-id.ts with a generateId() function that returns a random string.",
+      "agent": "orchestrator",
+      "description": "A single-file task has no independent lanes — should not spawn parallel specialists for it",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 1}",
+          "description": "A single implementation task should need at most one delegate"
+        }
+      ],
+      "category": "direct-execution",
+      "tags": ["routing", "parallel", "delegation"],
+      "smoke": true
+    }
+  ]
+}

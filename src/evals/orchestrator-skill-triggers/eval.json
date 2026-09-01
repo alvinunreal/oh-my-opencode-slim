@@ -1,0 +1,110 @@
+{
+  "name": "orchestrator-skill-triggers",
+  "description": "Evals for progressive-disclosure skill triggers \u2014 the orchestrator should invoke the matching skill and read its reference file.",
+  "version": "1.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "reflect-progressive-disclosure",
+      "prompt": "I keep repeating the same manual steps before every release. What patterns am I repeating, and how can I capture them as reusable skills?",
+      "agent": "orchestrator",
+      "description": "Should trigger @reflect skill and read its reference file for detailed patterns",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "SKILL.md",
+          "description": "Should read the reflect skill reference file"
+        }
+      ],
+      "category": "skill-trigger",
+      "tags": ["progressive-disclosure", "reflect"],
+      "smoke": true
+    },
+    {
+      "id": "clonedeps-progressive-disclosure",
+      "prompt": "I'm debugging why the SDK handles tool calls differently than expected. How does it actually work internally?",
+      "agent": "orchestrator",
+      "description": "Should trigger @clonedeps skill and read its reference file",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "SKILL.md",
+          "description": "Should read the clonedeps skill reference file"
+        }
+      ],
+      "category": "skill-trigger",
+      "tags": ["progressive-disclosure", "clonedeps"]
+    },
+    {
+      "id": "verification-planning-progressive-disclosure",
+      "prompt": "I'm about to refactor the prompt cache to a different invalidation strategy. How do I know the change works before I ship it?",
+      "agent": "orchestrator",
+      "description": "Should trigger @verification-planning skill and read its reference file",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "SKILL.md",
+          "description": "Should read the verification-planning skill reference file"
+        }
+      ],
+      "category": "skill-trigger",
+      "tags": ["progressive-disclosure", "verification-planning"]
+    },
+    {
+      "id": "deepwork-progressive-disclosure",
+      "prompt": "We're migrating the plugin from CommonJS to ESM. It touches every module, so it can't ship half-done.",
+      "agent": "orchestrator",
+      "description": "Should trigger @deepwork skill and read its reference file",
+      "assertions": [
+        {
+          "type": "references_read",
+          "value": "SKILL.md",
+          "description": "Should read the deepwork skill reference file"
+        }
+      ],
+      "category": "skill-trigger",
+      "tags": ["progressive-disclosure", "deepwork"]
+    },
+    {
+      "id": "simple-question-no-skill",
+      "prompt": "What is the capital of France? Answer with just the city name.",
+      "agent": "orchestrator",
+      "description": "Trivial factual question should not trigger any progressive-disclosure skill",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should answer directly without delegating or triggering a skill"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "oracle",
+          "description": "Should not route a trivial question to a specialist"
+        }
+      ],
+      "category": "skill-trigger",
+      "tags": ["progressive-disclosure", "negative"],
+      "smoke": true
+    },
+    {
+      "id": "direct-edit-no-skill",
+      "prompt": "Make the last line of src/cli/eval.ts the comment `// eval scoring CLI entrypoint`.",
+      "agent": "orchestrator",
+      "description": "Trivial direct edit should not trigger any progressive-disclosure skill",
+      "assertions": [
+        {
+          "type": "subagent_count",
+          "value": "{\"max\": 0}",
+          "description": "Should edit directly without delegating or triggering a skill"
+        },
+        {
+          "type": "agent_not_routed",
+          "value": "fixer",
+          "description": "Should not route a trivial edit to @fixer"
+        }
+      ],
+      "category": "skill-trigger",
+      "tags": ["progressive-disclosure", "negative"]
+    }
+  ]
+}

@@ -98,7 +98,7 @@ oh-my-opencode-slim/
 3. Run `bun run check:ci` to verify linting and formatting
 4. Run `bun run typecheck` to verify types
 5. Run `bun test` to verify tests pass
-6. Commit changes
+6. Commit changes — if you ran `bun run eval` (or any eval command), include those resulting changes in the commit
 
 ## Release Workflow
 

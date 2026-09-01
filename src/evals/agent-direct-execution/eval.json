@@ -1,0 +1,170 @@
+{
+  "name": "agent-direct-execution",
+  "description": "Evals for specialist agents exercised via orchestrator delegation (@explorer, @librarian, etc.) — do the specialists follow their own guidelines and output format?",
+  "version": "2.0.0",
+  "category": "capability",
+  "evals": [
+    {
+      "id": "explorer-returns-structured-results",
+      "prompt": "@explorer Find all TypeScript files in src/hooks/ that contain the word 'fallback'.",
+      "agent": "orchestrator",
+      "description": "Orchestrator delegates to explorer; explorer should return structured results with file paths",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "explorer",
+          "description": "Should delegate to explorer for file search"
+        },
+        {
+          "type": "contains",
+          "value": "src/hooks/",
+          "description": "Should list file paths under src/hooks/"
+        },
+        {
+          "type": "contains",
+          "value": ".ts",
+          "description": "Should return TypeScript file paths"
+        }
+      ],
+      "tags": ["explorer", "guidelines"],
+      "category": "execution",
+      "smoke": true
+    },
+    {
+      "id": "librarian-cites-sources",
+      "prompt": "@librarian What is the latest version of the Anthropic TypeScript SDK and what are the breaking changes since v1.0? Cite authoritative sources.",
+      "agent": "orchestrator",
+      "description": "Orchestrator delegates to librarian; librarian should cite authoritative sources",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "librarian",
+          "description": "Should delegate to librarian for research"
+        },
+        {
+          "type": "regex",
+          "value": "https?://",
+          "description": "Should cite at least one source URL"
+        },
+        {
+          "type": "regex",
+          "value": "version|v[0-9]|changelog|breaking",
+          "description": "Should reference specific version or changelog information"
+        }
+      ],
+      "tags": ["librarian", "guidelines"],
+      "category": "execution"
+    },
+    {
+      "id": "observer-extracts-exact-text",
+      "prompt": "@observer Analyze the screenshot at test/fixtures/error-screenshot.png and extract all error messages verbatim.",
+      "agent": "orchestrator",
+      "description": "Orchestrator delegates to observer; observer should extract exact text, never paraphrase or fabricate",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "observer",
+          "description": "Should delegate to observer for screenshot analysis"
+        },
+        {
+          "type": "contains",
+          "value": "Failed to load module",
+          "description": "Should extract the error message verbatim"
+        },
+        {
+          "type": "not_contains",
+          "value": "I think",
+          "description": "Should not hedge or guess"
+        },
+        {
+          "type": "not_contains",
+          "value": "probably",
+          "description": "Should not fabricate uncertain details"
+        }
+      ],
+      "tags": ["observer", "guidelines"],
+      "category": "execution"
+    },
+    {
+      "id": "oracle-completes-within-timeout",
+      "prompt": "@oracle For a small in-memory cache, is a Map or a plain object the better choice? Give a one-sentence answer that mentions a tradeoff.",
+      "agent": "orchestrator",
+      "description": "Regression for #523: oracle must complete within timeout, not stall",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "oracle",
+          "description": "Should delegate to oracle for expert recommendation"
+        },
+        {
+          "type": "regex",
+          "value": "\\b(map|object)\\b",
+          "description": "Should answer the Map vs object question"
+        }
+      ],
+      "tags": ["regression", "oracle"],
+      "category": "execution",
+      "smoke": true
+    },
+    {
+      "id": "oracle-provides-structured-recommendations",
+      "prompt": "@oracle For our eval collector's retry logic, should we keep it as-is or change it? Give a one-sentence recommendation.",
+      "agent": "orchestrator",
+      "description": "Regression for #224: oracle should provide structured, actionable recommendations",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "oracle",
+          "description": "Should delegate to oracle for expert recommendation"
+        },
+        {
+          "type": "regex",
+          "value": "recommend|suggest|should|keep|change",
+          "description": "Should provide actionable recommendations"
+        }
+      ],
+      "tags": ["regression", "oracle"],
+      "category": "execution"
+    },
+    {
+      "id": "librarian-context-not-infinite",
+      "prompt": "@librarian Research three unrelated topics: 1) How does the OpenCode SDK handle sessions? 2) What CSS framework is best for dashboards? 3) How do you configure Nginx reverse proxy?",
+      "agent": "orchestrator",
+      "description": "Regression for #868: librarian sessions should not grow unbounded across unrelated tasks",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "librarian",
+          "description": "Should delegate to librarian for multi-topic research"
+        },
+        {
+          "type": "contains",
+          "value": "session",
+          "description": "Should address at least the first research topic"
+        }
+      ],
+      "tags": ["regression", "librarian"],
+      "category": "execution"
+    },
+    {
+      "id": "explorer-returns-focused-results",
+      "prompt": "@explorer Find all error handling patterns in src/hooks/. List only the file paths and the pattern used.",
+      "agent": "orchestrator",
+      "description": "Regression: explorer should return focused, structured results, not dump everything",
+      "assertions": [
+        {
+          "type": "agent_routed",
+          "value": "explorer",
+          "description": "Should delegate to explorer for pattern search"
+        },
+        {
+          "type": "contains",
+          "value": ".ts",
+          "description": "Should return TypeScript file paths"
+        }
+      ],
+      "tags": ["regression", "explorer"],
+      "category": "execution"
+    }
+  ]
+}
