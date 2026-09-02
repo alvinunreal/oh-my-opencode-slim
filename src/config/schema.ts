@@ -332,7 +332,7 @@ export const FailoverConfigSchema = z.preprocess(
         .default(0)
         .describe(
           'Delay in milliseconds before triggering the first fallback on a ' +
-            'rate-limit error. Gives intercepting plugins time to recover ' +
+            'failover-worthy error. Gives intercepting plugins time to recover ' +
             'the current model before the fallback chain advances. 0 disables.',
         ),
       retryDelayMs: z

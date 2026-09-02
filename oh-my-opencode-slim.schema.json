@@ -1225,7 +1225,7 @@
         },
         "initialRetryDelayMs": {
           "default": 0,
-          "description": "Delay in milliseconds before triggering the first fallback on a rate-limit error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables.",
+          "description": "Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
