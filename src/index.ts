@@ -471,6 +471,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // model. No-op for unknown/non-task sessions; idempotent per model.
       (sessionID, model) =>
         backgroundTaskConcurrency.migrateTask(sessionID, model),
+      runtime.fallback.initialRetryDelayMs,
+      runtime.fallback.retryDelayMs,
     );
 
     deepworkCommandHook = createDeepworkCommandHook();

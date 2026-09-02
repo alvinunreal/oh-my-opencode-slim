@@ -288,7 +288,6 @@ export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
  */
 export const LEGACY_FALLBACK_KEYS = [
   'timeoutMs',
-  'retryDelayMs',
   'retry_on_empty',
   'runtimeOverride',
 ] as const;
@@ -325,6 +324,25 @@ export const FailoverConfigSchema = z.preprocess(
           'Number of consecutive 429/rate-limit responses tolerated on the ' +
             'same model before aborting (or swapping to the next fallback ' +
             'model when a chain is configured).',
+        ),
+      initialRetryDelayMs: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe(
+          'Delay in milliseconds before triggering the first fallback on a ' +
+            'rate-limit error. Gives intercepting plugins time to recover ' +
+            'the current model before the fallback chain advances. 0 disables.',
+        ),
+      retryDelayMs: z
+        .number()
+        .int()
+        .min(0)
+        .default(500)
+        .describe(
+          'Delay in milliseconds between consecutive fallback attempts ' +
+            'after the initial trigger. 0 disables.',
         ),
     })
     .strict(),

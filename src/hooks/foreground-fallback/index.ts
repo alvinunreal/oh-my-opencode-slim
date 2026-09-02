@@ -374,6 +374,10 @@ export class ForegroundFallbackManager {
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
     onSessionModelChanged?: (sessionID: string, model: string) => void,
+    /** Delay before first fallback; gives intercepting plugins time to recover. */
+    private readonly initialRetryDelayMs: number = 0,
+    /** Delay between consecutive fallback attempts. */
+    private readonly retryDelayMs: number = 500,
   ) {
     this.onSessionModelChanged = onSessionModelChanged;
     if (coordinator) {
@@ -582,7 +586,21 @@ export class ForegroundFallbackManager {
    *  delegate to retry budget. Used by all three event paths. */
   private shouldTriggerFallback(sessionID: string): boolean {
     const tried = this.sessionRetries.get(sessionID) ?? 0;
-    if (tried === 0) return true;
+    if (tried === 0) {
+      if (this.initialRetryDelayMs > 0) {
+        this.sessionRetries.set(sessionID, tried + 1);
+        log('[foreground-fallback] delaying initial fallback', {
+          sessionID,
+          delayMs: this.initialRetryDelayMs,
+        });
+        setTimeout(() => {
+          this.sessionRetries.delete(sessionID);
+          void this.tryFallback(sessionID);
+        }, this.initialRetryDelayMs);
+        return false;
+      }
+      return true;
+    }
     return this.consumeRetryBudget(sessionID);
   }
 
@@ -593,7 +611,7 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
+    // No chain -> no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
     if (!this.hasFallbackChain(sessionID)) return;
 
@@ -601,6 +619,18 @@ export class ForegroundFallbackManager {
     // Bypass dedup when the model changed since the last trigger - the new
     // model's failure is a separate incident and the cascade should continue.
     if (this.isDeduped(sessionID)) return;
+
+    // Delay between consecutive fallback attempts (except for the initial trigger
+    // which uses initialRetryDelayMs in shouldTriggerFallback).
+    const tried = this.sessionRetries.get(sessionID) ?? 0;
+    if (tried > 0 && this.retryDelayMs > 0) {
+      log('[foreground-fallback] delaying retry fallback', {
+        sessionID,
+        delayMs: this.retryDelayMs,
+        attempt: tried,
+      });
+      await new Promise((r) => setTimeout(r, this.retryDelayMs));
+    }
 
     this.inProgress.add(sessionID);
     try {
