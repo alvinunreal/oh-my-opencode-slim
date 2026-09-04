@@ -246,6 +246,27 @@ Q&A history.
 - **`chat.headers`.** Not bridged (low value on v2 — an HTTP request hook
   exists if demand appears).
 
+### Known gap: the shim drops `body.agent`
+
+The v2 flat host `PromptInput` (`{ sessionID, text, files?, delivery? }`) has
+no `agent` field; on v2 the agent is chosen by a separate
+`session.switchAgent({ sessionID, agent })` call. When `src/v2/client-shim.ts`
+adapts a v1 `session.prompt` / `session.promptAsync` into that flat shape it
+therefore **silently discards `body.agent`**, exactly as it already handles
+`body.model` by routing it through `session.switchModel` first.
+
+That matters because on v1 an agent-less prompt body makes OpenCode resolve
+its default primary and *durably rewrite the session's agent*
+(`docs/agents/build-agent-empty-input-diagnosis.md`, probe A2). Every plugin
+prompt site now names its agent (`src/utils/prompt-agent.ts`, enforced
+repo-wide by `prompt-agent.test.ts`), so the field is always present and
+always thrown away on v2.
+
+**Follow-up:** mirror the `switchModel` treatment — when the adapted body
+carries an `agent`, call `session.switchAgent` before `s.prompt(...)` (and log
+when the host does not expose it). Until then `v2/client-shim.ts` is
+allowlisted in the prompt-agent scanner as a v2 flat-host prompt site.
+
 ### Environment caveats
 
 - **Reduced/TUI-side hosts.** Some host processes load the plugin's `setup`
