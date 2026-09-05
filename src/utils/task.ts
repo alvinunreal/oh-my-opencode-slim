@@ -36,6 +36,84 @@ export function renderRunningTaskPlaceholder(taskID: string): string {
   ].join('\n');
 }
 
+/**
+ * Render a terminal task tool output from a background job board record.
+ * Used to reconcile a false-cancelled foreground task part (opencode marked
+ * it "error" because the FG-fallback abort poisoned the awaited BackgroundJob)
+ * once the board later records the real model-2 outcome (#595).
+ *
+ * Mirrors opencode task.ts `renderOutput` shape so the orchestrator's history
+ * reads as a normal terminal result. Content is the board's resultSummary
+ * (the authoritative outcome the board captured); full model-2 text is not
+ * recoverable from the orphan runLoop, but the board truth is what matters.
+ */
+export function renderTaskTerminalFromBoard(input: {
+  taskID: string;
+  state: 'completed' | 'error';
+  description: string;
+  resultSummary?: string;
+}): string {
+  const { taskID, state, description, resultSummary } = input;
+  const tag = state === 'error' ? 'task_error' : 'task_result';
+  const summary =
+    state === 'completed'
+      ? `Background task completed: ${description}`
+      : `Background task failed: ${description}`;
+  const body =
+    resultSummary ??
+    (state === 'completed' ? 'Task completed.' : 'Task failed.');
+  return [
+    `<task id="${taskID}" state="${state}">`,
+    `<summary>${summary}</summary>`,
+    `<${tag}>`,
+    body,
+    `</${tag}>`,
+    '</task>',
+  ].join('\n');
+}
+
+/**
+ * Render a terminal task tool output carrying real assistant text.
+ *
+ * opencode's `runTask` settles a foreground task as `completed` with an empty
+ * `output` when the primary model halts on a non-retryable error (e.g. 403
+ * quota exhausted): the halted assistant message has no text part, so
+ * `result.parts.findLast(text)?.text ?? ""` yields "" and `Exit.succeed("")`
+ * marks the job completed. omos's `tryFallback` then re-prompts with the
+ * fallback model on an orphan runLoop and produces the real result, but the
+ * parent task part already says completed+empty — the orchestrator reads an
+ * empty `<task_result>` and mis-judges the task as failed/empty (#863
+ * self-amplify).
+ *
+ * This renders the opencode `renderOutput` shape (task.ts) with the child
+ * session's real assistant text, so the orchestrator's history reflects the
+ * true outcome once the fallback model has produced it. Mirrors the
+ * `state:"completed"` branch of opencode `renderOutput` (task.ts:64-76).
+ */
+/**
+ * Neutralize embedded task close tags so non-greedy
+ * `parseTaskResultFromOutput` cannot truncate recovered body early.
+ * Zero-width space after `</` keeps the visible text intact.
+ */
+export function sanitizeTaskResultBody(text: string): string {
+  return text.replace(/<\/(task_(?:result|error))>/gi, '</\u200b$1>');
+}
+
+export function renderTaskCompletedWithText(
+  taskID: string,
+  summary: string,
+  text: string,
+): string {
+  return [
+    `<task id="${taskID}" state="completed">`,
+    `<summary>${summary}</summary>`,
+    '<task_result>',
+    sanitizeTaskResultBody(text),
+    '</task_result>',
+    '</task>',
+  ].join('\n');
+}
+
 export function parseTaskIdFromTaskOutput(output: string): string | undefined {
   const xmlMatch = /<task\s+[^>]*\bid=["']([^"']+)["'][^>]*>/i.exec(output);
   if (xmlMatch) return xmlMatch[1];

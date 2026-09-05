@@ -23,6 +23,8 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   observeSyntheticTerminalPart,
+  reconcileFallbackFalseCancel,
+  reconcileFalseCompleteFallback,
   reconcileInjectedTerminalJobs,
   stabilizeRunningTaskParts,
   updateFromInjectedCompletion,
@@ -494,6 +496,13 @@ export function createTaskSessionManagerHook(
       // cache. Terminal results are left untouched (they materialize once).
       stabilizeRunningTaskParts(messages);
 
+      // Reconcile false-cancelled foreground task parts: when a FG-fallback
+      // abort poisoned the awaited BackgroundJob ("Task cancelled" error part)
+      // but the board later recorded the real model-2 outcome, rewrite the
+      // part to the board's terminal truth so the orchestrator's history is
+      // accurate (#595). Board-gated, idempotent, no-op for true cancels.
+      reconcileFallbackFalseCancel(injectionState, messages);
+
       const rehydratedCount = rehydrateHistoricalRunningTasks(
         messages,
         backgroundJobBoard,
@@ -502,6 +511,20 @@ export function createTaskSessionManagerHook(
         rehydrateTombstones,
         options.backgroundTaskConcurrency,
         options.getModelForAgent,
+      );
+
+      // Reconcile false-completed foreground task parts: when the primary
+      // model halts on a non-retryable error, opencode settles the task as
+      // completed with an empty output while the fallback model still
+      // produces the real result on an orphan runLoop (#863). Fill the empty
+      // output with the child session's real assistant text once available.
+      // Idempotent and non-blocking — empty extractions are skipped and
+      // re-evaluated on the next transform turn.
+      await reconcileFalseCompleteFallback(
+        injectionState,
+        messages,
+        _ctx.client,
+        _ctx.directory,
       );
 
       for (const [messageIndex, message] of messages.entries()) {
