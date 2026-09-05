@@ -93,6 +93,8 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
 const DEFAULT_FALLBACK: FailoverConfig = {
   enabled: true,
   maxRetries: 3,
+  initialRetryDelayMs: 0,
+  retryDelayMs: 500,
 };
 
 /** First model from an override's model field (string or array). */

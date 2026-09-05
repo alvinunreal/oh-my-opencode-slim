@@ -311,9 +311,15 @@ export class ForegroundFallbackManager {
    *  when the model has changed, allowing the cascade to continue when a
    *  new fallback model also fails within the dedup window. */
   private readonly lastTriggerModel = new Map<string, string>();
-  /** sessionID → consecutive 429 count for the current model.
+  /** sessionID -> consecutive 429 count for the current model.
    *  Reset on model swap or session deletion. */
   private readonly sessionRetries = new Map<string, number>();
+  /** sessionID -> pending initial delay timeout handle.
+   *  Cleared on recovery or session deletion. */
+  private readonly pendingInitialDelay = new Map<string, ReturnType<typeof setTimeout>>();
+  /** sessionID -> timestamp of last fallback attempt.
+   *  Used to enforce retryDelayMs between consecutive attempts. */
+  private readonly lastFallbackTime = new Map<string, number>();
   /** sessionID → chain-exhaustion stage:
    *   0 = not exhausted; 1 = chain exhausted once, reset to sticky fallback
    *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
@@ -386,6 +392,10 @@ export class ForegroundFallbackManager {
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
     onSessionModelChanged?: (sessionID: string, model: string) => void,
+    /** Delay before first fallback; gives intercepting plugins time to recover. */
+    private readonly initialRetryDelayMs: number = 0,
+    /** Delay between consecutive fallback attempts. */
+    private readonly retryDelayMs: number = 500,
   ) {
     this.onSessionModelChanged = onSessionModelChanged;
     if (coordinator) {
@@ -403,6 +413,13 @@ export class ForegroundFallbackManager {
         this.lastTriggerModel.delete(id);
         this.sessionRetries.delete(id);
         this.chainExhaustion.delete(id);
+        this.lastFallbackTime.delete(id);
+        // Cancel any pending initial delay
+        const pendingDelay = this.pendingInitialDelay.get(id);
+        if (pendingDelay) {
+          clearTimeout(pendingDelay);
+          this.pendingInitialDelay.delete(id);
+        }
       });
     }
   }
@@ -455,6 +472,13 @@ export class ForegroundFallbackManager {
           // Only a completed, successful assistant response proves recovery.
           this.sessionRetries.delete(sessionID);
           this.chainExhaustion.delete(sessionID);
+          this.lastFallbackTime.delete(sessionID);
+          // Cancel any pending initial delay on recovery
+          const pendingDelay = this.pendingInitialDelay.get(sessionID);
+          if (pendingDelay) {
+            clearTimeout(pendingDelay);
+            this.pendingInitialDelay.delete(sessionID);
+          }
         }
         break;
       }
@@ -518,7 +542,7 @@ export class ForegroundFallbackManager {
           }
           // Otherwise (attempt === 1, or model didn't change, or outside
           // dedup window): process as genuine retry for current model.
-          if (this.shouldTriggerFallback(sessionID)) {
+          if (this.shouldTriggerFallback(sessionID, true)) {
             // Failover may have been detected from status.message (e.g.
             // 'AI_APICallError: Gone') with no separate error property;
             // forward that message so 401/410 inline errors suppress the
@@ -592,9 +616,34 @@ export class ForegroundFallbackManager {
 
   /** Intervene immediately on first occurrence (tried === 0), otherwise
    *  delegate to retry budget. Used by all three event paths. */
-  private shouldTriggerFallback(sessionID: string): boolean {
+  private shouldTriggerFallback(sessionID: string, needsAbort = false): boolean {
     const tried = this.sessionRetries.get(sessionID) ?? 0;
-    if (tried === 0) return true;
+    if (tried === 0) {
+      if (this.initialRetryDelayMs > 0) {
+        // Don't set sessionRetries here - it would let subsequent errors
+        // consume the retry budget before the delay elapses.
+        log('[foreground-fallback] delaying initial fallback', {
+          sessionID,
+          delayMs: this.initialRetryDelayMs,
+          needsAbort,
+        });
+        // Cancel any existing pending delay for this session
+        const existing = this.pendingInitialDelay.get(sessionID);
+        if (existing) clearTimeout(existing);
+        const handle = setTimeout(() => {
+          this.pendingInitialDelay.delete(sessionID);
+          // Call tryFallbackWithAbort for session.status retry path
+          if (needsAbort) {
+            void this.tryFallbackWithAbort(sessionID);
+          } else {
+            void this.tryFallback(sessionID);
+          }
+        }, this.initialRetryDelayMs);
+        this.pendingInitialDelay.set(sessionID, handle);
+        return false;
+      }
+      return true;
+    }
     return this.consumeRetryBudget(sessionID);
   }
 
@@ -605,7 +654,7 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
+    // No chain -> no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
     if (!this.hasFallbackChain(sessionID)) return;
 
@@ -614,9 +663,27 @@ export class ForegroundFallbackManager {
     // model's failure is a separate incident and the cascade should continue.
     if (this.isDeduped(sessionID)) return;
 
+    // Set inProgress before delay to prevent concurrent fallback attempts
     this.inProgress.add(sessionID);
     try {
+      // Delay between consecutive fallback attempts (except for the initial trigger
+      // which uses initialRetryDelayMs in shouldTriggerFallback).
+      const lastFallback = this.lastFallbackTime.get(sessionID);
+      if (lastFallback && this.retryDelayMs > 0) {
+        const elapsed = Date.now() - lastFallback;
+        if (elapsed < this.retryDelayMs) {
+          const delay = this.retryDelayMs - elapsed;
+          log('[foreground-fallback] delaying retry fallback', {
+            sessionID,
+            delayMs: delay,
+            elapsed,
+          });
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+
       await this.execFallback(sessionID, error);
+      this.lastFallbackTime.set(sessionID, Date.now());
     } finally {
       this.inProgress.delete(sessionID);
     }
@@ -792,8 +859,15 @@ export class ForegroundFallbackManager {
         }
       }
       tried.add(nextModel);
-      // Reset retry count on model switch — the new model starts fresh.
+      // Reset retry count on model switch - the new model starts fresh.
       this.sessionRetries.delete(sessionID);
+      this.lastFallbackTime.delete(sessionID);
+      // Cancel any pending initial delay on model switch
+      const pendingDelay = this.pendingInitialDelay.get(sessionID);
+      if (pendingDelay) {
+        clearTimeout(pendingDelay);
+        this.pendingInitialDelay.delete(sessionID);
+      }
 
       const ref = parseModelReference(nextModel);
       if (!ref) {
