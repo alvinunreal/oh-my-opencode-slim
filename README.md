@@ -705,6 +705,16 @@ install details.
 
 ---
 
+<a id="community-plugins"></a>
+
+## 🔌 Community Plugins
+
+- **[OpenCode Preset Switcher](https://github.com/KomeijiReimu/omo-slim-preset-switcher)** — a lightweight desktop GUI for browsing, inspecting, and switching oh-my-opencode-slim presets.
+
+Built or found another compatible plugin? [Open an issue](https://github.com/alvinunreal/oh-my-opencode-slim/issues/new) to propose it, or send a PR to add it here.
+
+---
+
 ## 📚 Documentation
 
 Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.
