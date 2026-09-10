@@ -131,7 +131,12 @@ describe('RuntimeConfig', () => {
       providerConcurrency: {},
       modelConcurrency: {},
     });
-    expect(runtime.fallback).toEqual({ enabled: true, maxRetries: 3 });
+    expect(runtime.fallback).toEqual({
+      enabled: true,
+      maxRetries: 3,
+      initialRetryDelayMs: 0,
+      retryDelayMs: 500,
+    });
     expect(runtime.webfetch.enabled).toBe(true);
     expect(runtime.acpAgents).toEqual({});
     expect(runtime.companion).toBeUndefined();
