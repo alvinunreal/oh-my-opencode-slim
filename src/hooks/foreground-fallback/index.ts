@@ -316,7 +316,10 @@ export class ForegroundFallbackManager {
   private readonly sessionRetries = new Map<string, number>();
   /** sessionID -> pending initial delay timeout handle.
    *  Cleared on recovery or session deletion. */
-  private readonly pendingInitialDelay = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingInitialDelay = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   /** sessionID -> timestamp of last fallback attempt.
    *  Used to enforce retryDelayMs between consecutive attempts. */
   private readonly lastFallbackTime = new Map<string, number>();
@@ -616,7 +619,10 @@ export class ForegroundFallbackManager {
 
   /** Intervene immediately on first occurrence (tried === 0), otherwise
    *  delegate to retry budget. Used by all three event paths. */
-  private shouldTriggerFallback(sessionID: string, needsAbort = false): boolean {
+  private shouldTriggerFallback(
+    sessionID: string,
+    needsAbort = false,
+  ): boolean {
     const tried = this.sessionRetries.get(sessionID) ?? 0;
     if (tried === 0) {
       if (this.initialRetryDelayMs > 0) {
