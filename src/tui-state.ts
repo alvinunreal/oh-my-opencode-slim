@@ -210,32 +210,32 @@ function releaseStateLock(lock: TuiStateLock): void {
 }
 
 // Last confirmed on-disk snapshot per project, keyed by identity
-// (ino,mtime,size). No-ops return before the lock; failed writes do not
-// seed the memo. An identity mismatch (external rename) invalidates it.
+// (ino,mtimeNs,ctimeNs,size). No-ops return before the lock; failed writes do
+// not seed the memo. An identity mismatch invalidates it.
 const lastKnownSnapshots = new Map<
   string,
   {
     snapshot: TuiSnapshot;
-    ino: number;
-    mtimeMs: number;
-    ctimeMs: number;
-    size: number;
+    ino: bigint;
+    mtimeNs: bigint;
+    ctimeNs: bigint;
+    size: bigint;
   }
 >();
 const LAST_KNOWN_SNAPSHOTS_MAX = 32;
 
 function statSnapshotFile(statePath: string): {
-  ino: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  size: number;
+  ino: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  size: bigint;
 } | null {
   try {
-    const stat = fs.statSync(statePath);
+    const stat = fs.statSync(statePath, { bigint: true });
     return {
       ino: stat.ino,
-      mtimeMs: stat.mtimeMs,
-      ctimeMs: stat.ctimeMs,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
       size: stat.size,
     };
   } catch {
@@ -284,8 +284,8 @@ function memoFor(statePath: string): TuiSnapshot | undefined {
   if (
     !stat ||
     stat.ino !== entry.ino ||
-    stat.mtimeMs !== entry.mtimeMs ||
-    stat.ctimeMs !== entry.ctimeMs ||
+    stat.mtimeNs !== entry.mtimeNs ||
+    stat.ctimeNs !== entry.ctimeNs ||
     stat.size !== entry.size
   ) {
     lastKnownSnapshots.delete(statePath);
