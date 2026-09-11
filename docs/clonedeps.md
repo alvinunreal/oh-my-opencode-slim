@@ -66,7 +66,10 @@ name, and may include a pinned-release suffix when multiple revisions need to
 coexist. For example, the TypeScript OpenCode repository
 `https://github.com/anomalyco/opencode.git` becomes
 `.slim/clonedeps/repos/anomalyco__opencode-v1.18.13/` when pinned to that
-release.
+release. This project also keeps a separate
+`.slim/clonedeps/repos/opencode/` checkout of the OpenCode `beta` source for
+intentional v2 migration work. That checkout is tracked as source by its branch
+and commit, not as an npm-pinned dependency.
 
 If multiple packages come from the same monorepo, they share one cloned repo path
 and use different `packagePath` values in the manifest.
@@ -75,7 +78,9 @@ These repositories are read-only reference source. Do not edit them.
 
 ### `.slim/clonedeps.json`
 
-This is the structured manifest. It is intentionally small and committable:
+This is the structured manifest. It is intentionally small and committable. The
+following abbreviated example shows the OpenCode entries; other manifest entries
+are omitted:
 
 ```json
 {
@@ -99,10 +104,26 @@ This is the structured manifest. It is intentionally small and committable:
       "path": ".slim/clonedeps/repos/anomalyco__opencode-v1.18.13",
       "packagePath": "packages/sdk/js",
       "reason": "Core SDK source used to inspect runtime behavior"
+    },
+    {
+      "name": "anomalyco/opencode",
+      "resolvedVersion": "beta",
+      "repoUrl": "https://github.com/anomalyco/opencode.git",
+      "ref": "beta@d6deb62379c54dc60468b80c498bd6a5899797cf",
+      "path": ".slim/clonedeps/repos/opencode",
+      "packagePath": "packages/plugin",
+      "reason": "OpenCode v2 plugin SDK and runtime source for the v2 migration"
     }
   ]
 }
 ```
+
+The actual manifest may contain additional dependency entries beyond this
+abbreviated example.
+
+The beta entry is a checked-out source reference: `resolvedVersion` identifies
+the beta channel, while `ref` records the branch and commit. It does not pin an
+npm package version.
 
 Future clonedeps runs read this file first instead of starting from a fresh scan.
 
@@ -124,6 +145,10 @@ Read-only dependency source repositories are available under
   `anomalyco/opencode` at
   `v1.18.13@a105350812f05f914c768e468559dbd6bd508d8e`; inspect `packages/plugin` and
   `packages/sdk/js` for OpenCode plugin and SDK internals.
+- `.slim/clonedeps/repos/opencode/` - `anomalyco/opencode` at
+  `beta@d6deb62379c54dc60468b80c498bd6a5899797cf`; inspect the checked-out beta
+  source as an intentional OpenCode v2 migration reference. This is not an
+  npm-pinned dependency.
 ```
 
 ---

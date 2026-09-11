@@ -705,6 +705,16 @@ install details.
 
 ---
 
+<a id="community-plugins"></a>
+
+## 🔌 Community Plugins
+
+- **[OpenCode Preset Switcher](https://github.com/KomeijiReimu/omo-slim-preset-switcher)** — a lightweight desktop GUI for browsing, inspecting, and switching oh-my-opencode-slim presets.
+
+Built or found another compatible plugin? [Open an issue](https://github.com/alvinunreal/oh-my-opencode-slim/issues/new) to propose it, or send a PR to add it here.
+
+---
+
 ## 📚 Documentation
 
 Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.
@@ -735,6 +745,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Project Customization](docs/project-local-customization.md)** | Repository-specific custom agents, prompt overrides, per-agent skills, and precedence |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
+| **[OpenCode v2 Compatibility](docs/opencode-v2-compatibility.md)** | Supported v1/v2 hosts, adapter behavior, feature coverage, and v2 limitations |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
 | **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `verification-planning`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `context7`, `gh_grep`, and how MCP permissions work per agent |
