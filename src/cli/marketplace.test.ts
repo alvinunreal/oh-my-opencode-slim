@@ -65,6 +65,25 @@ describe('marketplace CLI parsing', () => {
       value: 'community/example@1.2.3',
       json: false,
     });
+    expect(
+      parseMarketplaceArgs(['import', './package-v2.json', '--update']),
+    ).toEqual({
+      command: 'import',
+      value: './package-v2.json',
+      force: false,
+      json: false,
+      clear: false,
+      update: true,
+    });
+    expect(
+      parseMarketplaceArgs(['install', 'community/example@1.2.3']),
+    ).toEqual({
+      command: 'install',
+      value: 'community/example@1.2.3',
+      force: false,
+      json: false,
+      clear: false,
+    });
   });
 
   test('requires package input for install and update', () => {
