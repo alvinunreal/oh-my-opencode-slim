@@ -6,6 +6,8 @@ import {
   compareMarketplaceCodeUnits,
   digestMarketplaceBundle,
 } from '../marketplace/canonical';
+import { MarketplaceRetiredError } from '../marketplace/errors';
+import { isMarketplacePackageRetired } from '../marketplace/retirements';
 import {
   MARKETPLACE_DIGEST_DOMAIN,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION,
@@ -46,7 +48,7 @@ export {
   MarketplaceVersionSchema,
 };
 
-export const MARKETPLACE_REGISTRY_SCHEMA_VERSION = 1 as const;
+export const MARKETPLACE_REGISTRY_SCHEMA_VERSION = 2 as const;
 export const DEFAULT_MARKETPLACE_REGISTRY_URL =
   'https://registry.ohmyopencodeslim.com/v1/' as const;
 
@@ -84,68 +86,125 @@ export const MarketplaceRegistryEntrySchema = z
   })
   .strict();
 
-export const MarketplaceRegistryIndexSchema = z
+export const MarketplaceRegistryRetirementSchema = z
+  .object({ id: MarketplacePackageIdSchema })
+  .strict();
+
+function validateRegistryEntries(
+  entries: readonly MarketplaceRegistryEntry[],
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Set<string>();
+  for (let position = 0; position < entries.length; position += 1) {
+    const entry = entries[position];
+    const key = `${entry.id}@${entry.version}`;
+    if (seen.has(key)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['entries', position],
+        message: `Duplicate registry entry ${key}`,
+      });
+    }
+    seen.add(key);
+    if (entry.artifactPath !== registryArtifactPath(entry.id, entry.version)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['entries', position, 'artifactPath'],
+        message: `Artifact path must be ${registryArtifactPath(entry.id, entry.version)}`,
+      });
+    }
+    if (
+      entry.summary.id !== entry.id ||
+      entry.summary.version !== entry.version
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['entries', position, 'summary'],
+        message: 'Summary identity must match the registry entry',
+      });
+    }
+    const previous = entries[position - 1];
+    if (
+      previous &&
+      (compareMarketplaceCodeUnits(previous.id, entry.id) > 0 ||
+        (previous.id === entry.id &&
+          (compare(previous.version, entry.version) > 0 ||
+            (compare(previous.version, entry.version) === 0 &&
+              compareMarketplaceCodeUnits(previous.version, entry.version) >=
+                0))))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['entries', position],
+        message: 'Registry entries must be sorted by ID then version',
+      });
+    }
+  }
+}
+
+const MarketplaceRegistryIndexV1Schema = z
   .object({
-    schemaVersion: z.literal(MARKETPLACE_REGISTRY_SCHEMA_VERSION),
+    schemaVersion: z.literal(1),
     entries: z.array(MarketplaceRegistryEntrySchema).max(100_000),
   })
   .strict()
+  .superRefine((index, ctx) => validateRegistryEntries(index.entries, ctx));
+
+const MarketplaceRegistryIndexV2Schema = z
+  .object({
+    schemaVersion: z.literal(MARKETPLACE_REGISTRY_SCHEMA_VERSION),
+    entries: z.array(MarketplaceRegistryEntrySchema).max(100_000),
+    retirements: z.array(MarketplaceRegistryRetirementSchema).max(100_000),
+  })
+  .strict()
   .superRefine((index, ctx) => {
+    validateRegistryEntries(index.entries, ctx);
+    const entryIds = new Set(index.entries.map((entry) => entry.id));
     const seen = new Set<string>();
-    for (let position = 0; position < index.entries.length; position += 1) {
-      const entry = index.entries[position];
-      const key = `${entry.id}@${entry.version}`;
-      if (seen.has(key)) {
+    for (let position = 0; position < index.retirements.length; position += 1) {
+      const retirement = index.retirements[position];
+      if (seen.has(retirement.id)) {
         ctx.addIssue({
           code: 'custom',
-          path: ['entries', position],
-          message: `Duplicate registry entry ${key}`,
+          path: ['retirements', position],
+          message: `Duplicate marketplace retirement ${retirement.id}`,
         });
       }
-      seen.add(key);
-      if (
-        entry.artifactPath !== registryArtifactPath(entry.id, entry.version)
-      ) {
+      seen.add(retirement.id);
+      if (!entryIds.has(retirement.id)) {
         ctx.addIssue({
           code: 'custom',
-          path: ['entries', position, 'artifactPath'],
-          message: `Artifact path must be ${registryArtifactPath(entry.id, entry.version)}`,
+          path: ['retirements', position, 'id'],
+          message: `Marketplace retirement ${retirement.id} has no registry entry`,
         });
       }
-      if (
-        entry.summary.id !== entry.id ||
-        entry.summary.version !== entry.version
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['entries', position, 'summary'],
-          message: 'Summary identity must match the registry entry',
-        });
-      }
-      const previous = index.entries[position - 1];
+      const previous = index.retirements[position - 1];
       if (
         previous &&
-        (compareMarketplaceCodeUnits(previous.id, entry.id) > 0 ||
-          (previous.id === entry.id &&
-            (compare(previous.version, entry.version) > 0 ||
-              (compare(previous.version, entry.version) === 0 &&
-                compareMarketplaceCodeUnits(previous.version, entry.version) >=
-                  0))))
+        compareMarketplaceCodeUnits(previous.id, retirement.id) >= 0
       ) {
         ctx.addIssue({
           code: 'custom',
-          path: ['entries', position],
-          message: 'Registry entries must be sorted by ID then version',
+          path: ['retirements', position],
+          message: 'Marketplace retirements must be sorted by ID',
         });
       }
     }
   });
+
+export const MarketplaceRegistryIndexSchema = z.discriminatedUnion(
+  'schemaVersion',
+  [MarketplaceRegistryIndexV1Schema, MarketplaceRegistryIndexV2Schema],
+);
 
 export type MarketplaceManifestSummary = z.infer<
   typeof MarketplaceManifestSummarySchema
 >;
 export type MarketplaceRegistryEntry = z.infer<
   typeof MarketplaceRegistryEntrySchema
+>;
+export type MarketplaceRegistryRetirement = z.infer<
+  typeof MarketplaceRegistryRetirementSchema
 >;
 export type MarketplaceRegistryIndex = z.infer<
   typeof MarketplaceRegistryIndexSchema
@@ -192,6 +251,7 @@ export function createMarketplaceRegistryEntry(
 
 export function createMarketplaceRegistryIndex(
   entries: readonly MarketplaceRegistryEntry[],
+  retirements: readonly MarketplaceRegistryRetirement[] = [],
 ): MarketplaceRegistryIndex {
   const sorted = [...entries].sort(
     (left, right) =>
@@ -199,7 +259,36 @@ export function createMarketplaceRegistryIndex(
       compare(left.version, right.version) ||
       compareMarketplaceCodeUnits(left.version, right.version),
   );
-  return parseMarketplaceRegistryIndex({ schemaVersion: 1, entries: sorted });
+  const sortedRetirements = [...retirements].sort((left, right) =>
+    compareMarketplaceCodeUnits(left.id, right.id),
+  );
+  return parseMarketplaceRegistryIndex({
+    schemaVersion: MARKETPLACE_REGISTRY_SCHEMA_VERSION,
+    entries: sorted,
+    retirements: sortedRetirements,
+  });
+}
+
+export function retiredMarketplaceRegistryIds(
+  index: MarketplaceRegistryIndex,
+): ReadonlySet<string> {
+  return new Set(
+    index.schemaVersion === 2 ? index.retirements.map(({ id }) => id) : [],
+  );
+}
+
+export function isMarketplaceRegistryIdRetired(
+  index: MarketplaceRegistryIndex,
+  id: string,
+): boolean {
+  return retiredMarketplaceRegistryIds(index).has(id);
+}
+
+export function filterMarketplaceRegistryEntries(
+  index: MarketplaceRegistryIndex,
+): MarketplaceRegistryEntry[] {
+  const retired = retiredMarketplaceRegistryIds(index);
+  return index.entries.filter((entry) => !retired.has(entry.id));
 }
 
 export function parseMarketplaceRegistryIndex(
@@ -277,7 +366,15 @@ export function resolveMarketplaceRegistryEntry(
   compatibility: { pluginVersion: string; roleContractVersion: string },
   minimumVersion?: string,
 ): MarketplaceRegistryEntry {
-  const candidates = index.entries.filter(
+  if (
+    isMarketplacePackageRetired(selector.id) ||
+    isMarketplaceRegistryIdRetired(index, selector.id)
+  ) {
+    throw new MarketplaceRetiredError(
+      `${selector.id}${selector.version ? `@${selector.version}` : ''} is retired and cannot be installed`,
+    );
+  }
+  const candidates = filterMarketplaceRegistryEntries(index).filter(
     (entry) =>
       entry.id === selector.id &&
       (selector.version === undefined || entry.version === selector.version) &&

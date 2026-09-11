@@ -18,6 +18,7 @@ import {
   discoverPreflightMcps,
   discoverPreflightSkills,
 } from './preflight';
+import { isMarketplacePackageRetired } from './retirements';
 import type {
   MarketplaceAgentManifest,
   MarketplacePackageManifest,
@@ -42,7 +43,8 @@ export type MarketplaceDiagnosticCode =
   | 'target-mismatch'
   | 'target-disabled'
   | 'prompt-masked'
-  | 'invalid-alias';
+  | 'invalid-alias'
+  | 'retired';
 
 export interface MarketplaceDiagnostic {
   packageId: string;
@@ -276,6 +278,7 @@ export function resolveMarketplaceActivation(
   let selectedPackages = new Map<string, StoredMarketplacePackage>();
   let selectedErrors = new Map<string, Error>();
   let selectedLoadFailed = false;
+  const reportedRetired = new Set<string>();
   try {
     const selected = store.loadSelected(selectedIds);
     selectedPackages = selected.packages;
@@ -297,6 +300,19 @@ export function resolveMarketplaceActivation(
     try {
       normalized = normalizeMarketplacePackageId(packageId);
     } catch {
+      return undefined;
+    }
+    if (isMarketplacePackageRetired(normalized)) {
+      if (!reportedRetired.has(normalized)) {
+        reportedRetired.add(normalized);
+        diagnostics.push(
+          diagnostic(
+            normalized,
+            'retired',
+            `${normalized} is retired and will not be activated`,
+          ),
+        );
+      }
       return undefined;
     }
     const error = selectedErrors.get(normalized);

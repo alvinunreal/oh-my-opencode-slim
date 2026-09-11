@@ -15,7 +15,9 @@ import {
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryProtocolError,
   MarketplaceRegistryUnavailableError,
+  MarketplaceRetiredError,
 } from './errors';
+import { assertMarketplacePackageNotRetired } from './retirements';
 import {
   MARKETPLACE_ROLE_CONTRACT_VERSION,
   type MarketplacePackageBundle,
@@ -144,6 +146,7 @@ export class MarketplaceRegistryClient {
         );
       }
     })();
+    assertMarketplacePackageNotRetired(selector.id);
     const index = await this.fetchIndex(signal);
     const matchingId = index.entries.some((entry) => entry.id === selector.id);
     if (!matchingId) {
@@ -174,6 +177,7 @@ export class MarketplaceRegistryClient {
         minimumVersion,
       );
     } catch (error) {
+      if (error instanceof MarketplaceRetiredError) throw error;
       throw new MarketplaceCompatibilityError(
         error instanceof Error ? error.message : String(error),
       );

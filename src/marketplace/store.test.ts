@@ -19,6 +19,7 @@ import {
   MarketplaceLockfileError,
   MarketplaceLockOwnershipError,
   type MarketplacePackageBundle,
+  MarketplaceRetiredError,
   MarketplaceService,
   MarketplaceStore,
 } from './index';
@@ -102,6 +103,23 @@ ${body}`,
 }
 
 describe('MarketplaceStore', () => {
+  test('rejects retired local mutations without creating store state', () => {
+    const root = tempRoot();
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      expect(() =>
+        store.install(bundle('1.0.0', { id: 'alvin/deepwork-implementer' })),
+      ).toThrow(MarketplaceRetiredError);
+      expect(() =>
+        store.update(bundle('2.0.0', { id: 'alvin/deepwork-reviewer' })),
+      ).toThrow(MarketplaceRetiredError);
+      expect(existsSync(store.paths.lockfilePath)).toBe(false);
+      expect(existsSync(store.paths.packagesDir)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('installs, verifies, and lists an immutable exact version', () => {
     const root = tempRoot();
     try {

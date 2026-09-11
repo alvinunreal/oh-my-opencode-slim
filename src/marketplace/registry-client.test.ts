@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MarketplacePackageBundle } from '../marketplace-contract';
@@ -21,6 +21,7 @@ import {
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryProtocolError,
   MarketplaceRegistryUnavailableError,
+  MarketplaceRetiredError,
 } from './errors';
 import {
   DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES,
@@ -170,6 +171,60 @@ describe('marketplace registry contract', () => {
     ).toThrow();
   });
 
+  test('validates v2 retirement tombstones and rejects retired selectors', () => {
+    const first = indexFor(bundle('1.0.0', 'community/alpha'));
+    const second = indexFor(bundle('1.0.0', 'community/beta'));
+    const entries = [
+      ...(first.entries as unknown[]),
+      ...(second.entries as unknown[]),
+    ];
+    expect(
+      parseMarketplaceRegistryIndex({
+        schemaVersion: 2,
+        entries,
+        retirements: [{ id: 'community/alpha' }],
+      }).schemaVersion,
+    ).toBe(2);
+    expect(() =>
+      parseMarketplaceRegistryIndex({
+        schemaVersion: 2,
+        entries,
+        retirements: [{ id: 'community/missing' }],
+      }),
+    ).toThrow('no registry entry');
+    expect(() =>
+      parseMarketplaceRegistryIndex({
+        schemaVersion: 2,
+        entries,
+        retirements: [{ id: 'community/alpha' }, { id: 'community/alpha' }],
+      }),
+    ).toThrow('Duplicate');
+    expect(() =>
+      parseMarketplaceRegistryIndex({
+        schemaVersion: 2,
+        entries,
+        retirements: [{ id: 'community/beta' }, { id: 'community/alpha' }],
+      }),
+    ).toThrow('sorted');
+
+    const index = parseMarketplaceRegistryIndex({
+      schemaVersion: 2,
+      entries,
+      retirements: [{ id: 'community/alpha' }],
+    });
+    for (const selector of [
+      { id: 'community/alpha' },
+      { id: 'community/alpha', version: '1.0.0' },
+    ]) {
+      expect(() =>
+        resolveMarketplaceRegistryEntry(index, selector, {
+          pluginVersion: '3.1.0',
+          roleContractVersion: '1.0.0',
+        }),
+      ).toThrow(MarketplaceRetiredError);
+    }
+  });
+
   test('uses locale-independent code-unit ordering for JSON and catalog entries', () => {
     expect(canonicalizeMarketplaceValue({ a_: 1, 'a-': 2 })).toBe(
       '{"a-":2,"a_":1}',
@@ -219,6 +274,45 @@ describe('MarketplaceRegistryClient', () => {
         MARKETPLACE_REGISTRY_INDEX_URL,
         'https://registry.ohmyopencodeslim.com/v1/artifacts/community/registry-agent/1.0.0.json',
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects policy-retired remote selectors before any fetch', async () => {
+    let fetches = 0;
+    const client = new MarketplaceRegistryClient({
+      pluginVersion: '3.1.0',
+      fetch: async () => {
+        fetches += 1;
+        return response({});
+      },
+    });
+    await expect(
+      client.download('alvin/deepwork-recon@1.0.0'),
+    ).rejects.toBeInstanceOf(MarketplaceRetiredError);
+    expect(fetches).toBe(0);
+
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-retired-remote-'));
+    try {
+      let downloads = 0;
+      const service = new MarketplaceService({
+        rootDir: root,
+        registryClient: {
+          download: async () => {
+            downloads += 1;
+            throw new Error('registry client should not be called');
+          },
+        },
+      });
+      await expect(
+        service.installRemote('alvin/deepwork-implementer'),
+      ).rejects.toBeInstanceOf(MarketplaceRetiredError);
+      await expect(
+        service.updateRemote('alvin/deepwork-reviewer'),
+      ).rejects.toBeInstanceOf(MarketplaceRetiredError);
+      expect(downloads).toBe(0);
+      expect(existsSync(service.store.paths.lockfilePath)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
