@@ -146,6 +146,11 @@ export function normalizePermission(permission: unknown): PermissionRecord {
   return {};
 }
 
+/** A wildcard deny must remain authoritative under v2's last-match-wins rules. */
+function hasWildcardDeny(permission: PermissionRecord): boolean {
+  return permission['*'] === 'deny';
+}
+
 function mergePermissionRules(
   base: PermissionRecord,
   override: PermissionRecord,
@@ -303,7 +308,9 @@ export function projectAgentPermission(
   const permission = normalizePermission(registryEntry?.permission);
   const hostPermission = normalizePermission(hostEntry.permission);
   const projected = mergePermissionRules(permission, hostPermission);
-  applyTaskControlDefaults(canonicalName, projected);
+  if (!hasWildcardDeny(projected)) {
+    applyTaskControlDefaults(canonicalName, projected);
+  }
   if (canonicalName !== 'orchestrator') {
     projected.wait_for_user = 'deny';
     projected.marketplace = 'deny';
@@ -321,7 +328,9 @@ function projectPermissionValues(
     permission,
     normalizePermission(hostPermission),
   );
-  applyTaskControlDefaults(canonicalName, projected);
+  if (!hasWildcardDeny(projected)) {
+    applyTaskControlDefaults(canonicalName, projected);
+  }
   if (canonicalName !== 'orchestrator') {
     projected.wait_for_user = 'deny';
     projected.marketplace = 'deny';
@@ -707,6 +716,12 @@ function applyDefaultPermissionPolicy(
   disabledSkills?: readonly string[],
 ): void {
   const existing = normalizePermission(agent.config.permission);
+  // A user/package deny-all intentionally disables every capability. Adding
+  // role, question, or skill allows after it reopens those tools on v2.
+  if (hasWildcardDeny(existing)) {
+    agent.config.permission = existing as SDKAgentConfig['permission'];
+    return;
+  }
   const role = agent.baseRole ? ROLE_DEFINITIONS[agent.baseRole] : undefined;
 
   // Get skill-specific permissions for this agent
@@ -750,6 +765,10 @@ function applyDefaultPermissionPolicy(
 /** Task controls are editable defaults, not immutable gates. */
 function applyDefaultTaskControls(agent: AgentDefinition): void {
   const permission = normalizePermission(agent.config.permission);
+  if (hasWildcardDeny(permission)) {
+    agent.config.permission = permission as SDKAgentConfig['permission'];
+    return;
+  }
   const canonicalName = agent.baseRole ?? agent.name;
   applyTaskControlDefaults(canonicalName, permission);
   agent.config.permission = {
@@ -806,6 +825,10 @@ function applyMarketplaceCapabilities(
   activated: ActivatedMarketplaceAgent | ActivatedMarketplaceProfile,
 ): void {
   const permission = normalizePermission(agent.config.permission);
+  if (hasWildcardDeny(permission)) {
+    agent.config.permission = permission as SDKAgentConfig['permission'];
+    return;
+  }
   const role = agent.baseRole ? ROLE_DEFINITIONS[agent.baseRole] : undefined;
   for (const tool of activated.manifest.capabilities.tools) {
     permission[tool] = 'allow';
@@ -1578,6 +1601,7 @@ function applyMcpPermissionRules(
   availableMcpNames: readonly string[],
 ): PermissionRecord {
   const result = normalizePermission(permission);
+  if (hasWildcardDeny(result)) return result;
   const denied = new Set(
     agentMcps
       .filter((name) => name.startsWith('!'))

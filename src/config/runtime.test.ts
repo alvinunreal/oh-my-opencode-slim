@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { RuntimeConfig } from './runtime';
-import type { PluginConfig } from './schema';
+import { type PluginConfig, PluginConfigSchema } from './schema';
 
 const DIRECTORY = '/tmp/runtime-config-test';
 
@@ -32,6 +32,22 @@ describe('RuntimeConfig', () => {
     seed.agents = { explorer: { model: 'mutated' } };
     expect(runtime.plugin?.agents?.explorer?.model).toBe('original');
     expect(runtime.agent('explorer')?.model).toBe('original');
+  });
+
+  test('resolves normalized legacy preset agents through the single preset path', () => {
+    resetRegistry();
+    const plugin = PluginConfigSchema.parse({
+      preset: 'legacy',
+      presets: {
+        legacy: { explorer: { model: 'legacy/explorer' } },
+      },
+    });
+    const runtime = RuntimeConfig.init(DIRECTORY, plugin);
+
+    expect(runtime.agent('explorer')?.model).toBe('legacy/explorer');
+    expect(runtime.plugin?.presets?.legacy).toEqual({
+      agents: { explorer: { model: 'legacy/explorer' } },
+    });
   });
 
   test('seed precedence: host override > root > selected preset', () => {

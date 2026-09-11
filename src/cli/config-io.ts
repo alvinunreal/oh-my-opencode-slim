@@ -498,6 +498,11 @@ export function mutateJsonFile(
   mutate: (current: unknown) => unknown,
 ): void {
   withSerializedConfigWrite(filePath, () => {
+    if (filePath.endsWith('.jsonc')) {
+      console.warn(
+        '[config-manager] Writing to .jsonc file - comments will not be preserved',
+      );
+    }
     const original = readFileBytes(filePath);
     const parsed =
       original === null

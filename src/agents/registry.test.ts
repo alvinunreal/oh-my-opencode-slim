@@ -23,6 +23,33 @@ function registryFor(config: PluginConfig = {}): ResolvedAgentRegistry {
 }
 
 describe('ResolvedAgentRegistry', () => {
+  test('keeps deny-all authoritative for a role-derived agent under v2 matching', () => {
+    const registry = registryFor({
+      agents: {
+        audit: {
+          baseRole: 'fixer',
+          model: 'provider/audit',
+          permission: 'deny',
+        },
+      },
+    });
+    const permission = registry.sdkConfigs.audit?.permission as Record<
+      string,
+      unknown
+    >;
+
+    // v2 resolves an explicit tool rule after the wildcard, so any generated
+    // allow would reopen that tool. Only immutable deny gates may be added.
+    const v2EffectivePermission = (tool: string): unknown =>
+      permission[tool] ?? permission['*'];
+    expect(v2EffectivePermission('read')).toBe('deny');
+    expect(v2EffectivePermission('edit')).toBe('deny');
+    expect(v2EffectivePermission('question')).toBe('deny');
+    expect(v2EffectivePermission('task_cancel')).toBe('deny');
+    expect(permission.wait_for_user).toBe('deny');
+    expect(permission.marketplace).toBe('deny');
+  });
+
   test('keeps SDK, model, skill, MCP, and routing surfaces consistent', () => {
     const registry = registryFor({
       agents: {
