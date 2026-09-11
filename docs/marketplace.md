@@ -1,7 +1,8 @@
-# Local Marketplace
+# Marketplace
 
-Install, inspect, and activate local offline marketplace packages. There is
-no website, network registry, or remote package resolution in this release.
+Install, inspect, and activate marketplace packages. Startup and every local
+read are offline. Only explicit registry `install` and `update` operations
+make bounded HTTPS requests to the beta registry.
 
 Package manifests are data-only, exact-version locked, and stored under the
 XDG data directory. Installation and preset activation are separate: install
@@ -12,12 +13,14 @@ registry is never hot-swapped.
 ## CLI
 
 ```bash
-bunx oh-my-opencode-slim marketplace install ./package.json
+bunx oh-my-opencode-slim marketplace install community/example
+bunx oh-my-opencode-slim marketplace install community/example@1.2.3
+bunx oh-my-opencode-slim marketplace update community/example
 bunx oh-my-opencode-slim marketplace import ./package.json
+bunx oh-my-opencode-slim marketplace import ./package-v2.json --update
 bunx oh-my-opencode-slim marketplace list
 bunx oh-my-opencode-slim marketplace show author/name
 bunx oh-my-opencode-slim marketplace verify [author/name]
-bunx oh-my-opencode-slim marketplace update ./package-v2.json
 bunx oh-my-opencode-slim marketplace enable author/name
 bunx oh-my-opencode-slim marketplace profile librarian author/profile
 bunx oh-my-opencode-slim marketplace profile oracle --clear
@@ -26,9 +29,12 @@ bunx oh-my-opencode-slim marketplace remove author/name
 bunx oh-my-opencode-slim marketplace status [--json]
 ```
 
-`import` is an alias for `install` and records the canonical absolute local
-source path in the lockfile. Use `update` to select a different exact
-version. `enable` activates an installed `agent` package in the active
+`import` is the explicit local author workflow and records the canonical
+absolute local source path in the lockfile. Add `--update` to import a strictly
+newer version into an existing package. Registry `install` accepts an ID or an
+exact `ID@version`; an unversioned ID selects the highest compatible version.
+Registry `update` requires an installed package and selects only a strictly
+newer compatible version. `enable` activates an installed `agent` package in the active
 preset as a separately named role-derived agent. `profile` selects at most
 one installed `profile` package per supported specialist role; `--clear`
 writes a tombstone.
@@ -43,15 +49,15 @@ compared.
 
 ## In-session tool
 
-The orchestrator can use the `marketplace` tool for the same local
-lifecycle: install, import, list, show, verify, update, enable, disable,
-profile, remove, and status. Do not shell out to the CLI for these actions
-when the tool is available.
+The orchestrator can use the `marketplace` tool for the same lifecycle. Its
+`install`/`update` actions use the fixed registry, while `import` is the only
+local path action. Do not shell out to the CLI when the tool is available.
 
 Disable it with `disabled_tools: ["marketplace"]`. Specialists cannot
 invoke it.
 
-Read-only actions (list, show, verify, status) do not change activation.
+Read-only actions (list, show, verify, status) do not change activation or
+contact the registry.
 Mutating actions write the local store and plugin config only and report
 `reload_required` only when disk activation differs from this session.
 Inactive or idempotent mutations do not include a reload note. The CLI
@@ -71,9 +77,19 @@ read (for example EACCES).
 
 ## Limits
 
-- Local `package.json` files only. No remote URLs or registry IDs.
+- The beta registry is fixed at `https://registry.ohmyopencodeslim.com/v1/`;
+  configurable registries and redirects are not supported.
 - Required skills and MCPs are preflighted against built-in capabilities
   and on-disk host configuration. Missing required dependencies disable
   that package for the session. Optional requirements stay unavailable
   and are never auto-installed.
-- Startup reads only the local store and never contacts a registry.
+- Startup and local `list`, `show`, `verify`, `status`, activation, and removal
+  read only the local store and never contact a registry.
+
+## Registry contract
+
+Registry CI and static site tooling can import the narrow
+`oh-my-opencode-slim/marketplace-contract` package subpath. It provides the
+schema-v1 index, deterministic artifact paths, manifest-summary projection,
+selector resolution, and the same canonical bundle SHA-256 digest used by the
+plugin store. The public contract does not add root-package exports.

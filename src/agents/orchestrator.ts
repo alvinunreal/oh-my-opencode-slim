@@ -106,7 +106,7 @@ export interface RoutingEntry {
  * @param disabledAgents - Set of disabled agent names to exclude from the prompt
  * @param waitForUserEnabled - Whether explicit text-only HITL waiting is available
  * @param wakeSchedulerEnabled - Whether the orchestrator wake scheduler can resume the session after idle
- * @param marketplaceEnabled - Whether the local marketplace tool is available
+ * @param marketplaceEnabled - Whether the marketplace tool is available
  * @returns The complete orchestrator prompt string
  */
 export function buildOrchestratorPrompt(
@@ -165,7 +165,7 @@ export function buildOrchestratorPrompt(
     : '- When work must pause while the user completes an external manual operation, first give the user concrete manual steps, then use the `question` tool as the blocking boundary and ask them to respond when finished. `wait_for_user` is disabled, so do not reference or call it.';
 
   const marketplaceInstruction = marketplaceEnabled
-    ? '- Use the `marketplace` tool for local offline package lifecycle and status. list, show, verify, and status are read-only. install, import, update, enable, disable, profile, and remove write store/config only and never hot-swap the live registry; they report reload_required only when disk activation differs from this session. Do not shell out to the CLI for these actions.'
+    ? '- Use the `marketplace` tool for package lifecycle and status. list, show, verify, and status are read-only and offline. Use install/update with a canonical package ID for the fixed HTTPS registry; use import with a local path (and update=true only for a strictly newer existing package). Do not infer path versus ID, do not shell out to the CLI, and remember mutations never hot-swap the live registry.'
     : '';
 
   return `<Role>

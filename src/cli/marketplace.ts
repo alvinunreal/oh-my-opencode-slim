@@ -15,6 +15,7 @@ import {
 
 export type MarketplaceCommandName =
   | 'install'
+  | 'import'
   | 'list'
   | 'show'
   | 'verify'
@@ -32,6 +33,7 @@ export interface MarketplaceArgs {
   force: boolean;
   json: boolean;
   clear: boolean;
+  update?: boolean;
 }
 
 function commandSet(): readonly string[] {
@@ -57,13 +59,11 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
       'Usage: marketplace install|import|list|show|verify|update|remove|enable|disable|profile|status [value] [options]',
     );
   }
-  const command: MarketplaceCommandName =
-    rawCommand === 'import'
-      ? 'install'
-      : (rawCommand as MarketplaceCommandName);
+  const command = rawCommand as MarketplaceCommandName;
   const force = args.includes('--force');
   const json = args.includes('--json');
   const clear = args.includes('--clear');
+  const update = args.includes('--update');
   const options = args.filter((arg) => arg.startsWith('--'));
   const allowedOptions = new Set(
     command === 'remove'
@@ -72,7 +72,9 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
         ? ['--json']
         : command === 'profile'
           ? ['--clear']
-          : [],
+          : command === 'import'
+            ? ['--update']
+            : [],
   );
   for (const option of options) {
     if (!allowedOptions.has(option)) {
@@ -91,7 +93,13 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
       if (positional.length > 1) {
         throw new Error('marketplace profile --clear accepts only a role');
       }
-      return { command, role: positional[0], force, json, clear };
+      return {
+        command,
+        role: positional[0],
+        force,
+        json,
+        clear,
+      };
     }
     if (!positional[1] || positional.length > 2) {
       throw new Error('marketplace profile requires a role and package ID');
@@ -107,6 +115,7 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
   }
   const needsValue = [
     'install',
+    'import',
     'show',
     'update',
     'remove',
@@ -122,12 +131,25 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
   if (needsValue && !positional[0]) {
     throw new Error(`marketplace ${rawCommand} requires a value`);
   }
-  if ((command === 'install' || command === 'update') && force) {
+  if (
+    (command === 'install' || command === 'update' || command === 'import') &&
+    force
+  ) {
     throw new Error(
       `Option --force is not valid for marketplace ${rawCommand}`,
     );
   }
-  return { command, value: positional[0], force, json, clear };
+  if (command !== 'import' && update) {
+    throw new Error('Option --update is only valid for marketplace import');
+  }
+  return {
+    command,
+    value: positional[0],
+    force,
+    json,
+    clear,
+    ...(command === 'import' && update ? { update: true } : {}),
+  };
 }
 
 export async function marketplaceCommand(
@@ -140,7 +162,7 @@ export async function marketplaceCommand(
     const projectDir = options.projectDir ?? process.cwd();
     switch (parsed.command) {
       case 'install': {
-        const pkg = service.installFile(parsed.value as string);
+        const pkg = await service.installRemote(parsed.value as string);
         console.log(
           mutationReloadNotice(
             `Installed ${pkg.manifest.id}@${pkg.manifest.version}`,
@@ -149,8 +171,20 @@ export async function marketplaceCommand(
         );
         return 0;
       }
+      case 'import': {
+        const pkg = parsed.update
+          ? service.importFileUpdate(parsed.value as string)
+          : service.importFile(parsed.value as string);
+        console.log(
+          mutationReloadNotice(
+            `${parsed.update ? 'Updated' : 'Imported'} ${pkg.manifest.id}@${pkg.manifest.version}`,
+            'unknown',
+          ),
+        );
+        return 0;
+      }
       case 'update': {
-        const pkg = service.updateFile(parsed.value as string);
+        const pkg = await service.updateRemote(parsed.value as string);
         console.log(
           mutationReloadNotice(
             `Updated ${pkg.manifest.id}@${pkg.manifest.version}`,

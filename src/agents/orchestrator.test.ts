@@ -48,7 +48,7 @@ describe('orchestrator prompt', () => {
     expect(prompt).toContain('Use the `marketplace` tool');
     expect(prompt).toContain('list, show, verify, and status are read-only');
     expect(prompt).toContain(
-      'report reload_required only when disk activation differs',
+      'Use install/update with a canonical package ID for the fixed HTTPS registry',
     );
   });
 

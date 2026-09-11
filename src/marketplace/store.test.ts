@@ -582,6 +582,58 @@ describe('MarketplaceService', () => {
     }
   });
 
+  test('updates only to a strictly newer version and preserve state on rejection', () => {
+    const root = tempRoot();
+    try {
+      const service = new MarketplaceService({ rootDir: root });
+      expect(() => service.update(bundle('1.0.0'))).toThrow(
+        MarketplaceConflictError,
+      );
+      service.install(bundle('2.0.0'));
+      expect(() => service.update(bundle('2.0.0'))).toThrow(
+        MarketplaceConflictError,
+      );
+      expect(() => service.update(bundle('1.0.0'))).toThrow(
+        MarketplaceConflictError,
+      );
+      expect(service.show('community/example').manifest.version).toBe('2.0.0');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves locked bytes when same-version install has a different digest', () => {
+    const root = tempRoot();
+    try {
+      const service = new MarketplaceService({ rootDir: root });
+      const installed = service.install(bundle());
+      const lockBefore = readFileSync(service.store.paths.lockfilePath);
+      const packageBefore = readFileSync(join(installed.path, 'package.json'));
+      const digestBefore = readFileSync(join(installed.path, 'sha256'));
+
+      expect(() =>
+        service.install(
+          bundle('1.0.0', { instructions: 'A different package body.' }),
+        ),
+      ).toThrow(MarketplaceConflictError);
+
+      expect(readFileSync(service.store.paths.lockfilePath)).toEqual(
+        lockBefore,
+      );
+      expect(readFileSync(join(installed.path, 'package.json'))).toEqual(
+        packageBefore,
+      );
+      expect(readFileSync(join(installed.path, 'sha256'))).toEqual(
+        digestBefore,
+      );
+      expect(service.show('community/example').digest).toBe(
+        digestBefore.toString().trim(),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('preserves the canonical local import source and exposes show', () => {
     const root = tempRoot();
     const packageFile = join(root, 'package.json');

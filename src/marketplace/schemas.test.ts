@@ -3,6 +3,7 @@ import {
   MarketplaceAgentManifestSchema,
   MarketplacePackageManifestSchema,
   MarketplaceProfileManifestSchema,
+  MarketplaceVersionSchema,
 } from './schemas';
 
 const common = {
@@ -32,6 +33,20 @@ const common = {
 };
 
 describe('marketplace manifest schemas', () => {
+  test('rejects non-canonical semantic-version aliases', () => {
+    expect(MarketplaceVersionSchema.safeParse('v1.0.0').success).toBe(false);
+    expect(
+      MarketplacePackageManifestSchema.safeParse({
+        ...common,
+        version: 'v1.0.0',
+        kind: 'agent',
+        baseRole: 'explorer',
+        agentName: 'example',
+        overrides: {},
+      }).success,
+    ).toBe(false);
+  });
+
   test('accept only data-only agent and profile manifests', () => {
     expect(
       MarketplaceAgentManifestSchema.safeParse({

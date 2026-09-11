@@ -209,38 +209,45 @@ function releaseStateLock(lock: TuiStateLock): void {
   }
 }
 
-// Last confirmed on-disk snapshot per project, keyed by identity
-// (ino,mtime,size). No-ops return before the lock; failed writes do not
-// seed the memo. An identity mismatch (external rename) invalidates it.
+// Last confirmed on-disk snapshot per project, keyed by filesystem identity
+// (ino,mtime,size,ctime) and the file content. No-ops return before the lock;
+// failed writes do not seed the memo. Metadata alone cannot detect every
+// in-place rewrite (some filesystems coalesce ctime updates), so the memo also
+// verifies the content without relying on timestamp precision.
 const lastKnownSnapshots = new Map<
   string,
   {
     snapshot: TuiSnapshot;
-    ino: number;
-    mtimeMs: number;
-    ctimeMs: number;
-    size: number;
+    ino: bigint;
+    mtimeNs: bigint;
+    ctimeNs: bigint;
+    size: bigint;
+    contentFingerprint: string;
   }
 >();
 const LAST_KNOWN_SNAPSHOTS_MAX = 32;
 
 function statSnapshotFile(statePath: string): {
-  ino: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  size: number;
+  ino: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  size: bigint;
 } | null {
   try {
-    const stat = fs.statSync(statePath);
+    const stat = fs.statSync(statePath, { bigint: true });
     return {
       ino: stat.ino,
-      mtimeMs: stat.mtimeMs,
-      ctimeMs: stat.ctimeMs,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
       size: stat.size,
     };
   } catch {
     return null;
   }
+}
+
+function fingerprintSnapshotContent(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 function cloneSnapshot(snapshot: TuiSnapshot): TuiSnapshot {
@@ -267,6 +274,15 @@ function rememberSnapshot(statePath: string, snapshot: TuiSnapshot): void {
     lastKnownSnapshots.delete(statePath);
     return;
   }
+  let contentFingerprint: string;
+  try {
+    contentFingerprint = fingerprintSnapshotContent(
+      fs.readFileSync(statePath, 'utf8'),
+    );
+  } catch {
+    lastKnownSnapshots.delete(statePath);
+    return;
+  }
   if (
     !lastKnownSnapshots.has(statePath) &&
     lastKnownSnapshots.size >= LAST_KNOWN_SNAPSHOTS_MAX
@@ -274,7 +290,11 @@ function rememberSnapshot(statePath: string, snapshot: TuiSnapshot): void {
     const oldest = lastKnownSnapshots.keys().next().value;
     if (oldest !== undefined) lastKnownSnapshots.delete(oldest);
   }
-  lastKnownSnapshots.set(statePath, { snapshot, ...stat });
+  lastKnownSnapshots.set(statePath, {
+    snapshot,
+    ...stat,
+    contentFingerprint,
+  });
 }
 
 function memoFor(statePath: string): TuiSnapshot | undefined {
@@ -284,10 +304,20 @@ function memoFor(statePath: string): TuiSnapshot | undefined {
   if (
     !stat ||
     stat.ino !== entry.ino ||
-    stat.mtimeMs !== entry.mtimeMs ||
-    stat.ctimeMs !== entry.ctimeMs ||
+    stat.mtimeNs !== entry.mtimeNs ||
+    stat.ctimeNs !== entry.ctimeNs ||
     stat.size !== entry.size
   ) {
+    lastKnownSnapshots.delete(statePath);
+    return undefined;
+  }
+  try {
+    const content = fs.readFileSync(statePath, 'utf8');
+    if (fingerprintSnapshotContent(content) !== entry.contentFingerprint) {
+      lastKnownSnapshots.delete(statePath);
+      return undefined;
+    }
+  } catch {
     lastKnownSnapshots.delete(statePath);
     return undefined;
   }

@@ -32,6 +32,8 @@ const packagedRequiredFiles = [
   'dist/tui.js',
   'dist/tui.d.ts',
   'dist/cli/index.js',
+  'dist/marketplace-contract/index.js',
+  'dist/marketplace-contract/index.d.ts',
   'oh-my-opencode-slim.schema.json',
   'src/companion/companion-manifest.json',
   'src/skills/simplify/SKILL.md',
@@ -269,6 +271,16 @@ function verifyFreshInstall(tarballPath: string) {
     ].join('\n');
     console.log('Importing installed server subpath entrypoint...');
     run('node', ['--input-type=module', '--eval', serverSmokeScript], {
+      cwd: installDir,
+    });
+
+    const contractSmokeScript = [
+      "import { registryArtifactPath } from 'oh-my-opencode-slim/marketplace-contract';",
+      "if (registryArtifactPath('community/example', '1.0.0') !== 'artifacts/community/example/1.0.0.json') throw new Error('marketplace contract export failed');",
+      "console.log('marketplace contract package loads');",
+    ].join('\n');
+    console.log('Importing marketplace contract subpath...');
+    run('node', ['--input-type=module', '--eval', contractSmokeScript], {
       cwd: installDir,
     });
   } finally {
