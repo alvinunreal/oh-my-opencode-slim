@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { chmod, mkdir, stat, symlink } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  readFile,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 
-import { parsePatch } from './codec';
+import { formatPatch, parsePatch } from './codec';
 import {
   isApplyPatchBlockedError,
   isApplyPatchValidationError,
@@ -408,7 +415,7 @@ garbage
     expect(parsePatch(rewritten.patchText).hunks[0]).toMatchObject({
       type: 'add',
       path: 'added.txt',
-      contents: 'fresh',
+      contents: 'fresh\n',
     });
 
     await expect(
@@ -518,7 +525,7 @@ garbage
     expect(parsePatch(rewritten.patchText).hunks[0]).toMatchObject({
       type: 'add',
       path: '../shared.txt',
-      contents: 'fresh',
+      contents: 'fresh\n',
     });
 
     await expect(
@@ -902,7 +909,7 @@ garbage
       {
         type: 'add',
         path: 'added.txt',
-        contents: 'alpha\nBETA',
+        contents: 'alpha\nBETA\n',
       },
     ]);
   });
@@ -931,7 +938,7 @@ garbage
       {
         type: 'add',
         path: 'nested/after.txt',
-        contents: 'alpha\nBETA',
+        contents: 'alpha\nBETA\n',
       },
     ]);
   });
@@ -1524,5 +1531,268 @@ garbage
     ).rejects.toThrow(
       'apply_patch blocked: patch contains path outside workspace root:',
     );
+  });
+
+  test('parsePatch/formatPatch keep an Add File trailing empty line distinct from the terminator', () => {
+    const patchText = `*** Begin Patch
+*** Add File: trailing.txt
++a
++
+*** End Patch`;
+
+    const parsed = parsePatch(patchText);
+    expect(parsed.hunks[0]).toMatchObject({
+      type: 'add',
+      contents: 'a\n\n',
+    });
+
+    // Round-trip preserves the trailing empty `+` line.
+    const reformatted = formatPatch(parsed);
+    expect(reformatted).toContain('+a\n+\n');
+    expect(parsePatch(reformatted).hunks[0]).toEqual(parsed.hunks[0]);
+  });
+
+  test('parsePatch represents an empty Add File as empty contents', () => {
+    const parsed = parsePatch(`*** Begin Patch
+*** Add File: empty.txt
+*** End Patch`);
+
+    expect(parsed.hunks[0]).toMatchObject({
+      type: 'add',
+      contents: '',
+    });
+  });
+
+  test('rewritePatch re-emits a folded move after a later delete of its destination', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'a.txt', 'alpha\n');
+    await writeFixture(root, 'b.txt', 'beta\n');
+
+    const result = await rewritePatch(
+      root,
+      `*** Begin Patch
+*** Update File: a.txt
+@@
+-alpha
++ALPHA
+*** Update File: b.txt
+@@
+-beta
++BETA
+*** Delete File: b.txt
+*** Update File: a.txt
+*** Move to: b.txt
+@@
+-ALPHA
++ALPHA-MOVED
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    );
+
+    // The folded update+move over a.txt must be emitted after Delete b.txt
+    // so the destination is free, not hoisted above it.
+    const hunks = parsePatch(result.patchText).hunks;
+    const deleteIndex = hunks.findIndex((hunk) => hunk.type === 'delete');
+    const lastIndex = hunks.length - 1;
+    expect(deleteIndex).toBeGreaterThanOrEqual(0);
+    expect(hunks[lastIndex]).toMatchObject({
+      type: 'update',
+      path: 'a.txt',
+      move_path: 'b.txt',
+    });
+    expect(deleteIndex).toBeLessThan(lastIndex);
+
+    await applyPatch(root, result.patchText);
+    expect(await readText(root, 'b.txt')).toBe('ALPHA-MOVED\n');
+  });
+
+  test('rewritePatch serializes non-overlapping canonical chunks when a rescue shares context', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'sample.txt', 'a\nold\nz\n');
+
+    const result = await rewritePatch(
+      root,
+      `*** Begin Patch
+*** Update File: sample.txt
+@@
+ a
+-stale
++fresh
+ z
+@@
+-z
++Z2
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    );
+
+    // The stale first chunk is rescued with shared suffix `z`; the second
+    // chunk edits that same `z`. The rewritten patch must not consume `z`
+    // twice and must re-apply cleanly.
+    await applyPatch(root, result.patchText);
+    expect(await readText(root, 'sample.txt')).toBe('a\nfresh\nZ2\n');
+  });
+
+  test('EOF insertion into an empty file does not create a leading blank line', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'empty.txt', '');
+
+    await applyPatch(
+      root,
+      `*** Begin Patch
+*** Update File: empty.txt
+@@
++hello
+*** End of File
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    );
+
+    // Zero-line representation: no phantom leading blank line. The missing
+    // final newline matches the empty file's original terminator state.
+    expect(await readText(root, 'empty.txt')).toBe('hello');
+  });
+
+  test('applyPreparedChanges rollback restores binary files byte-for-byte', async () => {
+    const root = await createTempDir();
+    const binaryPath = path.join(root, 'bin.dat');
+    const original = Buffer.from([0xff, 0xfe, 0x00, 0x41, 0xff]);
+    await writeFile(binaryPath, original);
+    // Existing file at `blocker` makes the nested add fail with ENOTDIR.
+    await writeFile(path.join(root, 'blocker'), 'not-a-dir\n');
+
+    await expect(
+      applyPreparedChanges([
+        {
+          type: 'delete',
+          file: binaryPath,
+        },
+        {
+          type: 'add',
+          file: path.join(root, 'blocker', 'nested.txt'),
+          text: 'never written\n',
+        },
+      ]),
+    ).rejects.toThrow();
+
+    expect(Buffer.compare(await readFile(binaryPath), original)).toBe(0);
+  });
+
+  test('applyPreparedChanges transfers the source mode to later writes on the move destination', async () => {
+    const root = await createTempDir();
+    const source = path.join(root, 'src.txt');
+    await writeFile(source, 'one\n');
+    await chmod(source, 0o755);
+
+    await applyPreparedChanges([
+      {
+        type: 'update',
+        file: source,
+        move: path.join(root, 'dst.txt'),
+        text: 'ONE\n',
+      },
+      {
+        type: 'update',
+        file: path.join(root, 'dst.txt'),
+        text: 'TWO\n',
+      },
+    ]);
+
+    expect(await readText(root, 'dst.txt')).toBe('TWO\n');
+    expect((await stat(path.join(root, 'dst.txt'))).mode & 0o777).toBe(0o755);
+  });
+
+  test('applyPreparedChanges drops the stale mode when a move destination is deleted and recreated', async () => {
+    const root = await createTempDir();
+    const source = path.join(root, 'src.txt');
+    const dst = path.join(root, 'dst.txt');
+    await writeFile(source, 'one\n');
+    await chmod(source, 0o755);
+
+    await applyPreparedChanges([
+      {
+        type: 'update',
+        file: source,
+        move: dst,
+        text: 'ONE\n',
+      },
+      { type: 'delete', file: dst },
+      { type: 'add', file: dst, text: 'fresh\n' },
+      { type: 'update', file: dst, text: 'FRESH\n' },
+    ]);
+
+    const dstStat = await stat(dst).catch(() => null);
+    expect(dstStat).not.toBeNull();
+    // The recreated-and-updated file must not inherit the moved source's
+    // execute bits through the trailing update.
+    expect((dstStat?.mode ?? 0o777) & 0o111).toBe(0);
+    expect(await readFile(dst, 'utf-8')).toBe('FRESH\n');
+  });
+
+  test('rewritePatch emits a folded add with canonical terminator when finalText lacks a final newline', async () => {
+    const root = await createTempDir();
+
+    // Empty Add (no `+` lines) followed by an EOF update on the empty file:
+    // finalText is 'hello' with NO final newline, which the renderer would
+    // silently drop without canonical termination.
+    const result = await rewritePatch(
+      root,
+      `*** Begin Patch
+*** Add File: made.txt
+*** Update File: made.txt
+@@
++hello
+*** End of File
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    );
+
+    const hunks = parsePatch(result.patchText).hunks;
+    expect(hunks[hunks.length - 1]).toMatchObject({
+      type: 'add',
+      contents: 'hello\n',
+    });
+
+    await applyPatch(root, result.patchText);
+    expect(await readText(root, 'made.txt')).toBe('hello\n');
+  });
+
+  test('rewritePatch keeps a later add on the freed move source after the folded group', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'a.txt', 'alpha\n');
+
+    const result = await rewritePatch(
+      root,
+      `*** Begin Patch
+*** Update File: a.txt
+*** Move to: b.txt
+@@
+-alpha
++ALPHA
+*** Add File: a.txt
++recreated
+*** Update File: b.txt
+@@
+-ALPHA
++ALPHA-MOVED
+*** End Patch`,
+      DEFAULT_OPTIONS,
+    );
+
+    // The add on the freed source a.txt must stay AFTER the folded move
+    // group, or it would collide with the still-existing original a.txt.
+    const hunks = parsePatch(result.patchText).hunks;
+    const addIndex = hunks.findIndex(
+      (hunk) => hunk.type === 'add' && hunk.path === 'a.txt',
+    );
+    const moveIndex = hunks.findIndex(
+      (hunk) => hunk.type === 'update' && hunk.move_path === 'b.txt',
+    );
+    expect(moveIndex).toBeGreaterThanOrEqual(0);
+    expect(addIndex).toBeGreaterThan(moveIndex);
+
+    await applyPatch(root, result.patchText);
+    expect(await readText(root, 'a.txt')).toBe('recreated\n');
+    expect(await readText(root, 'b.txt')).toBe('ALPHA-MOVED\n');
   });
 });

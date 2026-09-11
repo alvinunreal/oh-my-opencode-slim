@@ -2,7 +2,7 @@ use egui::{ColorImage, Context, Rect, TextureHandle, TextureId, TextureOptions};
 use std::collections::HashMap;
 
 const DEFAULT_SPEED: f32 = 1.0;
-const BASE_SPEED_MULTIPLIER: f32 = 2.0;
+const BASE_SPEED_MULTIPLIER: f32 = 1.0;
 const FRAME_RATE: f32 = 24.0;
 const FRAME_COUNT: usize = 72;
 const SHEET_COLS: usize = 12;
@@ -30,11 +30,13 @@ impl Gifs {
         sheets.insert("input", include_bytes!("../animations/question.jpg"));
         sheets.insert("intro", include_bytes!("../animations/intro.jpg"));
         sheets.insert("librarian", include_bytes!("../animations/librarian.jpg"));
+        sheets.insert("observer", include_bytes!("../animations/observer.jpg"));
         sheets.insert("oracle", include_bytes!("../animations/oracle.jpg"));
         sheets.insert(
             "orchestrator",
             include_bytes!("../animations/orchestrator.jpg"),
         );
+        sheets.insert("unknown", include_bytes!("../animations/unknown.jpg"));
         Self {
             sheets,
             textures: HashMap::new(),
@@ -92,10 +94,13 @@ impl Gifs {
         if gif_pack != "default" {
             return "orchestrator";
         }
+        if agent.starts_with("councillor-") {
+            return "council";
+        }
         self.sheets
             .get_key_value(agent)
             .map(|(name, _)| *name)
-            .unwrap_or("intro")
+            .unwrap_or("unknown")
     }
 }
 
@@ -154,12 +159,19 @@ mod tests {
     use super::{frame_index, frame_uv, normalized_speed, Gifs, FRAME_COUNT};
 
     #[test]
-    fn unknown_agents_use_the_neutral_intro_animation() {
+    fn unknown_agents_use_the_unknown_animation() {
         let gifs = Gifs::new();
 
         for agent in ["plan", "build", "general", "explore", "custom-agent"] {
-            assert_eq!(gifs.resolve_name(agent, "default"), "intro");
+            assert_eq!(gifs.resolve_name(agent, "default"), "unknown");
         }
+    }
+
+    #[test]
+    fn unknown_animation_is_distinct_from_observer() {
+        let gifs = Gifs::new();
+
+        assert_ne!(gifs.sheets["unknown"], gifs.sheets["observer"]);
     }
 
     #[test]
@@ -170,6 +182,7 @@ mod tests {
             "orchestrator",
             "explorer",
             "librarian",
+            "observer",
             "oracle",
             "designer",
             "fixer",
@@ -179,7 +192,14 @@ mod tests {
     }
 
     #[test]
-    fn speed_is_clamped_and_defaults_fast() {
+    fn dynamic_councillors_use_the_council_animation() {
+        let gifs = Gifs::new();
+
+        assert_eq!(gifs.resolve_name("councillor-alpha", "default"), "council");
+    }
+
+    #[test]
+    fn speed_is_clamped_and_defaults_to_one() {
         assert_eq!(normalized_speed(f32::NAN), 1.0);
         assert_eq!(normalized_speed(0.1), 0.25);
         assert_eq!(normalized_speed(9.0), 4.0);
@@ -188,18 +208,18 @@ mod tests {
     #[test]
     fn classic_loop_wraps_forward() {
         assert_eq!(frame_index(0.0, 1.0, "classic"), 0);
-        assert_eq!(frame_index(1.5, 1.0, "classic"), 0);
-        assert_eq!(frame_index(1.5 + 1.0 / 48.0, 1.0, "classic"), 1);
+        assert_eq!(frame_index(3.0, 1.0, "classic"), 0);
+        assert_eq!(frame_index(3.0 + 1.0 / 24.0, 1.0, "classic"), 1);
     }
 
     #[test]
     fn smooth_loop_ping_pongs_without_duplicate_endpoints() {
         assert_eq!(frame_index(0.0, 1.0, "smooth"), 0);
         assert_eq!(
-            frame_index((FRAME_COUNT - 1) as f64 / 48.0, 1.0, "smooth"),
+            frame_index((FRAME_COUNT - 1) as f64 / 24.0, 1.0, "smooth"),
             71
         );
-        assert_eq!(frame_index(FRAME_COUNT as f64 / 48.0, 1.0, "smooth"), 70);
+        assert_eq!(frame_index(FRAME_COUNT as f64 / 24.0, 1.0, "smooth"), 70);
     }
 
     #[test]

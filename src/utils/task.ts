@@ -40,6 +40,17 @@ export function parseTaskIdFromTaskOutput(output: string): string | undefined {
   const xmlMatch = /<task\s+[^>]*\bid=["']([^"']+)["'][^>]*>/i.exec(output);
   if (xmlMatch) return xmlMatch[1];
 
+  // v2 host `subagent` tool output formats.
+  const subagentXml =
+    /<subagent\s+[^>]*\bsessionID=["']([^"']+)["'][^>]*>/i.exec(output);
+  if (subagentXml) return subagentXml[1];
+  const failed =
+    /Subagent (?:failed|cancelled) \(sessionID:\s*([^\s)]+)\)/i.exec(output);
+  if (failed) return failed[1];
+
+  // v1 `task_id:` line before the generic bracket pattern: a v1 output can
+  // quote a foreign `(sessionID: x)` in passing, and the explicit marker
+  // is the authoritative id.
   const lines = output.split(/\r?\n/);
 
   for (const line of lines) {
@@ -52,6 +63,9 @@ export function parseTaskIdFromTaskOutput(output: string): string | undefined {
 
     return match[1];
   }
+
+  const background = /\(sessionID:\s*([^\s)]+)\)/.exec(output);
+  if (background) return background[1];
 
   return undefined;
 }
@@ -96,6 +110,19 @@ export function parseTaskStateFromOutput(
     );
   if (xmlMatch) return xmlMatch[1].toLowerCase() as TaskOutputState;
 
+  // v2 host `subagent` tool output formats.
+  const subagentXml =
+    /<subagent\s+[^>]*\bstate=["'](running|completed|error|cancelled)["'][^>]*>/i.exec(
+      output,
+    );
+  if (subagentXml) return subagentXml[1].toLowerCase() as TaskOutputState;
+
+  if (/Subagent failed \(sessionID:/i.test(output)) return 'error';
+  if (/Subagent cancelled \(sessionID:/i.test(output)) return 'cancelled';
+  if (/The subagent is working in the background \(sessionID:/i.test(output)) {
+    return 'running';
+  }
+
   for (const line of getTaskHeader(output).split(/\r?\n/)) {
     const match = /^state:\s*(running|completed|error|cancelled)\s*$/i.exec(
       line.trim(),
@@ -107,14 +134,49 @@ export function parseTaskStateFromOutput(
   return undefined;
 }
 
+/** Diagnostic applied when a terminal `completed` report carries no text. */
+export const COMPLETED_WITHOUT_TEXT_DIAGNOSTIC =
+  'Task ended without a public text result; completion is not confirmed';
+
+export interface GuardedTaskStatus {
+  state: TaskOutputState;
+  resultSummary?: string;
+  lastStatusError?: string;
+}
+
+export function guardCompletedStatusText(
+  state: TaskOutputState,
+  result: string | undefined,
+  existingResultSummary: string | undefined,
+): GuardedTaskStatus {
+  if (
+    state === 'completed' &&
+    !result?.trim() &&
+    !existingResultSummary?.trim()
+  ) {
+    return {
+      state: 'error',
+      resultSummary: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+      lastStatusError: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+    };
+  }
+  return { state, resultSummary: result };
+}
+
 export function parseTaskResultFromOutput(output: string): string | undefined {
   // Require matching open/close tags via backreference
   const match = /<task_(result|error)>\s*([\s\S]*?)\s*<\/task_\1>/m.exec(
     output,
   );
   const result = match?.[2]?.trim();
+  if (result) return result;
 
-  return result || undefined;
+  // v2 `subagent` wraps its final text directly inside the tag.
+  const subagent = /<subagent[^>]*>\s*([\s\S]*?)\s*<\/subagent>/m.exec(output);
+  const subagentResult = subagent?.[1]?.trim();
+  if (subagentResult) return subagentResult;
+
+  return undefined;
 }
 
 function getTaskHeader(output: string): string {

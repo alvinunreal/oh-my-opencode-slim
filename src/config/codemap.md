@@ -163,6 +163,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `tmux`: Legacy tmux configuration (migrated to multiplexer)
 - `interview`: Interview feature configuration
 - `backgroundJobs`: Background job configuration
+- `backgroundJobs.concurrency`: Optional default, provider, and model caps for native background task admission
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with presets and execution modes
 - `companion`: Companion animation configuration
@@ -170,6 +171,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ### AgentOverrideConfig
 - `model`: Model ID or array of model IDs
+- `inheritModelFrom`: Explicitly inherit the current `session` model or the configured `orchestrator` model when `model` is omitted; supported for built-in and custom agents
 - `temperature`: Sampling temperature (0-2)
 - `variant`: Model variant identifier
 - `skills`: Skill allow/deny list ("*" = all, "!item" = exclude)
@@ -178,6 +180,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `orchestratorPrompt`: Custom orchestrator prompt override
 - `options`: Provider-specific model options
 - `displayName`: Custom display name for the agent
+- `color`: Agent display color as a six-digit hex value or OpenCode theme color
 
 ### CouncilConfig
 - `presets`: Named council presets (map of presetName → CouncillorConfig[])

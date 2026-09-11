@@ -199,6 +199,77 @@ async function deleteSessionSafely(
   }
 }
 
+/** One-shot generation channel exposed by the v2 host
+ * (`ctx.generate.text`), threaded through `PluginInput.experimental_v2`. */
+export type V2GenerateText = (
+  prompt: string,
+  model?: { id: string; providerID: string; variant?: string },
+) => Promise<{ text: string }>;
+
+function readV2GenerateText(input: PluginInput): V2GenerateText | undefined {
+  const channel = (
+    input as {
+      experimental_v2?: { generateText?: unknown };
+    }
+  ).experimental_v2?.generateText;
+  return typeof channel === 'function'
+    ? (channel as V2GenerateText)
+    : undefined;
+}
+
+/**
+ * v2 path: one-shot `ctx.generate.text`, no temporary session.
+ *
+ * Skips session.create / tool.ids / session.delete entirely (the v2 host
+ * manages generation lifetime) while preserving the v1 contract: the same
+ * deterministic `buildPrompt` embedding (generate.text has no separate
+ * content channel), the same truncation + note behavior, the same
+ * `{text, inputTruncated, inputChars, sourceChars}` result shape, and the
+ * same `Promise.race` timeout error so the fallback chain treats v2
+ * timeouts exactly like v1 timeouts.
+ */
+async function runSecondaryModelViaGenerateText(
+  generateText: V2GenerateText,
+  model: SecondaryModel,
+  prompt: string,
+  content: string,
+) {
+  const sourceChars = content.length;
+  const truncatedContent = content.slice(0, MAX_MODEL_CONTENT_CHARS);
+  const inputChars = truncatedContent.length;
+  const inputTruncated = inputChars < sourceChars;
+  const effectivePrompt = inputTruncated
+    ? `${prompt}\n\nNote: only the first ${inputChars} characters of a longer fetched document were provided.`
+    : prompt;
+
+  const { variant, ...modelOnly } = model;
+  const modelRef = {
+    id: modelOnly.modelID,
+    providerID: modelOnly.providerID,
+    ...(variant ? { variant } : {}),
+  };
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      generateText(buildPrompt(truncatedContent, effectivePrompt), modelRef),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error('Secondary model timed out'));
+        }, _testConfig.secondaryModelTimeoutMs);
+      }),
+    ]);
+    return {
+      text: result.text.trim(),
+      inputTruncated,
+      inputChars,
+      sourceChars,
+    };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
 async function runSecondaryModel(
   input: PluginInput,
   model: SecondaryModel,
@@ -206,6 +277,16 @@ async function runSecondaryModel(
   content: string,
   parentSessionID?: string,
 ) {
+  const generateText = readV2GenerateText(input);
+  if (generateText) {
+    return runSecondaryModelViaGenerateText(
+      generateText,
+      model,
+      prompt,
+      content,
+    );
+  }
+
   const client = getClient(input);
   const directory = input.directory;
   const releaseLease = acquireSecondaryModelLease(client);

@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { PluginConfig } from '../config';
 import { DEFAULT_DASHBOARD_PORT } from './dashboard';
@@ -7,6 +8,10 @@ import { createPerSessionInterviewServer } from './session-server';
 export function createInterviewManager(
   ctx: PluginInput,
   config: PluginConfig,
+  options: {
+    /** Already-listening server for the dashboard role to adopt. */
+    server?: Server;
+  } = {},
 ): {
   registerCommand: (config: Record<string, unknown>) => void;
   handleCommandExecuteBefore: (
@@ -33,5 +38,11 @@ export function createInterviewManager(
   const dashboardPort =
     effectivePort > 0 ? effectivePort : DEFAULT_DASHBOARD_PORT;
 
-  return createDashboardManager(ctx, config, dashboardPort, outputFolder);
+  return createDashboardManager(
+    ctx,
+    config,
+    dashboardPort,
+    outputFolder,
+    options,
+  );
 }

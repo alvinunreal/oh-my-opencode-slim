@@ -11,7 +11,11 @@ import {
   recordBackgroundJobSuppression,
 } from './background-job-store';
 import { log } from './logger';
-import { parseTaskStatusOutput, type TaskOutputState } from './task';
+import {
+  guardCompletedStatusText,
+  parseTaskStatusOutput,
+  type TaskOutputState,
+} from './task';
 
 export interface ContextFile {
   path: string;
@@ -64,6 +68,8 @@ export interface BackgroundJobRecord {
   lastLaunchedAt: number;
   /** Monotonic run identity. Explicit relaunch/reuse increments it. */
   generation: number;
+  /** Task-local run identity; unlike generation, unrelated tasks do not affect it. */
+  taskGeneration: number;
   /** First launch observation for the current generation. */
   runStartedAt: number;
   /** Persistent hard wall-clock marker; distinct from external task wait timeout. */
@@ -263,6 +269,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       const updated = {
         ...existing,
         generation,
+        taskGeneration: existing.taskGeneration + 1,
         agent: input.agent || existing.agent,
         description: input.description || existing.description,
         objective: input.objective ?? existing.objective,
@@ -294,6 +301,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     const record: BackgroundJobRecord = {
       taskID: input.taskID,
       generation,
+      taskGeneration: 1,
       parentSessionID: input.parentSessionID,
       agent: input.agent,
       description: input.description || `background ${input.agent} task`,
@@ -409,11 +417,18 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     const status = parseTaskStatusOutput(output);
     if (!status) return undefined;
 
+    const guarded = guardCompletedStatusText(
+      status.state,
+      status.result,
+      this.get(status.taskID)?.resultSummary,
+    );
+
     return this.updateStatus({
       taskID: status.taskID,
-      state: status.state,
+      state: guarded.state,
       timedOut: status.timedOut,
-      resultSummary: status.result,
+      resultSummary: guarded.resultSummary,
+      lastStatusError: guarded.lastStatusError,
     });
   }
 

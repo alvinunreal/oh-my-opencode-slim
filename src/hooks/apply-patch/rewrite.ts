@@ -49,6 +49,11 @@ function normalizeTextLineEndings(text: string): string {
 }
 
 function splitPatchTextLines(text: string): string[] {
+  // Empty text is zero lines, not one empty line; '\n' is one empty line.
+  if (text.length === 0) {
+    return [];
+  }
+
   const normalized = normalizeTextLineEndings(text);
   const lines = normalized.split('\n');
   if (normalized.endsWith('\n')) {
@@ -116,15 +121,6 @@ function clonePatchChunks(
 }
 
 function minimizeMergedChunk(chunk: UpdatePatchHunk['chunks'][number]) {
-  if (chunk.old_lines.length === 0 && chunk.new_lines.length === 0) {
-    return {
-      old_lines: [],
-      new_lines: [],
-      change_context: chunk.change_context,
-      is_end_of_file: chunk.is_end_of_file,
-    };
-  }
-
   let prefixLength = 0;
   while (
     prefixLength < chunk.old_lines.length &&
@@ -195,9 +191,11 @@ function mergeSameFileUpdateGroupChunks(
     return undefined;
   }
 
+  // minimizeMergedChunk never mutates its input, so the original chunk
+  // arrays can be mapped directly.
   const mergedChunks = [
-    ...clonePatchChunks(group.chunks).map(minimizeMergedChunk),
-    ...clonePatchChunks(nextChunks).map(minimizeMergedChunk),
+    ...group.chunks.map(minimizeMergedChunk),
+    ...nextChunks.map(minimizeMergedChunk),
   ];
 
   try {
@@ -214,10 +212,6 @@ function mergeSameFileUpdateGroupChunks(
   }
 }
 
-function addContentsFromFinalText(text: string): string {
-  return text.endsWith('\n') ? text.slice(0, -1) : text;
-}
-
 function renderRewriteDependencyGroup(
   group: RewriteDependencyGroup,
   cfg: ApplyPatchRuntimeOptions,
@@ -226,7 +220,10 @@ function renderRewriteDependencyGroup(
     return {
       type: 'add',
       path: group.group.outputPath,
-      contents: addContentsFromFinalText(group.group.finalText),
+      // Guarantee the canonical newline-terminated Add representation:
+      // finalText may legitimately lack a final newline (e.g. updates on a
+      // no-final-newline file), which the renderer would otherwise drop.
+      contents: stageAddedText(group.group.finalText),
     };
   }
 
@@ -320,6 +317,37 @@ export async function rewritePatch(
       dependencyGroups.delete(filePath);
     }
 
+    function hunkTouchedPaths(hunk: PatchHunk): Set<string> {
+      const touched = new Set<string>([path.resolve(root, hunk.path)]);
+      if (hunk.type === 'update' && hunk.move_path) {
+        touched.add(path.resolve(root, hunk.move_path));
+      }
+      return touched;
+    }
+
+    // Fold a dependency group in place only when no hunk emitted after it
+    // touches its paths: reordering around interleaved hunks (delete of the
+    // move destination, add recreating the move source) is exactly where
+    // folded patches stop being order-equivalent. On any interference the
+    // fold is abandoned and the caller emits the update standalone, which
+    // preserves the original patch ordering and is always safe.
+    function reemitFoldedGroup(
+      groupIndex: number,
+      rendered: PatchHunk,
+    ): number | undefined {
+      const touched = hunkTouchedPaths(rendered);
+      for (let index = groupIndex + 1; index < rewritten.length; index += 1) {
+        for (const target of hunkTouchedPaths(rewritten[index])) {
+          if (touched.has(target)) {
+            return undefined;
+          }
+        }
+      }
+
+      rewritten[groupIndex] = rendered;
+      return groupIndex;
+    }
+
     for (const hunk of hunks) {
       if (hunk.type === 'add') {
         const filePath = path.resolve(root, hunk.path);
@@ -376,16 +404,82 @@ export async function rewritePatch(
         cfg,
       );
 
-      const next = resolved.map((chunk, index) => ({
-        old_lines: [...chunk.canonical_old_lines],
-        new_lines: [...chunk.canonical_new_lines],
-        change_context:
-          chunk.canonical_change_context ?? hunk.chunks[index].change_context,
-        is_end_of_file:
+      let next: UpdatePatchHunk['chunks'] = [];
+      let lastCanonicalEnd = -1;
+      let sawCanonicalOverlap = false;
+      for (const [index, chunk] of resolved.entries()) {
+        const changeContext =
+          chunk.canonical_change_context ?? hunk.chunks[index].change_context;
+        const isEndOfFile =
           hunk.chunks[index].is_end_of_file && chunk.resolved_is_end_of_file
             ? true
-            : undefined,
-      }));
+            : undefined;
+
+        const previous = next[next.length - 1];
+        const overlap = previous ? lastCanonicalEnd - chunk.canonical_start : 0;
+
+        if (
+          previous &&
+          overlap > 0 &&
+          overlap <= previous.old_lines.length &&
+          chunk.canonical_old_lines.length >= overlap
+        ) {
+          // A rescue extended this chunk's canonical range over lines the
+          // previous chunk already claimed. Serialize both as one chunk so
+          // every source line is consumed exactly once; separate chunks
+          // would re-match consumed context and fail on re-apply.
+          previous.old_lines = previous.old_lines
+            .slice(0, previous.old_lines.length - overlap)
+            .concat(chunk.canonical_old_lines);
+          previous.new_lines = previous.new_lines
+            .slice(0, previous.new_lines.length - overlap)
+            .concat(chunk.canonical_new_lines);
+          previous.is_end_of_file = isEndOfFile ?? previous.is_end_of_file;
+          lastCanonicalEnd = Math.max(lastCanonicalEnd, chunk.canonical_end);
+          sawCanonicalOverlap = true;
+          continue;
+        }
+
+        if (overlap > 0) {
+          sawCanonicalOverlap = true;
+        }
+
+        next.push({
+          old_lines: [...chunk.canonical_old_lines],
+          new_lines: [...chunk.canonical_new_lines],
+          change_context: changeContext,
+          is_end_of_file: isEndOfFile,
+        });
+        lastCanonicalEnd = chunk.canonical_end;
+      }
+
+      if (sawCanonicalOverlap) {
+        // Overlap merges must reproduce the accepted hits exactly. If an
+        // exotic shape does not, fall back to a verified whole-file chunk
+        // instead of shipping a rewrite that cannot re-apply.
+        try {
+          if (
+            deriveNewContentFromText(filePath, current.text, next, cfg) !==
+            nextText
+          ) {
+            next = createCollapsedUpdateHunk(
+              hunk.path,
+              filePath,
+              current.text,
+              nextText,
+              cfg,
+            ).chunks;
+          }
+        } catch {
+          next = createCollapsedUpdateHunk(
+            hunk.path,
+            filePath,
+            current.text,
+            nextText,
+            cfg,
+          ).chunks;
+        }
+      }
 
       for (const chunk of resolved) {
         if (!chunk.rewritten) {
@@ -397,6 +491,7 @@ export async function rewritePatch(
       const nextOutputPath = hunk.move_path ?? hunk.path;
       const nextOutputFilePath = movePath ?? filePath;
 
+      let folded = false;
       if (current.derived && currentDependency) {
         const nextGroup = combineDependentUpdateGroup(
           filePath,
@@ -407,17 +502,26 @@ export async function rewritePatch(
           nextOutputFilePath,
           cfg,
         );
-        rewritten[currentDependency.group.index] = renderRewriteDependencyGroup(
-          nextGroup,
-          cfg,
+        const foldedIndex = reemitFoldedGroup(
+          currentDependency.group.index,
+          renderRewriteDependencyGroup(nextGroup, cfg),
         );
-        changed = true;
-        clearDependencyGroup(filePath);
-        if (movePath && movePath !== filePath) {
-          clearDependencyGroup(movePath);
+        if (foldedIndex !== undefined) {
+          changed = true;
+          clearDependencyGroup(filePath);
+          if (movePath && movePath !== filePath) {
+            clearDependencyGroup(movePath);
+          }
+          nextGroup.group.index = foldedIndex;
+          dependencyGroups.set(nextOutputFilePath, nextGroup);
+          folded = true;
         }
-        dependencyGroups.set(nextOutputFilePath, nextGroup);
-      } else {
+      }
+
+      if (!folded) {
+        // First touch of this path, or an interfering hunk made the fold
+        // order-unsafe: emit this update standalone, which preserves the
+        // original patch ordering.
         rewritten.push(createUpdateHunk(hunk.path, next, hunk.move_path));
         clearDependencyGroup(filePath);
         if (movePath && movePath !== filePath) {

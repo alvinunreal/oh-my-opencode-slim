@@ -9,6 +9,7 @@ import type { TaskActivityTracker } from './task-activity';
 import { observationFromSnapshot, summarizeTaskStatus } from './task-policy';
 
 const z = tool.schema;
+const ACTIVE_STATES = new Set(['busy', 'running', 'retry']);
 
 export function createTaskStatusTool(options: {
   input: PluginInput;
@@ -62,6 +63,12 @@ export function createTaskStatusTool(options: {
         if (report.lastStatusError) {
           details.push(`last_status_error: ${report.lastStatusError}`);
         }
+      }
+      if (!report.uncertain && ACTIVE_STATES.has(report.state)) {
+        details.push('');
+        details.push(
+          '[guidance]: The task is still running. Work on non-overlapping tasks, or conclude your response now to await the completion event.',
+        );
       }
       return details.join('\n');
     },

@@ -30,8 +30,34 @@ export function createRuntimeStatusReconciler(options: {
   let activeReconcile: Promise<void> | undefined;
   let rerunRequested = false;
 
+  // Capability gate: hosts without `client.session.status` (live v2 —
+  // verified beta-19365/beta-19378) can never produce a status snapshot;
+  // every poll would throw "client.session.status is not a function" and
+  // log reconciliation uncertainty (~5s of pure noise). Skip the loop
+  // entirely with a single per-instance disable notice instead. v1 hosts
+  // expose the method and keep the exact historical behavior.
+  let capability: 'unknown' | 'supported' | 'unsupported' = 'unknown';
+  function reconciliationSupported(): boolean {
+    if (capability === 'unknown') {
+      const client = options.input?.client as
+        | { session?: { status?: unknown } }
+        | undefined;
+      capability =
+        client && typeof client.session?.status === 'function'
+          ? 'supported'
+          : 'unsupported';
+      if (capability === 'unsupported') {
+        log(
+          '[task-session-manager] runtime status reconciliation disabled on this host (client.session.status unavailable)',
+        );
+      }
+    }
+    return capability === 'supported';
+  }
+
   function schedule(): void {
     if (disposed) return;
+    if (!reconciliationSupported()) return;
     if (activeReconcile) {
       rerunRequested = true;
       return;
@@ -51,6 +77,10 @@ export function createRuntimeStatusReconciler(options: {
 
   async function reconcilePass(): Promise<void> {
     if (disposed) return;
+    // Same capability gate as schedule(): a direct reconcile() (rehydrate
+    // path) on a host without the status method must stay silent instead
+    // of marking every running job uncertain.
+    if (!reconciliationSupported()) return;
     const running = options.backgroundJobBoard
       .list()
       .filter((job) => job.state === 'running');

@@ -158,6 +158,8 @@ export interface DashboardConfig {
   port: number;
   outputFolder: string;
   sessionClient?: Pick<PluginInput['client']['session'], 'list'>;
+  /** Already-listening server to adopt instead of binding `port`. */
+  server?: Server;
 }
 
 // ─── Dashboard Server ─────────────────────────────────────────────────
@@ -1514,14 +1516,21 @@ export function createDashboardServer(config: DashboardConfig): {
     }
 
     startPromise = new Promise((resolve, reject) => {
-      const server = createServer((request, response) => {
+      const requestHandler = (
+        request: IncomingMessage,
+        response: ServerResponse,
+      ) => {
         handleRequest(request, response).catch((error: unknown) => {
           sendJson(response, 500, {
             error:
               error instanceof Error ? error.message : 'Internal server error',
           });
         });
-      });
+      };
+
+      // Adopt an already-listening server (deterministic port ownership)
+      // or bind a fresh one on config.port.
+      const server = config.server ?? createServer(requestHandler);
 
       server.requestTimeout = 30_000;
       server.headersTimeout = 10_000;
@@ -1535,6 +1544,30 @@ export function createDashboardServer(config: DashboardConfig): {
           reject(error);
         }
       });
+
+      if (config.server) {
+        // Adoption path: already listening. Swap the placeholder handler
+        // for the dashboard handler and read the port from the address.
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          reject(new Error('Failed to start dashboard server'));
+          return;
+        }
+        server.removeAllListeners('request');
+        server.on('request', requestHandler);
+        activeServer = server;
+        baseUrl = `http://127.0.0.1:${address.port}`;
+        if (closed) {
+          activeServer = null;
+          baseUrl = null;
+          closeServer(server);
+          reject(new Error('Dashboard server is closed.'));
+          return;
+        }
+        writeAuthFile(config.port, authToken);
+        resolve(baseUrl);
+        return;
+      }
 
       pendingServer = server;
       server.listen(config.port, '127.0.0.1', () => {

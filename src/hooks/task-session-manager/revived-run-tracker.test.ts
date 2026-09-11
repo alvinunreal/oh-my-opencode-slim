@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import { createRevivedRunTracker } from './revived-run-tracker';
 
@@ -6,6 +6,7 @@ function createHarness(
   messages: () => unknown,
   prompt = mock(async () => ({})),
   assertBound = false,
+  options: { stabilizationProbeDelayMs?: number } = {},
 ) {
   const board = new BackgroundJobBoard();
   board.registerLaunch({
@@ -57,6 +58,7 @@ function createHarness(
     input,
     backgroundJobBoard: board,
     notificationRetryDelayMs: 0,
+    ...options,
     onSettled: settled,
     pruneContext: pruned,
   });
@@ -69,6 +71,14 @@ function createHarness(
     pruned,
   };
 }
+
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+
+afterEach(() => {
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
+});
 
 describe('revived run tracker', () => {
   test('publishes a newer completed assistant turn and notifies the parent', async () => {
@@ -149,8 +159,15 @@ describe('revived run tracker', () => {
     expect(harness.prompt).not.toHaveBeenCalled();
   });
 
-  test('publishes an explicitly empty completed turn but rejects tool-call finishes', async () => {
+  test('settles terminal-empty output after scheduled stabilization probes', async () => {
     let toolCallFinish = true;
+    const scheduled: Array<() => void> = [];
+    globalThis.setTimeout = ((callback: () => void) => {
+      scheduled.push(callback);
+      return { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
     const harness = createHarness(() => ({
       data: [
         { info: { id: 'baseline', role: 'user' }, parts: [] },
@@ -172,18 +189,34 @@ describe('revived run tracker', () => {
       baselineMessageID: 'baseline',
       description: 'inspect the change',
     });
+
     expect(
       await harness.tracker.probe(harness.run.taskID, harness.run.generation),
     ).toBe(false);
-    expect(harness.board.get('ses_child')?.state).toBe('running');
+    expect(scheduled).toHaveLength(0);
 
     toolCallFinish = false;
     expect(
       await harness.tracker.probe(harness.run.taskID, harness.run.generation),
-    ).toBe(true);
+    ).toBe(false);
+    expect(scheduled).toHaveLength(1);
+
+    for (
+      let attempt = 0;
+      harness.board.get('ses_child')?.state === 'running' && attempt < 4;
+      attempt += 1
+    ) {
+      const callback = scheduled.shift();
+      if (!callback) throw new Error('missing stabilization probe');
+      callback();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
     expect(harness.board.get('ses_child')).toMatchObject({
-      state: 'completed',
-      resultSummary: '',
+      state: 'error',
+      resultSummary:
+        'Task ended without a public text result; completion is not confirmed',
     });
   });
 

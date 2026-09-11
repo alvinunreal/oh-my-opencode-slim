@@ -1,13 +1,13 @@
 import { z } from 'zod';
-import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from './constants';
+import { SUPPORTED_SPECIALIST_ROLES } from './agent-roles';
+import {
+  AGENT_THEME_COLORS,
+  DEFAULT_MAX_RETAINED_SNAPSHOTS,
+} from './constants';
 import { CouncilConfigSchema } from './council-schema';
+import { ProviderModelIdSchema } from './model-id-schema';
 
-export const ProviderModelIdSchema = z
-  .string()
-  .regex(
-    /^[^/\s]+\/[^\s]+$/,
-    'Expected provider/model format (provider/.../model)',
-  );
+export { ProviderModelIdSchema } from './model-id-schema';
 
 // Permission schemas — mirror the SDK's PermissionConfig type with shallow
 // validation. Action values are validated; unknown tool keys pass through.
@@ -49,7 +49,21 @@ export const PermissionConfigSchema = z.union([
   PermissionObjectSchema,
 ]);
 
+export const AgentColorSchema = z.union([
+  z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Expected a six-digit hex color (#RRGGBB)'),
+  z.enum(AGENT_THEME_COLORS),
+]);
+
 // Agent override configuration (distinct from SDK's AgentConfig)
+export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
+export const AgentBaseRoleSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
+export type AgentBaseRole = z.infer<typeof AgentBaseRoleSchema>;
+export type ModelInheritanceSource = z.infer<
+  typeof ModelInheritanceSourceSchema
+>;
+
 export const AgentOverrideConfigSchema = z
   .object({
     model: z
@@ -68,6 +82,8 @@ export const AgentOverrideConfigSchema = z
           .min(1),
       ])
       .optional(),
+    inheritModelFrom: ModelInheritanceSourceSchema.optional(),
+    baseRole: AgentBaseRoleSchema.optional(),
     temperature: z.number().min(0).max(2).optional(),
     variant: z.string().optional().catch(undefined),
     skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
@@ -76,6 +92,9 @@ export const AgentOverrideConfigSchema = z
     orchestratorPrompt: z.string().min(1).optional(),
     options: z.record(z.string(), z.unknown()).optional(), // provider-specific model options (e.g., textVerbosity, thinking budget)
     displayName: z.string().min(1).optional(),
+    color: AgentColorSchema.optional().describe(
+      'Agent display color as #RRGGBB or an OpenCode theme color',
+    ),
     description: z.string().min(1).optional(),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })
@@ -123,7 +142,112 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 /** Normalized model entry with optional per-model variant. */
 export type ModelEntry = { id: string; variant?: string };
 
-export const PresetSchema = z.record(z.string(), AgentOverrideConfigSchema);
+export const MarketplaceProfileTargetSchema = AgentBaseRoleSchema;
+export type MarketplaceProfileTarget = z.infer<
+  typeof MarketplaceProfileTargetSchema
+>;
+
+const MarketplacePackageIdSchema = z.string().trim().min(1);
+const MarketplacePackageIdsSchema = z
+  .array(MarketplacePackageIdSchema)
+  .superRefine((ids, ctx) => {
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Package IDs must be unique',
+      });
+    }
+  });
+
+/**
+ * User-owned preset configuration.  Agent overrides deliberately live below
+ * `agents`; reserved marketplace activation state must never be interpreted as
+ * an agent override.
+ *
+ * The activation shape is reserved in Phase 1 so the config contract is
+ * forward-compatible, but no package state or marketplace resolution is
+ * performed by this phase.
+ */
+export const MarketplaceActivationSchema = z
+  .object({
+    agents: MarketplacePackageIdsSchema.optional(),
+    profiles: z
+      .record(z.string(), MarketplacePackageIdSchema.nullable())
+      .superRefine((profiles, ctx) => {
+        const packageIds = Object.values(profiles).filter(
+          (packageId): packageId is string => packageId !== null,
+        );
+        if (new Set(packageIds).size !== packageIds.length) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Profile package IDs must be unique',
+          });
+        }
+        for (const target of Object.keys(profiles)) {
+          if (!MarketplaceProfileTargetSchema.safeParse(target).success) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [target],
+              message: `Unsupported profile target '${target}'`,
+            });
+          }
+        }
+      })
+      .optional(),
+  })
+  .superRefine((activation, ctx) => {
+    const packageIds = [
+      ...(activation.agents ?? []),
+      ...Object.values(activation.profiles ?? {}).filter(
+        (packageId): packageId is string => packageId !== null,
+      ),
+    ];
+    if (new Set(packageIds).size !== packageIds.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['agents'],
+        message: 'Activation package IDs must be unique',
+      });
+    }
+  })
+  .strict();
+
+export type MarketplaceActivation = z.infer<typeof MarketplaceActivationSchema>;
+
+function normalizeLegacyPreset(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+
+  const preset = value as Record<string, unknown>;
+  const { agents: structuredAgents, marketplace, ...legacyAgents } = preset;
+  if (Object.keys(legacyAgents).length === 0) return value;
+
+  // v3's explicit keys win when a mixed layout contains the same agent.
+  // Normalizing at the schema boundary keeps all runtime consumers on the
+  // structured representation.
+  return {
+    ...(marketplace === undefined ? {} : { marketplace }),
+    agents: {
+      ...legacyAgents,
+      ...(structuredAgents &&
+      typeof structuredAgents === 'object' &&
+      !Array.isArray(structuredAgents)
+        ? structuredAgents
+        : {}),
+    },
+  };
+}
+
+export const PresetSchema = z.preprocess(
+  normalizeLegacyPreset,
+  z
+    .object({
+      agents: z.record(z.string(), AgentOverrideConfigSchema).default({}),
+      marketplace: MarketplaceActivationSchema.optional(),
+    })
+    .strict(),
+);
 
 export type Preset = z.infer<typeof PresetSchema>;
 
@@ -154,6 +278,43 @@ export const InterviewConfigSchema = z.object({
 });
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
+
+const ConcurrencyLimitSchema = z.number().int().min(0).max(1000);
+
+export const BackgroundTaskConcurrencyConfigSchema = z
+  .object({
+    defaultConcurrency: z
+      .number()
+      .int()
+      .min(0)
+      .max(1000)
+      .default(0)
+      .describe(
+        'Maximum concurrently running native background tasks. 0 disables the default cap.',
+      ),
+    providerConcurrency: z
+      .record(z.string().min(1), ConcurrencyLimitSchema)
+      .default({})
+      .describe(
+        'Per-provider concurrency caps keyed by provider ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that provider.',
+      ),
+    modelConcurrency: z
+      .record(z.string().min(1), ConcurrencyLimitSchema)
+      .default({})
+      .describe(
+        'Per-model concurrency caps keyed by provider/model ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that model.',
+      ),
+  })
+  .strict()
+  .default({
+    defaultConcurrency: 0,
+    providerConcurrency: {},
+    modelConcurrency: {},
+  });
+
+export type BackgroundTaskConcurrencyConfig = z.infer<
+  typeof BackgroundTaskConcurrencyConfigSchema
+>;
 
 export const BackgroundJobsConfigSchema = z.object({
   strategy: z
@@ -192,10 +353,16 @@ export const BackgroundJobsConfigSchema = z.object({
         .describe(
           'Continuous parent-idle interval between orchestrator wake evaluations (60,000–2,147,483,647ms). Default 300,000 (5 minutes). 0 is invalid.',
         ),
+      mode: z
+        .enum(['auto', 'todo', 'children'])
+        .default('auto')
+        .describe(
+          'Wake-condition source. "auto" uses todo-gating on v1 hosts and children-driven degraded mode on v2 hosts (no todo surface there); "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. Default "auto".',
+        ),
     })
-    .default({ enabled: true, intervalMs: 300_000 })
+    .default({ enabled: true, intervalMs: 300_000, mode: 'auto' })
     .describe(
-      'Periodic orchestrator wake scheduler for idle sessions with incomplete todos. Default enabled at a 5-minute interval. Requires host session APIs (session.get, todo, children, status, promptAsync); inactive on the v2 shim.',
+      'Periodic orchestrator wake scheduler for idle sessions. v1: requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. v2: runs in children-driven degraded mode (requires session.list + promptAsync) and wakes while un-finished child sessions remain. Default enabled at a 5-minute interval.',
     ),
   wallClockTimeoutMs: z
     .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
@@ -212,6 +379,7 @@ export const BackgroundJobsConfigSchema = z.object({
     .describe(
       'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
     ),
+  concurrency: BackgroundTaskConcurrencyConfigSchema,
   waitForUserGuard: z
     .boolean()
     .default(true)
@@ -231,7 +399,6 @@ export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
  */
 export const LEGACY_FALLBACK_KEYS = [
   'timeoutMs',
-  'retryDelayMs',
   'retry_on_empty',
   'runtimeOverride',
 ] as const;
@@ -268,6 +435,25 @@ export const FailoverConfigSchema = z.preprocess(
           'Number of consecutive 429/rate-limit responses tolerated on the ' +
             'same model before aborting (or swapping to the next fallback ' +
             'model when a chain is configured).',
+        ),
+      initialRetryDelayMs: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe(
+          'Delay in milliseconds before triggering the first fallback on a ' +
+            'failover-worthy error. Gives intercepting plugins time to recover ' +
+            'the current model before the fallback chain advances. 0 disables.',
+        ),
+      retryDelayMs: z
+        .number()
+        .int()
+        .min(0)
+        .default(500)
+        .describe(
+          'Delay in milliseconds between consecutive fallback attempts ' +
+            'after the initial trigger. 0 disables.',
         ),
     })
     .strict(),
@@ -460,9 +646,10 @@ export const PluginConfigSchema = z
 
     if (value.presets) {
       for (const [presetName, preset] of Object.entries(value.presets)) {
-        rejectOrchestratorPromptOnOrchestrator(preset, ctx, [
+        rejectOrchestratorPromptOnOrchestrator(preset.agents, ctx, [
           'presets',
           presetName,
+          'agents',
         ]);
       }
     }

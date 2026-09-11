@@ -1,5 +1,10 @@
 import { describe, expect, mock, test } from 'bun:test';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { BackgroundJobBoard } from '../../utils';
+import { buildPluginInput } from '../../v2/client-shim';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 
 function createReconciler(
@@ -427,5 +432,232 @@ describe('runtime status reconciliation', () => {
     await reconciliation;
 
     expect(board.get('child-1')).toMatchObject({ state: 'running' });
+  });
+
+  test('v2 shim client (no session.status) never confirms a stop', async () => {
+    // Capability gate: without client.session.status the reconciler skips
+    // entirely (single disable notice) instead of marking every running
+    // job uncertain every poll. Skipping is strictly safer than the old
+    // snapshot.error path for stop-confirmation: no lookup ever runs, so
+    // nothing can terminalize a still-running job.
+    const board = new BackgroundJobBoard();
+    const contextFilesForPrompt = mock(() => []);
+    const prune = mock(() => {});
+    const reconciler = createRuntimeStatusReconciler({
+      input: {
+        directory: '/test/project',
+        client: buildPluginInput({} as never).client,
+      } as never,
+      backgroundJobBoard: board,
+      stopConfirmationGraceMs: 0,
+      taskContextTracker: {
+        pendingManagedTaskIds: new Set(['child-1']),
+        contextFilesForPrompt,
+        prune,
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'shim status omission',
+      now: 0,
+    });
+    const listener = mock(() => {});
+    board.addTerminalStateListener(listener);
+
+    reconciler.schedule();
+    await reconciler.reconcile();
+    await reconciler.reconcile();
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      statusUncertain: false,
+    });
+    expect(board.get('child-1')?.lastStatusError).toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
+    expect(contextFilesForPrompt).not.toHaveBeenCalled();
+    expect(prune).not.toHaveBeenCalled();
+    reconciler.dispose();
+  });
+
+  test('v2 host: polling loop never arms, no uncertainty marks, and the disable notice logs exactly once', async () => {
+    // Board behavior is asserted in-process (no logger involved): the
+    // loop never arms and nothing is ever marked uncertain.
+    const board = new BackgroundJobBoard();
+    const reconciler = createRuntimeStatusReconciler({
+      // v2 shape: the session domain exists but has NO status method.
+      input: {
+        directory: '/test/project',
+        client: { session: {} },
+      } as never,
+      backgroundJobBoard: board,
+      delayMs: 1,
+      taskContextTracker: {
+        pendingManagedTaskIds: new Set(),
+        contextFilesForPrompt: () => [],
+        prune: () => {},
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'gate check',
+      now: 0,
+    });
+
+    // Repeated scheduling attempts (the event hook fires schedule()
+    // after every event) must arm nothing.
+    for (let index = 0; index < 5; index += 1) {
+      reconciler.schedule();
+      await new Promise((resolve) => setTimeout(resolve, 3));
+    }
+    await reconciler.reconcile();
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      statusUncertain: false,
+    });
+    reconciler.dispose();
+
+    // Log-file assertions run in a subprocess: other test files
+    // mock.module('../../utils/logger') globally in shared-process runs,
+    // so the real logger (and its file sink) is only observable with a
+    // pristine module registry.
+    const logDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-reconcile-log-'),
+    );
+    const workerSource = `
+      const { createRuntimeStatusReconciler } = await import(
+        process.env.RECONCILER_MODULE_URL
+      );
+      const { BackgroundJobBoard } = await import(
+        process.env.BOARD_MODULE_URL
+      );
+      const { initLogger, flushLoggerForTesting } = await import(
+        process.env.LOGGER_MODULE_URL
+      );
+      const { readFileSync } = await import('node:fs');
+      initLogger('reconcile-v2-gate');
+      const board = new BackgroundJobBoard();
+      const reconciler = createRuntimeStatusReconciler({
+        input: {
+          directory: '/test/project',
+          client: { session: {} },
+        },
+        backgroundJobBoard: board,
+        delayMs: 1,
+        taskContextTracker: {
+          pendingManagedTaskIds: new Set(),
+          contextFilesForPrompt: () => [],
+          prune: () => {},
+        },
+      });
+      board.registerLaunch({
+        taskID: 'child-1',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        description: 'worker gate check',
+        now: 0,
+      });
+      for (let index = 0; index < 5; index += 1) {
+        reconciler.schedule();
+        await new Promise((resolve) => setTimeout(resolve, 3));
+      }
+      await reconciler.reconcile();
+      reconciler.dispose();
+      await flushLoggerForTesting();
+      const contents = readFileSync(
+        process.env.LOG_FILE_PATH,
+        'utf8',
+      );
+      const lines = contents.split('\\n');
+      console.log(
+        JSON.stringify({
+          disableNotices: lines.filter((line) =>
+            line.includes('runtime status reconciliation disabled'),
+          ).length,
+          uncertainLines: lines.filter((line) =>
+            line.includes('reconciliation uncertain'),
+          ).length,
+        }),
+      );
+    `;
+    const proc = Bun.spawn([process.execPath, '-e', workerSource], {
+      cwd: import.meta.dir,
+      env: {
+        ...process.env,
+        OPENCODE_LOG_DIR: logDir,
+        RECONCILER_MODULE_URL: pathToFileURL(
+          path.join(import.meta.dir, 'runtime-status-reconciliation.ts'),
+        ).href,
+        BOARD_MODULE_URL: pathToFileURL(
+          path.join(import.meta.dir, '../../utils/index.ts'),
+        ).href,
+        LOGGER_MODULE_URL: pathToFileURL(
+          path.join(import.meta.dir, '../../utils/logger.ts'),
+        ).href,
+        LOG_FILE_PATH: path.join(
+          logDir,
+          'oh-my-opencode-slim.reconcile-v2-gate.log',
+        ),
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    await fs.rm(logDir, { recursive: true, force: true });
+    if (exitCode !== 0) {
+      console.error(stderr);
+      expect(exitCode).toBe(0);
+    }
+    const counts = JSON.parse(stdout.trim()) as {
+      disableNotices: number;
+      uncertainLines: number;
+    };
+    expect(counts.disableNotices).toBe(1);
+    expect(counts.uncertainLines).toBe(0);
+  });
+
+  test('v1 host (status fn present): schedule() arms the loop exactly as before', async () => {
+    const board = new BackgroundJobBoard();
+    const status = mock(async () => ({
+      data: { 'child-1': { type: 'busy' } },
+    }));
+    const reconciler = createRuntimeStatusReconciler({
+      input: {
+        directory: '/test/project',
+        client: { session: { status } },
+      } as never,
+      backgroundJobBoard: board,
+      delayMs: 1,
+      taskContextTracker: {
+        pendingManagedTaskIds: new Set(['child-1']),
+        contextFilesForPrompt: () => [],
+        prune: () => {},
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'v1 loop regression',
+      now: 0,
+    });
+
+    reconciler.schedule();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(status).toHaveBeenCalled();
+    expect(board.get('child-1')).toMatchObject({
+      state: 'running',
+      statusUncertain: false,
+    });
+    reconciler.dispose();
   });
 });

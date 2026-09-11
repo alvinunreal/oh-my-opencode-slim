@@ -4,6 +4,7 @@ import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import {
   BackgroundJobBoard,
   BackgroundJobSupervisor,
+  BackgroundTaskConcurrency,
   createInternalAgentTextPart,
   getBackgroundJobLifecycleLedger,
   SLIM_INTERNAL_INITIATOR_MARKER,
@@ -17,6 +18,10 @@ import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
   createTaskSessionManagerHook,
 } from './index';
+import {
+  createPendingCallTracker,
+  type PendingCallTracker,
+} from './pending-call-tracker';
 import { resetUserWaitGateForTests } from './user-wait-gate';
 
 // Route getClient back to _ctx.client so existing _ctx.client.session
@@ -114,6 +119,9 @@ type HookOptions = {
   willAttemptFallback?: (sessionID: string) => boolean;
   coordinator?: SessionLifecycle;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
+  backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+  pendingCallTracker?: PendingCallTracker;
+  getModelForAgent?: (agentType: string) => string | undefined;
 };
 
 function createHook(options?: HookOptions) {
@@ -137,6 +145,9 @@ function createHook(options?: HookOptions) {
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
       backgroundJobSupervisor: options?.backgroundJobSupervisor,
+      backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
+      pendingCallTracker: options?.pendingCallTracker,
+      getModelForAgent: options?.getModelForAgent,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
       isFallbackInProgress: options?.isFallbackInProgress,
@@ -234,6 +245,285 @@ describe('task-session-manager hook', () => {
   beforeEach(() => {
     // Process-global gate only — never reset inside createHook/production paths.
     resetUserWaitGateForTests();
+  });
+
+  test('queues background task admission until an earlier task releases its slot', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const { hook } = createHook({
+      backgroundTaskConcurrency: concurrency,
+      getModelForAgent: () => 'openai/fast',
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'first task',
+        },
+      },
+    );
+
+    const secondAdmission = hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      },
+    );
+    await Promise.resolve();
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { output: taskLaunchOutput('ses_first') },
+    );
+    concurrency.releaseTask('ses_first');
+    await secondAdmission;
+
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+  });
+
+  test('finishes a queued call after its manager generation is replaced', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const pendingCallTracker = createPendingCallTracker();
+    const firstGeneration = createHook({
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    await firstGeneration.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'first generation task',
+        },
+      },
+    );
+    await firstGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { output: taskLaunchOutput('child-1') },
+    );
+
+    const queuedCall = firstGeneration.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'handoff task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+
+    await firstGeneration.hook.event({
+      event: { type: 'server.instance.disposed' },
+    });
+
+    const secondGeneration = createHook({
+      backgroundJobBoard: new BackgroundJobBoard(),
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+    concurrency.releaseTask('child-1');
+    await queuedCall;
+    await secondGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      { output: taskLaunchOutput('child-2') },
+    );
+
+    expect(secondGeneration.hook).toBeDefined();
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+    concurrency.releaseTask('child-2');
+  });
+
+  test('hands an early session.created registration to the next generation', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const pendingCallTracker = createPendingCallTracker();
+    const firstBoard = new BackgroundJobBoard();
+    // Force the source registration onto a different board-generation number
+    // than the fresh target board. The handoff must update the generation
+    // fence rather than rejecting the valid terminal result as stale.
+    firstBoard.registerLaunch({
+      taskID: 'child-early',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'stale prior run',
+    });
+    firstBoard.drop('child-early');
+    const firstGeneration = createHook({
+      backgroundJobBoard: firstBoard,
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    await firstGeneration.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-early' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'early handoff task',
+        },
+      },
+    );
+    await firstGeneration.hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'child-early',
+            parentID: 'parent-1',
+            agent: 'explorer',
+          },
+        },
+      },
+    });
+    expect(firstBoard.get('child-early')).toMatchObject({
+      state: 'running',
+      agent: 'explorer',
+    });
+
+    await firstGeneration.hook.event({
+      event: { type: 'server.instance.disposed' },
+    });
+
+    const secondBoard = new BackgroundJobBoard();
+    const secondGeneration = createHook({
+      backgroundJobBoard: secondBoard,
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    expect(firstBoard.get('child-early')).toBeUndefined();
+    expect(secondBoard.get('child-early')).toMatchObject({
+      state: 'running',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+
+    const terminalOutput = [
+      'task_id: child-early',
+      'state: completed',
+      '',
+      '<task_result>',
+      'completed after handoff',
+      '</task_result>',
+    ].join('\n');
+    // The disposed generation must not consume the transferred pending call
+    // or release its still-live admission ticket.
+    await firstGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-early' },
+      { output: terminalOutput },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+
+    await secondGeneration.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-early' },
+      { output: terminalOutput },
+    );
+
+    expect(secondBoard.get('child-early')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'completed after handoff',
+    });
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+  });
+
+  test('parent deletion cancels queued calls owned by the shared tracker', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    const pendingCallTracker = createPendingCallTracker();
+    const { hook } = createHook({
+      coordinator,
+      backgroundTaskConcurrency: concurrency,
+      pendingCallTracker,
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      { args: { background: true, subagent_type: 'explorer' } },
+    );
+    const queuedCall = hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+      { args: { background: true, subagent_type: 'fixer' } },
+    );
+
+    coordinator.dispatchSessionDeleted('parent-1');
+    await expect(queuedCall).rejects.toThrow(
+      'Background task concurrency queue was cancelled',
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+  });
+
+  test('exempts managed-task sessions from background admission (nested orchestration)', async () => {
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    // A session that is itself a managed background task.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_child',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'nested orchestrator',
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      getModelForAgent: () => 'openai/fast',
+    });
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'explorer',
+          description: 'outer task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+
+    // The only slot is taken, so a non-exempt caller would queue here and
+    // never be admitted while the managed child stays blocked on itself.
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'ses_child', callID: 'call-2' },
+      {
+        args: {
+          background: true,
+          subagent_type: 'librarian',
+          description: 'nested task',
+        },
+      },
+    );
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
   });
 
   test('ignores messages without OpenCode info or parts', async () => {
@@ -2925,7 +3215,7 @@ describe('task-session-manager hook', () => {
     });
   });
 
-  test('new synthetic message occurrence updates board after task relaunch with same state/result', async () => {
+  test('does not accept an unobserved weak occurrence after task relaunch', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
 
@@ -2967,9 +3257,9 @@ describe('task-session-manager hook', () => {
 
     await transformMessages(hook, firstMessages);
     expect(board.get('child-1')).toMatchObject({
-      state: 'completed',
-      terminalUnreconciled: true,
-      resultSummary: 'same result',
+      state: 'running',
+      statusUncertain: true,
+      terminalUnreconciled: false,
     });
 
     // Relaunch same task ID
@@ -2985,7 +3275,7 @@ describe('task-session-manager hook', () => {
       terminalUnreconciled: false,
     });
 
-    // New synthetic message occurrence with same state/result - should update to terminal
+    // A weak occurrence without runtime provenance remains fail-closed.
     const secondMessages = {
       messages: [
         {
@@ -3016,11 +3306,11 @@ describe('task-session-manager hook', () => {
 
     await transformMessages(hook, secondMessages);
 
-    // Should be terminal again because this is a new message occurrence
+    // The unobserved weak occurrence remains fail-closed.
     expect(board.get('child-1')).toMatchObject({
-      state: 'completed',
-      terminalUnreconciled: true,
-      resultSummary: 'same result',
+      state: 'running',
+      statusUncertain: true,
+      terminalUnreconciled: false,
     });
   });
 
@@ -5467,8 +5757,8 @@ describe('task-session-manager hook', () => {
 
     const oldCompletion = {
       type: 'text',
-      id: 'generation-one-completion',
       synthetic: true,
+      messageID: 'generation-one-message',
       text: [
         '<task id="child-relaunch" state="completed">',
         '<summary>Background task completed: first run</summary>',
@@ -5757,7 +6047,7 @@ describe('task-session-manager hook', () => {
     expect(terminalListener).not.toHaveBeenCalled();
   });
 
-  test('does not upgrade an ambiguous occurrence without a deletion epoch', async () => {
+  test('accepts a host messageID occurrence in the current generation', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
     board.addTerminalStateListener(terminalListener);
@@ -5772,7 +6062,7 @@ describe('task-session-manager hook', () => {
       description: 'ambiguous observation',
     });
 
-    const completion = {
+    const observedCompletion = {
       type: 'text',
       synthetic: true,
       messageID: 'ambiguous-message',
@@ -5788,7 +6078,148 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: {
         type: 'message.part.updated',
-        properties: { part: completion },
+        properties: { part: observedCompletion },
+      },
+    });
+    const transformedCompletion = { ...observedCompletion };
+    delete transformedCompletion.messageID;
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'ambiguous-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [transformedCompletion],
+        },
+      ],
+    } as never);
+
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'ambiguous-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [{ ...transformedCompletion }],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-ambiguous')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'uncertain result',
+      terminalUnreconciled: true,
+    });
+    expect(terminalListener).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps a host completion without observed provenance fail-closed', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-no-host-provenance',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'no host provenance',
+    });
+
+    const completion = {
+      type: 'text',
+      synthetic: true,
+      messageID: 'unobserved-host-message',
+      text: [
+        '<task id="child-no-host-provenance" state="completed">',
+        '<summary>Background task completed: unobserved</summary>',
+        '<task_result>unobserved result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'unobserved-host-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [{ ...completion, messageID: undefined }],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-no-host-provenance')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+      terminalUnreconciled: false,
+    });
+    expect(terminalListener).not.toHaveBeenCalled();
+  });
+
+  test('keeps an exact explicit ID collision independent from host provenance', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-explicit-host-prefix',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'explicit host prefix',
+    });
+    const hostCompletion = {
+      type: 'text',
+      synthetic: true,
+      messageID: 'collision-host-message',
+      text: [
+        '<task id="child-explicit-host-prefix" state="completed">',
+        '<summary>Background task completed: host</summary>',
+        '<task_result>host result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: hostCompletion },
+      },
+    });
+    const hostOrigin = [
+      ...getBackgroundJobLifecycleLedger(
+        board,
+      ).syntheticTerminalOccurrences.values(),
+    ][0];
+    if (!hostOrigin) throw new Error('host origin was not recorded');
+
+    const explicitCompletion = {
+      type: 'text',
+      id: hostOrigin.occurrenceID,
+      synthetic: true,
+      text: [
+        '<task id="child-explicit-host-prefix" state="completed">',
+        '<summary>Background task completed: explicit</summary>',
+        '<task_result>explicit result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: explicitCompletion },
       },
     });
     await hook['experimental.chat.messages.transform']({}, {
@@ -5799,12 +6230,294 @@ describe('task-session-manager hook', () => {
             agent: 'orchestrator',
             sessionID: 'parent-1',
           },
-          parts: [completion],
+          parts: [hostCompletion],
+        },
+      ],
+    } as never);
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [explicitCompletion],
         },
       ],
     } as never);
 
-    expect(board.get('child-ambiguous')).toMatchObject({
+    expect(board.get('child-explicit-host-prefix')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'explicit result',
+      terminalUnreconciled: true,
+    });
+    expect(terminalListener).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects weak provenance after relaunch without session deletion', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-undetected-relaunch',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+    const completion = {
+      type: 'text',
+      synthetic: true,
+      messageID: 'undetected-relaunch-message',
+      text: [
+        '<task id="child-undetected-relaunch" state="completed">',
+        '<summary>Background task completed: first run</summary>',
+        '<task_result>old result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    board.updateStatus({
+      taskID: 'child-undetected-relaunch',
+      state: 'completed',
+      resultSummary: 'first run',
+    });
+    const relaunched = board.registerLaunch({
+      taskID: 'child-undetected-relaunch',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+    terminalListener.mockClear();
+    // The old message is first observed only after the same-ID relaunch.
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: completion },
+      },
+    });
+
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'undetected-relaunch-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [{ ...completion, messageID: undefined }],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-undetected-relaunch')).toMatchObject({
+      generation: relaunched.generation,
+      state: 'running',
+      statusUncertain: true,
+      resultSummary: undefined,
+    });
+    expect(terminalListener).not.toHaveBeenCalled();
+  });
+
+  test('does not reject weak provenance after an unrelated task deletion', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-unrelated-delete',
+      parentSessionID: 'other-parent',
+      agent: 'explorer',
+      description: 'child-unrelated-delete',
+    });
+    board.registerLaunch({
+      taskID: 'child-valid-host',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'child-valid-host',
+    });
+    const completion = {
+      type: 'text',
+      synthetic: true,
+      messageID: 'valid-host-message',
+      text: [
+        '<task id="child-valid-host" state="completed">',
+        '<summary>Background task completed: valid host</summary>',
+        '<task_result>valid result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: completion },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-unrelated-delete' },
+      },
+    });
+
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'valid-host-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [{ ...completion, messageID: undefined }],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-valid-host')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'valid result',
+      terminalUnreconciled: true,
+    });
+    expect(terminalListener).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps a distinct weak origin after processing the first one fail-closed', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-processed-weak-origin',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'processed weak origin',
+    });
+    const completion = (result: string) => ({
+      type: 'text',
+      synthetic: true,
+      messageID: 'shared-processed-message',
+      text: [
+        '<task id="child-processed-weak-origin" state="completed">',
+        '<summary>Background task completed: processed</summary>',
+        `<task_result>${result}</task_result>`,
+        '</task>',
+      ].join('\n'),
+    });
+    const first = completion('first result');
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: first },
+      },
+    });
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'shared-processed-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [{ ...first, messageID: undefined }],
+        },
+      ],
+    } as never);
+
+    const second = completion('second result');
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: second },
+      },
+    });
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            id: 'shared-processed-message',
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [{ ...second, messageID: undefined }],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-processed-weak-origin')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'first result',
+      terminalUnreconciled: true,
+    });
+    expect(terminalListener).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps multiple current-generation host messageID origins fail-closed', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-multiple-host-origins',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'multiple host origins',
+    });
+
+    const completion = (messageID: string, result: string) => ({
+      type: 'text',
+      synthetic: true,
+      messageID,
+      text: [
+        '<task id="child-multiple-host-origins" state="completed">',
+        '<summary>Background task completed: multiple origins</summary>',
+        '<task_result>',
+        result,
+        '</task_result>',
+        '</task>',
+      ].join('\n'),
+    });
+    const first = completion('host-message-shared', 'first result');
+    const second = completion('host-message-shared', 'second result');
+
+    for (const part of [first, second]) {
+      await hook.event({
+        event: {
+          type: 'message.part.updated',
+          properties: { part },
+        },
+      });
+    }
+
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [first],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-multiple-host-origins')).toMatchObject({
       state: 'running',
       statusUncertain: true,
       terminalUnreconciled: false,
@@ -6135,6 +6848,55 @@ describe('task-session-manager hook', () => {
     const job = board.get('child-b');
     expect(job).toBeDefined();
     expect(job?.state).toBe('running');
+  });
+
+  test('deleting a parent releases its children admission slots (recursive-delete ordering)', async () => {
+    // A recursive delete can arrive parent-first, and a child mid-fallback
+    // is skipped entirely, so the parent's cleanup must release every
+    // child's slot itself — otherwise capacity is leaked forever.
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'parent-1',
+      parentSessionID: 'grandparent',
+      agent: 'orchestrator',
+      description: 'parent orchestrator',
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'child one',
+    });
+    board.registerLaunch({
+      taskID: 'child-2',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'child two',
+    });
+
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 10,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    // Every task holds an admission slot, as if it were running.
+    concurrency.restoreTask('parent-1', 'openai/orch');
+    concurrency.restoreTask('child-1', 'openai/child1');
+    concurrency.restoreTask('child-2', 'openai/child2');
+    expect(concurrency.snapshot()).toEqual({ active: 3, queued: 0 });
+
+    createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      backgroundTaskConcurrency: concurrency,
+      shouldManageSession: () => false,
+      isFallbackInProgress: () => false,
+    });
+
+    coordinator.dispatchSessionDeleted('parent-1');
+
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
   });
 
   test('session.created early-registers board job so after-hook cancellation cannot orphan the child', async () => {

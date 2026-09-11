@@ -101,6 +101,11 @@ export type ResolvedChunk = {
   rewritten: boolean;
   strategy?: ApplyPatchRescueStrategy;
   matchComparator?: MatchComparatorName;
+  // Half-open [canonical_start, canonical_end) range of the source lines
+  // covered by the canonical representation. Used to keep serialized chunks
+  // non-overlapping when rescue extends a chunk over shared context lines.
+  canonical_start: number;
+  canonical_end: number;
 };
 
 export type RescueResult =

@@ -1,5 +1,128 @@
 import { describe, expect, it } from 'bun:test';
-import { InterviewConfigSchema, PluginConfigSchema } from './schema';
+import {
+  InterviewConfigSchema,
+  PluginConfigSchema,
+  PresetSchema,
+  ProviderModelIdSchema,
+} from './schema';
+
+describe('structured preset schema', () => {
+  it('keeps agent overrides separate from reserved marketplace activation', () => {
+    const result = PresetSchema.safeParse({
+      agents: { explorer: { model: 'provider/explorer' } },
+      marketplace: {
+        agents: ['community/example'],
+        profiles: { librarian: null },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agents.explorer.model).toBe('provider/explorer');
+      expect(result.data.marketplace?.agents).toEqual(['community/example']);
+    }
+  });
+
+  it('normalizes the legacy flat preset agent map', () => {
+    const result = PresetSchema.safeParse({
+      explorer: { model: 'provider/explorer' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({
+        agents: { explorer: { model: 'provider/explorer' } },
+      });
+    }
+  });
+
+  it('gives structured agent overrides precedence in mixed presets', () => {
+    const result = PresetSchema.safeParse({
+      explorer: { model: 'legacy/explorer' },
+      agents: { explorer: { model: 'structured/explorer' } },
+      marketplace: { agents: ['community/example'] },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agents.explorer.model).toBe('structured/explorer');
+      expect(result.data.marketplace?.agents).toEqual(['community/example']);
+    }
+  });
+
+  it('normalizes package IDs and validates profile targets', () => {
+    const result = PresetSchema.safeParse({
+      marketplace: {
+        agents: ['  community/one  '],
+        profiles: { oracle: '  community/oracle  ' },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.marketplace?.agents).toEqual(['community/one']);
+      expect(result.data.marketplace?.profiles).toEqual({
+        oracle: 'community/oracle',
+      });
+    }
+  });
+
+  it('rejects duplicate package IDs and unsupported profile targets', () => {
+    const result = PresetSchema.safeParse({
+      marketplace: {
+        agents: ['community/one', ' community/one '],
+        profiles: { orchestrator: 'community/one' },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('ProviderModelIdSchema', () => {
+  it('accepts and preserves model remainders with spaces and nested segments', () => {
+    const ids = [
+      'of/MiniMax M3',
+      'of/Kimi K2.6',
+      'opencode-omniroute-live/of/Qwen3.8 27b',
+      'openai/gpt-5.6-luna',
+    ];
+
+    for (const id of ids) {
+      const result = ProviderModelIdSchema.safeParse(id);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toBe(id);
+      }
+    }
+  });
+
+  it('rejects missing provider/model parts and whitespace in the provider', () => {
+    for (const id of [
+      'model',
+      '/model',
+      'provider/',
+      ' provider/model',
+      'provider name/model',
+    ]) {
+      expect(ProviderModelIdSchema.safeParse(id).success).toBe(false);
+    }
+  });
+});
+
+describe('PluginConfigSchema ACP wrapper models', () => {
+  it('accepts and preserves a wrapper model ID with spaces and nested segments', () => {
+    const wrapperModel = 'opencode-omniroute-live/of/MiniMax M3';
+    const result = PluginConfigSchema.safeParse({
+      acpAgents: {
+        helper: {
+          command: 'acp-helper',
+          wrapperModel,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.acpAgents?.helper?.wrapperModel).toBe(wrapperModel);
+    }
+  });
+});
 
 describe('PluginConfigSchema image_routing', () => {
   it('accepts image_routing: direct with observer disabled', () => {
@@ -144,7 +267,7 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
   });
 
-  it('defaults orchestratorWake to enabled with a 5-minute interval', () => {
+  it('defaults orchestratorWake to enabled with a 5-minute interval and auto mode', () => {
     const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
 
     expect(result.success).toBe(true);
@@ -152,6 +275,7 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
         enabled: true,
         intervalMs: 300_000,
+        mode: 'auto',
       });
     }
   });
@@ -168,7 +292,30 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
         enabled: false,
         intervalMs: 120_000,
+        mode: 'auto',
       });
+    }
+  });
+
+  it('accepts explicit orchestratorWake.mode values', () => {
+    for (const mode of ['auto', 'todo', 'children'] as const) {
+      const result = PluginConfigSchema.safeParse({
+        backgroundJobs: { orchestratorWake: { mode } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.backgroundJobs?.orchestratorWake?.mode).toBe(mode);
+      }
+    }
+  });
+
+  it('rejects unknown orchestratorWake.mode values', () => {
+    for (const mode of ['child', 'todos', 'AUTO', '', null]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: { orchestratorWake: { mode } },
+        }).success,
+      ).toBe(false);
     }
   });
 
@@ -240,6 +387,72 @@ describe('PluginConfigSchema backgroundJobs', () => {
     if (result.success) {
       expect(result.data.backgroundJobs?.wallClockTimeoutMs).toBe(0);
       expect(result.data.backgroundJobs?.abortGraceMs).toBe(10_000);
+    }
+  });
+
+  it('defaults background task concurrency limits to disabled', () => {
+    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.concurrency).toEqual({
+        defaultConcurrency: 0,
+        providerConcurrency: {},
+        modelConcurrency: {},
+      });
+    }
+  });
+
+  it('accepts default, provider, and model concurrency limits', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: {
+        concurrency: {
+          defaultConcurrency: 2,
+          providerConcurrency: { openai: 3 },
+          modelConcurrency: { 'openai/gpt-5.6-luna': 1 },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects invalid background task concurrency limits', () => {
+    for (const concurrency of [
+      { defaultConcurrency: -1 },
+      { defaultConcurrency: 1001 },
+      { defaultConcurrency: 1.5 },
+      { providerConcurrency: { openai: -1 } },
+      { providerConcurrency: { openai: 1.5 } },
+      { modelConcurrency: { 'openai/gpt-5.6-luna': -1 } },
+      { modelConcurrency: { 'openai/gpt-5.6-luna': 1.5 } },
+    ]) {
+      expect(
+        PluginConfigSchema.safeParse({ backgroundJobs: { concurrency } })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it('accepts zero as unlimited for provider and model caps', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: {
+        concurrency: {
+          defaultConcurrency: 2,
+          providerConcurrency: { openai: 0 },
+          modelConcurrency: { 'openai/gpt-5.6-luna': 0 },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(
+        result.data.backgroundJobs?.concurrency?.providerConcurrency,
+      ).toEqual({ openai: 0 });
+      expect(result.data.backgroundJobs?.concurrency?.modelConcurrency).toEqual(
+        { 'openai/gpt-5.6-luna': 0 },
+      );
     }
   });
 

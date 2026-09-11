@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v2.webp" alt="oh-my-opencode-slim V2 Release" style="border-radius: 10px;">
+    <img src="img/v2.jpg" alt="oh-my-opencode-slim V2 Release" style="border-radius: 10px;">
   </a>
   <h3>✨ oh-my-opencode-slim ✨</h3>
 
@@ -48,6 +48,9 @@ The main idea is simple: instead of forcing one model to do everything, the plug
   models at runtime with `/preset`.
 - **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
   across 25 languages, and built-in MCPs for docs and GitHub code
+- **[Local marketplace](docs/marketplace.md)** - install and activate local
+  offline agent/profile packages from the CLI or the in-session
+  `marketplace` tool; changes apply after reload
   search.
 - **[Fully customizable](docs/configuration.md)** - custom agents, prompt
   overrides, per-agent skill/MCP permissions, and
@@ -108,6 +111,44 @@ have Bun installed:
 npx oh-my-opencode-slim@latest install
 ```
 
+### Local Marketplace Packages
+
+The marketplace lifecycle is local and offline. Package manifests are
+data-only, exact-version locked, and stored under the XDG data directory.
+Installation and preset activation are separate: install a package, then enable
+it in the active preset. Activated agents and profiles apply after the next
+OpenCode session/reload; the live registry is never hot-swapped.
+Manifests include bounded author, tag, license, plugin/role-contract,
+routing/delegation, role-target, capability, and override metadata. `instructions`
+is the single package instruction surface; profile packages declare explicit
+append/replace composition semantics. Executable fields,
+package-to-package dependencies, and arbitrary file maps are rejected.
+
+```bash
+bunx oh-my-opencode-slim marketplace install ./package.json
+bunx oh-my-opencode-slim marketplace list
+bunx oh-my-opencode-slim marketplace verify [author/name]
+bunx oh-my-opencode-slim marketplace update ./package-v2.json
+bunx oh-my-opencode-slim marketplace enable author/name
+bunx oh-my-opencode-slim marketplace profile librarian author/profile
+bunx oh-my-opencode-slim marketplace disable author/name
+bunx oh-my-opencode-slim marketplace remove author/name
+bunx oh-my-opencode-slim marketplace status
+```
+
+Use `update` explicitly to select a different exact version. `enable` activates
+an installed `agent` package in the active preset as a separately named
+role-derived agent. `profile` selects at most one installed `profile` package
+per supported specialist role; `--clear` writes a tombstone. Required skills
+and MCPs are preflighted against built-in capabilities and on-disk host
+configuration; missing required dependencies disable that package for the
+session. Optional requirements stay unavailable and are never auto-installed.
+`import` is an alias for `install` and records the canonical absolute local
+source path in the lockfile. Startup reads only the local store and never
+contacts a registry. The orchestrator can perform the same local lifecycle
+with the in-session `marketplace` tool; see
+[Local Marketplace](docs/marketplace.md).
+
 ### Run from Master
 
 Use this if you want the latest code, easier bug fixes, or a local setup for
@@ -131,6 +172,27 @@ git pull
 bun install
 bun run build
 ```
+
+### OpenCode v2 (`opencode2`)
+
+The same package runs on both OpenCode v1 and v2. On v2 you get the full
+agent pantheon, delegation through the host `subagent` tool (bridged into the
+background job board), all built-in tools and slash commands, auto-registered
+MCPs, `/preset` in the TUI, webfetch secondary-model summaries, rate-limit
+model fallback, and the orchestrator-wake scheduler in children-driven
+degraded mode (a periodic watchdog over stuck background children and
+unreconciled jobs). Multiplexer panes stay v1-only by design (v2 renders and
+notifies subagents natively).
+
+v2 auto-refreshes unpinned plugins on startup, so pin an exact version while
+both v2 and this adapter evolve quickly:
+
+```json
+{ "plugin": ["oh-my-opencode-slim@2.2.17"] }
+```
+
+Details, the feature matrix, and per-feature minimum v2 builds:
+[OpenCode v2 Compatibility](docs/opencode-v2-compatibility.md).
 
 ### Getting Started
 
@@ -165,6 +227,10 @@ Then:
 > Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, or kitty pane, so you can watch specialists work live while the Orchestrator continues coordinating the session.
 
 The default generated configuration includes both `openai` and `opencode-go` presets.
+Preset agent overrides are stored under each preset's explicit `agents` field;
+`marketplace` activation selects installed packages for that preset. Agent, model,
+skill, MCP, permission, and routing decisions are resolved once at startup and
+apply after the next reload rather than hot-swapping a live session.
 
 ```jsonc
 {
@@ -172,21 +238,25 @@ The default generated configuration includes both `openai` and `opencode-go` pre
   "preset": "openai",
   "presets": {
     "openai": {
-      "orchestrator": { "model": "openai/gpt-5.6-terra", "variant": "high", "skills": ["*"], "mcps": ["*", "!context7"] },
-      "oracle": { "model": "openai/gpt-5.6-sol", "variant": "high", "skills": ["simplify"], "mcps": [] },
-      "librarian": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": ["context7", "gh_grep"] },
-      "explorer": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": [] },
-      "designer": { "model": "openai/gpt-5.6-luna", "variant": "medium", "skills": [], "mcps": [] },
-      "fixer": { "model": "openai/gpt-5.6-luna", "variant": "high", "skills": [], "mcps": [] }
+      "agents": {
+        "orchestrator": { "model": "openai/gpt-5.6-terra", "variant": "high", "skills": ["*"], "mcps": ["*", "!context7"] },
+        "oracle": { "model": "openai/gpt-5.6-sol", "variant": "high", "skills": ["simplify"], "mcps": [] },
+        "librarian": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": ["context7", "gh_grep"] },
+        "explorer": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": [] },
+        "designer": { "model": "openai/gpt-5.6-luna", "variant": "medium", "skills": [], "mcps": [] },
+        "fixer": { "model": "openai/gpt-5.6-luna", "variant": "high", "skills": [], "mcps": [] }
+      }
     },
     "opencode-go": {
-      "orchestrator": { "model": "opencode-go/minimax-m3", "variant": "thinking" },
-      "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max" },
-      "librarian": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
-      "explorer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
-      "designer": { "model": "opencode-go/kimi-k2.7-code" },
-      "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
-      "observer": { "model": "opencode-go/mimo-v2.5" }
+      "agents": {
+        "orchestrator": { "model": "opencode-go/minimax-m3", "variant": "thinking" },
+        "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max" },
+        "librarian": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
+        "explorer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
+        "designer": { "model": "opencode-go/kimi-k2.7-code" },
+        "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
+        "observer": { "model": "opencode-go/mimo-v2.5" }
+      }
     }
   }
 }
@@ -236,7 +306,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/orchestrator.png" width="240" style="border-radius: 10px;">
+      <img src="img/orchestrator.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>Forged in the void of complexity.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -277,7 +347,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/explorer.png" width="240" style="border-radius: 10px;">
+      <img src="img/explorer.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The wind that carries knowledge.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -318,7 +388,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/oracle.png" width="240" style="border-radius: 10px;">
+      <img src="img/oracle.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The voice at the crossroads.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -362,7 +432,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/council.png" width="240" style="border-radius: 10px;">
+      <img src="img/council.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>Many minds, one verdict.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -408,7 +478,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/librarian.png" width="240" style="border-radius: 10px;">
+      <img src="img/librarian.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The weaver of understanding.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -449,7 +519,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/designer.png" width="240" style="border-radius: 10px;">
+      <img src="img/designer.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>Beauty is essential.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -490,7 +560,7 @@ If any agent fails to respond, check your provider authentication and config fil
 <table>
   <tr>
     <td width="30%" align="center" valign="top">
-      <img src="img/fixer.png" width="240" style="border-radius: 10px;">
+      <img src="img/fixer.jpg" width="240" style="border-radius: 10px;">
       <br><sub><i>The final step between vision and reality.</i></sub>
     </td>
     <td width="70%" valign="top">
@@ -671,6 +741,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | Doc | What it covers |
 |-----|----------------|
 | **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
+| **[OpenCode v2 Compatibility](docs/opencode-v2-compatibility.md)** | Run the same plugin on `opencode2`: feature matrix, minimum v2 builds, version pinning |
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Project Customization](docs/project-local-customization.md)** | Repository-specific custom agents, prompt overrides, per-agent skills, and precedence |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
@@ -679,6 +750,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `verification-planning`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `context7`, `gh_grep`, and how MCP permissions work per agent |
 | **[Tools](docs/tools.md)** | Built-in tool capabilities like `webfetch`, LSP tools, code search, and formatters |
+| **[Marketplace](docs/marketplace.md)** | Local offline package install, activation, status, and the in-session `marketplace` tool |
 
 ---
 
@@ -689,7 +761,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-104-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-111-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -839,6 +911,15 @@ Use this section as a map: start with installation, then jump to features, confi
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/zjm54321"><img src="https://avatars.githubusercontent.com/u/20168947?v=4?s=100" width="100px;" alt="落花有意"/><br /><sub><b>落花有意</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=zjm54321" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/JoJohanse"><img src="https://avatars.githubusercontent.com/u/97782983?v=4?s=100" width="100px;" alt="JoJohanse"/><br /><sub><b>JoJohanse</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=JoJohanse" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/Alfiegerner"><img src="https://avatars.githubusercontent.com/u/596188?v=4?s=100" width="100px;" alt="Alfiegerner"/><br /><sub><b>Alfiegerner</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=Alfiegerner" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/leducmaxime"><img src="https://avatars.githubusercontent.com/u/37900355?v=4?s=100" width="100px;" alt="Maxime Leduc"/><br /><sub><b>Maxime Leduc</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=leducmaxime" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/vmvarela"><img src="https://avatars.githubusercontent.com/u/11040851?v=4?s=100" width="100px;" alt="Victor M. Varela"/><br /><sub><b>Victor M. Varela</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=vmvarela" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/gitslim"><img src="https://avatars.githubusercontent.com/u/24612825?v=4?s=100" width="100px;" alt="gitslim"/><br /><sub><b>gitslim</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=gitslim" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/xiaolf0813"><img src="https://avatars.githubusercontent.com/u/314566924?v=4?s=100" width="100px;" alt="xiaolf0813"/><br /><sub><b>xiaolf0813</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=xiaolf0813" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/BaconDroid"><img src="https://avatars.githubusercontent.com/u/11067111?v=4?s=100" width="100px;" alt="BaconDroid"/><br /><sub><b>BaconDroid</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=BaconDroid" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://sprightly-strudel-e1f939.netlify.app/"><img src="https://avatars.githubusercontent.com/u/277080233?v=4?s=100" width="100px;" alt="Enoch"/><br /><sub><b>Enoch</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=bferanmi806-sketch" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

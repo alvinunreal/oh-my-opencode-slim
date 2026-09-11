@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const distEntry = path.join(repoRoot, 'dist', 'index.js');
+const opencodeVersion = process.env.OPENCODE_SMOKE_VERSION?.trim() || 'latest';
 
 function fail(message: string): never {
   throw new Error(message);
@@ -197,8 +198,10 @@ async function verifyHostSmoke(tarballPath: string) {
       ),
     );
 
-    console.log('Installing opencode-ai into isolated test root...');
-    run('bun', ['add', 'opencode-ai@latest'], { cwd: hostDir });
+    console.log(
+      `Installing opencode-ai@${opencodeVersion} into isolated test root...`,
+    );
+    run('bun', ['add', `opencode-ai@${opencodeVersion}`], { cwd: hostDir });
 
     const opencodeBin = path.join(hostDir, 'node_modules', '.bin', 'opencode');
     if (!existsSync(opencodeBin)) {

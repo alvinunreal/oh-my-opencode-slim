@@ -25,6 +25,8 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 - **BackgroundJobSupervisor** (`background-job-supervisor.ts`): One-shot wall-clock deadline supervision for background task runs: deadline timer → abort → grace timer → terminal finalization. Owns only timer/generation/abort mechanics.
 
+- **BackgroundTaskConcurrency** (`background-task-concurrency.ts`): Process-local admission scheduler for native background tasks. Tracks queued tickets and active provider/model capacity without owning Job Board lifecycle state.
+
 - **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map once per observation (5s bounded timeout). It distinguishes a valid absent session (`idle`) from malformed data or lookup failure (`unknown`) so lifecycle policy never treats schema drift as completion.
 
 - **Session Metadata** (`session-metadata.ts`): `SessionMetadataStore` — bounded session → agent/directory map with LRU eviction that never evicts active orchestrator sessions.

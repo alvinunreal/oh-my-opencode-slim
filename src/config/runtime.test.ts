@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { RuntimeConfig } from './runtime';
-import type { PluginConfig } from './schema';
+import { type PluginConfig, PluginConfigSchema } from './schema';
 
 const DIRECTORY = '/tmp/runtime-config-test';
 
@@ -34,13 +34,29 @@ describe('RuntimeConfig', () => {
     expect(runtime.agent('explorer')?.model).toBe('original');
   });
 
-  test('seed precedence: host override > runtime override > plugin file', () => {
+  test('resolves normalized legacy preset agents through the single preset path', () => {
+    resetRegistry();
+    const plugin = PluginConfigSchema.parse({
+      preset: 'legacy',
+      presets: {
+        legacy: { explorer: { model: 'legacy/explorer' } },
+      },
+    });
+    const runtime = RuntimeConfig.init(DIRECTORY, plugin);
+
+    expect(runtime.agent('explorer')?.model).toBe('legacy/explorer');
+    expect(runtime.plugin?.presets?.legacy).toEqual({
+      agents: { explorer: { model: 'legacy/explorer' } },
+    });
+  });
+
+  test('seed precedence: host override > root > selected preset', () => {
     resetRegistry();
     const plugin: PluginConfig = {
       preset: 'file',
       presets: {
-        file: { explorer: { model: 'preset-model' } },
-        runtime: { explorer: { model: 'runtime-model' } },
+        file: { agents: { explorer: { model: 'preset-model' } } },
+        runtime: { agents: { explorer: { model: 'runtime-model' } } },
       },
       agents: { explorer: { model: 'plugin-file-model' } },
     };
@@ -53,11 +69,11 @@ describe('RuntimeConfig', () => {
     // host wins over runtime override
     expect(runtime.agent('explorer')?.model).toBe('host-model');
 
-    // without host, runtime override wins over plugin file
+    // without host, root wins over the selected runtime preset
     runtime.captureHostConfig({});
-    expect(runtime.agent('explorer')?.model).toBe('runtime-model');
+    expect(runtime.agent('explorer')?.model).toBe('plugin-file-model');
 
-    // without runtime override, plugin file wins over preset agents
+    // without runtime override, the config-file preset remains below root
     runtime.setRuntimePreset(null);
     expect(runtime.agent('explorer')?.model).toBe('plugin-file-model');
   });
@@ -126,7 +142,17 @@ describe('RuntimeConfig', () => {
     });
     expect(runtime.backgroundJobs.maxSessionsPerAgent).toBe(2);
     expect(runtime.backgroundJobs.strategy).toBe('latest');
-    expect(runtime.fallback).toEqual({ enabled: true, maxRetries: 3 });
+    expect(runtime.backgroundJobs.concurrency).toEqual({
+      defaultConcurrency: 0,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    expect(runtime.fallback).toEqual({
+      enabled: true,
+      maxRetries: 3,
+      initialRetryDelayMs: 0,
+      retryDelayMs: 500,
+    });
     expect(runtime.webfetch.enabled).toBe(true);
     expect(runtime.acpAgents).toEqual({});
     expect(runtime.companion).toBeUndefined();
@@ -208,8 +234,10 @@ describe('RuntimeConfig', () => {
       preset: 'fast',
       presets: {
         fast: {
-          explorer: { model: 'provider/explorer' },
-          oracle: { model: 'provider/oracle' },
+          agents: {
+            explorer: { model: 'provider/explorer' },
+            oracle: { model: 'provider/oracle' },
+          },
         },
       },
     });
@@ -219,19 +247,50 @@ describe('RuntimeConfig', () => {
     const withOrch = RuntimeConfig.init(DIRECTORY, {
       preset: 'orch',
       presets: {
-        orch: { orchestrator: { model: 'provider/orch' } },
+        orch: { agents: { orchestrator: { model: 'provider/orch' } } },
       },
     });
     expect(withOrch.primaryModel).toBe('provider/orch');
   });
 
-  test('setRuntimePreset re-applies preset agents into agents() and preset()', () => {
+  test('active preset and root layers clear model inheritance in either direction', () => {
+    resetRegistry();
+    const presetWinsWithInheritance = RuntimeConfig.init(DIRECTORY, {
+      preset: 'lower',
+      presets: {
+        session: {
+          agents: { explorer: { inheritModelFrom: 'session' } },
+        },
+        lower: { agents: { explorer: { model: 'provider/lower' } } },
+      },
+    });
+    presetWinsWithInheritance.setRuntimePreset('session');
+    expect(presetWinsWithInheritance.agent('explorer')).toEqual({
+      inheritModelFrom: 'session',
+    });
+
+    resetRegistry();
+    const rootWinsWithModel = RuntimeConfig.init(DIRECTORY, {
+      preset: 'lower',
+      presets: {
+        lower: {
+          agents: { explorer: { inheritModelFrom: 'session' } },
+        },
+      },
+      agents: { explorer: { model: 'provider/higher' } },
+    });
+    expect(rootWinsWithModel.agent('explorer')).toEqual({
+      model: 'provider/higher',
+    });
+  });
+
+  test('setRuntimePreset selects preset agents below root agents()', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {
       preset: 'file',
       presets: {
-        file: { explorer: { model: 'file-preset-model' } },
-        runtime: { explorer: { model: 'runtime-preset-model' } },
+        file: { agents: { explorer: { model: 'file-preset-model' } } },
+        runtime: { agents: { explorer: { model: 'runtime-preset-model' } } },
       },
       agents: { explorer: { temperature: 0.2 } },
     });
@@ -280,6 +339,24 @@ describe('RuntimeConfig', () => {
     });
     expect(runtime.hostMcp()).toEqual({ context7: { type: 'remote' } });
     expect(runtime.smallModel()).toBe('host/small');
+  });
+
+  test('host snapshot is deeply immutable and isolated from the source', () => {
+    resetRegistry();
+    const hostConfig = {
+      agent: { explorer: { options: { nested: { value: 1 } } } },
+    };
+    const runtime = RuntimeConfig.init(DIRECTORY, {});
+    runtime.captureHostConfig(hostConfig);
+
+    expect(Object.isFrozen(runtime.host())).toBe(true);
+    expect(Object.isFrozen(runtime.hostAgent('explorer'))).toBe(true);
+    expect(Object.isFrozen(runtime.hostAgent('explorer')?.options)).toBe(true);
+    hostConfig.agent.explorer.options.nested.value = 2;
+    const nested = runtime.hostAgent('explorer')?.options?.nested as
+      | { value: number }
+      | undefined;
+    expect(nested?.value).toBe(1);
   });
 
   test('agent() is alias-aware for legacy names', () => {
@@ -360,6 +437,43 @@ describe('RuntimeConfig', () => {
     expect(runtime.runtimeChains['councillor-alpha']).toEqual([
       'provider/a1',
       'provider/a2',
+    ]);
+  });
+
+  test('modelArrays and runtimeChains retain nested spaced IDs and variants', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      preset: 'spaced',
+      presets: {
+        spaced: {
+          agents: {
+            explorer: {
+              model: [
+                {
+                  id: 'opencode-omniroute-live/of/MiniMax M3',
+                  variant: 'fast',
+                },
+                { id: 'of/Kimi K2.6', variant: 'balanced' },
+                'opencode-omniroute-live/of/Qwen3.8 27b',
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.modelArrays.explorer).toEqual([
+      {
+        id: 'opencode-omniroute-live/of/MiniMax M3',
+        variant: 'fast',
+      },
+      { id: 'of/Kimi K2.6', variant: 'balanced' },
+      { id: 'opencode-omniroute-live/of/Qwen3.8 27b' },
+    ]);
+    expect(runtime.runtimeChains.explorer).toEqual([
+      'opencode-omniroute-live/of/MiniMax M3',
+      'of/Kimi K2.6',
+      'opencode-omniroute-live/of/Qwen3.8 27b',
     ]);
   });
 

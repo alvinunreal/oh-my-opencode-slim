@@ -3,13 +3,19 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import {
+  parseJsonConfig,
+  parseJsonConfigFile,
+  stripJsonComments,
+} from '../config/jsonc';
+import { withMarketplaceLease, writeAtomic } from '../marketplace/lease';
+import type { MarketplacePaths } from '../marketplace/paths';
 import {
   INSTALLER_MANAGED_PLUGIN_OPTION,
   type PluginEntry,
@@ -30,6 +36,8 @@ import type {
   InstallConfig,
   OpenCodeConfig,
 } from './types';
+
+export { stripJsonComments } from '../config/jsonc';
 
 const PACKAGE_NAME = 'oh-my-opencode-slim';
 const DEFAULT_OPENCODE_AGENTS_TO_DISABLE = ['explore', 'general'] as const;
@@ -380,51 +388,140 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
   }
 }
 
-/**
- * Strip JSON comments (single-line // and multi-line) and trailing commas for JSONC support.
- */
-export function stripJsonComments(json: string): string {
-  const commentPattern = /\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g;
-  const trailingCommaPattern = /\\"|"(?:\\"|[^"])*"|(,)(\s*[}\]])/g;
-
-  return json
-    .replace(commentPattern, (match, commentGroup) =>
-      commentGroup ? '' : match,
-    )
-    .replace(trailingCommaPattern, (match, comma, closing) =>
-      comma ? closing : match,
-    );
-}
-
 export function parseConfigFile(path: string): {
   config: OpenCodeConfig | null;
   error?: string;
 } {
-  try {
-    if (!existsSync(path)) return { config: null };
-    const stat = statSync(path);
-    if (stat.size === 0) return { config: null };
-    // Strip a UTF-8 BOM (RFC 8259 permits one) so JSON.parse does not choke.
-    const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
-    if (content.trim().length === 0) return { config: null };
-    return { config: JSON.parse(stripJsonComments(content)) as OpenCodeConfig };
-  } catch (err) {
-    return { config: null, error: String(err) };
-  }
+  const result = parseJsonConfigFile(path);
+  return {
+    config: result.config as OpenCodeConfig | null,
+    error: result.error,
+  };
 }
 
 export function parseConfig(path: string): {
   config: OpenCodeConfig | null;
   error?: string;
 } {
-  const result = parseConfigFile(path);
-  if (result.config || result.error) return result;
+  const result = parseJsonConfig(path);
+  if (result.config || result.error) {
+    return {
+      config: result.config as OpenCodeConfig | null,
+      error: result.error,
+    };
+  }
 
   if (path.endsWith('.json')) {
     const jsoncPath = path.replace(/\.json$/, '.jsonc');
-    return parseConfigFile(jsoncPath);
+    return parseJsonConfigFile(jsoncPath) as {
+      config: OpenCodeConfig | null;
+      error?: string;
+    };
   }
   return { config: null };
+}
+
+function errnoCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function sleepSync(milliseconds: number): void {
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(sleeper, 0, 0, milliseconds);
+}
+
+function readFileBytes(filePath: string): string | null {
+  try {
+    return readFileSync(filePath, 'utf8');
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function configMutationPaths(filePath: string): MarketplacePaths {
+  const root = join(dirname(filePath), `.${basename(filePath)}.write-lock`);
+  return {
+    rootDir: root,
+    packagesDir: join(root, 'packages'),
+    lockfilePath: join(root, 'lock.json'),
+    lockDir: join(root, 'lock'),
+    breakerDir: join(root, 'lock.breaker'),
+    stagingDir: join(root, '.staging'),
+  };
+}
+
+function testMutationBarrier(point: string): void {
+  const dir = process.env.CONFIG_MUTATION_BARRIER_DIR;
+  if (!dir) return;
+  const waitPath = join(dir, `${point}.wait`);
+  try {
+    statSync(waitPath);
+  } catch {
+    return;
+  }
+  writeAtomic(join(dir, `${point}.reached`), `${process.pid}\n`);
+  const goPath = join(dir, `${point}.go`);
+  while (true) {
+    try {
+      statSync(goPath);
+      return;
+    } catch {
+      sleepSync(10);
+    }
+  }
+}
+
+function publishJsonFile(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  if (existsSync(filePath)) {
+    copyFileSync(filePath, `${filePath}.bak`);
+  }
+  writeAtomic(filePath, content);
+}
+
+function withSerializedConfigWrite<T>(filePath: string, operation: () => T): T {
+  return withMarketplaceLease(
+    configMutationPaths(filePath),
+    (lease) => lease.commit(operation),
+    {},
+  );
+}
+
+/**
+ * Whole-file read-modify-write serialized by the generation-safe lease.
+ */
+export function mutateJsonFile(
+  filePath: string,
+  mutate: (current: unknown) => unknown,
+): void {
+  withSerializedConfigWrite(filePath, () => {
+    if (filePath.endsWith('.jsonc')) {
+      console.warn(
+        '[config-manager] Writing to .jsonc file - comments will not be preserved',
+      );
+    }
+    const original = readFileBytes(filePath);
+    const parsed =
+      original === null
+        ? null
+        : (JSON.parse(
+            stripJsonComments(original.replace(/^\uFEFF/, '')),
+          ) as unknown);
+    testMutationBarrier('config-rmw-read');
+    publishJsonFile(filePath, `${JSON.stringify(mutate(parsed), null, 2)}\n`);
+  });
+}
+
+/**
+ * Write JSON to disk atomically under the generation-safe lease.
+ */
+export function writeJsonAtomic(filePath: string, value: unknown): void {
+  withSerializedConfigWrite(filePath, () => {
+    publishJsonFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  });
 }
 
 /**
@@ -436,19 +533,7 @@ export function writeConfig(configPath: string, config: OpenCodeConfig): void {
       '[config-manager] Writing to .jsonc file - comments will not be preserved',
     );
   }
-
-  const tmpPath = `${configPath}.tmp`;
-  const bakPath = `${configPath}.bak`;
-  const content = `${JSON.stringify(config, null, 2)}\n`;
-
-  // Backup existing config if it exists
-  if (existsSync(configPath)) {
-    copyFileSync(configPath, bakPath);
-  }
-
-  // Atomic write pattern: write to tmp, then rename
-  writeFileSync(tmpPath, content);
-  renameSync(tmpPath, configPath);
+  writeJsonAtomic(configPath, config);
 }
 
 export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
@@ -553,19 +638,7 @@ export function writeLiteConfig(
   try {
     ensureConfigDir();
     const config = generateLiteConfig(installConfig);
-
-    // Atomic write for lite config too
-    const tmpPath = `${configPath}.tmp`;
-    const bakPath = `${configPath}.bak`;
-    const content = `${JSON.stringify(config, null, 2)}\n`;
-
-    // Backup existing config if it exists
-    if (existsSync(configPath)) {
-      copyFileSync(configPath, bakPath);
-    }
-
-    writeFileSync(tmpPath, content);
-    renameSync(tmpPath, configPath);
+    writeJsonAtomic(configPath, config);
 
     return { success: true, configPath };
   } catch (err) {
@@ -685,9 +758,10 @@ export function detectCurrentConfig(): DetectedConfig {
     const configObj = liteConfig as Record<string, unknown>;
     const presetName = configObj.preset as string;
     const presets = configObj.presets as Record<string, unknown>;
-    const agents = presets?.[presetName] as
-      | Record<string, { model?: unknown }>
+    const preset = presets?.[presetName] as
+      | { agents?: Record<string, { model?: unknown }> }
       | undefined;
+    const agents = preset?.agents;
 
     if (agents && typeof agents === 'object') {
       const models = Object.values(agents)

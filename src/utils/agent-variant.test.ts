@@ -58,6 +58,12 @@ describe('resolveRuntimeAgentName', () => {
     );
   });
 
+  test('resolves legacy aliases to internal names', () => {
+    expect(
+      resolveRuntimeAgentName(runtimeFor({} as PluginConfig), 'explore'),
+    ).toBe('explorer');
+  });
+
   test('resolves displayName with @ prefix and whitespace', () => {
     const config = {
       agents: {
@@ -80,6 +86,26 @@ describe('resolveRuntimeAgentName', () => {
     expect(resolveRuntimeAgentName(runtimeFor(config), 'researcher')).toBe(
       'explorer',
     );
+  });
+
+  test('resolves aliases from the final registry mappings', () => {
+    expect(
+      resolveRuntimeAgentName(
+        {
+          canonicalIdByRuntimeName: {
+            docsresearcher: 'docsresearcher',
+            docsalias: 'docsresearcher',
+            explore: 'explorer',
+            explorer: 'explorer',
+          },
+          runtimeNameByCanonicalId: {
+            docsresearcher: 'docsalias',
+            explorer: 'explorer',
+          },
+        },
+        '@docsalias',
+      ),
+    ).toBe('docsresearcher');
   });
 
   test('returns normalized name when no displayName match exists', () => {

@@ -7,6 +7,16 @@
  * job board is never consulted. Progress/reservation state is process-global
  * so independently created hook instances share one-flight and the two-wake
  * no-progress cap.
+ *
+ * v2 hosts (hostFlavor 'v2', stamped by the client shim) have no todo/
+ * children/status surfaces, so the scheduler runs there in a children-driven
+ * degraded mode: children are enumerated via `session.list({parentID})`
+ * (event-tracked fallback when the listing is unavailable), the wake
+ * condition is "children without a terminal outcome" plus stopped-job
+ * recovery, and the wake prompt is delivered with `delivery: 'queue'`
+ * (v1 prompt_async queued; v2 steer would hijack an in-flight run). All new
+ * behavior is behind the host-flavor/capability probe — the v1 code path is
+ * unchanged.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { OpencodeClient } from '@opencode-ai/sdk';
@@ -43,8 +53,22 @@ export const ORCHESTRATOR_WAKE_TEXT =
 export const ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT =
   '<system-reminder>\nA background job stopped without a terminal result. Consult the Background Job Board, recover or reroute the work as needed, and do not wait for that job as if it were still running. Do not respond to this reminder.\n</system-reminder>';
 
+/** Children-mode variant (v2 degraded mode): watchdog over background
+ * children and unreconciled jobs instead of the todo list. */
+export const ORCHESTRATOR_CHILDREN_WAKE_TEXT =
+  '<system-reminder>\nCheck on unfinished background child sessions and unreconciled jobs. Await running agents; if one appears stuck, assess it and cancel/respawn only when justified. Do not respond to this reminder.\n</system-reminder>';
+
 /** After this many successful wakes with an unchanged fingerprint, stop. */
 export const ORCHESTRATOR_WAKE_UNCHANGED_CAP = 2;
+
+/**
+ * Children-driven mode: a child with `outcome === undefined` counts as
+ * inactive once its newest update evidence (host `time.updated` or a
+ * tracked status change) is older than this multiple of the wake interval.
+ * Bounds wakes when a child crashes mid-run without recording an outcome;
+ * stopped-job recovery remains the explicit path for such children.
+ */
+export const CHILD_STALENESS_INTERVALS = 3;
 
 const SUPPORTED_TODO_STATUSES = new Set([
   'pending',
@@ -54,6 +78,30 @@ const SUPPORTED_TODO_STATUSES = new Set([
 ]);
 
 type SessionClient = OpencodeClient['session'];
+
+/** Todo-mode host snapshot (v1): todos + children + live status map. */
+type TodoModeSnapshot = {
+  kind: 'todo';
+  todos: Array<Record<string, unknown>>;
+  children: Array<Record<string, unknown>>;
+  status: Record<string, unknown>;
+  model?: ContinuationModelSelection;
+};
+
+/** Children-mode snapshot (v2 degraded mode / explicit 'children'). */
+type ChildrenModeSnapshot = {
+  kind: 'children';
+  children: Array<WakeChildInfo>;
+  /** v1 status-map parent activity (v2 has no status map; the event-tracked
+   * race guard covers it). */
+  hostParentActive: boolean;
+  model?: ContinuationModelSelection;
+};
+
+type WakeSnapshot = TodoModeSnapshot | ChildrenModeSnapshot;
+
+/** Checkpoint verdict shared by both wake modes. */
+type SnapshotVerdict = 'parent-active' | 'children-active' | 'no-work' | 'wake';
 
 type LocalSessionState = {
   /** Invalidates local timers/async work for this hook instance. */
@@ -65,6 +113,10 @@ type LocalSessionState = {
 export type OrchestratorWakeConfig = {
   enabled: boolean;
   intervalMs: number;
+  /** Wake-condition source; resolved against host capabilities (see
+   * `resolveWakeMode`). Optional for callers built before the field
+   * existed — absent means 'auto'. */
+  mode?: 'auto' | 'todo' | 'children';
 };
 
 export type OrchestratorWakeOptions = {
@@ -77,22 +129,159 @@ export type OrchestratorWakeOptions = {
   intervalMs?: number;
 };
 
-function hasRequiredSessionApis(
+/**
+ * Capability record for the host session surface. The v1 branch keeps
+ * exactly the historical probe set (get/todo/children/status/promptAsync);
+ * the v2 branch (hostFlavor 'v2', stamped by the client shim) requires only
+ * list+promptAsync — `get` is optional enrichment and todo/children/status
+ * have no v2 equivalent (children-driven degraded mode covers them).
+ */
+export type WakeSessionApis = {
+  flavor: 'v1' | 'v2';
+  hasGet: boolean;
+  hasTodo: boolean;
+  hasChildren: boolean;
+  hasStatus: boolean;
+  hasList: boolean;
+  hasPromptAsync: boolean;
+  /** True when the scheduler can operate against this host surface. */
+  ready: boolean;
+};
+
+function probeSessionApis(
   session: SessionClient | undefined,
-): session is SessionClient & {
-  get: NonNullable<SessionClient['get']>;
-  todo: NonNullable<SessionClient['todo']>;
-  children: NonNullable<SessionClient['children']>;
-  status: NonNullable<SessionClient['status']>;
-  promptAsync: NonNullable<SessionClient['promptAsync']>;
-} {
-  return (
-    typeof session?.get === 'function' &&
-    typeof session.todo === 'function' &&
-    typeof session.children === 'function' &&
-    typeof session.status === 'function' &&
-    typeof session.promptAsync === 'function'
-  );
+  hostFlavor: string | undefined,
+): WakeSessionApis {
+  const flavor = hostFlavor === 'v2' ? ('v2' as const) : ('v1' as const);
+  const caps = {
+    flavor,
+    hasGet: typeof session?.get === 'function',
+    hasTodo: typeof session?.todo === 'function',
+    hasChildren: typeof session?.children === 'function',
+    hasStatus: typeof session?.status === 'function',
+    hasList: typeof session?.list === 'function',
+    hasPromptAsync: typeof session?.promptAsync === 'function',
+  } as WakeSessionApis;
+  caps.ready =
+    flavor === 'v2'
+      ? caps.hasList && caps.hasPromptAsync
+      : caps.hasGet &&
+        caps.hasTodo &&
+        caps.hasChildren &&
+        caps.hasStatus &&
+        caps.hasPromptAsync;
+  return caps;
+}
+
+export type ResolvedWakeMode = 'todo' | 'children';
+
+/**
+ * Resolve the configured wake mode against host capabilities: 'auto' uses
+ * todo-gating on v1 and children-driven degraded mode on v2; an explicit
+ * 'todo' degrades to children on hosts without the todo API (v2).
+ */
+export function resolveWakeMode(
+  configured: 'auto' | 'todo' | 'children' | undefined,
+  caps: Pick<WakeSessionApis, 'flavor' | 'hasTodo'>,
+): ResolvedWakeMode {
+  if (configured === 'children') return 'children';
+  if (configured === 'todo') {
+    return caps.flavor === 'v2' || !caps.hasTodo ? 'children' : 'todo';
+  }
+  return caps.flavor === 'v2' ? 'children' : 'todo';
+}
+
+/** Normalized child view for children-driven wake decisions. */
+export type WakeChildInfo = {
+  id: string;
+  /** v2 Session.Info.outcome — present only on terminal transition
+   * (succeeded|failed|interrupted). */
+  outcome?: string;
+  /** Workspace directory when the host reports it (scope filter). */
+  directory?: string;
+  /** Newest update-evidence timestamp (epoch ms) when known. */
+  evidenceAt?: number;
+};
+
+/** Event-tracked session status (busy-set + parent-active race guard). */
+export type TrackedSessionStatus = { status: 'busy' | 'idle'; at: number };
+
+/** Numeric variant of the update-evidence cascade (staleness bound). */
+export function childUpdateEvidenceMs(
+  child: Record<string, unknown>,
+): number | undefined {
+  const time = isObjectRecord(child.time) ? child.time : undefined;
+  const candidates = [
+    time?.updated,
+    time?.completed,
+    child.updatedAt,
+    child.updated,
+    time?.created,
+    child.createdAt,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/** Map one host child/list entry to the normalized children-mode view. */
+export function mapWakeChild(
+  child: Record<string, unknown>,
+): WakeChildInfo | undefined {
+  if (typeof child.id !== 'string' || !child.id) return undefined;
+  const info: WakeChildInfo = { id: child.id };
+  if (typeof child.outcome === 'string' && child.outcome) {
+    info.outcome = child.outcome;
+  }
+  if (typeof child.directory === 'string' && child.directory) {
+    info.directory = child.directory;
+  }
+  const evidence = childUpdateEvidenceMs(child);
+  if (evidence !== undefined) {
+    info.evidenceAt = evidence;
+  }
+  return info;
+}
+
+/**
+ * Active-child determination for children-driven mode: a terminal outcome
+ * always wins; otherwise the child is active while its newest evidence —
+ * host update time OR tracked status change (the event busy-set) — is
+ * fresher than the staleness bound. Children with no evidence at all are
+ * inactive (cannot be proven active).
+ */
+export function isWakeChildActive(
+  child: WakeChildInfo,
+  tracked: TrackedSessionStatus | undefined,
+  now: number,
+  stalenessMs: number,
+): boolean {
+  if (child.outcome !== undefined) return false;
+  const evidenceAt = Math.max(child.evidenceAt ?? 0, tracked?.at ?? 0);
+  if (evidenceAt <= 0) return false;
+  return now - evidenceAt <= stalenessMs;
+}
+
+/** Children-mode fingerprint: id + outcome + tracked status + evidence. */
+export function buildChildrenWakeFingerprint(
+  children: Array<WakeChildInfo>,
+  trackedStatuses: ReadonlyMap<string, TrackedSessionStatus>,
+): string {
+  return children
+    .map((child) => {
+      const tracked = trackedStatuses.get(child.id);
+      return [
+        child.id,
+        child.outcome ?? '',
+        tracked?.status ?? '',
+        String(child.evidenceAt ?? ''),
+      ].join(':');
+    })
+    .sort()
+    .join('\n');
 }
 
 function isIncompleteTodoStatus(status: string): boolean {
@@ -225,12 +414,80 @@ export function createOrchestratorWakeScheduler(
   const directory = ctx.directory;
   const sessionSdk = (ctx.client as OpencodeClient).session;
 
+  /** Static host-surface capability record (the client never changes). */
+  const capabilities = probeSessionApis(
+    sessionSdk,
+    (ctx as PluginInput & { hostFlavor?: string }).hostFlavor,
+  );
+  const wakeMode = resolveWakeMode(options.config.mode, capabilities);
+  if (enabled && capabilities.flavor === 'v2' && !capabilities.hasTodo) {
+    log(
+      '[orchestrator-wake] host provides no session todo API; running in children-driven degraded mode',
+      { directory },
+    );
+  }
+
   /** Local timer/generation state only; progress lives in the process gate. */
   const localSessions = new Map<string, LocalSessionState>();
   /** Reservations this hook owns and must release when it is disposed. */
   const localWakeOwners = new Map<string, symbol>();
   const pendingStoppedRecoveries = new Set<string>();
+  /** Event-tracked session statuses (busy-set + parent race guard). */
+  const lastStatusBySession = new Map<string, TrackedSessionStatus>();
+  /** parentID → child session ids observed via session.created events. */
+  const childSessions = new Map<string, Set<string>>();
+  /** Newest event evidence (created/status change) per child, epoch ms. */
+  const childEvidence = new Map<string, number>();
   let disposed = false;
+
+  /** Bound for the event-tracked bookkeeping maps (FIFO eviction). */
+  const MAX_EVENT_TRACKED_SESSIONS = 512;
+
+  function boundTrackedMap<T>(map: Map<string, T>): void {
+    while (map.size > MAX_EVENT_TRACKED_SESSIONS) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+
+  function recordTrackedStatus(
+    sessionID: string,
+    status: 'busy' | 'idle',
+  ): void {
+    const now = Date.now();
+    lastStatusBySession.set(sessionID, { status, at: now });
+    boundTrackedMap(lastStatusBySession);
+    if (childEvidence.has(sessionID)) {
+      childEvidence.set(sessionID, now);
+      boundTrackedMap(childEvidence);
+    }
+  }
+
+  function recordChildSession(parentID: string, childID: string): void {
+    let kids = childSessions.get(parentID);
+    if (!kids) {
+      kids = new Set();
+      childSessions.set(parentID, kids);
+      boundTrackedMap(childSessions);
+    }
+    kids.add(childID);
+    childEvidence.set(childID, Date.now());
+    boundTrackedMap(childEvidence);
+  }
+
+  function forgetSessionEvents(sessionID: string): void {
+    lastStatusBySession.delete(sessionID);
+    childEvidence.delete(sessionID);
+    childSessions.delete(sessionID);
+    for (const kids of childSessions.values()) {
+      kids.delete(sessionID);
+    }
+  }
+
+  function isParentActiveByEvents(sessionID: string): boolean {
+    return lastStatusBySession.get(sessionID)?.status === 'busy';
+  }
 
   function touchLocal(sessionID: string): LocalSessionState {
     const existing = localSessions.get(sessionID);
@@ -308,7 +565,7 @@ export function createOrchestratorWakeScheduler(
 
   function canSchedule(sessionID: string): boolean {
     if (!enabled) return false;
-    if (!hasRequiredSessionApis(sessionSdk)) return false;
+    if (!capabilities.ready) return false;
     if (!options.shouldManageSession(sessionID)) return false;
     if (options.hasInputWait(sessionID)) return false;
     if (options.isFallbackInProgress?.(sessionID)) return false;
@@ -341,16 +598,34 @@ export function createOrchestratorWakeScheduler(
     if (state.timer === undefined) schedule(sessionID);
   }
 
-  async function readHostSnapshot(sessionID: string): Promise<
-    | {
-        todos: Array<Record<string, unknown>>;
-        children: Array<Record<string, unknown>>;
-        status: Record<string, unknown>;
-        model?: ContinuationModelSelection;
-      }
-    | undefined
-  > {
-    if (!hasRequiredSessionApis(sessionSdk)) return undefined;
+  /** Fail-soft session-model enrichment (v2 `get` is optional). */
+  async function readSessionModel(
+    sessionID: string,
+  ): Promise<ContinuationModelSelection | undefined> {
+    if (typeof sessionSdk?.get !== 'function') return undefined;
+    try {
+      const sessionResponse = await sessionSdk.get({
+        path: { id: sessionID },
+        query: { directory },
+        throwOnError: true,
+      });
+      // Session.model is version-dependent; read via record shape.
+      const session = isObjectRecord(sessionResponse?.data)
+        ? sessionResponse.data
+        : undefined;
+      return parseContinuationModelSelection(
+        session ? (session as Record<string, unknown>).model : undefined,
+      );
+    } catch {
+      // Model enrichment is fail-soft.
+      return undefined;
+    }
+  }
+
+  async function readHostSnapshot(
+    sessionID: string,
+  ): Promise<TodoModeSnapshot | undefined> {
+    if (!capabilities.ready) return undefined;
 
     const dirQuery = { directory };
     const [todoResponse, childrenResponse, statusResponse] = await Promise.all([
@@ -394,30 +669,197 @@ export function createOrchestratorWakeScheduler(
       return undefined;
     }
 
-    let model: ContinuationModelSelection | undefined;
-    try {
-      const sessionResponse = await sessionSdk.get({
-        path: { id: sessionID },
-        query: dirQuery,
-        throwOnError: true,
-      });
-      // Session.model is version-dependent; read via record shape.
-      const session = isObjectRecord(sessionResponse?.data)
-        ? sessionResponse.data
-        : undefined;
-      model = parseContinuationModelSelection(
-        session ? (session as Record<string, unknown>).model : undefined,
-      );
-    } catch {
-      // Model enrichment is fail-soft.
-    }
+    const model = await readSessionModel(sessionID);
 
     return {
+      kind: 'todo',
       todos: todos as Array<Record<string, unknown>>,
       children: children as Array<Record<string, unknown>>,
       status,
       model,
     };
+  }
+
+  /**
+   * Children-driven degraded mode snapshot (v2, or explicit 'children' on
+   * v1). Children are enumerated via `session.list({parentID})` through the
+   * shim; when the listing is unavailable (missing/erroring/empty) the
+   * event-tracked bookkeeping (session.created parentID links + tracked
+   * statuses) is the fallback. Results are scoped to this workspace and
+   * enriched with the session model (fail-soft).
+   */
+  async function readChildrenSnapshot(
+    sessionID: string,
+  ): Promise<ChildrenModeSnapshot | undefined> {
+    if (!capabilities.ready) return undefined;
+
+    let children: Array<WakeChildInfo> | undefined;
+    let hostParentActive = false;
+
+    if (capabilities.flavor === 'v2') {
+      try {
+        const response = (await sessionSdk.list({
+          query: { parentID: sessionID, directory },
+        } as Parameters<SessionClient['list']>[0])) as { data?: unknown };
+        if (Array.isArray(response?.data)) {
+          children = response.data
+            .filter(isObjectRecord)
+            .map(mapWakeChild)
+            .filter((child): child is WakeChildInfo => child !== undefined);
+        }
+      } catch (error) {
+        log(
+          '[orchestrator-wake] session.list child enumeration failed; using event-tracked fallback',
+          {
+            sessionID,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+    } else {
+      const dirQuery = { directory };
+      const [childrenResponse, statusResponse] = await Promise.all([
+        sessionSdk.children({
+          path: { id: sessionID },
+          query: dirQuery,
+          throwOnError: true,
+        }),
+        sessionSdk.status({
+          query: dirQuery,
+          throwOnError: true,
+        }),
+      ]);
+      if (
+        !Array.isArray(childrenResponse.data) ||
+        !isObjectRecord(statusResponse.data)
+      ) {
+        return undefined;
+      }
+      if (
+        !childrenResponse.data.every(
+          (child) => isObjectRecord(child) && typeof child.id === 'string',
+        )
+      ) {
+        return undefined;
+      }
+      children = childrenResponse.data
+        .filter(isObjectRecord)
+        .map(mapWakeChild)
+        .filter((child): child is WakeChildInfo => child !== undefined);
+      hostParentActive = isActiveStatus(statusResponse.data, sessionID);
+    }
+
+    if (children === undefined || children.length === 0) {
+      const trackedKids = childSessions.get(sessionID);
+      children = trackedKids
+        ? [...trackedKids].map((id) => {
+            const evidenceAt = childEvidence.get(id);
+            return evidenceAt === undefined ? { id } : { id, evidenceAt };
+          })
+        : [];
+    }
+
+    // Workspace scoping: drop children the host reports under another
+    // directory (only when the info is available).
+    children = children.filter(
+      (child) => child.directory === undefined || child.directory === directory,
+    );
+
+    const model = await readSessionModel(sessionID);
+
+    return { kind: 'children', children, hostParentActive, model };
+  }
+
+  /** Active-child check for children-driven mode (see isWakeChildActive). */
+  function hasActiveWakeChild(children: Array<WakeChildInfo>): boolean {
+    const now = Date.now();
+    const stalenessMs = intervalMs * CHILD_STALENESS_INTERVALS;
+    return children.some((child) =>
+      isWakeChildActive(
+        child,
+        lastStatusBySession.get(child.id),
+        now,
+        stalenessMs,
+      ),
+    );
+  }
+
+  /**
+   * Classify a snapshot at a wake checkpoint. The todo branch is the exact
+   * v1 check sequence (host status map → active-child suppression →
+   * incomplete-todo condition); children mode replaces the status-map
+   * lookups with the event-tracked parent guard and the outcome-based child
+   * check (active children ARE the wake condition there — recovery wakes
+   * bypass it, as on v1).
+   */
+  function classifyTodoSnapshot(
+    snapshot: TodoModeSnapshot,
+    sessionID: string,
+    recoveryWake: boolean,
+  ): SnapshotVerdict {
+    if (isActiveStatus(snapshot.status, sessionID)) return 'parent-active';
+    if (!recoveryWake && hasActiveChild(snapshot.children, snapshot.status)) {
+      return 'children-active';
+    }
+    if (!recoveryWake && !hasIncompleteTodos(snapshot.todos)) {
+      return 'no-work';
+    }
+    return 'wake';
+  }
+
+  function classifyChildrenSnapshot(
+    snapshot: ChildrenModeSnapshot,
+    sessionID: string,
+    recoveryWake: boolean,
+  ): SnapshotVerdict {
+    if (snapshot.hostParentActive || isParentActiveByEvents(sessionID)) {
+      return 'parent-active';
+    }
+    if (!recoveryWake && !hasActiveWakeChild(snapshot.children)) {
+      return 'no-work';
+    }
+    return 'wake';
+  }
+
+  function classifySnapshot(
+    snapshot: WakeSnapshot,
+    sessionID: string,
+    recoveryWake: boolean,
+  ): SnapshotVerdict {
+    return snapshot.kind === 'children'
+      ? classifyChildrenSnapshot(snapshot, sessionID, recoveryWake)
+      : classifyTodoSnapshot(snapshot, sessionID, recoveryWake);
+  }
+
+  function buildSnapshotFingerprint(snapshot: WakeSnapshot): string {
+    return snapshot.kind === 'children'
+      ? buildChildrenWakeFingerprint(snapshot.children, lastStatusBySession)
+      : buildOrchestratorWakeFingerprint(
+          snapshot.todos,
+          snapshot.children,
+          snapshot.status,
+        );
+  }
+
+  /** Apply a checkpoint verdict; false means the evaluation ended. */
+  function applySnapshotVerdict(
+    sessionID: string,
+    verdict: SnapshotVerdict,
+  ): boolean {
+    if (verdict === 'parent-active') {
+      endIdleSpell(sessionID, true);
+      return false;
+    }
+    if (verdict === 'children-active') {
+      schedule(sessionID);
+      return false;
+    }
+    if (verdict === 'no-work') {
+      // No incomplete work: end the spell; do not keep polling.
+      endIdleSpell(sessionID, false);
+      return false;
+    }
+    return true;
   }
 
   async function evaluate(
@@ -450,7 +892,10 @@ export function createOrchestratorWakeScheduler(
     localWakeOwners.set(sessionID, owner);
 
     try {
-      const snapshot = await readHostSnapshot(sessionID);
+      const snapshot =
+        wakeMode === 'children'
+          ? await readChildrenSnapshot(sessionID)
+          : await readHostSnapshot(sessionID);
       if (!snapshot || state.generation !== generation) return;
       if (!state.continuousIdle) return;
       if (!canSchedule(sessionID)) {
@@ -458,25 +903,16 @@ export function createOrchestratorWakeScheduler(
         return;
       }
 
-      if (isActiveStatus(snapshot.status, sessionID)) {
-        endIdleSpell(sessionID, true);
-        return;
-      }
-      if (!recoveryWake && hasActiveChild(snapshot.children, snapshot.status)) {
-        schedule(sessionID);
-        return;
-      }
-      if (!recoveryWake && !hasIncompleteTodos(snapshot.todos)) {
-        // No incomplete work: end the spell; do not keep polling.
-        endIdleSpell(sessionID, false);
+      if (
+        !applySnapshotVerdict(
+          sessionID,
+          classifySnapshot(snapshot, sessionID, recoveryWake),
+        )
+      ) {
         return;
       }
 
-      const fingerprint = buildOrchestratorWakeFingerprint(
-        snapshot.todos,
-        snapshot.children,
-        snapshot.status,
-      );
+      const fingerprint = buildSnapshotFingerprint(snapshot);
       noteHostProgress(sessionID, fingerprint);
 
       const progress = getWakeProgress(sessionID);
@@ -491,31 +927,26 @@ export function createOrchestratorWakeScheduler(
       }
 
       // Recheck host status/waits immediately before promptAsync.
-      const latest = await readHostSnapshot(sessionID);
+      const latest =
+        wakeMode === 'children'
+          ? await readChildrenSnapshot(sessionID)
+          : await readHostSnapshot(sessionID);
       if (!latest || state.generation !== generation) return;
       if (!state.continuousIdle) return;
       if (!canSchedule(sessionID)) {
         suppress(sessionID);
         return;
       }
-      if (isActiveStatus(latest.status, sessionID)) {
-        endIdleSpell(sessionID, true);
-        return;
-      }
-      if (!recoveryWake && hasActiveChild(latest.children, latest.status)) {
-        schedule(sessionID);
-        return;
-      }
-      if (!recoveryWake && !hasIncompleteTodos(latest.todos)) {
-        endIdleSpell(sessionID, false);
+      if (
+        !applySnapshotVerdict(
+          sessionID,
+          classifySnapshot(latest, sessionID, recoveryWake),
+        )
+      ) {
         return;
       }
 
-      const latestFingerprint = buildOrchestratorWakeFingerprint(
-        latest.todos,
-        latest.children,
-        latest.status,
-      );
+      const latestFingerprint = buildSnapshotFingerprint(latest);
       noteHostProgress(sessionID, latestFingerprint);
 
       const latestProgress = getWakeProgress(sessionID);
@@ -537,24 +968,40 @@ export function createOrchestratorWakeScheduler(
         return;
       }
 
-      if (!hasRequiredSessionApis(sessionSdk)) return;
+      if (!capabilities.ready) return;
 
-      await sessionSdk.promptAsync({
-        path: { id: sessionID },
-        query: { directory },
-        body: {
-          agent: 'orchestrator',
-          ...(modelSelection ? { model: modelSelection.model } : {}),
-          parts: [
-            createInternalAgentTextPart(
-              recoveryWake
-                ? ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT
-                : ORCHESTRATOR_WAKE_TEXT,
-            ),
-          ],
-        },
-        throwOnError: true,
-      });
+      const wakeText = recoveryWake
+        ? ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT
+        : wakeMode === 'children'
+          ? ORCHESTRATOR_CHILDREN_WAKE_TEXT
+          : ORCHESTRATOR_WAKE_TEXT;
+      const body = {
+        agent: 'orchestrator',
+        ...(modelSelection ? { model: modelSelection.model } : {}),
+        parts: [createInternalAgentTextPart(wakeText)],
+      };
+      if (wakeMode === 'children' && capabilities.flavor === 'v2') {
+        // v1 prompt_async queued; 'queue' preserves that on v2 ('steer'
+        // would hijack an in-flight run).
+        await (
+          sessionSdk.promptAsync as (
+            args: Record<string, unknown>,
+          ) => Promise<unknown>
+        )({
+          path: { id: sessionID },
+          query: { directory },
+          body,
+          delivery: 'queue',
+          throwOnError: true,
+        });
+      } else {
+        await sessionSdk.promptAsync({
+          path: { id: sessionID },
+          query: { directory },
+          body,
+          throwOnError: true,
+        });
+      }
       if (recoveryWake) pendingStoppedRecoveries.delete(sessionID);
     } catch (error) {
       // Failed promptAsync already reserved; clear expecting-busy so a later
@@ -649,7 +1096,7 @@ export function createOrchestratorWakeScheduler(
     if (
       disposed ||
       !enabled ||
-      !hasRequiredSessionApis(sessionSdk) ||
+      !capabilities.ready ||
       !options.shouldManageSession(sessionID)
     ) {
       return;
@@ -669,8 +1116,9 @@ export function createOrchestratorWakeScheduler(
     event: {
       type: string;
       properties?: {
-        info?: { id?: string };
+        info?: { id?: string; parentID?: string };
         sessionID?: string;
+        parentID?: string;
         status?: { type?: string };
       };
     };
@@ -680,6 +1128,9 @@ export function createOrchestratorWakeScheduler(
     if (type === 'server.instance.disposed') {
       disposed = true;
       pendingStoppedRecoveries.clear();
+      lastStatusBySession.clear();
+      childSessions.clear();
+      childEvidence.clear();
       for (const sessionID of [...localWakeOwners.keys()]) {
         releaseLocalWakeOwner(sessionID);
       }
@@ -692,7 +1143,27 @@ export function createOrchestratorWakeScheduler(
     const sessionID = extractSessionID(input.event);
     if (!sessionID) return;
 
+    // Event bookkeeping (children-driven mode + parent-active race guard).
+    // Status tracking covers ALL sessions: child entries feed the busy-set
+    // and update evidence, the parent entry is the race guard on hosts
+    // without a live status map (v2).
+    if (type === 'session.status') {
+      const statusType = properties?.status?.type;
+      if (statusType === 'busy' || statusType === 'idle') {
+        recordTrackedStatus(sessionID, statusType);
+      }
+    } else if (type === 'session.created') {
+      const parentID =
+        typeof properties?.info?.parentID === 'string'
+          ? properties.info.parentID
+          : typeof properties?.parentID === 'string'
+            ? properties.parentID
+            : undefined;
+      if (parentID) recordChildSession(parentID, sessionID);
+    }
+
     if (type === 'session.deleted') {
+      forgetSessionEvents(sessionID);
       clearSession(sessionID);
       return;
     }
@@ -758,7 +1229,12 @@ export function createOrchestratorWakeScheduler(
       localSessions,
       intervalMs,
       enabled,
-      hasRequiredSessionApis: () => hasRequiredSessionApis(sessionSdk),
+      hasRequiredSessionApis: () => capabilities.ready,
+      capabilities: () => capabilities,
+      wakeMode: () => wakeMode,
+      lastStatusBySession,
+      childEvidence,
+      childSessions,
     },
   };
 }

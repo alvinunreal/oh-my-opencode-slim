@@ -15,6 +15,13 @@ describe('parseModelRef', () => {
     });
   });
 
+  test('retains nested spaced model suffixes after the first slash', () => {
+    expect(parseModelRef('opencode-omniroute-live/of/MiniMax M3')).toEqual({
+      providerID: 'opencode-omniroute-live',
+      id: 'of/MiniMax M3',
+    });
+  });
+
   test('undefined for non-string', () => {
     expect(parseModelRef(undefined)).toBeUndefined();
     expect(parseModelRef(42)).toBeUndefined();

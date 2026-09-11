@@ -359,15 +359,19 @@ periodic internal wake prompt so incomplete TODOs are not abandoned. This is
   "backgroundJobs": {
     "orchestratorWake": {
       "enabled": true,
-      "intervalMs": 300000
+      "intervalMs": 300000,
+      "mode": "auto"
     }
   }
 }
 ```
 
 `intervalMs` must be an integer from `60000` to `2147483647`. `0` is invalid.
-Set `enabled: false` to disable wakes while keeping idle reconciliation and
-background-job orchestration.
+`mode` selects the wake condition: `"auto"` (default) uses todo-gating on v1
+hosts and children-driven mode on v2 hosts; `"todo"` and `"children"` pin one
+mode (an explicit `"todo"` degrades to children on hosts without the todo
+API). Set `enabled: false` to disable wakes while keeping idle reconciliation
+and background-job orchestration.
 
 Behavior:
 
@@ -406,8 +410,20 @@ The scheduler does **not** perform automatic cancellation and does not rely on
 the local job board. When no incomplete TODOs remain, it ends the current idle
 spell and stops polling until new activity.
 
-**v2 availability:** the v2 shim lacks the required session APIs, so this
-capability-gated feature remains inactive there.
+**v2 hosts (children-driven degraded mode):** v2 has no todo/children/status
+surfaces, so with `mode: "auto"` the scheduler runs in children-driven mode.
+The wake condition becomes "children without a terminal `outcome`" — v2
+records an outcome (succeeded|failed|interrupted) only on terminal transition —
+plus pending stopped-job recovery. Children are enumerated via
+`session.list({parentID})` (event-tracked fallback from `session.created`
+links when the listing is unavailable), scoped to the session's directory, and
+a child with no fresh update evidence (host `time.updated` or a tracked status
+change within 3× the interval) counts as inactive. The wake prompt asks the
+orchestrator to check on unfinished background child sessions and unreconciled
+jobs, is delivered with `queue` semantics (like v1's queued prompt_async), and
+the children-only fingerprint keeps the two-wake no-progress cap bounding
+cost. v2's native subagent completion nudges still cover the happy path; this
+watchdog covers stuck children and unreconciled jobs.
 
 For external manual work, the orchestrator first gives the user concrete steps,
 then calls `wait_for_user` as its final tool action. This explicit signal covers
@@ -478,6 +494,41 @@ Malformed status entries and failed status requests are surfaced as `status
 uncertain`; they never prove that a job stopped or completed and do not confirm
 a pending stop. Each observation is generation-aware, so a delayed response
 cannot modify a relaunched task.
+
+### Background Task Concurrency
+
+`backgroundJobs.concurrency` (disabled by default, see
+[Configuration](configuration.md#background-job-management)) caps how many
+native background tasks may run at once. Admission happens in the
+`tool.execute.before` hook: a task waits for a slot before OpenCode creates
+its child session. Queued requests are admitted in order, but requests whose
+resolved cap is saturated are skipped in favor of admittable later requests.
+
+Only the most specific configured cap applies to a task: a model cap wins
+over a provider cap, which wins over the default cap. `0` means unlimited.
+So `modelConcurrency: {"openai/gpt-4o": 10}` permits 10 concurrent
+`openai/gpt-4o` tasks even when `defaultConcurrency` is lower; other OpenAI
+models fall back to `providerConcurrency` (or the default) instead.
+
+The scheduler keeps its accounting correct across two runtime events:
+- A task that switches models mid-flight (foreground model fallback or a
+  runtime `/model` change on the child session) moves its provider/model
+  accounting to the new model instead of keeping the admission-time model.
+- The scheduler is process-scoped, so a plugin re-init (the plugin factory
+  re-runs on config updates) preserves both running slots and queued
+  tickets. Deleting a parent orchestrator also releases its children's
+  admission slots, so capacity is never leaked by recursive-delete ordering.
+
+Sessions that are themselves managed tasks — a background subagent running
+its own nested `task(..., background: true)` calls — are exempt from
+admission. They already hold a slot while running, so waiting for a second
+one would self-deadlock once the queue saturates.
+
+Admission itself has no timeout. A running task that never reaches a terminal
+state keeps its slot forever, and queued tasks as well as the orchestrator's
+`task` calls block behind it. When you enable `concurrency`, pair it with the
+opt-in wall-clock supervisor below so stalled tasks are eventually forced to
+a terminal state and release their slots.
 
 ### Opt-in Wall-clock Supervisor
 

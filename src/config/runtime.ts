@@ -30,7 +30,7 @@ import {
   SUBAGENT_NAMES,
 } from './constants';
 import type { CouncilConfig } from './council-schema';
-import { deepMerge } from './loader';
+import { mergeAgentOverrides as mergeAgentOverrideRecords } from './loader';
 import type {
   AcpAgentsConfig,
   AgentOverrideConfig,
@@ -79,15 +79,22 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   readContextMinLines: DEFAULT_READ_CONTEXT_MIN_LINES,
   readContextMaxFiles: DEFAULT_READ_CONTEXT_MAX_FILES,
   maxRetainedSnapshots: DEFAULT_MAX_RETAINED_SNAPSHOTS,
-  orchestratorWake: { enabled: true, intervalMs: 300_000 },
+  orchestratorWake: { enabled: true, intervalMs: 300_000, mode: 'auto' },
   wallClockTimeoutMs: 0,
   abortGraceMs: 10_000,
+  concurrency: {
+    defaultConcurrency: 0,
+    providerConcurrency: {},
+    modelConcurrency: {},
+  },
   waitForUserGuard: true,
 };
 
 const DEFAULT_FALLBACK: FailoverConfig = {
   enabled: true,
   maxRetries: 3,
+  initialRetryDelayMs: 0,
+  retryDelayMs: 500,
 };
 
 /** First model from an override's model field (string or array). */
@@ -103,6 +110,19 @@ function primaryModelFromOverride(
     return typeof first === 'string' ? first : first?.id;
   }
   return undefined;
+}
+
+/**
+ * Merge agent layers while allowing an explicit inheritance policy to clear a
+ * model supplied by a lower-precedence layer. A missing `model` normally
+ * means "keep the lower layer", but `inheritModelFrom` is an intentional
+ * request to use another source instead.
+ */
+function mergeAgentLayers(
+  base: Record<string, AgentOverrideConfig>,
+  override: Record<string, AgentOverrideConfig>,
+): Record<string, AgentOverrideConfig> {
+  return mergeAgentOverrideRecords(base, override) ?? base;
 }
 
 /** Recursive clone of plain JSON data (drops prototypes, no functions). */
@@ -192,7 +212,9 @@ export class RuntimeConfig {
    * post-merge state (double-application risk).
    */
   captureHostConfig(opencodeConfig: Record<string, unknown>): void {
-    this.hostSnapshot = clonePlain(opencodeConfig) as HostConfigSnapshot;
+    this.hostSnapshot = deepFreeze(
+      clonePlain(opencodeConfig) as HostConfigSnapshot,
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -204,35 +226,32 @@ export class RuntimeConfig {
     return this.pluginConfig;
   }
 
-  /** Active preset name: runtime override wins over the config-file preset. */
+  /** Active preset name: runtime state selects over the config-file preset. */
   get preset(): string | undefined {
     return this.runtimePresetName ?? this.pluginConfig?.preset;
   }
 
   /**
-   * Merged agent overrides with seed precedence: runtime preset override >
-   * plugin file (root agents override the config-file preset). Mirrors the
-   * loader's preset merge so this is correct even when seeded with a raw
-   * (not yet loader-merged) plugin config.
+   * Merged agent overrides with seed precedence: selected preset < root agent
+   * overrides. Runtime state selects the preset but never becomes a second
+   * higher-precedence agent layer.
    */
   agents(): Record<string, AgentOverrideConfig> {
-    let base = this.pluginConfig?.agents ?? {};
-    const filePreset = this.pluginConfig?.preset
-      ? this.pluginConfig.presets?.[this.pluginConfig.preset]
+    const activePreset = this.preset;
+    const presetAgents = activePreset
+      ? this.pluginConfig?.presets?.[activePreset]?.agents
       : undefined;
-    if (filePreset) {
-      base = deepMerge(filePreset, base) ?? base;
-    }
-    const runtimePreset = this.runtimePresetAgents();
-    if (!runtimePreset) {
-      return base;
-    }
-    return deepMerge(base, runtimePreset) ?? base;
+    // A runtime preset selects the preset layer; it is not a higher
+    // precedence override. Root agents always remain authoritative.
+    return (
+      mergeAgentLayers(presetAgents ?? {}, this.pluginConfig?.agents ?? {}) ??
+      {}
+    );
   }
 
   /**
    * Effective override for one agent, alias-aware, with seed precedence
-   * host override > runtime override > plugin file.
+   * host override > root agent override > selected preset.
    */
   agent(name: string): AgentOverrideConfig | undefined {
     const merged = this.aliasAwareOverride(this.agents(), name);
@@ -240,10 +259,10 @@ export class RuntimeConfig {
     if (!hostLayer) {
       return merged;
     }
-    return deepMerge(
-      merged as Record<string, unknown> | undefined,
-      hostLayer as Record<string, unknown> | undefined,
-    ) as AgentOverrideConfig | undefined;
+    return mergeAgentOverrideRecords(
+      merged ? { __agent: merged } : undefined,
+      hostLayer ? { __agent: hostLayer as AgentOverrideConfig } : undefined,
+    )?.__agent;
   }
 
   /** Disabled agent names, minus protected agents. */
@@ -273,7 +292,7 @@ export class RuntimeConfig {
 
   /** Custom agent names declared in config.agents (was getCustomAgentNames). */
   get customAgentNames(): string[] {
-    return getCustomAgentNames(this.pluginConfig);
+    return getCustomAgentNames({ agents: this.agents() });
   }
 
   get disabledMcps(): readonly string[] {
@@ -344,7 +363,7 @@ export class RuntimeConfig {
     const agents = this.agents();
     const names = new Set<string>([
       ...ALL_AGENT_NAMES,
-      ...getCustomAgentNames(this.pluginConfig),
+      ...this.customAgentNames,
     ]);
     for (const name of names) {
       if (disabled.has(name)) {
@@ -399,7 +418,7 @@ export class RuntimeConfig {
    */
   get primaryModel(): string | undefined {
     const activePreset = this.preset
-      ? this.pluginConfig?.presets?.[this.preset]
+      ? this.pluginConfig?.presets?.[this.preset]?.agents
       : undefined;
     if (!activePreset) {
       return undefined;
@@ -477,16 +496,6 @@ export class RuntimeConfig {
   // ---------------------------------------------------------------------
   // private helpers
   // ---------------------------------------------------------------------
-
-  private runtimePresetAgents():
-    | Record<string, AgentOverrideConfig>
-    | undefined {
-    const name = this.runtimePresetName;
-    if (!name) {
-      return undefined;
-    }
-    return this.pluginConfig?.presets?.[name];
-  }
 
   /** Alias-aware override lookup inside a merged agents record. */
   private aliasAwareOverride(

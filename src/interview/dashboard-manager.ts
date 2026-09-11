@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { PluginConfig } from '../config';
@@ -26,6 +27,8 @@ export function createDashboardManager(
   options: {
     runtime?: InterviewSessionRuntime;
     sessionClient?: DashboardConfig['sessionClient'];
+    /** Already-listening server for the dashboard role to adopt. */
+    server?: Server;
   } = {},
 ): {
   service: ReturnType<typeof createInterviewService>;
@@ -240,6 +243,7 @@ export function createDashboardManager(
         port: dashboardPort,
         outputFolder,
         sessionClient: options.sessionClient ?? getClient(ctx).session,
+        server: options.server,
       });
 
       if (dashboard) {

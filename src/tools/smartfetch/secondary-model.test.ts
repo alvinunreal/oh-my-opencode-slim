@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { MAX_MODEL_CONTENT_CHARS } from './constants';
 import { _testConfig, runSecondaryModelWithFallback } from './secondary-model';
 import type { SecondaryModel } from './types';
 
@@ -401,5 +402,185 @@ describe('smartfetch/secondary-model', () => {
         body: { title: 'smartfetch-secondary' },
       }),
     );
+  });
+});
+
+describe('smartfetch/secondary-model v2 generateText channel', () => {
+  const models: SecondaryModel[] = [
+    { providerID: 'provider-a', modelID: 'small', variant: 'fast' },
+    { providerID: 'provider-b', modelID: 'fallback' },
+  ];
+
+  afterEach(() => {
+    mock.restore();
+  });
+
+  test('uses generateText and skips the session pipeline entirely', async () => {
+    mockV2Client = createV2ClientMock([{ text: 'should-not-be-used' }]);
+    const generateText = mock(async () => ({ text: 'v2 summary' }));
+    const input = {
+      directory: '/tmp/project',
+      experimental_v2: { generateText },
+    } as never;
+
+    const result = await runSecondaryModelWithFallback(
+      input,
+      models,
+      'Summarize',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    expect(result.text).toBe('v2 summary');
+    expect(result.model).toEqual(models[0]);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(mockV2Session.create).toHaveBeenCalledTimes(0);
+    expect(mockV2Session.prompt).toHaveBeenCalledTimes(0);
+    expect(mockV2Session.delete).toHaveBeenCalledTimes(0);
+    expect(mockV2Tool.ids).toHaveBeenCalledTimes(0);
+  });
+
+  test('passes the model ref and embeds content in the prompt', async () => {
+    mockV2Client = createV2ClientMock([]);
+    const seen: Array<{ prompt: string; model?: unknown }> = [];
+    const generateText = mock(async (prompt: string, model?: unknown) => {
+      seen.push({ prompt, model });
+      return { text: 'ok' };
+    });
+    const input = {
+      directory: '/tmp/project',
+      experimental_v2: { generateText },
+    } as never;
+    const content =
+      'This is enough fetched content to clear the short-content guard.';
+
+    const result = await runSecondaryModelWithFallback(
+      input,
+      [models[0]],
+      'Extract the answer',
+      content,
+    );
+
+    expect(seen.length).toBe(1);
+    // v2 model ref shape: {id, providerID, variant?}
+    expect(seen[0].model).toEqual({
+      id: 'small',
+      providerID: 'provider-a',
+      variant: 'fast',
+    });
+    // generate.text has no content channel, so the fetched content must be
+    // embedded via the same deterministic prompt builder as v1.
+    expect(seen[0].prompt).toContain('Fetched content:');
+    expect(seen[0].prompt).toContain(content);
+    expect(seen[0].prompt).toContain('Extract the answer');
+    expect(result.inputTruncated).toBe(false);
+    expect(result.inputChars).toBe(content.length);
+    expect(result.sourceChars).toBe(content.length);
+  });
+
+  test('truncates long content and appends the note', async () => {
+    mockV2Client = createV2ClientMock([]);
+    const seen: Array<{ prompt: string; model?: unknown }> = [];
+    const generateText = mock(async (prompt: string, model?: unknown) => {
+      seen.push({ prompt, model });
+      return { text: 'ok' };
+    });
+    const input = {
+      directory: '/tmp/project',
+      experimental_v2: { generateText },
+    } as never;
+    const content = `${'a'.repeat(MAX_MODEL_CONTENT_CHARS)}TAIL_UNIQUE_END`;
+
+    const result = await runSecondaryModelWithFallback(
+      input,
+      [models[1]],
+      'Summarize',
+      content,
+    );
+
+    expect(seen.length).toBe(1);
+    expect(seen[0].model).toEqual({
+      id: 'fallback',
+      providerID: 'provider-b',
+    });
+    expect(seen[0].prompt).toContain(
+      `Note: only the first ${MAX_MODEL_CONTENT_CHARS} characters of a longer fetched document were provided.`,
+    );
+    expect(seen[0].prompt.includes('TAIL_UNIQUE_END')).toBe(false);
+    expect(result.inputTruncated).toBe(true);
+    expect(result.inputChars).toBe(MAX_MODEL_CONTENT_CHARS);
+    expect(result.sourceChars).toBe(content.length);
+  });
+
+  test('falls back to the next model when generateText throws', async () => {
+    mockV2Client = createV2ClientMock([]);
+    let calls = 0;
+    const generateText = mock(async () => {
+      calls++;
+      if (calls === 1) throw new Error('primary v2 model failed');
+      return { text: 'Recovered v2 answer' };
+    });
+    const input = {
+      directory: '/tmp/project',
+      experimental_v2: { generateText },
+    } as never;
+
+    const result = await runSecondaryModelWithFallback(
+      input,
+      models,
+      'Summarize',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    expect(result.text).toBe('Recovered v2 answer');
+    expect(result.model).toEqual(models[1]);
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(mockV2Session.create).toHaveBeenCalledTimes(0);
+  });
+
+  test('rejects with the shared timeout error on v2', async () => {
+    mockV2Client = createV2ClientMock([]);
+    const originalTimeout = _testConfig.secondaryModelTimeoutMs;
+    _testConfig.secondaryModelTimeoutMs = 0;
+    const generateText = mock(
+      () => new Promise<{ text: string }>(() => {}) as never,
+    );
+    const input = {
+      directory: '/tmp/project',
+      experimental_v2: { generateText },
+    } as never;
+
+    try {
+      await expect(
+        runSecondaryModelWithFallback(
+          input,
+          [models[0]],
+          'Summarize',
+          'This is enough fetched content to clear the short-content guard.',
+        ),
+      ).rejects.toThrow('Secondary model timed out');
+      expect(mockV2Session.create).toHaveBeenCalledTimes(0);
+      expect(mockV2Session.abort).toHaveBeenCalledTimes(0);
+    } finally {
+      _testConfig.secondaryModelTimeoutMs = originalTimeout;
+    }
+  });
+
+  test('empty experimental_v2 keeps the v1 session path', async () => {
+    mockV2Client = createV2ClientMock([{ text: 'v1 answer' }]);
+    const input = {
+      directory: '/tmp/project',
+      experimental_v2: {},
+    } as never;
+
+    const result = await runSecondaryModelWithFallback(
+      input,
+      [models[1]],
+      'Summarize',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    expect(result.text).toBe('v1 answer');
+    expect(mockV2Session.create).toHaveBeenCalledTimes(1);
+    expect(mockV2Session.delete).toHaveBeenCalledTimes(1);
   });
 });

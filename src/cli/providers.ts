@@ -115,12 +115,14 @@ export function generateLiteConfig(
 
   const buildPreset = (mappingName: PresetName) => {
     const mapping = MODEL_MAPPINGS[mappingName];
-    return Object.fromEntries(
-      Object.entries(mapping).map(([agentName, modelInfo]) => [
-        agentName,
-        createAgentConfig(agentName, modelInfo),
-      ]),
-    );
+    return {
+      agents: Object.fromEntries(
+        Object.entries(mapping).map(([agentName, modelInfo]) => [
+          agentName,
+          createAgentConfig(agentName, modelInfo),
+        ]),
+      ),
+    };
   };
 
   const presets = config.presets as Record<string, unknown>;

@@ -7,10 +7,13 @@ import type {
 import type { BackgroundJobStore } from '../../utils/background-job-store';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import { getClient } from '../../utils/opencode-client';
+import { COMPLETED_WITHOUT_TEXT_DIAGNOSTIC } from '../../utils/task';
 
 const DEFAULT_NOTIFICATION_RETRIES = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const TERMINAL_NOTIFICATION_TIMEOUT_MS = 10_000;
+const DEFAULT_STABILIZATION_PROBES = 3;
+const DEFAULT_STABILIZATION_DELAY_MS = 150;
 
 type SessionMessage = {
   info?: {
@@ -39,6 +42,8 @@ type RevivedRun = {
     pending: boolean;
     retryTimer?: ReturnType<typeof setTimeout>;
   };
+  stabilizationProbes: number;
+  stabilizationTimer?: ReturnType<typeof setTimeout>;
   terminalState?: 'completed' | 'error';
   probeInFlight?: Promise<boolean>;
 };
@@ -64,6 +69,8 @@ export function createRevivedRunTracker(options: {
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   maxNotificationRetries?: number;
   notificationRetryDelayMs?: number;
+  maxStabilizationProbes?: number;
+  stabilizationProbeDelayMs?: number;
   onRegister?: (taskID: string) => void;
   onSettled?: (taskID: string) => void;
   contextFilesForPrompt?: (taskID: string) => ContextFile[];
@@ -74,6 +81,10 @@ export function createRevivedRunTracker(options: {
     options.maxNotificationRetries ?? DEFAULT_NOTIFICATION_RETRIES;
   const retryDelayMs =
     options.notificationRetryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  const maxStabilizationProbes =
+    options.maxStabilizationProbes ?? DEFAULT_STABILIZATION_PROBES;
+  const stabilizationProbeDelayMs =
+    options.stabilizationProbeDelayMs ?? DEFAULT_STABILIZATION_DELAY_MS;
   let disposed = false;
 
   const captureBaseline = async (
@@ -136,6 +147,9 @@ export function createRevivedRunTracker(options: {
       if (run.notification.retryTimer) {
         clearTimeout(run.notification.retryTimer);
       }
+      if (run.stabilizationTimer) {
+        clearTimeout(run.stabilizationTimer);
+      }
     }
     runs.clear();
   };
@@ -188,24 +202,45 @@ export function createRevivedRunTracker(options: {
     const text = (last.parts ?? [])
       .filter(
         (part) =>
-          (part.type === 'text' || part.type === 'reasoning') &&
+          part.type === 'text' &&
           typeof part.text === 'string' &&
           part.text.length > 0,
       )
       .map((part) => part.text as string)
       .join('\n\n')
       .trim();
-    const updated = options.backgroundJobBoard.updateStatus({
-      taskID: run.taskID,
-      expectedGeneration: run.generation,
-      state: 'completed',
-      resultSummary: text,
-    });
-    return updated?.generation === run.generation && finish(run, updated);
+    if (text.length > 0) {
+      const updated = options.backgroundJobBoard.updateStatus({
+        taskID: run.taskID,
+        expectedGeneration: run.generation,
+        state: 'completed',
+        resultSummary: text,
+      });
+      return updated?.generation === run.generation && finish(run, updated);
+    }
+
+    if (run.stabilizationProbes >= maxStabilizationProbes) {
+      const updated = options.backgroundJobBoard.updateStatus({
+        taskID: run.taskID,
+        expectedGeneration: run.generation,
+        state: 'error',
+        resultSummary: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+        lastStatusError: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+      });
+      return updated?.generation === run.generation && finish(run, updated);
+    }
+
+    run.stabilizationProbes += 1;
+    scheduleStabilizationProbe(run);
+    return false;
   }
 
   function finish(run: RevivedRun, record: BackgroundJobRecord): boolean {
     if (record.state !== 'completed' && record.state !== 'error') return false;
+    if (run.stabilizationTimer) {
+      clearTimeout(run.stabilizationTimer);
+      run.stabilizationTimer = undefined;
+    }
     if (run.terminalState && run.terminalState !== record.state) return true;
     run.terminalState = record.state;
     settleRun(run, record);
@@ -325,6 +360,17 @@ export function createRevivedRunTracker(options: {
     run.notification.retryTimer.unref?.();
   }
 
+  function scheduleStabilizationProbe(run: RevivedRun): void {
+    if (disposed || runs.get(run.taskID) !== run || run.stabilizationTimer) {
+      return;
+    }
+    run.stabilizationTimer = setTimeout(() => {
+      run.stabilizationTimer = undefined;
+      void probe(run.taskID, run.generation);
+    }, stabilizationProbeDelayMs);
+    run.stabilizationTimer.unref?.();
+  }
+
   function register(input: {
     taskID: string;
     generation: number;
@@ -334,9 +380,11 @@ export function createRevivedRunTracker(options: {
   }): void {
     const old = runs.get(input.taskID);
     if (old?.notification.retryTimer) clearTimeout(old.notification.retryTimer);
+    if (old?.stabilizationTimer) clearTimeout(old.stabilizationTimer);
     runs.set(input.taskID, {
       ...input,
       notification: { attempts: 0, sent: false, pending: false },
+      stabilizationProbes: 0,
     });
     options.onRegister?.(input.taskID);
   }
@@ -344,6 +392,7 @@ export function createRevivedRunTracker(options: {
   function discardRun(run: RevivedRun): void {
     if (runs.get(run.taskID) !== run) return;
     if (run.notification.retryTimer) clearTimeout(run.notification.retryTimer);
+    if (run.stabilizationTimer) clearTimeout(run.stabilizationTimer);
     runs.delete(run.taskID);
   }
 

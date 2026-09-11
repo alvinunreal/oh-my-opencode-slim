@@ -17,6 +17,7 @@ import {
   detectCurrentConfig,
   disableDefaultAgents,
   enableLspByDefault,
+  mutateJsonFile,
   parseConfig,
   parseConfigFile,
   stripJsonComments,
@@ -114,6 +115,45 @@ describe('config-io', () => {
     // We pass .json path, it should try .jsonc
     const result = parseConfig(join(tmpDir, 'test.json'));
     expect(result.config).toEqual({ a: 1 } as any);
+  });
+
+  test('mutateJsonFile read-modify-writes under a unique temp', () => {
+    const path = join(tmpDir, 'mutate.json');
+    writeFileSync(path, JSON.stringify({ keep: true, count: 1 }));
+    mutateJsonFile(path, (current) => {
+      const value = current as { keep: boolean; count: number };
+      return { ...value, count: value.count + 1 };
+    });
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
+      keep: true,
+      count: 2,
+    });
+    expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8'))).toEqual({
+      keep: true,
+      count: 1,
+    });
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test('mutateJsonFile warns before replacing JSONC comments', () => {
+    const path = join(tmpDir, 'mutate.jsonc');
+    writeFileSync(path, '{\n  // retain this manually\n  "count": 1\n}\n');
+    const warn = mock(() => {});
+    const originalWarn = console.warn;
+    console.warn = warn;
+
+    try {
+      mutateJsonFile(path, (current) => ({
+        ...(current as Record<string, unknown>),
+        count: 2,
+      }));
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warn).toHaveBeenCalledWith(
+      '[config-manager] Writing to .jsonc file - comments will not be preserved',
+    );
   });
 
   test('writeConfig writes JSON and creates backup', () => {
@@ -509,14 +549,18 @@ describe('config-io', () => {
     expect(saved.preset).toBe('opencode-go');
     expect(saved.disabled_agents).toEqual([]);
     expect(saved.presets.openai).toBeDefined();
-    expect(saved.presets['opencode-go'].orchestrator.model).toBe(
+    expect(saved.presets['opencode-go'].agents.orchestrator.model).toBe(
       'opencode-go/minimax-m3',
     );
-    expect(saved.presets['opencode-go'].orchestrator.variant).toBe('thinking');
-    expect(saved.presets['opencode-go'].observer.model).toBe(
+    expect(saved.presets['opencode-go'].agents.orchestrator.variant).toBe(
+      'thinking',
+    );
+    expect(saved.presets['opencode-go'].agents.observer.model).toBe(
       'opencode-go/mimo-v2.5',
     );
-    expect(saved.presets['opencode-go'].observer.variant).toBeUndefined();
+    expect(
+      saved.presets['opencode-go'].agents.observer.variant,
+    ).toBeUndefined();
   });
 
   test('disableDefaultAgents disables conflicting OpenCode built-in agents', () => {
@@ -615,10 +659,12 @@ describe('config-io', () => {
         preset: 'openai',
         presets: {
           openai: {
-            orchestrator: { model: 'openai/gpt-4' },
-            oracle: { model: 'anthropic/claude-opus-4-6' },
-            explorer: { model: 'github-copilot/grok-code-fast-1' },
-            librarian: { model: 'zai-coding-plan/glm-4.7' },
+            agents: {
+              orchestrator: { model: 'openai/gpt-4' },
+              oracle: { model: 'anthropic/claude-opus-4-6' },
+              explorer: { model: 'github-copilot/grok-code-fast-1' },
+              librarian: { model: 'zai-coding-plan/glm-4.7' },
+            },
           },
         },
       }),
@@ -668,11 +714,13 @@ describe('config-io', () => {
         preset: 'dev',
         presets: {
           dev: {
-            orchestrator: {
-              model: [
-                'openai/gpt-5.6-luna',
-                { id: 'anthropic/claude-opus-4-6' },
-              ],
+            agents: {
+              orchestrator: {
+                model: [
+                  'openai/gpt-5.6-luna',
+                  { id: 'anthropic/claude-opus-4-6' },
+                ],
+              },
             },
           },
         },

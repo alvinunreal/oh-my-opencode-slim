@@ -43,7 +43,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/hooks/post-file-tool-nudge/` | Post-read/write reminder path that nudges delegation-aware next steps. | [View Map](src/hooks/post-file-tool-nudge/codemap.md) |
 | `src/hooks/task-session-manager/` | Resumable `task` session tracking: job-board injection, short alias resolution, cache-safe prompt injection, idle/stop-confirmation reconciliation, live runtime-status reads, HITL wait gating, and revived-run tracking. | [View Map](src/hooks/task-session-manager/codemap.md) |
 | `src/hooks/cache-monitor/` | Observation-only runtime watchdog over provider cache telemetry (`tokens.cache.read/write`) that warns on prompt-cache busts and frozen-prefix plateaus. | [View Map](src/hooks/cache-monitor/codemap.md) |
-| `src/hooks/orchestrator-wake/` | Periodic orchestrator wake scheduler: after continuous parent idle, sends a static internal wake prompt when incomplete TODOs remain; process-global one-flight/no-progress gate. | [View Map](src/hooks/orchestrator-wake/codemap.md) |
+| `src/hooks/orchestrator-wake/` | Periodic orchestrator wake scheduler: after continuous parent idle, sends a static internal wake prompt when incomplete TODOs remain (v1) or when background children lack a terminal outcome (v2 children-driven degraded mode); process-global one-flight/no-progress gate. | [View Map](src/hooks/orchestrator-wake/codemap.md) |
 | `src/hooks/loop-command/` | `/loop` runtime command: extracts goal/successCriteria/maxAttempts and drives an iterative retry loop with a per-run history directory. | [View Map](src/hooks/loop-command/codemap.md) |
 | `src/interview/` | `/interview` feature: per-session and dashboard prompt/state orchestration, persistence, local UI, and cross-process coordination. | [View Map](src/interview/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and per-provider MCP definitions. | [View Map](src/mcp/codemap.md) |
@@ -104,7 +104,10 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/tools/preset-switch.ts` + `src/tui-preset.ts` implement `/preset` switching: the preset name (or preset edits) is persisted to the user config file and takes effect on the next reload; the agent registry is never hot-swapped mid-session.
 - `src/hooks/task-session-manager/` depends on `src/utils/background-job-board.ts`, `background-job-store.ts`, `background-job-coordinator.ts`, `background-job-supervisor.ts`, `session-runtime-status.ts`, and `task.ts`, and injects prompt content only through `src/hooks/cache-safe-injection.ts`.
 - `src/hooks/cache-monitor/` watches `message.updated` cache telemetry across all sessions and logs prompt-cache-bust/plateau warnings; it is observation-only and never mutates messages.
-- `src/hooks/orchestrator-wake/` reads host todo/children/status APIs, gates on the task-session-manager's `hasInputWait` and continuation-model seams, and shares one-flight/no-progress state via a process-global wake gate.
+- `src/hooks/orchestrator-wake/` reads host todo/children/status APIs (v1)
+  or `session.list({parentID})` + event tracking (v2 degraded mode), gates on
+  the task-session-manager's `hasInputWait` and continuation-model seams, and
+  shares one-flight/no-progress state via a process-global wake gate.
 - `src/v2/` wraps the v1 factory for the v2 host: `setup(ctx)` shims a v1 `PluginInput`, runs the v1 `config()` hook, and adapts agent/tool/command/hook registrations into v2 domains.
 - `src/hooks/filter-available-skills/` and agent permission logic rely on shared skill names from the CLI/config layer.
 - `src/interview/` hooks into plugin command/event surfaces exposed by `src/index.ts`.

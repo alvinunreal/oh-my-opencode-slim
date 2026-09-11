@@ -41,4 +41,28 @@ describe('orchestrator prompt', () => {
     expect(prompt).not.toContain('End Turn After Background Tasks');
     expect(prompt).toContain('Do not immediately wait after spawning');
   });
+
+  test('instructs the orchestrator to use the marketplace tool', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('Use the `marketplace` tool');
+    expect(prompt).toContain('list, show, verify, and status are read-only');
+    expect(prompt).toContain(
+      'report reload_required only when disk activation differs',
+    );
+  });
+
+  test('omits marketplace instructions when the tool is disabled', () => {
+    const prompt = buildOrchestratorPrompt(
+      undefined,
+      undefined,
+      true,
+      true,
+      undefined,
+      undefined,
+      false,
+    );
+
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
 });

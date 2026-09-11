@@ -9,7 +9,8 @@ export function stripOrchestratorModel(
   enabled: boolean | undefined,
   preset: Preset | undefined,
 ): void {
-  if (enabled !== true || preset?.orchestrator?.model !== undefined) return;
+  if (enabled !== true || preset?.agents.orchestrator?.model !== undefined)
+    return;
 
   const orchestrator = agents.orchestrator;
   if (!isRecord(orchestrator)) return;

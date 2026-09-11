@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
-import { createServer as createHttpServer } from 'node:http';
+import type { Server } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import type { PluginConfig } from '../config';
 import { readDashboardAuthFile } from './dashboard';
 import { createDashboardManager } from './dashboard-manager';
 import { createInterviewManager as createInterviewManagerImpl } from './manager';
+import { bindFreePort } from './test-port';
 
 // Intercept getClient so the manager's service uses the same session mocks.
 mock.module('../utils/opencode-client', () => ({
@@ -15,6 +16,8 @@ mock.module('../utils/opencode-client', () => ({
 }));
 
 const managers = new Set<ReturnType<typeof createInterviewManagerImpl>>();
+// Held-port servers from bindFreePort that await dashboard adoption.
+const heldServers = new Set<Server>();
 
 function createInterviewManager(
   ...args: Parameters<typeof createInterviewManagerImpl>
@@ -28,23 +31,16 @@ afterEach(async () => {
   const pending = [...managers];
   managers.clear();
   await Promise.all(pending.map((manager) => manager.dispose()));
+  // Safety net: close held-port servers no manager adopted. Adopted ones
+  // are already closed by their manager's dispose() above.
+  for (const server of heldServers) {
+    heldServers.delete(server);
+    if (server.listening) {
+      server.closeAllConnections();
+      server.close();
+    }
+  }
 });
-
-// Helper to find a free port (matches interview.test.ts pattern)
-async function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createHttpServer();
-    server.listen(0, () => {
-      const address = server.address();
-      if (address && typeof address !== 'string') {
-        const port = address.port;
-        server.close(() => resolve(port));
-      } else {
-        server.close(() => reject(new Error('Failed to get port')));
-      }
-    });
-  });
-}
 
 // Mock context pattern from interview.test.ts
 function createMockContext(overrides?: {
@@ -207,13 +203,14 @@ describe('interview manager - per-session mode', () => {
       const tempDir = await fs.mkdtemp('/tmp/manager-test-');
       const ctx = createMockContext({ directory: tempDir });
 
-      const freePort = await findFreePort();
+      const { port: freePort, server } = await bindFreePort();
+      heldServers.add(server);
       const config = createTestConfig({
         port: freePort,
         dashboard: true,
       });
 
-      const manager = createInterviewManager(ctx, config);
+      const manager = createInterviewManager(ctx, config, { server });
 
       // Wait for dashboard init
       await new Promise((r) => setTimeout(r, 100));
@@ -249,6 +246,7 @@ describe('interview manager - per-session mode', () => {
         // Verify session is registered (interview exists in cache)
         const listResponse = await fetch(
           `http://127.0.0.1:${freePort}/api/interviews/${interviewId}/state?token=${auth?.token}`,
+          { signal: AbortSignal.timeout(2000) },
         );
         expect(listResponse.status).toBe(200);
       } finally {
@@ -259,7 +257,8 @@ describe('interview manager - per-session mode', () => {
 
   describe('dashboard: true with port 0', () => {
     test('activates dashboard mode and creates interview', async () => {
-      const freePort = await findFreePort();
+      const { port: freePort, server } = await bindFreePort();
+      heldServers.add(server);
       const tempDir = await fs.mkdtemp('/tmp/manager-test-');
       const ctx = createMockContext({ directory: tempDir });
 
@@ -268,7 +267,7 @@ describe('interview manager - per-session mode', () => {
         dashboard: true,
       });
 
-      const manager = createInterviewManager(ctx, config);
+      const manager = createInterviewManager(ctx, config, { server });
 
       // Wait for async init
       await new Promise((r) => setTimeout(r, 100));
@@ -298,13 +297,14 @@ describe('interview manager - state push callback wiring', () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
 
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({
       port: freePort,
       dashboard: true,
     });
 
-    const manager = createInterviewManager(ctx, config);
+    const manager = createInterviewManager(ctx, config, { server });
 
     // Wait for dashboard init
     await new Promise((r) => setTimeout(r, 100));
@@ -340,6 +340,7 @@ describe('interview manager - state push callback wiring', () => {
       // Verify state was pushed to dashboard cache
       const stateResponse = await fetch(
         `http://127.0.0.1:${freePort}/api/interviews/${interviewId}/state?token=${auth?.token}`,
+        { signal: AbortSignal.timeout(2000) },
       );
       expect(stateResponse.status).toBe(200);
 
@@ -387,13 +388,14 @@ describe('interview manager - session registration', () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
 
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({
       port: freePort,
       dashboard: true,
     });
 
-    const manager = createInterviewManager(ctx, config);
+    const manager = createInterviewManager(ctx, config, { server });
 
     // Wait for dashboard init
     await new Promise((r) => setTimeout(r, 100));
@@ -429,6 +431,7 @@ describe('interview manager - session registration', () => {
       // Verify session was registered by checking the interview state
       const stateResponse = await fetch(
         `http://127.0.0.1:${freePort}/api/interviews/${interviewId}/state?token=${auth?.token}`,
+        { signal: AbortSignal.timeout(2000) },
       );
       expect(stateResponse.status).toBe(200);
     } finally {
@@ -440,13 +443,14 @@ describe('interview manager - session registration', () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
 
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({
       port: freePort,
       dashboard: true,
     });
 
-    const manager = createInterviewManager(ctx, config);
+    const manager = createInterviewManager(ctx, config, { server });
 
     // Wait for dashboard init
     await new Promise((r) => setTimeout(r, 100));
@@ -491,6 +495,7 @@ describe('interview manager - session registration', () => {
       const stateResponse = await fetch(
         `http://127.0.0.1:${freePort}/api/interviews/${_interviewId}` +
           `/state?token=${auth?.token}`,
+        { signal: AbortSignal.timeout(2000) },
       );
       expect(stateResponse.status).toBe(404);
 
@@ -510,7 +515,8 @@ describe('interview manager - session registration', () => {
     const dashboardCtx = createMockContext({ directory: dashboardDir });
     const clientCtx = createMockContext({ directory: clientDir });
 
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({
       port: freePort,
       dashboard: true,
@@ -530,7 +536,7 @@ describe('interview manager - session registration', () => {
       (globalThis as any).setInterval = setIntervalSpy;
       (globalThis as any).clearInterval = clearIntervalSpy;
 
-      createInterviewManager(dashboardCtx, config);
+      createInterviewManager(dashboardCtx, config, { server });
 
       // Wait for dashboard init
       await new Promise((r) => setTimeout(r, 100));
@@ -575,10 +581,12 @@ describe('interview manager - session registration', () => {
   test('disposes dashboard resources idempotently', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const manager = createInterviewManager(
       ctx,
       createTestConfig({ port: freePort, dashboard: true }),
+      { server },
     );
 
     try {
@@ -605,7 +613,8 @@ describe('interview manager - edge cases', () => {
   test('does not roll back a claim during an overlapping in-process delivery', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({ port: freePort, dashboard: true });
     const messages: Array<{
       info?: { role: string };
@@ -636,6 +645,7 @@ describe('interview manager - edge cases', () => {
     };
     const manager = createDashboardManager(ctx, config, freePort, 'interview', {
       runtime,
+      server,
     });
 
     try {
@@ -670,6 +680,7 @@ describe('interview manager - edge cases', () => {
           body: JSON.stringify({
             answers: [{ questionId: 'q-1', answer: 'A' }],
           }),
+          signal: AbortSignal.timeout(2000),
         },
       );
       expect(queued.status).toBe(202);
@@ -706,7 +717,8 @@ describe('interview manager - edge cases', () => {
   test('waits for accepted delivery before disposal and replacement polling', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({ port: freePort, dashboard: true });
     const messages: Array<{
       info?: { role: string };
@@ -733,6 +745,7 @@ describe('interview manager - edge cases', () => {
     };
     const manager = createDashboardManager(ctx, config, freePort, 'interview', {
       runtime,
+      server,
     });
 
     try {
@@ -767,6 +780,7 @@ describe('interview manager - edge cases', () => {
           body: JSON.stringify({
             answers: [{ questionId: 'q-1', answer: 'A' }],
           }),
+          signal: AbortSignal.timeout(2000),
         },
       );
       expect(queued.status).toBe(202);
@@ -944,13 +958,14 @@ describe('interview manager - integration with real dashboard', () => {
     const ctx1 = createMockContext({ directory: tempDir1 });
     const ctx2 = createMockContext({ directory: tempDir2 });
 
-    const freePort = await findFreePort();
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({
       port: freePort,
       dashboard: true,
     });
 
-    const manager1 = createInterviewManager(ctx1, config);
+    const manager1 = createInterviewManager(ctx1, config, { server });
 
     // Wait for manager1 to become dashboard
     await new Promise((r) => setTimeout(r, 100));
@@ -959,6 +974,7 @@ describe('interview manager - integration with real dashboard', () => {
       // Manager1 should be the dashboard
       const healthResponse = await fetch(
         `http://127.0.0.1:${freePort}/api/health`,
+        { signal: AbortSignal.timeout(2000) },
       );
       expect(healthResponse.status).toBe(200);
 
@@ -1014,6 +1030,7 @@ describe('interview manager - integration with real dashboard', () => {
       // Both interviews should be in dashboard cache
       const state1Response = await fetch(
         `http://127.0.0.1:${freePort}/api/interviews/${interviewId1}/state?token=${auth?.token}`,
+        { signal: AbortSignal.timeout(2000) },
       );
       expect(state1Response.status).toBe(200);
 
@@ -1030,6 +1047,7 @@ describe('interview manager - integration with real dashboard', () => {
 
       const state2Response = await fetch(
         `http://127.0.0.1:${freePort}/api/interviews/${interviewId2}/state?token=${auth?.token}`,
+        { signal: AbortSignal.timeout(2000) },
       );
       expect(state2Response.status).toBe(200);
     } finally {
@@ -1041,9 +1059,12 @@ describe('interview manager - integration with real dashboard', () => {
   test('does not redeliver after a successful delivery loses its ACK response', async () => {
     const tempDir1 = await fs.mkdtemp('/tmp/manager-test-');
     const tempDir2 = await fs.mkdtemp('/tmp/manager-test-');
-    const port = await findFreePort();
+    const { port, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({ port, dashboard: true });
-    createInterviewManager(createMockContext({ directory: tempDir1 }), config);
+    createInterviewManager(createMockContext({ directory: tempDir1 }), config, {
+      server,
+    });
     await new Promise((resolve) => setTimeout(resolve, 100));
     const ctx2 = createMockContext({ directory: tempDir2 });
     const manager2 = createInterviewManager(ctx2, config);
@@ -1085,6 +1106,7 @@ describe('interview manager - integration with real dashboard', () => {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ action: 'more-questions' }),
+          signal: AbortSignal.timeout(2000),
         },
       );
       expect(nudgeResponse.status).toBe(202);
@@ -1121,9 +1143,12 @@ describe('interview manager - integration with real dashboard', () => {
   test('delivers a new answer claim after an earlier claim ACK is uncertain', async () => {
     const tempDir1 = await fs.mkdtemp('/tmp/manager-test-');
     const tempDir2 = await fs.mkdtemp('/tmp/manager-test-');
-    const port = await findFreePort();
+    const { port, server } = await bindFreePort();
+    heldServers.add(server);
     const config = createTestConfig({ port, dashboard: true });
-    createInterviewManager(createMockContext({ directory: tempDir1 }), config);
+    createInterviewManager(createMockContext({ directory: tempDir1 }), config, {
+      server,
+    });
     await new Promise((resolve) => setTimeout(resolve, 100));
     const messagesData: Array<{
       info?: { role: string };
@@ -1190,12 +1215,14 @@ describe('interview manager - integration with real dashboard', () => {
           body: JSON.stringify({
             answers: [{ questionId: 'q-1', answer: 'First answer' }],
           }),
+          signal: AbortSignal.timeout(2000),
         },
       );
       expect(firstAnswer.status).toBe(202);
 
       const firstClaimResponse = await originalFetch(
         `${interviewUrl}/pending${authQuery}`,
+        { signal: AbortSignal.timeout(2000) },
       );
       const firstClaim = (await firstClaimResponse.json()) as {
         claimId: string;
@@ -1224,6 +1251,7 @@ describe('interview manager - integration with real dashboard', () => {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ claimId: firstClaim.claimId }),
+          signal: AbortSignal.timeout(2000),
         },
       );
       expect(recoveredAck.status).toBe(200);
@@ -1236,6 +1264,7 @@ describe('interview manager - integration with real dashboard', () => {
           body: JSON.stringify({
             answers: [{ questionId: 'q-1', answer: 'Second answer' }],
           }),
+          signal: AbortSignal.timeout(2000),
         },
       );
       expect(secondAnswer.status).toBe(202);

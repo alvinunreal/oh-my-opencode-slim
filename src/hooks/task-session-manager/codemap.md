@@ -14,6 +14,9 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
 - **continuation-attempt-gate.ts**: Owns process-global continuation epochs, reservations, and explicit user waits across hook recreation. The wait is encoded as an `attempts` sentinel so pre-upgrade #856 hooks sharing the store also fail closed. Distinct external user-message identity rearms both states.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
 - **pending-call-tracker.ts**: Tracks in-flight task calls using a capped ordered map (`MAX_PENDING_TASK_CALLS`) to correlate launch output safely. Provides call ID generation, storage, retrieval, and cleanup for pending task invocations.
+- **admission-runtime.ts**: Re-exports the per-directory admission runtime
+  lease used by plugin generations; its scheduler and pending-call tracker are
+  torn down only after the final unclaimed owner release.
 - **task-context-tracker.ts**: Manages read context from child sessions with line-count and file caps. Stores context per task ID and provides pruning to prevent unbounded growth.
 
 All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.ts` as the single source of truth for active jobs, terminal unreconciled jobs, reusable completed sessions, aliases, read context, and LRU caps.
@@ -64,6 +67,8 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
     - `session.idle` / `session.status` (idle): Reconciles injected terminal jobs for the parent session (backstop path), then can run the opt-in continuation evaluator in the same idle cycle under its existing guards. Child idle is a stop candidate: the first observation stays provisional, and only a confirmed idle/absent after the 5s grace marks `stopped`
     - `session.status` (busy): Marks sessions as running from live session state and resets pending stop confirmation
     - `session.deleted`: Clears job state, child jobs, and pending call records for the session
+    - `server.instance.disposed`: Clears generation-local state but leaves the
+      shared pending calls and admission queue for the next generation
 
 6. **Human-in-the-loop Waits**
    - `wait_for_user` calls the facade's `beginUserWait()` only after tool validation

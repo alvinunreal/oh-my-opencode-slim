@@ -40,7 +40,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | Category | Factories | Hook points |
 |---|---|---|
 | Prompt transforms | `createPhaseReminderHook`, `createPostFileToolNudgeHook`, `createChatHeadersHook`, task-session-manager board injection, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
-| Tool interception | `createApplyPatchHook` (tool), task-session-manager | `tool.execute.before` / `tool.execute.after` |
+| Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, task-session-manager | `tool.execute.before` / `tool.execute.after` |
 | Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
 | Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler` | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook`, `createLoopCommandHook` | `command.execute.before` |
@@ -116,6 +116,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | `phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases |
 | `post-file-tool-nudge/` | Post-read/write reminder nudging delegation-aware next steps |
 | `reflect/` | `/reflect` runtime command |
+| `search-path-guard/` | Pre-checks `grep`/`glob` `args.path` validity in `tool.execute.before`, using each host tool's path resolution semantics, and fails fast with an actionable error instead of upstream "ripgrep execution failed" noise or silent parent-directory searches |
 | `task-session-manager/` | Resumable task session tracking, job-board injection, reconciliation |
 
 ### Dependencies

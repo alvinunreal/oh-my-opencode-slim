@@ -677,6 +677,31 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
+  test('rejects an empty completed status as an error', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map files',
+    });
+
+    board.updateFromStatusOutput(
+      [
+        'task_id: ses_1',
+        'state: completed',
+        '<task_result>',
+        '</task_result>',
+      ].join('\n'),
+    );
+
+    expect(board.get('ses_1')).toMatchObject({
+      state: 'error',
+      resultSummary:
+        'Task ended without a public text result; completion is not confirmed',
+    });
+  });
+
   test('updates error summary from task_error output', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({

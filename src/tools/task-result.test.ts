@@ -114,9 +114,9 @@ describe('task_result', () => {
     expect(output).toBe(
       [
         'task_id: ses_child1',
-        'state: running',
-        'message: Task is still running. Wait for its terminal result.',
-        'next: use task_status to inspect the task',
+        'state: running (unconfirmed)',
+        'message: Live task status is uncertain; no definitive running state is available.',
+        'next: retry task_result or use task_status to inspect the task',
       ].join('\n'),
     );
     await expect(
@@ -147,6 +147,35 @@ describe('task_result', () => {
 
     expect(output).toContain('state: retry');
     expect(output).toContain('next: use task_status to inspect the task');
+    expect(messages).not.toHaveBeenCalled();
+  });
+
+  test('treats a live-confirmed idle task as pending reconciliation', async () => {
+    const { board, tool, messages } = createTool();
+    board.registerLaunch({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'trace bug',
+    });
+    mockClient.session.status.mockResolvedValue({
+      data: { ses_child1: { type: 'idle' } },
+    });
+
+    const output = await tool.execute({ task_id: 'exp-1' }, {
+      sessionID: 'parent-1',
+      agent: 'orchestrator',
+    } as any);
+
+    expect(output).toBe(
+      [
+        'task_id: ses_child1',
+        'state: pending',
+        'message: Task is quiescent; wait for terminal reconciliation before retrieving its result.',
+        'next: retry task_result after the terminal notification',
+      ].join('\n'),
+    );
+    expect(output).not.toContain('still running');
     expect(messages).not.toHaveBeenCalled();
   });
 
@@ -542,8 +571,7 @@ describe('task_result', () => {
       state: 'completed',
       resultSummary: 'complete findings',
     });
-    mockClient = (buildPluginInput('/test/project') as { client: never })
-      .client;
+    mockClient = (buildPluginInput({} as never) as { client: never }).client;
 
     const output = await tool.execute({ task_id: 'exp-1' }, {
       sessionID: 'parent-1',

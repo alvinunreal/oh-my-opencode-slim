@@ -77,6 +77,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Plugin config** — The user-facing configuration loaded from `oh-my-opencode-slim.jsonc`.
 - **Preset** — A named set of per-agent overrides. The same word also names council councillor lineups (see Flagged).
 - **Model entry** — A normalized model reference with an optional variant, used in fallback chains.
+- **Model inheritance** — An explicit agent policy selecting the current `session` model or the configured `orchestrator` model when no agent model is set.
 - **Variant** — An optional model qualifier (e.g., a preview build) used in fallback resolution.
 - **Fallback / failover** — The mechanism that switches models when a call is rate-limited or returns empty.
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.

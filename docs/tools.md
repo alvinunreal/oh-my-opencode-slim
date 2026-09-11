@@ -38,6 +38,16 @@ Fast, structural code search and refactoring - more powerful than plain text gre
 
 `ast_grep` understands code structure, so it can find patterns like "all arrow functions that return a JSX element" rather than relying on exact text matching.
 
+Before the built-in `grep`/`glob` tools run, the plugin pre-checks that the
+requested `path` is valid, using the same resolution rules as the host:
+v1 `grep` joins relative paths, while v1 `glob` resolves them; v2 resolves
+relative paths for both tools. Missing paths and paths with a non-directory
+component fail fast with an actionable error instead of an opaque "ripgrep
+execution failed" message or a silent search of the parent directory.
+Resolution uses the host process's native path flavor, preserving Windows
+drive-relative behavior; if no project directory is available, the guard
+conservatively passes the path through.
+
 ---
 
 ## Background Task Control
@@ -73,6 +83,22 @@ that preceded the wait do not.
 See the background orchestration concepts in
 [Background Orchestration](background-orchestration.md) for the session
 lifecycle, cancellation, and explicit-wait edge cases behind these tools.
+
+---
+
+## Local Marketplace
+
+| Tool | Description |
+|------|-------------|
+| `marketplace` | Install, inspect, and activate local offline marketplace packages |
+
+`marketplace` is orchestrator-only. list/show/verify/status are read-only.
+install/import/update/enable/disable/profile/remove write store/config only
+and report reload only when disk activation differs from the live session.
+The CLI reports reload status as unknown. In-session status is also
+unknown when the store or desired activation cannot be read. There is no
+network registry.
+See [Local Marketplace](marketplace.md).
 
 ---
 

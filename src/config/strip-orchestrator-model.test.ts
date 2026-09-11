@@ -37,7 +37,9 @@ describe('applyOrchestratorModelConfig', () => {
       agents: presetOverride,
       enabled: true,
       presets: {
-        file: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
+        file: {
+          agents: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
+        },
       },
       configPreset: 'file',
       runtimePreset: null,
@@ -62,8 +64,10 @@ describe('applyOrchestratorModelConfig', () => {
       agents,
       enabled: true,
       presets: {
-        file: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
-        runtime: { explorer: { model: 'openai/gpt-5-mini' } },
+        file: {
+          agents: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
+        },
+        runtime: { agents: { explorer: { model: 'openai/gpt-5-mini' } } },
       },
       configPreset: 'file',
       runtimePreset: 'runtime',
@@ -81,8 +85,10 @@ describe('applyOrchestratorModelConfig', () => {
       agents,
       enabled: true,
       presets: {
-        file: { explorer: { model: 'openai/gpt-5-mini' } },
-        runtime: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
+        file: { agents: { explorer: { model: 'openai/gpt-5-mini' } } },
+        runtime: {
+          agents: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
+        },
       },
       configPreset: 'file',
       runtimePreset: 'runtime',

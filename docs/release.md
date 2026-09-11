@@ -203,6 +203,13 @@ bun test
 bun run build
 ```
 
+CI installs the Bun version pinned by `packageManager` in `package.json` and
+uses `bun ci` so lockfile drift fails instead of rewriting `bun.lock`. Required
+CI uploads JUnit and LCOV reports. A non-blocking latest-Bun canary reports
+upcoming runtime incompatibilities, package smoke runs for package-affecting
+pull requests, and the scheduled OpenCode compatibility workflow checks both
+the pinned supported host and latest host canary.
+
 ### Skill Synchronization Hashes Gate
 
 If this release changes any bundled skill content (under `src/skills/`), you must populate the `LEGACY_MANAGED_SKILL_HASHES` table in `src/hooks/auto-update-checker/skill-sync.ts` with the hashes of the previously published versions of those skills (obtained from published npm package tarballs). This ensures existing users' installations are adopted and upgraded safely. If this is a migration-only release without skill changes, confirm the table is kept as-is.

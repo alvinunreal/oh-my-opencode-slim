@@ -28,6 +28,9 @@ const packagedRequiredFiles = [
   'LICENSE',
   'dist/index.js',
   'dist/index.d.ts',
+  'dist/server/index.js',
+  'dist/tui.js',
+  'dist/tui.d.ts',
   'dist/cli/index.js',
   'oh-my-opencode-slim.schema.json',
   'src/companion/companion-manifest.json',
@@ -62,18 +65,34 @@ function run(command: string, args: string[], options: { cwd?: string } = {}) {
   return result.stdout.trim();
 }
 
-function parsePackJson(output: string) {
-  const start = output.indexOf('[');
-  const end = output.lastIndexOf(']');
+type PackEntry = {
+  filename?: string;
+  files?: Array<{ path: string }>;
+};
 
-  if (start === -1 || end === -1 || end < start) {
-    fail(`Could not locate npm pack JSON output:\n${output}`);
+function parsePackJson(output: string): PackEntry[] {
+  // npm pack --json historically emitted an array of entries; npm >= 12
+  // emits an object keyed by package name. Accept both shapes.
+  const arrayStart = output.indexOf('[');
+  const objectStart = output.indexOf('{');
+
+  if (arrayStart !== -1 && (objectStart === -1 || arrayStart < objectStart)) {
+    const end = output.lastIndexOf(']');
+    if (end === -1 || end < arrayStart) {
+      fail(`Could not locate npm pack JSON output:\n${output}`);
+    }
+    return JSON.parse(output.slice(arrayStart, end + 1)) as PackEntry[];
   }
 
-  return JSON.parse(output.slice(start, end + 1)) as Array<{
-    filename?: string;
-    files?: Array<{ path: string }>;
-  }>;
+  const end = output.lastIndexOf('}');
+  if (objectStart === -1 || end === -1 || end < objectStart) {
+    fail(`Could not locate npm pack JSON output:\n${output}`);
+  }
+  const parsed = JSON.parse(output.slice(objectStart, end + 1)) as Record<
+    string,
+    PackEntry | PackEntry[]
+  >;
+  return Object.values(parsed).flat() as PackEntry[];
 }
 
 function walkFiles(dir: string): string[] {
@@ -181,11 +200,75 @@ function verifyFreshInstall(tarballPath: string) {
       "if (pkg?.id !== 'oh-my-opencode-slim') throw new Error('default export has an unexpected plugin id');",
       "if (typeof pkg.server !== 'function') throw new Error('default export is missing a server plugin factory');",
       "if (typeof pkg.setup !== 'function') throw new Error('default export is missing a v2 setup factory');",
+      'const asyncNoop = async () => ({});',
+      'const client = new Proxy({}, {',
+      '  get(_target, property) {',
+      "    if (property === 'app') return { log: asyncNoop };",
+      "    if (property === 'session') return { abort: asyncNoop };",
+      '    return new Proxy({}, { get: () => asyncNoop });',
+      '  },',
+      '});',
+      'globalThis.fetch = async () => new Response(',
+      "  '<!doctype html><html><head><title>Release smoke</title></head><body><main><h1>Release smoke</h1><p>packaged jsdom extraction works</p></main></body></html>',",
+      "  { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },",
+      ');',
+      'const plugin = await pkg.server({',
+      '  client,',
+      '  directory: process.cwd(),',
+      '  worktree: process.cwd(),',
+      "  serverUrl: new URL('http://127.0.0.1:4096'),",
+      '});',
+      'const webfetch = plugin?.tool?.webfetch;',
+      "if (typeof webfetch?.execute !== 'function') throw new Error('server plugin did not register webfetch');",
+      'const result = await webfetch.execute({',
+      "  url: 'https://example.com/release-smoke',",
+      "  format: 'markdown',",
+      '  timeout: 10,',
+      '  extract_main: true,',
+      "  prefer_llms_txt: 'never',",
+      '  include_metadata: false,',
+      '  save_binary: false,',
+      '}, {',
+      '  ask: async () => undefined,',
+      '  metadata: () => undefined,',
+      '  abort: new AbortController().signal,',
+      '  directory: process.cwd(),',
+      "  sessionID: 'release-smoke',",
+      '});',
+      "if (!String(result).includes('packaged jsdom extraction works')) throw new Error('packaged webfetch did not extract the expected document');",
+      'await plugin.dispose?.();',
       "console.log('package loads');",
+      "console.log('packaged webfetch constructs and extracts a document');",
       'process.exit(0);',
     ].join('\n');
     console.log('Importing installed package entrypoint...');
     run('node', ['--input-type=module', '--eval', smokeScript], {
+      cwd: installDir,
+    });
+
+    const tuiSmokeScript = [
+      "import pkg from 'oh-my-opencode-slim/tui';",
+      "if (pkg?.id !== 'oh-my-opencode-slim:tui') throw new Error('TUI export has an unexpected plugin id');",
+      "if (typeof pkg.tui !== 'function') throw new Error('TUI export is missing its v1 factory');",
+      "if (typeof pkg.setup !== 'function') throw new Error('TUI export is missing its v2 setup factory');",
+      "console.log('TUI package loads');",
+      'process.exit(0);',
+    ].join('\n');
+    console.log('Importing installed TUI entrypoint...');
+    run('bun', ['--eval', tuiSmokeScript], { cwd: installDir });
+
+    // v2 hosts install this package with `subpaths: ["server", ""]`; the
+    // exports map must resolve ./server to the self-contained bundle.
+    const serverSmokeScript = [
+      "import pkg from 'oh-my-opencode-slim/server';",
+      "if (pkg?.id !== 'oh-my-opencode-slim') throw new Error('server export has an unexpected plugin id');",
+      "if (typeof pkg.server !== 'function') throw new Error('server export is missing a v1 plugin factory');",
+      "if (typeof pkg.setup !== 'function') throw new Error('server export is missing a v2 setup factory');",
+      "console.log('server package loads');",
+      'process.exit(0);',
+    ].join('\n');
+    console.log('Importing installed server subpath entrypoint...');
+    run('node', ['--input-type=module', '--eval', serverSmokeScript], {
       cwd: installDir,
     });
   } finally {

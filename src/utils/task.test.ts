@@ -1,11 +1,49 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+  guardCompletedStatusText,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
   parseTaskResultFromOutput,
+  parseTaskStateFromOutput,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
 } from './task';
+
+describe('guardCompletedStatusText', () => {
+  test('keeps completed only when non-empty result text exists', () => {
+    expect(
+      guardCompletedStatusText('completed', 'final text', undefined),
+    ).toEqual({ state: 'completed', resultSummary: 'final text' });
+  });
+
+  test('downgrades empty completed to error with a diagnostic', () => {
+    const guarded = guardCompletedStatusText('completed', undefined, undefined);
+    expect(guarded.state).toBe('error');
+    expect(guarded.resultSummary).toBe(COMPLETED_WITHOUT_TEXT_DIAGNOSTIC);
+  });
+
+  test('downgrades whitespace-only completed to error', () => {
+    expect(guardCompletedStatusText('completed', '  ', undefined).state).toBe(
+      'error',
+    );
+  });
+
+  test('keeps completed when the board already holds a summary', () => {
+    expect(
+      guardCompletedStatusText('completed', undefined, 'recorded result'),
+    ).toEqual({ state: 'completed', resultSummary: undefined });
+  });
+
+  test('passes non-completed states through unchanged', () => {
+    for (const state of ['running', 'error', 'cancelled'] as const) {
+      expect(guardCompletedStatusText(state, '', undefined)).toEqual({
+        state,
+        resultSummary: '',
+      });
+    }
+  });
+});
 
 describe('renderRunningTaskPlaceholder', () => {
   test('is deterministic and keyed only on the task ID', () => {
@@ -267,5 +305,69 @@ describe('parseTaskResultFromOutput', () => {
     expect(
       parseTaskResultFromOutput('<task_error>data</task_result>'),
     ).toBeUndefined();
+  });
+});
+
+describe('v2 subagent output formats', () => {
+  test('parses subagent XML completion', () => {
+    const out = [
+      '<subagent sessionID="ses_a" state="completed" description="fix lint">',
+      'done',
+      '</subagent>',
+    ].join('\n');
+    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_a');
+    expect(parseTaskStateFromOutput(out)).toBe('completed');
+    expect(parseTaskResultFromOutput(out)).toBe('done');
+    const status = parseTaskStatusOutput(out);
+    expect(status).toMatchObject({ taskID: 'ses_a', state: 'completed' });
+  });
+
+  test('parses subagent XML error completion', () => {
+    const out =
+      '<subagent sessionID="ses_b" state="error" description="d">broken</subagent>';
+    expect(parseTaskStatusOutput(out)).toMatchObject({
+      taskID: 'ses_b',
+      state: 'error',
+      result: 'broken',
+    });
+  });
+
+  test('parses plain-text background launch', () => {
+    const out =
+      'The subagent is working in the background (sessionID: ses_c). You will be notified automatically when it finishes.';
+    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_c');
+    expect(parseTaskStateFromOutput(out)).toBe('running');
+    expect(parseTaskLaunchOutput(out)).toMatchObject({
+      taskID: 'ses_c',
+      state: 'running',
+    });
+  });
+
+  test('parses subagent failure message', () => {
+    const out = 'Subagent failed (sessionID: ses_d): rate limited';
+    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_d');
+    expect(parseTaskStateFromOutput(out)).toBe('error');
+  });
+
+  test('v1 <task> formats still parse unchanged', () => {
+    const out =
+      '<task id="ses_e" state="running">\n<task_result>\nx\n</task_result>\n</task>';
+    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_e');
+    expect(parseTaskStateFromOutput(out)).toBe('running');
+  });
+
+  test('v1 task_id line wins over a stray bracketed sessionID', () => {
+    const out = [
+      'Launched background task.',
+      'task_id: ses_v1',
+      'Related discussion mentions (sessionID: ses_other) in passing.',
+    ].join('\n');
+    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_v1');
+  });
+
+  test('v2 background-launch text still parses after precedence reorder', () => {
+    const out =
+      'The subagent is working in the background (sessionID: ses_c). You will be notified automatically when it finishes.';
+    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_c');
   });
 });

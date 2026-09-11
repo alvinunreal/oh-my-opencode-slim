@@ -72,6 +72,24 @@ function formatRunningTaskStatus(
   ].join('\n');
 }
 
+function formatUncertainTaskStatus(taskID: string, tracked: boolean): string {
+  return [
+    `task_id: ${taskID}`,
+    'state: running (unconfirmed)',
+    'message: Live task status is uncertain; no definitive running state is available.',
+    `next: ${tracked ? 'retry task_result or use task_status to inspect the task' : 'retry task_result after the task finishes'}`,
+  ].join('\n');
+}
+
+function formatQuiescentTaskStatus(taskID: string): string {
+  return [
+    `task_id: ${taskID}`,
+    'state: pending',
+    'message: Task is quiescent; wait for terminal reconciliation before retrieving its result.',
+    'next: retry task_result after the terminal notification',
+  ].join('\n');
+}
+
 function assertStableTrackedGeneration(
   requested: string,
   parentSessionID: string,
@@ -173,6 +191,12 @@ Use this when the user asks to see a prior task's full result, or before retryin
         revalidateTracked();
         if (tracked && getTrackedTerminalState(tracked) === 'running') {
           const status = runtimeSessionStatus(liveSnapshot, taskID);
+          if (status === undefined) {
+            return formatUncertainTaskStatus(taskID, true);
+          }
+          if (status === 'idle') {
+            return formatQuiescentTaskStatus(taskID);
+          }
           return formatRunningTaskStatus(
             taskID,
             status === 'retry' ? 'retry' : 'running',
@@ -210,9 +234,15 @@ Use this when the user asks to see a prior task's full result, or before retryin
       const activeState =
         status === 'retry'
           ? 'retry'
-          : status === 'busy' || trackedTerminalState === 'running'
+          : status === 'busy'
             ? 'running'
             : undefined;
+      if (status === undefined && trackedTerminalState === 'running') {
+        return formatUncertainTaskStatus(taskID, true);
+      }
+      if (status === 'idle' && trackedTerminalState === 'running') {
+        return formatQuiescentTaskStatus(taskID);
+      }
       if (activeState !== undefined && trackedTerminalState !== 'completed') {
         return formatRunningTaskStatus(
           taskID,

@@ -2,13 +2,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
 import { getConfigSearchDirs } from '../cli/paths';
-import { DEFAULT_DISABLED_AGENTS } from './constants';
+import { AGENT_ALIASES, DEFAULT_DISABLED_AGENTS } from './constants';
 import {
+  type AgentOverrideConfig,
   BackgroundJobsConfigSchema,
   InterviewConfigSchema,
   LEGACY_FALLBACK_KEYS,
+  type MarketplaceActivation,
   type PluginConfig,
   PluginConfigSchema,
+  type Preset,
   WebfetchConfigSchema,
 } from './schema';
 
@@ -269,6 +272,13 @@ function retainExplicitBackgroundJobsFields(
  * @param onWarning - Optional callback for warnings
  * @returns Validated config object, or null if loading failed
  */
+export function loadPluginConfigFile(
+  configPath: string,
+  options?: LoadPluginConfigOptions,
+): PluginConfig | null {
+  return loadConfigFromPath(configPath, options);
+}
+
 function loadConfigFromPath(
   configPath: string,
   options?: LoadPluginConfigOptions,
@@ -593,8 +603,8 @@ export function mergePluginConfigs(
   return {
     ...base,
     ...override,
-    agents: deepMerge(base.agents, override.agents),
-    presets: deepMerge(base.presets, override.presets),
+    agents: mergeAgentOverrides(base.agents, override.agents),
+    presets: mergePresets(base.presets, override.presets),
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
@@ -610,6 +620,121 @@ export function mergePluginConfigs(
       override.companion as Record<string, unknown> | undefined,
     ) as PluginConfig['companion'],
   };
+}
+
+/** Typed merge for agent override records. Object-valued options are merged;
+ * scalar values and arrays are replaced by the higher-precedence layer. */
+export function mergeAgentOverrides(
+  base: Record<string, AgentOverrideConfig> | undefined,
+  override: Record<string, AgentOverrideConfig> | undefined,
+): Record<string, AgentOverrideConfig> | undefined {
+  const result: Record<string, AgentOverrideConfig> = {};
+  const addLayer = (layer: Record<string, AgentOverrideConfig> | undefined) => {
+    if (!layer) return;
+    const entries = Object.entries(layer).sort(([left], [right]) => {
+      const leftCanonical = AGENT_ALIASES[left] ?? left;
+      const rightCanonical = AGENT_ALIASES[right] ?? right;
+      if (leftCanonical !== rightCanonical) {
+        return leftCanonical < rightCanonical ? -1 : 1;
+      }
+      return left === leftCanonical ? 1 : right === rightCanonical ? -1 : 0;
+    });
+    for (const [rawName, value] of entries) {
+      const name = AGENT_ALIASES[rawName] ?? rawName;
+      const previous = result[name];
+      const merged = previous
+        ? {
+            ...previous,
+            ...value,
+            options:
+              previous.options || value.options
+                ? { ...previous.options, ...value.options }
+                : undefined,
+          }
+        : { ...value };
+      if (value.model !== undefined) {
+        delete merged.inheritModelFrom;
+      } else if (value.inheritModelFrom !== undefined) {
+        delete merged.model;
+      }
+      result[name] = merged;
+    }
+  };
+
+  addLayer(base);
+  addLayer(override);
+  if (Object.keys(result).length === 0) return base || override;
+  return result;
+}
+
+/** Typed merge for the structured preset model. */
+function normalizePreset(preset: Preset): Preset {
+  return {
+    ...preset,
+    agents: mergeAgentOverrides(undefined, preset.agents) ?? {},
+  };
+}
+
+export function mergePreset(
+  base: Preset | undefined,
+  override: Preset | undefined,
+): Preset | undefined {
+  if (!base) {
+    return override ? normalizePreset(override) : undefined;
+  }
+  if (!override) {
+    return normalizePreset(base);
+  }
+  const marketplace: MarketplaceActivation | undefined = override.marketplace
+    ? {
+        ...(base.marketplace ?? {}),
+        ...override.marketplace,
+        ...(Object.hasOwn(override.marketplace, 'agents')
+          ? { agents: override.marketplace.agents }
+          : {}),
+        ...(Object.hasOwn(override.marketplace, 'profiles')
+          ? {
+              profiles: {
+                ...(base.marketplace?.profiles ?? {}),
+                ...(override.marketplace.profiles ?? {}),
+              },
+            }
+          : {}),
+      }
+    : base.marketplace;
+  return {
+    agents: mergeAgentOverrides(base.agents, override.agents) ?? {},
+    ...(marketplace ? { marketplace } : {}),
+  };
+}
+
+export function mergePresets(
+  base: Record<string, Preset> | undefined,
+  override: Record<string, Preset> | undefined,
+): Record<string, Preset> | undefined {
+  if (!base) {
+    return override
+      ? Object.fromEntries(
+          Object.entries(override).map(([name, preset]) => [
+            name,
+            normalizePreset(preset),
+          ]),
+        )
+      : undefined;
+  }
+  if (!override) {
+    return Object.fromEntries(
+      Object.entries(base).map(([name, preset]) => [
+        name,
+        normalizePreset(preset),
+      ]),
+    );
+  }
+  const result: Record<string, Preset> = { ...base };
+  for (const [name, preset] of Object.entries(override)) {
+    result[name] = mergePreset(result[name], preset) ?? preset;
+  }
+  return result;
 }
 
 /**
@@ -703,13 +828,12 @@ export function loadPluginConfig(
     config.preset = envPreset;
   }
 
-  // Resolve preset and merge with root agents
+  // Validate the selected preset without projecting it into root agents.
+  // RuntimeConfig/ResolvedAgentRegistry perform the single structural
+  // preset + root + host resolution later.
   if (config.preset) {
     const preset = config.presets?.[config.preset];
-    if (preset) {
-      // Merge preset agents with root agents (root overrides)
-      config.agents = deepMerge(preset, config.agents);
-    } else {
+    if (!preset) {
       // Preset name specified but doesn't exist - warn user
       const presetSource =
         envPreset === config.preset ? 'environment variable' : 'config file';

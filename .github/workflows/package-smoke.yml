@@ -2,6 +2,21 @@ name: Package Smoke
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/package-smoke.yml'
+      - 'package.json'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - 'tsconfig.json'
+      - 'oh-my-opencode-slim.schema.json'
+      - 'LICENSE'
+      - 'README*.md'
+      - 'scripts/generate-schema.ts'
+      - 'scripts/verify-opencode-host-smoke.ts'
+      - 'scripts/verify-release-artifact.ts'
+      - 'src/**'
   push:
     tags: ['v*']
 
@@ -12,11 +27,11 @@ concurrency:
 jobs:
   package-smoke:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
 
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        bun-version: [latest]
 
     steps:
       - name: Checkout code
@@ -24,11 +39,9 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ matrix.bun-version }}
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun ci
 
       - name: Build
         run: bun run build

@@ -53,7 +53,9 @@ describe('switchPresetOnDisk', () => {
   test('returns a not-found result for an unknown preset', () => {
     const config: PluginConfig = {
       presets: {
-        cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        cheap: {
+          agents: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        },
       },
     };
 
@@ -79,7 +81,7 @@ describe('switchPresetOnDisk', () => {
   test('returns an empty result when the preset has no valid overrides', () => {
     const config: PluginConfig = {
       presets: {
-        empty: { orchestrator: {} },
+        empty: { agents: { orchestrator: {} } },
       },
     };
 
@@ -90,12 +92,32 @@ describe('switchPresetOnDisk', () => {
     expect(result.message).toContain('no agent overrides');
   });
 
+  test('allows profile-only preset activation', () => {
+    const config: PluginConfig = {
+      presets: {
+        profiles: {
+          agents: {},
+          marketplace: {
+            profiles: { oracle: 'community/oracle-profile' },
+          },
+        },
+      },
+    };
+
+    const result = switchPresetOnDisk(tempDir, 'profiles', config);
+
+    expect(result.ok).toBe(true);
+    expect(result.presetName).toBe('profiles');
+  });
+
   test('switches preset and reports a reload-to-apply message', () => {
     const config: PluginConfig = {
       presets: {
         cheap: {
-          orchestrator: { model: 'anthropic/claude-3.5-haiku' },
-          explorer: { model: 'openai/gpt-5.6-luna' },
+          agents: {
+            orchestrator: { model: 'anthropic/claude-3.5-haiku' },
+            explorer: { model: 'openai/gpt-5.6-luna' },
+          },
         },
       },
     };
@@ -134,7 +156,9 @@ describe('switchPresetOnDisk', () => {
 
     const config: PluginConfig = {
       presets: {
-        cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        cheap: {
+          agents: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        },
       },
     };
 
@@ -166,7 +190,9 @@ describe('switchPresetOnDisk', () => {
 
     const config: PluginConfig = {
       presets: {
-        cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        cheap: {
+          agents: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        },
       },
     };
 
@@ -186,7 +212,7 @@ describe('switchPresetOnDisk', () => {
   test('resolves legacy alias keys (explore → explorer)', () => {
     const config: PluginConfig = {
       presets: {
-        scout: { explore: { model: 'openai/gpt-5.6-luna' } },
+        scout: { agents: { explore: { model: 'openai/gpt-5.6-luna' } } },
       },
     };
 
@@ -200,9 +226,11 @@ describe('switchPresetOnDisk', () => {
     const config: PluginConfig = {
       presets: {
         mixed: {
-          orchestrator: { model: 'anthropic/claude-3.5-haiku' },
-          explorer: {},
-          oracle: { temperature: 0.3 },
+          agents: {
+            orchestrator: { model: 'anthropic/claude-3.5-haiku' },
+            explorer: {},
+            oracle: { temperature: 0.3 },
+          },
         },
       },
     };
@@ -222,8 +250,10 @@ describe('switchPresetOnDisk', () => {
     const config: PluginConfig = {
       presets: {
         fallback: {
-          orchestrator: {
-            model: ['anthropic/claude-3.5-haiku', 'openai/gpt-5.6'],
+          agents: {
+            orchestrator: {
+              model: ['anthropic/claude-3.5-haiku', 'openai/gpt-5.6'],
+            },
           },
         },
       },
@@ -241,11 +271,13 @@ describe('switchPresetOnDisk', () => {
     const config: PluginConfig = {
       presets: {
         thinker: {
-          oracle: {
-            model: [
-              { id: 'anthropic/claude-sonnet-4-6', variant: 'thinking' },
-              { id: 'openai/o3' },
-            ],
+          agents: {
+            oracle: {
+              model: [
+                { id: 'anthropic/claude-sonnet-4-6', variant: 'thinking' },
+                { id: 'openai/o3' },
+              ],
+            },
           },
         },
       },
@@ -263,10 +295,12 @@ describe('switchPresetOnDisk', () => {
     const config: PluginConfig = {
       presets: {
         precise: {
-          orchestrator: {
-            model: 'openai/o3',
-            temperature: 0.1,
-            options: { thinking: { type: 'enabled', budgetTokens: 10000 } },
+          agents: {
+            orchestrator: {
+              model: 'openai/o3',
+              temperature: 0.1,
+              options: { thinking: { type: 'enabled', budgetTokens: 10000 } },
+            },
           },
         },
       },
@@ -284,7 +318,9 @@ describe('switchPresetOnDisk', () => {
     // No config file on disk; persistPresetName is best-effort.
     const config: PluginConfig = {
       presets: {
-        cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        cheap: {
+          agents: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        },
       },
     };
 
@@ -303,7 +339,7 @@ describe('writePreset', () => {
     );
 
     const ok = writePreset(tempDir, 'scout', {
-      explorer: { model: 'openai/gpt-5.6-luna' },
+      agents: { explorer: { model: 'openai/gpt-5.6-luna' } },
     });
 
     expect(ok).toBe(true);
@@ -314,7 +350,7 @@ describe('writePreset', () => {
       ),
     ) as { presets?: Record<string, unknown> };
     expect(persisted.presets?.scout).toEqual({
-      explorer: { model: 'openai/gpt-5.6-luna' },
+      agents: { explorer: { model: 'openai/gpt-5.6-luna' } },
     });
     // existing fields preserved
     expect(persisted.preset).toBe('old');
@@ -329,12 +365,12 @@ describe('writePreset', () => {
       configPath,
       `\uFEFF${JSON.stringify({
         preset: 'old',
-        presets: { existing: { oracle: { model: 'a' } } },
+        presets: { existing: { agents: { oracle: { model: 'a' } } } },
       })}`,
     );
 
     const ok = writePreset(tempDir, 'scout', {
-      explorer: { model: 'openai/gpt-5.6-luna' },
+      agents: { explorer: { model: 'openai/gpt-5.6-luna' } },
     });
 
     expect(ok).toBe(true);
@@ -344,9 +380,11 @@ describe('writePreset', () => {
     };
     // Existing fields survived, proving the BOM-prefixed file was parsed
     expect(persisted.preset).toBe('old');
-    expect(persisted.presets?.existing).toEqual({ oracle: { model: 'a' } });
+    expect(persisted.presets?.existing).toEqual({
+      agents: { oracle: { model: 'a' } },
+    });
     expect(persisted.presets?.scout).toEqual({
-      explorer: { model: 'openai/gpt-5.6-luna' },
+      agents: { explorer: { model: 'openai/gpt-5.6-luna' } },
     });
   });
 
@@ -357,12 +395,12 @@ describe('writePreset', () => {
     fs.writeFileSync(
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        presets: { scout: { orchestrator: { model: 'old' } } },
+        presets: { scout: { agents: { orchestrator: { model: 'old' } } } },
       }),
     );
 
     writePreset(tempDir, 'scout', {
-      oracle: { model: 'new' },
+      agents: { oracle: { model: 'new' } },
     });
 
     const persisted = JSON.parse(
@@ -371,7 +409,9 @@ describe('writePreset', () => {
         'utf-8',
       ),
     ) as { presets?: Record<string, unknown> };
-    expect(persisted.presets?.scout).toEqual({ oracle: { model: 'new' } });
+    expect(persisted.presets?.scout).toEqual({
+      agents: { oracle: { model: 'new' } },
+    });
   });
 
   test('writes into a freshly empty user config', () => {
@@ -381,7 +421,7 @@ describe('writePreset', () => {
     fs.writeFileSync(path.join(configDir, 'oh-my-opencode-slim.json'), '{}');
 
     const ok = writePreset(tempDir, 'solo', {
-      orchestrator: { model: 'x' },
+      agents: { orchestrator: { model: 'x' } },
     });
 
     expect(ok).toBe(true);
@@ -391,7 +431,9 @@ describe('writePreset', () => {
         'utf-8',
       ),
     ) as { presets?: Record<string, unknown> };
-    expect(persisted.presets?.solo).toEqual({ orchestrator: { model: 'x' } });
+    expect(persisted.presets?.solo).toEqual({
+      agents: { orchestrator: { model: 'x' } },
+    });
   });
 });
 
@@ -404,8 +446,8 @@ describe('deletePreset', () => {
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         presets: {
-          scout: { orchestrator: { model: 'a' } },
-          keep: { oracle: { model: 'b' } },
+          scout: { agents: { orchestrator: { model: 'a' } } },
+          keep: { agents: { oracle: { model: 'b' } } },
         },
       }),
     );
@@ -419,7 +461,9 @@ describe('deletePreset', () => {
         'utf-8',
       ),
     ) as { presets?: Record<string, unknown> };
-    expect(persisted.presets).toEqual({ keep: { oracle: { model: 'b' } } });
+    expect(persisted.presets).toEqual({
+      keep: { agents: { oracle: { model: 'b' } } },
+    });
   });
 
   test('clears the active preset field when deleting the active preset', () => {
@@ -430,7 +474,7 @@ describe('deletePreset', () => {
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         preset: 'scout',
-        presets: { scout: { orchestrator: { model: 'a' } } },
+        presets: { scout: { agents: { orchestrator: { model: 'a' } } } },
       }),
     );
 
@@ -452,7 +496,9 @@ describe('deletePreset', () => {
     process.env.OPENCODE_CONFIG_DIR = configDir;
     fs.writeFileSync(
       path.join(configDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({ presets: { keep: { orchestrator: { model: 'a' } } } }),
+      JSON.stringify({
+        presets: { keep: { agents: { orchestrator: { model: 'a' } } } },
+      }),
     );
 
     expect(deletePreset(tempDir, 'missing')).toBe(false);
@@ -465,41 +511,47 @@ describe('deletePreset', () => {
 
 describe('setAgentOverride / removeAgentFromPreset', () => {
   test('setAgentOverride adds a new agent immutably', () => {
-    const preset = { orchestrator: { model: 'a' } };
+    const preset = { agents: { orchestrator: { model: 'a' } } };
     const next = setAgentOverride(preset, 'oracle', { model: 'b' });
     expect(next).toEqual({
-      orchestrator: { model: 'a' },
-      oracle: { model: 'b' },
+      agents: {
+        orchestrator: { model: 'a' },
+        oracle: { model: 'b' },
+      },
     });
-    expect(preset).toEqual({ orchestrator: { model: 'a' } });
+    expect(preset).toEqual({ agents: { orchestrator: { model: 'a' } } });
   });
 
   test('setAgentOverride replaces an existing agent', () => {
-    const preset = { orchestrator: { model: 'a' } };
+    const preset = { agents: { orchestrator: { model: 'a' } } };
     const next = setAgentOverride(preset, 'orchestrator', {
       model: 'b',
       variant: 'thinking',
     });
     expect(next).toEqual({
-      orchestrator: { model: 'b', variant: 'thinking' },
+      agents: { orchestrator: { model: 'b', variant: 'thinking' } },
     });
   });
 
   test('removeAgentFromPreset removes an agent immutably', () => {
     const preset = {
-      orchestrator: { model: 'a' },
-      oracle: { model: 'b' },
+      agents: {
+        orchestrator: { model: 'a' },
+        oracle: { model: 'b' },
+      },
     };
     const next = removeAgentFromPreset(preset, 'oracle');
-    expect(next).toEqual({ orchestrator: { model: 'a' } });
+    expect(next).toEqual({ agents: { orchestrator: { model: 'a' } } });
     expect(preset).toEqual({
-      orchestrator: { model: 'a' },
-      oracle: { model: 'b' },
+      agents: {
+        orchestrator: { model: 'a' },
+        oracle: { model: 'b' },
+      },
     });
   });
 
   test('removeAgentFromPreset is a no-op for absent agents', () => {
-    const preset = { orchestrator: { model: 'a' } };
+    const preset = { agents: { orchestrator: { model: 'a' } } };
     expect(removeAgentFromPreset(preset, 'oracle')).toBe(preset);
   });
 });

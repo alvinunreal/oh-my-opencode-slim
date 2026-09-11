@@ -9,6 +9,7 @@ import {
   createInterviewService as createRealInterviewService,
   MAX_RETAINED_ABANDONED,
 } from './service';
+import { bindFreePort } from './test-port';
 import type { InterviewAnswer } from './types';
 import { renderInterviewPage } from './ui';
 
@@ -1852,24 +1853,6 @@ describe('renderInterviewPage', () => {
   });
 });
 
-/** Discover a free port by briefly binding to port 0, then closing. */
-async function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      srv.close(() => {
-        if (!addr || typeof addr === 'string') {
-          reject(new Error('Failed to find free port'));
-          return;
-        }
-        resolve(addr.port);
-      });
-    });
-    srv.on('error', reject);
-  });
-}
-
 describe('interview server port configuration', () => {
   const noopDeps = {
     getState: mock(
@@ -1896,13 +1879,18 @@ describe('interview server port configuration', () => {
   };
 
   test('server starts on a specific port when port is non-zero', async () => {
-    const freePort = await findFreePort();
-    const server = createInterviewServer({ ...noopDeps, port: freePort });
+    const held = await bindFreePort();
+    const server = createInterviewServer({
+      ...noopDeps,
+      port: held.port,
+      server: held.server,
+    });
     try {
       const baseUrl = await server.ensureStarted();
-      expect(baseUrl).toBe(`http://127.0.0.1:${freePort}`);
+      expect(baseUrl).toBe(`http://127.0.0.1:${held.port}`);
     } finally {
       server.close();
+      if (held.server.listening) held.server.close();
     }
   });
 
@@ -1920,15 +1908,20 @@ describe('interview server port configuration', () => {
   });
 
   test('baseUrl contains the correct port number for fixed port', async () => {
-    const freePort = await findFreePort();
-    const server = createInterviewServer({ ...noopDeps, port: freePort });
+    const held = await bindFreePort();
+    const server = createInterviewServer({
+      ...noopDeps,
+      port: held.port,
+      server: held.server,
+    });
     try {
       const baseUrl = await server.ensureStarted();
       const portStr = baseUrl.split(':').pop();
       const port = Number.parseInt(portStr ?? '0', 10);
-      expect(port).toBe(freePort);
+      expect(port).toBe(held.port);
     } finally {
       server.close();
+      if (held.server.listening) held.server.close();
     }
   });
 

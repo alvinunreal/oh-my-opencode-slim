@@ -10,7 +10,7 @@
  */
 
 import { log } from '../utils/logger';
-import type { ModelRef, V2AgentDraft } from './types';
+import type { ModelRef, V2AgentDraft, V2ToolDefinition } from './types';
 
 /** Parse a v1 "provider/model" string into a v2 Model.Ref. */
 export function parseModelRef(model: unknown): ModelRef | undefined {
@@ -104,7 +104,7 @@ export function adaptTool(
   v1Tool: Record<string, unknown>,
   directory: string,
   inputSchema: unknown,
-): Record<string, unknown> {
+): V2ToolDefinition {
   const description =
     (v1Tool.description as string | undefined) ?? `Tool ${name}`;
 
@@ -116,6 +116,13 @@ export function adaptTool(
     name,
     description,
     input: inputSchema,
+    // CodeMode opt-out (official plugin pattern, packages/plugin README):
+    // v2's Tool.snapshot() only turns `codemode: false` tools into direct
+    // model-visible tool definitions. Without this flag the tool registers
+    // cleanly but is confined to the `execute` tool's JS runtime — session
+    // tool catalogs then yield `Unknown tool: <name>`. Additive field;
+    // older hosts ignore it.
+    options: { codemode: false },
     execute: async (input: unknown, context: unknown) => {
       if (!execute) return { output: {} };
       const ctx = context as {

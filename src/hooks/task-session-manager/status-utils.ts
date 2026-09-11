@@ -3,7 +3,7 @@ import type {
   BackgroundJobStore,
   ContextFile,
 } from '../../utils';
-import { parseTaskStatusOutput } from '../../utils';
+import { guardCompletedStatusText, parseTaskStatusOutput } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 
@@ -76,11 +76,18 @@ export function updateBackgroundJobFromOutput(
     return existing;
   }
 
+  const guarded = guardCompletedStatusText(
+    status.state,
+    status.result,
+    existing?.resultSummary,
+  );
+
   const updated = backgroundJobBoard.updateStatus({
     taskID: status.taskID,
-    state: status.state,
+    state: guarded.state,
     timedOut: status.timedOut,
-    resultSummary: status.result,
+    resultSummary: guarded.resultSummary,
+    lastStatusError: guarded.lastStatusError,
   });
   if (!updated) {
     log('[task-session-manager] ignored status for unknown background job', {

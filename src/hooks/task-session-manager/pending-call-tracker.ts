@@ -1,4 +1,14 @@
 import type { BackgroundJobLease } from '../../utils/background-job-board';
+import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
+import type { BackgroundTaskConcurrencyTicket } from '../../utils/background-task-concurrency';
+
+export interface EarlyTaskRegistration {
+  taskID: string;
+  generation: number;
+  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobSupervisor?: BackgroundJobSupervisor;
+}
 
 export interface PendingTaskCall {
   callId: string;
@@ -13,11 +23,37 @@ export interface PendingTaskCall {
   lifecycleEpoch: number;
   resumedTaskId?: string;
   relaunchLease?: BackgroundJobLease;
+  /** Board generation that owns the relaunch lease. */
+  releaseLease?: (lease: BackgroundJobLease) => boolean;
+  concurrencyTicket?: BackgroundTaskConcurrencyTicket;
   earlyRegisteredTaskID?: string;
+  earlyRegistration?: EarlyTaskRegistration;
   earlyRegistrationRejected?: boolean;
 }
 
 const MAX_PENDING_TASK_CALLS = 100;
+
+export interface PendingCallTracker {
+  add(call: PendingTaskCall): void;
+  take(
+    callId?: string,
+    parentSessionId?: string,
+    ownerBoard?: BackgroundJobStore,
+  ): PendingTaskCall | undefined;
+  release(call: PendingTaskCall): void;
+  peekByParent(parentSessionId: string): PendingTaskCall | undefined;
+  peekByParentAndAgent(
+    parentSessionId: string,
+    agentHint?: string,
+  ): PendingTaskCall | undefined;
+  adoptEarlyRegistrations(
+    backgroundJobBoard: BackgroundJobStore,
+    backgroundJobSupervisor?: BackgroundJobSupervisor,
+  ): void;
+  clearSession(sessionId: string): void;
+  clearAll(): void;
+  pendingCallId(sessionID?: string, callID?: string): string;
+}
 
 export function createPendingCallTracker(
   options: { releaseLease?: (lease: BackgroundJobLease) => boolean } = {},
@@ -26,10 +62,13 @@ export function createPendingCallTracker(
   let anonymousPendingCallId = 0;
 
   const releaseCallLease = (call: PendingTaskCall): void => {
-    if (call.relaunchLease) options.releaseLease?.(call.relaunchLease);
+    if (call.relaunchLease) {
+      (call.releaseLease ?? options.releaseLease)?.(call.relaunchLease);
+    }
+    call.concurrencyTicket?.releaseIfUnbound();
   };
 
-  return {
+  const tracker: PendingCallTracker = {
     add(call: PendingTaskCall) {
       const replaced = pendingCalls.get(call.callId);
       if (replaced) releaseCallLease(replaced);
@@ -44,7 +83,11 @@ export function createPendingCallTracker(
       }
     },
 
-    take(callId?: string, parentSessionId?: string) {
+    take(
+      callId?: string,
+      parentSessionId?: string,
+      ownerBoard?: BackgroundJobStore,
+    ) {
       if (!callId && parentSessionId) {
         for (const id of pendingCalls.keys()) {
           const call = pendingCalls.get(id);
@@ -56,6 +99,13 @@ export function createPendingCallTracker(
       }
       if (!callId) return undefined;
       const pending = pendingCalls.get(callId);
+      if (
+        pending?.earlyRegistration &&
+        ownerBoard &&
+        pending.earlyRegistration.backgroundJobBoard !== ownerBoard
+      ) {
+        return undefined;
+      }
       pendingCalls.delete(callId);
       return pending;
     },
@@ -102,18 +152,72 @@ export function createPendingCallTracker(
       return fallback;
     },
 
-    clearSession(sessionId: string) {
-      for (const [callId, pending] of pendingCalls.entries()) {
-        if (pending.parentSessionId === sessionId) {
-          pendingCalls.delete(callId);
-          releaseCallLease(pending);
+    adoptEarlyRegistrations(
+      backgroundJobBoard: BackgroundJobStore,
+      backgroundJobSupervisor?: BackgroundJobSupervisor,
+    ) {
+      for (const pending of pendingCalls.values()) {
+        const registration = pending.earlyRegistration;
+        if (
+          !registration ||
+          registration.backgroundJobBoard === backgroundJobBoard
+        ) {
+          continue;
         }
+
+        const existing = backgroundJobBoard.get(registration.taskID);
+        if (
+          existing &&
+          (existing.parentSessionID !== pending.parentSessionId ||
+            existing.agent !== pending.agentType)
+        ) {
+          continue;
+        }
+
+        let adopted = existing;
+        if (!adopted) {
+          try {
+            adopted = backgroundJobBoard.registerLaunch({
+              taskID: registration.taskID,
+              parentSessionID: pending.parentSessionId,
+              agent: pending.agentType,
+              description: pending.label,
+              objective: pending.fullObjective ?? pending.label,
+              background: false,
+              preserveRun: true,
+            });
+          } catch {
+            continue;
+          }
+        }
+
+        registration.backgroundJobBoard.drop(registration.taskID);
+        registration.backgroundJobSupervisor?.drop(registration.taskID);
+        registration.backgroundJobBoard = backgroundJobBoard;
+        registration.backgroundJobSupervisor = backgroundJobSupervisor;
+        registration.generation = adopted.generation;
+      }
+    },
+
+    clearSession(sessionId: string) {
+      const removed: PendingTaskCall[] = [];
+      for (const [callId, pending] of pendingCalls.entries()) {
+        if (pending.parentSessionId !== sessionId) continue;
+        pendingCalls.delete(callId);
+        removed.push(pending);
+      }
+      // Release queued tickets before active tickets. Releasing an active
+      // ticket pumps the scheduler, so doing it in insertion order could
+      // admit a later call just as the parent is being deleted.
+      for (const pending of removed.reverse()) {
+        releaseCallLease(pending);
       }
     },
 
     clearAll() {
-      for (const pending of pendingCalls.values()) releaseCallLease(pending);
+      const removed = [...pendingCalls.values()].reverse();
       pendingCalls.clear();
+      for (const pending of removed) releaseCallLease(pending);
     },
 
     pendingCallId(sessionID?: string, callID?: string) {
@@ -123,4 +227,6 @@ export function createPendingCallTracker(
       );
     },
   };
+
+  return tracker;
 }

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it, spyOn } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -71,6 +71,20 @@ function makeUserMsg(parts: MessageWithParts['parts']): MessageWithParts {
 
 function imagePartCount(message: MessageWithParts): number {
   return message.parts.filter((part) => part.type === 'image').length;
+}
+
+const AUTO = {
+  imageRouting: 'auto' as const,
+  disabledAgents: new Set<string>(),
+  log: () => {},
+};
+
+function processAuto(messages: MessageWithParts[], workDir: string): boolean {
+  return processImageAttachments({ messages, workDir, ...AUTO });
+}
+
+function nudgeText(message: MessageWithParts): string {
+  return message.parts.find((part) => part.type === 'text')?.text ?? '';
 }
 
 afterAll(() => {
@@ -711,6 +725,93 @@ describe('processImageAttachments image routing', () => {
     });
     expect(imagePartCount(failed)).toBe(1);
     expect(imagePartCount(saved)).toBe(0);
+  });
+
+  it('historical attachments reuse the memoized path without re-decoding', async () => {
+    const { workDir } = makeTestDir('memo-reuse');
+    const first = makeUserMsg([IMG]);
+    processAuto([first], workDir);
+    const marker = nudgeText(first).match(
+      /(\/[^\s,]+image-[0-9a-f]{8}\.png)/,
+    )?.[1];
+    expect(marker).toBeDefined();
+    const fromSpy = spyOn((await import('node:buffer')).Buffer, 'from');
+    try {
+      const second = makeUserMsg([IMG]);
+      processAuto([second], workDir);
+      expect(nudgeText(second)).toContain(marker as string);
+      expect(fromSpy).not.toHaveBeenCalled();
+    } finally {
+      fromSpy.mockRestore();
+    }
+  });
+
+  it('memoized attachment falls back to re-saving after deletion', () => {
+    const { workDir, saveDir } = makeTestDir('memo-evict');
+    processAuto([makeUserMsg([IMG])], workDir);
+    for (const entry of readdirSync(saveDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        rmSync(path.join(saveDir, entry.name), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
+    const second = makeUserMsg([IMG]);
+    processAuto([second], workDir);
+    expect(imagePartCount(second)).toBe(0);
+    expect(nudgeText(second)).toContain('image-');
+  });
+
+  it('same payload with different filenames resolves to different memo entries', () => {
+    const { workDir } = makeTestDir('memo-filename');
+    const before = makeUserMsg([{ type: 'image', url: IMG.url }]);
+    const after = makeUserMsg([
+      { type: 'image', url: IMG.url, filename: 'after.png' },
+    ]);
+    processAuto([before], workDir);
+    processAuto([after], workDir);
+    expect(nudgeText(before)).toContain('image-');
+    expect(nudgeText(after)).toContain('after-');
+  });
+
+  it('suffixed resolution is not memoized: canonical path returns when obstacle is gone', () => {
+    const { workDir } = makeTestDir('memo-suffix');
+    const sessionDir = path.join(workDir, '.opencode', 'images', 's1');
+    mkdirSync(sessionDir, { recursive: true });
+    const canonical = path.join(sessionDir, IMG_CONTENT_NAME);
+    const external = path.join(TEST_DIR, 'memo-suffix-external.bin');
+    writeFileSync(external, 'external');
+    symlinkSync(external, canonical);
+    const first = makeUserMsg([IMG]);
+    processAuto([first], workDir);
+    expect(nudgeText(first)).toContain(`image-${IMG_HASH}-1.png`);
+    rmSync(canonical);
+    const second = makeUserMsg([IMG]);
+    processAuto([second], workDir);
+    expect(nudgeText(second)).toContain(IMG_CONTENT_NAME);
+    expect(nudgeText(second)).not.toContain(`image-${IMG_HASH}-1.png`);
+  });
+
+  it('memo hit does not reuse a path replaced by a symlink', () => {
+    const { workDir } = makeTestDir('memo-symlink');
+    const first = makeUserMsg([IMG]);
+    processAuto([first], workDir);
+    const savedPath = nudgeText(first).match(
+      /(\/[^\s,]+image-[0-9a-f]{8}\.png)/,
+    )?.[1];
+    expect(savedPath).toBeDefined();
+    const external = path.join(TEST_DIR, 'memo-symlink-external.bin');
+    writeFileSync(external, 'external');
+    rmSync(savedPath as string);
+    symlinkSync(external, savedPath as string);
+    const second = makeUserMsg([IMG]);
+    processAuto([second], workDir);
+    const text = nudgeText(second);
+    expect(text).not.toContain(savedPath as string);
+    expect(text).toContain('image-');
+    expect(lstatSync(savedPath as string).isSymbolicLink()).toBe(true);
+    expect(readFileSync(external, 'utf8')).toBe('external');
   });
 
   it('ignores non-user messages and non-image parts', () => {

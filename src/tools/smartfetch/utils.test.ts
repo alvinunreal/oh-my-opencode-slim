@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { loadJSDOM } from '../../utils/jsdom';
 import {
   extractFromHtml,
   extractHeadingsFromMarkdown,
@@ -138,17 +139,18 @@ describe('smartfetch/utils', () => {
     }
   });
 
-  test('forwards non-css-parsing jsdomErrors to console.error', () => {
+  test('forwards non-css-parsing jsdomErrors to console.error', async () => {
     const originalError = console.error;
     const errorCalls: unknown[][] = [];
     console.error = (...args: unknown[]) => errorCalls.push(args);
     try {
+      const { VirtualConsole } = await loadJSDOM();
       withJsdomCssParsingErrorsSuppressed((vc) => {
         vc.emit('jsdomError', {
           type: 'resource-loading',
           message: 'Failed to load resource',
         });
-      });
+      }, VirtualConsole);
 
       expect(errorCalls).toHaveLength(1);
       expect((errorCalls[0][0] as Error).message).toBe(
@@ -159,11 +161,12 @@ describe('smartfetch/utils', () => {
     }
   });
 
-  test('filters css-parsing errors but forwards other jsdomErrors', () => {
+  test('filters css-parsing errors but forwards other jsdomErrors', async () => {
     const originalError = console.error;
     const errorCalls: unknown[][] = [];
     console.error = (...args: unknown[]) => errorCalls.push(args);
     try {
+      const { VirtualConsole } = await loadJSDOM();
       withJsdomCssParsingErrorsSuppressed((vc) => {
         vc.emit('jsdomError', {
           type: 'css-parsing',
@@ -173,7 +176,7 @@ describe('smartfetch/utils', () => {
           type: 'resource-loading',
           message: 'Failed to load resource',
         });
-      });
+      }, VirtualConsole);
 
       expect(errorCalls).toHaveLength(1);
       expect((errorCalls[0][0] as Error).message).toBe(

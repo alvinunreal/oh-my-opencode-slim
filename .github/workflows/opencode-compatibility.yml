@@ -1,0 +1,49 @@
+name: OpenCode Compatibility
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-smoke:
+    name: Host ${{ matrix.channel }} / OpenCode ${{ matrix.opencode-version }}
+    continue-on-error: ${{ matrix.experimental }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: supported
+            opencode-version: '1.18.13'
+            experimental: false
+          - channel: latest-canary
+            opencode-version: latest
+            experimental: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Build
+        run: bun run build
+
+      - name: Verify OpenCode host compatibility
+        env:
+          OPENCODE_SMOKE_VERSION: ${{ matrix.opencode-version }}
+        run: bun run verify:host-smoke

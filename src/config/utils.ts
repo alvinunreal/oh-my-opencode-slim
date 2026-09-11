@@ -29,7 +29,7 @@ export function getAgentOverride(
  * legacy aliases.
  */
 export function getCustomAgentNames(
-  config: PluginConfig | undefined,
+  config: Pick<PluginConfig, 'agents'> | undefined,
 ): string[] {
   const overrides = config?.agents ?? {};
   return Object.keys(overrides).filter((name) => {

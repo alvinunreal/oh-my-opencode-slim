@@ -18,6 +18,7 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
+import { isRecord } from '../../utils/guards';
 import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
 import { getClient } from '../../utils/opencode-client';
@@ -37,6 +38,7 @@ const RETRYABLE_ERROR_PATTERNS = [
   /rate.?limit/i,
   /too many requests/i,
   /quota.?exceeded/i,
+  /\bquota\b.*\bexhausted/i,
   /quota.?threshold/i,
   /usage.?exceeded/i,
   /ExceededBudget/i,
@@ -67,6 +69,18 @@ const RETRYABLE_ERROR_PATTERNS = [
   // "provider returned error" wording, which wraps any provider 4xx (e.g. a
   // genuine 400 the next model would reproduce) and must stay a hard error.
   /\b401\b/,
+  // Content-policy moderation rejections (e.g. OpenAI "cyber_policy",
+  // "content_policy_violation") arrive as HTTP 400 invalid_request with a
+  // provider-specific policy code in the body. They are deterministic per
+  // provider — retrying the same model will fail again, but a different
+  // provider in the chain does not share the policy, so the next model
+  // should be tried. Match the structured codes and the exact provider
+  // wording; do NOT match generic "flagged"/"policy" words that could
+  // appear in ordinary error text.
+  /\bcyber_policy\b/,
+  /\bcontent_policy_violation\b/,
+  /flagged for possible cybersecurity risk/i,
+  /rejected as a result of our safety system/i,
 ];
 
 const OUTAGE_STATUS_CODES = new Set([500, 502, 503, 504]);
@@ -265,6 +279,16 @@ const FALLBACK_IN_PROGRESS_KEY = Symbol.for(
   'oh-my-opencode-slim.foreground-fallback.in-progress',
 );
 
+/** Error name stamped by the v2 client shim's promptAsync when the host
+ * provides no session.switchModel while the replay declared
+ * `modelSwitch: 'required'`. Duck-typed by name (mirroring the hostFlavor
+ * convention) so this v1 hook stays decoupled from the v2 adapter module. */
+const V2_SWITCH_MODEL_UNAVAILABLE_ERROR = 'V2SwitchModelUnavailableError';
+
+function isSwitchModelUnavailableError(err: unknown): err is Error {
+  return err instanceof Error && err.name === V2_SWITCH_MODEL_UNAVAILABLE_ERROR;
+}
+
 function getProcessFallbacksInProgress(): Set<string> {
   const globalWithStore = globalThis as typeof globalThis & {
     [FALLBACK_IN_PROGRESS_KEY]?: Set<string>;
@@ -298,14 +322,30 @@ export class ForegroundFallbackManager {
    *  when the model has changed, allowing the cascade to continue when a
    *  new fallback model also fails within the dedup window. */
   private readonly lastTriggerModel = new Map<string, string>();
-  /** sessionID → consecutive 429 count for the current model.
+  /** sessionID -> consecutive 429 count for the current model.
    *  Reset on model swap or session deletion. */
   private readonly sessionRetries = new Map<string, number>();
+  /** sessionID -> pending initial delay timeout handle.
+   *  Cleared on recovery or session deletion. */
+  private readonly pendingInitialDelay = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  /** sessionID -> timestamp of last fallback attempt.
+   *  Used to enforce retryDelayMs between consecutive attempts. */
+  private readonly lastFallbackTime = new Map<string, number>();
   /** sessionID → chain-exhaustion stage:
    *   0 = not exhausted; 1 = chain exhausted once, reset to sticky fallback
    *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
    *   Reset to 0 on successful responses or session deletion. */
   private readonly chainExhaustion = new Map<string, number>();
+  /** sessionID → notified when the session switched to a new model mid-flight
+   *  (e.g. after a fallback re-prompt). Lets the background-task admission
+   *  scheduler migrate provider/model accounting to the new model. */
+  private readonly onSessionModelChanged?: (
+    sessionID: string,
+    model: string,
+  ) => void;
 
   /** Exposed for task-session-manager: prevents idle reconciliation
    *  while a fallback abort/re-prompt is in flight for this session. */
@@ -365,7 +405,13 @@ export class ForegroundFallbackManager {
     /** Consecutive 429s tolerated on the same model before swap/abort. */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
+    onSessionModelChanged?: (sessionID: string, model: string) => void,
+    /** Delay before first fallback; gives intercepting plugins time to recover. */
+    private readonly initialRetryDelayMs: number = 0,
+    /** Delay between consecutive fallback attempts. */
+    private readonly retryDelayMs: number = 500,
   ) {
+    this.onSessionModelChanged = onSessionModelChanged;
     if (coordinator) {
       coordinator.onSessionDeleted((id) => {
         this.sessionModel.delete(id);
@@ -381,6 +427,13 @@ export class ForegroundFallbackManager {
         this.lastTriggerModel.delete(id);
         this.sessionRetries.delete(id);
         this.chainExhaustion.delete(id);
+        this.lastFallbackTime.delete(id);
+        // Cancel any pending initial delay
+        const pendingDelay = this.pendingInitialDelay.get(id);
+        if (pendingDelay) {
+          clearTimeout(pendingDelay);
+          this.pendingInitialDelay.delete(id);
+        }
       });
     }
   }
@@ -433,6 +486,13 @@ export class ForegroundFallbackManager {
           // Only a completed, successful assistant response proves recovery.
           this.sessionRetries.delete(sessionID);
           this.chainExhaustion.delete(sessionID);
+          this.lastFallbackTime.delete(sessionID);
+          // Cancel any pending initial delay on recovery
+          const pendingDelay = this.pendingInitialDelay.get(sessionID);
+          if (pendingDelay) {
+            clearTimeout(pendingDelay);
+            this.pendingInitialDelay.delete(sessionID);
+          }
         }
         break;
       }
@@ -496,7 +556,7 @@ export class ForegroundFallbackManager {
           }
           // Otherwise (attempt === 1, or model didn't change, or outside
           // dedup window): process as genuine retry for current model.
-          if (this.shouldTriggerFallback(sessionID)) {
+          if (this.shouldTriggerFallback(sessionID, true)) {
             // Failover may have been detected from status.message (e.g.
             // 'AI_APICallError: Gone') with no separate error property;
             // forward that message so 401/410 inline errors suppress the
@@ -570,9 +630,37 @@ export class ForegroundFallbackManager {
 
   /** Intervene immediately on first occurrence (tried === 0), otherwise
    *  delegate to retry budget. Used by all three event paths. */
-  private shouldTriggerFallback(sessionID: string): boolean {
+  private shouldTriggerFallback(
+    sessionID: string,
+    needsAbort = false,
+  ): boolean {
     const tried = this.sessionRetries.get(sessionID) ?? 0;
-    if (tried === 0) return true;
+    if (tried === 0) {
+      if (this.initialRetryDelayMs > 0) {
+        // Don't set sessionRetries here - it would let subsequent errors
+        // consume the retry budget before the delay elapses.
+        log('[foreground-fallback] delaying initial fallback', {
+          sessionID,
+          delayMs: this.initialRetryDelayMs,
+          needsAbort,
+        });
+        // Cancel any existing pending delay for this session
+        const existing = this.pendingInitialDelay.get(sessionID);
+        if (existing) clearTimeout(existing);
+        const handle = setTimeout(() => {
+          this.pendingInitialDelay.delete(sessionID);
+          // Call tryFallbackWithAbort for session.status retry path
+          if (needsAbort) {
+            void this.tryFallbackWithAbort(sessionID);
+          } else {
+            void this.tryFallback(sessionID);
+          }
+        }, this.initialRetryDelayMs);
+        this.pendingInitialDelay.set(sessionID, handle);
+        return false;
+      }
+      return true;
+    }
     return this.consumeRetryBudget(sessionID);
   }
 
@@ -583,7 +671,7 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
-    // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
+    // No chain -> no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
     if (!this.hasFallbackChain(sessionID)) return;
 
@@ -592,9 +680,27 @@ export class ForegroundFallbackManager {
     // model's failure is a separate incident and the cascade should continue.
     if (this.isDeduped(sessionID)) return;
 
+    // Set inProgress before delay to prevent concurrent fallback attempts
     this.inProgress.add(sessionID);
     try {
+      // Delay between consecutive fallback attempts (except for the initial trigger
+      // which uses initialRetryDelayMs in shouldTriggerFallback).
+      const lastFallback = this.lastFallbackTime.get(sessionID);
+      if (lastFallback && this.retryDelayMs > 0) {
+        const elapsed = Date.now() - lastFallback;
+        if (elapsed < this.retryDelayMs) {
+          const delay = this.retryDelayMs - elapsed;
+          log('[foreground-fallback] delaying retry fallback', {
+            sessionID,
+            delayMs: delay,
+            elapsed,
+          });
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+
       await this.execFallback(sessionID, error);
+      this.lastFallbackTime.set(sessionID, Date.now());
     } finally {
       this.inProgress.delete(sessionID);
     }
@@ -653,11 +759,8 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     const session = getClient(this.input).session;
     try {
-      // After the chain has been exhausted twice (reset retry failed and we
-      // aborted), do not intervene again for this session: re-entering would
-      // keep aborting in a loop. Surface errors to the user instead.
-      if (this.chainExhaustion.get(sessionID) === 2) return;
-      let currentModel = this.sessionModel.get(sessionID);
+      const observedModel = this.sessionModel.get(sessionID);
+      let currentModel = observedModel;
       const agentName = this.sessionAgent.get(sessionID);
       const chain = this.resolveChain(agentName, currentModel);
       // Callers pre-check via hasFallbackChain; keep as defensive guard only.
@@ -677,7 +780,51 @@ export class ForegroundFallbackManager {
       }
       // biome-ignore lint/style/noNonNullAssertion: We just set this above
       let tried = this.sessionTried.get(sessionID)!;
+
+      // A new user turn always re-sends the agent's configured primary:
+      // promptAsync's `model` is a per-message override, so a fallback never
+      // persists past the message it was applied to. Landing here on chain[0]
+      // with a tried set that already walked past it therefore means the
+      // previous descent has ended and its state is stale. Without this the
+      // next descent resumes one link deeper every turn (link 2, then 3, then
+      // 4...) until the chain is spent and the session aborts, instead of
+      // re-walking from link 2 each turn.
+      //
+      // This does not weaken the backward-fallback guard below: currentModel
+      // is re-added immediately after, so chain[0] still can never be picked.
+      // Only an OBSERVED chain[0] counts. execFallback infers
+      // `currentModel = chain[0]` above when no model was ever captured for
+      // this session, which is the opposite situation — resetting there would
+      // re-pick chain[1] on every error instead of descending.
+      // size > 1 means a previous descent actually selected a fallback
+      // (tried.add(nextModel) below), so there is stale state to clear. A
+      // single-entry chain never gets there and must stay terminal after its
+      // one abort rather than re-aborting on every error.
+      if (
+        observedModel !== undefined &&
+        observedModel === chain[0] &&
+        tried.size > 1
+      ) {
+        tried = new Set();
+        this.sessionTried.set(sessionID, tried);
+        // A descent that ended in a stage-2 abort is never followed by a
+        // successful assistant message, so the message.updated recovery path
+        // cannot clear chainExhaustion and fallback would stay disabled for
+        // the rest of the session. A fresh descent earns a fresh chance.
+        this.chainExhaustion.delete(sessionID);
+      }
+
+      // After the chain has been exhausted twice (reset retry failed and we
+      // aborted), do not intervene again for this session: re-entering would
+      // keep aborting in a loop. Surface errors to the user instead.
+      if (this.chainExhaustion.get(sessionID) === 2) return;
       if (currentModel) tried.add(currentModel);
+      // ponytail: seed chain entries at or before the current model's index
+      // to prevent backward fallback onto models the session already left.
+      if (currentModel) {
+        const idx = chain.indexOf(currentModel);
+        for (let i = 0; i < idx; i++) tried.add(chain[i]);
+      }
 
       let nextModel = chain.find((m) => !tried.has(m));
       if (!nextModel) {
@@ -729,8 +876,15 @@ export class ForegroundFallbackManager {
         }
       }
       tried.add(nextModel);
-      // Reset retry count on model switch — the new model starts fresh.
+      // Reset retry count on model switch - the new model starts fresh.
       this.sessionRetries.delete(sessionID);
+      this.lastFallbackTime.delete(sessionID);
+      // Cancel any pending initial delay on model switch
+      const pendingDelay = this.pendingInitialDelay.get(sessionID);
+      if (pendingDelay) {
+        clearTimeout(pendingDelay);
+        this.pendingInitialDelay.delete(sessionID);
+      }
 
       const ref = parseModelReference(nextModel);
       if (!ref) {
@@ -767,12 +921,24 @@ export class ForegroundFallbackManager {
         log('[foreground-fallback] promptAsync unavailable', { sessionID });
         return;
       }
+      // Loose alias: the v2 client shim accepts extra top-level args
+      // (`modelSwitch`) the way orchestrator-wake passes `delivery`.
+      const promptAsync = sessionClient.promptAsync as (
+        args: Record<string, unknown> & { modelSwitch?: 'required' },
+      ) => Promise<unknown>;
 
       const replayParts = partsFromReplayMessage(lastUser) as Array<{
         type: 'text';
         text: string;
       }>;
 
+      // v2-only flag (consumed by the client shim): the replay's model is
+      // the fallback TARGET, so a v2 host without session.switchModel must
+      // reject the replay (typed error) instead of silently replaying on
+      // the model that just failed. v1 call bytes stay untouched.
+      const isV2Host =
+        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
+        'v2';
       const promptBody = {
         path: { id: sessionID },
         body: {
@@ -785,20 +951,42 @@ export class ForegroundFallbackManager {
           model: ref,
           ...(agentName ? { agent: agentName } : {}),
         },
+        ...(isV2Host ? { modelSwitch: 'required' as const } : {}),
       };
 
+      let promptResult: unknown;
       try {
-        await sessionClient.promptAsync(promptBody);
-      } catch (_promptErr) {
+        promptResult = await promptAsync(promptBody);
+      } catch (promptErr) {
+        if (isSwitchModelUnavailableError(promptErr)) {
+          // Not a busy session — the host cannot switch models at all, so
+          // aborting and retrying cannot help (same missing capability on
+          // every attempt). Surface the real cause via the outer handler.
+          throw promptErr;
+        }
         log('[foreground-fallback] promptAsync on busy session, aborting', {
           sessionID,
         });
         await abortSessionWithTimeout(getClient(this.input), sessionID);
         await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        await sessionClient.promptAsync(promptBody);
+        promptResult = await promptAsync(promptBody);
       }
 
+      // v2 shim truthfulness: when the replay was delivered on the CURRENT
+      // model (session.switchModel failed mid-replay, `switched: false`),
+      // the switch claim must not be recorded — sessionModel feeds chain
+      // descent and onSessionModelChanged migrates provider accounting;
+      // both would lie. v1 results carry no `switched` key and keep the
+      // claim (v1 parity).
+      if (isRecord(promptResult) && promptResult.switched === false) {
+        log(
+          '[foreground-fallback] fallback prompt delivered on the current model (model switch failed)',
+          { sessionID, agentName, from: currentModel, intended: nextModel },
+        );
+        return;
+      }
       this.sessionModel.set(sessionID, nextModel);
+      this.onSessionModelChanged?.(sessionID, nextModel);
       log('[foreground-fallback] switched to fallback model', {
         sessionID,
         agentName,

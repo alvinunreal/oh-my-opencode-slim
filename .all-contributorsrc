@@ -947,6 +947,69 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "Alfiegerner",
+      "name": "Alfiegerner",
+      "avatar_url": "https://avatars.githubusercontent.com/u/596188?v=4",
+      "profile": "https://github.com/Alfiegerner",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "leducmaxime",
+      "name": "Maxime Leduc",
+      "avatar_url": "https://avatars.githubusercontent.com/u/37900355?v=4",
+      "profile": "https://github.com/leducmaxime",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "vmvarela",
+      "name": "Victor M. Varela",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11040851?v=4",
+      "profile": "https://github.com/vmvarela",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "gitslim",
+      "name": "gitslim",
+      "avatar_url": "https://avatars.githubusercontent.com/u/24612825?v=4",
+      "profile": "https://github.com/gitslim",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "xiaolf0813",
+      "name": "xiaolf0813",
+      "avatar_url": "https://avatars.githubusercontent.com/u/314566924?v=4",
+      "profile": "https://github.com/xiaolf0813",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "BaconDroid",
+      "name": "BaconDroid",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11067111?v=4",
+      "profile": "https://github.com/BaconDroid",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "bferanmi806-sketch",
+      "name": "Enoch",
+      "avatar_url": "https://avatars.githubusercontent.com/u/277080233?v=4",
+      "profile": "https://sprightly-strudel-e1f939.netlify.app/",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

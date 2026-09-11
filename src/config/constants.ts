@@ -20,6 +20,18 @@ export const ALL_AGENT_NAMES = ['orchestrator', ...SUBAGENT_NAMES] as const;
 // Agent name type (for use in DEFAULT_MODELS)
 export type AgentName = (typeof ALL_AGENT_NAMES)[number];
 
+export const AGENT_THEME_COLORS = [
+  'primary',
+  'secondary',
+  'accent',
+  'success',
+  'warning',
+  'error',
+  'info',
+] as const;
+
+export type AgentThemeColor = (typeof AGENT_THEME_COLORS)[number];
+
 /** Agents that cannot be disabled even if listed in disabled_agents config. */
 export const PROTECTED_AGENTS = new Set(['orchestrator', 'councillor']);
 

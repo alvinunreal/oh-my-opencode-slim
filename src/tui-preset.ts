@@ -20,8 +20,8 @@
  * new model may have a smaller window), drift prior assistant turns under a
  * changed system prompt, leave running subagents referencing stale agent
  * definitions, or shift tool/skill availability underfoot. A future path
- * to true in-session switching without reset requires upgrading
- * `@opencode-ai/plugin` (tracked in #799).
+ * to true in-session switching without reset requires a host API for atomic
+ * agent-registry refresh with session compatibility checks.
  */
 import type {
   TuiDialogSelectOption,
@@ -239,7 +239,7 @@ function promptAndCreatePreset(
             confirmOverwritePreset(state, name, onCancel);
             return;
           }
-          editPresetWorkingCopy(state, name, {});
+          editPresetWorkingCopy(state, name, { agents: {} });
         },
         onCancel,
       }),
@@ -264,7 +264,7 @@ function confirmOverwritePreset(
         title: 'Preset exists',
         message: `A preset named "${name}" already exists. Overwrite it with a new empty preset?`,
         onConfirm: () => {
-          editPresetWorkingCopy(state, name, {});
+          editPresetWorkingCopy(state, name, { agents: {} });
         },
         onCancel: () => promptAndCreatePreset(state, onCancel),
       }),
@@ -274,7 +274,7 @@ function confirmOverwritePreset(
 
 function editPreset(state: ManagerState, presetName: string): void {
   const config = loadPluginConfig(state.directory, { silent: true });
-  const preset = config.presets?.[presetName] ?? {};
+  const preset = config.presets?.[presetName] ?? { agents: {} };
   // Work on a shallow copy so in-memory edits don't mutate the loaded config.
   editPresetWorkingCopy(state, presetName, { ...preset });
 }
@@ -284,11 +284,11 @@ function editPresetWorkingCopy(
   presetName: string,
   working: Preset,
 ): void {
-  const agentNames = Object.keys(working);
+  const agentNames = Object.keys(working.agents);
   const options: TuiDialogSelectOption<string>[] = agentNames.map((name) => ({
     title: name,
     value: name,
-    description: describeOverride(working[name]),
+    description: describeOverride(working.agents[name]),
   }));
   options.push({ title: '+ Add agent', value: ACTION_ADD_AGENT });
   options.push({ title: '− Remove agent', value: '__omo_remove_agent__' });
@@ -356,7 +356,7 @@ function promptAddAgent(
   presetName: string,
   working: Preset,
 ): void {
-  const present = new Set(Object.keys(working));
+  const present = new Set(Object.keys(working.agents));
   const available = ALL_AGENT_NAMES.filter((n) => !present.has(n));
   if (available.length === 0) {
     state.api.ui.toast({
@@ -399,7 +399,7 @@ function promptRemoveAgent(
   presetName: string,
   working: Preset,
 ): void {
-  const agentNames = Object.keys(working);
+  const agentNames = Object.keys(working.agents);
   if (agentNames.length === 0) {
     state.api.ui.toast({
       variant: 'info',
@@ -412,7 +412,7 @@ function promptRemoveAgent(
   const options: TuiDialogSelectOption<string>[] = agentNames.map((n) => ({
     title: n,
     value: n,
-    description: describeOverride(working[n]),
+    description: describeOverride(working.agents[n]),
   }));
   options.push({ title: '← Back', value: ACTION_BACK });
 
@@ -449,10 +449,10 @@ function savePreset(
   silent = false,
 ): boolean {
   // Strip agents whose override is empty — they add nothing to the preset.
-  const cleaned: Preset = {};
-  for (const [agent, override] of Object.entries(working)) {
+  const cleaned: Preset = { ...working, agents: {} };
+  for (const [agent, override] of Object.entries(working.agents)) {
     if (Object.keys(override).length > 0) {
-      cleaned[agent] = override;
+      cleaned.agents[agent] = override;
     }
   }
   const ok = writePreset(state.directory, presetName, cleaned);
@@ -481,7 +481,7 @@ function editAgent(
   working: Preset,
   agentName: string,
 ): void {
-  const current = working[agentName] ?? {};
+  const current = working.agents[agentName] ?? {};
   pickModel(state, presetName, working, agentName, current);
 }
 
@@ -773,7 +773,7 @@ function pickOptions(
 // --- formatting helpers (also used by the simple list view if needed) ---
 
 function describePreset(preset: Preset): string {
-  const parts = Object.entries(preset).map(
+  const parts = Object.entries(preset.agents).map(
     ([agent, override]) => `${agent}: ${describeOverride(override)}`,
   );
   return parts.length > 0 ? parts.join(', ') : '(empty)';

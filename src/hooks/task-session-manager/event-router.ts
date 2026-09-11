@@ -17,7 +17,10 @@ import type {
   InjectedTerminalJobs,
   RetainedBoardSnapshotState,
 } from './board-injection';
-import type { PendingTaskCall } from './pending-call-tracker';
+import type {
+  EarlyTaskRegistration,
+  PendingTaskCall,
+} from './pending-call-tracker';
 import type { RevivedRunTracker } from './revived-run-tracker';
 
 type BackgroundJobRecord = NonNullable<ReturnType<BackgroundJobStore['get']>>;
@@ -287,6 +290,8 @@ export async function handleEvent(
     >;
     retainedBoardSnapshots: Map<string, RetainedBoardSnapshotState>;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
+    bindConcurrencyTicket?: (taskID: string, pending: PendingTaskCall) => void;
+    releaseConcurrencyTask?: (taskID: string) => void;
     observeSyntheticTerminalPart?: (part: unknown) => void;
     revivedRunTracker?: RevivedRunTracker;
   },
@@ -353,6 +358,13 @@ export async function handleEvent(
               background: false,
             });
             pending.earlyRegisteredTaskID = record.taskID;
+            pending.earlyRegistration = {
+              taskID: record.taskID,
+              generation: record.generation,
+              backgroundJobBoard: deps.backgroundJobBoard,
+              backgroundJobSupervisor: deps.backgroundJobSupervisor,
+            } satisfies EarlyTaskRegistration;
+            deps.bindConcurrencyTicket?.(record.taskID, pending);
             log(
               '[task-session-manager] tentative early board registration from session.created',
               {
@@ -382,7 +394,6 @@ export async function handleEvent(
   if (input.event.type === 'server.instance.disposed') {
     deps.backgroundJobSupervisor?.dispose();
     deps.revivedRunTracker?.dispose();
-    deps.pendingCallTracker.clearAll?.();
     deps.retainedBoardSnapshots.clear();
     eventFenceMap(deps.backgroundJobBoard).clear();
     const idleSessionIds = deps.idleReconciler.clearAllTimers();

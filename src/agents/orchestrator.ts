@@ -1,8 +1,14 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
 import { WRITABLE_FILE_OPERATIONS_RULES } from '../config';
+import {
+  ROLE_DEFINITIONS,
+  renderRoleRoutingBlock,
+  type SpecialistRole,
+} from './role-definitions';
 
 export interface AgentDefinition {
   name: string;
+  baseRole?: SpecialistRole;
   displayName?: string;
   description?: string;
   config: AgentConfig;
@@ -18,99 +24,53 @@ export interface AgentDefinition {
  * shared default. `customAppendPrompt` always appends after whichever base
  * won. Deterministic per session (construction-time only) — cache-safe.
  */
+export interface PromptComposition {
+  agentName: string;
+  replacement?: string;
+  filePrompt?: string;
+  fallback: string;
+  appendPrompt?: string;
+  requiredSuffixes?: readonly string[];
+}
+
+/** Pure prompt composition. Replacement and append layers are intentionally
+ * explicit so every caller has the same precedence and suffix ordering. */
+export function composePrompt(input: PromptComposition): string {
+  const effectiveBase = input.replacement ?? input.filePrompt ?? input.fallback;
+  const parts = [effectiveBase, input.appendPrompt].filter(
+    (part): part is string => part !== undefined && part.length > 0,
+  );
+  for (const suffix of input.requiredSuffixes ?? []) {
+    const normalized = suffix.trim();
+    if (normalized && !parts[parts.length - 1].endsWith(normalized)) {
+      parts.push(normalized);
+    }
+  }
+  return parts.join('\n\n');
+}
+
 export function resolvePrompt(
   agentName: string,
   inlinePrompt: string | undefined,
   filePrompt: string | undefined,
   fallback: string,
   customAppendPrompt?: string,
+  requiredSuffixes?: readonly string[],
 ): string {
   if (inlinePrompt !== undefined && filePrompt !== undefined) {
     console.warn(
       `[oh-my-opencode] Agent '${agentName}': inline prompt overrides prompt file (${agentName}.md). Remove the inline prompt to use the file.`,
     );
   }
-  const effectiveBase = inlinePrompt ?? filePrompt ?? fallback;
-  return customAppendPrompt !== undefined
-    ? `${effectiveBase}\n\n${customAppendPrompt}`
-    : effectiveBase;
+  return composePrompt({
+    agentName,
+    replacement: inlinePrompt,
+    filePrompt,
+    fallback,
+    appendPrompt: customAppendPrompt,
+    requiredSuffixes,
+  });
 }
-
-// Agent descriptions for the orchestrator prompt
-const AGENT_DESCRIPTIONS: Record<string, string> = {
-  explorer: `@explorer
-- Lane: Fast codebase recon that returns compressed context
-- Permissions: read_files
-- Stats: 2x faster codebase search than orchestrator, 1/2 cost of orchestrator
-- Capabilities: Glob, grep, AST queries to locate files, symbols, patterns
-- **Delegate when:** Need to discover what exists before planning • Parallel searches speed discovery • Need summarized map vs full contents • Broad/uncertain scope
-- **Don't delegate when:** Know the path and need actual content • Need full file anyway • Single specific lookup • About to edit the file`,
-
-  librarian: `@librarian
-- Lane: External knowledge and library research, fast web research
-- Role: Authoritative source for current library docs, API references, examples, bug investigations, and web retrieval
-- Stats: 2x faster web research than orchestrator, 1/2 cost of orchestrator
-- **Delegate when:** Libraries with frequent API changes (React, Next.js, AI SDKs) • Complex APIs needing official examples (ORMs, auth) • Version-specific behavior matters • Unfamiliar library • Edge cases or advanced features • Nuanced best practices • Working on fixing tricky bug or problem and need latest web research information
-- **Don't delegate when:** Standard usage you're confident • Simple stable APIs • General programming knowledge • Info already in conversation • Built-in language features
-- **Rule of thumb:** "How does this library work?" → @librarian. "How does programming work?" → answer directly. "How do others solve or workaround this tricky issue?" → @librarian.`,
-
-  oracle: `@oracle
-- Lane: Architecture, risk, debugging strategy, and review
-- Role: Strategic advisor for high-stakes decisions and persistent problems, code reviewer
-- Permissions: read_files
-- Stats: 5x better decision maker, problem solver, investigator than orchestrator, 0.8x speed of orchestrator, same cost.
-- Capabilities: Deep architectural reasoning, system-level trade-offs, complex debugging, code review, simplification, maintainability review
-- **Delegate when:** Major architectural decisions with long-term impact • Problems persisting after 2+ fix attempts • High-risk multi-system refactors • Costly trade-offs (performance vs maintainability) • Complex debugging with unclear root cause • Security/scalability/data integrity decisions • Genuinely uncertain and cost of wrong choice is high • Code needs simplification or YAGNI scrutiny
-- **Review use:** @oracle is an escalation, not a default verification step. Request independent @oracle review only when its analysis is expected to materially reduce risk or uncertainty.
-- **Don't delegate when:** Routine decisions you're confident about • First bug fix attempt • Straightforward trade-offs • Tactical "how" vs strategic "should" • Time-sensitive good-enough decisions • Quick research/testing can answer
-- **Rule of thumb:** Need senior architect review? → @oracle. Need code review or simplification? → @oracle. Routine coordination or final synthesis? → handle directly.`,
-
-  designer: `@designer
-- Lane: UI/UX design, related edits, design polish and review
-- Permissions: read_files, write_files
-- Stats: 10x better UI/UX than orchestrator
-- Capabilities: Good design taste, visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge.
-- Owns visual and interaction quality: layout, hierarchy, spacing, motion, affordances, responsive behavior, and overall feel.
-- Weakness: copywriting. Ask @designer to use grounded, normal wording, then have orchestrator review/fix copy after design work without changing visual or interaction intent.
-- Avoid: "Let me ask @designer how it should look and implement yourself" → instead: "Let me ask @designer to design and implement the UI/UX changes for me"
-- **Delegate when:** User-facing interfaces needing polish • Responsive layouts • UX-critical components (forms, nav, dashboards) • Visual consistency systems • Animations/micro-interactions • Landing/marketing pages • Refining functional→delightful • Reviewing existing UI/UX quality
-- **Don't delegate when:** Backend/logic with no visual • Quick prototypes where design doesn't matter yet.
-- **Rule of thumb:** Users see it and polish matters? → @designer. Headless/functional implementation? → schedule @fixer.`,
-
-  fixer: `@fixer
-- Lane: Bounded implementation and executioner
-- Role: Fast execution specialist for well-defined tasks
-- Permissions: read_files, write_files
-- Stats: 2x faster code edits, 1/2 cost of orchestrator
-- Weakness: design, taste
-- Tools/Constraints: Execution-focused-no research, no architectural decisions
-- **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixer instances for each folder.
-- **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to @fixer > doing • Tight integration with your current work • Requires design taste, visual hierarchy, interaction polish, responsive layout decisions, animation/motion, component feel, or UI copy/design trade-offs
-- **Rule of thumb:** Headless/mechanical implementation → @fixer. User-visible design or polish → @designer. If @designer already set direction, @fixer may only do bounded mechanical follow-up that preserves that design exactly.`,
-
-  council: `@council
-- Lane: High-stakes multi-model decision support
-- Role: Multi-LLM consensus engine that receives raw councillor responses and synthesizes them into a structured council report.
-- Permissions: Read files
-- Stats: 3x slower than orchestrator, 3x or more cost of orchestrator
-- Capabilities: Synthesizes responses from independently-dispatched councillors, compares their answers, resolves disagreements, and produces a final synthesized answer plus councillor details and consensus summary.
-- **Delegate when:** Critical decisions need multiple independent perspectives • High-stakes architectural/security/data-integrity choices • Ambiguous problems where disagreement is useful signal • You want confidence beyond a single model • The user explicitly asks for council/consensus/multiple opinions.
-- **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Routine implementation/debugging • A single specialist is clearly the right tool • You only need current docs/search/code review rather than multi-model consensus.
-- **How to call:** Send the full question/task and relevant context. Be explicit about what decision, trade-off, or answer the council should resolve. Do not ask council to do routine code edits.
-- **Result handling:** Council returns a structured response that may include: synthesized Council Response, individual Per-Councillor Details, and Council Summary/confidence. Preserve that structure when the user asked for council output. Do not pretend the council only returned a final answer. If you need to act on the council result, first briefly state the council's recommendation, then proceed.
-- **Rule of thumb:** Need second/third opinions from different models? → @council. Need one expert lane? → use the specialist. Need final synthesis? → handle directly.`,
-
-  observer: `@observer
-- Lane: Visual/media analysis isolated from orchestrator context
-- Role: Visual analysis specialist for images, PDFs, and diagrams
-- Permissions: Read files
-- Stats: Saves main context tokens - @observer processes raw files, returns structured observations
-- Capabilities: Interprets images, screenshots, PDFs, and diagrams via native read tool; extracts UI elements, layouts, text, relationships
-- **Delegate when:** Need to analyze a multimedia file• Extract information
-- **Don't delegate when:** Plain text files that Read can handle directly • Files that need editing afterward (need literal content from Read)
-- **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer - it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for routing? → Read only the minimal context yourself.
-- **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png - describe the UI elements and error messages."`,
-};
 
 // Parallel delegation examples
 const PARALLEL_DELEGATION_EXAMPLES = [
@@ -120,11 +80,33 @@ const PARALLEL_DELEGATION_EXAMPLES = [
   '- @observer + @explorer in parallel (visual analysis + code search)?',
 ];
 
+export const COUNCIL_ROUTING_BLOCK = `@council
+- Lane: High-stakes multi-model decision support
+- Role: Multi-LLM consensus engine that receives raw councillor responses and synthesizes them into a structured council report.
+- Permissions: Read files
+- Stats: 3x slower than orchestrator, 3x or more cost of orchestrator
+- Capabilities: Synthesizes responses from independently-dispatched councillors, compares their answers, resolves disagreements, and produces a final synthesized answer plus councillor details and consensus summary.
+- **Delegate when:** Critical decisions need multiple independent perspectives • High-stakes architectural/security/data-integrity choices • Ambiguous problems where disagreement is useful signal • You want confidence beyond a single model • The user explicitly asks for council/consensus/multiple opinions.
+- **Don't delegate when:** Straightforward tasks you're confident about • Speed matters more than confidence • Routine implementation/debugging • A single specialist is clearly the right tool • You only need current docs/search/code review rather than multi-model consensus.
+- **How to call:** Send the full question/task and relevant context. Be explicit about what decision, trade-off, or answer the council should resolve. Do not ask council to do routine code edits.
+- **Result handling:** Council returns a structured response that may include: synthesized Council Response, individual Per-Councillor Details, and Council Summary/confidence. Preserve that structure when the user asked for council output. Do not pretend the council only returned a final answer. If you need to act on the council result, first briefly state the council's recommendation, then proceed.
+- **Rule of thumb:** Need second/third opinions from different models? → @council. Need one expert lane? → use the specialist. Need final synthesis? → handle directly.`;
+
+export function renderCouncilRoutingBlock(runtimeName: string): string {
+  return COUNCIL_ROUTING_BLOCK.replaceAll('@council', `@${runtimeName}`);
+}
+
+export interface RoutingEntry {
+  readonly agentName: string;
+  readonly routingBlock: string;
+}
+
 /**
  * Build the orchestrator prompt with dynamic agent filtering.
  * @param disabledAgents - Set of disabled agent names to exclude from the prompt
  * @param waitForUserEnabled - Whether explicit text-only HITL waiting is available
  * @param wakeSchedulerEnabled - Whether the orchestrator wake scheduler can resume the session after idle
+ * @param marketplaceEnabled - Whether the local marketplace tool is available
  * @returns The complete orchestrator prompt string
  */
 export function buildOrchestratorPrompt(
@@ -132,12 +114,28 @@ export function buildOrchestratorPrompt(
   excludeDescriptions?: string[],
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
+  routingEntries?: readonly RoutingEntry[],
+  runtimeNameByCanonicalId?: Readonly<Record<string, string>>,
+  marketplaceEnabled = true,
 ): string {
-  // Filter agent descriptions
-  const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
-    .filter(([name]) => !disabledAgents?.has(name))
-    .filter(([name]) => !excludeDescriptions?.includes(name))
-    .map(([, desc]) => desc)
+  const entries = routingEntries ?? [
+    ...Object.entries(ROLE_DEFINITIONS).map(([name, role]) => ({
+      agentName: name,
+      routingBlock: renderRoleRoutingBlock(role, name),
+    })),
+    { agentName: 'council', routingBlock: COUNCIL_ROUTING_BLOCK },
+  ];
+  const enabledAgents = entries
+    .filter(({ agentName }) => !disabledAgents?.has(agentName))
+    .filter(({ agentName }) => !excludeDescriptions?.includes(agentName))
+    .sort((left, right) =>
+      left.agentName < right.agentName
+        ? -1
+        : left.agentName > right.agentName
+          ? 1
+          : 0,
+    )
+    .map(({ routingBlock }) => routingBlock)
     .join('\n\n');
 
   // Filter parallel delegation examples - remove lines mentioning any disabled agent
@@ -147,11 +145,28 @@ export function buildOrchestratorPrompt(
       if (mentions.length === 0) return true;
       return mentions.every((name) => !disabledAgents?.has(name));
     },
-  ).join('\n');
+  )
+    .map((line) => {
+      let rendered = line;
+      for (const [canonicalName, runtimeName] of Object.entries(
+        runtimeNameByCanonicalId ?? {},
+      )) {
+        rendered = rendered.replace(
+          new RegExp(`@${canonicalName}\\b`, 'g'),
+          `@${runtimeName}`,
+        );
+      }
+      return rendered;
+    })
+    .join('\n');
 
   const externalManualWaitInstruction = waitForUserEnabled
     ? '- When work must pause while the user completes an external manual operation, first give the user concrete manual steps, then call `wait_for_user` as your final tool action and end the turn. Do not rely on ordinary text alone to mark this waiting state, and do not call more tools after `wait_for_user`. Background tasks are not external manual work — never use `wait_for_user` to await them; the system resumes automatically via the Background Job Board and orchestrator wake scheduler.'
     : '- When work must pause while the user completes an external manual operation, first give the user concrete manual steps, then use the `question` tool as the blocking boundary and ask them to respond when finished. `wait_for_user` is disabled, so do not reference or call it.';
+
+  const marketplaceInstruction = marketplaceEnabled
+    ? '- Use the `marketplace` tool for local offline package lifecycle and status. list, show, verify, and status are read-only. install, import, update, enable, disable, profile, and remove write store/config only and never hot-swap the live registry; they report reload_required only when disk activation differs from this session. Do not shell out to the CLI for these actions.'
+    : '';
 
   return `<Role>
 You are a workflow manager for coding work. Your job is to plan, schedule, delegate, monitor, reconcile, and verify specialist-agent work. You are not the default implementation worker.
@@ -277,7 +292,7 @@ After spawning all independent background tasks and any remaining non-overlappin
 - Don't guess at critical details (file paths, API choices, architectural decisions)
 - Do make reasonable assumptions for minor details and state them briefly
 - When user input is required before work can continue and the user can answer immediately—including clarification, permission, a choice, or pasted command output—use the \`question\` tool. Enable custom input, request a concise pasted response or command output, and provide a small bounded set of options whenever the tool schema requires options.
-${externalManualWaitInstruction}
+${[externalManualWaitInstruction, marketplaceInstruction].filter(Boolean).join('\n')}
 - For ordinary dialogue that does not block work, answer normally and do not use the question tool gratuitously.
 
 ## Concise Execution
@@ -316,12 +331,18 @@ export function createOrchestratorAgent(
   excludeDescriptions?: string[],
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
+  routingEntries?: readonly RoutingEntry[],
+  runtimeNameByCanonicalId?: Readonly<Record<string, string>>,
+  marketplaceEnabled = true,
 ): AgentDefinition {
   const basePrompt = buildOrchestratorPrompt(
     disabledAgents,
     excludeDescriptions,
     waitForUserEnabled,
     wakeSchedulerEnabled,
+    routingEntries,
+    runtimeNameByCanonicalId,
+    marketplaceEnabled,
   );
   const prompt = resolvePrompt(
     'orchestrator',

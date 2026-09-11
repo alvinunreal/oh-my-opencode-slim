@@ -1,33 +1,27 @@
 import { describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
-import { createServer, get } from 'node:http';
+import { get } from 'node:http';
 import * as path from 'node:path';
 import { createDashboardServer } from './dashboard';
+import { bindFreePort } from './test-port';
 
-// Helper to find a free port (matches interview.test.ts pattern)
-function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, () => {
-      const address = server.address();
-      if (address && typeof address !== 'string') {
-        const port = address.port;
-        server.close(() => resolve(port));
-      } else {
-        server.close(() => reject(new Error('Failed to get port')));
-      }
-    });
-  });
-}
-
-// Helper to start a dashboard on a free port
+// Helper to start a dashboard on a held port (bindFreePort keeps the
+// listener open, the dashboard adopts it — no TOCTOU window).
 async function startDashboard() {
-  const port = await findFreePort();
+  const { port, server } = await bindFreePort();
   const dashboard = createDashboardServer({
     port,
     outputFolder: 'interview',
+    server,
   });
-  const baseUrl = await dashboard.start();
+  let baseUrl: string;
+  try {
+    baseUrl = await dashboard.start();
+  } catch (error) {
+    server.closeAllConnections();
+    server.close();
+    throw error;
+  }
 
   return {
     dashboard,

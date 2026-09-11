@@ -33,8 +33,8 @@ the built-in `/models`, so it triggers no LLM turn.
    new model may have a smaller window), drift prior assistant turns under
    a changed system prompt, leave running subagents referencing stale agent
    definitions, or shift tool/skill availability. A future path to true
-   in-session switching without reset requires upgrading
-   `@opencode-ai/plugin` (tracked in #799).
+   in-session switching without reset requires a host API for atomic
+   agent-registry refresh with session compatibility checks.
 
 ### Level 3 — model and variant selection
 
