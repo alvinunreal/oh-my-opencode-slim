@@ -109,6 +109,29 @@ describe('loadPluginConfig', () => {
     expect(config.agents?.oracle?.model).toBe('test/model');
   });
 
+  test('normalizes flat legacy presets without dropping unrelated config', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'fast',
+        disabled_tools: ['websearch'],
+        presets: {
+          fast: { explorer: { model: 'legacy/explorer' } },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir);
+
+    expect(config.disabled_tools).toEqual(['websearch']);
+    expect(config.presets?.fast?.agents.explorer?.model).toBe(
+      'legacy/explorer',
+    );
+  });
+
   test('loads autoUpdate flag when configured', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');

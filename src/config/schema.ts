@@ -214,12 +214,40 @@ export const MarketplaceActivationSchema = z
 
 export type MarketplaceActivation = z.infer<typeof MarketplaceActivationSchema>;
 
-export const PresetSchema = z
-  .object({
-    agents: z.record(z.string(), AgentOverrideConfigSchema).default({}),
-    marketplace: MarketplaceActivationSchema.optional(),
-  })
-  .strict();
+function normalizeLegacyPreset(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+
+  const preset = value as Record<string, unknown>;
+  const { agents: structuredAgents, marketplace, ...legacyAgents } = preset;
+  if (Object.keys(legacyAgents).length === 0) return value;
+
+  // v3's explicit keys win when a mixed layout contains the same agent.
+  // Normalizing at the schema boundary keeps all runtime consumers on the
+  // structured representation.
+  return {
+    ...(marketplace === undefined ? {} : { marketplace }),
+    agents: {
+      ...legacyAgents,
+      ...(structuredAgents &&
+      typeof structuredAgents === 'object' &&
+      !Array.isArray(structuredAgents)
+        ? structuredAgents
+        : {}),
+    },
+  };
+}
+
+export const PresetSchema = z.preprocess(
+  normalizeLegacyPreset,
+  z
+    .object({
+      agents: z.record(z.string(), AgentOverrideConfigSchema).default({}),
+      marketplace: MarketplaceActivationSchema.optional(),
+    })
+    .strict(),
+);
 
 export type Preset = z.infer<typeof PresetSchema>;
 

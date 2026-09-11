@@ -22,11 +22,29 @@ describe('structured preset schema', () => {
     }
   });
 
-  it('rejects the obsolete flat preset agent map', () => {
-    expect(
-      PresetSchema.safeParse({ explorer: { model: 'provider/explorer' } })
-        .success,
-    ).toBe(false);
+  it('normalizes the legacy flat preset agent map', () => {
+    const result = PresetSchema.safeParse({
+      explorer: { model: 'provider/explorer' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({
+        agents: { explorer: { model: 'provider/explorer' } },
+      });
+    }
+  });
+
+  it('gives structured agent overrides precedence in mixed presets', () => {
+    const result = PresetSchema.safeParse({
+      explorer: { model: 'legacy/explorer' },
+      agents: { explorer: { model: 'structured/explorer' } },
+      marketplace: { agents: ['community/example'] },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agents.explorer.model).toBe('structured/explorer');
+      expect(result.data.marketplace?.agents).toEqual(['community/example']);
+    }
   });
 
   it('normalizes package IDs and validates profile targets', () => {

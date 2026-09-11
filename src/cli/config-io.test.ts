@@ -135,6 +135,27 @@ describe('config-io', () => {
     expect(existsSync(`${path}.lock`)).toBe(false);
   });
 
+  test('mutateJsonFile warns before replacing JSONC comments', () => {
+    const path = join(tmpDir, 'mutate.jsonc');
+    writeFileSync(path, '{\n  // retain this manually\n  "count": 1\n}\n');
+    const warn = mock(() => {});
+    const originalWarn = console.warn;
+    console.warn = warn;
+
+    try {
+      mutateJsonFile(path, (current) => ({
+        ...(current as Record<string, unknown>),
+        count: 2,
+      }));
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warn).toHaveBeenCalledWith(
+      '[config-manager] Writing to .jsonc file - comments will not be preserved',
+    );
+  });
+
   test('writeConfig writes JSON and creates backup', () => {
     const path = join(tmpDir, 'test.json');
     writeFileSync(path, '{"old": true}');
