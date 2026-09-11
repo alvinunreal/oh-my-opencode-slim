@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SUPPORTED_SPECIALIST_ROLES } from './agent-roles';
 import {
   AGENT_THEME_COLORS,
   DEFAULT_MAX_RETAINED_SNAPSHOTS,
@@ -57,6 +58,11 @@ export const AgentColorSchema = z.union([
 
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
+export const AgentBaseRoleSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
+export type AgentBaseRole = z.infer<typeof AgentBaseRoleSchema>;
+export type ModelInheritanceSource = z.infer<
+  typeof ModelInheritanceSourceSchema
+>;
 
 export const AgentOverrideConfigSchema = z
   .object({
@@ -77,6 +83,7 @@ export const AgentOverrideConfigSchema = z
       ])
       .optional(),
     inheritModelFrom: ModelInheritanceSourceSchema.optional(),
+    baseRole: AgentBaseRoleSchema.optional(),
     temperature: z.number().min(0).max(2).optional(),
     variant: z.string().optional().catch(undefined),
     skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
@@ -135,7 +142,84 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 /** Normalized model entry with optional per-model variant. */
 export type ModelEntry = { id: string; variant?: string };
 
-export const PresetSchema = z.record(z.string(), AgentOverrideConfigSchema);
+export const MarketplaceProfileTargetSchema = AgentBaseRoleSchema;
+export type MarketplaceProfileTarget = z.infer<
+  typeof MarketplaceProfileTargetSchema
+>;
+
+const MarketplacePackageIdSchema = z.string().trim().min(1);
+const MarketplacePackageIdsSchema = z
+  .array(MarketplacePackageIdSchema)
+  .superRefine((ids, ctx) => {
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Package IDs must be unique',
+      });
+    }
+  });
+
+/**
+ * User-owned preset configuration.  Agent overrides deliberately live below
+ * `agents`; reserved marketplace activation state must never be interpreted as
+ * an agent override.
+ *
+ * The activation shape is reserved in Phase 1 so the config contract is
+ * forward-compatible, but no package state or marketplace resolution is
+ * performed by this phase.
+ */
+export const MarketplaceActivationSchema = z
+  .object({
+    agents: MarketplacePackageIdsSchema.optional(),
+    profiles: z
+      .record(z.string(), MarketplacePackageIdSchema.nullable())
+      .superRefine((profiles, ctx) => {
+        const packageIds = Object.values(profiles).filter(
+          (packageId): packageId is string => packageId !== null,
+        );
+        if (new Set(packageIds).size !== packageIds.length) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Profile package IDs must be unique',
+          });
+        }
+        for (const target of Object.keys(profiles)) {
+          if (!MarketplaceProfileTargetSchema.safeParse(target).success) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [target],
+              message: `Unsupported profile target '${target}'`,
+            });
+          }
+        }
+      })
+      .optional(),
+  })
+  .superRefine((activation, ctx) => {
+    const packageIds = [
+      ...(activation.agents ?? []),
+      ...Object.values(activation.profiles ?? {}).filter(
+        (packageId): packageId is string => packageId !== null,
+      ),
+    ];
+    if (new Set(packageIds).size !== packageIds.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['agents'],
+        message: 'Activation package IDs must be unique',
+      });
+    }
+  })
+  .strict();
+
+export type MarketplaceActivation = z.infer<typeof MarketplaceActivationSchema>;
+
+export const PresetSchema = z
+  .object({
+    agents: z.record(z.string(), AgentOverrideConfigSchema).default({}),
+    marketplace: MarketplaceActivationSchema.optional(),
+  })
+  .strict();
 
 export type Preset = z.infer<typeof PresetSchema>;
 
@@ -531,9 +615,10 @@ export const PluginConfigSchema = z
 
     if (value.presets) {
       for (const [presetName, preset] of Object.entries(value.presets)) {
-        rejectOrchestratorPromptOnOrchestrator(preset, ctx, [
+        rejectOrchestratorPromptOnOrchestrator(preset.agents, ctx, [
           'presets',
           presetName,
+          'agents',
         ]);
       }
     }

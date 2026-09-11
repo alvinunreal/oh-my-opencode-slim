@@ -3,10 +3,68 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ConfigLoadWarning } from './loader';
-import { loadAgentPrompt, loadPluginConfig } from './loader';
+import {
+  loadAgentPrompt,
+  loadPluginConfig,
+  mergeAgentOverrides,
+  mergePreset,
+} from './loader';
+import type { Preset } from './schema';
 
-// Test deepMerge indirectly through loadPluginConfig behavior
-// since deepMerge is not exported
+function selectedPresetAgent(config: ReturnType<typeof loadPluginConfig>) {
+  return config.preset
+    ? config.presets?.[config.preset]?.agents?.oracle
+    : undefined;
+}
+
+describe('typed agent and preset merge precedence', () => {
+  test('canonicalizes aliases and clears lower inheritance in both directions', () => {
+    expect(
+      mergeAgentOverrides(
+        { explorer: { model: 'lower/model' } },
+        { explore: { inheritModelFrom: 'session' } },
+      ),
+    ).toEqual({ explorer: { inheritModelFrom: 'session' } });
+    expect(
+      mergeAgentOverrides(
+        { explore: { inheritModelFrom: 'session' } },
+        { explorer: { model: 'higher/model' } },
+      ),
+    ).toEqual({ explorer: { model: 'higher/model' } });
+  });
+
+  test('preserves omitted activation and applies explicit empty tombstones', () => {
+    const base = {
+      agents: {},
+      marketplace: {
+        agents: ['community/one'],
+        profiles: { oracle: 'community/oracle' },
+      },
+    } satisfies Preset;
+    expect(mergePreset(base, { agents: {} })).toEqual(base);
+    expect(
+      mergePreset(base, { agents: {}, marketplace: { agents: [] } }),
+    ).toEqual({
+      agents: {},
+      marketplace: {
+        agents: [],
+        profiles: { oracle: 'community/oracle' },
+      },
+    });
+    expect(
+      mergePreset(base, {
+        agents: {},
+        marketplace: { profiles: { oracle: null } },
+      }),
+    ).toEqual({
+      agents: {},
+      marketplace: {
+        agents: ['community/one'],
+        profiles: { oracle: null },
+      },
+    });
+  });
+});
 
 describe('loadPluginConfig', () => {
   let tempDir: string;
@@ -74,7 +132,7 @@ describe('loadPluginConfig', () => {
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       `\uFEFF${JSON.stringify({
         preset: 'fast',
-        presets: { fast: { oracle: { model: 'fast-model' } } },
+        presets: { fast: { agents: { oracle: { model: 'fast-model' } } } },
         agents: { oracle: { temperature: 0.9 } },
         autoUpdate: false,
       })}`,
@@ -85,7 +143,7 @@ describe('loadPluginConfig', () => {
     // The BOM is stripped silently (RFC 8259 permits one); every setting
     // survives, including preset resolution.
     expect(config.autoUpdate).toBe(false);
-    expect(config.agents?.oracle?.model).toBe('fast-model');
+    expect(selectedPresetAgent(config)?.model).toBe('fast-model');
     expect(config.agents?.oracle?.temperature).toBe(0.9);
   });
 
@@ -485,7 +543,7 @@ describe('onWarning callback', () => {
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         preset: 'nonexistent',
-        presets: { other: { oracle: { model: 'other' } } },
+        presets: { other: { agents: { oracle: { model: 'other' } } } },
         agents: { oracle: { model: 'root' } },
       }),
     );
@@ -509,7 +567,7 @@ describe('onWarning callback', () => {
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         preset: 'nonexistent',
-        presets: { other: { oracle: { model: 'other' } } },
+        presets: { other: { agents: { oracle: { model: 'other' } } } },
         agents: { oracle: { model: 'root' } },
       }),
     );
@@ -956,7 +1014,7 @@ describe('disabled_* key normalization', () => {
       JSON.stringify({
         disabled_tools: 'webfetch',
         preset: 'fast',
-        presets: { fast: { oracle: { model: 'fast-model' } } },
+        presets: { fast: { agents: { oracle: { model: 'fast-model' } } } },
         agents: { oracle: { temperature: 0.9 } },
       }),
     );
@@ -967,8 +1025,8 @@ describe('disabled_* key normalization', () => {
     });
 
     expect(config.disabled_tools).toEqual(['webfetch']);
-    // Preset resolution still runs and merges with root agents
-    expect(config.agents?.oracle?.model).toBe('fast-model');
+    // Preset resolution remains structural; registry construction merges it.
+    expect(selectedPresetAgent(config)?.model).toBe('fast-model');
     expect(config.agents?.oracle?.temperature).toBe(0.9);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.kind).toBe('normalized');
@@ -1259,13 +1317,13 @@ describe('preset resolution', () => {
       JSON.stringify({
         preset: 'fast',
         presets: {
-          fast: { oracle: { model: 'fast-model' } },
+          fast: { agents: { oracle: { model: 'fast-model' } } },
         },
       }),
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('fast-model');
+    expect(selectedPresetAgent(config)?.model).toBe('fast-model');
   });
 
   test('root agents override preset agents', () => {
@@ -1278,8 +1336,10 @@ describe('preset resolution', () => {
         preset: 'fast',
         presets: {
           fast: {
-            oracle: { model: 'fast-model', temperature: 0.1 },
-            explorer: { model: 'explorer-model' },
+            agents: {
+              oracle: { model: 'fast-model', temperature: 0.1 },
+              explorer: { model: 'explorer-model' },
+            },
           },
         },
         agents: {
@@ -1289,9 +1349,10 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('fast-model');
+    expect(selectedPresetAgent(config)?.model).toBe('fast-model');
+    expect(selectedPresetAgent(config)?.temperature).toBe(0.1);
     expect(config.agents?.oracle?.temperature).toBe(0.9);
-    expect(config.agents?.explorer?.model).toBe('explorer-model');
+    expect(selectedPresetAgent(config)?.options).toBeUndefined();
   });
 
   test('missing preset: preset set but not in presets -> returns empty/root agents', () => {
@@ -1303,7 +1364,7 @@ describe('preset resolution', () => {
       JSON.stringify({
         preset: 'nonexistent',
         presets: {
-          other: { oracle: { model: 'other' } },
+          other: { agents: { oracle: { model: 'other' } } },
         },
         agents: { oracle: { model: 'root' } },
       }),
@@ -1322,13 +1383,13 @@ describe('preset resolution', () => {
       JSON.stringify({
         preset: 'dev',
         presets: {
-          dev: { oracle: { model: 'dev-model' } },
+          dev: { agents: { oracle: { model: 'dev-model' } } },
         },
       }),
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('dev-model');
+    expect(selectedPresetAgent(config)?.model).toBe('dev-model');
   });
 
   test('invalid preset shape: bad agent config in preset fails schema validation', () => {
@@ -1342,7 +1403,7 @@ describe('preset resolution', () => {
       JSON.stringify({
         preset: 'invalid',
         presets: {
-          invalid: { oracle: { temperature: 5 } },
+          invalid: { agents: { oracle: { temperature: 5 } } },
         },
       }),
     );
@@ -1360,7 +1421,7 @@ describe('preset resolution', () => {
       JSON.stringify({
         preset: 'nonexistent',
         presets: {
-          other: { oracle: { model: 'other' } },
+          other: { agents: { oracle: { model: 'other' } } },
         },
         agents: { oracle: { model: 'root' } },
       }),
@@ -1384,7 +1445,7 @@ describe('preset resolution', () => {
       JSON.stringify({
         preset: 'nonexistent',
         presets: {
-          other: { oracle: { model: 'other' } },
+          other: { agents: { oracle: { model: 'other' } } },
         },
       }),
     );
@@ -1407,9 +1468,11 @@ describe('preset resolution', () => {
         preset: 'openai',
         presets: {
           openai: {
-            oracle: {
-              model: 'openai/gpt-5.6',
-              options: { textVerbosity: 'low' },
+            agents: {
+              oracle: {
+                model: 'openai/gpt-5.6',
+                options: { textVerbosity: 'low' },
+              },
             },
           },
         },
@@ -1422,10 +1485,13 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.6');
-    // deepMerge should combine both option keys
-    expect(config.agents?.oracle?.options).toEqual({
+    expect(selectedPresetAgent(config)?.model).toBe('openai/gpt-5.6');
+    // Loader preserves the two structural layers; registry construction
+    // performs their typed merge exactly once.
+    expect(selectedPresetAgent(config)?.options).toEqual({
       textVerbosity: 'low',
+    });
+    expect(config.agents?.oracle?.options).toEqual({
       reasoningEffort: 'medium',
     });
   });
@@ -1440,10 +1506,12 @@ describe('preset resolution', () => {
         preset: 'anthropic-thinking',
         presets: {
           'anthropic-thinking': {
-            oracle: {
-              model: 'anthropic/claude-sonnet-4-6',
-              options: {
-                thinking: { type: 'enabled', budgetTokens: 16000 },
+            agents: {
+              oracle: {
+                model: 'anthropic/claude-sonnet-4-6',
+                options: {
+                  thinking: { type: 'enabled', budgetTokens: 16000 },
+                },
               },
             },
           },
@@ -1452,8 +1520,10 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('anthropic/claude-sonnet-4-6');
-    expect(config.agents?.oracle?.options).toEqual({
+    expect(selectedPresetAgent(config)?.model).toBe(
+      'anthropic/claude-sonnet-4-6',
+    );
+    expect(selectedPresetAgent(config)?.options).toEqual({
       thinking: { type: 'enabled', budgetTokens: 16000 },
     });
   });
@@ -1468,9 +1538,11 @@ describe('preset resolution', () => {
         preset: 'concise',
         presets: {
           concise: {
-            oracle: {
-              model: 'openai/gpt-5.6',
-              options: { textVerbosity: 'low' },
+            agents: {
+              oracle: {
+                model: 'openai/gpt-5.6',
+                options: { textVerbosity: 'low' },
+              },
             },
           },
         },
@@ -1483,8 +1555,11 @@ describe('preset resolution', () => {
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.6');
-    // root wins over preset for same key
+    expect(selectedPresetAgent(config)?.model).toBe('openai/gpt-5.6');
+    // Root remains separate until registry construction.
+    expect(selectedPresetAgent(config)?.options).toEqual({
+      textVerbosity: 'low',
+    });
     expect(config.agents?.oracle?.options).toEqual({
       textVerbosity: 'high',
     });
@@ -1516,8 +1591,8 @@ describe('environment variable preset override', () => {
       JSON.stringify({
         preset: 'config-preset',
         presets: {
-          'config-preset': { oracle: { model: 'config-model' } },
-          'env-preset': { oracle: { model: 'env-model' } },
+          'config-preset': { agents: { oracle: { model: 'config-model' } } },
+          'env-preset': { agents: { oracle: { model: 'env-model' } } },
         },
       }),
     );
@@ -1525,7 +1600,7 @@ describe('environment variable preset override', () => {
     process.env.OH_MY_OPENCODE_SLIM_PRESET = 'env-preset';
     const config = loadPluginConfig(projectDir);
     expect(config.preset).toBe('env-preset');
-    expect(config.agents?.oracle?.model).toBe('env-model');
+    expect(selectedPresetAgent(config)?.model).toBe('env-model');
   });
 
   test('Env var works when config has no preset', () => {
@@ -1536,7 +1611,7 @@ describe('environment variable preset override', () => {
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         presets: {
-          'env-preset': { oracle: { model: 'env-model' } },
+          'env-preset': { agents: { oracle: { model: 'env-model' } } },
         },
       }),
     );
@@ -1544,7 +1619,7 @@ describe('environment variable preset override', () => {
     process.env.OH_MY_OPENCODE_SLIM_PRESET = 'env-preset';
     const config = loadPluginConfig(projectDir);
     expect(config.preset).toBe('env-preset');
-    expect(config.agents?.oracle?.model).toBe('env-model');
+    expect(selectedPresetAgent(config)?.model).toBe('env-model');
   });
 
   test('Env var is ignored if empty string', () => {
@@ -1556,7 +1631,7 @@ describe('environment variable preset override', () => {
       JSON.stringify({
         preset: 'config-preset',
         presets: {
-          'config-preset': { oracle: { model: 'config-model' } },
+          'config-preset': { agents: { oracle: { model: 'config-model' } } },
         },
       }),
     );
@@ -1564,7 +1639,7 @@ describe('environment variable preset override', () => {
     process.env.OH_MY_OPENCODE_SLIM_PRESET = '';
     const config = loadPluginConfig(projectDir);
     expect(config.preset).toBe('config-preset');
-    expect(config.agents?.oracle?.model).toBe('config-model');
+    expect(selectedPresetAgent(config)?.model).toBe('config-model');
   });
 
   test('Env var is ignored if undefined', () => {
@@ -1576,7 +1651,7 @@ describe('environment variable preset override', () => {
       JSON.stringify({
         preset: 'config-preset',
         presets: {
-          'config-preset': { oracle: { model: 'config-model' } },
+          'config-preset': { agents: { oracle: { model: 'config-model' } } },
         },
       }),
     );
@@ -1584,7 +1659,7 @@ describe('environment variable preset override', () => {
     delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
     const config = loadPluginConfig(projectDir);
     expect(config.preset).toBe('config-preset');
-    expect(config.agents?.oracle?.model).toBe('config-model');
+    expect(selectedPresetAgent(config)?.model).toBe('config-model');
   });
 
   test('Env var with nonexistent preset warns and falls back', () => {
@@ -1596,7 +1671,7 @@ describe('environment variable preset override', () => {
       JSON.stringify({
         preset: 'config-preset',
         presets: {
-          'config-preset': { oracle: { model: 'config-model' } },
+          'config-preset': { agents: { oracle: { model: 'config-model' } } },
         },
         agents: { oracle: { model: 'fallback' } },
       }),
@@ -1784,8 +1859,10 @@ describe('JSONC config support', () => {
         "presets": {
           "dev": {
             // Development agents
-            "oracle": { "model": "dev-oracle", },
-            "explorer": { "model": "dev-explorer", },
+            "agents": {
+              "oracle": { "model": "dev-oracle", },
+              "explorer": { "model": "dev-explorer", },
+            },
           },
         },
       }`,
@@ -1793,8 +1870,8 @@ describe('JSONC config support', () => {
 
     const config = loadPluginConfig(projectDir);
     expect(config.preset).toBe('dev');
-    expect(config.agents?.oracle?.model).toBe('dev-oracle');
-    expect(config.agents?.explorer?.model).toBe('dev-explorer');
+    expect(selectedPresetAgent(config)?.model).toBe('dev-oracle');
+    expect(config.presets?.dev?.agents?.explorer?.model).toBe('dev-explorer');
   });
 });
 

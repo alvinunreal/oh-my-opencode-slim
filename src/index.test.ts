@@ -146,6 +146,7 @@ describe('plugin tool registration', () => {
     expect(hooks.tool?.task_cancel).toBeDefined();
     expect(hooks.tool?.task_revive).toBeDefined();
     expect(hooks.tool?.wait_for_user).toBeDefined();
+    expect(hooks.tool?.marketplace).toBeDefined();
     await expect(
       hooks.tool?.wait_for_user?.execute(
         { reason: 'Complete the external approval.' },
@@ -725,8 +726,10 @@ describe('plugin config model inheritance', () => {
       preset: 'split',
       presets: {
         split: {
-          orchestrator: { model: 'preset/orchestrator' },
-          fixer: { inheritModelFrom: 'session' },
+          agents: {
+            orchestrator: { model: 'preset/orchestrator' },
+            fixer: { inheritModelFrom: 'session' },
+          },
         },
       },
     });

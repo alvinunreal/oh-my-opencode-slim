@@ -1,7 +1,11 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import { DEFAULT_MODELS, type PluginConfig } from '../config';
 import { RuntimeConfig } from '../config/runtime';
-import { createAgents, getAgentConfigs } from './index';
+import {
+  buildResolvedAgentRegistry,
+  createAgents,
+  getAgentConfigs,
+} from './index';
 
 const TEST_DIRECTORY = 'runtime-test-agents-custom';
 function runtimeFor(config: PluginConfig | undefined = {}) {
@@ -31,7 +35,7 @@ describe('custom-agent creation', () => {
     expect(customAgent).toBeDefined();
     expect(customAgent?.config.model).toBe('openai/gpt-5.6');
     expect(customAgent?.config.prompt).toBe(
-      'You are the custom reviewer agent.',
+      'You are the custom reviewer agent.\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
     );
   });
 
@@ -52,7 +56,7 @@ describe('custom-agent creation', () => {
 
     expect(customAgent).toBeDefined();
     expect(customAgent?.config.prompt).toBe(
-      'You are a custom subagent for auditing.',
+      'You are a custom subagent for auditing.\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
     );
 
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
@@ -134,6 +138,34 @@ describe('custom-agent creation', () => {
     );
   });
 
+  test('role-derived custom agents inherit the canonical role policy', () => {
+    const config: PluginConfig = {
+      agents: {
+        'oracle-derived': {
+          baseRole: 'oracle',
+          model: 'provider/oracle-derived',
+        },
+        'librarian-derived': {
+          baseRole: 'librarian',
+          model: 'provider/librarian-derived',
+        },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const derived = agents.find((agent) => agent.name === 'oracle-derived');
+
+    expect(derived?.baseRole).toBe('oracle');
+    expect(derived?.config.prompt).toContain('You are Oracle');
+    expect(derived?.description).toContain('Strategic technical advisor');
+    const registry = buildResolvedAgentRegistry(runtimeFor(config));
+    expect(registry.mcpLists['oracle-derived']).toEqual([]);
+    expect(registry.skillPermissions['oracle-derived']?.simplify).toBe('allow');
+    expect(registry.mcpLists['librarian-derived']).toEqual([
+      'context7',
+      'gh_grep',
+    ]);
+  });
+
   test('creates wrapper agents from acpAgents config', () => {
     const config: PluginConfig = {
       acpAgents: {
@@ -165,7 +197,9 @@ describe('custom-agent creation', () => {
       preset: 'opencode-go',
       presets: {
         'opencode-go': {
-          orchestrator: { model: 'opencode-go/glm-5.2' },
+          agents: {
+            orchestrator: { model: 'opencode-go/glm-5.2' },
+          },
         },
       },
       agents: {
@@ -261,7 +295,7 @@ describe('custom-agent creation', () => {
     );
   });
 
-  test('appends ACP routing prompts separately without heading, and preserves rewriting', () => {
+  test('folds custom and ACP routing prompts into their route entries', () => {
     const config: PluginConfig = {
       agents: {
         explorer: {
@@ -291,19 +325,16 @@ describe('custom-agent creation', () => {
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
     const prompt = orchestrator?.config.prompt ?? '';
 
-    // Verify Project-specific routing guidance exists and has the custom agent override prompt rewritten
-    expect(prompt).toContain('# Project-specific routing guidance');
+    // Both guidance blocks are part of their agent's single route entry.
+    expect(prompt).not.toContain('# Project-specific routing guidance');
     expect(prompt).toContain(
       'Please use @janitor to clean up after @fancy-explorer has completed.',
     );
 
-    // Verify ACP routing prompt is appended but NOT under the Project-specific routing guidance section
+    // Verify ACP routing guidance is embedded in its route entry.
     // (i.e. it comes after or is separate, let's verify exact substring sequence or that the ACP test isn't inside the heading section)
-    const pieces = prompt.split('# Project-specific routing guidance');
-    expect(pieces.length).toBe(2);
-
-    const headingContent = pieces[1];
-    // The headingContent should contain the custom prompt but not contain the ACP prompt if ACP prompt is appended after/before.
+    expect(prompt.match(/Please use @janitor/g)?.length).toBe(1);
+    // Both guidance snippets should be present exactly once in the prompt.
     // Wait, in our implementation, order of appending is:
     // 1) overridden/custom prompts under # Project-specific routing guidance.
     // 2) ACP routing prompts (without the header).
@@ -311,12 +342,14 @@ describe('custom-agent creation', () => {
     // But the ACP prompt is not under that header's specific block if it's appended separately.
     // Wait, is there a way to verify they are separated? Yes, we can verify that the custom prompt block and ACP prompt block are two separate parts,
     // and that ACP prompt is appended at the very end of the string, outside of the heading's contiguous text block or that if only ACP is present, the heading doesn't show up.
-    expect(headingContent).toContain(
-      'Please use @janitor to clean up after @fancy-explorer has completed.',
-    );
-    expect(headingContent).toContain(
+    expect(prompt).toContain(
       'Please delegate research tasks to @claude-research or @fancy-explorer.',
     );
+    expect(
+      prompt.match(
+        /Please delegate research tasks to @claude-research or @fancy-explorer\./g,
+      )?.length,
+    ).toBe(1);
 
     // Let's also check a scenario where only ACP routing prompt is present. There should be NO heading at all!
     const configOnlyAcp: PluginConfig = {
@@ -476,9 +509,8 @@ describe('permission edge cases', () => {
     const planner = agents.find((a) => a.name === 'planner');
 
     expect(planner).toBeDefined();
-    // The shorthand string should be preserved as-is, not spread into
-    // character keys like { "0": "a", "1": "s", "2": "k" }
-    expect(planner?.config.permission).toBe('ask');
+    // Shorthand permissions are normalized before defaults and gates apply.
+    expect(planner?.config.permission).toMatchObject({ '*': 'ask' });
   });
 
   test('orchestrator permission override does not replace plugin gates', () => {

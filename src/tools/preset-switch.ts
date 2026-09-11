@@ -61,7 +61,10 @@ export function switchPresetOnDisk(
   }
 
   const agentUpdates = buildAgentUpdates(preset);
-  if (Object.keys(agentUpdates).length === 0) {
+  const hasMarketplaceActivation =
+    preset.marketplace?.agents !== undefined ||
+    preset.marketplace?.profiles !== undefined;
+  if (Object.keys(agentUpdates).length === 0 && !hasMarketplaceActivation) {
     return {
       ok: false,
       presetName,
@@ -86,7 +89,7 @@ export function switchPresetOnDisk(
  */
 export function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
   const agentUpdates: Record<string, AgentUpdate> = {};
-  for (const [agentName, override] of Object.entries(preset)) {
+  for (const [agentName, override] of Object.entries(preset.agents)) {
     const resolvedName = AGENT_ALIASES[agentName] ?? agentName;
     const agentConfig = mapOverrideToAgentConfig(override);
     if (Object.keys(agentConfig).length > 0) {
@@ -257,7 +260,7 @@ export function setAgentOverride(
   agentName: string,
   override: AgentOverrideConfig,
 ): Preset {
-  return { ...preset, [agentName]: override };
+  return { ...preset, agents: { ...preset.agents, [agentName]: override } };
 }
 
 /**
@@ -268,8 +271,8 @@ export function removeAgentFromPreset(
   preset: Preset,
   agentName: string,
 ): Preset {
-  if (!(agentName in preset)) return preset;
-  const next = { ...preset };
-  delete next[agentName];
-  return next;
+  if (!(agentName in preset.agents)) return preset;
+  const agents = { ...preset.agents };
+  delete agents[agentName];
+  return { ...preset, agents };
 }

@@ -10,10 +10,13 @@ import {
   SUBAGENT_NAMES,
 } from '../config';
 import { RuntimeConfig } from '../config/runtime';
+import { COUNCIL_SYNTHESIS_REINFORCEMENT } from './council';
 import {
   applyModelInheritanceToConfig,
   createAgents,
   getAgentConfigs,
+  getDisabledAgents,
+  isMarketplacePermissionDenied,
   isSubagent,
 } from './index';
 import { TASK_REJECTION_INSTRUCTION } from './task-rejection';
@@ -114,7 +117,9 @@ describe('built-in subagent preset fallback', () => {
       preset: 'opencode-go',
       presets: {
         'opencode-go': {
-          orchestrator: { model: 'opencode-go/glm-5.2' },
+          agents: {
+            orchestrator: { model: 'opencode-go/glm-5.2' },
+          },
         },
       },
       council: councilConfig(),
@@ -135,7 +140,9 @@ describe('built-in subagent preset fallback', () => {
       preset: 'minimal',
       presets: {
         minimal: {
-          oracle: { model: 'anthropic/claude-sonnet-4-6' },
+          agents: {
+            oracle: { model: 'anthropic/claude-sonnet-4-6' },
+          },
         },
       },
       agents: {
@@ -168,7 +175,9 @@ describe('fixer agent fallback', () => {
       preset: 'balanced',
       presets: {
         balanced: {
-          orchestrator: { model: 'orchestrator-model' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+          },
         },
       },
       agents: {
@@ -189,7 +198,9 @@ describe('fixer agent fallback', () => {
       preset: 'balanced',
       presets: {
         balanced: {
-          orchestrator: { model: 'orchestrator-model' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+          },
         },
       },
       agents: {
@@ -210,9 +221,11 @@ describe('fixer agent fallback', () => {
       preset: 'split',
       presets: {
         split: {
-          orchestrator: { model: 'orchestrator-model' },
-          librarian: { model: 'librarian-local-model' },
-          fixer: { inheritModelFrom: 'session' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+            librarian: { model: 'librarian-local-model' },
+            fixer: { inheritModelFrom: 'session' },
+          },
         },
       },
     };
@@ -229,8 +242,10 @@ describe('fixer agent fallback', () => {
       preset: 'split',
       presets: {
         split: {
-          orchestrator: { model: 'orchestrator-model' },
-          fixer: { model: 'preset-fixer-model' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+            fixer: { model: 'preset-fixer-model' },
+          },
         },
       },
       agents: {
@@ -248,7 +263,9 @@ describe('fixer agent fallback', () => {
       preset: 'split',
       presets: {
         split: {
-          explorer: { model: 'preset/explorer' },
+          agents: {
+            explorer: { model: 'preset/explorer' },
+          },
         },
       },
       agents: {
@@ -393,6 +410,15 @@ describe('orchestrator agent', () => {
     expect(
       (orchestrator as { config: { permission: Record<string, unknown> } })
         .config.permission.wait_for_user,
+    ).toBe('allow');
+  });
+
+  test('orchestrator is allowed to invoke marketplace', () => {
+    const agents = createAgents(runtimeFor());
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    expect(
+      (orchestrator as { config: { permission: Record<string, unknown> } })
+        .config.permission.marketplace,
     ).toBe('allow');
   });
 
@@ -542,18 +568,20 @@ describe('spaced model ID registrations', () => {
       preset: 'spaced',
       presets: {
         spaced: {
-          explorer: {
-            model: [
-              { id: primary, variant: 'fast' },
-              { id: secondary, variant: 'balanced' },
-            ],
-          },
-          librarian: { model: primary, variant: 'direct' },
-          reviewer: {
-            model: [
-              { id: secondary, variant: 'precise' },
-              { id: fallback, variant: 'economy' },
-            ],
+          agents: {
+            explorer: {
+              model: [
+                { id: primary, variant: 'fast' },
+                { id: secondary, variant: 'balanced' },
+              ],
+            },
+            librarian: { model: primary, variant: 'direct' },
+            reviewer: {
+              model: [
+                { id: secondary, variant: 'precise' },
+                { id: fallback, variant: 'economy' },
+              ],
+            },
           },
         },
       },
@@ -750,6 +778,122 @@ describe('tool permissions', () => {
     }
   });
 
+  test('subagents are denied access to marketplace', () => {
+    const agents = createAgents(runtimeFor());
+
+    for (const name of ['oracle', 'explorer', 'fixer']) {
+      const agent = agents.find((candidate) => candidate.name === name);
+      expect(
+        (agent as { config: { permission: Record<string, unknown> } }).config
+          .permission.marketplace,
+      ).toBe('deny');
+    }
+  });
+
+  test('hostile marketplace allow rules cannot open the tool on non-orchestrators', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            displayName: 'Scout',
+            permission: { marketplace: 'allow' },
+          },
+          oracle: { permission: { marketplace: 'allow' } },
+          researcher: {
+            baseRole: 'librarian',
+            model: 'test/researcher',
+            permission: { marketplace: 'allow' },
+          },
+        },
+        council: councilConfig(),
+      }),
+    );
+    for (const name of [
+      'explorer',
+      'oracle',
+      'researcher',
+      'council',
+      'councillor-alpha',
+    ]) {
+      const agent = agents.find((candidate) => candidate.name === name);
+      expect(
+        (agent as { config: { permission: Record<string, unknown> } }).config
+          .permission.marketplace,
+      ).toBe('deny');
+    }
+    expect(
+      (
+        agents.find((agent) => agent.name === 'explorer') as {
+          config: { permission: Record<string, unknown> };
+        }
+      ).config.permission.marketplace,
+    ).toBe('deny');
+  });
+
+  test('omits marketplace prompt guidance when orchestrator permission denies it', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          orchestrator: { permission: { marketplace: 'deny' } },
+        },
+      }),
+    );
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
+
+  test('omits marketplace prompt guidance when host permission denies it', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    runtime.captureHostConfig({
+      agent: { orchestrator: { permission: { marketplace: 'deny' } } },
+    });
+    const agents = createAgents(runtime);
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
+
+  test('omits marketplace prompt guidance for nested pattern-map deny', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          orchestrator: { permission: { marketplace: { '*': 'deny' } } },
+        },
+      }),
+    );
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+    expect(
+      isMarketplacePermissionDenied({ marketplace: { '*': 'deny' } }),
+    ).toBe(true);
+    expect(isMarketplacePermissionDenied({ marketplace: 'allow' })).toBe(false);
+  });
+
+  test('ACP wrappers are denied marketplace', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({
+        acpAgents: {
+          bridge: { command: 'bridge-acp' },
+        },
+      }),
+    );
+    expect(
+      (configs.bridge.permission as Record<string, unknown>).marketplace,
+    ).toBe('deny');
+  });
+
+  test('omits marketplace prompt guidance when the tool is disabled', () => {
+    const agents = createAgents(
+      runtimeFor({ disabled_tools: ['marketplace'] }),
+    );
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
+
   test('council agent has synthesis-only (deny-all) permissions', () => {
     const agents = createAgents(
       runtimeFor({
@@ -810,6 +954,13 @@ test('orchestrator prompt excludes Council Mode when no councillors', () => {
   const orchestrator = agents.find((a) => a.name === 'orchestrator');
   const prompt = orchestrator?.config.prompt as string;
   expect(prompt).not.toContain('## Council Mode');
+});
+
+test('council synthesis reinforcement is appended exactly once', () => {
+  const agents = createAgents(runtimeFor({ council: councilConfig() }));
+  const council = agents.find((agent) => agent.name === 'council');
+  const prompt = council?.config.prompt as string;
+  expect(prompt.split(COUNCIL_SYNTHESIS_REINFORCEMENT).length - 1).toBe(1);
 });
 
 describe('isSubagent type guard', () => {
@@ -889,7 +1040,9 @@ describe('createAgents', () => {
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
     const explorer = agents.find((agent) => agent.name === 'explorer');
 
-    expect(explorer?.config.prompt).toBe('Replacement explorer prompt.');
+    expect(explorer?.config.prompt).toBe(
+      `Replacement explorer prompt.\n\n${TASK_REJECTION_INSTRUCTION}`,
+    );
     expect(orchestrator?.config.prompt).not.toContain(
       TASK_REJECTION_INSTRUCTION,
     );
@@ -1477,9 +1630,11 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     const result = PluginConfigSchema.safeParse({
       presets: {
         openai: {
-          oracle: {
-            model: 'openai/gpt-5.6',
-            prompt: 'ignored preset built-in prompt override',
+          agents: {
+            oracle: {
+              model: 'openai/gpt-5.6',
+              prompt: 'ignored preset built-in prompt override',
+            },
           },
         },
       },
@@ -1793,6 +1948,118 @@ describe('createAgents with malformed disabled_tools', () => {
     );
     expect(orchestrator?.config.prompt).not.toContain(
       '`wait_for_user` is disabled',
+    );
+  });
+});
+
+describe('resolveAgentConfigModel', () => {
+  test('returns the explicit model when configured', () => {
+    const config: PluginConfig = {
+      agents: { oracle: { model: 'test/oracle-explicit' } },
+    };
+    expect(resolveAgentConfigModel(runtimeFor(config), 'oracle')).toBe(
+      'test/oracle-explicit',
+    );
+  });
+
+  test('returns the primary model of an explicit model array', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: { model: ['test/primary', 'test/fallback'] },
+      },
+    };
+    expect(resolveAgentConfigModel(runtimeFor(config), 'oracle')).toBe(
+      'test/primary',
+    );
+  });
+
+  test('session inheritance resolves to no config model (parent session serves)', () => {
+    const config: PluginConfig = {
+      agents: { oracle: { inheritModelFrom: 'session' } },
+    };
+    expect(
+      resolveAgentConfigModel(runtimeFor(config), 'oracle'),
+    ).toBeUndefined();
+  });
+
+  test('orchestrator inheritance uses the configured orchestrator model', () => {
+    const config: PluginConfig = {
+      agents: {
+        orchestrator: { model: 'test/orch' },
+        oracle: { inheritModelFrom: 'orchestrator' },
+      },
+    };
+    expect(resolveAgentConfigModel(runtimeFor(config), 'oracle')).toBe(
+      'test/orch',
+    );
+  });
+
+  test('orchestrator inheritance without an orchestrator model leaves the config model-less', () => {
+    const config: PluginConfig = {
+      agents: { oracle: { inheritModelFrom: 'orchestrator' } },
+    };
+    expect(
+      resolveAgentConfigModel(runtimeFor(config), 'oracle'),
+    ).toBeUndefined();
+  });
+
+  test('fixer with no model inherits the librarian model', () => {
+    const config: PluginConfig = {
+      agents: { librarian: { model: 'anthropic/lib' } },
+    };
+    expect(resolveAgentConfigModel(runtimeFor(config), 'fixer')).toBe(
+      'anthropic/lib',
+    );
+  });
+
+  test('fixer without librarian falls back to the preset primary model', () => {
+    const config: PluginConfig = {
+      preset: 'default',
+      presets: {
+        default: { agents: { oracle: { model: 'test/primary' } } },
+      },
+    };
+    expect(resolveAgentConfigModel(runtimeFor(config), 'fixer')).toBe(
+      'test/primary',
+    );
+  });
+
+  test('matches the final config model createAgents produces for the fixer case', () => {
+    const config: PluginConfig = {
+      agents: { librarian: { model: 'anthropic/lib' } },
+    };
+    const runtime = runtimeFor(config);
+    const fixer = createAgents(runtime).find((a) => a.name === 'fixer');
+    expect(fixer?.config.model).toBe('anthropic/lib');
+    expect(resolveAgentConfigModel(runtime, 'fixer')).toBe(fixer?.config.model);
+  });
+
+  test('resolves a dynamic councillor primary model from the active council preset', () => {
+    const config: PluginConfig = {
+      council: CouncilConfigSchema.parse({
+        presets: {
+          default: {
+            alpha: { model: ['openai/primary', 'google/fallback'] },
+          },
+        },
+      }),
+    };
+    expect(
+      resolveAgentConfigModel(runtimeFor(config), 'councillor-alpha'),
+    ).toBe('openai/primary');
+  });
+
+  test('resolves an ACP wrapper model for background admission', () => {
+    const config: PluginConfig = {
+      acpAgents: {
+        research: {
+          command: 'research-agent',
+          wrapperModel: 'anthropic/sonnet',
+        },
+      },
+    };
+    expect(resolveAgentConfigModel(runtimeFor(config), 'research')).toBe(
+      'anthropic/sonnet',
     );
   });
 });

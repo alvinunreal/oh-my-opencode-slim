@@ -26,6 +26,7 @@
 | [Skills](skills.md) | `simplify`, `codemap`, `clonedeps` - skills assignment syntax |
 | [MCPs](mcps.md) | `context7`, `gh_grep` - permissions per agent, global disable |
 | [Tools](tools.md) | Background tasks, LSP, code search (`ast_grep`), formatters |
+| [Marketplace](marketplace.md) | Local offline package install, activation, status, and the in-session tool |
 | [Configuration](configuration.md) | Config files, prompt overriding, JSONC, full option reference table |
 
 ## 💡 Author's Setup

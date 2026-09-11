@@ -88,6 +88,26 @@ describe('resolveRuntimeAgentName', () => {
     );
   });
 
+  test('resolves aliases from the final registry mappings', () => {
+    expect(
+      resolveRuntimeAgentName(
+        {
+          canonicalIdByRuntimeName: {
+            docsresearcher: 'docsresearcher',
+            docsalias: 'docsresearcher',
+            explore: 'explorer',
+            explorer: 'explorer',
+          },
+          runtimeNameByCanonicalId: {
+            docsresearcher: 'docsalias',
+            explorer: 'explorer',
+          },
+        },
+        '@docsalias',
+      ),
+    ).toBe('docsresearcher');
+  });
+
   test('returns normalized name when no displayName match exists', () => {
     const config = {
       agents: {

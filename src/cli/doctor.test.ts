@@ -297,7 +297,7 @@ describe('runDoctorCheck', () => {
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         preset: 'mypreset',
-        presets: { mypreset: { oracle: { model: 'test/model' } } },
+        presets: { mypreset: { agents: { oracle: { model: 'test/model' } } } },
       }),
     );
 
@@ -316,7 +316,7 @@ describe('runDoctorCheck', () => {
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         preset: 'mypreset',
-        presets: { mypreset: { oracle: { model: 'test/model' } } },
+        presets: { mypreset: { agents: { oracle: { model: 'test/model' } } } },
       }),
     );
 
@@ -334,7 +334,7 @@ describe('runDoctorCheck', () => {
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         preset: 'nonexistent',
-        presets: { other: {} },
+        presets: { other: { agents: {} } },
       }),
     );
 
@@ -354,8 +354,8 @@ describe('runDoctorCheck', () => {
       JSON.stringify({
         preset: 'config-preset',
         presets: {
-          'config-preset': { oracle: { model: 'config/model' } },
-          'env-preset': { oracle: { model: 'env/model' } },
+          'config-preset': { agents: { oracle: { model: 'config/model' } } },
+          'env-preset': { agents: { oracle: { model: 'env/model' } } },
         },
       }),
     );
@@ -378,8 +378,10 @@ describe('runDoctorCheck', () => {
         agents: { oracle: { temperature: 0.5 } },
         presets: {
           'test-preset': {
-            oracle: { model: 'user/model' },
-            explorer: { model: 'user/explorer' },
+            agents: {
+              oracle: { model: 'user/model' },
+              explorer: { model: 'user/explorer' },
+            },
           },
         },
       }),
@@ -433,8 +435,8 @@ describe('runDoctorCheck', () => {
       JSON.stringify({
         preset: 'user-preset',
         presets: {
-          'user-preset': { oracle: { model: 'user/model' } },
-          'project-preset': { oracle: { model: 'project/model' } },
+          'user-preset': { agents: { oracle: { model: 'user/model' } } },
+          'project-preset': { agents: { oracle: { model: 'project/model' } } },
         },
       }),
     );

@@ -16,11 +16,15 @@ function makeConfig(): PluginConfig {
     preset: 'balanced',
     presets: {
       balanced: {
-        orchestrator: { model: 'anthropic/claude-sonnet-4-5' },
-        explorer: { model: 'openai/gpt-5-mini' },
+        agents: {
+          orchestrator: { model: 'anthropic/claude-sonnet-4-5' },
+          explorer: { model: 'openai/gpt-5-mini' },
+        },
       },
       cheap: {
-        orchestrator: { model: 'openai/gpt-5-mini', temperature: 0.4 },
+        agents: {
+          orchestrator: { model: 'openai/gpt-5-mini', temperature: 0.4 },
+        },
       },
     },
   } as PluginConfig;
@@ -89,8 +93,10 @@ describe('v2 tui preset plugin', () => {
     test('persists the preset name and returns a success message', () => {
       writeUserConfig({
         presets: {
-          balanced: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
-          cheap: { orchestrator: { model: 'openai/gpt-5-mini' } },
+          balanced: {
+            agents: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
+          },
+          cheap: { agents: { orchestrator: { model: 'openai/gpt-5-mini' } } },
         },
       });
 
@@ -162,8 +168,10 @@ describe('v2 tui preset plugin', () => {
       writeUserConfig({
         preset: 'balanced',
         presets: {
-          balanced: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
-          cheap: { orchestrator: { model: 'openai/gpt-5-mini' } },
+          balanced: {
+            agents: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
+          },
+          cheap: { agents: { orchestrator: { model: 'openai/gpt-5-mini' } } },
         },
       });
       const stub = makeStubCtx('cheap');
@@ -190,8 +198,10 @@ describe('v2 tui preset plugin', () => {
       writeUserConfig({
         preset: 'balanced',
         presets: {
-          balanced: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
-          cheap: { orchestrator: { model: 'openai/gpt-5-mini' } },
+          balanced: {
+            agents: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
+          },
+          cheap: { agents: { orchestrator: { model: 'openai/gpt-5-mini' } } },
         },
       });
       const stub = makeStubCtx('cheap');
@@ -205,7 +215,9 @@ describe('v2 tui preset plugin', () => {
 
     test('cancels silently when the dialog is dismissed', async () => {
       writeUserConfig({
-        presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+        presets: {
+          cheap: { agents: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+        },
       });
       const stub = makeStubCtx(undefined);
 

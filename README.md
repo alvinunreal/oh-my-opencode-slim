@@ -48,6 +48,9 @@ The main idea is simple: instead of forcing one model to do everything, the plug
   models at runtime with `/preset`.
 - **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
   across 25 languages, and built-in MCPs for docs and GitHub code
+- **[Local marketplace](docs/marketplace.md)** - install and activate local
+  offline agent/profile packages from the CLI or the in-session
+  `marketplace` tool; changes apply after reload
   search.
 - **[Fully customizable](docs/configuration.md)** - custom agents, prompt
   overrides, per-agent skill/MCP permissions, and
@@ -107,6 +110,44 @@ have Bun installed:
 ```bash
 npx oh-my-opencode-slim@latest install
 ```
+
+### Local Marketplace Packages
+
+The marketplace lifecycle is local and offline. Package manifests are
+data-only, exact-version locked, and stored under the XDG data directory.
+Installation and preset activation are separate: install a package, then enable
+it in the active preset. Activated agents and profiles apply after the next
+OpenCode session/reload; the live registry is never hot-swapped.
+Manifests include bounded author, tag, license, plugin/role-contract,
+routing/delegation, role-target, capability, and override metadata. `instructions`
+is the single package instruction surface; profile packages declare explicit
+append/replace composition semantics. Executable fields,
+package-to-package dependencies, and arbitrary file maps are rejected.
+
+```bash
+bunx oh-my-opencode-slim marketplace install ./package.json
+bunx oh-my-opencode-slim marketplace list
+bunx oh-my-opencode-slim marketplace verify [author/name]
+bunx oh-my-opencode-slim marketplace update ./package-v2.json
+bunx oh-my-opencode-slim marketplace enable author/name
+bunx oh-my-opencode-slim marketplace profile librarian author/profile
+bunx oh-my-opencode-slim marketplace disable author/name
+bunx oh-my-opencode-slim marketplace remove author/name
+bunx oh-my-opencode-slim marketplace status
+```
+
+Use `update` explicitly to select a different exact version. `enable` activates
+an installed `agent` package in the active preset as a separately named
+role-derived agent. `profile` selects at most one installed `profile` package
+per supported specialist role; `--clear` writes a tombstone. Required skills
+and MCPs are preflighted against built-in capabilities and on-disk host
+configuration; missing required dependencies disable that package for the
+session. Optional requirements stay unavailable and are never auto-installed.
+`import` is an alias for `install` and records the canonical absolute local
+source path in the lockfile. Startup reads only the local store and never
+contacts a registry. The orchestrator can perform the same local lifecycle
+with the in-session `marketplace` tool; see
+[Local Marketplace](docs/marketplace.md).
 
 ### Run from Master
 
@@ -186,6 +227,10 @@ Then:
 > Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, or kitty pane, so you can watch specialists work live while the Orchestrator continues coordinating the session.
 
 The default generated configuration includes both `openai` and `opencode-go` presets.
+Preset agent overrides are stored under each preset's explicit `agents` field;
+`marketplace` activation selects installed packages for that preset. Agent, model,
+skill, MCP, permission, and routing decisions are resolved once at startup and
+apply after the next reload rather than hot-swapping a live session.
 
 ```jsonc
 {
@@ -193,21 +238,25 @@ The default generated configuration includes both `openai` and `opencode-go` pre
   "preset": "openai",
   "presets": {
     "openai": {
-      "orchestrator": { "model": "openai/gpt-5.6-terra", "variant": "high", "skills": ["*"], "mcps": ["*", "!context7"] },
-      "oracle": { "model": "openai/gpt-5.6-sol", "variant": "high", "skills": ["simplify"], "mcps": [] },
-      "librarian": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": ["context7", "gh_grep"] },
-      "explorer": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": [] },
-      "designer": { "model": "openai/gpt-5.6-luna", "variant": "medium", "skills": [], "mcps": [] },
-      "fixer": { "model": "openai/gpt-5.6-luna", "variant": "high", "skills": [], "mcps": [] }
+      "agents": {
+        "orchestrator": { "model": "openai/gpt-5.6-terra", "variant": "high", "skills": ["*"], "mcps": ["*", "!context7"] },
+        "oracle": { "model": "openai/gpt-5.6-sol", "variant": "high", "skills": ["simplify"], "mcps": [] },
+        "librarian": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": ["context7", "gh_grep"] },
+        "explorer": { "model": "openai/gpt-5.6-luna", "variant": "low", "skills": [], "mcps": [] },
+        "designer": { "model": "openai/gpt-5.6-luna", "variant": "medium", "skills": [], "mcps": [] },
+        "fixer": { "model": "openai/gpt-5.6-luna", "variant": "high", "skills": [], "mcps": [] }
+      }
     },
     "opencode-go": {
-      "orchestrator": { "model": "opencode-go/minimax-m3", "variant": "thinking" },
-      "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max" },
-      "librarian": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
-      "explorer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
-      "designer": { "model": "opencode-go/kimi-k2.7-code" },
-      "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
-      "observer": { "model": "opencode-go/mimo-v2.5" }
+      "agents": {
+        "orchestrator": { "model": "opencode-go/minimax-m3", "variant": "thinking" },
+        "oracle": { "model": "opencode-go/qwen3.7-max", "variant": "max" },
+        "librarian": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
+        "explorer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
+        "designer": { "model": "opencode-go/kimi-k2.7-code" },
+        "fixer": { "model": "opencode-go/deepseek-v4-flash", "variant": "high" },
+        "observer": { "model": "opencode-go/mimo-v2.5" }
+      }
     }
   }
 }
@@ -690,6 +739,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Skills](docs/skills.md)** | Bundled skills such as `simplify`, `codemap`, `clonedeps`, `deepwork`, `verification-planning`, `reflect`, `worktrees`, and `oh-my-opencode-slim` |
 | **[MCPs](docs/mcps.md)** | `context7`, `gh_grep`, and how MCP permissions work per agent |
 | **[Tools](docs/tools.md)** | Built-in tool capabilities like `webfetch`, LSP tools, code search, and formatters |
+| **[Marketplace](docs/marketplace.md)** | Local offline package install, activation, status, and the in-session `marketplace` tool |
 
 ---
 

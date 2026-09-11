@@ -4,8 +4,10 @@
  * block before the prompt is sent.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
-import { getSkillPermissionsForAgent } from '../../cli/skills';
-import { AGENT_ALIASES, type AgentOverrideConfig } from '../../config';
+import {
+  buildResolvedAgentRegistry,
+  type ResolvedAgentRegistry,
+} from '../../agents';
 import type { RuntimeConfig } from '../../config/runtime';
 import {
   isMessageWithParts,
@@ -95,31 +97,21 @@ function filterAvailableSkillsText(
  */
 export function createFilterAvailableSkillsHook(
   _ctx: PluginInput,
-  runtime: RuntimeConfig,
+  source: ResolvedAgentRegistry | RuntimeConfig | (() => ResolvedAgentRegistry),
 ) {
-  const permissionRulesByAgent = new Map<string, Record<string, SkillRule>>();
+  const getRegistry = (): ResolvedAgentRegistry => {
+    if (typeof source === 'function') return source();
+    return isResolvedAgentRegistry(source)
+      ? source
+      : buildResolvedAgentRegistry(source);
+  };
 
   const getPermissionRules = (agentName: string): Record<string, SkillRule> => {
-    const cached = permissionRulesByAgent.get(agentName);
-    if (cached) {
-      return cached;
-    }
-
-    const agents = runtime.agents();
-    const agentConfig: AgentOverrideConfig | undefined =
-      agents[agentName] ??
-      agents[
-        Object.keys(AGENT_ALIASES).find(
-          (key) => AGENT_ALIASES[key] === agentName,
-        ) ?? ''
-      ];
-    const permissionRules = getSkillPermissionsForAgent(
-      agentName,
-      agentConfig?.skills,
-      runtime.disabledSkills,
-    );
-    permissionRulesByAgent.set(agentName, permissionRules);
-    return permissionRules;
+    const resolved = getRegistry();
+    return (resolved.skillPermissions[agentName] ?? { '*': 'deny' }) as Record<
+      string,
+      SkillRule
+    >;
   };
 
   return {
@@ -152,6 +144,12 @@ export function createFilterAvailableSkillsHook(
       }
     },
   };
+}
+
+function isResolvedAgentRegistry(
+  source: ResolvedAgentRegistry | RuntimeConfig,
+): source is ResolvedAgentRegistry {
+  return 'skillPermissions' in source;
 }
 
 export { filterAvailableSkillsText };
