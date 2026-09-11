@@ -8,7 +8,8 @@ Centralized tool factory and registry for the OpenCode plugin system. This direc
 - **Code intelligence tools**: AST-grep pattern matching and transformation across languages
 - **Web capabilities**: Smart web fetching with caching and secondary model processing
 - **ACP integration**: External agent protocol execution
-- **Marketplace**: Local offline package install, activation, and status
+- **Marketplace**: Explicit registry install/update plus local import,
+  activation, and offline status
 - **Preset switching**: On-disk preset persistence helpers used by the TUI `/preset` manager
 
 These tools enable agents to perform file operations, manage background tasks, and interact with external systems while maintaining security boundaries through the OpenCode tool schema. Multi-LLM council orchestration is agent-level (dynamic `councillor-<name>` subagents in `src/agents/`), not a tool.

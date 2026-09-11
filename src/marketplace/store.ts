@@ -1,6 +1,15 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { gt } from 'semver';
+import {
+  canonicalizeMarketplaceValue,
+  compareMarketplaceCodeUnits,
+  digestMarketplaceBundle,
+} from './canonical';
+
+export { digestMarketplaceBundle } from './canonical';
+
 import { validateMarketplaceCompatibility } from './compatibility';
 import {
   MarketplaceConflictError,
@@ -62,35 +71,8 @@ export interface MarketplaceStoreInspection {
   operationalError?: string;
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableJson(item)).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(
-      ([a], [b]) => a.localeCompare(b),
-    );
-    return `{${entries
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** Digest input is UTF-8 bytes of canonical stable JSON for `{ manifest }`. */
-export function canonicalMarketplaceBundleBytes(
-  bundle: MarketplacePackageBundle,
-): string {
-  return stableJson(bundle);
-}
-
-export function digestMarketplaceBundle(
-  bundle: MarketplacePackageBundle,
-): string {
-  return createHash('sha256')
-    .update(canonicalMarketplaceBundleBytes(bundle))
-    .digest('hex');
-}
+export const canonicalMarketplaceBundleBytes = canonicalizeMarketplaceValue;
 
 function parseBundle(value: unknown): MarketplacePackageBundle {
   const result = MarketplacePackageBundleSchema.safeParse(value);
@@ -392,10 +374,18 @@ export class MarketplaceStore {
           }
           if (
             mode === 'update' &&
-            current.manifestVersion === bundle.manifest.version
+            !gt(bundle.manifest.version, current.manifestVersion)
           ) {
             throw new MarketplaceConflictError(
-              `${bundle.manifest.id}@${bundle.manifest.version} is already selected; updates require a new exact version`,
+              `${bundle.manifest.id}@${bundle.manifest.version} is not strictly newer than the installed ${current.manifestVersion}`,
+            );
+          }
+          if (
+            current.manifestVersion === bundle.manifest.version &&
+            existing.digest !== digest
+          ) {
+            throw new MarketplaceConflictError(
+              `${bundle.manifest.id}@${bundle.manifest.version} is already locked with a different digest`,
             );
           }
           if (existing.digest === digest) {
@@ -406,6 +396,12 @@ export class MarketplaceStore {
             }
             return existing;
           }
+        }
+
+        if (mode === 'update' && !current) {
+          throw new MarketplaceConflictError(
+            `${bundle.manifest.id} is not installed; updates require an existing package`,
+          );
         }
 
         const versionPath = packageVersionPath(
@@ -629,7 +625,7 @@ export class MarketplaceStore {
       fs.mkdirSync(temporaryPath, { recursive: true });
       writeAtomic(
         path.join(temporaryPath, 'package.json'),
-        `${stableJson(bundle)}\n`,
+        `${canonicalizeMarketplaceValue(bundle)}\n`,
       );
       writeAtomic(path.join(temporaryPath, 'sha256'), `${digest}\n`);
       fs.mkdirSync(path.dirname(versionPath), { recursive: true });
@@ -651,11 +647,14 @@ export class MarketplaceStore {
       schemaVersion: MARKETPLACE_LOCKFILE_SCHEMA_VERSION,
       packages: Object.fromEntries(
         Object.entries(lockfile.packages).sort(([a], [b]) =>
-          a.localeCompare(b),
+          compareMarketplaceCodeUnits(a, b),
         ),
       ),
     };
-    writeAtomic(this.paths.lockfilePath, `${stableJson(normalized)}\n`);
+    writeAtomic(
+      this.paths.lockfilePath,
+      `${canonicalizeMarketplaceValue(normalized)}\n`,
+    );
   }
 
   private toStored(

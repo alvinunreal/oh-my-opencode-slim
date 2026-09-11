@@ -70,3 +70,31 @@ export class MarketplaceActivationError extends MarketplaceError {
     this.name = 'MarketplaceActivationError';
   }
 }
+
+export class MarketplaceRegistryUnavailableError extends MarketplaceError {
+  constructor(message: string) {
+    super(message, 'registry-unavailable');
+    this.name = 'MarketplaceRegistryUnavailableError';
+  }
+}
+
+export class MarketplaceRegistryProtocolError extends MarketplaceError {
+  constructor(message: string) {
+    super(message, 'registry-protocol');
+    this.name = 'MarketplaceRegistryProtocolError';
+  }
+}
+
+export class MarketplaceRegistryNotFoundError extends MarketplaceError {
+  constructor(message: string) {
+    super(message, 'registry-not-found');
+    this.name = 'MarketplaceRegistryNotFoundError';
+  }
+}
+
+export class MarketplaceRegistryIntegrityError extends MarketplaceError {
+  constructor(message: string) {
+    super(message, 'registry-integrity');
+    this.name = 'MarketplaceRegistryIntegrityError';
+  }
+}

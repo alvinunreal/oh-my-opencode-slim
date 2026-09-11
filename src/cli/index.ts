@@ -76,9 +76,9 @@ oh-my-opencode-slim installer
 Usage:
   bunx oh-my-opencode-slim install [OPTIONS]
   bunx oh-my-opencode-slim doctor [OPTIONS]
-  bunx oh-my-opencode-slim marketplace install <package.json>
-  bunx oh-my-opencode-slim marketplace import <package.json> (alias for install)
-  bunx oh-my-opencode-slim marketplace update <package.json>
+  bunx oh-my-opencode-slim marketplace install <publisher/package[@version]>
+  bunx oh-my-opencode-slim marketplace import <package.json> [--update]
+  bunx oh-my-opencode-slim marketplace update <publisher/package>
   bunx oh-my-opencode-slim marketplace list
   bunx oh-my-opencode-slim marketplace show <package-id> [--json]
   bunx oh-my-opencode-slim marketplace verify [package-id] [--json]

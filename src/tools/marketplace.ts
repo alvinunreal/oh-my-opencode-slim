@@ -34,9 +34,19 @@ export const MARKETPLACE_TOOL_ACTIONS = [
 export type MarketplaceToolAction = (typeof MARKETPLACE_TOOL_ACTIONS)[number];
 
 const MarketplaceToolRequestSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('install'), path: z.string().min(1) }).strict(),
-  z.object({ action: z.literal('import'), path: z.string().min(1) }).strict(),
-  z.object({ action: z.literal('update'), path: z.string().min(1) }).strict(),
+  z
+    .object({ action: z.literal('install'), packageId: z.string().min(1) })
+    .strict(),
+  z
+    .object({
+      action: z.literal('import'),
+      path: z.string().min(1),
+      update: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({ action: z.literal('update'), packageId: z.string().min(1) })
+    .strict(),
   z
     .object({ action: z.literal('show'), packageId: z.string().min(1) })
     .strict(),
@@ -161,13 +171,13 @@ export function createMarketplaceTool(
   options: MarketplaceToolOptions,
 ): Record<'marketplace', ToolDefinition> {
   const marketplace = tool({
-    description: `Manage local offline marketplace packages.
+    description: `Manage marketplace packages.
 
-Use this tool for install, import, list, show, verify, update, enable, disable, profile, remove, and status. Do not shell out to the CLI for these actions. There is no network registry.
+Use install and update with a canonical package ID for the default HTTPS registry. Use import with a local path (and update=true for an existing package). Do not infer whether an argument is a path or registry ID. Do not shell out to the CLI for these actions.
 
-list, show, verify, and status are read-only. install, import, update, enable, disable, profile, and remove write the local store and plugin config only and never hot-swap the live agent registry. Those mutations report reload_required only when disk activation differs from this session; no-op or inactive changes do not.
+list, show, verify, and status are read-only and always offline. Remote network work occurs only for explicit install/update. All mutations use the local transaction store and never hot-swap the live agent registry.
 
-Action-specific fields: path for install/import/update; packageId for show/enable/disable/remove and optional for verify; role plus packageId or role plus clear=true for profile; no extra fields.`,
+Action-specific fields: packageId for install/update/show/enable/disable/profile/remove; path and optional update=true for import; role plus packageId or role plus clear=true for profile; no extra fields.`,
     args: {
       action: toolZ
         .enum(MARKETPLACE_TOOL_ACTIONS)
@@ -176,13 +186,13 @@ Action-specific fields: path for install/import/update; packageId for show/enabl
         .string()
         .min(1)
         .optional()
-        .describe('Local package.json path for install, import, or update'),
+        .describe('Local package.json path for explicit import'),
       packageId: toolZ
         .string()
         .min(1)
         .optional()
         .describe(
-          'Canonical package ID for show, verify, enable, disable, profile, or remove',
+          'Canonical package ID for registry install/update or local actions',
         ),
       role: toolZ
         .string()
@@ -197,6 +207,10 @@ Action-specific fields: path for install/import/update; packageId for show/enabl
         .boolean()
         .optional()
         .describe('Clear the selected profile for a specialist role'),
+      update: toolZ
+        .boolean()
+        .optional()
+        .describe('Use with import to update an existing local package'),
     },
     async execute(args, toolContext) {
       const sessionID = toolContext?.sessionID;
@@ -228,19 +242,31 @@ Action-specific fields: path for install/import/update; packageId for show/enabl
       const projectDir = options.projectDir;
 
       switch (request.action) {
-        case 'install':
-        case 'import': {
-          const pkg = service.installFile(
-            resolvePackagePath(projectDir, request.path),
+        case 'install': {
+          const pkg = await service.installRemote(
+            request.packageId,
+            toolContext?.abort,
           );
           return mutationResult(
             options,
             `Installed ${pkg.manifest.id}@${pkg.manifest.version}`,
           );
         }
+        case 'import': {
+          const pkg = request.update
+            ? service.importFileUpdate(
+                resolvePackagePath(projectDir, request.path),
+              )
+            : service.importFile(resolvePackagePath(projectDir, request.path));
+          return mutationResult(
+            options,
+            `${request.update ? 'Updated' : 'Imported'} ${pkg.manifest.id}@${pkg.manifest.version}`,
+          );
+        }
         case 'update': {
-          const pkg = service.updateFile(
-            resolvePackagePath(projectDir, request.path),
+          const pkg = await service.updateRemote(
+            request.packageId,
+            toolContext?.abort,
           );
           return mutationResult(
             options,

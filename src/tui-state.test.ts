@@ -336,9 +336,11 @@ describe('tui-state persistence', () => {
     expect(fs.statSync(filePath).mtimeMs).toBe(baselineMtime);
   });
 
-  test('repeated no-op updates do not touch the lock or the filesystem', async () => {
+  test('repeated no-op updates verify content without rewriting the filesystem', async () => {
     recordLuna();
     const fsModule = await import('node:fs');
+    const filePath = getTuiStatePath(tempDir);
+    const before = fs.statSync(filePath);
     let openCalls = 0;
     let readCalls = 0;
     const lockCreateSpy = spyOn(fsModule, 'openSync').mockImplementation(
@@ -356,8 +358,10 @@ describe('tui-state persistence', () => {
     try {
       recordLuna();
       recordLuna();
-      expect(openCalls).toBe(0);
-      expect(readCalls).toBe(0);
+      expect(openCalls).toBeGreaterThan(0);
+      expect(readCalls).toBeGreaterThan(0);
+      expect(fs.statSync(filePath).mtimeMs).toBe(before.mtimeMs);
+      expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
     } finally {
       lockCreateSpy.mockRestore();
       readSpy.mockRestore();
@@ -426,9 +430,9 @@ describe('tui-state persistence', () => {
     recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
     const statBefore = fs.statSync(filePath);
 
-    // In-place rewrite (same inode, same length): mtime restored via
-    // utimes. ctime cannot be restored by userspace, so the memo must
-    // invalidate and re-record the value from the real file.
+    // In-place rewrite (same inode, same length): mtime restored via utimes.
+    // The memo must verify the file content rather than rely on timestamp
+    // precision, then re-record the value from the real file.
     const external = readTuiSnapshot(tempDir);
     external.agentModels.explorer = 'model-y';
     const fd = fs.openSync(filePath, 'w');

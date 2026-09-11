@@ -189,11 +189,11 @@ describe('marketplace tool', () => {
 
       const installed = String(
         await marketplace.execute(
-          { action: 'install', path: agentPath },
+          { action: 'import', path: agentPath },
           context,
         ),
       );
-      expect(installed).toContain('Installed community/docs-researcher@1.0.0');
+      expect(installed).toContain('Imported community/docs-researcher@1.0.0');
       expect(installed).toContain('reload_required: false');
       expect(installed).not.toContain(MARKETPLACE_RELOAD_NOTICE);
 
@@ -203,7 +203,7 @@ describe('marketplace tool', () => {
           context,
         ),
       );
-      expect(imported).toContain('Installed community/deep-explorer@1.0.0');
+      expect(imported).toContain('Imported community/deep-explorer@1.0.0');
       expect(imported).toContain('reload_required: false');
 
       const listed = String(
@@ -236,7 +236,10 @@ describe('marketplace tool', () => {
       expect(verified).toContain('OK');
 
       const updated = String(
-        await marketplace.execute({ action: 'update', path: v2Path }, context),
+        await marketplace.execute(
+          { action: 'import', path: v2Path, update: true },
+          context,
+        ),
       );
       expect(updated).toContain('Updated community/docs-researcher@1.1.0');
       expect(updated).toContain('reload_required: false');
@@ -344,7 +347,7 @@ describe('marketplace tool', () => {
       setupHarness();
     try {
       const v1 = writeBundle(project, agentBundle());
-      await marketplace.execute({ action: 'install', path: v1 }, context);
+      await marketplace.execute({ action: 'import', path: v1 }, context);
       await marketplace.execute(
         { action: 'enable', packageId: 'community/docs-researcher' },
         context,
@@ -361,7 +364,10 @@ describe('marketplace tool', () => {
       ];
       const v2 = writeBundle(project, agentBundle('1.1.0'), 'package-v2.json');
       const updated = String(
-        await marketplace.execute({ action: 'update', path: v2 }, context),
+        await marketplace.execute(
+          { action: 'import', path: v2, update: true },
+          context,
+        ),
       );
       expect(updated).toContain('reload_required: true');
     } finally {
@@ -374,7 +380,7 @@ describe('marketplace tool', () => {
       setupHarness();
     try {
       const path = writeBundle(project, agentBundle());
-      await marketplace.execute({ action: 'install', path }, context);
+      await marketplace.execute({ action: 'import', path }, context);
       await marketplace.execute(
         { action: 'enable', packageId: 'community/docs-researcher' },
         context,
@@ -410,7 +416,7 @@ describe('marketplace tool', () => {
       setupHarness();
     try {
       const path = writeBundle(project, agentBundle());
-      await marketplace.execute({ action: 'install', path }, context);
+      await marketplace.execute({ action: 'import', path }, context);
       await marketplace.execute(
         { action: 'enable', packageId: 'community/docs-researcher' },
         context,

@@ -1,4 +1,6 @@
 import { readFileSync, realpathSync } from 'node:fs';
+import { DEFAULT_MARKETPLACE_REGISTRY_URL } from '../marketplace-contract';
+import { readPluginPackageVersion } from '../utils/package-metadata';
 import type { MarketplaceCompatibilityOptions } from './compatibility';
 import {
   type MarketplaceConfigReference,
@@ -6,9 +8,12 @@ import {
 } from './config-references';
 import {
   MarketplaceActivationReferenceError,
+  MarketplaceConflictError,
+  MarketplaceRegistryUnavailableError,
   MarketplaceValidationError,
 } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
+import { MarketplaceRegistryClient } from './registry-client';
 import {
   type MarketplacePackageBundle,
   MarketplacePackageBundleSchema,
@@ -26,6 +31,7 @@ export interface MarketplaceServiceOptions
   extends MarketplaceStoreOptions,
     MarketplaceCompatibilityOptions {
   projectDir?: string;
+  registryClient?: Pick<MarketplaceRegistryClient, 'download'>;
 }
 
 export interface MarketplaceRemoveOptions {
@@ -66,10 +72,18 @@ function referenceMessage(
 export class MarketplaceService {
   readonly store: MarketplaceStore;
   readonly projectDir: string;
+  readonly registryClient: Pick<MarketplaceRegistryClient, 'download'>;
 
   constructor(options: MarketplaceServiceOptions = {}) {
     this.store = new MarketplaceStore(options);
     this.projectDir = options.projectDir ?? process.cwd();
+    this.registryClient =
+      options.registryClient ??
+      new MarketplaceRegistryClient({
+        pluginVersion:
+          options.pluginVersion ?? readPluginPackageVersion() ?? '0.0.0',
+        roleContractVersion: options.roleContractVersion,
+      });
   }
 
   install(
@@ -87,6 +101,10 @@ export class MarketplaceService {
     );
   }
 
+  importFile(filePath: string): StoredMarketplacePackage {
+    return this.installFile(filePath);
+  }
+
   update(
     input: MarketplacePackageBundle,
     source?: MarketplaceSource,
@@ -100,6 +118,61 @@ export class MarketplaceService {
       parseBundleFromFile(filePath),
       sourceForImport(filePath),
     );
+  }
+
+  importFileUpdate(filePath: string): StoredMarketplacePackage {
+    return this.updateFile(filePath);
+  }
+
+  async installRemote(
+    selector: string,
+    signal?: AbortSignal,
+  ): Promise<StoredMarketplacePackage> {
+    const downloaded = await this.registryClient.download(
+      selector,
+      undefined,
+      signal,
+    );
+    if (signal?.aborted) {
+      throw new MarketplaceRegistryUnavailableError(
+        'Marketplace install was cancelled before local mutation',
+      );
+    }
+    return this.store.install(downloaded.bundle, {
+      kind: 'registry',
+      registry: DEFAULT_MARKETPLACE_REGISTRY_URL,
+      indexUrl: downloaded.indexUrl,
+      packageUrl: downloaded.packageUrl,
+    });
+  }
+
+  async updateRemote(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<StoredMarketplacePackage> {
+    const normalizedId = normalizeMarketplacePackageId(id);
+    if (!this.store.getLockfile().packages[normalizedId]) {
+      throw new MarketplaceConflictError(
+        `${normalizedId} is not installed; updates require an existing package`,
+      );
+    }
+    const current = this.store.show(normalizedId);
+    const downloaded = await this.registryClient.download(
+      current.manifest.id,
+      current.manifest.version,
+      signal,
+    );
+    if (signal?.aborted) {
+      throw new MarketplaceRegistryUnavailableError(
+        'Marketplace update was cancelled before local mutation',
+      );
+    }
+    return this.store.update(downloaded.bundle, {
+      kind: 'registry',
+      registry: DEFAULT_MARKETPLACE_REGISTRY_URL,
+      indexUrl: downloaded.indexUrl,
+      packageUrl: downloaded.packageUrl,
+    });
   }
 
   list(): StoredMarketplacePackage[] {

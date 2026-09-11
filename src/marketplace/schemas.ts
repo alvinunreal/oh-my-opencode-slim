@@ -22,8 +22,12 @@ export const MarketplacePackageIdSchema = z
 export const MarketplaceVersionSchema = z
   .string()
   .refine(
-    (version) => valid(version) !== null,
-    'Expected an exact semantic version',
+    (version) =>
+      valid(version) !== null &&
+      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
+        version,
+      ),
+    'Expected canonical exact semantic version spelling',
   );
 
 export const MarketplaceRoleSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
@@ -221,7 +225,8 @@ export const MarketplaceRegistrySourceSchema = z
   .object({
     kind: z.literal('registry'),
     registry: z.string().trim().min(1).max(200),
-    packageUrl: z.string().url().optional(),
+    indexUrl: z.string().url(),
+    packageUrl: z.string().url(),
   })
   .strict();
 
