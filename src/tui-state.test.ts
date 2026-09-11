@@ -414,7 +414,7 @@ describe('tui-state persistence', () => {
     expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe('model-x');
   });
 
-  test('in-place rewrite preserving mtime is caught by ctime', () => {
+  test('in-place rewrite preserving mtime is caught by ctime', async () => {
     recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
     const filePath = getTuiStatePath(tempDir);
 
@@ -427,8 +427,9 @@ describe('tui-state persistence', () => {
     const statBefore = fs.statSync(filePath);
 
     // In-place rewrite (same inode, same length): mtime restored via
-    // utimes. ctime cannot be restored by userspace, so the memo must
-    // invalidate and re-record the value from the real file.
+    // utimes. Wait for the filesystem ctime resolution before rewriting so
+    // the ctime-based invalidation assertion is deterministic.
+    await Bun.sleep(1_100);
     const external = readTuiSnapshot(tempDir);
     external.agentModels.explorer = 'model-y';
     const fd = fs.openSync(filePath, 'w');
