@@ -37,7 +37,10 @@ function agentBundle(
       author: { name: 'Community' },
       tags: ['docs'],
       license: 'MIT',
-      compatibility: { plugin: '>=2.2.0 <3.0.0', roleContract: '^1.0.0' },
+      compatibility: {
+        plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
+        roleContract: '^1.0.0',
+      },
       routing: {
         description: 'Research docs.',
         keywords: ['docs'],

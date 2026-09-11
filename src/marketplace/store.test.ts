@@ -41,7 +41,10 @@ function bundle(
       author: { name: 'Example Community' },
       tags: ['example'],
       license: 'MIT',
-      compatibility: { plugin: '>=2.2.0 <3.0.0', roleContract: '^1.0.0' },
+      compatibility: {
+        plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
+        roleContract: '^1.0.0',
+      },
       routing: {
         description: 'Explore example code.',
         keywords: ['example'],
