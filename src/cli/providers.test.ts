@@ -28,10 +28,10 @@ describe('providers', () => {
     expect(config.preset).toBe('openai');
     expect(config.disabled_agents).toBeUndefined();
     expect((config.presets as any)['opencode-go']).toBeDefined();
-    expect((config.presets as any)['opencode-go'].observer.model).toBe(
+    expect((config.presets as any)['opencode-go'].agents.observer.model).toBe(
       'opencode-go/mimo-v2.5',
     );
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any).openai.agents;
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('openai/gpt-5.6-terra');
     expect(agents.orchestrator.variant).toBe('high');
@@ -46,7 +46,7 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any).openai.agents;
     const expected = {
       orchestrator: { model: 'openai/gpt-5.6-terra', variant: 'high' },
       oracle: { model: 'openai/gpt-5.6-sol', variant: 'high' },
@@ -71,7 +71,7 @@ describe('providers', () => {
     expect(config.preset).toBe('opencode-go');
     expect(config.disabled_agents).toEqual([]);
     expect((config.presets as any).openai).toBeDefined();
-    const agents = (config.presets as any)['opencode-go'];
+    const agents = (config.presets as any)['opencode-go'].agents;
     expect(agents).toBeDefined();
     expect(agents.orchestrator.model).toBe('opencode-go/minimax-m3');
     expect(agents.orchestrator.variant).toBe('thinking');
@@ -162,7 +162,7 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any).openai.agents;
     // Orchestrator should always have '*'
     expect(agents.orchestrator.skills).toEqual(['*']);
 
@@ -189,7 +189,7 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any).openai.agents;
     expect(agents.orchestrator.mcps).toBeDefined();
     expect(Array.isArray(agents.orchestrator.mcps)).toBe(true);
     expect(agents.librarian.mcps).toBeDefined();
@@ -203,7 +203,7 @@ describe('providers', () => {
       reset: false,
     });
 
-    const agents = (config.presets as any).openai;
+    const agents = (config.presets as any).openai.agents;
     expect(agents.orchestrator.mcps).toEqual(['*', '!context7']);
     expect(agents.librarian.mcps).toContain('context7');
     expect(agents.librarian.mcps).toContain('gh_grep');

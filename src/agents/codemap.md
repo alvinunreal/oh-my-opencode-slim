@@ -37,7 +37,7 @@ Each agent is a **prompt-driven specialist** with a factory function that create
 2. **Dynamic councillors**: `buildCouncillorAgents()` (`council-agents.ts`) creates one `councillor-<name>` subagent per council preset seat, attaching `_modelArray` fallback chains for multi-model councillors
 3. **Permission application**: `applyDefaultPermissions()` sets read/write permissions based on agent type
 4. **Task-rejection instruction**: `appendTaskRejectionInstruction()` appends the "outside your role" instruction to specialist prompts (`task-rejection.ts`)
-5. **Display name injection**: Orchestrator prompt rewrites `@agent` mentions to user-configured display names
+5. **Routing finalization**: Routing entries are built from the actual resolved agent definitions, with display names and custom/ACP guidance applied before sorting and orchestrator construction
 6. **Configuration export**: `getAgentConfigs()` converts `AgentDefinition` to OpenCode SDK format with classification metadata
 
 ## Flow
@@ -70,13 +70,11 @@ const orchestrator = createOrchestratorAgent(
 );
 applyDefaultPermissions(orchestrator, orchestratorOverride?.skills, config?.disabled_skills);
 
-// 4. Collect display names and inject into orchestrator prompt
-const displayNameMap = new Map<string, string>();
-// ... populate from orchestrator and all subagents ...
-injectDisplayNames(orchestrator, displayNameMap);
-
-// 5. Inject council-dispatch instructions when dynamic councillors exist
-// 6. Return agents array [orchestrator, ...allSubAgents]
+// 4. Build deterministic routes from the actual resolved subagents
+const routing = buildRoutingEntriesForResolvedAgents(runtime, allSubAgents);
+// 5. Construct the orchestrator from those finalized routes
+// 6. Inject council-dispatch instructions when dynamic councillors exist
+// 7. Return agents array [orchestrator, ...allSubAgents]
 return [orchestrator, ...allSubAgents];
 ```
 

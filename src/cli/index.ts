@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { doctor, parseDoctorArgs } from './doctor';
 import { install } from './install';
+import { marketplaceCommand } from './marketplace';
 import { getGeneratedPresetNames, isGeneratedPresetName } from './providers';
 import type {
   BackgroundSubagentsArg,
@@ -75,6 +76,18 @@ oh-my-opencode-slim installer
 Usage:
   bunx oh-my-opencode-slim install [OPTIONS]
   bunx oh-my-opencode-slim doctor [OPTIONS]
+  bunx oh-my-opencode-slim marketplace install <package.json>
+  bunx oh-my-opencode-slim marketplace import <package.json> (alias for install)
+  bunx oh-my-opencode-slim marketplace update <package.json>
+  bunx oh-my-opencode-slim marketplace list
+  bunx oh-my-opencode-slim marketplace show <package-id> [--json]
+  bunx oh-my-opencode-slim marketplace verify [package-id] [--json]
+  bunx oh-my-opencode-slim marketplace remove <package-id> [--force]
+  bunx oh-my-opencode-slim marketplace enable <package-id>
+  bunx oh-my-opencode-slim marketplace disable <package-id>
+  bunx oh-my-opencode-slim marketplace profile <role> <package-id>
+  bunx oh-my-opencode-slim marketplace profile <role> --clear
+  bunx oh-my-opencode-slim marketplace status [--json]
 
 Options:
   --skills=yes|no|force  Install bundled skills; force replaces existing skill
@@ -122,6 +135,9 @@ async function main(): Promise<void> {
   } else if (args[0] === 'doctor') {
     const doctorArgs = parseDoctorArgs(args.slice(1));
     const exitCode = await doctor(doctorArgs);
+    process.exit(exitCode);
+  } else if (args[0] === 'marketplace') {
+    const exitCode = await marketplaceCommand(args.slice(1));
     process.exit(exitCode);
   } else if (args[0] === '-h' || args[0] === '--help') {
     printHelp();

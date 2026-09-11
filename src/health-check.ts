@@ -17,8 +17,8 @@ export const HEALTH_CHECK = {
   minAgents: 5,
   // Default tool set when council and ACP agents are not configured:
   // task_cancel, task_message, task_revive, task_status, task_result,
-  // wait_for_user, webfetch, ast_grep_search, ast_grep_replace.
-  minTools: 9,
+  // wait_for_user, marketplace, webfetch, ast_grep_search, ast_grep_replace.
+  minTools: 10,
   minMcps: 1,
 } as const;
 
@@ -29,6 +29,7 @@ const BASELINE_TOOL_NAMES = new Set([
   'task_status',
   'task_result',
   'wait_for_user',
+  'marketplace',
   'webfetch',
   'ast_grep_search',
   'ast_grep_replace',

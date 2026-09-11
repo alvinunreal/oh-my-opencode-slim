@@ -2,8 +2,59 @@ import { describe, expect, it } from 'bun:test';
 import {
   InterviewConfigSchema,
   PluginConfigSchema,
+  PresetSchema,
   ProviderModelIdSchema,
 } from './schema';
+
+describe('structured preset schema', () => {
+  it('keeps agent overrides separate from reserved marketplace activation', () => {
+    const result = PresetSchema.safeParse({
+      agents: { explorer: { model: 'provider/explorer' } },
+      marketplace: {
+        agents: ['community/example'],
+        profiles: { librarian: null },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agents.explorer.model).toBe('provider/explorer');
+      expect(result.data.marketplace?.agents).toEqual(['community/example']);
+    }
+  });
+
+  it('rejects the obsolete flat preset agent map', () => {
+    expect(
+      PresetSchema.safeParse({ explorer: { model: 'provider/explorer' } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('normalizes package IDs and validates profile targets', () => {
+    const result = PresetSchema.safeParse({
+      marketplace: {
+        agents: ['  community/one  '],
+        profiles: { oracle: '  community/oracle  ' },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.marketplace?.agents).toEqual(['community/one']);
+      expect(result.data.marketplace?.profiles).toEqual({
+        oracle: 'community/oracle',
+      });
+    }
+  });
+
+  it('rejects duplicate package IDs and unsupported profile targets', () => {
+    const result = PresetSchema.safeParse({
+      marketplace: {
+        agents: ['community/one', ' community/one '],
+        profiles: { orchestrator: 'community/one' },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
 
 describe('ProviderModelIdSchema', () => {
   it('accepts and preserves model remainders with spaces and nested segments', () => {

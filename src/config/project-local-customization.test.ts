@@ -118,7 +118,9 @@ describe('Project-local customization - 15 core cases', () => {
       projectDirectory: projectDir,
     });
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect(oracle?.config.prompt).toBe('replacement prompt\n\nappend prompt');
+    expect(oracle?.config.prompt).toBe(
+      'replacement prompt\n\nappend prompt\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
+    );
   });
 
   // Test Case 5: Inline built-in prompt is accepted and used
@@ -135,7 +137,7 @@ describe('Project-local customization - 15 core cases', () => {
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe(
-      'You are the inline oracle prompt override.',
+      'You are the inline oracle prompt override.\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
     );
   });
 
@@ -161,7 +163,7 @@ describe('Project-local customization - 15 core cases', () => {
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe(
-      'You are the inline oracle prompt override.',
+      'You are the inline oracle prompt override.\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
     );
   });
 
@@ -184,12 +186,12 @@ describe('Project-local customization - 15 core cases', () => {
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle?.config.prompt).toBe(
-      'You are the inline oracle prompt override.\n\nappend content',
+      'You are the inline oracle prompt override.\n\nappend content\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
     );
   });
 
-  // Test Case 8: Built-in orchestratorPrompt is injected into orchestrator prompt
-  test('8. Built-in orchestratorPrompt is injected into orchestrator prompt', () => {
+  // Test Case 8: Built-in orchestratorPrompt is part of the agent route
+  test('8. Built-in orchestratorPrompt is part of the agent route', () => {
     const config = {
       agents: {
         oracle: {
@@ -203,11 +205,13 @@ describe('Project-local customization - 15 core cases', () => {
     const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator?.config.prompt).toContain(
-      '# Project-specific routing guidance',
-    );
-    expect(orchestrator?.config.prompt).toContain(
       'Please routing to @oracle when architecture is queried.',
     );
+    expect(
+      orchestrator?.config.prompt?.match(
+        /Please routing to @oracle when architecture is queried\./g,
+      ),
+    ).toHaveLength(1);
   });
 
   // Test Case 9: Disabled built-in agent\'s orchestratorPrompt is not injected
@@ -250,7 +254,9 @@ describe('Project-local customization - 15 core cases', () => {
     const userConfig = {
       presets: {
         presetA: {
-          oracle: { model: 'model-a' },
+          agents: {
+            oracle: { model: 'model-a' },
+          },
         },
       },
     };
@@ -258,7 +264,9 @@ describe('Project-local customization - 15 core cases', () => {
     const projectConfig = {
       presets: {
         presetB: {
-          explorer: { model: 'model-b' },
+          agents: {
+            explorer: { model: 'model-b' },
+          },
         },
       },
     };
@@ -266,8 +274,8 @@ describe('Project-local customization - 15 core cases', () => {
     const merged = mergePluginConfigs(userConfig, projectConfig);
     expect(merged.presets?.presetA).toBeDefined();
     expect(merged.presets?.presetB).toBeDefined();
-    expect(merged.presets?.presetA.oracle?.model).toBe('model-a');
-    expect(merged.presets?.presetB.explorer?.model).toBe('model-b');
+    expect(merged.presets?.presetA.agents.oracle?.model).toBe('model-a');
+    expect(merged.presets?.presetB.agents.explorer?.model).toBe('model-b');
   });
 
   // Test Case 12: Same-name preset deep-merges by agent and nested options
@@ -275,9 +283,11 @@ describe('Project-local customization - 15 core cases', () => {
     const userConfig = {
       presets: {
         myPreset: {
-          oracle: {
-            model: 'model-a',
-            options: { tokenLimit: 1000, debug: true },
+          agents: {
+            oracle: {
+              model: 'model-a',
+              options: { tokenLimit: 1000, debug: true },
+            },
           },
         },
       },
@@ -286,16 +296,18 @@ describe('Project-local customization - 15 core cases', () => {
     const projectConfig = {
       presets: {
         myPreset: {
-          oracle: {
-            temperature: 0.7,
-            options: { debug: false, maxSearch: 5 },
+          agents: {
+            oracle: {
+              temperature: 0.7,
+              options: { debug: false, maxSearch: 5 },
+            },
           },
         },
       },
     };
 
     const merged = mergePluginConfigs(userConfig, projectConfig);
-    const oraclePreset = merged.presets?.myPreset?.oracle;
+    const oraclePreset = merged.presets?.myPreset?.agents.oracle;
     expect(oraclePreset?.model).toBe('model-a');
     expect(oraclePreset?.temperature).toBe(0.7);
     expect(oraclePreset?.options).toEqual({

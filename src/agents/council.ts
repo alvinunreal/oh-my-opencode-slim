@@ -4,7 +4,7 @@ import { createSynthesisOnlyPermission } from './permissions';
 // NOTE: Councillor system prompts live in the councillor agent factory.
 // The council agent synthesizes councillor responses passed by the orchestrator.
 
-const COUNCIL_SYNTHESIS_REINFORCEMENT = `\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually by name, then produce the required output with a synthesized Council Response, a Per-Councillor Details section using each councillor's exact seat name (e.g. "alpha", not the model label), and a Council Summary with Consensus Level (unanimous|majority|split), Agreed Points, Disagreements + resolution, Remaining Uncertainty, and Recommended Action.`;
+export const COUNCIL_SYNTHESIS_REINFORCEMENT = `\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually by name, then produce the required output with a synthesized Council Response, a Per-Councillor Details section using each councillor's exact seat name (e.g. "alpha", not the model label), and a Council Summary with Consensus Level (unanimous|majority|split), Agreed Points, Disagreements + resolution, Remaining Uncertainty, and Recommended Action.`;
 
 const COUNCIL_AGENT_PROMPT = `You are the Council agent - a \
 synthesizer for multi-model consensus.
@@ -62,14 +62,13 @@ export function createCouncilAgent(
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
-  const prompt =
-    resolvePrompt(
-      'council',
-      customPrompt,
-      undefined,
-      COUNCIL_AGENT_PROMPT,
-      customAppendPrompt,
-    ) + COUNCIL_SYNTHESIS_REINFORCEMENT;
+  const prompt = resolvePrompt(
+    'council',
+    customPrompt,
+    undefined,
+    COUNCIL_AGENT_PROMPT,
+    customAppendPrompt,
+  );
 
   return {
     name: 'council',

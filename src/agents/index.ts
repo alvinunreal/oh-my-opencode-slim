@@ -7,31 +7,62 @@ import {
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   loadAgentPrompt,
+  loadPluginConfig,
   type PluginConfig,
   PROTECTED_AGENTS,
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
-import type { RuntimeConfig } from '../config/runtime';
-import { escapeRegExp, normalizeAgentName } from '../utils/agent-variant';
+import { type HostConfigSnapshot, RuntimeConfig } from '../config/runtime';
+import { applyOrchestratorModelConfig } from '../config/strip-orchestrator-model';
+import {
+  type ActivatedMarketplaceAgent,
+  type ActivatedMarketplaceProfile,
+  boundedPackageOverride,
+  composePackagePrompt,
+  type MarketplaceActivationPlan,
+  type MarketplaceDiagnostic,
+  reservedRuntimeNames,
+  resolveMarketplaceActivation,
+} from '../marketplace/activation';
+import type {
+  MarketplaceLivePackage,
+  MarketplaceLiveSnapshot,
+} from '../marketplace/status';
+import type { MarketplaceStore } from '../marketplace/store';
+import {
+  escapeRegExp,
+  isSafeAgentAlias,
+  normalizeAgentName,
+} from '../utils/agent-variant';
 
-import { createCouncilAgent } from './council';
+import { COUNCIL_SYNTHESIS_REINFORCEMENT, createCouncilAgent } from './council';
 import { buildCouncillorAgents, getCouncillorSeatName } from './council-agents';
 import { createCouncillorAgent } from './councillor';
-import { createDesignerAgent } from './designer';
-import { createExplorerAgent } from './explorer';
-import { createFixerAgent } from './fixer';
-import { createLibrarianAgent } from './librarian';
-import { createObserverAgent } from './observer';
-import { createOracleAgent } from './oracle';
+import type { RoutingEntry } from './orchestrator';
 import {
   type AgentDefinition,
   createOrchestratorAgent,
+  renderCouncilRoutingBlock,
   resolvePrompt,
 } from './orchestrator';
-import { appendTaskRejectionInstruction } from './task-rejection';
+import {
+  ROLE_DEFINITIONS,
+  renderRoleRoutingBlock,
+  type SpecialistRole,
+  SUPPORTED_SPECIALIST_ROLES,
+} from './role-definitions';
+import {
+  appendTaskRejectionInstruction,
+  TASK_REJECTION_INSTRUCTION,
+} from './task-rejection';
 
 export type { AgentDefinition } from './orchestrator';
+export type { RoleDefinition, SpecialistRole } from './role-definitions';
+export {
+  ROLE_DEFINITIONS,
+  SUPPORTED_SPECIALIST_ROLES,
+} from './role-definitions';
 
 type AgentFactory = (
   model: string,
@@ -39,14 +70,270 @@ type AgentFactory = (
   customAppendPrompt?: string,
 ) => AgentDefinition;
 
-const TASK_CONTROL_TOOL_NAMES = [
+interface CreateAgentsOptions {
+  projectDirectory?: string;
+  marketplace?: MarketplaceActivationPlan;
+  marketplaceStore?: MarketplaceStore;
+  availableMcpNames?: readonly string[];
+}
+
+const TASK_CONTROL_DEFAULTS = [
   'task_cancel',
   'task_message',
   'task_revive',
   'task_status',
   'task_result',
 ] as const;
-const SAFE_AGENT_ALIAS_RE = /^[a-z][a-z0-9_-]*$/i;
+
+export interface ResolvedAgentRegistry {
+  readonly agents: readonly AgentDefinition[];
+  readonly sdkConfigs: Readonly<Record<string, SDKAgentConfig>>;
+  readonly modelArrays: Readonly<
+    Record<string, readonly { id: string; variant?: string }[]>
+  >;
+  readonly modelChains: Readonly<Record<string, readonly string[]>>;
+  readonly mcpLists: Readonly<Record<string, readonly string[]>>;
+  readonly skillPermissions: Readonly<
+    Record<string, Readonly<Record<string, 'allow' | 'ask' | 'deny'>>>
+  >;
+  readonly routing: readonly RoutingEntry[];
+  readonly provenance: Readonly<Record<string, string>>;
+  readonly runtimeNameByCanonicalId: Readonly<Record<string, string>>;
+  readonly canonicalIdByRuntimeName: Readonly<Record<string, string>>;
+  readonly packageIdByRuntimeName: Readonly<Record<string, string>>;
+  readonly runtimeNameByPackageId: Readonly<Record<string, string>>;
+  readonly marketplaceLive: readonly MarketplaceLivePackage[];
+  readonly diagnostics: readonly MarketplaceDiagnostic[];
+}
+
+type PermissionAction = 'allow' | 'ask' | 'deny';
+type PermissionRecord = Record<string, unknown>;
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+    if (!Object.isFrozen(value)) Object.freeze(value);
+  }
+  return value;
+}
+
+/** Clone JSON-shaped data before handing it to a host-owned configuration. */
+export function cloneOwned<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneOwned(entry)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const clone: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      clone[key] = cloneOwned(entry);
+    }
+    return clone as T;
+  }
+  return value;
+}
+
+export function normalizePermission(permission: unknown): PermissionRecord {
+  if (typeof permission === 'string') {
+    return { '*': permission as PermissionAction };
+  }
+  if (permission && typeof permission === 'object') {
+    return cloneOwned(permission as PermissionRecord);
+  }
+  return {};
+}
+
+function mergePermissionRules(
+  base: PermissionRecord,
+  override: PermissionRecord,
+): PermissionRecord {
+  const result = cloneOwned(base);
+  for (const [key, value] of Object.entries(override)) {
+    const previous = result[key];
+    if (
+      previous !== null &&
+      typeof previous === 'object' &&
+      !Array.isArray(previous) &&
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      result[key] = mergePermissionRules(
+        previous as PermissionRecord,
+        value as PermissionRecord,
+      );
+    } else {
+      result[key] = cloneOwned(value);
+    }
+  }
+  return result;
+}
+
+function applyTaskControlDefaults(
+  agentName: string,
+  permission: PermissionRecord,
+): void {
+  const isOrchestrator = agentName === 'orchestrator';
+  for (const toolName of TASK_CONTROL_DEFAULTS) {
+    permission[toolName] ??= isOrchestrator ? 'allow' : 'deny';
+  }
+  permission.wait_for_user ??= isOrchestrator ? 'allow' : 'deny';
+  permission.marketplace ??= isOrchestrator ? 'allow' : 'deny';
+}
+
+function isDeniedPermissionValue(value: unknown): boolean {
+  if (value === 'deny') return true;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const map = value as PermissionRecord;
+  if (map['*'] === 'deny') return true;
+  const actions = Object.values(map);
+  return actions.length > 0 && actions.every((entry) => entry === 'deny');
+}
+
+/** True when marketplace is denied by a string action or nested pattern map. */
+export function isMarketplacePermissionDenied(permission: unknown): boolean {
+  const record = normalizePermission(permission);
+  if (isDeniedPermissionValue(record.marketplace)) return true;
+  return (
+    record.marketplace === undefined && isDeniedPermissionValue(record['*'])
+  );
+}
+
+/** True when the marketplace tool is registered and not denied for orchestrator. */
+export function isMarketplaceToolAvailable(runtime: RuntimeConfig): boolean {
+  if (runtime.disabledTools.includes('marketplace')) return false;
+  return !isMarketplacePermissionDenied(
+    runtime.agent('orchestrator')?.permission,
+  );
+}
+
+/** Resolve marketplace live identities from on-disk config without touching
+ * the session RuntimeConfig singleton. */
+export function resolveDesiredMarketplaceLiveFromDisk(
+  projectDirectory: string,
+  store: MarketplaceStore,
+  host?: HostConfigSnapshot,
+): MarketplaceLiveSnapshot {
+  const config = loadPluginConfig(projectDirectory, { silent: true });
+  const directory = `${projectDirectory}\0marketplace-desired`;
+  RuntimeConfig.reset(directory);
+  const runtime = RuntimeConfig.init(directory, config);
+  if (host) runtime.captureHostConfig(host);
+  try {
+    const registry = buildResolvedAgentRegistry(runtime, {
+      marketplaceStore: store,
+      projectDirectory,
+    });
+    return {
+      packages: [...registry.marketplaceLive],
+      diagnostics: [...registry.diagnostics],
+    };
+  } catch (error) {
+    return {
+      packages: [],
+      diagnostics: [
+        {
+          packageId: '(store)',
+          code: 'operational',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    };
+  } finally {
+    RuntimeConfig.reset(directory);
+  }
+}
+
+function buildMarketplaceLive(
+  marketplace: MarketplaceActivationPlan,
+  runtimeNameByPackageId: Readonly<Record<string, string>>,
+): MarketplaceLivePackage[] {
+  const registered = new Map<
+    string,
+    { version: string; digest: string; kind: 'agent' | 'profile' }
+  >();
+  for (const activated of marketplace.agents) {
+    registered.set(activated.packageId, {
+      version: activated.version,
+      digest: activated.digest,
+      kind: 'agent',
+    });
+  }
+  for (const activated of marketplace.profiles.values()) {
+    registered.set(activated.packageId, {
+      version: activated.version,
+      digest: activated.digest,
+      kind: 'profile',
+    });
+  }
+  const live: MarketplaceLivePackage[] = [];
+  for (const [packageId, runtimeName] of Object.entries(
+    runtimeNameByPackageId,
+  )) {
+    const meta = registered.get(packageId);
+    if (!meta) continue;
+    live.push({
+      packageId,
+      version: meta.version,
+      digest: meta.digest,
+      runtimeName,
+      kind: meta.kind,
+    });
+  }
+  return live;
+}
+
+/** Project registry defaults into a host-owned config object without mutating
+ * registry data. Task controls are defaults; wait_for_user and marketplace
+ * are immutable plugin gates for non-orchestrator agents. */
+export function projectAgentPermission(
+  agentName: string,
+  hostEntry: Record<string, unknown>,
+  registry: ResolvedAgentRegistry,
+): void {
+  const canonicalName =
+    registry.canonicalIdByRuntimeName[agentName] ?? agentName;
+  const registryEntry =
+    registry.sdkConfigs[canonicalName] ?? registry.sdkConfigs[agentName];
+  const permission = normalizePermission(registryEntry?.permission);
+  const hostPermission = normalizePermission(hostEntry.permission);
+  const projected = mergePermissionRules(permission, hostPermission);
+  applyTaskControlDefaults(canonicalName, projected);
+  if (canonicalName !== 'orchestrator') {
+    projected.wait_for_user = 'deny';
+    projected.marketplace = 'deny';
+  }
+  hostEntry.permission = cloneOwned(projected);
+}
+
+function projectPermissionValues(
+  canonicalName: string,
+  registryPermission: unknown,
+  hostPermission: unknown,
+): PermissionRecord {
+  const permission = normalizePermission(registryPermission);
+  const projected = mergePermissionRules(
+    permission,
+    normalizePermission(hostPermission),
+  );
+  applyTaskControlDefaults(canonicalName, projected);
+  if (canonicalName !== 'orchestrator') {
+    projected.wait_for_user = 'deny';
+    projected.marketplace = 'deny';
+  }
+  return projected;
+}
+
+export function cloneAgentConfigs(
+  configs: Readonly<Record<string, SDKAgentConfig>>,
+): Record<string, SDKAgentConfig> {
+  return cloneOwned(configs);
+}
 
 export function resolvePrimaryModelValue(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
@@ -66,6 +353,9 @@ function getPrimaryModelFromOverride(
 ): string | undefined {
   return resolvePrimaryModelValue(override?.model);
 }
+
+const isInternalOnly = (name: string): boolean =>
+  name === 'councillor' || name.startsWith('councillor-');
 
 /**
  * Alias-aware override lookup inside a merged (preset-aware) agents record.
@@ -128,7 +418,7 @@ function buildAcpAgentDefinition(
 }
 
 function isSafeDisplayName(displayName: string): boolean {
-  return SAFE_AGENT_ALIAS_RE.test(displayName);
+  return isSafeAgentAlias(displayName);
 }
 
 // Agent Configuration Helpers
@@ -272,10 +562,17 @@ export function resolveAgentConfigModel(
     const librarianModel = getPrimaryModelFromOverride(
       getOverrideFromAgents(mergedAgents, 'librarian'),
     );
-    return librarianModel ?? runtime.primaryModel ?? DEFAULT_MODELS.librarian;
+    return (
+      librarianModel ??
+      runtime.primaryModel ??
+      ROLE_DEFINITIONS.librarian.defaultModel
+    );
   }
+  const roleName = runtime.agent(name)?.baseRole ?? name;
+  const role = ROLE_DEFINITIONS[roleName as keyof typeof ROLE_DEFINITIONS];
   return (
     runtime.primaryModel ??
+    role?.defaultModel ??
     (DEFAULT_MODELS as Record<string, string | undefined>)[name]
   );
 }
@@ -330,7 +627,7 @@ function normalizeCustomAgentName(name: string): string {
 }
 
 function isSafeCustomAgentName(name: string): boolean {
-  return SAFE_AGENT_ALIAS_RE.test(name) && !isKnownAgentName(name);
+  return isSafeAgentAlias(name) && !isKnownAgentName(name);
 }
 
 function hasCustomAgentModel(
@@ -352,44 +649,48 @@ function buildCustomAgentDefinition(
   fileAppendPrompt?: string,
   fallbackModel?: string,
 ): AgentDefinition {
-  const defaultPrompt = appendTaskRejectionInstruction(
-    `You are the ${name} specialist.`,
-  );
+  const role = override.baseRole
+    ? ROLE_DEFINITIONS[override.baseRole]
+    : undefined;
+  const defaultPrompt = role?.basePrompt ?? `You are the ${name} specialist.`;
   const primaryModel = getPrimaryModelFromOverride(override);
-  const description = override.description ?? `Custom subagent '${name}'`;
+  const description =
+    override.description ?? role?.description ?? `Custom subagent '${name}'`;
 
   return {
     name,
+    ...(role ? { baseRole: role.id } : {}),
     description,
     config: {
-      model: primaryModel ?? fallbackModel ?? DEFAULT_MODELS.oracle,
+      model:
+        primaryModel ??
+        fallbackModel ??
+        role?.defaultModel ??
+        DEFAULT_MODELS.oracle,
       prompt: resolvePrompt(
         name,
         override.prompt,
         filePrompt,
         defaultPrompt,
         fileAppendPrompt,
+        [TASK_REJECTION_INSTRUCTION],
       ),
     },
   } as AgentDefinition;
 }
 
-function injectDisplayNames(
-  orchestrator: AgentDefinition,
-  nameMap: Map<string, string>,
-): void {
-  if (nameMap.size === 0) return;
-  let prompt = orchestrator.config.prompt;
-  if (!prompt) return;
-
+function rewriteRoutingPrompt(
+  prompt: string,
+  nameMap: ReadonlyMap<string, string>,
+): string {
+  let rewritten = prompt;
   for (const [internalName, displayName] of nameMap) {
-    prompt = prompt.replace(
+    rewritten = rewritten.replace(
       new RegExp(`@${escapeRegExp(internalName)}\\b`, 'g'),
       `@${normalizeAgentName(displayName)}`,
     );
   }
-
-  orchestrator.config.prompt = prompt;
+  return rewritten;
 }
 
 /**
@@ -400,54 +701,157 @@ function injectDisplayNames(
  * Note: If the agent already explicitly sets question to 'deny', that is
  * respected (e.g. councillor should not ask questions).
  */
-function applyDefaultPermissions(
+function applyDefaultPermissionPolicy(
   agent: AgentDefinition,
   configuredSkills?: readonly string[],
   disabledSkills?: readonly string[],
 ): void {
-  // If the user supplied a shorthand string permission (e.g. "ask"),
-  // it already applies to all tools — preserve it as-is and skip the
-  // object merge, which would corrupt it by spreading the string.
-  if (typeof agent.config.permission === 'string') {
-    return;
-  }
-
-  const existing = (agent.config.permission ?? {}) as Record<
-    string,
-    'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
-  >;
+  const existing = normalizePermission(agent.config.permission);
+  const role = agent.baseRole ? ROLE_DEFINITIONS[agent.baseRole] : undefined;
 
   // Get skill-specific permissions for this agent
   const skillPermissions = getSkillPermissionsForAgent(
-    agent.name,
-    configuredSkills,
+    configuredSkills ? agent.name : (agent.baseRole ?? agent.name),
+    configuredSkills ?? role?.defaultSkills,
     disabledSkills,
   );
+  const filePermissions = role
+    ? {
+        read: existing.read ?? 'allow',
+        edit:
+          existing.edit ??
+          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
+        write:
+          existing.write ??
+          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
+        apply_patch:
+          existing.apply_patch ??
+          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
+        ast_grep_replace:
+          existing.ast_grep_replace ??
+          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
+      }
+    : {};
 
   // Respect explicit deny on question (councillor)
   const questionPerm = existing.question === 'deny' ? 'deny' : 'allow';
-  const taskControlPermissions = Object.fromEntries(
-    TASK_CONTROL_TOOL_NAMES.map((toolName) => [
-      toolName,
-      existing[toolName] ?? (agent.name === 'orchestrator' ? 'allow' : 'deny'),
-    ]),
-  );
-  const waitForUserPerm =
-    agent.name === 'orchestrator'
-      ? (existing.wait_for_user ?? 'allow')
-      : 'deny';
-
   agent.config.permission = {
     ...existing,
+    ...filePermissions,
     question: questionPerm,
-    ...taskControlPermissions,
-    wait_for_user: waitForUserPerm,
     // Apply skill permissions as nested object under 'skill' key
     skill: {
       ...(typeof existing.skill === 'object' ? existing.skill : {}),
       ...skillPermissions,
     },
-  } as SDKAgentConfig['permission'];
+  } as unknown as SDKAgentConfig['permission'];
+}
+
+/** Task controls are editable defaults, not immutable gates. */
+function applyDefaultTaskControls(agent: AgentDefinition): void {
+  const permission = normalizePermission(agent.config.permission);
+  const canonicalName = agent.baseRole ?? agent.name;
+  applyTaskControlDefaults(canonicalName, permission);
+  agent.config.permission = {
+    ...permission,
+  } as unknown as SDKAgentConfig['permission'];
+}
+
+/** Apply immutable plugin gates after host projection. */
+function applyFinalImmutableGates(agent: AgentDefinition): void {
+  const permission = normalizePermission(agent.config.permission);
+  const canonicalName = agent.baseRole ?? agent.name;
+  const orchestratorOnly =
+    canonicalName === 'orchestrator'
+      ? {
+          wait_for_user: permission.wait_for_user,
+          marketplace: permission.marketplace,
+        }
+      : { wait_for_user: 'deny', marketplace: 'deny' };
+  agent.config.permission = {
+    ...permission,
+    ...orchestratorOnly,
+  } as unknown as SDKAgentConfig['permission'];
+}
+
+function applyFinalPermissions(
+  agent: AgentDefinition,
+  configuredSkills: readonly string[] | undefined,
+  disabledSkills: readonly string[] | undefined,
+): void {
+  applyDefaultPermissionPolicy(agent, configuredSkills, disabledSkills);
+  applyDefaultTaskControls(agent);
+  applyFinalImmutableGates(agent);
+}
+
+function uniqueNames(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+function marketplaceSkillList(
+  agent: AgentDefinition,
+  override: AgentOverrideConfig | undefined,
+  extraSkills: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (override?.skills) return override.skills;
+  if (!extraSkills || extraSkills.length === 0) return undefined;
+  const roleSkills = agent.baseRole
+    ? ROLE_DEFINITIONS[agent.baseRole].defaultSkills
+    : [];
+  return uniqueNames([...roleSkills, ...extraSkills]);
+}
+
+function applyMarketplaceCapabilities(
+  agent: AgentDefinition,
+  activated: ActivatedMarketplaceAgent | ActivatedMarketplaceProfile,
+): void {
+  const permission = normalizePermission(agent.config.permission);
+  const role = agent.baseRole ? ROLE_DEFINITIONS[agent.baseRole] : undefined;
+  for (const tool of activated.manifest.capabilities.tools) {
+    permission[tool] = 'allow';
+  }
+  for (const capability of activated.manifest.capabilities.permissions) {
+    if (capability === 'filesystem.read') permission.read = 'allow';
+    if (
+      capability === 'filesystem.write' &&
+      role?.permissionPolicy === 'read-write'
+    ) {
+      permission.edit = 'allow';
+      permission.write = 'allow';
+    }
+    if (capability === 'network.fetch') permission.webfetch = 'allow';
+    if (capability === 'session.delegate') permission.task = 'allow';
+  }
+  agent.config.permission =
+    permission as unknown as SDKAgentConfig['permission'];
+}
+
+function extraMarketplaceMcps(
+  plan: MarketplaceActivationPlan | undefined,
+  agentName: string,
+  baseRole: string | undefined,
+): readonly string[] {
+  if (!plan) return [];
+  const derived = plan.agents.find(
+    (entry) => entry.manifest.agentName === agentName,
+  );
+  if (derived) return derived.requiredMcps;
+  if (!baseRole) return [];
+  return plan.profiles.get(baseRole as SpecialistRole)?.requiredMcps ?? [];
+}
+
+function extraMarketplaceSkills(
+  plan: MarketplaceActivationPlan | undefined,
+  agentName: string,
+  baseRole: string | undefined,
+): readonly string[] {
+  if (!plan) return [];
+  const derived = plan.agents.find(
+    (entry) => entry.manifest.agentName === agentName,
+  );
+  if (derived) return derived.requiredSkills;
+  if (!baseRole) return [];
+  return plan.profiles.get(baseRole as SpecialistRole)?.requiredSkills ?? [];
 }
 
 // Agent Classification
@@ -458,18 +862,155 @@ export function isSubagent(name: string): name is SubagentName {
   return (SUBAGENT_NAMES as readonly string[]).includes(name);
 }
 
+function buildRoutingEntriesFromAgents(
+  agents: readonly AgentDefinition[],
+  guidanceByAgent: ReadonlyMap<string, string>,
+): RoutingEntry[] {
+  const entries = agents.flatMap((agent): RoutingEntry[] => {
+    if (agent.name === 'council') {
+      const runtimeName = agent.displayName
+        ? normalizeAgentName(agent.displayName)
+        : agent.name;
+      return [
+        {
+          agentName: runtimeName,
+          routingBlock: renderCouncilRoutingBlock(runtimeName),
+        },
+      ];
+    }
+    if (agent.name === 'councillor' || agent.name.startsWith('councillor-')) {
+      return [];
+    }
+    if (agent.baseRole) {
+      const runtimeName = agent.displayName
+        ? normalizeAgentName(agent.displayName)
+        : agent.name;
+      const routingBlock = renderRoleRoutingBlock(
+        ROLE_DEFINITIONS[agent.baseRole],
+        runtimeName,
+      );
+      return [
+        {
+          agentName: runtimeName,
+          routingBlock: appendRoutingGuidance(
+            routingBlock,
+            guidanceByAgent.get(agent.name),
+          ),
+        },
+      ];
+    }
+    const runtimeName = agent.displayName
+      ? normalizeAgentName(agent.displayName)
+      : agent.name;
+    return [
+      {
+        agentName: runtimeName,
+        routingBlock: appendRoutingGuidance(
+          [
+            `@${runtimeName}`,
+            `- Lane: ${agent.description ?? `Configured agent ${agent.name}`}`,
+          ].join('\n'),
+          guidanceByAgent.get(agent.name),
+        ),
+      },
+    ];
+  });
+  return entries.sort((left, right) =>
+    left.agentName < right.agentName
+      ? -1
+      : left.agentName > right.agentName
+        ? 1
+        : 0,
+  );
+}
+
+function appendRoutingGuidance(
+  routingBlock: string,
+  guidance: string | undefined,
+): string {
+  return guidance ? `${routingBlock}\n\n${guidance}` : routingBlock;
+}
+
+function marketplaceRoutingGuidance(
+  plan: MarketplaceActivationPlan | undefined,
+  agent: AgentDefinition,
+): string | undefined {
+  const derived = plan?.agents.find(
+    (entry) => entry.manifest.agentName === agent.name,
+  );
+  const profile = agent.baseRole
+    ? plan?.profiles.get(agent.baseRole)
+    : undefined;
+  const manifest = derived?.manifest ?? profile?.manifest;
+  if (!manifest) return undefined;
+  return [
+    `- Package: ${manifest.displayName}`,
+    `- ${manifest.routing.description}`,
+    `- **Delegate when:** ${manifest.routing.delegation.when}`,
+  ].join('\n');
+}
+
+function buildRoutingGuidance(
+  runtime: RuntimeConfig,
+  agents: readonly AgentDefinition[],
+  marketplace?: MarketplaceActivationPlan,
+): ReadonlyMap<string, string> {
+  const displayNameMap = new Map<string, string>();
+  for (const agent of agents) {
+    if (agent.displayName) {
+      displayNameMap.set(agent.name, agent.displayName);
+    }
+  }
+
+  const guidance = new Map<string, string>();
+  const mergedAgents = runtime.agents();
+  for (const agent of agents) {
+    const acp = runtime.acpAgents[agent.name];
+    const customPrompt = getOverrideFromAgents(
+      mergedAgents,
+      agent.name,
+    )?.orchestratorPrompt;
+    const prompt = acp
+      ? (acp.orchestratorPrompt ??
+        [
+          `@${agent.displayName ? normalizeAgentName(agent.displayName) : agent.name}`,
+          `- Lane: External ACP-connected agent (${acp.command})`,
+          `- Role: ${agent.description ?? `External ACP agent ${agent.name}`}`,
+          '- **Delegate when:** The user explicitly asks for this ACP-backed agent, or the task matches its role and benefits from software/subscription-specific capabilities outside OpenCode.',
+          '- **Do not delegate when:** The built-in specialists can handle the task more directly or local file ownership would conflict with another writer lane.',
+          '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
+        ].join('\n'))
+      : (customPrompt ?? marketplaceRoutingGuidance(marketplace, agent));
+    if (prompt) {
+      guidance.set(agent.name, rewriteRoutingPrompt(prompt, displayNameMap));
+    }
+  }
+  return guidance;
+}
+
+function buildRoutingEntriesForResolvedAgents(
+  runtime: RuntimeConfig,
+  agents: readonly AgentDefinition[],
+  marketplace?: MarketplaceActivationPlan,
+): RoutingEntry[] {
+  return buildRoutingEntriesFromAgents(
+    agents,
+    buildRoutingGuidance(runtime, agents, marketplace),
+  );
+}
+
 // Agent Factories
 
 const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
-  explorer: createExplorerAgent,
-  librarian: createLibrarianAgent,
-  oracle: createOracleAgent,
-  designer: createDesignerAgent,
-  fixer: createFixerAgent,
-  observer: createObserverAgent,
+  ...Object.fromEntries(
+    SUPPORTED_SPECIALIST_ROLES.map((name) => [
+      name,
+      (model: string) => ROLE_DEFINITIONS[name].createBaseline(model),
+    ]),
+  ),
   council: createCouncilAgent,
   councillor: createCouncillorAgent,
-};
+} as Record<SubagentName, AgentFactory>;
 
 // Public API
 
@@ -482,9 +1023,10 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  */
 export function createAgents(
   runtime: RuntimeConfig,
-  options?: { projectDirectory?: string },
+  options?: CreateAgentsOptions,
 ): AgentDefinition[] {
   const mergedAgents = runtime.agents();
+  const marketplace = options?.marketplace;
   const disabled = new Set(runtime.disabledAgents);
   if (!runtime.council) {
     disabled.add('council');
@@ -503,13 +1045,14 @@ export function createAgents(
   // Preserve the historical fixer → librarian fallback unless an explicit
   // inheritance policy opts the fixer into a different source.
   const getModelForAgent = (name: SubagentName): string => {
+    const role = ROLE_DEFINITIONS[name as keyof typeof ROLE_DEFINITIONS];
     const override = getOverrideFromAgents(mergedAgents, name);
     if (override?.model === undefined) {
       if (override?.inheritModelFrom === 'orchestrator') {
-        return configuredOrchestratorModel ?? (DEFAULT_MODELS[name] as string);
+        return configuredOrchestratorModel ?? (role?.defaultModel as string);
       }
       if (override?.inheritModelFrom === 'session') {
-        return primaryModel ?? (DEFAULT_MODELS[name] as string);
+        return primaryModel ?? (role?.defaultModel as string);
       }
     }
 
@@ -526,10 +1069,14 @@ export function createAgents(
         librarianModel = librarianOverride;
       }
       return (
-        librarianModel ?? primaryModel ?? (DEFAULT_MODELS.librarian as string)
+        librarianModel ??
+        primaryModel ??
+        (ROLE_DEFINITIONS.librarian.defaultModel as string)
       );
     }
-    return primaryModel ?? (DEFAULT_MODELS[name] as string);
+    return (
+      primaryModel ?? role?.defaultModel ?? (DEFAULT_MODELS[name] as string)
+    );
   };
 
   // 1. Gather all sub-agent definitions with custom prompts
@@ -540,6 +1087,10 @@ export function createAgents(
     .map(([name, factory]) => {
       // Get base agent definition using the subagent factory with undefined prompts
       const agent = factory(getModelForAgent(name), undefined, undefined);
+      if (name in ROLE_DEFINITIONS) {
+        agent.description =
+          ROLE_DEFINITIONS[name as keyof typeof ROLE_DEFINITIONS].description;
+      }
 
       const customPrompts = loadAgentPrompt(name, {
         preset: runtime.preset,
@@ -548,9 +1099,29 @@ export function createAgents(
 
       const override = getOverrideFromAgents(mergedAgents, name);
       const inlinePrompt = override?.prompt;
-      const defaultPrompt = appendTaskRejectionInstruction(
-        agent.config.prompt ?? '',
+      const profile = marketplace?.profiles.get(
+        name as keyof typeof ROLE_DEFINITIONS,
       );
+      if (profile && name in ROLE_DEFINITIONS) {
+        applyOverrides(agent, boundedPackageOverride(profile.manifest));
+        applyMarketplaceCapabilities(agent, profile);
+        agent.config.prompt = composePackagePrompt(
+          agent.config.prompt ?? '',
+          profile.manifest.instructions,
+          profile.manifest.instructionMode,
+        );
+        if (
+          marketplace &&
+          (inlinePrompt !== undefined || customPrompts.prompt)
+        ) {
+          marketplace.diagnostics.push({
+            packageId: profile.packageId,
+            code: 'prompt-masked',
+            message: `User prompt replacement masks marketplace profile ${profile.packageId} on @${name}`,
+          });
+        }
+      }
+      const defaultPrompt = agent.config.prompt ?? '';
 
       agent.config.prompt = resolvePrompt(
         name,
@@ -558,16 +1129,27 @@ export function createAgents(
         customPrompts.prompt,
         defaultPrompt,
         customPrompts.appendPrompt,
+        [
+          TASK_REJECTION_INSTRUCTION,
+          ...(name === 'council' ? [COUNCIL_SYNTHESIS_REINFORCEMENT] : []),
+        ],
       );
 
       return agent;
     });
+
+  const marketplaceAgentNames = new Set(
+    (marketplace?.agents ?? []).map((entry) => entry.manifest.agentName),
+  );
 
   // 1b. Discover unknown keys in config.agents as custom subagents.
   const customAgentNames = runtime.customAgentNames
     .map(normalizeCustomAgentName)
     .filter((name) => name.length > 0)
     .filter((name) => {
+      if (marketplaceAgentNames.has(name)) {
+        return false;
+      }
       if (!isSafeCustomAgentName(name)) {
         throw new Error(`Unsafe custom agent name '${name}'`);
       }
@@ -607,11 +1189,57 @@ export function createAgents(
     ];
   });
 
+  const protoMarketplaceAgents = (marketplace?.agents ?? []).flatMap(
+    (activated) => {
+      const name = activated.manifest.agentName;
+      if (disabled.has(name)) return [];
+      const role = ROLE_DEFINITIONS[activated.manifest.baseRole];
+      const override = getOverrideFromAgents(mergedAgents, name);
+      const customPrompts = loadAgentPrompt(name, {
+        preset: runtime.preset,
+        projectDirectory: options?.projectDirectory,
+      });
+      const packageModel =
+        typeof boundedPackageOverride(activated.manifest).model === 'string'
+          ? (boundedPackageOverride(activated.manifest).model as string)
+          : undefined;
+      const agent = role.createBaseline(
+        getPrimaryModelFromOverride(override) ??
+          packageModel ??
+          (override?.inheritModelFrom === 'orchestrator'
+            ? configuredOrchestratorModel
+            : primaryModel) ??
+          (role.defaultModel as string),
+      );
+      agent.name = name;
+      agent.baseRole = role.id;
+      agent.description =
+        activated.manifest.overrides.description ??
+        activated.manifest.description ??
+        role.description;
+      applyOverrides(agent, boundedPackageOverride(activated.manifest));
+      applyMarketplaceCapabilities(agent, activated);
+      agent.config.prompt = resolvePrompt(
+        name,
+        override?.prompt,
+        customPrompts.prompt,
+        composePackagePrompt(
+          role.basePrompt,
+          activated.manifest.instructions,
+          'append',
+        ),
+        customPrompts.appendPrompt,
+        [TASK_REJECTION_INSTRUCTION],
+      );
+      return [agent];
+    },
+  );
+
   const acpAgentNames = Object.keys(runtime.acpAgents)
     .map(normalizeCustomAgentName)
     .filter((name) => name.length > 0)
     .filter((name) => {
-      if (!SAFE_AGENT_ALIAS_RE.test(name)) {
+      if (!isSafeAgentAlias(name)) {
         throw new Error(
           `ACP agent name '${name}' must match /^[a-z][a-z0-9_-]*$/i`,
         );
@@ -624,6 +1252,11 @@ export function createAgents(
       if (customAgentNames.includes(name)) {
         throw new Error(
           `ACP agent '${name}' conflicts with a custom agent of the same name`,
+        );
+      }
+      if (protoMarketplaceAgents.some((agent) => agent.name === name)) {
+        throw new Error(
+          `ACP agent '${name}' conflicts with a marketplace agent of the same name`,
         );
       }
       return !disabled.has(name);
@@ -642,7 +1275,15 @@ export function createAgents(
       applyOverrides(agent, override);
     }
     applyModelInheritance(agent, override, configuredOrchestratorModel);
-    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
+    applyFinalPermissions(
+      agent,
+      marketplaceSkillList(
+        agent,
+        override,
+        extraMarketplaceSkills(marketplace, agent.name, agent.baseRole),
+      ),
+      runtime.disabledSkills,
+    );
     return agent;
   });
 
@@ -652,12 +1293,56 @@ export function createAgents(
       applyOverrides(agent, override);
     }
     applyModelInheritance(agent, override, configuredOrchestratorModel);
-    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
+    applyFinalPermissions(agent, override?.skills, runtime.disabledSkills);
     return agent;
   });
 
+  const marketplaceSubAgents = protoMarketplaceAgents.flatMap((agent) => {
+    const override = getOverrideFromAgents(mergedAgents, agent.name);
+    if (override) {
+      applyOverrides(agent, override);
+    }
+    if (agent.displayName) {
+      const displayName = normalizeAgentName(agent.displayName);
+      if (displayName === agent.name) {
+        agent.displayName = undefined;
+      } else if (!isSafeDisplayName(displayName)) {
+        marketplace?.diagnostics.push({
+          packageId:
+            marketplace.agents.find(
+              (entry) => entry.manifest.agentName === agent.name,
+            )?.packageId ?? agent.name,
+          code: 'invalid-alias',
+          message: `display alias '${agent.displayName}' is not a valid agent alias`,
+        });
+        return [];
+      } else if (reservedRuntimeNames(runtime, agent.name).has(displayName)) {
+        marketplace?.diagnostics.push({
+          packageId:
+            marketplace.agents.find(
+              (entry) => entry.manifest.agentName === agent.name,
+            )?.packageId ?? agent.name,
+          code: 'collision',
+          message: `display alias '${displayName}' collides with an existing agent name`,
+        });
+        return [];
+      }
+    }
+    applyModelInheritance(agent, override, configuredOrchestratorModel);
+    applyFinalPermissions(
+      agent,
+      marketplaceSkillList(
+        agent,
+        override,
+        extraMarketplaceSkills(marketplace, agent.name, agent.baseRole),
+      ),
+      runtime.disabledSkills,
+    );
+    return [agent];
+  });
+
   const acpSubAgents = protoAcpAgents.map((agent) => {
-    applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
+    applyFinalPermissions(agent, undefined, runtime.disabledSkills);
     return agent;
   });
 
@@ -673,7 +1358,7 @@ export function createAgents(
   const councillorAgents = buildCouncillorAgents(runtime, disabled).map(
     (agent) => {
       if (councillorColor) agent.config.color ??= councillorColor;
-      applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
+      applyFinalPermissions(agent, undefined, runtime.disabledSkills);
       return agent;
     },
   );
@@ -681,6 +1366,7 @@ export function createAgents(
   const allSubAgents = [
     ...builtInSubAgents,
     ...customSubAgents,
+    ...marketplaceSubAgents,
     ...acpSubAgents,
     ...councillorAgents,
   ];
@@ -690,6 +1376,13 @@ export function createAgents(
       agent.config.prompt ?? '',
     );
   }
+
+  const runtimeNameByCanonicalId = Object.fromEntries(
+    allSubAgents.map((agent) => [
+      agent.name,
+      agent.displayName ? normalizeAgentName(agent.displayName) : agent.name,
+    ]),
+  );
 
   // 3. Create Orchestrator (with its own overrides and custom prompts)
   // DEFAULT_MODELS.orchestrator is undefined; model is resolved via override or
@@ -708,6 +1401,9 @@ export function createAgents(
     councillorAgents.length > 0 ? ['council'] : undefined,
     !runtime.disabledTools.includes('wait_for_user'),
     runtime.backgroundJobs.orchestratorWake.enabled,
+    buildRoutingEntriesForResolvedAgents(runtime, allSubAgents, marketplace),
+    runtimeNameByCanonicalId,
+    isMarketplaceToolAvailable(runtime),
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
@@ -729,7 +1425,7 @@ export function createAgents(
     orchestratorOverride,
     configuredOrchestratorModel,
   );
-  applyDefaultPermissions(
+  applyFinalPermissions(
     orchestrator,
     orchestratorOverride?.skills,
     runtime.disabledSkills,
@@ -745,29 +1441,6 @@ export function createAgents(
       displayNameMap.set(agent.name, agent.displayName);
     }
   }
-
-  // 3b. Append custom orchestrator hints from built-in and custom agent overrides.
-  const extraOrchestratorPromptsList = [...builtInSubAgents, ...customSubAgents]
-    .map((agent) => {
-      const override = getOverrideFromAgents(mergedAgents, agent.name);
-      return override?.orchestratorPrompt;
-    })
-    .filter((prompt): prompt is string => Boolean(prompt));
-
-  const acpOrchestratorPrompts = acpSubAgents.map((agent) => {
-    const acp = runtime.acpAgents[agent.name];
-    if (acp?.orchestratorPrompt) return acp.orchestratorPrompt;
-    return [
-      `@${agent.name}`,
-      `- Lane: External ACP-connected agent (${
-        acp?.command ?? 'unknown command'
-      })`,
-      `- Role: ${agent.description ?? `External ACP agent ${agent.name}`}`,
-      '- **Delegate when:** The user explicitly asks for this ACP-backed agent, or the task matches its role and benefits from software/subscription-specific capabilities outside OpenCode.',
-      '- **Do not delegate when:** The built-in specialists can handle the task more directly or local file ownership would conflict with another writer lane.',
-      '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
-    ].join('\n');
-  });
 
   // Validate display names
   const usedDisplayNames = new Set<string>();
@@ -789,6 +1462,7 @@ export function createAgents(
     if (
       (ALL_AGENT_NAMES as readonly string[]).includes(displayName) ||
       customAgentNames.includes(displayName) ||
+      marketplaceSubAgents.some((agent) => agent.name === displayName) ||
       acpAgentNames.includes(displayName)
     ) {
       throw new Error(
@@ -797,34 +1471,7 @@ export function createAgents(
     }
   }
 
-  // Inject display names into orchestrator prompt (complete map)
-  injectDisplayNames(orchestrator, displayNameMap);
-
-  const rewritePrompt = (promptText: string) => {
-    let text = promptText;
-    for (const [internalName, displayName] of displayNameMap) {
-      text = text.replace(
-        new RegExp(`@${escapeRegExp(internalName)}\\b`, 'g'),
-        `@${normalizeAgentName(displayName)}`,
-      );
-    }
-    return text;
-  };
-
-  const rewrittenOverrides = extraOrchestratorPromptsList.map(rewritePrompt);
-  const rewrittenAcps = acpOrchestratorPrompts.map(rewritePrompt);
-
   let updatedPrompt = orchestrator.config.prompt ?? '';
-
-  if (rewrittenOverrides.length > 0) {
-    updatedPrompt = `${updatedPrompt}\n\n# Project-specific routing guidance\n\n${rewrittenOverrides.join(
-      '\n\n',
-    )}`;
-  }
-
-  if (rewrittenAcps.length > 0) {
-    updatedPrompt = `${updatedPrompt}\n\n${rewrittenAcps.join('\n\n')}`;
-  }
 
   // Inject council-dispatch block if dynamic councillors exist (flatten mode)
   if (councillorAgents.length > 0) {
@@ -850,12 +1497,11 @@ export function createAgents(
  * @param options - Optional options including projectDirectory
  * @returns Record mapping agent names to their SDK configurations
  */
-export function getAgentConfigs(
+function buildCanonicalAgentConfigs(
   runtime: RuntimeConfig,
-  options?: { projectDirectory?: string },
+  options?: CreateAgentsOptions,
+  agents = createAgents(runtime, options),
 ): Record<string, SDKAgentConfig> {
-  const agents = createAgents(runtime, options);
-
   const applyClassification = (
     name: string,
     sdkConfig: SDKAgentConfig & {
@@ -882,8 +1528,24 @@ export function getAgentConfigs(
     }
   };
 
-  const isInternalOnly = (name: string): boolean =>
-    name === 'councillor' || name.startsWith('councillor-');
+  const resolveAgentMcps = (agent: AgentDefinition): string[] => {
+    const configured = runtime.agent(agent.name)?.mcps;
+    if (configured !== undefined) {
+      return getAgentMcpList(agent.name, runtime);
+    }
+    const extras = extraMarketplaceMcps(
+      options?.marketplace,
+      agent.name,
+      agent.baseRole,
+    );
+    if (agent.baseRole) {
+      return uniqueNames([
+        ...ROLE_DEFINITIONS[agent.baseRole].defaultMcps,
+        ...extras,
+      ]);
+    }
+    return getAgentMcpList(agent.name, runtime);
+  };
 
   const entries: Array<[string, SDKAgentConfig]> = [];
 
@@ -895,7 +1557,7 @@ export function getAgentConfigs(
     } = {
       ...a.config,
       description: a.description,
-      mcps: getAgentMcpList(a.name, runtime),
+      mcps: resolveAgentMcps(a),
     };
 
     if (a.displayName) {
@@ -904,20 +1566,352 @@ export function getAgentConfigs(
 
     applyClassification(a.name, sdkConfig);
 
-    const normalizedDisplayName = a.displayName
-      ? normalizeAgentName(a.displayName)
-      : undefined;
-
-    if (normalizedDisplayName && !isInternalOnly(a.name)) {
-      entries.push([normalizedDisplayName, sdkConfig]);
-      entries.push([a.name, { ...sdkConfig, hidden: true }]);
-      continue;
-    }
-
     entries.push([a.name, sdkConfig]);
   }
 
   return Object.fromEntries(entries);
+}
+
+function applyMcpPermissionRules(
+  permission: unknown,
+  agentMcps: readonly string[],
+  availableMcpNames: readonly string[],
+): PermissionRecord {
+  const result = normalizePermission(permission);
+  const denied = new Set(
+    agentMcps
+      .filter((name) => name.startsWith('!'))
+      .map((name) => name.slice(1)),
+  );
+  const allowsAll = agentMcps.includes('*');
+  const allowed = new Set(
+    agentMcps.filter((name) => !name.startsWith('!') && name !== '*'),
+  );
+
+  for (const mcpName of availableMcpNames) {
+    const sanitized = mcpName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const key = `${sanitized}_*`;
+    if (!(key in result)) {
+      result[key] =
+        !denied.has(mcpName) && (allowsAll || allowed.has(mcpName))
+          ? 'allow'
+          : 'deny';
+    }
+  }
+  return result;
+}
+
+function hostAgentFor(
+  runtime: RuntimeConfig,
+  name: string,
+  canonicalName: string,
+): Record<string, unknown> | undefined {
+  const entry = runtime.hostAgent(name) ?? runtime.hostAgent(canonicalName);
+  return entry ? (entry as Record<string, unknown>) : undefined;
+}
+
+const SUPPORTED_HOST_AGENT_FIELDS = [
+  'model',
+  'variant',
+  'temperature',
+  'topP',
+  'options',
+  'tools',
+  'steps',
+  'color',
+  'description',
+  'permission',
+] as const;
+
+function mergeSupportedHostAgentFields(
+  target: Record<string, unknown>,
+  host: Record<string, unknown> | undefined,
+): void {
+  if (!host) return;
+  for (const field of SUPPORTED_HOST_AGENT_FIELDS) {
+    if (field in host) {
+      target[field] = cloneOwned(host[field]);
+    }
+  }
+}
+
+/** Build every runtime agent surface once. Consumers must use this immutable
+ * snapshot rather than reconstructing policy from raw config. Host capture is
+ * optional only for the initial catalogue; the plugin replaces that catalogue
+ * with the host-finalized snapshot before runtime consumers execute. */
+export function buildResolvedAgentRegistry(
+  runtime: RuntimeConfig,
+  options?: {
+    projectDirectory?: string;
+    availableMcpNames?: readonly string[];
+    marketplaceStore?: MarketplaceStore;
+    preflightSkillNames?: readonly string[];
+    preflightMcpNames?: readonly string[];
+    extraSkillDirectories?: readonly string[];
+  },
+): ResolvedAgentRegistry {
+  const marketplace = resolveMarketplaceActivation({
+    runtime,
+    store: options?.marketplaceStore,
+    projectDirectory: options?.projectDirectory,
+    availableSkillNames: options?.preflightSkillNames,
+    availableMcpNames: options?.preflightMcpNames,
+    extraSkillDirectories: options?.extraSkillDirectories,
+  });
+  const agents = createAgents(runtime, { ...options, marketplace });
+  const routing = buildRoutingEntriesForResolvedAgents(
+    runtime,
+    agents.slice(1),
+    marketplace,
+  );
+  const rawSdkConfigs = buildCanonicalAgentConfigs(
+    runtime,
+    { ...options, marketplace },
+    agents,
+  );
+  const sdkConfigs: Record<string, SDKAgentConfig> = {};
+
+  const modelArrays = cloneOwned(runtime.modelArrays);
+  for (const activated of marketplace.agents) {
+    const name = activated.manifest.agentName;
+    if (modelArrays[name]) continue;
+    const agent = agents.find((entry) => entry.name === name);
+    const model =
+      typeof agent?.config.model === 'string' ? agent.config.model : undefined;
+    if (model) {
+      modelArrays[name] = [
+        {
+          id: model,
+          ...(typeof agent?.config.variant === 'string'
+            ? { variant: agent.config.variant }
+            : {}),
+        },
+      ];
+    }
+  }
+  for (const agent of agents) {
+    const name = agent.name;
+    const rawConfig = rawSdkConfigs[name];
+    if (!rawConfig) continue;
+    const runtimeName = agent.displayName
+      ? normalizeAgentName(agent.displayName)
+      : name;
+    const hostConfig = hostAgentFor(runtime, runtimeName, name);
+    const hostModel = resolvePrimaryModelValue(hostConfig?.model);
+    const configuredModels = modelArrays[name];
+    if (
+      hostModel &&
+      configuredModels?.[0]?.id &&
+      configuredModels[0].id !== hostModel
+    ) {
+      modelArrays[name] = [
+        {
+          id: hostModel,
+          ...(typeof hostConfig?.variant === 'string'
+            ? { variant: hostConfig.variant }
+            : {}),
+        },
+      ];
+    }
+    const ownedConfig = cloneOwned(rawConfig) as SDKAgentConfig &
+      Record<string, unknown>;
+    mergeSupportedHostAgentFields(ownedConfig, hostConfig);
+    ownedConfig.permission = projectPermissionValues(
+      name,
+      rawConfig.permission,
+      hostConfig?.permission,
+    ) as SDKAgentConfig['permission'];
+    sdkConfigs[name] = ownedConfig;
+  }
+
+  // Apply inheritance only while constructing the immutable registry. The
+  // config hook must not repeat this resolution against its host projection.
+  applyModelInheritanceToConfig(sdkConfigs as Record<string, unknown>, runtime);
+
+  const mcpLists: Record<string, readonly string[]> = {};
+  const skillPermissions: Record<
+    string,
+    Readonly<Record<string, 'allow' | 'ask' | 'deny'>>
+  > = {};
+  const provenance: Record<string, string> = {};
+  const runtimeNameByCanonicalId: Record<string, string> = {};
+  const canonicalIdByRuntimeName: Record<string, string> = {};
+  const packageIdByRuntimeName: Record<string, string> = {};
+  const runtimeNameByPackageId: Record<string, string> = {};
+  const modelChains = Object.fromEntries(
+    Object.entries(modelArrays).map(([name, models]) => [
+      name,
+      models.map((model) => model.id),
+    ]),
+  );
+
+  for (const [name, models] of Object.entries(modelArrays)) {
+    const entry = sdkConfigs[name] as Record<string, unknown> | undefined;
+    if (entry && entry.model === undefined && models.length > 0) {
+      entry.model = models[0]?.id;
+      if (models[0]?.variant !== undefined) {
+        entry.variant = models[0].variant;
+      }
+    }
+  }
+
+  applyOrchestratorModelConfig({
+    agents: sdkConfigs as Record<string, unknown>,
+    enabled: runtime.stripOrchestratorModel,
+    presets: runtime.plugin?.presets,
+    configPreset: runtime.preset,
+    runtimePreset: runtime.getRuntimePreset(),
+  });
+
+  const availableMcpNames = options?.availableMcpNames ?? [];
+  for (const agent of agents) {
+    const sdkConfig = sdkConfigs[agent.name] as SDKAgentConfig & {
+      mcps?: string[];
+    };
+    mcpLists[agent.name] = sdkConfig.mcps ?? [];
+    sdkConfig.permission = applyMcpPermissionRules(
+      sdkConfig.permission,
+      sdkConfig.mcps ?? [],
+      availableMcpNames,
+    ) as SDKAgentConfig['permission'];
+    const permission = sdkConfig.permission;
+    skillPermissions[agent.name] =
+      typeof permission === 'object' &&
+      permission !== null &&
+      typeof permission.skill === 'object' &&
+      permission.skill !== null
+        ? cloneOwned(
+            permission.skill as Record<string, 'allow' | 'ask' | 'deny'>,
+          )
+        : getSkillPermissionsForAgent(
+            agent.name,
+            runtime.agent(agent.name)?.skills,
+            runtime.disabledSkills,
+          );
+    const marketplaceAgent = marketplace.agents.find(
+      (entry) => entry.manifest.agentName === agent.name,
+    );
+    const marketplaceProfile = agent.baseRole
+      ? marketplace.profiles.get(agent.baseRole)
+      : undefined;
+    provenance[agent.name] = marketplaceAgent
+      ? `marketplace-agent:${marketplaceAgent.packageId}@${marketplaceAgent.version}`
+      : marketplaceProfile && isSubagent(agent.name)
+        ? `marketplace-profile:${marketplaceProfile.packageId}@${marketplaceProfile.version}`
+        : agent.name === 'orchestrator'
+          ? 'orchestrator-special'
+          : isSubagent(agent.name)
+            ? `builtin:${agent.name}`
+            : 'configured-agent';
+    runtimeNameByCanonicalId[agent.name] = agent.name;
+    canonicalIdByRuntimeName[agent.name] = agent.name;
+    if (marketplaceAgent) {
+      packageIdByRuntimeName[agent.name] = marketplaceAgent.packageId;
+      runtimeNameByPackageId[marketplaceAgent.packageId] = agent.name;
+    } else if (marketplaceProfile && isSubagent(agent.name)) {
+      packageIdByRuntimeName[agent.name] = marketplaceProfile.packageId;
+      runtimeNameByPackageId[marketplaceProfile.packageId] = agent.name;
+    }
+    if (agent.displayName) {
+      const displayName = normalizeAgentName(agent.displayName);
+      if (modelArrays[agent.name]) {
+        modelArrays[displayName] = modelArrays[agent.name];
+        modelChains[displayName] = modelChains[agent.name];
+      }
+      mcpLists[displayName] = mcpLists[agent.name];
+      skillPermissions[displayName] = skillPermissions[agent.name];
+      provenance[displayName] = `alias:${agent.name}`;
+      runtimeNameByCanonicalId[agent.name] = displayName;
+      canonicalIdByRuntimeName[displayName] = agent.name;
+      const packageId = packageIdByRuntimeName[agent.name];
+      if (packageId) {
+        packageIdByRuntimeName[displayName] = packageId;
+        runtimeNameByPackageId[packageId] = displayName;
+      }
+    }
+  }
+
+  for (const [alias, canonical] of Object.entries(AGENT_ALIASES)) {
+    if (canonicalIdByRuntimeName[canonical]) {
+      canonicalIdByRuntimeName[alias] = canonical;
+    }
+  }
+
+  for (const agent of agents) {
+    if (!agent.displayName || isInternalOnly(agent.name)) continue;
+    const displayName = normalizeAgentName(agent.displayName);
+    const canonical = sdkConfigs[agent.name];
+    if (!canonical) continue;
+    const visible = cloneOwned(canonical) as SDKAgentConfig &
+      Record<string, unknown>;
+    delete visible.hidden;
+    sdkConfigs[displayName] = visible;
+    sdkConfigs[agent.name] = {
+      ...cloneOwned(canonical),
+      hidden: true,
+    };
+  }
+
+  return deepFreeze({
+    agents: Object.freeze(agents),
+    sdkConfigs: Object.freeze(sdkConfigs),
+    modelArrays: Object.freeze(
+      Object.fromEntries(
+        Object.entries(modelArrays).map(([name, models]) => [
+          name,
+          Object.freeze(models.map((model) => Object.freeze({ ...model }))),
+        ]),
+      ),
+    ),
+    modelChains: Object.freeze(
+      Object.fromEntries(
+        Object.entries(modelChains).map(([name, chain]) => [
+          name,
+          Object.freeze(chain),
+        ]),
+      ),
+    ),
+    mcpLists: Object.freeze(
+      Object.fromEntries(
+        Object.entries(mcpLists).map(([name, list]) => [
+          name,
+          Object.freeze([...list]),
+        ]),
+      ),
+    ),
+    skillPermissions: Object.freeze(
+      Object.fromEntries(
+        Object.entries(skillPermissions).map(([name, permissions]) => [
+          name,
+          Object.freeze({ ...permissions }),
+        ]),
+      ),
+    ),
+    marketplaceLive: Object.freeze(
+      buildMarketplaceLive(marketplace, runtimeNameByPackageId).map((entry) =>
+        Object.freeze({ ...entry }),
+      ),
+    ),
+    routing: Object.freeze(routing),
+    provenance: Object.freeze(provenance),
+    runtimeNameByCanonicalId: Object.freeze(runtimeNameByCanonicalId),
+    canonicalIdByRuntimeName: Object.freeze(canonicalIdByRuntimeName),
+    packageIdByRuntimeName: Object.freeze(packageIdByRuntimeName),
+    runtimeNameByPackageId: Object.freeze(runtimeNameByPackageId),
+    diagnostics: Object.freeze(
+      marketplace.diagnostics.map((entry) => Object.freeze({ ...entry })),
+    ),
+  });
+}
+
+export function getAgentConfigs(
+  runtime: RuntimeConfig,
+  options?: { projectDirectory?: string },
+): Record<string, SDKAgentConfig> {
+  return buildResolvedAgentRegistry(runtime, options).sdkConfigs as Record<
+    string,
+    SDKAgentConfig
+  >;
 }
 
 /**

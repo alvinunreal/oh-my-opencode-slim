@@ -163,6 +163,28 @@ describe('createFilterAvailableSkillsHook', () => {
     expect(resultText).toContain('<name>skill2</name>');
   });
 
+  test('denies skills for an unknown agent', async () => {
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor());
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [{ type: 'text', text: availableSkillsBlock('skill1') }],
+        },
+        {
+          info: { role: 'user', agent: 'missing-agent' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    const resultText = output.messages[0]?.parts[0]?.text ?? '';
+    expect(resultText).toContain('No skills available.');
+    expect(resultText).not.toContain('<name>skill1</name>');
+  });
+
   test('supports wildcard allow with explicit exclusions', async () => {
     const config: PluginConfig = {
       agents: {

@@ -482,6 +482,27 @@ Theme colors adapt to the active OpenCode theme. Dynamic councillors inherit
 the configured `council` color unless `agents.councillor.color` overrides it.
 `color` works in top-level `agents` overrides and inside `presets`.
 
+### Local marketplace packages
+
+Preset `marketplace` activation selects installed local packages for that
+preset. Installation and activation are separate; changes apply after the
+next OpenCode session or reload. See **[Local Marketplace](marketplace.md)**
+for the CLI, in-session `marketplace` tool, and status diagnostics.
+
+```jsonc
+{
+  "preset": "work",
+  "presets": {
+    "work": {
+      "marketplace": {
+        "agents": ["community/example"],
+        "profiles": { "oracle": "community/oracle-profile" }
+      }
+    }
+  }
+}
+```
+
 ### Per-preset agent configuration
 
 To get per-preset behavior for any agent, built-in (`council`, `oracle`,
