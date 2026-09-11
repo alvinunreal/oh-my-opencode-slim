@@ -72,7 +72,7 @@ read (for example EACCES).
 | installed | Exact locked versions in the local store |
 | configured_agents / configured_profiles | Active-preset activation on disk |
 | live_packages | Packages already in this session's registry, with version, digest, and runtime name |
-| diagnostics | Store and activation issues (missing, corrupt, operational, collision, missing required dependency, invalid alias), labeled `disk` or `live` |
+| diagnostics | Store and activation issues (missing, corrupt, operational, collision, missing required dependency, invalid alias, retired), labeled `disk` or `live` |
 | reload_required | `true`/`false` when live and desired identities can be compared; `unknown` for CLI and when store/desired resolution failed operationally |
 
 ## Limits
@@ -90,6 +90,7 @@ read (for example EACCES).
 
 Registry CI and static site tooling can import the narrow
 `oh-my-opencode-slim/marketplace-contract` package subpath. It provides the
-schema-v1 index, deterministic artifact paths, manifest-summary projection,
-selector resolution, and the same canonical bundle SHA-256 digest used by the
-plugin store. The public contract does not add root-package exports.
+schema-v1 and schema-v2 indexes (including retirement tombstones), deterministic
+artifact paths, manifest-summary projection, selector resolution, and the same
+canonical bundle SHA-256 digest used by the plugin store. The public contract
+does not add root-package exports.

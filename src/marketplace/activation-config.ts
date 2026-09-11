@@ -16,6 +16,7 @@ import type {
 } from '../config/schema';
 import { MarketplaceActivationError } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
+import { assertMarketplacePackageNotRetired } from './retirements';
 import { MarketplaceStore } from './store';
 
 function writeConfigFile(
@@ -142,6 +143,7 @@ export function enableMarketplaceAgent(
   store = new MarketplaceStore(),
 ): void {
   const id = normalizeMarketplacePackageId(packageId);
+  assertMarketplacePackageNotRetired(id);
   const pkg = store.show(id);
   if (pkg.manifest.kind !== 'agent') {
     throw new MarketplaceActivationError(
@@ -205,6 +207,7 @@ export function setMarketplaceProfile(
     return;
   }
   const id = normalizeMarketplacePackageId(packageId);
+  assertMarketplacePackageNotRetired(id);
   const pkg = store.show(id);
   if (pkg.manifest.kind !== 'profile') {
     throw new MarketplaceActivationError(

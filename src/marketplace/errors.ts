@@ -57,6 +57,13 @@ export class MarketplaceCompatibilityError extends MarketplaceError {
   }
 }
 
+export class MarketplaceRetiredError extends MarketplaceError {
+  constructor(message: string) {
+    super(message, 'retired');
+    this.name = 'MarketplaceRetiredError';
+  }
+}
+
 export class MarketplaceActivationReferenceError extends MarketplaceError {
   constructor(message: string) {
     super(message, 'activation-reference');
