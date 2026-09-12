@@ -39,6 +39,9 @@ Registry `update` requires an installed package and selects only a strictly
 newer compatible version. `enable` activates an already installed agent package
 in the active preset as a separately named agent. An agent may optionally extend one
 built-in specialist.
+`remove` clears the package from every user and project preset activation list
+before deleting it locally, so a separate `disable` command is unnecessary.
+The old unsafe `--force` removal path is not supported.
 
 `status` reports installed packages, configured activation, live-session
 agents when used from the in-session tool, diagnostics, and whether a

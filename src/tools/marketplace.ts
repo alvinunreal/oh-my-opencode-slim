@@ -61,11 +61,7 @@ const MarketplaceToolRequestSchema = z.discriminatedUnion('action', [
     })
     .strict(),
   z
-    .object({
-      action: z.literal('remove'),
-      packageId: z.string().min(1),
-      force: z.boolean().optional(),
-    })
+    .object({ action: z.literal('remove'), packageId: z.string().min(1) })
     .strict(),
   z.object({ action: z.literal('list') }).strict(),
   z.object({ action: z.literal('status') }).strict(),
@@ -166,10 +162,6 @@ Action-specific fields: packageId for install/update/show/enable/disable/remove;
         .describe(
           'Canonical package ID for registry install/update or local actions',
         ),
-      force: toolZ
-        .boolean()
-        .optional()
-        .describe('Force remove even if the package is still referenced'),
       update: toolZ
         .boolean()
         .optional()
@@ -254,7 +246,7 @@ Action-specific fields: packageId for install/update/show/enable/disable/remove;
             .join('\n');
         }
         case 'remove':
-          service.remove(request.packageId, { force: request.force });
+          service.remove(request.packageId);
           return mutationResult(options, `Removed ${request.packageId}`);
         case 'enable':
           enableMarketplaceAgent(projectDir, request.packageId, service.store);

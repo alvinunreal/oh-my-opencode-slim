@@ -2,12 +2,8 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { DEFAULT_MARKETPLACE_REGISTRY_URL } from '../marketplace-contract';
 import { readPluginPackageVersion } from '../utils/package-metadata';
 import type { MarketplaceCompatibilityOptions } from './compatibility';
+import { removeMarketplaceConfigReferences } from './config-references';
 import {
-  type MarketplaceConfigReference,
-  readMarketplaceConfigReferences,
-} from './config-references';
-import {
-  MarketplaceActivationReferenceError,
   MarketplaceConflictError,
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryUnavailableError,
@@ -43,10 +39,6 @@ export type MarketplaceRegistryDownloadClient = Pick<
 > &
   Partial<Pick<MarketplaceRegistryClient, 'downloadV3'>>;
 
-export interface MarketplaceRemoveOptions {
-  force?: boolean;
-}
-
 function parseBundle(value: unknown): MarketplacePackageBundle {
   const candidate =
     typeof value === 'object' && value !== null && 'manifest' in value
@@ -63,19 +55,6 @@ function parseBundle(value: unknown): MarketplacePackageBundle {
 
 function sourceForImport(filePath: string): MarketplaceSource {
   return { kind: 'local', path: realpathSync(filePath) };
-}
-
-function referenceMessage(
-  packageId: string,
-  references: MarketplaceConfigReference[],
-): string {
-  const locations = references
-    .filter((reference) => reference.packageId === packageId)
-    .map(
-      (reference) =>
-        `${reference.configPath} (preset ${reference.presetName}, ${reference.target})`,
-    );
-  return `Cannot remove referenced package ${packageId}: ${locations.join('; ')}. Deactivate it first or use --force.`;
 }
 
 export class MarketplaceService {
@@ -225,25 +204,10 @@ export class MarketplaceService {
     return this.store.verifyAll();
   }
 
-  remove(id: string, options: MarketplaceRemoveOptions = {}): void {
+  remove(id: string): void {
     const normalizedId = normalizeMarketplacePackageId(id);
-    this.store.remove(
-      normalizedId,
-      options.force
-        ? undefined
-        : () => {
-            const references = readMarketplaceConfigReferences(this.projectDir);
-            if (
-              references.some(
-                (reference) => reference.packageId === normalizedId,
-              )
-            ) {
-              throw new MarketplaceActivationReferenceError(
-                referenceMessage(normalizedId, references),
-              );
-            }
-          },
-    );
+    removeMarketplaceConfigReferences(this.projectDir, normalizedId);
+    this.store.remove(normalizedId);
   }
 }
 

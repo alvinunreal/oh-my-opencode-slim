@@ -277,7 +277,7 @@ describe('marketplace tool', () => {
     }
   });
 
-  test('reports reload required after force-removing a live package', async () => {
+  test('removes a live package through the safe lifecycle path', async () => {
     const { root, project, service, marketplace, context, live } =
       setupHarness();
     try {
@@ -301,7 +301,6 @@ describe('marketplace tool', () => {
           {
             action: 'remove',
             packageId: 'community/docs-researcher',
-            force: true,
           },
           context,
         ),
