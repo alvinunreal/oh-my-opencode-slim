@@ -75,6 +75,11 @@ export interface V2SessionContextEvent {
     sessionID?: string;
     /** Agent that handled the message (same enrichment contract). */
     agent?: string;
+    /** Envelope metadata: v2 spreads transcript user-message metadata
+     * (including prompt `metadata`, where the plugin's internal-initiator
+     * marker travels) onto the LLM Message envelope. Read-only signal for
+     * the chat-headers bridge — never mutated. */
+    metadata?: Record<string, unknown>;
   }>;
   tools: Record<string, unknown>;
 }
@@ -95,6 +100,22 @@ export interface V2SessionPromptEvent {
   };
   metadata?: Record<string, unknown>;
   readonly delivery?: unknown;
+}
+/**
+ * v2 `session.model.request` hook payload: fires once per provider request
+ * (primary loop, compaction, title, generate) with a MUTABLE `headers`
+ * record the host merges into the outgoing HTTP request. This is the v2
+ * equivalent of the v1 `chat.headers` hook surface (upstream
+ * `SessionModelRequest`; the host triggers it after the context hook and
+ * reads mutated headers back into the LLM request).
+ */
+export interface V2SessionModelRequestEvent {
+  readonly sessionID: string;
+  readonly agent: string;
+  readonly model: { id: string; providerID: string; variant?: string };
+  readonly kind: 'primary' | 'compaction' | 'title' | 'generate';
+  baseURL?: string;
+  headers: Record<string, string>;
 }
 export interface V2ToolBeforeEvent {
   readonly tool: string;
@@ -164,6 +185,13 @@ export interface V2Context {
     hook(
       name: 'prompt',
       cb: (event: V2SessionPromptEvent) => Promise<void>,
+    ): Promise<V2Registration>;
+    /** v2 session.model.request hook — per provider request with mutable
+     * `headers` (see V2SessionModelRequestEvent; the v1 `chat.headers`
+     * equivalent). Older v2 hosts reject the name; callers must degrade. */
+    hook(
+      name: 'model.request',
+      cb: (event: V2SessionModelRequestEvent) => Promise<void>,
     ): Promise<V2Registration>;
     /** v2 session.get — SessionInfo by id (runtime-probed). */
     get?(input: { sessionID: string }): Promise<unknown>;

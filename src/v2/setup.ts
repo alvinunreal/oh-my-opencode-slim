@@ -7,8 +7,9 @@
  * a single session context hook (system/messages transforms, chat.message
  * tracking, and interview + generic command marker dispatch), the native
  * `session.prompt` hook (once-per-admission chat.message fidelity, with a
- * context-hook fallback on older hosts), tool execute hooks, and the event
- * stream. Each bridge is independently try/catch-guarded.
+ * context-hook fallback on older hosts), the native `session.model.request`
+ * hook (v1 chat.headers — Copilot initiator header), tool execute hooks,
+ * and the event stream. Each bridge is independently try/catch-guarded.
  */
 
 import { loadPluginConfig } from '../config/loader';
@@ -18,6 +19,11 @@ import {
   type SyntheticPartCacheHint,
   setDefaultSyntheticPartCacheHint,
 } from '../hooks/cache-safe-injection';
+import {
+  CHAT_INITIATOR_HEADER_AGENT,
+  CHAT_INITIATOR_HEADER_NAME,
+  isCopilotProvider,
+} from '../hooks/chat-headers';
 import { OhMyOpenCodeLite } from '../index';
 import type { McpConfig } from '../mcp/types';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
@@ -26,6 +32,10 @@ import { adaptTool, applyAgentToDraft } from './adapters';
 import { buildPluginInput, resolveV2Directory } from './client-shim';
 import { subagentArgsToV1, toolNameToV1, v1ArgsToSubagent } from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
+import {
+  isInternalAdmission,
+  recordInternalAdmission,
+} from './internal-admissions';
 import { createV2InterviewBridge } from './interview-bridge';
 import {
   createSessionSubmit,
@@ -38,6 +48,7 @@ import type {
   V2CommandDraft,
   V2Context,
   V2SessionContextEvent,
+  V2SessionModelRequestEvent,
   V2SessionPromptEvent,
   V2ToolAfterEvent,
   V2ToolBeforeEvent,
@@ -211,6 +222,11 @@ export interface V2SessionContextHandlerDeps {
    * context events and forwards newly learned state to the v1
    * `chat.message` hook (see createSessionPromptBridge). */
   observeContextAgent?: (event: V2SessionContextEvent) => Promise<void>;
+  /** v1 `chat.headers` support: records the trailing user message
+   * identity + internal-initiator state per session from context events
+   * (context fires before every `model.request` — see
+   * createChatHeadersBridge). */
+  observeChatHeaders?: (event: V2SessionContextEvent) => void;
   /** Agent known for a session, from the agent-learned state the
    * session-prompt bridge / context events maintain. Used to enrich
    * transcript user messages the v1 injection gates key on when the
@@ -264,6 +280,15 @@ export function createSessionContextHandler(
         await deps.observeContextAgent(event);
       } catch (err) {
         log('[v2] chat.message agent-discovery bridge failed', String(err));
+      }
+    }
+    // chat.headers state (trailing user message identity + internal
+    // initiator marker) for the model.request bridge below.
+    if (deps.observeChatHeaders) {
+      try {
+        deps.observeChatHeaders(event);
+      } catch (err) {
+        log('[v2] chat.headers context tracking failed', String(err));
       }
     }
     // Agent tracking (chat.message equivalent, per-request emulation —
@@ -430,6 +455,85 @@ function trailingUserId(event: V2SessionContextEvent): string | undefined {
   return typeof id === 'string' && id ? id : undefined;
 }
 
+/** Trailing-user-message internal-initiator state per session, learned
+ * from context events by `observeChatHeaderState` and consumed by
+ * `createChatHeadersBridge`. Bounded via `pruneSessionMap`. */
+export interface ChatHeaderSessionState {
+  messageID?: string;
+  internal: boolean;
+}
+export type ChatHeaderSessionStates = Map<string, ChatHeaderSessionState>;
+
+/** Record the current trailing user message identity and whether it is an
+ * internal-initiator admission (plugin-driven wake/fallback prompt). The
+ * v1 chat.headers hook answered this per request by fetching the message's
+ * parts; on v2 the marker is visible in-band — prompt `metadata` persisted
+ * onto the transcript user message (spread onto the LLM Message envelope
+ * the context event carries) or the admission tracker for synthetic
+ * admissions — so no per-request transcript fetch is needed. Overwrites
+ * per context event: each event is the current request's view. */
+export function observeChatHeaderState(
+  states: ChatHeaderSessionStates,
+  event: V2SessionContextEvent,
+): void {
+  const trailing = trailingUserMessage(event.messages);
+  if (!trailing) return;
+  const messageID = trailingUserId(event);
+  const metadataMarked =
+    isRecord(trailing.metadata) &&
+    trailing.metadata[INTERNAL_INITIATOR_METADATA_KEY] === true;
+  states.set(event.sessionID, {
+    ...(messageID ? { messageID } : {}),
+    internal:
+      metadataMarked ||
+      (messageID ? isInternalAdmission(event.sessionID, messageID) : false),
+  });
+  pruneSessionMap(states);
+}
+
+/**
+ * v1 `chat.headers` → v2 `session.model.request` bridge.
+ *
+ * The v1 hook sets `x-initiator: agent` on GitHub Copilot provider requests
+ * whose user message is an internal-initiator admission, so Copilot's
+ * backend does not account plugin-driven turns (orchestrator wake prompts)
+ * as user activity. v2 exposes the same transport-level surface via
+ * `session.hook("model.request")` with a mutable `headers` record the host
+ * merges into the outgoing HTTP request.
+ *
+ * Translation notes (deliberate deviations, both verified against the v2
+ * host source):
+ * - The v1 `model.api.npm === '@ai-sdk/github-copilot'` exclusion is not
+ *   reproducible (v2 Model.Ref carries no npm package) and not desirable:
+ *   v2's built-in Copilot provider hook leaves `x-initiator` unset exactly
+ *   for primary requests in root sessions, and the native fetch layer only
+ *   escalates (`x-initiator` pre-set to `agent` is honored, never reset to
+ *   `user`) — so this bridge composes with the built-in instead of
+ *   conflicting.
+ * - Auxiliary kinds (compaction/title/generate) are skipped: v2's built-in
+ *   Copilot hook already marks those (`conversation-background` /
+ *   `conversation-compaction` → `x-initiator: agent`).
+ * - The decision constants and provider gate come from
+ *   `src/hooks/chat-headers.ts` so both hosts stamp the same header.
+ *
+ * Headers are transport-level only — no payload content is read or mutated
+ * (prompt-cache safety is unaffected).
+ */
+export function createChatHeadersBridge(
+  states: ChatHeaderSessionStates,
+): (event: V2SessionModelRequestEvent) => Promise<void> {
+  return async (event) => {
+    try {
+      if (event.kind !== 'primary') return;
+      if (!isCopilotProvider(event.model.providerID)) return;
+      if (!states.get(event.sessionID)?.internal) return;
+      event.headers[CHAT_INITIATOR_HEADER_NAME] = CHAT_INITIATOR_HEADER_AGENT;
+    } catch (err) {
+      log('[v2] chat.headers bridge failed', String(err));
+    }
+  };
+}
+
 /**
  * Native `session.prompt` hook → v1 `chat.message` bridge.
  *
@@ -516,6 +620,13 @@ export function createSessionPromptBridge(
       const internalInitiator =
         isRecord(event.metadata) &&
         event.metadata[INTERNAL_INITIATOR_METADATA_KEY] === true;
+      // Record the admission for the chat-headers bridge: prompt-path
+      // internal admissions keep their metadata on the transcript user
+      // message (and thus the context-event envelope), but recording here
+      // covers hosts that strip envelope metadata.
+      if (internalInitiator) {
+        recordInternalAdmission(sessionID, messageID);
+      }
       // Rebuild the v1 parts view: observeChatMessage gates on a
       // non-synthetic text/file part being present.
       const parts: Array<Record<string, unknown>> = [];
@@ -1136,6 +1247,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const chatMessage = v1Hooks['chat.message'] as
         | ((i: V1ChatMessageInput, o: unknown) => Promise<void>)
         | undefined;
+      const chatHeadersHook = v1Hooks['chat.headers'] as
+        | ((i: unknown, o: unknown) => Promise<void>)
+        | undefined;
+      // v1 chat.headers marker state, learned from the context events
+      // handled below and consumed by the model.request bridge registered
+      // after this block.
+      const chatHeaderStates = new Map<string, ChatHeaderSessionState>();
 
       // Native per-admission prompt hook (v2): `session.prompt` fires once
       // per admitted input with the eventual inbox User messageID — the
@@ -1167,6 +1285,14 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         commandBefore,
         chatMessage: promptBridge ? undefined : chatMessage,
         observeContextAgent: promptBridge?.observeContext,
+        // chat.headers: trailing user-message marker state for the
+        // model.request bridge below.
+        ...(chatHeadersHook
+          ? {
+              observeChatHeaders: (event: V2SessionContextEvent) =>
+                observeChatHeaderState(chatHeaderStates, event),
+            }
+          : {}),
         // Transcript user-message enrichment falls back to the agent the
         // prompt bridge learned when the context event carries none.
         knownAgentForSession: (sessionID) =>
@@ -1180,6 +1306,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const reg = await ctx.session.hook('context', handler);
       disposers.push(() => reg.dispose());
       log('[v2] session context hook registered');
+
+      // v1 chat.headers → v2 session.model.request (per-provider-request
+      // HTTP headers; capability-probed like the prompt hook above — hosts
+      // that reject the hook name keep v1 behavior of simply not setting
+      // the Copilot initiator header).
+      if (chatHeadersHook) {
+        try {
+          const headerReg = await ctx.session.hook(
+            'model.request',
+            createChatHeadersBridge(chatHeaderStates),
+          );
+          disposers.push(() => headerReg.dispose());
+          log('[v2] chat.headers bridge registered (session.model.request)');
+        } catch (err) {
+          log(
+            '[v2] session.hook(model.request) unavailable; chat.headers not bridged',
+            String(err),
+          );
+        }
+      }
     } catch (err) {
       log('[v2] session.hook(context) failed', String(err));
     }

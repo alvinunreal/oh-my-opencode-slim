@@ -62,13 +62,15 @@ entrypoint v2 loads when the `dist/server` directory is registered directly
 requires it. v1 uses the main entry.
 
 Verified against opencode2 `beta-19365` (all bridges green — health check
-`bridges:11`; live mock-driven re-verification on 2026-09-09 exercised the
-event-stream bridge end-to-end, including the orchestrator-wake
-children-driven degraded mode firing a queued wake after 60 s of parent
-idle with a stalled background child). Every v2 API the adapter touches is
-capability-probed at runtime (`typeof ctx.mcp?.transform === 'function'`,
-`s.switchModel`, `ctx.generate`, …), so a host lacking one capability
-degrades that single feature with a log line instead of breaking the load.
+`bridges:11`, +1 on hosts that accept the `session.model.request` hook
+name for the chat.headers bridge; live mock-driven re-verification on
+2026-09-09 exercised the event-stream bridge end-to-end, including the
+orchestrator-wake children-driven degraded mode firing a queued wake after
+60 s of parent idle with a stalled background child). Every v2 API the
+adapter touches is capability-probed at runtime (`typeof
+ctx.mcp?.transform === 'function'`, `s.switchModel`, `ctx.generate`, …),
+so a host lacking one capability degrades that single feature with a log
+line instead of breaking the load.
 
 ## The v2 adapter (`src/v2/setup.ts`)
 
@@ -137,6 +139,28 @@ degrades that single feature with a log line instead of breaking the load.
       context hook's per-request `chat.message` emulation narrows to
       agent/model discovery; hosts that reject the hook name keep the
       full emulation as fallback.
+    - a native `ctx.session.hook("model.request")` registration
+      (capability-guarded): the v2 equivalent of the v1 `chat.headers` hook.
+      Fires once per provider request with a mutable `headers` record the
+      host merges into the outgoing HTTP request. The bridge replays the v1
+      Copilot initiator-header semantics: for `github-copilot` /
+      `github-copilot-enterprise` primary requests whose trailing user
+      message is an internal-initiator admission (orchestrator-wake queue
+      prompts, foreground-fallback replays), it sets `x-initiator: agent`
+      so Copilot's backend does not account plugin-driven turns as user
+      activity. The internal marker is learned in-band — prompt `metadata`
+      persisted onto the transcript user message (visible on the
+      context-event envelope) plus an admission tracker for
+      `session.synthetic` wakes (synthetic admissions skip the prompt hook
+      and the host drops their metadata from the LLM envelope, so the shim
+      records a client-chosen `msg_`-prefixed admission id the host
+      honors). Auxiliary kinds (compaction/title/generate) are skipped —
+      v2's built-in Copilot provider hook already marks those, and the
+      native fetch layer only escalates a pre-set `x-initiator: agent`
+      (never resets it to `user`), so the bridge composes with the
+      built-in. Headers are transport-level; no payload content is read or
+      mutated. Hosts that reject the hook name keep the pre-bridge
+      behavior (header simply unset) with a one-time log.
     - `tool.execute.before/after` → `ctx.tool.hook` via
       `createToolExecuteBridges` (`src/v2/setup.ts`): the host `subagent`
       tool is normalized to v1 `task` semantics (name mapping, `agent`→
@@ -202,7 +226,7 @@ the rest, and a zero-registration load logs a loud health-check warning.
 | TUI default agent | ✅ orchestrator | ✅ orchestrator — `draft.default("orchestrator")`; the v2 TUI honors `default_agent` and hoists the default to the head of the agent list | — |
 | Multiplexer (tmux/zellij/herdr/cmux panes) | ✅ | ❌ host-gated off (`hostFlavor: 'v2'` → `shouldEnableMultiplexer` returns false and the session manager is forced to `type: "none"`) | by design — v2 renders subagents natively |
 | Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ✅ children-driven degraded mode (`backgroundJobs.orchestratorWake.mode`) | v2 wake enumerates children via `session.list({parentID})` with an event-tracked fallback, gates on children without a terminal `outcome` (staleness-bounded), and delivers with `queue`; v2's native subagent completion nudges still cover the happy path — the port adds a periodic watchdog for stuck children and unreconciled jobs |
-| `chat.headers` (custom request headers) | ✅ | ❌ unbridged | low value: v2 exposes a model request hook (`session.hook("model.request")`, with mutable `headers`) — will bridge only if asked for |
+| `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
 | Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
 
 ## Upstream behaviors to know
@@ -364,9 +388,6 @@ Q&A history.
   v2 renders subagents natively, so the multiplexer is host-gated off on v2
   (`shouldEnableMultiplexer` / `sessionManagerMultiplexerConfig` in
   `src/index.ts`).
-- **`chat.headers`.** Not bridged (low value on v2 — a model request hook
-  exists, `session.hook("model.request")` with mutable `headers`, if
-  demand appears).
 
 ### Orchestrator-wake on v2 (children-driven degraded mode)
 

@@ -27,6 +27,10 @@ import {
   isInternalInitiatorPart,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
+import {
+  createInternalSyntheticMessageID,
+  recordInternalAdmission,
+} from './internal-admissions';
 import type { V2Context } from './types';
 
 /** v2 model reference accepted by `ctx.generate.text`. */
@@ -390,8 +394,17 @@ export function buildPluginInput(
           }
         }
         if (internalViaSynthetic) {
+          // Client-chosen message id: v2 `Session.synthetic` honors
+          // `input.id` and preserves it on the LLM context message, so the
+          // admission can be recorded BEFORE the context event carries it —
+          // synthetic admissions skip the prompt hook and the host drops
+          // synthetic metadata from the LLM envelope, so without this the
+          // chat-headers bridge could never classify the wake request.
+          const internalMessageID = createInternalSyntheticMessageID();
+          recordInternalAdmission(sessionIDOf(args), internalMessageID);
           const result = await s.synthetic?.({
             sessionID: sessionIDOf(args),
+            id: internalMessageID,
             text: textFromBody(args),
             description: 'oh-my-opencode-slim internal initiator',
             ...(metadata ? { metadata } : {}),
