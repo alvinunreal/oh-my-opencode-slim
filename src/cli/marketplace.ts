@@ -8,6 +8,10 @@ import {
   preflightMarketplaceAgentActivation,
 } from '../marketplace/activation-config';
 import {
+  type MarketplaceReloadResult,
+  reloadOpenCodeService,
+} from '../marketplace/reload';
+import {
   collectMarketplaceStatus,
   formatMarketplaceStatus,
   mutationReloadNotice,
@@ -30,6 +34,10 @@ export interface MarketplaceArgs {
   value?: string;
   json: boolean;
   update?: boolean;
+}
+
+export interface MarketplaceCommandOptions extends MarketplaceServiceOptions {
+  reload?: (projectDir: string) => Promise<MarketplaceReloadResult>;
 }
 
 function commandSet(): readonly string[] {
@@ -105,12 +113,16 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
 
 export async function marketplaceCommand(
   args: string[],
-  options: MarketplaceServiceOptions = {},
+  options: MarketplaceCommandOptions = {},
 ): Promise<number> {
   try {
     const parsed = parseMarketplaceArgs(args);
     const service = new MarketplaceService(options);
     const projectDir = options.projectDir ?? process.cwd();
+    const reload = async (): Promise<MarketplaceReloadResult> => {
+      if (options.reload) return options.reload(projectDir);
+      return reloadOpenCodeService({ cwd: projectDir });
+    };
     switch (parsed.command) {
       case 'install': {
         const packageId = (parsed.value as string).trim().split('@', 1)[0];
@@ -120,7 +132,7 @@ export async function marketplaceCommand(
         console.log(
           mutationReloadNotice(
             `Installed and enabled ${pkg.manifest.id}@${pkg.manifest.version} in the active preset`,
-            'unknown',
+            await reload(),
           ),
         );
         return 0;
@@ -132,7 +144,7 @@ export async function marketplaceCommand(
         console.log(
           mutationReloadNotice(
             `${parsed.update ? 'Updated' : 'Imported'} ${pkg.manifest.id}@${pkg.manifest.version}`,
-            'unknown',
+            await reload(),
           ),
         );
         return 0;
@@ -142,7 +154,7 @@ export async function marketplaceCommand(
         console.log(
           mutationReloadNotice(
             `Updated ${pkg.manifest.id}@${pkg.manifest.version}`,
-            'unknown',
+            await reload(),
           ),
         );
         return 0;
@@ -175,7 +187,9 @@ export async function marketplaceCommand(
       }
       case 'remove':
         service.remove(parsed.value as string);
-        console.log(mutationReloadNotice(`Removed ${parsed.value}`, 'unknown'));
+        console.log(
+          mutationReloadNotice(`Removed ${parsed.value}`, await reload()),
+        );
         return 0;
       case 'enable':
         enableMarketplaceAgent(
@@ -186,7 +200,7 @@ export async function marketplaceCommand(
         console.log(
           mutationReloadNotice(
             `Enabled ${parsed.value} in the active preset`,
-            'unknown',
+            await reload(),
           ),
         );
         return 0;
@@ -195,7 +209,7 @@ export async function marketplaceCommand(
         console.log(
           mutationReloadNotice(
             `Disabled ${parsed.value} in the active preset`,
-            'unknown',
+            await reload(),
           ),
         );
         return 0;

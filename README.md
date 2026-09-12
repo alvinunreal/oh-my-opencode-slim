@@ -119,7 +119,10 @@ Package manifests are data-only, exact-version locked, and stored under the XDG
 data directory. The CLI registry `install` command installs a package and
 enables its agent in the active preset in one operation. Local imports still
 require a separate activation step. Activated agents apply after the next
-OpenCode session/reload; the live registry is never hot-swapped.
+OpenCode session/reload; the live registry is never hot-swapped. CLI mutations
+restart an active OpenCode v2 managed service automatically; with no running
+service, the configuration is saved for the next launch. In-session mutations
+never restart their own host service and report whether application is pending.
 Manifests include bounded author, tag, license, plugin compatibility, routing,
 model policy, exact skills/MCPs/tools, and prompt metadata. Schema-v2 manifests
 retain the legacy routing fields; schema-v3 manifests use bounded single-line

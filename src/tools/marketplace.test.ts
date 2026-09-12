@@ -142,7 +142,7 @@ describe('marketplace tool', () => {
           ),
         );
         expect(installed).toContain('Imported community/docs-researcher@1.0.0');
-        expect(installed).toContain('reload_required: false');
+        expect(installed).toContain('reload_status: applied');
         expect(installed).not.toContain(MARKETPLACE_RELOAD_NOTICE);
 
         const listed = String(
@@ -179,7 +179,7 @@ describe('marketplace tool', () => {
           ),
         );
         expect(updated).toContain('Updated community/docs-researcher@1.1.0');
-        expect(updated).toContain('reload_required: false');
+        expect(updated).toContain('reload_status: applied');
 
         const enabled = String(
           await marketplace.execute(
@@ -191,14 +191,14 @@ describe('marketplace tool', () => {
           ),
         );
         expect(enabled).toContain('Enabled community/docs-researcher');
-        expect(enabled).toContain('reload_required: true');
+        expect(enabled).toContain('reload_status: pending');
         expect(enabled).toContain(MARKETPLACE_RELOAD_NOTICE);
         expect(live.packages).toEqual([]);
 
         const statusAfterMutations = String(
           await marketplace.execute({ action: 'status' }, context),
         );
-        expect(statusAfterMutations).toContain('reload_required: true');
+        expect(statusAfterMutations).toContain('reload_status: pending');
         expect(statusAfterMutations).toContain(
           'community/docs-researcher@1.1.0',
         );
@@ -235,7 +235,7 @@ describe('marketplace tool', () => {
           ),
         );
         expect(disabled).toContain('Disabled community/docs-researcher');
-        expect(disabled).toContain('reload_required: false');
+        expect(disabled).toContain('reload_status: applied');
 
         expect(live.packages).toEqual([]);
       } finally {
@@ -271,7 +271,7 @@ describe('marketplace tool', () => {
           context,
         ),
       );
-      expect(updated).toContain('reload_required: true');
+      expect(updated).toContain('reload_status: pending');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -305,7 +305,7 @@ describe('marketplace tool', () => {
           context,
         ),
       );
-      expect(removed).toContain('reload_required: true');
+      expect(removed).toContain('reload_status: pending');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -336,7 +336,7 @@ describe('marketplace tool', () => {
           context,
         ),
       );
-      expect(again).toContain('reload_required: false');
+      expect(again).toContain('reload_status: applied');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

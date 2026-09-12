@@ -11,7 +11,7 @@ import {
   formatMarketplaceStatus,
   type MarketplaceLiveSnapshot,
   mutationReloadNotice,
-  reloadRequiredAfterMutation,
+  reloadStatusAfterMutation,
 } from '../marketplace/status';
 
 const toolZ = tool.schema;
@@ -109,7 +109,7 @@ function mutationResult(
 ): string {
   return mutationReloadNotice(
     message,
-    reloadRequiredAfterMutation({
+    reloadStatusAfterMutation({
       service: options.service,
       projectDir: options.projectDir,
       live: options.getLiveSnapshot?.(),
