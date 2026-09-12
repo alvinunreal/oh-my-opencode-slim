@@ -12,24 +12,4 @@
  * the peer modules. See `codemap.md`.
  */
 
-export type { V2InterviewBridge } from './interview-bridge';
-export {
-  createV2InterviewBridge,
-  INTERVIEW_COMMAND_MARKER,
-} from './interview-bridge';
 export { createV2Setup } from './setup';
-export type {
-  ModelRef,
-  V2AgentDraft,
-  V2Cleanup,
-  V2CommandDefinition,
-  V2CommandDraft,
-  V2Context,
-  V2Registration,
-  V2SessionContextEvent,
-  V2ToolAfterEvent,
-  V2ToolBeforeEvent,
-  V2ToolDefinition,
-  V2ToolDraft,
-  V2ToolOptions,
-} from './types';
