@@ -115,13 +115,17 @@ npx oh-my-opencode-slim@latest install
 
 Startup and local marketplace reads are offline. Explicit registry install and
 update operations use bounded HTTPS requests to the fixed beta registry.
-Package manifests are data-only, exact-version locked, and stored under the XDG data directory.
-Installation and preset activation are separate: install a package, then enable
-it in the active preset. Activated agents apply after the next
+Package manifests are data-only, exact-version locked, and stored under the XDG
+data directory. The CLI registry `install` command installs a package and
+enables its agent in the active preset in one operation. Local imports still
+require a separate activation step. Activated agents apply after the next
 OpenCode session/reload; the live registry is never hot-swapped.
 Manifests include bounded author, tag, license, plugin compatibility, routing,
-model policy, exact skills/MCPs/tools, and prompt metadata. Agents may extend
-one built-in specialist with explicit append/replace composition semantics.
+model policy, exact skills/MCPs/tools, and prompt metadata. Schema-v2 manifests
+retain the legacy routing fields; schema-v3 manifests use bounded single-line
+`lane`, `stats`, `delegateWhen`, `avoid`, and optional
+`additionalInstructions` fields. V3 extensions are append-only. Agents may
+extend one built-in specialist with the version's composition semantics.
 Executable fields,
 package-to-package dependencies, and arbitrary file maps are rejected.
 
@@ -141,10 +145,14 @@ bunx oh-my-opencode-slim marketplace status
 
 Use `import` explicitly for local author files; `import --update` requires an
 existing package and a strictly newer version. Unversioned registry install
-selects the highest compatible version, while `ID@version` selects exactly
-that version. Registry update requires an installed package and is strictly
-monotonic. `enable` activates an installed agent package in the active preset as
-a separately named agent. Declared skills and MCPs are preflighted against
+selects the highest compatible version and enables it in the active preset,
+while `ID@version` selects exactly that version. Registry update requires an
+installed package and is strictly monotonic. `enable` activates an already
+installed agent package in the active preset as a separately named agent.
+Registry installs try v3 first and fall back to v2 only when v3 is unavailable
+or lacks the requested package; malformed or integrity-invalid v3 data is not
+downgraded.
+Declared skills and MCPs are preflighted against
 built-in capabilities and on-disk host configuration; missing dependencies
 disable that agent for the session.
 Startup reads only the local store and never contacts a registry. The

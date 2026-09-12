@@ -5,6 +5,7 @@ import {
 import {
   disableMarketplacePackage,
   enableMarketplaceAgent,
+  preflightMarketplaceAgentActivation,
 } from '../marketplace/activation-config';
 import {
   collectMarketplaceStatus,
@@ -125,10 +126,13 @@ export async function marketplaceCommand(
     const projectDir = options.projectDir ?? process.cwd();
     switch (parsed.command) {
       case 'install': {
+        const packageId = (parsed.value as string).trim().split('@', 1)[0];
+        preflightMarketplaceAgentActivation(projectDir, packageId);
         const pkg = await service.installRemote(parsed.value as string);
+        enableMarketplaceAgent(projectDir, pkg.manifest.id, service.store);
         console.log(
           mutationReloadNotice(
-            `Installed ${pkg.manifest.id}@${pkg.manifest.version}`,
+            `Installed and enabled ${pkg.manifest.id}@${pkg.manifest.version} in the active preset`,
             'unknown',
           ),
         );

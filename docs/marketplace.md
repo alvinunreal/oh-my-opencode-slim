@@ -5,10 +5,11 @@ read are offline. Only explicit registry `install` and `update` operations
 make bounded HTTPS requests to the beta registry.
 
 Package manifests are data-only, exact-version locked, and stored under the
-XDG data directory. Installation and preset activation are separate: install
-a package, then enable it in the active preset. Activated agents apply after
-the next OpenCode session or reload. The live agent
-registry is never hot-swapped.
+XDG data directory. The CLI registry `install` command installs a package and
+enables its agent in the active preset in one operation. Local imports and
+in-session tool actions remain separate from preset activation. Activated agents
+apply after the next OpenCode session or reload. The live agent registry is
+never hot-swapped.
 
 ## CLI
 
@@ -30,10 +31,13 @@ bunx oh-my-opencode-slim marketplace status [--json]
 `import` is the explicit local author workflow and records the canonical
 absolute local source path in the lockfile. Add `--update` to import a strictly
 newer version into an existing package. Registry `install` accepts an ID or an
-exact `ID@version`; an unversioned ID selects the highest compatible version.
+exact `ID@version`; an unversioned ID selects the highest compatible version and
+enables the installed agent in the active preset. Registry installs try the v3
+endpoint first and use v2 only when v3 is unavailable or does not contain the
+requested package; malformed or integrity-invalid v3 data is not downgraded.
 Registry `update` requires an installed package and selects only a strictly
-newer compatible version. `enable` activates an installed agent package in the
-active preset as a separately named agent. An agent may optionally extend one
+newer compatible version. `enable` activates an already installed agent package
+in the active preset as a separately named agent. An agent may optionally extend one
 built-in specialist.
 
 `status` reports installed packages, configured activation, live-session
@@ -43,6 +47,14 @@ or operational read failures) and activation rejections (collision,
 missing required dependency, invalid alias). Operational failures leave
 in-session `reload_required` as `unknown` because disk identity cannot be
 compared.
+
+## Manifest routing versions
+
+Schema-v2 manifests retain the legacy routing object and prompt-mode behavior.
+Schema-v3 manifests use a deterministic routing object with `lane`, `stats`,
+`delegateWhen`, `avoid`, and optional `additionalInstructions`; extensions are
+append-only. V3 routing lines are single-line bounded values, and list order is
+preserved in the generated routing block.
 
 ## In-session tool
 
@@ -74,7 +86,8 @@ read (for example EACCES).
 
 ## Limits
 
-- The beta registry is fixed at `https://registry.ohmyopencodeslim.com/v2/`;
+- The beta registry uses `https://registry.ohmyopencodeslim.com/v3/` first and
+  falls back to `/v2/` only for an unavailable or missing v3 package;
   configurable registries and redirects are not supported.
 - Declared skills and MCPs are preflighted against built-in capabilities and
   on-disk host configuration. Missing dependencies disable that package for
@@ -85,13 +98,16 @@ read (for example EACCES).
 ## Registry contract
 
 Registry CI and static site tooling can import the narrow
-`oh-my-opencode-slim/marketplace-contract` package subpath. It provides the
-schema-v3 indexes (including retirement tombstones), deterministic
-artifact paths, manifest-summary projection, selector resolution, and the same
-canonical bundle SHA-256 digest used by the plugin store. It also exports
-`renderDefaultMarketplaceAutoDelegationBlock(manifest)`, the authoritative
-default routing block for marketplace agents. Built-in extensions use the
-current built-in role routing plus the package's routing suffix; standalone
-packages use a generic lane block. This default renderer does not apply owner
-or runtime display-alias overrides. The public contract does not add
-root-package exports.
+`oh-my-opencode-slim/marketplace-contract` package subpath. The fixed `/v2/`
+registry remains a v2-manifest index and must be parsed with its v2 parser.
+The contract also exposes separate v3 manifest/index schemas, parsers, summary
+projection, selector resolution, and the future `/v3/` registry base URL;
+v2 parsing never accepts v3 artifacts. Both contracts use deterministic
+artifact paths, retirement tombstones, and canonical bundle SHA-256 digests.
+It also exports `renderDefaultMarketplaceAutoDelegationBlock(manifest)`, the
+authoritative deterministic routing block. Built-in v3 extensions use the
+current built-in role routing followed by package lane, stats, delegation, and
+avoidance guidance; standalone v3 packages include their role sentence and
+mechanically derived declared capabilities. This default renderer does not
+apply owner or runtime display-alias overrides. The public contract does not
+add root-package exports.

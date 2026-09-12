@@ -29,6 +29,7 @@ import { getMarketplacePaths, type MarketplacePaths } from './paths';
 import { assertMarketplacePackageNotRetired } from './retirements';
 import {
   MARKETPLACE_DIGEST_DOMAIN,
+  MARKETPLACE_DIGEST_DOMAIN_V3,
   MARKETPLACE_LOCKFILE_SCHEMA_VERSION,
   type MarketplaceLockEntry,
   type MarketplaceLockfile,
@@ -112,8 +113,20 @@ function packageEntry(
   source: MarketplaceSource,
   digest: string,
 ): MarketplaceLockEntry {
+  if (bundle.manifest.schemaVersion === 3) {
+    return {
+      manifestSchemaVersion: 3,
+      manifestVersion: bundle.manifest.version,
+      source,
+      digest: {
+        algorithm: 'sha256',
+        domain: MARKETPLACE_DIGEST_DOMAIN_V3,
+        value: digest,
+      },
+    };
+  }
   return {
-    manifestSchemaVersion: bundle.manifest.schemaVersion,
+    manifestSchemaVersion: 2,
     manifestVersion: bundle.manifest.version,
     source,
     digest: {
@@ -586,7 +599,10 @@ export class MarketplaceStore {
         bundle.manifest.schemaVersion !== entry.manifestSchemaVersion ||
         sidecar !== digest ||
         entry.digest.algorithm !== 'sha256' ||
-        entry.digest.domain !== MARKETPLACE_DIGEST_DOMAIN ||
+        entry.digest.domain !==
+          (bundle.manifest.schemaVersion === 3
+            ? MARKETPLACE_DIGEST_DOMAIN_V3
+            : MARKETPLACE_DIGEST_DOMAIN) ||
         entry.digest.value !== digest
       ) {
         throw new MarketplaceIntegrityError(

@@ -1,14 +1,22 @@
 import { satisfies } from 'semver';
 import {
   DEFAULT_MARKETPLACE_REGISTRY_URL,
+  DEFAULT_MARKETPLACE_REGISTRY_V3_URL,
   isMarketplaceRegistryIdRetired,
-  MarketplacePackageBundleSchema,
+  isMarketplaceRegistryIdRetiredV3,
+  MarketplacePackageBundleV2Schema,
+  MarketplacePackageBundleV3Schema,
   type MarketplaceRegistryEntry,
+  type MarketplaceRegistryEntryV3,
   type MarketplaceRegistryIndex,
+  type MarketplaceRegistryIndexV3,
   parseMarketplaceRegistryIndex,
+  parseMarketplaceRegistryIndexV3,
   parseMarketplaceRegistrySelector,
   resolveMarketplaceRegistryEntry,
+  resolveMarketplaceRegistryEntryV3,
   validateMarketplaceRegistryEntry,
+  validateMarketplaceRegistryEntryV3,
 } from '../marketplace-contract';
 import {
   MarketplaceCompatibilityError,
@@ -22,6 +30,8 @@ import { assertMarketplacePackageNotRetired } from './retirements';
 import type { MarketplacePackageBundle } from './schemas';
 
 export const MARKETPLACE_REGISTRY_INDEX_URL = `${DEFAULT_MARKETPLACE_REGISTRY_URL}index.json`;
+export const MARKETPLACE_REGISTRY_V2_INDEX_URL = MARKETPLACE_REGISTRY_INDEX_URL;
+export const MARKETPLACE_REGISTRY_V3_INDEX_URL = `${DEFAULT_MARKETPLACE_REGISTRY_V3_URL}index.json`;
 export const DEFAULT_MARKETPLACE_REGISTRY_TIMEOUT_MS = 10_000;
 export const DEFAULT_MARKETPLACE_REGISTRY_INDEX_MAX_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES = 512 * 1024;
@@ -36,9 +46,10 @@ export interface MarketplaceRegistryClientOptions {
 
 export interface MarketplaceRegistryDownload {
   bundle: MarketplacePackageBundle;
-  entry: MarketplaceRegistryEntry;
+  entry: MarketplaceRegistryEntry | MarketplaceRegistryEntryV3;
   indexUrl: string;
   packageUrl: string;
+  registry?: string;
 }
 
 async function readBoundedBody(
@@ -126,6 +137,33 @@ export class MarketplaceRegistryClient {
     minimumVersion?: string,
     signal?: AbortSignal,
   ): Promise<MarketplaceRegistryDownload> {
+    return this.downloadFromRegistry(
+      selectorText,
+      minimumVersion,
+      signal,
+      false,
+    );
+  }
+
+  async downloadV3(
+    selectorText: string,
+    minimumVersion?: string,
+    signal?: AbortSignal,
+  ): Promise<MarketplaceRegistryDownload> {
+    return this.downloadFromRegistry(
+      selectorText,
+      minimumVersion,
+      signal,
+      true,
+    );
+  }
+
+  private async downloadFromRegistry(
+    selectorText: string,
+    minimumVersion: string | undefined,
+    signal: AbortSignal | undefined,
+    v3: boolean,
+  ): Promise<MarketplaceRegistryDownload> {
     if (signal?.aborted) {
       throw new MarketplaceRegistryUnavailableError(
         'Marketplace registry request was cancelled',
@@ -141,8 +179,31 @@ export class MarketplaceRegistryClient {
       }
     })();
     assertMarketplacePackageNotRetired(selector.id);
-    const index = await this.fetchIndex(signal);
-    if (isMarketplaceRegistryIdRetired(index, selector.id)) {
+    const indexText = await this.fetchJson(
+      v3 ? MARKETPLACE_REGISTRY_V3_INDEX_URL : MARKETPLACE_REGISTRY_INDEX_URL,
+      this.maxIndexBytes,
+      signal,
+    );
+    let index: MarketplaceRegistryIndex | MarketplaceRegistryIndexV3;
+    try {
+      index = v3
+        ? parseMarketplaceRegistryIndexV3(indexText)
+        : parseMarketplaceRegistryIndex(indexText);
+    } catch (error) {
+      throw new MarketplaceRegistryProtocolError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    const retired = v3
+      ? isMarketplaceRegistryIdRetiredV3(
+          index as MarketplaceRegistryIndexV3,
+          selector.id,
+        )
+      : isMarketplaceRegistryIdRetired(
+          index as MarketplaceRegistryIndex,
+          selector.id,
+        );
+    if (retired) {
       throw new MarketplaceRetiredError(
         `${selector.id} is retired and cannot be installed`,
       );
@@ -164,16 +225,25 @@ export class MarketplaceRegistryClient {
         `Marketplace package ${selector.id}@${selector.version} was not found in the registry`,
       );
     }
-    let entry: MarketplaceRegistryEntry;
+    let entry: MarketplaceRegistryEntry | MarketplaceRegistryEntryV3;
     try {
-      entry = resolveMarketplaceRegistryEntry(
-        index,
-        selector,
-        {
-          pluginVersion: this.options.pluginVersion,
-        },
-        minimumVersion,
-      );
+      entry = v3
+        ? resolveMarketplaceRegistryEntryV3(
+            index as MarketplaceRegistryIndexV3,
+            selector,
+            {
+              pluginVersion: this.options.pluginVersion,
+            },
+            minimumVersion,
+          )
+        : resolveMarketplaceRegistryEntry(
+            index as MarketplaceRegistryIndex,
+            selector,
+            {
+              pluginVersion: this.options.pluginVersion,
+            },
+            minimumVersion,
+          );
     } catch (error) {
       if (error instanceof MarketplaceRetiredError) throw error;
       throw new MarketplaceCompatibilityError(
@@ -183,7 +253,9 @@ export class MarketplaceRegistryClient {
 
     const packageUrl = new URL(
       entry.artifactPath,
-      DEFAULT_MARKETPLACE_REGISTRY_URL,
+      v3
+        ? DEFAULT_MARKETPLACE_REGISTRY_V3_URL
+        : DEFAULT_MARKETPLACE_REGISTRY_URL,
     ).href;
     const artifact = await this.fetchJson(
       packageUrl,
@@ -192,12 +264,23 @@ export class MarketplaceRegistryClient {
     );
     let bundle: MarketplacePackageBundle;
     try {
-      const result = MarketplacePackageBundleSchema.safeParse(artifact);
-      if (!result.success) {
-        throw new Error(result.error.message);
+      if (v3) {
+        const result = MarketplacePackageBundleV3Schema.safeParse(artifact);
+        if (!result.success) throw new Error(result.error.message);
+        bundle = result.data;
+        validateMarketplaceRegistryEntryV3(
+          entry as MarketplaceRegistryEntryV3,
+          bundle,
+        );
+      } else {
+        const result = MarketplacePackageBundleV2Schema.safeParse(artifact);
+        if (!result.success) throw new Error(result.error.message);
+        bundle = result.data;
+        validateMarketplaceRegistryEntry(
+          entry as MarketplaceRegistryEntry,
+          bundle,
+        );
       }
-      bundle = result.data;
-      validateMarketplaceRegistryEntry(entry, bundle);
     } catch (error) {
       throw new MarketplaceRegistryIntegrityError(
         error instanceof Error ? error.message : String(error),
@@ -216,8 +299,13 @@ export class MarketplaceRegistryClient {
     return {
       bundle,
       entry,
-      indexUrl: MARKETPLACE_REGISTRY_INDEX_URL,
+      indexUrl: v3
+        ? MARKETPLACE_REGISTRY_V3_INDEX_URL
+        : MARKETPLACE_REGISTRY_INDEX_URL,
       packageUrl,
+      registry: v3
+        ? DEFAULT_MARKETPLACE_REGISTRY_V3_URL
+        : DEFAULT_MARKETPLACE_REGISTRY_URL,
     };
   }
 

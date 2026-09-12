@@ -1,3 +1,4 @@
+import { accessSync, constants } from 'node:fs';
 import { mutateJsonFile } from '../cli/config-io';
 import {
   findPluginConfigPaths,
@@ -46,6 +47,31 @@ function activePresetName(config: PluginConfig): string {
   throw new MarketplaceActivationError(
     'Select an active preset before enabling marketplace packages',
   );
+}
+
+export function preflightMarketplaceAgentActivation(
+  directory: string,
+  packageId: string,
+): void {
+  const id = normalizeMarketplacePackageId(packageId);
+  assertMarketplacePackageNotRetired(id);
+  const config = loadPluginConfig(directory, { silent: true });
+  const presetName = activePresetName(config);
+  if (!config.presets?.[presetName]) {
+    throw new MarketplaceActivationError(
+      `Active preset '${presetName}' does not exist in the plugin config`,
+    );
+  }
+  const filePath = configWritePath(directory);
+  try {
+    accessSync(filePath, constants.W_OK);
+  } catch (error) {
+    throw new MarketplaceActivationError(
+      `Cannot write plugin config for marketplace activation: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 function cloneActivation(
@@ -118,6 +144,7 @@ export function enableMarketplaceAgent(
 ): void {
   const id = normalizeMarketplacePackageId(packageId);
   assertMarketplacePackageNotRetired(id);
+  preflightMarketplaceAgentActivation(directory, id);
   store.show(id);
   const config = loadPluginConfig(directory, { silent: true });
   const presetName = activePresetName(config);

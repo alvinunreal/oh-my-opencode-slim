@@ -10,7 +10,10 @@ import {
 import { RuntimeConfig } from '../config/runtime';
 import { renderDefaultMarketplaceAutoDelegationBlock } from '../marketplace-contract';
 import { renderMarketplaceAutoDelegationBlock } from './routing';
-import type { MarketplacePackageManifest } from './schemas';
+import type {
+  MarketplacePackageManifest,
+  MarketplacePackageManifestV3,
+} from './schemas';
 import { MarketplaceStore } from './store';
 
 const baseManifest: MarketplacePackageManifest = {
@@ -29,6 +32,31 @@ const baseManifest: MarketplacePackageManifest = {
   skills: [],
   mcps: [],
   tools: [],
+  author: { name: 'Community' },
+  tags: ['routing'],
+  license: 'MIT',
+  compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+  model: { source: 'explicit', candidates: ['provider/model'] },
+};
+
+const v3Manifest: MarketplacePackageManifestV3 = {
+  schemaVersion: 3,
+  id: 'community/routing-v3-agent',
+  version: '1.0.0',
+  displayName: 'Routing v3 agent',
+  description: 'A v3 standalone routing agent.',
+  agentName: 'routing-v3-agent',
+  prompt: 'Package prompt.',
+  routing: {
+    lane: 'Deterministic package lane.',
+    stats: ['Fast implementation', 'Low context overhead'],
+    delegateWhen: ['The task has a bounded implementation scope.'],
+    avoid: ['Architecture decisions', 'Visual design work'],
+    additionalInstructions: ['Return a concise implementation summary.'],
+  },
+  skills: ['simplify'],
+  mcps: ['context7'],
+  tools: ['read', 'apply_patch'],
   author: { name: 'Community' },
   tags: ['routing'],
   license: 'MIT',
@@ -84,6 +112,43 @@ describe('marketplace routing renderer', () => {
     ].join('\n');
 
     expect(renderMarketplaceAutoDelegationBlock(baseManifest)).toBe(expected);
+  });
+
+  test('renders v3 standalone routing deterministically in source order', () => {
+    expect(renderMarketplaceAutoDelegationBlock(v3Manifest)).toBe(
+      [
+        '@routing-v3-agent',
+        '- Lane: Deterministic package lane.',
+        '- Role: A v3 standalone routing agent.',
+        '- Capabilities: Tools: read, apply_patch; Skills: simplify; MCPs: context7',
+        '- Stats: Fast implementation • Low context overhead',
+        '- **Delegate when:** The task has a bounded implementation scope.',
+        '- **Avoid:** Architecture decisions • Visual design work',
+        '- **Additional instructions:** Return a concise implementation summary.',
+      ].join('\n'),
+    );
+  });
+
+  test('renders v3 extensions after the current base-role block', () => {
+    const manifest: MarketplacePackageManifestV3 = {
+      ...v3Manifest,
+      extends: { builtin: 'fixer', promptMode: 'append' },
+    };
+    expect(renderMarketplaceAutoDelegationBlock(manifest, 'build-agent')).toBe(
+      [
+        ROLE_DEFINITIONS.fixer.routingBlock.replaceAll(
+          '@fixer',
+          '@build-agent',
+        ),
+        '',
+        '- Package: Routing v3 agent',
+        '- Package lane: Deterministic package lane.',
+        '- Stats: Fast implementation • Low context overhead',
+        '- **Delegate when:** The task has a bounded implementation scope.',
+        '- **Avoid:** Architecture decisions • Visual design work',
+        '- **Additional instructions:** Return a concise implementation summary.',
+      ].join('\n'),
+    );
   });
 
   test('renders a runtime display alias without changing the manifest default', () => {

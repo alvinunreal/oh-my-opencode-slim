@@ -6,7 +6,9 @@ import type { MarketplacePackageBundle } from '../marketplace-contract';
 import {
   canonicalizeMarketplaceValue,
   createMarketplaceRegistryEntry,
+  createMarketplaceRegistryEntryV3,
   createMarketplaceRegistryIndex,
+  createMarketplaceRegistryIndexV3,
   digestMarketplaceBundle,
   MarketplaceManifestSummarySchema,
   MarketplaceRegistryIndexSchema,
@@ -26,6 +28,7 @@ import {
 import {
   DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES,
   MARKETPLACE_REGISTRY_INDEX_URL,
+  MARKETPLACE_REGISTRY_V3_INDEX_URL,
   MarketplaceRegistryClient,
 } from './registry-client';
 import { MarketplaceService } from './service';
@@ -67,6 +70,26 @@ function bundle(
   };
 }
 
+function bundleV3(
+  version = '1.0.0',
+  id = 'community/registry-v3-agent',
+): MarketplacePackageBundle {
+  const current = bundle(version, id);
+  return {
+    manifest: {
+      ...current.manifest,
+      schemaVersion: 3,
+      compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+      routing: {
+        lane: 'V3 registry lane.',
+        stats: ['Fast v3 resolution'],
+        delegateWhen: ['The v3 package matches.'],
+        avoid: ['Malformed package metadata.'],
+      },
+    },
+  };
+}
+
 function indexFor(packageBundle = bundle()): Record<string, unknown> {
   const manifest = packageBundle.manifest;
   return {
@@ -86,6 +109,12 @@ function indexFor(packageBundle = bundle()): Record<string, unknown> {
     ],
     retirements: canonicalRetirements,
   };
+}
+
+function indexForV3(packageBundle = bundleV3()): Record<string, unknown> {
+  return createMarketplaceRegistryIndexV3([
+    createMarketplaceRegistryEntryV3(packageBundle),
+  ]);
 }
 
 function response(value: unknown, status = 200): Response {
@@ -242,6 +271,272 @@ describe('marketplace registry contract', () => {
 });
 
 describe('MarketplaceRegistryClient', () => {
+  test('downloads v3 artifacts with the v3 contract and base URL', async () => {
+    const packageBundle = bundleV3();
+    const calls: string[] = [];
+    const client = new MarketplaceRegistryClient({
+      pluginVersion: '3.0.0-beta.6',
+      fetch: async (input) => {
+        const url = String(input);
+        calls.push(url);
+        return url === MARKETPLACE_REGISTRY_V3_INDEX_URL
+          ? response(indexForV3(packageBundle))
+          : response(packageBundle);
+      },
+    });
+
+    const downloaded = await client.downloadV3('community/registry-v3-agent');
+    expect(downloaded.bundle.manifest.schemaVersion).toBe(3);
+    expect(downloaded.registry).toBe(
+      'https://registry.ohmyopencodeslim.com/v3/',
+    );
+    expect(calls).toEqual([
+      MARKETPLACE_REGISTRY_V3_INDEX_URL,
+      'https://registry.ohmyopencodeslim.com/v3/artifacts/community/registry-v3-agent/1.0.0.json',
+    ]);
+  });
+
+  test('the v2 client rejects v3 indexes instead of parsing them as v2', async () => {
+    const packageBundle = bundleV3();
+    const client = new MarketplaceRegistryClient({
+      pluginVersion: '3.0.0-beta.6',
+      fetch: async () => response(indexForV3(packageBundle)),
+    });
+
+    await expect(client.fetchIndex()).rejects.toBeInstanceOf(
+      MarketplaceRegistryProtocolError,
+    );
+  });
+
+  test('MarketplaceService tries v3 first and installs the v3 result', async () => {
+    const packageBundle = bundleV3();
+    const calls: string[] = [];
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-v3-first-'));
+    try {
+      const service = new MarketplaceService({
+        rootDir: root,
+        pluginVersion: '3.0.0-beta.6',
+        registryClient: new MarketplaceRegistryClient({
+          pluginVersion: '3.0.0-beta.6',
+          fetch: async (input) => {
+            const url = String(input);
+            calls.push(url);
+            return url === MARKETPLACE_REGISTRY_V3_INDEX_URL
+              ? response(indexForV3(packageBundle))
+              : response(packageBundle);
+          },
+        }),
+      });
+
+      const installed = await service.installRemote(
+        'community/registry-v3-agent',
+      );
+      expect(installed.manifest.schemaVersion).toBe(3);
+      expect(installed.manifest.version).toBe('1.0.0');
+      expect(
+        service.store.getLockfile().packages['community/registry-v3-agent']
+          .source,
+      ).toMatchObject({
+        kind: 'registry',
+        registry: 'https://registry.ohmyopencodeslim.com/v3/',
+      });
+      expect(calls[0]).toBe(MARKETPLACE_REGISTRY_V3_INDEX_URL);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('updates an installed v3 package through v3 without substituting v2', async () => {
+    const initial = bundleV3('1.0.0');
+    const updated = bundleV3('2.0.0');
+    const v2Replacement = bundle('2.0.0', initial.manifest.id);
+    const calls: string[] = [];
+    let v3IndexReads = 0;
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-v3-update-'));
+    try {
+      const service = new MarketplaceService({
+        rootDir: root,
+        pluginVersion: '3.0.0-beta.6',
+        registryClient: new MarketplaceRegistryClient({
+          pluginVersion: '3.0.0-beta.6',
+          fetch: async (input) => {
+            const url = String(input);
+            calls.push(url);
+            if (url === MARKETPLACE_REGISTRY_V3_INDEX_URL) {
+              v3IndexReads += 1;
+              return response(
+                createMarketplaceRegistryIndexV3(
+                  v3IndexReads === 1
+                    ? [createMarketplaceRegistryEntryV3(initial)]
+                    : [
+                        createMarketplaceRegistryEntryV3(initial),
+                        createMarketplaceRegistryEntryV3(updated),
+                      ],
+                ),
+              );
+            }
+            if (url === MARKETPLACE_REGISTRY_INDEX_URL) {
+              return response(indexFor(v2Replacement));
+            }
+            if (
+              url.endsWith(
+                '/v3/artifacts/community/registry-v3-agent/1.0.0.json',
+              )
+            ) {
+              return response(initial);
+            }
+            if (
+              url.endsWith(
+                '/v3/artifacts/community/registry-v3-agent/2.0.0.json',
+              )
+            ) {
+              return response(updated);
+            }
+            if (
+              url.endsWith(
+                '/v2/artifacts/community/registry-v3-agent/2.0.0.json',
+              )
+            ) {
+              return response(v2Replacement);
+            }
+            throw new Error(`Unexpected registry request: ${url}`);
+          },
+        }),
+      });
+
+      const installed = await service.installRemote(
+        'community/registry-v3-agent',
+      );
+      const result = await service.updateRemote('community/registry-v3-agent');
+
+      expect(installed.manifest.schemaVersion).toBe(3);
+      expect(result.manifest.schemaVersion).toBe(3);
+      expect(result.manifest.version).toBe('2.0.0');
+      expect(result.source).toEqual({
+        kind: 'registry',
+        registry: 'https://registry.ohmyopencodeslim.com/v3/',
+        indexUrl: MARKETPLACE_REGISTRY_V3_INDEX_URL,
+        packageUrl:
+          'https://registry.ohmyopencodeslim.com/v3/artifacts/community/registry-v3-agent/2.0.0.json',
+      });
+      expect(calls).toEqual([
+        MARKETPLACE_REGISTRY_V3_INDEX_URL,
+        'https://registry.ohmyopencodeslim.com/v3/artifacts/community/registry-v3-agent/1.0.0.json',
+        MARKETPLACE_REGISTRY_V3_INDEX_URL,
+        'https://registry.ohmyopencodeslim.com/v3/artifacts/community/registry-v3-agent/2.0.0.json',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to v2 only when v3 is unavailable or lacks the package', async () => {
+    const v2Bundle = bundle();
+    const calls: string[] = [];
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-v3-fallback-'));
+    try {
+      const service = new MarketplaceService({
+        rootDir: root,
+        pluginVersion: '3.1.0',
+        registryClient: new MarketplaceRegistryClient({
+          pluginVersion: '3.1.0',
+          fetch: async (input) => {
+            const url = String(input);
+            calls.push(url);
+            if (url === MARKETPLACE_REGISTRY_V3_INDEX_URL) {
+              return response(createMarketplaceRegistryIndexV3([]));
+            }
+            if (url === MARKETPLACE_REGISTRY_INDEX_URL) {
+              return response(indexFor(v2Bundle));
+            }
+            return response(v2Bundle);
+          },
+        }),
+      });
+
+      const installed = await service.installRemote('community/registry-agent');
+      expect(installed.manifest.schemaVersion).toBe(2);
+      expect(calls).toEqual([
+        MARKETPLACE_REGISTRY_V3_INDEX_URL,
+        MARKETPLACE_REGISTRY_INDEX_URL,
+        'https://registry.ohmyopencodeslim.com/v2/artifacts/community/registry-agent/1.0.0.json',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back when the v3 endpoint is unavailable', async () => {
+    const packageBundle = bundle();
+    const calls: string[] = [];
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-v3-unavailable-'));
+    try {
+      const service = new MarketplaceService({
+        rootDir: root,
+        pluginVersion: '3.1.0',
+        registryClient: new MarketplaceRegistryClient({
+          pluginVersion: '3.1.0',
+          fetch: async (input) => {
+            const url = String(input);
+            calls.push(url);
+            if (url === MARKETPLACE_REGISTRY_V3_INDEX_URL) {
+              return response({}, 503);
+            }
+            if (url === MARKETPLACE_REGISTRY_INDEX_URL) {
+              return response(indexFor(packageBundle));
+            }
+            return response(packageBundle);
+          },
+        }),
+      });
+
+      expect(
+        (await service.installRemote('community/registry-agent')).manifest
+          .schemaVersion,
+      ).toBe(2);
+      expect(calls[0]).toBe(MARKETPLACE_REGISTRY_V3_INDEX_URL);
+      expect(calls[1]).toBe(MARKETPLACE_REGISTRY_INDEX_URL);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('does not fall back after malformed or integrity-invalid v3 data', async () => {
+    const packageBundle = bundleV3();
+    const malformedCalls: string[] = [];
+    const malformed = new MarketplaceRegistryClient({
+      pluginVersion: '3.0.0-beta.6',
+      fetch: async (input) => {
+        malformedCalls.push(String(input));
+        return response({ schemaVersion: 3, entries: [] });
+      },
+    });
+    await expect(
+      malformed.downloadV3('community/registry-v3-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryProtocolError);
+    expect(malformedCalls).toEqual([MARKETPLACE_REGISTRY_V3_INDEX_URL]);
+
+    const integrityCalls: string[] = [];
+    const integrity = new MarketplaceRegistryClient({
+      pluginVersion: '3.0.0-beta.6',
+      fetch: async (input) => {
+        const url = String(input);
+        integrityCalls.push(url);
+        return url === MARKETPLACE_REGISTRY_V3_INDEX_URL
+          ? response(indexForV3(packageBundle))
+          : response({
+              ...packageBundle,
+              manifest: { ...packageBundle.manifest, description: 'forged' },
+            });
+      },
+    });
+    await expect(
+      integrity.downloadV3('community/registry-v3-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryIntegrityError);
+    expect(integrityCalls).toHaveLength(2);
+    expect(integrityCalls[0]).toBe(MARKETPLACE_REGISTRY_V3_INDEX_URL);
+  });
+
   test('validates the index and artifact before store mutation and records provenance', async () => {
     const packageBundle = bundle();
     const calls: string[] = [];
@@ -259,7 +554,7 @@ describe('MarketplaceRegistryClient', () => {
       const service = new MarketplaceService({
         rootDir: root,
         pluginVersion: '3.1.0',
-        registryClient: client,
+        registryClient: { download: client.download.bind(client) },
       });
       const installed = await service.installRemote('community/registry-agent');
       expect(installed.manifest.version).toBe('1.0.0');
