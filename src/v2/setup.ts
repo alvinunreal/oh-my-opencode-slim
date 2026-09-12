@@ -24,6 +24,7 @@ import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import { adaptTool, applyAgentToDraft } from './adapters';
 import { buildPluginInput, resolveV2Directory } from './client-shim';
+import { createCommandMarkerKit } from './command-marker';
 import { subagentArgsToV1, toolNameToV1, v1ArgsToSubagent } from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
 import { createV2InterviewBridge } from './interview-bridge';
@@ -64,18 +65,20 @@ type V1CommandPart = {
   metadata?: Record<string, unknown>;
 };
 
+/** Generic v2 command marker kit (deepwork / reflect / loop) — shared,
+ * byte-stable marker machinery; see ./command-marker.ts. */
+const COMMAND_MARKER = createCommandMarkerKit({
+  tag: 'omos-cmd-command',
+  nameAttribute: 'data-name',
+  namePattern: '[\\w.-]+',
+});
+
 /** Wrap slash-command arguments in the generic v2 command marker. v2 command
  * drafts are add-only (no `template`), so `execute` submits this marker as a
  * plain user prompt and the session context hook recovers it below. */
 export function wrapCommandMarker(name: string, args: string): string {
-  return `<omos-cmd-command data-name="${name}">${args}</omos-cmd-command>`;
+  return COMMAND_MARKER.wrap({ name, args });
 }
-
-// Whole-text anchored: v2 writes the marker as the entire submitted prompt,
-// so whole-text anchoring is the contract. A user-typed embedded marker must
-// not hijack dispatch in the merged session context hook.
-const COMMAND_MARKER_PATTERN =
-  /^\s*<omos-cmd-command\s+data-name="([\w.-]+)">([\s\S]*?)<\/omos-cmd-command>\s*$/;
 
 export interface ParsedCommandMarker {
   name: string;
@@ -86,19 +89,17 @@ export interface ParsedCommandMarker {
 export function parseCommandMarker(
   text: string,
 ): ParsedCommandMarker | undefined {
-  const match = text.match(COMMAND_MARKER_PATTERN);
-  if (!match) return undefined;
-  return { name: match[1], args: match[2] };
+  const parsed = COMMAND_MARKER.parse(text);
+  // The pattern requires the name attribute, so a match always carries one;
+  // the narrowing only satisfies the shared kit's optional-name type.
+  return parsed?.name === undefined
+    ? undefined
+    : { name: parsed.name, args: parsed.args };
 }
 
 /** Strip the marker tags from marker-only `text`, leaving the raw args. */
 export function stripCommandMarker(text: string): string {
-  // Function replacer: a string replacer would interpret `$`-sequences in
-  // the captured args. Group 1 is the command name; group 2 the args.
-  return text.replace(
-    COMMAND_MARKER_PATTERN,
-    (_match, _name: string, args: string) => args,
-  );
+  return COMMAND_MARKER.strip(text);
 }
 
 /** Register one v1 synth command on a v2 command draft. Uses `add` when

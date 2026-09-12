@@ -8,6 +8,7 @@ import { createInterviewService } from '../interview/service';
 import type { InterviewMessage } from '../interview/types';
 import { log } from '../utils/logger';
 import { createSessionListShim } from './client-shim';
+import { createCommandMarkerKit } from './command-marker';
 import { createSessionSubmit, textFromContent } from './session-submit';
 import type {
   V2CommandDraft,
@@ -16,14 +17,15 @@ import type {
   V2SessionContextEvent,
 } from './types';
 
-const INTERVIEW_COMMAND_MARKER =
-  '<omos-interview-command>$ARGUMENTS</omos-interview-command>';
-
-// Whole-text anchored: v2 writes the marker as the entire submitted prompt,
-// so whole-text anchoring is the contract. A user-typed embedded marker must
-// not hijack dispatch in the merged session context hook.
-const MARKER_PATTERN =
-  /^\s*<omos-interview-command>\s*([\s\S]*?)\s*<\/omos-interview-command>\s*$/;
+/** Interview command marker kit — shared, byte-stable marker machinery;
+ * see ./command-marker.ts. Whole-text anchored: v2 writes the marker as
+ * the entire submitted prompt, so whole-text anchoring is the contract. A
+ * user-typed embedded marker must not hijack dispatch in the merged
+ * session context hook. */
+const INTERVIEW_MARKER = createCommandMarkerKit({
+  tag: 'omos-interview-command',
+  trimArgs: true,
+});
 
 /** Cap on per-session state retained by the bridge (FIFO eviction).
  * Context events fire for every LLM request of every session; without a
@@ -33,9 +35,7 @@ const MAX_RETAINED_SESSIONS = 1024;
 
 /** Render the `/interview` command marker with the given arguments. */
 export function markerText(args: string): string {
-  // Function replacer: a string replacer would interpret `$`-sequences in
-  // args (`$&`, `` $` ``, `$$`, ...) instead of emitting them byte-exact.
-  return INTERVIEW_COMMAND_MARKER.replace('$ARGUMENTS', () => args);
+  return INTERVIEW_MARKER.wrap({ args });
 }
 
 function projectContent(
@@ -79,8 +79,9 @@ export function applyInterviewCommandParts(
   trailing.content = [
     {
       type: 'text',
-      // Function replacer: a string replacer would interpret `$`-sequences.
-      text: text.replace(MARKER_PATTERN, (_match, args: string) => args),
+      // Function replacer under the hood: `$`-sequences in the captured
+      // args survive the strip (see ./command-marker.ts).
+      text: INTERVIEW_MARKER.strip(text),
     },
   ];
 }
@@ -278,8 +279,8 @@ export function createV2InterviewBridge(
       return;
     }
     const text = textFromContent(trailing.content);
-    const match = text.match(MARKER_PATTERN);
-    if (!match) {
+    const parsed = INTERVIEW_MARKER.parse(text);
+    if (!parsed) {
       observeContext(event);
       return;
     }
@@ -303,7 +304,7 @@ export function createV2InterviewBridge(
       {
         command: 'interview',
         sessionID: event.sessionID,
-        arguments: match[1].trim(),
+        arguments: parsed.args.trim(),
       },
       output,
     );
