@@ -7,10 +7,7 @@ import {
   digestMarketplaceBundle,
 } from '../marketplace/canonical';
 import { MarketplaceRetiredError } from '../marketplace/errors';
-import {
-  isMarketplacePackageRetired,
-  RETIRED_MARKETPLACE_PACKAGE_IDS,
-} from '../marketplace/retirements';
+import { isMarketplacePackageRetired } from '../marketplace/retirements';
 import { renderMarketplaceAutoDelegationBlock } from '../marketplace/routing';
 import {
   MARKETPLACE_DIGEST_DOMAIN,
@@ -148,6 +145,12 @@ function validateRegistryEntries(
   }
 }
 
+const CANONICAL_MARKETPLACE_RETIREMENT_IDS = [
+  'alvin/deepwork-implementer',
+  'alvin/deepwork-recon',
+  'alvin/deepwork-reviewer',
+] as const;
+
 const MarketplaceRegistryIndexV3Schema = z
   .object({
     schemaVersion: z.literal(MARKETPLACE_REGISTRY_SCHEMA_VERSION),
@@ -180,7 +183,7 @@ const MarketplaceRegistryIndexV3Schema = z
         });
       }
     }
-    for (const id of RETIRED_MARKETPLACE_PACKAGE_IDS) {
+    for (const id of CANONICAL_MARKETPLACE_RETIREMENT_IDS) {
       if (!seen.has(id)) {
         ctx.addIssue({
           code: 'custom',
@@ -247,19 +250,16 @@ export function createMarketplaceRegistryEntry(
 
 export function createMarketplaceRegistryIndex(
   entries: readonly MarketplaceRegistryEntry[],
-  retirements: readonly MarketplaceRegistryRetirement[] = RETIRED_MARKETPLACE_PACKAGE_IDS.map(
+  retirements: readonly MarketplaceRegistryRetirement[] = CANONICAL_MARKETPLACE_RETIREMENT_IDS.map(
     (id) => ({ id }),
   ),
 ): MarketplaceRegistryIndex {
-  const retiredIds = new Set(retirements.map(({ id }) => id));
-  const sorted = entries
-    .filter((entry) => !retiredIds.has(entry.id))
-    .sort(
-      (left, right) =>
-        compareMarketplaceCodeUnits(left.id, right.id) ||
-        compare(left.version, right.version) ||
-        compareMarketplaceCodeUnits(left.version, right.version),
-    );
+  const sorted = [...entries].sort(
+    (left, right) =>
+      compareMarketplaceCodeUnits(left.id, right.id) ||
+      compare(left.version, right.version) ||
+      compareMarketplaceCodeUnits(left.version, right.version),
+  );
   const sortedRetirements = [...retirements].sort((left, right) =>
     compareMarketplaceCodeUnits(left.id, right.id),
   );

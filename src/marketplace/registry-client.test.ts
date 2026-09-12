@@ -28,12 +28,13 @@ import {
   MARKETPLACE_REGISTRY_INDEX_URL,
   MarketplaceRegistryClient,
 } from './registry-client';
-import { RETIRED_MARKETPLACE_PACKAGE_IDS } from './retirements';
 import { MarketplaceService } from './service';
 
-const canonicalRetirements = RETIRED_MARKETPLACE_PACKAGE_IDS.map((id) => ({
-  id,
-}));
+const canonicalRetirements = [
+  { id: 'alvin/deepwork-implementer' },
+  { id: 'alvin/deepwork-recon' },
+  { id: 'alvin/deepwork-reviewer' },
+];
 
 function bundle(
   version = '1.0.0',
@@ -217,8 +218,6 @@ describe('marketplace registry contract', () => {
     for (const selector of [
       { id: 'alvin/deepwork-implementer' },
       { id: 'alvin/deepwork-implementer', version: '1.0.0' },
-      { id: 'alvin/evidence-scout' },
-      { id: 'alvin/visual-inspector', version: '1.0.0-beta.1' },
     ]) {
       expect(() =>
         resolveMarketplaceRegistryEntry(index, selector, {
@@ -226,11 +225,6 @@ describe('marketplace registry contract', () => {
         }),
       ).toThrow(MarketplaceRetiredError);
     }
-    expect(
-      createMarketplaceRegistryIndex([
-        createMarketplaceRegistryEntry(bundle('1.0.0', 'alvin/evidence-scout')),
-      ]).entries,
-    ).toEqual([]);
   });
 
   test('uses locale-independent code-unit ordering for JSON and catalog entries', () => {
@@ -297,7 +291,7 @@ describe('MarketplaceRegistryClient', () => {
       },
     });
     await expect(
-      client.download('alvin/evidence-scout@0.1.0-beta.1'),
+      client.download('alvin/deepwork-recon@1.0.0'),
     ).rejects.toBeInstanceOf(MarketplaceRetiredError);
     expect(fetches).toBe(0);
 
@@ -314,10 +308,10 @@ describe('MarketplaceRegistryClient', () => {
         },
       });
       await expect(
-        service.installRemote('alvin/visual-inspector'),
+        service.installRemote('alvin/deepwork-implementer'),
       ).rejects.toBeInstanceOf(MarketplaceRetiredError);
       await expect(
-        service.updateRemote('alvin/evidence-scout'),
+        service.updateRemote('alvin/deepwork-reviewer'),
       ).rejects.toBeInstanceOf(MarketplaceRetiredError);
       expect(downloads).toBe(0);
       expect(existsSync(service.store.paths.lockfilePath)).toBe(false);
