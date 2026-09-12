@@ -92,24 +92,6 @@ describe('switchPresetOnDisk', () => {
     expect(result.message).toContain('no agent overrides');
   });
 
-  test('allows profile-only preset activation', () => {
-    const config: PluginConfig = {
-      presets: {
-        profiles: {
-          agents: {},
-          marketplace: {
-            profiles: { oracle: 'community/oracle-profile' },
-          },
-        },
-      },
-    };
-
-    const result = switchPresetOnDisk(tempDir, 'profiles', config);
-
-    expect(result.ok).toBe(true);
-    expect(result.presetName).toBe('profiles');
-  });
-
   test('switches preset and reports a reload-to-apply message', () => {
     const config: PluginConfig = {
       presets: {

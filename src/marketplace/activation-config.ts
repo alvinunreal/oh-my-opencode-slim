@@ -1,9 +1,5 @@
 import { mutateJsonFile } from '../cli/config-io';
 import {
-  type SpecialistRole,
-  SUPPORTED_SPECIALIST_ROLES,
-} from '../config/agent-roles';
-import {
   findPluginConfigPaths,
   loadPluginConfig,
   loadPluginConfigFile,
@@ -57,7 +53,6 @@ function cloneActivation(
 ): MarketplaceActivation {
   return {
     ...(activation?.agents ? { agents: [...activation.agents] } : {}),
-    ...(activation?.profiles ? { profiles: { ...activation.profiles } } : {}),
   };
 }
 
@@ -78,27 +73,6 @@ function activationOverlay(
   if (parent === undefined || !samePackageIds(parent.agents, desired.agents)) {
     overlay.agents = [...(desired.agents ?? [])];
   }
-  const parentProfiles = parent?.profiles ?? {};
-  const desiredProfiles = desired.profiles ?? {};
-  const profiles: NonNullable<MarketplaceActivation['profiles']> = {
-    ...parentProfiles,
-  };
-  let profilesChanged = false;
-  for (const key of new Set([
-    ...Object.keys(parentProfiles),
-    ...Object.keys(desiredProfiles),
-  ])) {
-    const role = key as SpecialistRole;
-    const next = Object.hasOwn(desiredProfiles, key)
-      ? desiredProfiles[role]
-      : undefined;
-    const previous = parentProfiles[role];
-    if (next !== previous) {
-      profiles[role] = next ?? null;
-      profilesChanged = true;
-    }
-  }
-  if (profilesChanged) overlay.profiles = profiles;
   return overlay;
 }
 
@@ -144,26 +118,13 @@ export function enableMarketplaceAgent(
 ): void {
   const id = normalizeMarketplacePackageId(packageId);
   assertMarketplacePackageNotRetired(id);
-  const pkg = store.show(id);
-  if (pkg.manifest.kind !== 'agent') {
-    throw new MarketplaceActivationError(
-      `${id} is a ${pkg.manifest.kind} package; use profile to activate it`,
-    );
-  }
+  store.show(id);
   const config = loadPluginConfig(directory, { silent: true });
   const presetName = activePresetName(config);
   persistActivation(directory, presetName, (activation) => {
     const agents = [...(activation.agents ?? [])];
     if (!agents.includes(id)) agents.push(id);
-    const profiles = { ...(activation.profiles ?? {}) };
-    for (const [role, value] of Object.entries(profiles)) {
-      if (value === id) {
-        throw new MarketplaceActivationError(
-          `${id} is already selected as the ${role} profile`,
-        );
-      }
-    }
-    return { agents, profiles };
+    return { agents };
   });
 }
 
@@ -176,61 +137,5 @@ export function disableMarketplacePackage(
   const presetName = activePresetName(config);
   persistActivation(directory, presetName, (activation) => ({
     agents: (activation.agents ?? []).filter((value) => value !== id),
-    profiles: Object.fromEntries(
-      Object.entries(activation.profiles ?? {}).map(([role, value]) => [
-        role,
-        value === id ? null : value,
-      ]),
-    ),
   }));
 }
-
-export function setMarketplaceProfile(
-  directory: string,
-  role: string,
-  packageId: string | null,
-  store = new MarketplaceStore(),
-): void {
-  const parsedRole = SUPPORTED_SPECIALIST_ROLES.find((name) => name === role);
-  if (!parsedRole) {
-    throw new MarketplaceActivationError(
-      `Unsupported profile target '${role}'`,
-    );
-  }
-  const config = loadPluginConfig(directory, { silent: true });
-  const presetName = activePresetName(config);
-  if (packageId === null) {
-    persistActivation(directory, presetName, (activation) => ({
-      agents: [...(activation.agents ?? [])],
-      profiles: { ...(activation.profiles ?? {}), [parsedRole]: null },
-    }));
-    return;
-  }
-  const id = normalizeMarketplacePackageId(packageId);
-  assertMarketplacePackageNotRetired(id);
-  const pkg = store.show(id);
-  if (pkg.manifest.kind !== 'profile') {
-    throw new MarketplaceActivationError(
-      `${id} is a ${pkg.manifest.kind} package; use enable to activate it`,
-    );
-  }
-  if (pkg.manifest.targetRole !== parsedRole) {
-    throw new MarketplaceActivationError(
-      `${id} targets ${pkg.manifest.targetRole}, not ${parsedRole}`,
-    );
-  }
-  persistActivation(directory, presetName, (activation) => {
-    const agents = [...(activation.agents ?? [])];
-    if (agents.includes(id)) {
-      throw new MarketplaceActivationError(
-        `${id} is already enabled as a marketplace agent`,
-      );
-    }
-    return {
-      agents,
-      profiles: { ...(activation.profiles ?? {}), [parsedRole]: id },
-    };
-  });
-}
-
-export type { SpecialistRole };

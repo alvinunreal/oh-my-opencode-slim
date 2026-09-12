@@ -22,7 +22,6 @@ import { resolveRuntimeAgentName } from '../utils/agent-variant';
 import {
   disableMarketplacePackage,
   enableMarketplaceAgent,
-  setMarketplaceProfile,
 } from './activation-config';
 import type { MarketplacePackageBundle } from './schemas';
 import { MarketplaceStore } from './store';
@@ -39,76 +38,29 @@ function agentBundle(
 ): MarketplacePackageBundle {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: 'community/docs-researcher',
       version: '1.0.0',
-      kind: 'agent',
       displayName: 'Docs researcher',
       description: 'A derived explorer.',
-      instructions: 'Prefer documentation paths first.',
+      agentName: 'docsresearcher',
+      prompt: 'Prefer documentation paths first.',
       author: { name: 'Community' },
       tags: ['docs'],
       license: 'MIT',
       compatibility: {
-        plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-        roleContract: '^1.0.0',
+        plugin: '>=3.0.0-beta.3 <4.0.0',
       },
       routing: {
         description: 'Research docs and examples.',
         keywords: ['docs'],
-        delegation: {
-          when: 'When docs research is needed.',
-          preferredRoles: [],
-        },
+        when: 'When docs research is needed.',
       },
-      requirements: {
-        skills: { required: [], optional: [] },
-        mcps: { required: [], optional: [] },
-      },
-      capabilities: { tools: [], permissions: [] },
-      baseRole: 'explorer',
-      agentName: 'docsresearcher',
-      overrides: {},
-      ...overrides,
-    } as MarketplacePackageBundle['manifest'],
-  };
-}
-
-function profileBundle(
-  overrides: Partial<MarketplacePackageBundle['manifest']> = {},
-): MarketplacePackageBundle {
-  return {
-    manifest: {
-      schemaVersion: 1,
-      id: 'community/deep-explorer',
-      version: '1.0.0',
-      kind: 'profile',
-      displayName: 'Deep explorer',
-      description: 'A specialist profile.',
-      instructions: 'Search more exhaustively than usual.',
-      author: { name: 'Community' },
-      tags: ['profile'],
-      license: 'MIT',
-      compatibility: {
-        plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-        roleContract: '^1.0.0',
-      },
-      routing: {
-        description: 'Deep exploration profile.',
-        keywords: ['deep'],
-        delegation: {
-          when: 'When exhaustive search is needed.',
-          preferredRoles: [],
-        },
-      },
-      requirements: {
-        skills: { required: [], optional: [] },
-        mcps: { required: [], optional: [] },
-      },
-      capabilities: { tools: [], permissions: [] },
-      targetRole: 'explorer',
-      instructionMode: 'append',
-      overrides: {},
+      skills: [],
+      mcps: [],
+      tools: [],
+      model: { source: 'explicit', candidates: ['provider/model'] },
+      extends: { builtin: 'explorer', promptMode: 'append' },
       ...overrides,
     } as MarketplacePackageBundle['manifest'],
   };
@@ -188,7 +140,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          overrides: { model: 'package/model', description: 'Package desc' },
+          model: { source: 'explicit', candidates: ['package/model'] },
+          description: 'Package desc',
         }),
       );
       const registry = registryFor(
@@ -234,101 +187,6 @@ describe('marketplace runtime activation', () => {
     }
   });
 
-  test('appends and replaces specialist profile instructions', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
-    try {
-      const store = new MarketplaceStore({ rootDir: root });
-      store.install(profileBundle());
-      const appended = registryFor(
-        {
-          preset: 'work',
-          presets: {
-            work: {
-              agents: {},
-              marketplace: {
-                profiles: { explorer: 'community/deep-explorer' },
-              },
-            },
-          },
-        },
-        store,
-      );
-      const explorer = appended.agents.find(
-        (agent) => agent.name === 'explorer',
-      );
-      expect(explorer?.config.prompt).toContain(
-        ROLE_DEFINITIONS.explorer.basePrompt,
-      );
-      expect(explorer?.config.prompt).toContain(
-        'Search more exhaustively than usual.',
-      );
-      expect(appended.provenance.explorer).toBe(
-        'marketplace-profile:community/deep-explorer@1.0.0',
-      );
-
-      store.remove('community/deep-explorer');
-      store.install(
-        profileBundle({
-          id: 'community/replace-explorer',
-          instructionMode: 'replace',
-          instructions: 'Replacement explorer instructions.',
-        }),
-      );
-      const replaced = registryFor(
-        {
-          preset: 'work',
-          presets: {
-            work: {
-              agents: {},
-              marketplace: {
-                profiles: { explorer: 'community/replace-explorer' },
-              },
-            },
-          },
-        },
-        store,
-        'marketplace-replace-test',
-      );
-      const replacedExplorer = replaced.agents.find(
-        (agent) => agent.name === 'explorer',
-      );
-      expect(replacedExplorer?.config.prompt).toContain(
-        'Replacement explorer instructions.',
-      );
-      expect(replacedExplorer?.config.prompt).not.toContain(
-        'You are Explorer - a fast codebase navigation specialist.',
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('respects profile tombstones and does not create a second agent', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
-    try {
-      const store = new MarketplaceStore({ rootDir: root });
-      store.install(profileBundle());
-      const registry = registryFor(
-        {
-          preset: 'work',
-          presets: {
-            work: {
-              agents: {},
-              marketplace: { profiles: { explorer: null } },
-            },
-          },
-        },
-        store,
-      );
-      expect(
-        registry.agents.filter((agent) => agent.baseRole === 'explorer'),
-      ).toHaveLength(1);
-      expect(registry.provenance.explorer).toBe('builtin:explorer');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test('rejects colliding runtime names', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
     try {
@@ -362,10 +220,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: ['not-a-real-skill'], optional: ['simplify'] },
-            mcps: { required: [], optional: [] },
-          },
+          skills: ['not-a-real-skill'],
+          mcps: [],
         }),
       );
       const registry = registryFor(
@@ -395,10 +251,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: ['not-a-real-skill'] },
-            mcps: { required: [], optional: ['unknown-mcp'] },
-          },
+          skills: [],
+          mcps: [],
         }),
       );
       const registry = registryFor(
@@ -569,10 +423,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['context7'], optional: [] },
-          },
+          skills: [],
+          mcps: ['context7'],
         }),
       );
       RuntimeConfig.reset('marketplace-mcp-projection');
@@ -616,10 +468,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['injected-plugin-mcp'], optional: [] },
-          },
+          skills: [],
+          mcps: ['injected-plugin-mcp'],
         }),
       );
       RuntimeConfig.reset('marketplace-injected-mcp');
@@ -665,10 +515,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: ['on-disk-skill'], optional: [] },
-            mcps: { required: [], optional: [] },
-          },
+          skills: ['on-disk-skill'],
+          mcps: [],
         }),
       );
       RuntimeConfig.reset('marketplace-disk-skill');
@@ -736,10 +584,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['injected-host-mcp'], optional: [] },
-          },
+          skills: [],
+          mcps: ['injected-host-mcp'],
         }),
       );
       RuntimeConfig.reset('marketplace-host-mcp');
@@ -792,10 +638,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['project-mcp'], optional: [] },
-          },
+          skills: [],
+          mcps: ['project-mcp'],
         }),
       );
       RuntimeConfig.reset(project);
@@ -838,10 +682,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['project-mcp'], optional: [] },
-          },
+          skills: [],
+          mcps: ['project-mcp'],
         }),
       );
       RuntimeConfig.reset(project);
@@ -901,10 +743,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: ['on-disk-skill'], optional: [] },
-            mcps: { required: ['project-mcp'], optional: [] },
-          },
+          skills: ['on-disk-skill'],
+          mcps: ['project-mcp'],
         }),
       );
       RuntimeConfig.reset(project);
@@ -962,10 +802,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['empty-mcp'], optional: [] },
-          },
+          skills: [],
+          mcps: ['empty-mcp'],
         }),
       );
       RuntimeConfig.reset(project);
@@ -987,10 +825,8 @@ describe('marketplace runtime activation', () => {
         agentBundle({
           id: 'community/config-json',
           agentName: 'configjson',
-          requirements: {
-            skills: { required: [], optional: [] },
-            mcps: { required: ['config-json-mcp'], optional: [] },
-          },
+          skills: [],
+          mcps: ['config-json-mcp'],
         }),
       );
       RuntimeConfig.reset(`${project}-ok`);
@@ -1023,10 +859,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: ['hidden-skill'], optional: [] },
-            mcps: { required: [], optional: [] },
-          },
+          skills: ['hidden-skill'],
+          mcps: [],
         }),
       );
       RuntimeConfig.reset(root);
@@ -1058,10 +892,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: ['on-disk-skill'], optional: [] },
-            mcps: { required: ['project-mcp'], optional: [] },
-          },
+          skills: ['on-disk-skill'],
+          mcps: ['project-mcp'],
         }),
       );
       RuntimeConfig.reset('marketplace-explicit-disabled');
@@ -1089,19 +921,18 @@ describe('marketplace runtime activation', () => {
     }
   });
 
-  test('reserves custom names except the package override key', () => {
+  test('reserves custom names except the marketplace owner override key', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
     try {
       const store = new MarketplaceStore({ rootDir: root });
-      store.install(
-        agentBundle({
-          overrides: { displayName: 'janitor' },
-        }),
-      );
+      store.install(agentBundle());
       const colliding = registryFor(
         {
           preset: 'work',
-          agents: { janitor: { model: 'custom/model' } },
+          agents: {
+            docsresearcher: { displayName: 'janitor' },
+            janitor: { model: 'custom/model' },
+          },
           presets: {
             work: {
               agents: { janitor: { model: 'custom/model' } },
@@ -1114,10 +945,7 @@ describe('marketplace runtime activation', () => {
       expect(colliding.diagnostics[0]?.code).toBe('collision');
 
       store.install(
-        agentBundle({
-          id: 'community/janitor',
-          agentName: 'janitor',
-        }),
+        agentBundle({ id: 'community/janitor', agentName: 'janitor' }),
       );
       const ownKey = registryFor(
         {
@@ -1149,7 +977,7 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          overrides: { displayName: 'docsresearcher' },
+          agentName: 'docsresearcher',
         }),
       );
       const registry = registryFor(
@@ -1157,7 +985,7 @@ describe('marketplace runtime activation', () => {
           preset: 'work',
           presets: {
             work: {
-              agents: {},
+              agents: { docsresearcher: { displayName: 'docsresearcher' } },
               marketplace: { agents: ['community/docs-researcher'] },
             },
           },
@@ -1203,10 +1031,8 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          requirements: {
-            skills: { required: ['on-disk-skill'], optional: [] },
-            mcps: { required: ['config-mcp'], optional: [] },
-          },
+          skills: ['on-disk-skill'],
+          mcps: ['config-mcp'],
         }),
       );
       RuntimeConfig.reset(root);
@@ -1238,58 +1064,17 @@ describe('marketplace runtime activation', () => {
     }
   });
 
-  test('disables unsafe profile aliases without affecting other packages', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
-    try {
-      const store = new MarketplaceStore({ rootDir: root });
-      store.install(agentBundle());
-      store.install(
-        profileBundle({
-          overrides: { displayName: 'Docs Researcher' },
-        }),
-      );
-      const registry = registryFor(
-        {
-          preset: 'work',
-          presets: {
-            work: {
-              agents: {},
-              marketplace: {
-                agents: ['community/docs-researcher'],
-                profiles: { explorer: 'community/deep-explorer' },
-              },
-            },
-          },
-        },
-        store,
-      );
-      expect(
-        registry.agents.some((agent) => agent.name === 'docsresearcher'),
-      ).toBe(true);
-      expect(registry.diagnostics[0]?.code).toBe('invalid-alias');
-      expect(registry.diagnostics[0]?.packageId).toBe(
-        'community/deep-explorer',
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test('disables unsafe display aliases without throwing', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
     try {
       const store = new MarketplaceStore({ rootDir: root });
-      store.install(
-        agentBundle({
-          overrides: { displayName: 'Docs Researcher' },
-        }),
-      );
+      store.install(agentBundle());
       const registry = registryFor(
         {
           preset: 'work',
           presets: {
             work: {
-              agents: {},
+              agents: { docsresearcher: { displayName: 'Docs Researcher' } },
               marketplace: { agents: ['community/docs-researcher'] },
             },
           },
@@ -1347,7 +1132,7 @@ describe('marketplace runtime activation', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(
         agentBundle({
-          overrides: { displayName: 'docsalias', model: 'package/model' },
+          model: { source: 'explicit', candidates: ['package/model'] },
         }),
       );
       const registry = registryFor(
@@ -1355,7 +1140,7 @@ describe('marketplace runtime activation', () => {
           preset: 'work',
           presets: {
             work: {
-              agents: {},
+              agents: { docsresearcher: { displayName: 'docsalias' } },
               marketplace: { agents: ['community/docs-researcher'] },
             },
           },
@@ -1376,12 +1161,12 @@ describe('marketplace runtime activation', () => {
         expect.objectContaining({
           packageId: 'community/docs-researcher',
           runtimeName: 'docsalias',
-          kind: 'agent',
         }),
       ]);
       expect(
-        (registry.sdkConfigs.docsalias.permission as Record<string, unknown>)
-          .marketplace,
+        (registry.sdkConfigs.docsalias.permission as Record<string, unknown>)[
+          '*'
+        ],
       ).toBe('deny');
       expect(
         (
@@ -1389,7 +1174,7 @@ describe('marketplace runtime activation', () => {
             string,
             unknown
           >
-        ).marketplace,
+        )['*'],
       ).toBe('deny');
       expect(registry.sdkConfigs.docsalias.model).toBe('package/model');
       expect(registry.sdkConfigs.docsresearcher.model).toBe('package/model');
@@ -1423,7 +1208,6 @@ describe('marketplace runtime activation', () => {
         expect.objectContaining({
           packageId: 'community/docs-researcher',
           runtimeName: 'fieldscout',
-          kind: 'agent',
         }),
       ]);
     } finally {
@@ -1453,7 +1237,13 @@ describe('marketplace runtime activation', () => {
     const sessionDir = `${project}\0session`;
     try {
       const store = new MarketplaceStore({ rootDir: join(root, 'store') });
-      store.install(agentBundle({ overrides: { displayName: 'docsalias' } }));
+      store.install(agentBundle());
+      writeFileSync(
+        join(project, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          agents: { docsresearcher: { displayName: 'docsalias' } },
+        }),
+      );
       RuntimeConfig.reset(sessionDir);
       const session = RuntimeConfig.init(sessionDir, {
         preset: 'session-preset',
@@ -1578,47 +1368,6 @@ describe('marketplace activation persistence', () => {
         'community/docs-researcher',
         'community/other',
       ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('selects and clears a profile for a supported role', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
-    const configHome = join(root, 'config');
-    const project = join(root, 'project');
-    try {
-      process.env.XDG_CONFIG_HOME = configHome;
-      mkdirSync(join(configHome, 'opencode'), { recursive: true });
-      const userConfig = join(
-        configHome,
-        'opencode',
-        'oh-my-opencode-slim.json',
-      );
-      writeFileSync(
-        userConfig,
-        JSON.stringify({
-          preset: 'work',
-          presets: { work: { agents: {} } },
-        }),
-      );
-      const store = new MarketplaceStore({ rootDir: join(root, 'store') });
-      store.install(profileBundle());
-      setMarketplaceProfile(
-        project,
-        'explorer',
-        'community/deep-explorer',
-        store,
-      );
-      expect(
-        JSON.parse(readFileSync(userConfig, 'utf8')).presets.work.marketplace
-          .profiles.explorer,
-      ).toBe('community/deep-explorer');
-      setMarketplaceProfile(project, 'explorer', null, store);
-      expect(
-        JSON.parse(readFileSync(userConfig, 'utf8')).presets.work.marketplace
-          .profiles.explorer,
-      ).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

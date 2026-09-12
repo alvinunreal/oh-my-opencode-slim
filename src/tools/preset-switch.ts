@@ -61,9 +61,7 @@ export function switchPresetOnDisk(
   }
 
   const agentUpdates = buildAgentUpdates(preset);
-  const hasMarketplaceActivation =
-    preset.marketplace?.agents !== undefined ||
-    preset.marketplace?.profiles !== undefined;
+  const hasMarketplaceActivation = preset.marketplace?.agents !== undefined;
   if (Object.keys(agentUpdates).length === 0 && !hasMarketplaceActivation) {
     return {
       ok: false,

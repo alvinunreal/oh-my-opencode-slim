@@ -17,7 +17,6 @@ export interface RoleDefinition {
   readonly basePrompt: string;
   readonly description: string;
   readonly derivable: true;
-  readonly profileTargetable: true;
   readonly defaultModel: string | undefined;
   readonly defaultSkills: readonly string[];
   readonly defaultMcps: readonly string[];
@@ -346,7 +345,6 @@ function defineRole(
     basePrompt,
     description,
     derivable: true,
-    profileTargetable: true,
     defaultModel,
     defaultSkills: Object.freeze([...defaultSkills]),
     defaultMcps: Object.freeze([...defaultMcps]),

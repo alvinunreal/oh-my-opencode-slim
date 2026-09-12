@@ -8,7 +8,6 @@ describe('marketplace CLI parsing', () => {
       value: './package.json',
       force: false,
       json: false,
-      clear: false,
     });
     expect(
       parseMarketplaceArgs(['import', './package-v2.json', '--update']),
@@ -17,7 +16,6 @@ describe('marketplace CLI parsing', () => {
       value: './package-v2.json',
       force: false,
       json: false,
-      clear: false,
       update: true,
     });
     expect(
@@ -27,7 +25,6 @@ describe('marketplace CLI parsing', () => {
       value: 'community/example@1.2.3',
       force: false,
       json: false,
-      clear: false,
     });
   });
 
@@ -39,7 +36,6 @@ describe('marketplace CLI parsing', () => {
       value: undefined,
       force: false,
       json: false,
-      clear: false,
     });
     expect(parseMarketplaceArgs(['update', 'community/example']).command).toBe(
       'update',
@@ -49,37 +45,18 @@ describe('marketplace CLI parsing', () => {
     ).toThrow();
   });
 
-  test('parses enable, disable, and profile commands', () => {
+  test('parses enable, disable, and status commands', () => {
     expect(parseMarketplaceArgs(['enable', 'community/example'])).toEqual({
       command: 'enable',
       value: 'community/example',
       force: false,
       json: false,
-      clear: false,
-    });
-    expect(
-      parseMarketplaceArgs(['profile', 'librarian', 'community/deep']),
-    ).toEqual({
-      command: 'profile',
-      role: 'librarian',
-      value: 'community/deep',
-      force: false,
-      json: false,
-      clear: false,
-    });
-    expect(parseMarketplaceArgs(['profile', 'oracle', '--clear'])).toEqual({
-      command: 'profile',
-      role: 'oracle',
-      force: false,
-      json: false,
-      clear: true,
     });
     expect(parseMarketplaceArgs(['status', '--json'])).toEqual({
       command: 'status',
       value: undefined,
       force: false,
       json: true,
-      clear: false,
     });
   });
 });

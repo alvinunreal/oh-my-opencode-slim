@@ -17,14 +17,13 @@ import { type HostConfigSnapshot, RuntimeConfig } from '../config/runtime';
 import { applyOrchestratorModelConfig } from '../config/strip-orchestrator-model';
 import {
   type ActivatedMarketplaceAgent,
-  type ActivatedMarketplaceProfile,
-  boundedPackageOverride,
   composePackagePrompt,
   type MarketplaceActivationPlan,
   type MarketplaceDiagnostic,
   reservedRuntimeNames,
   resolveMarketplaceActivation,
 } from '../marketplace/activation';
+import { MARKETPLACE_TOOL_NAMES } from '../marketplace/schemas';
 import type {
   MarketplaceLivePackage,
   MarketplaceLiveSnapshot,
@@ -49,7 +48,6 @@ import {
 import {
   ROLE_DEFINITIONS,
   renderRoleRoutingBlock,
-  type SpecialistRole,
   SUPPORTED_SPECIALIST_ROLES,
 } from './role-definitions';
 import {
@@ -258,22 +256,11 @@ function buildMarketplaceLive(
   marketplace: MarketplaceActivationPlan,
   runtimeNameByPackageId: Readonly<Record<string, string>>,
 ): MarketplaceLivePackage[] {
-  const registered = new Map<
-    string,
-    { version: string; digest: string; kind: 'agent' | 'profile' }
-  >();
+  const registered = new Map<string, { version: string; digest: string }>();
   for (const activated of marketplace.agents) {
     registered.set(activated.packageId, {
       version: activated.version,
       digest: activated.digest,
-      kind: 'agent',
-    });
-  }
-  for (const activated of marketplace.profiles.values()) {
-    registered.set(activated.packageId, {
-      version: activated.version,
-      digest: activated.digest,
-      kind: 'profile',
     });
   }
   const live: MarketplaceLivePackage[] = [];
@@ -287,7 +274,6 @@ function buildMarketplaceLive(
       version: meta.version,
       digest: meta.digest,
       runtimeName,
-      kind: meta.kind,
     });
   }
   return live;
@@ -361,6 +347,21 @@ function getPrimaryModelFromOverride(
   override: AgentOverrideConfig | undefined,
 ): string | undefined {
   return resolvePrimaryModelValue(override?.model);
+}
+
+function hasExplicitVariantOverride(
+  override: AgentOverrideConfig | undefined,
+): boolean {
+  if (override?.variant !== undefined) return true;
+  if (!Array.isArray(override?.model) || override.model.length === 0) {
+    return false;
+  }
+  const primary = override.model[0];
+  return typeof primary !== 'string' && primary.variant !== undefined;
+}
+
+function stringVariant(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 const isInternalOnly = (name: string): boolean =>
@@ -443,8 +444,12 @@ function applyOverrides(
   agent: AgentDefinition,
   override: AgentOverrideConfig,
 ): void {
-  if (override.model) {
+  if (override.model !== undefined) {
     if (Array.isArray(override.model)) {
+      // A model override replaces a marketplace candidate chain, including
+      // its package-level primary variant. Re-apply only the owner-provided
+      // variant below.
+      delete agent.config.variant;
       agent._modelArray = override.model.map((m) =>
         typeof m === 'string' ? { id: m } : m,
       );
@@ -478,10 +483,16 @@ function applyOverrides(
         agent.config.variant = primaryModel.variant;
       }
     } else {
+      // Marketplace agents may have installed an explicit package fallback
+      // chain before owner overrides are applied. A scalar owner model is a
+      // replacement, not an additional candidate, so discard that chain and
+      // its package-level primary variant.
+      delete agent._modelArray;
+      delete agent.config.variant;
       agent.config.model = override.model;
     }
   }
-  if (override.variant) agent.config.variant = override.variant;
+  if (override.variant !== undefined) agent.config.variant = override.variant;
   if (override.temperature !== undefined)
     agent.config.temperature = override.temperature;
   if (override.color) agent.config.color = override.color;
@@ -514,12 +525,25 @@ function applyModelInheritance(
 ): void {
   if (override?.model !== undefined) return;
 
-  if (
-    override?.inheritModelFrom === 'session' ||
-    (override?.inheritModelFrom === 'orchestrator' &&
-      orchestratorModel === undefined)
-  ) {
+  if (override?.inheritModelFrom === 'session') {
+    delete agent._modelArray;
     delete agent.config.model;
+    if (!hasExplicitVariantOverride(override)) {
+      delete agent.config.variant;
+    }
+    return;
+  }
+
+  if (override?.inheritModelFrom === 'orchestrator') {
+    delete agent._modelArray;
+    if (orchestratorModel === undefined) {
+      delete agent.config.model;
+    } else {
+      agent.config.model = orchestratorModel;
+    }
+    if (!hasExplicitVariantOverride(override)) {
+      delete agent.config.variant;
+    }
   }
 }
 
@@ -617,12 +641,20 @@ export function applyModelInheritanceToConfig(
     }
 
     const agentConfig = entry as Record<string, unknown>;
+    const hostAgent =
+      runtime.hostAgent(agentName) ?? runtime.hostAgent(resolvedName);
+    const hasHostVariant = hostAgent?.variant !== undefined;
+    const preserveVariant =
+      hasExplicitVariantOverride(override) || hasHostVariant;
     if (override.inheritModelFrom === 'session') {
       delete agentConfig.model;
     } else if (orchestratorModel === undefined) {
       delete agentConfig.model;
     } else {
       agentConfig.model = orchestratorModel;
+    }
+    if (!preserveVariant) {
+      delete agentConfig.variant;
     }
   }
 }
@@ -820,61 +852,244 @@ function marketplaceSkillList(
   return uniqueNames([...roleSkills, ...extraSkills]);
 }
 
+const READONLY_MARKETPLACE_TOOLS = [
+  'read',
+  'glob',
+  'grep',
+  'ast_grep_search',
+  'webfetch',
+  'websearch',
+] as const;
+
+const NON_MARKETPLACE_TOOL_NAMES = [
+  'task',
+  'acp_run',
+  'lsp',
+  'list',
+  'codesearch',
+] as const;
+
+function restrictMarketplaceNames(
+  ceiling: readonly string[],
+  ownerValues: readonly string[] | undefined,
+): string[] {
+  if (ownerValues === undefined) return [...ceiling];
+  const denied = new Set(
+    ownerValues
+      .filter((value) => value.startsWith('!'))
+      .map((value) => value.slice(1)),
+  );
+  const explicit = new Set(
+    ownerValues.filter((value) => value !== '*' && !value.startsWith('!')),
+  );
+  const allowsAll = ownerValues.includes('*');
+  return ceiling.filter(
+    (name) => !denied.has(name) && (allowsAll || explicit.has(name)),
+  );
+}
+
+function marketplaceCapabilityCeilings(
+  agent: AgentDefinition,
+  activated: ActivatedMarketplaceAgent,
+  override: AgentOverrideConfig | undefined,
+): {
+  tools: readonly string[];
+  skills: readonly string[];
+  mcps: readonly string[];
+} {
+  const role = agent.baseRole ? ROLE_DEFINITIONS[agent.baseRole] : undefined;
+  const baselineTools = role
+    ? role.permissionPolicy === 'read-only'
+      ? [...READONLY_MARKETPLACE_TOOLS]
+      : [...MARKETPLACE_TOOL_NAMES]
+    : [];
+  const tools = role
+    ? uniqueNames([...baselineTools, ...activated.manifest.tools])
+    : [...activated.manifest.tools];
+  const skills = restrictMarketplaceNames(
+    role
+      ? uniqueNames([...role.defaultSkills, ...activated.requiredSkills])
+      : activated.requiredSkills,
+    override?.skills,
+  );
+  const mcps = restrictMarketplaceNames(
+    role
+      ? uniqueNames([...role.defaultMcps, ...activated.requiredMcps])
+      : activated.requiredMcps,
+    override?.mcps,
+  );
+  return { tools, skills, mcps };
+}
+
+function applyRestrictiveMarketplacePermission(
+  target: PermissionRecord,
+  source: unknown,
+  tools: ReadonlySet<string>,
+  skills: ReadonlySet<string>,
+  mcps: ReadonlySet<string>,
+  applyWildcard = true,
+): void {
+  const record = normalizePermission(source);
+  const wildcard = applyWildcard ? record['*'] : undefined;
+  const applyRestriction = (key: string, value: unknown): void => {
+    if (value !== 'deny' && value !== 'ask') return;
+    if (target[key] !== 'deny' || value === 'deny') {
+      target[key] = value;
+    }
+  };
+  const skillIsGloballyDenied = (): boolean => {
+    if (target.skill === 'deny') return true;
+    if (
+      target.skill &&
+      typeof target.skill === 'object' &&
+      !Array.isArray(target.skill)
+    ) {
+      return (target.skill as PermissionRecord)['*'] === 'deny';
+    }
+    return false;
+  };
+  const applySkillRestriction = (
+    skillNames: ReadonlySet<string>,
+    value: unknown,
+  ): void => {
+    if (value === 'deny') {
+      target.skill = 'deny';
+      return;
+    }
+    if (value !== 'ask' || skillIsGloballyDenied()) return;
+    const targetSkills = normalizePermission(target.skill);
+    for (const skill of skillNames) {
+      if (targetSkills[skill] !== 'deny') targetSkills[skill] = 'ask';
+    }
+    target.skill = targetSkills;
+  };
+
+  // The package projection always has a default-deny wildcard. A restrictive
+  // owner/host wildcard must therefore be projected onto every package
+  // surface explicitly; changing only `*` would leave per-tool allows in
+  // place and v2's last-match-wins evaluator would widen the package again.
+  for (const tool of tools) applyRestriction(tool, wildcard);
+  for (const mcp of mcps) applyRestriction(mcp, wildcard);
+  applySkillRestriction(skills, wildcard);
+
+  for (const tool of tools) {
+    applyRestriction(tool, record[tool]);
+  }
+  const skillPermission = record.skill;
+  applySkillRestriction(skills, skillPermission);
+  if (
+    skillPermission &&
+    typeof skillPermission === 'object' &&
+    !Array.isArray(skillPermission)
+  ) {
+    applySkillRestriction(skills, (skillPermission as PermissionRecord)['*']);
+    if (!skillIsGloballyDenied()) {
+      const effectiveTargetSkills = normalizePermission(target.skill);
+      for (const skill of skills) {
+        const value = (skillPermission as PermissionRecord)[skill];
+        if (value === 'deny') effectiveTargetSkills[skill] = 'deny';
+        else if (
+          value === 'ask' &&
+          !skillIsGloballyDenied() &&
+          effectiveTargetSkills[skill] !== 'deny'
+        )
+          effectiveTargetSkills[skill] = 'ask';
+      }
+      target.skill = effectiveTargetSkills;
+    }
+  }
+  for (const mcp of mcps) {
+    applyRestriction(mcp, record[mcp]);
+  }
+}
+
+function projectMarketplacePermission(
+  packagePermission: unknown,
+  hostPermission: unknown,
+  tools: readonly string[],
+  skills: readonly string[],
+  mcps: readonly string[],
+  availableMcpNames: readonly string[],
+  hostTools: unknown,
+): PermissionRecord {
+  const result: PermissionRecord = { '*': 'deny' };
+  const allowedTools = new Set(tools);
+  for (const tool of MARKETPLACE_TOOL_NAMES) {
+    result[tool] = allowedTools.has(tool) ? 'allow' : 'deny';
+  }
+  for (const tool of NON_MARKETPLACE_TOOL_NAMES) result[tool] = 'deny';
+  result.skill = Object.fromEntries(skills.map((skill) => [skill, 'allow']));
+  const allowedMcps = new Set(mcps);
+  for (const mcp of availableMcpNames) {
+    const key = `${mcp.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`;
+    result[key] = allowedMcps.has(mcp) ? 'allow' : 'deny';
+  }
+
+  const toolSet = new Set(tools);
+  const skillSet = new Set(skills);
+  const mcpSet = new Set(
+    mcps.map((mcp) => `${mcp.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`),
+  );
+  applyRestrictiveMarketplacePermission(
+    result,
+    packagePermission,
+    toolSet,
+    skillSet,
+    mcpSet,
+    false,
+  );
+  applyRestrictiveMarketplacePermission(
+    result,
+    hostPermission,
+    toolSet,
+    skillSet,
+    mcpSet,
+  );
+
+  if (hostTools && typeof hostTools === 'object' && !Array.isArray(hostTools)) {
+    for (const [tool, value] of Object.entries(
+      hostTools as Record<string, unknown>,
+    )) {
+      if (toolSet.has(tool) && value === false) result[tool] = 'deny';
+    }
+  }
+  return result;
+}
+
 function applyMarketplaceCapabilities(
   agent: AgentDefinition,
-  activated: ActivatedMarketplaceAgent | ActivatedMarketplaceProfile,
+  ceilings: ReturnType<typeof marketplaceCapabilityCeilings>,
 ): void {
-  const permission = normalizePermission(agent.config.permission);
-  if (hasWildcardDeny(permission)) {
-    agent.config.permission = permission as SDKAgentConfig['permission'];
-    return;
+  const permission: PermissionRecord = { '*': 'deny' };
+  const allowedTools = new Set(ceilings.tools);
+  for (const tool of MARKETPLACE_TOOL_NAMES) {
+    permission[tool] = allowedTools.has(tool) ? 'allow' : 'deny';
   }
-  const role = agent.baseRole ? ROLE_DEFINITIONS[agent.baseRole] : undefined;
-  for (const tool of activated.manifest.capabilities.tools) {
-    permission[tool] = 'allow';
+  for (const tool of NON_MARKETPLACE_TOOL_NAMES) permission[tool] = 'deny';
+  permission.skill = Object.fromEntries(
+    ceilings.skills.map((skill) => [skill, 'allow']),
+  );
+  for (const mcp of ceilings.mcps) {
+    permission[`${mcp.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`] = 'allow';
   }
-  for (const capability of activated.manifest.capabilities.permissions) {
-    if (capability === 'filesystem.read') permission.read = 'allow';
-    if (
-      capability === 'filesystem.write' &&
-      role?.permissionPolicy === 'read-write'
-    ) {
-      permission.edit = 'allow';
-      permission.write = 'allow';
-    }
-    if (capability === 'network.fetch') permission.webfetch = 'allow';
-    if (capability === 'session.delegate') permission.task = 'allow';
-  }
+  applyRestrictiveMarketplacePermission(
+    permission,
+    agent.config.permission,
+    new Set(ceilings.tools),
+    new Set(ceilings.skills),
+    new Set(
+      ceilings.mcps.map((mcp) => `${mcp.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`),
+    ),
+  );
   agent.config.permission =
     permission as unknown as SDKAgentConfig['permission'];
 }
 
-function extraMarketplaceMcps(
+function marketplacePackage(
   plan: MarketplaceActivationPlan | undefined,
   agentName: string,
-  baseRole: string | undefined,
-): readonly string[] {
-  if (!plan) return [];
-  const derived = plan.agents.find(
-    (entry) => entry.manifest.agentName === agentName,
-  );
-  if (derived) return derived.requiredMcps;
-  if (!baseRole) return [];
-  return plan.profiles.get(baseRole as SpecialistRole)?.requiredMcps ?? [];
-}
-
-function extraMarketplaceSkills(
-  plan: MarketplaceActivationPlan | undefined,
-  agentName: string,
-  baseRole: string | undefined,
-): readonly string[] {
-  if (!plan) return [];
-  const derived = plan.agents.find(
-    (entry) => entry.manifest.agentName === agentName,
-  );
-  if (derived) return derived.requiredSkills;
-  if (!baseRole) return [];
-  return plan.profiles.get(baseRole as SpecialistRole)?.requiredSkills ?? [];
+): ActivatedMarketplaceAgent | undefined {
+  return plan?.agents.find((entry) => entry.manifest.agentName === agentName);
 }
 
 // Agent Classification
@@ -961,15 +1176,12 @@ function marketplaceRoutingGuidance(
   const derived = plan?.agents.find(
     (entry) => entry.manifest.agentName === agent.name,
   );
-  const profile = agent.baseRole
-    ? plan?.profiles.get(agent.baseRole)
-    : undefined;
-  const manifest = derived?.manifest ?? profile?.manifest;
+  const manifest = derived?.manifest;
   if (!manifest) return undefined;
   return [
     `- Package: ${manifest.displayName}`,
     `- ${manifest.routing.description}`,
-    `- **Delegate when:** ${manifest.routing.delegation.when}`,
+    `- **Delegate when:** ${manifest.routing.when}`,
   ].join('\n');
 }
 
@@ -1122,28 +1334,6 @@ export function createAgents(
 
       const override = getOverrideFromAgents(mergedAgents, name);
       const inlinePrompt = override?.prompt;
-      const profile = marketplace?.profiles.get(
-        name as keyof typeof ROLE_DEFINITIONS,
-      );
-      if (profile && name in ROLE_DEFINITIONS) {
-        applyOverrides(agent, boundedPackageOverride(profile.manifest));
-        applyMarketplaceCapabilities(agent, profile);
-        agent.config.prompt = composePackagePrompt(
-          agent.config.prompt ?? '',
-          profile.manifest.instructions,
-          profile.manifest.instructionMode,
-        );
-        if (
-          marketplace &&
-          (inlinePrompt !== undefined || customPrompts.prompt)
-        ) {
-          marketplace.diagnostics.push({
-            packageId: profile.packageId,
-            code: 'prompt-masked',
-            message: `User prompt replacement masks marketplace profile ${profile.packageId} on @${name}`,
-          });
-        }
-      }
       const defaultPrompt = agent.config.prompt ?? '';
 
       agent.config.prompt = resolvePrompt(
@@ -1216,41 +1406,67 @@ export function createAgents(
     (activated) => {
       const name = activated.manifest.agentName;
       if (disabled.has(name)) return [];
-      const role = ROLE_DEFINITIONS[activated.manifest.baseRole];
+      const role = activated.manifest.extends
+        ? ROLE_DEFINITIONS[activated.manifest.extends.builtin]
+        : undefined;
       const override = getOverrideFromAgents(mergedAgents, name);
       const customPrompts = loadAgentPrompt(name, {
         preset: runtime.preset,
         projectDirectory: options?.projectDirectory,
       });
-      const packageModel =
-        typeof boundedPackageOverride(activated.manifest).model === 'string'
-          ? (boundedPackageOverride(activated.manifest).model as string)
-          : undefined;
-      const agent = role.createBaseline(
-        getPrimaryModelFromOverride(override) ??
-          packageModel ??
-          (override?.inheritModelFrom === 'orchestrator'
-            ? configuredOrchestratorModel
-            : primaryModel) ??
-          (role.defaultModel as string),
-      );
+      const policy = activated.manifest.model;
+      const model =
+        policy.source === 'explicit'
+          ? typeof policy.candidates[0] === 'string'
+            ? policy.candidates[0]
+            : policy.candidates[0]?.id
+          : policy.source === 'builtin'
+            ? role?.defaultModel
+            : policy.source === 'orchestrator'
+              ? (configuredOrchestratorModel ?? primaryModel)
+              : undefined;
+      const agent: AgentDefinition = role
+        ? role.createBaseline(
+            (model ?? role.defaultModel ?? DEFAULT_MODELS.oracle) as string,
+          )
+        : {
+            name,
+            description: activated.manifest.description,
+            config: { prompt: activated.manifest.prompt },
+          };
       agent.name = name;
-      agent.baseRole = role.id;
-      agent.description =
-        activated.manifest.overrides.description ??
-        activated.manifest.description ??
-        role.description;
-      applyOverrides(agent, boundedPackageOverride(activated.manifest));
-      applyMarketplaceCapabilities(agent, activated);
+      if (role) agent.baseRole = role.id;
+      agent.description = activated.manifest.description;
+      if (policy.source === 'session') delete agent.config.model;
+      if (policy.source === 'explicit') {
+        agent._modelArray = policy.candidates.map((candidate) => ({
+          ...(typeof candidate === 'string' ? { id: candidate } : candidate),
+        }));
+        agent.config.model = model;
+        if (
+          typeof policy.candidates[0] !== 'string' &&
+          policy.candidates[0]?.variant
+        ) {
+          agent.config.variant = policy.candidates[0].variant;
+        }
+      }
+      if (activated.manifest.temperature !== undefined) {
+        agent.config.temperature = activated.manifest.temperature;
+      }
+      if (activated.manifest.color !== undefined) {
+        agent.config.color = activated.manifest.color;
+      }
       agent.config.prompt = resolvePrompt(
         name,
         override?.prompt,
         customPrompts.prompt,
-        composePackagePrompt(
-          role.basePrompt,
-          activated.manifest.instructions,
-          'append',
-        ),
+        role
+          ? composePackagePrompt(
+              role.basePrompt,
+              activated.manifest.prompt,
+              activated.manifest.extends?.promptMode ?? 'append',
+            )
+          : activated.manifest.prompt,
         customPrompts.appendPrompt,
         [TASK_REJECTION_INSTRUCTION],
       );
@@ -1300,11 +1516,7 @@ export function createAgents(
     applyModelInheritance(agent, override, configuredOrchestratorModel);
     applyFinalPermissions(
       agent,
-      marketplaceSkillList(
-        agent,
-        override,
-        extraMarketplaceSkills(marketplace, agent.name, agent.baseRole),
-      ),
+      marketplaceSkillList(agent, override, undefined),
       runtime.disabledSkills,
     );
     return agent;
@@ -1352,13 +1564,16 @@ export function createAgents(
       }
     }
     applyModelInheritance(agent, override, configuredOrchestratorModel);
+    const marketplaceEntry = marketplacePackage(marketplace, agent.name);
+    const marketplaceCeilings = marketplaceEntry
+      ? marketplaceCapabilityCeilings(agent, marketplaceEntry, override)
+      : undefined;
+    if (marketplaceCeilings) {
+      applyMarketplaceCapabilities(agent, marketplaceCeilings);
+    }
     applyFinalPermissions(
       agent,
-      marketplaceSkillList(
-        agent,
-        override,
-        extraMarketplaceSkills(marketplace, agent.name, agent.baseRole),
-      ),
+      marketplaceCeilings?.skills,
       runtime.disabledSkills,
     );
     return [agent];
@@ -1552,21 +1767,25 @@ function buildCanonicalAgentConfigs(
   };
 
   const resolveAgentMcps = (agent: AgentDefinition): string[] => {
+    const marketplaceEntry = marketplacePackage(
+      options?.marketplace,
+      agent.name,
+    );
+    if (marketplaceEntry) {
+      return [
+        ...marketplaceCapabilityCeilings(
+          agent,
+          marketplaceEntry,
+          getOverrideFromAgents(runtime.agents(), agent.name),
+        ).mcps,
+      ];
+    }
     const configured = runtime.agent(agent.name)?.mcps;
     if (configured !== undefined) {
       return getAgentMcpList(agent.name, runtime);
     }
-    const extras = extraMarketplaceMcps(
-      options?.marketplace,
-      agent.name,
-      agent.baseRole,
-    );
-    if (agent.baseRole) {
-      return uniqueNames([
-        ...ROLE_DEFINITIONS[agent.baseRole].defaultMcps,
-        ...extras,
-      ]);
-    }
+    if (agent.baseRole)
+      return [...ROLE_DEFINITIONS[agent.baseRole].defaultMcps];
     return getAgentMcpList(agent.name, runtime);
   };
 
@@ -1698,8 +1917,12 @@ export function buildResolvedAgentRegistry(
   const modelArrays = cloneOwned(runtime.modelArrays);
   for (const activated of marketplace.agents) {
     const name = activated.manifest.agentName;
-    if (modelArrays[name]) continue;
     const agent = agents.find((entry) => entry.name === name);
+    if (agent?._modelArray && agent._modelArray.length > 0) {
+      modelArrays[name] = cloneOwned(agent._modelArray);
+      continue;
+    }
+    if (modelArrays[name]) continue;
     const model =
       typeof agent?.config.model === 'string' ? agent.config.model : undefined;
     if (model) {
@@ -1723,34 +1946,111 @@ export function buildResolvedAgentRegistry(
     const hostConfig = hostAgentFor(runtime, runtimeName, name);
     const hostModel = resolvePrimaryModelValue(hostConfig?.model);
     const configuredModels = modelArrays[name];
-    if (
+    const hostVariant = stringVariant(hostConfig?.variant);
+    const hostReplacesModel = Boolean(
       hostModel &&
-      configuredModels?.[0]?.id &&
-      configuredModels[0].id !== hostModel
-    ) {
+        configuredModels?.[0]?.id &&
+        configuredModels[0].id !== hostModel,
+    );
+    if (hostReplacesModel && hostModel) {
+      const override = getOverrideFromAgents(runtime.agents(), name);
+      const ownerVariant = hasExplicitVariantOverride(override)
+        ? stringVariant((rawConfig as Record<string, unknown>).variant)
+        : undefined;
       modelArrays[name] = [
         {
           id: hostModel,
-          ...(typeof hostConfig?.variant === 'string'
-            ? { variant: hostConfig.variant }
-            : {}),
+          ...(hostVariant !== undefined
+            ? { variant: hostVariant }
+            : ownerVariant !== undefined
+              ? { variant: ownerVariant }
+              : {}),
         },
       ];
+    } else if (
+      hostModel &&
+      hostVariant !== undefined &&
+      configuredModels?.[0]?.id === hostModel
+    ) {
+      modelArrays[name] = configuredModels.map((entry, index) =>
+        index === 0 ? { ...entry, variant: hostVariant } : entry,
+      );
     }
     const ownedConfig = cloneOwned(rawConfig) as SDKAgentConfig &
       Record<string, unknown>;
     mergeSupportedHostAgentFields(ownedConfig, hostConfig);
-    ownedConfig.permission = projectPermissionValues(
-      name,
-      rawConfig.permission,
-      hostConfig?.permission,
-    ) as SDKAgentConfig['permission'];
+    if (hostReplacesModel && hostVariant === undefined) {
+      const override = getOverrideFromAgents(runtime.agents(), name);
+      if (!hasExplicitVariantOverride(override)) {
+        delete ownedConfig.variant;
+      }
+    }
+    const marketplaceEntry = marketplacePackage(marketplace, name);
+    if (marketplaceEntry) {
+      const ceilings = marketplaceCapabilityCeilings(
+        agent,
+        marketplaceEntry,
+        getOverrideFromAgents(runtime.agents(), name),
+      );
+      ownedConfig.permission = projectMarketplacePermission(
+        rawConfig.permission,
+        hostConfig?.permission,
+        ceilings.tools,
+        ceilings.skills,
+        ceilings.mcps,
+        options?.availableMcpNames ?? [],
+        hostConfig?.tools,
+      ) as SDKAgentConfig['permission'];
+      if (
+        hostConfig?.tools &&
+        typeof hostConfig.tools === 'object' &&
+        !Array.isArray(hostConfig.tools)
+      ) {
+        ownedConfig.tools = Object.fromEntries(
+          Object.entries(hostConfig.tools as Record<string, unknown>).filter(
+            ([tool, value]) =>
+              ceilings.tools.includes(tool) && typeof value === 'boolean',
+          ),
+        ) as Record<string, boolean>;
+      }
+    } else {
+      ownedConfig.permission = projectPermissionValues(
+        name,
+        rawConfig.permission,
+        hostConfig?.permission,
+      ) as SDKAgentConfig['permission'];
+    }
     sdkConfigs[name] = ownedConfig;
   }
 
   // Apply inheritance only while constructing the immutable registry. The
   // config hook must not repeat this resolution against its host projection.
   applyModelInheritanceToConfig(sdkConfigs as Record<string, unknown>, runtime);
+
+  // Inheritance replaces any lower-layer candidate chain. Rebuild the
+  // orchestrator-inherited single candidate from the finalized SDK config so
+  // the fallback surface cannot retain a package model or variant.
+  for (const agent of agents) {
+    const override = getOverrideFromAgents(runtime.agents(), agent.name);
+    if (override?.inheritModelFrom === 'session') {
+      delete modelArrays[agent.name];
+      continue;
+    }
+    if (override?.inheritModelFrom !== 'orchestrator') continue;
+    const config = sdkConfigs[agent.name];
+    const model = resolvePrimaryModelValue(config?.model);
+    if (model === undefined) {
+      delete modelArrays[agent.name];
+      continue;
+    }
+    const variant = stringVariant(config?.variant);
+    modelArrays[agent.name] = [
+      {
+        id: model,
+        ...(variant !== undefined ? { variant } : {}),
+      },
+    ];
+  }
 
   const mcpLists: Record<string, readonly string[]> = {};
   const skillPermissions: Record<
@@ -1799,6 +2099,9 @@ export function buildResolvedAgentRegistry(
       availableMcpNames,
     ) as SDKAgentConfig['permission'];
     const permission = sdkConfig.permission;
+    const marketplaceAgent = marketplace.agents.find(
+      (entry) => entry.manifest.agentName === agent.name,
+    );
     skillPermissions[agent.name] =
       typeof permission === 'object' &&
       permission !== null &&
@@ -1807,34 +2110,25 @@ export function buildResolvedAgentRegistry(
         ? cloneOwned(
             permission.skill as Record<string, 'allow' | 'ask' | 'deny'>,
           )
-        : getSkillPermissionsForAgent(
-            agent.name,
-            runtime.agent(agent.name)?.skills,
-            runtime.disabledSkills,
-          );
-    const marketplaceAgent = marketplace.agents.find(
-      (entry) => entry.manifest.agentName === agent.name,
-    );
-    const marketplaceProfile = agent.baseRole
-      ? marketplace.profiles.get(agent.baseRole)
-      : undefined;
+        : marketplaceAgent
+          ? {}
+          : getSkillPermissionsForAgent(
+              agent.name,
+              runtime.agent(agent.name)?.skills,
+              runtime.disabledSkills,
+            );
     provenance[agent.name] = marketplaceAgent
       ? `marketplace-agent:${marketplaceAgent.packageId}@${marketplaceAgent.version}`
-      : marketplaceProfile && isSubagent(agent.name)
-        ? `marketplace-profile:${marketplaceProfile.packageId}@${marketplaceProfile.version}`
-        : agent.name === 'orchestrator'
-          ? 'orchestrator-special'
-          : isSubagent(agent.name)
-            ? `builtin:${agent.name}`
-            : 'configured-agent';
+      : agent.name === 'orchestrator'
+        ? 'orchestrator-special'
+        : isSubagent(agent.name)
+          ? `builtin:${agent.name}`
+          : 'configured-agent';
     runtimeNameByCanonicalId[agent.name] = agent.name;
     canonicalIdByRuntimeName[agent.name] = agent.name;
     if (marketplaceAgent) {
       packageIdByRuntimeName[agent.name] = marketplaceAgent.packageId;
       runtimeNameByPackageId[marketplaceAgent.packageId] = agent.name;
-    } else if (marketplaceProfile && isSubagent(agent.name)) {
-      packageIdByRuntimeName[agent.name] = marketplaceProfile.packageId;
-      runtimeNameByPackageId[marketplaceProfile.packageId] = agent.name;
     }
     if (agent.displayName) {
       const displayName = normalizeAgentName(agent.displayName);

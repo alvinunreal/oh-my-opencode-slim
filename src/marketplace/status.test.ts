@@ -27,33 +27,28 @@ function agentBundle(
 ): MarketplacePackageBundle {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id,
       version,
-      kind: 'agent',
       displayName: 'Docs researcher',
       description: 'A derived explorer.',
-      instructions: 'Prefer documentation paths first.',
+      agentName: id.split('/')[1]?.replaceAll('-', '') ?? 'docsresearcher',
+      prompt: 'Prefer documentation paths first.',
       author: { name: 'Community' },
       tags: ['docs'],
       license: 'MIT',
       compatibility: {
-        plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-        roleContract: '^1.0.0',
+        plugin: '>=3.0.0-beta.3 <4.0.0',
       },
       routing: {
         description: 'Research docs.',
         keywords: ['docs'],
-        delegation: { when: 'When needed.', preferredRoles: [] },
+        when: 'When needed.',
       },
-      requirements: {
-        skills: { required: [], optional: [] },
-        mcps: { required: [], optional: [] },
-      },
-      capabilities: { tools: [], permissions: [] },
-      baseRole: 'explorer',
-      agentName: id.split('/')[1]?.replaceAll('-', '') ?? 'docsresearcher',
-      overrides: {},
+      skills: [],
+      mcps: [],
+      tools: [],
+      model: { source: 'explicit', candidates: ['provider/model'] },
       ...overrides,
     } as MarketplacePackageBundle['manifest'],
   };
@@ -217,11 +212,7 @@ describe('marketplace status', () => {
   test('compares desired registry identities so aliases match and collisions are excluded', () => {
     const { root, project, service } = setup();
     try {
-      service.install(
-        agentBundle('community/docs-researcher', '1.0.0', {
-          overrides: { displayName: 'docsalias' },
-        }),
-      );
+      service.install(agentBundle('community/docs-researcher', '1.0.0'));
       service.install(
         agentBundle('community/reserved-explorer', '1.0.0', {
           agentName: 'explorer',
@@ -234,7 +225,7 @@ describe('marketplace status', () => {
           preset: 'work',
           presets: {
             work: {
-              agents: {},
+              agents: { docsresearcher: { displayName: 'docsalias' } },
               marketplace: {
                 agents: [
                   'community/docs-researcher',
@@ -297,19 +288,13 @@ describe('marketplace status', () => {
   test('keeps desired rejection diagnostics in status', () => {
     const { root, project, service } = setup();
     try {
-      service.install(
-        agentBundle('community/docs-researcher', '1.0.0', {
-          overrides: { displayName: 'Docs Researcher' },
-        }),
-      );
+      service.install(agentBundle('community/docs-researcher', '1.0.0'));
       service.install(
         agentBundle('community/needs-skill', '1.0.0', {
           agentName: 'needsskill',
           displayName: 'Needs skill',
-          requirements: {
-            skills: { required: ['not-a-real-skill'], optional: [] },
-            mcps: { required: [], optional: [] },
-          },
+          skills: ['not-a-real-skill'],
+          mcps: [],
         }),
       );
       writeFileSync(
@@ -318,7 +303,7 @@ describe('marketplace status', () => {
           preset: 'work',
           presets: {
             work: {
-              agents: {},
+              agents: { docsresearcher: { displayName: 'Docs Researcher' } },
               marketplace: {
                 agents: ['community/docs-researcher', 'community/needs-skill'],
               },

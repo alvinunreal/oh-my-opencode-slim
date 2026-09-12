@@ -13,33 +13,28 @@ const previousConfigHome = process.env.XDG_CONFIG_HOME;
 
 const bundle: MarketplacePackageBundle = {
   manifest: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'community/referenced',
     version: '1.0.0',
-    kind: 'agent',
     displayName: 'Referenced agent',
     description: 'An agent used by a preset.',
-    instructions: 'Follow the role instructions.',
+    agentName: 'referenced',
+    prompt: 'Follow the role instructions.',
     author: { name: 'Community' },
     tags: ['test'],
     license: 'MIT',
     compatibility: {
-      plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-      roleContract: '^1.0.0',
+      plugin: '>=3.0.0-beta.3 <4.0.0',
     },
     routing: {
       description: 'Route referenced work here.',
       keywords: ['reference'],
-      delegation: { when: 'When referenced.', preferredRoles: [] },
+      when: 'When referenced.',
     },
-    requirements: {
-      skills: { required: [], optional: [] },
-      mcps: { required: [], optional: [] },
-    },
-    capabilities: { tools: [], permissions: [] },
-    baseRole: 'explorer',
-    agentName: 'referenced',
-    overrides: {},
+    skills: [],
+    mcps: [],
+    tools: [],
+    model: { source: 'explicit', candidates: ['provider/model'] },
   },
 };
 

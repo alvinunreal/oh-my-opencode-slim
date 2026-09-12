@@ -49,8 +49,8 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 - **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
   across 25 languages, and built-in MCPs for docs and GitHub code
 - **[Marketplace](docs/marketplace.md)** - install registry packages or import
-  local agent/profile packages explicitly; startup and local reads stay offline
-  and changes apply after reload
+  local agent packages explicitly; startup and local reads stay offline and
+  changes apply after reload
   search.
 - **[Fully customizable](docs/configuration.md)** - custom agents, prompt
   overrides, per-agent skill/MCP permissions, and
@@ -117,12 +117,12 @@ Startup and local marketplace reads are offline. Explicit registry install and
 update operations use bounded HTTPS requests to the fixed beta registry.
 Package manifests are data-only, exact-version locked, and stored under the XDG data directory.
 Installation and preset activation are separate: install a package, then enable
-it in the active preset. Activated agents and profiles apply after the next
+it in the active preset. Activated agents apply after the next
 OpenCode session/reload; the live registry is never hot-swapped.
-Manifests include bounded author, tag, license, plugin/role-contract,
-routing/delegation, role-target, capability, and override metadata. `instructions`
-is the single package instruction surface; profile packages declare explicit
-append/replace composition semantics. Executable fields,
+Manifests include bounded author, tag, license, plugin compatibility, routing,
+model policy, exact skills/MCPs/tools, and prompt metadata. Agents may extend
+one built-in specialist with explicit append/replace composition semantics.
+Executable fields,
 package-to-package dependencies, and arbitrary file maps are rejected.
 
 ```bash
@@ -134,7 +134,6 @@ bunx oh-my-opencode-slim marketplace verify [author/name]
 bunx oh-my-opencode-slim marketplace import ./package-v2.json --update
 bunx oh-my-opencode-slim marketplace update community/example
 bunx oh-my-opencode-slim marketplace enable author/name
-bunx oh-my-opencode-slim marketplace profile librarian author/profile
 bunx oh-my-opencode-slim marketplace disable author/name
 bunx oh-my-opencode-slim marketplace remove author/name
 bunx oh-my-opencode-slim marketplace status
@@ -144,13 +143,10 @@ Use `import` explicitly for local author files; `import --update` requires an
 existing package and a strictly newer version. Unversioned registry install
 selects the highest compatible version, while `ID@version` selects exactly
 that version. Registry update requires an installed package and is strictly
-monotonic. `enable` activates
-an installed `agent` package in the active preset as a separately named
-role-derived agent. `profile` selects at most one installed `profile` package
-per supported specialist role; `--clear` writes a tombstone. Required skills
-and MCPs are preflighted against built-in capabilities and on-disk host
-configuration; missing required dependencies disable that package for the
-session. Optional requirements stay unavailable and are never auto-installed.
+monotonic. `enable` activates an installed agent package in the active preset as
+a separately named agent. Declared skills and MCPs are preflighted against
+built-in capabilities and on-disk host configuration; missing dependencies
+disable that agent for the session.
 Startup reads only the local store and never contacts a registry. The
 orchestrator can perform the same lifecycle
 with the in-session `marketplace` tool; see

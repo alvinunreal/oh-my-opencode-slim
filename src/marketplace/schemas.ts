@@ -2,11 +2,11 @@ import { isAbsolute } from 'node:path';
 import { valid, validRange } from 'semver';
 import { z } from 'zod';
 import { SUPPORTED_SPECIALIST_ROLES } from '../config/agent-roles';
+import { AGENT_THEME_COLORS } from '../config/constants';
 
-export const MARKETPLACE_MANIFEST_SCHEMA_VERSION = 1 as const;
-export const MARKETPLACE_LOCKFILE_SCHEMA_VERSION = 1 as const;
-export const MARKETPLACE_ROLE_CONTRACT_VERSION = '1.0.0' as const;
-export const MARKETPLACE_DIGEST_DOMAIN = 'marketplace-bundle-v1' as const;
+export const MARKETPLACE_MANIFEST_SCHEMA_VERSION = 2 as const;
+export const MARKETPLACE_LOCKFILE_SCHEMA_VERSION = 2 as const;
+export const MARKETPLACE_DIGEST_DOMAIN = 'marketplace-agent-bundle-v2' as const;
 
 const packageIdPattern =
   /^[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -30,9 +30,32 @@ export const MarketplaceVersionSchema = z
     'Expected canonical exact semantic version spelling',
   );
 
-export const MarketplaceRoleSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
+export const MarketplaceBuiltinSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
+export type MarketplaceBuiltin = z.infer<typeof MarketplaceBuiltinSchema>;
 
 const BoundedTextSchema = (max: number) => z.string().trim().min(1).max(max);
+const UniqueStringArraySchema = z
+  .array(z.string().trim().min(1).max(200))
+  .max(128)
+  .refine((values) => new Set(values).size === values.length, {
+    message: 'Values must be unique',
+  });
+
+export const MARKETPLACE_TOOL_NAMES = [
+  'read',
+  'glob',
+  'grep',
+  'ast_grep_search',
+  'edit',
+  'write',
+  'apply_patch',
+  'ast_grep_replace',
+  'bash',
+  'webfetch',
+  'websearch',
+] as const;
+
+const MarketplaceToolSchema = z.enum(MARKETPLACE_TOOL_NAMES);
 
 export const MarketplaceAuthorSchema = z
   .object({
@@ -42,88 +65,29 @@ export const MarketplaceAuthorSchema = z
   })
   .strict();
 
-const UniqueBoundedStringArraySchema: z.ZodType<string[]> = z
-  .array(z.string().trim().min(1).max(64))
-  .max(32)
-  .refine((values) => new Set(values).size === values.length, {
-    message: 'Values must be unique',
-  });
+export const MarketplaceModelCandidateSchema = z.union([
+  BoundedTextSchema(200),
+  z
+    .object({
+      id: BoundedTextSchema(200),
+      variant: BoundedTextSchema(100).optional(),
+    })
+    .strict(),
+]);
 
-function uniqueCapabilityArray<T extends z.ZodTypeAny>(
-  itemSchema: T,
-  max: number,
-) {
-  return z
-    .array(itemSchema)
-    .max(max)
-    .refine((values) => new Set(values).size === values.length, {
-      message: 'Values must be unique',
-    });
-}
-
-const RequirementSetSchema = z
+const MarketplaceExplicitModelSchema = z
   .object({
-    required: UniqueBoundedStringArraySchema.default([]),
-    optional: UniqueBoundedStringArraySchema.default([]),
+    source: z.literal('explicit'),
+    candidates: z.array(MarketplaceModelCandidateSchema).min(1).max(16),
   })
   .strict();
 
-export const MarketplaceRequirementsSchema = z
-  .object({
-    skills: RequirementSetSchema.default({ required: [], optional: [] }),
-    mcps: RequirementSetSchema.default({ required: [], optional: [] }),
-  })
-  .strict()
-  .superRefine((requirements, ctx) => {
-    if (
-      requirements.skills.required.some((skill) =>
-        requirements.skills.optional.includes(skill),
-      )
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['skills'],
-        message: 'Required and optional skills must not overlap',
-      });
-    }
-    if (
-      requirements.mcps.required.some((mcp) =>
-        requirements.mcps.optional.includes(mcp),
-      )
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['mcps'],
-        message: 'Required and optional MCPs must not overlap',
-      });
-    }
-  });
-
-export const MarketplaceCapabilityRequestSchema = z
-  .object({
-    tools: uniqueCapabilityArray(
-      z.enum([
-        'read',
-        'glob',
-        'grep',
-        'ast_grep_search',
-        'webfetch',
-        'websearch',
-      ]),
-      6,
-    ).default([]),
-    permissions: uniqueCapabilityArray(
-      z.enum([
-        'filesystem.read',
-        'filesystem.write',
-        'network.fetch',
-        'session.delegate',
-      ]),
-      4,
-    ).default([]),
-  })
-  .strict()
-  .default({ tools: [], permissions: [] });
+export const MarketplaceModelPolicySchema = z.discriminatedUnion('source', [
+  z.object({ source: z.literal('session') }).strict(),
+  z.object({ source: z.literal('orchestrator') }).strict(),
+  MarketplaceExplicitModelSchema,
+  z.object({ source: z.literal('builtin') }).strict(),
+]);
 
 export const MarketplaceCompatibilitySchema = z
   .object({
@@ -131,83 +95,87 @@ export const MarketplaceCompatibilitySchema = z
       (range) => validRange(range) !== null,
       'Expected a valid plugin semantic-version range',
     ),
-    roleContract: BoundedTextSchema(64).refine(
-      (range) => validRange(range) !== null,
-      'Expected a valid role-contract semantic-version range',
-    ),
   })
   .strict();
 
 export const MarketplaceRoutingSchema = z
   .object({
     description: BoundedTextSchema(500),
-    keywords: UniqueBoundedStringArraySchema.default([]),
-    delegation: z
-      .object({
-        when: BoundedTextSchema(500),
-        preferredRoles: z.array(MarketplaceRoleSchema).max(6).default([]),
-      })
-      .strict(),
+    when: BoundedTextSchema(500),
+    keywords: UniqueStringArraySchema,
   })
   .strict();
 
-export const MarketplaceAgentOverridesSchema = z
+export const MarketplaceExtensionSchema = z
   .object({
-    model: z.string().trim().min(1).max(200).optional(),
-    variant: z.string().trim().min(1).max(100).optional(),
-    temperature: z.number().min(0).max(2).optional(),
-    displayName: BoundedTextSchema(120).optional(),
-    description: BoundedTextSchema(500).optional(),
+    builtin: MarketplaceBuiltinSchema,
+    promptMode: z.enum(['append', 'replace']),
   })
+  .strict();
+
+const ManifestSchema = z
+  .object({
+    schemaVersion: z.literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION),
+    id: MarketplacePackageIdSchema,
+    version: MarketplaceVersionSchema,
+    displayName: BoundedTextSchema(120),
+    description: BoundedTextSchema(1000),
+    agentName: z
+      .string()
+      .trim()
+      .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'Expected a valid agent name'),
+    prompt: BoundedTextSchema(100_000),
+    routing: MarketplaceRoutingSchema,
+    skills: UniqueStringArraySchema,
+    mcps: UniqueStringArraySchema,
+    tools: z
+      .array(MarketplaceToolSchema)
+      .max(11)
+      .refine((values) => new Set(values).size === values.length, {
+        message: 'Tools must be unique',
+      }),
+    author: MarketplaceAuthorSchema,
+    tags: UniqueStringArraySchema,
+    license: BoundedTextSchema(64),
+    compatibility: MarketplaceCompatibilitySchema,
+    model: MarketplaceModelPolicySchema,
+    temperature: z.number().min(0).max(2).optional(),
+    color: z
+      .union([
+        z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        z.enum(AGENT_THEME_COLORS),
+      ])
+      .optional(),
+  })
+  .strict();
+
+export const MarketplacePackageManifestSchema = ManifestSchema.extend({
+  extends: MarketplaceExtensionSchema.optional(),
+})
   .strict()
-  .default({});
+  .superRefine((manifest, ctx) => {
+    if (manifest.model.source === 'builtin' && !manifest.extends) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['model', 'source'],
+        message: "model.source 'builtin' requires extends",
+      });
+    }
+  });
 
-const ManifestBaseSchema = z.object({
-  schemaVersion: z
-    .literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION)
-    .default(MARKETPLACE_MANIFEST_SCHEMA_VERSION),
-  id: MarketplacePackageIdSchema,
-  version: MarketplaceVersionSchema,
-  displayName: BoundedTextSchema(120),
-  description: BoundedTextSchema(1000),
-  instructions: BoundedTextSchema(100_000),
-  author: MarketplaceAuthorSchema,
-  tags: UniqueBoundedStringArraySchema,
-  license: BoundedTextSchema(64),
-  compatibility: MarketplaceCompatibilitySchema,
-  routing: MarketplaceRoutingSchema,
-  requirements: MarketplaceRequirementsSchema,
-  capabilities: MarketplaceCapabilityRequestSchema,
-});
+export const MarketplaceAgentManifestSummarySchema = ManifestSchema.omit({
+  prompt: true,
+})
+  .extend({ extends: MarketplaceExtensionSchema.optional() })
+  .strict();
 
-export const MarketplaceAgentManifestSchema = ManifestBaseSchema.extend({
-  kind: z.literal('agent'),
-  baseRole: MarketplaceRoleSchema,
-  agentName: z
-    .string()
-    .trim()
-    .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'Expected a valid agent name'),
-  overrides: MarketplaceAgentOverridesSchema,
-}).strict();
+// Kept as the precise agent-manifest name for consumers of the public contract.
+export const MarketplaceAgentManifestSchema = MarketplacePackageManifestSchema;
 
-export const MarketplaceProfileManifestSchema = ManifestBaseSchema.extend({
-  kind: z.literal('profile'),
-  targetRole: MarketplaceRoleSchema,
-  instructionMode: z.enum(['append', 'replace']),
-  overrides: MarketplaceAgentOverridesSchema,
-}).strict();
-
-export const MarketplacePackageManifestSchema = z.discriminatedUnion('kind', [
-  MarketplaceAgentManifestSchema,
-  MarketplaceProfileManifestSchema,
-]);
-
-/**
- * A package bundle deliberately contains only its manifest. There is no
- * executable entrypoint, hook, script, or arbitrary file payload in V3.
- */
 export const MarketplacePackageBundleSchema = z
-  .object({ manifest: MarketplacePackageManifestSchema })
+  .object({
+    manifest: MarketplacePackageManifestSchema,
+  })
   .strict();
 
 export const MarketplaceLocalSourceSchema = z
@@ -269,12 +237,11 @@ export const MarketplaceLockfileSchema = z
 
 export type MarketplacePackageId = z.infer<typeof MarketplacePackageIdSchema>;
 export type MarketplaceVersion = z.infer<typeof MarketplaceVersionSchema>;
-export type MarketplaceRole = z.infer<typeof MarketplaceRoleSchema>;
+export type MarketplaceModelPolicy = z.infer<
+  typeof MarketplaceModelPolicySchema
+>;
 export type MarketplaceAgentManifest = z.infer<
   typeof MarketplaceAgentManifestSchema
->;
-export type MarketplaceProfileManifest = z.infer<
-  typeof MarketplaceProfileManifestSchema
 >;
 export type MarketplacePackageManifest = z.infer<
   typeof MarketplacePackageManifestSchema

@@ -4,7 +4,6 @@ import { z } from 'zod';
 import {
   disableMarketplacePackage,
   enableMarketplaceAgent,
-  setMarketplaceProfile,
 } from '../marketplace/activation-config';
 import type { MarketplaceService } from '../marketplace/service';
 import {
@@ -26,7 +25,6 @@ export const MARKETPLACE_TOOL_ACTIONS = [
   'update',
   'enable',
   'disable',
-  'profile',
   'remove',
   'status',
 ] as const;
@@ -69,14 +67,6 @@ const MarketplaceToolRequestSchema = z.discriminatedUnion('action', [
       force: z.boolean().optional(),
     })
     .strict(),
-  z
-    .object({
-      action: z.literal('profile'),
-      role: z.string().min(1),
-      packageId: z.string().min(1).optional(),
-      clear: z.literal(true).optional(),
-    })
-    .strict(),
   z.object({ action: z.literal('list') }).strict(),
   z.object({ action: z.literal('status') }).strict(),
 ]);
@@ -110,15 +100,6 @@ export function parseMarketplaceToolArgs(
     throw new Error(result.error.message);
   }
   const request = result.data;
-  if (request.action === 'profile') {
-    if (request.clear === true) {
-      if (request.packageId !== undefined) {
-        throw new Error('profile --clear accepts only a role');
-      }
-    } else if (!request.packageId) {
-      throw new Error('profile requires a role and package ID');
-    }
-  }
   return request;
 }
 
@@ -145,22 +126,13 @@ function formatPackageLine(pkg: {
   manifest: {
     id: string;
     version: string;
-    kind: string;
     displayName: string;
     description: string;
-    baseRole?: string;
-    targetRole?: string;
   };
   source: unknown;
 }): string {
-  const role =
-    pkg.manifest.kind === 'agent'
-      ? pkg.manifest.baseRole
-      : pkg.manifest.targetRole;
   return [
     `${pkg.manifest.id}@${pkg.manifest.version}`,
-    `kind: ${pkg.manifest.kind}`,
-    `role: ${role}`,
     `displayName: ${pkg.manifest.displayName}`,
     `description: ${pkg.manifest.description}`,
     `source: ${JSON.stringify(pkg.source)}`,
@@ -177,7 +149,7 @@ Use install and update with a canonical package ID for the default HTTPS registr
 
 list, show, verify, and status are read-only and always offline. Remote network work occurs only for explicit install/update. All mutations use the local transaction store and never hot-swap the live agent registry.
 
-Action-specific fields: packageId for install/update/show/enable/disable/profile/remove; path and optional update=true for import; role plus packageId or role plus clear=true for profile; no extra fields.`,
+Action-specific fields: packageId for install/update/show/enable/disable/remove; path and optional update=true for import; no extra fields.`,
     args: {
       action: toolZ
         .enum(MARKETPLACE_TOOL_ACTIONS)
@@ -194,19 +166,10 @@ Action-specific fields: packageId for install/update/show/enable/disable/profile
         .describe(
           'Canonical package ID for registry install/update or local actions',
         ),
-      role: toolZ
-        .string()
-        .min(1)
-        .optional()
-        .describe('Specialist role for profile'),
       force: toolZ
         .boolean()
         .optional()
         .describe('Force remove even if the package is still referenced'),
-      clear: toolZ
-        .boolean()
-        .optional()
-        .describe('Clear the selected profile for a specialist role'),
       update: toolZ
         .boolean()
         .optional()
@@ -277,11 +240,7 @@ Action-specific fields: packageId for install/update/show/enable/disable/profile
           return service
             .list()
             .map((pkg) => {
-              const role =
-                pkg.manifest.kind === 'agent'
-                  ? pkg.manifest.baseRole
-                  : pkg.manifest.targetRole;
-              return `${pkg.manifest.id}@${pkg.manifest.version}\t${pkg.manifest.kind}\t${role}\t${pkg.manifest.displayName}`;
+              return `${pkg.manifest.id}@${pkg.manifest.version}\t${pkg.manifest.displayName}`;
             })
             .join('\n');
         case 'show':
@@ -308,32 +267,6 @@ Action-specific fields: packageId for install/update/show/enable/disable/profile
           return mutationResult(
             options,
             `Disabled ${request.packageId} in the active preset`,
-          );
-        case 'profile':
-          if (request.clear === true) {
-            setMarketplaceProfile(
-              projectDir,
-              request.role,
-              null,
-              service.store,
-            );
-            return mutationResult(
-              options,
-              `Cleared the ${request.role} profile`,
-            );
-          }
-          if (!request.packageId) {
-            throw new Error('profile requires a role and package ID');
-          }
-          setMarketplaceProfile(
-            projectDir,
-            request.role,
-            request.packageId,
-            service.store,
-          );
-          return mutationResult(
-            options,
-            `Selected ${request.packageId} for ${request.role}`,
           );
         case 'status':
           return formatMarketplaceStatus(

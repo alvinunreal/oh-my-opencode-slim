@@ -19,7 +19,6 @@ export interface MarketplaceLivePackage {
   version: string;
   digest: string;
   runtimeName: string;
-  kind: 'agent' | 'profile';
 }
 
 export interface MarketplaceLiveSnapshot {
@@ -30,9 +29,7 @@ export interface MarketplaceLiveSnapshot {
 export interface MarketplaceInstalledSummary {
   id: string;
   version?: string;
-  kind?: 'agent' | 'profile';
   displayName?: string;
-  role?: string;
   digest?: string;
   valid: boolean;
 }
@@ -46,7 +43,6 @@ export interface MarketplaceStatusReport {
   configured: {
     preset?: string;
     agents: string[];
-    profiles: Record<string, string | null>;
   };
   live?: {
     packages: MarketplaceLivePackage[];
@@ -64,19 +60,11 @@ export interface CollectMarketplaceStatusOptions {
   desiredLive?: MarketplaceLiveSnapshot;
 }
 
-function packageRole(pkg: StoredMarketplacePackage): string {
-  return pkg.manifest.kind === 'agent'
-    ? pkg.manifest.baseRole
-    : pkg.manifest.targetRole;
-}
-
 function summarize(pkg: StoredMarketplacePackage): MarketplaceInstalledSummary {
   return {
     id: pkg.manifest.id,
     version: pkg.manifest.version,
-    kind: pkg.manifest.kind,
     displayName: pkg.manifest.displayName,
-    role: packageRole(pkg),
     digest: pkg.digest,
     valid: true,
   };
@@ -86,10 +74,7 @@ function configuredIds(
   activation: MarketplaceActivation | undefined,
 ): string[] {
   const agents = activation?.agents ?? [];
-  const profiles = Object.values(activation?.profiles ?? {}).filter(
-    (value): value is string => typeof value === 'string' && value.length > 0,
-  );
-  return [...new Set([...agents, ...profiles])];
+  return [...new Set(agents)];
 }
 
 function identityKey(entry: {
@@ -274,7 +259,6 @@ export function collectMarketplaceStatus(
     configured: {
       ...(preset ? { preset } : {}),
       agents: [...(activation?.agents ?? [])],
-      profiles: { ...(activation?.profiles ?? {}) },
     },
     ...(livePackages
       ? {
@@ -304,11 +288,9 @@ export function formatMarketplaceStatus(
   } else {
     for (const pkg of report.installed) {
       const version = pkg.version ? `@${pkg.version}` : '';
-      const kind = pkg.kind ? ` ${pkg.kind}` : '';
-      const role = pkg.role ? ` ${pkg.role}` : '';
       const name = pkg.displayName ? ` ${pkg.displayName}` : '';
       const valid = pkg.valid ? '' : ' corrupt';
-      lines.push(`  ${pkg.id}${version}${kind}${role}${name}${valid}`);
+      lines.push(`  ${pkg.id}${version}${name}${valid}`);
     }
   }
   lines.push('', 'configured_agents:');
@@ -317,15 +299,6 @@ export function formatMarketplaceStatus(
   } else {
     for (const id of report.configured.agents) lines.push(`  ${id}`);
   }
-  lines.push('', 'configured_profiles:');
-  const profileEntries = Object.entries(report.configured.profiles);
-  if (profileEntries.length === 0) {
-    lines.push('  (none)');
-  } else {
-    for (const [role, packageId] of profileEntries) {
-      lines.push(`  ${role}: ${packageId ?? '(cleared)'}`);
-    }
-  }
   if (report.live) {
     lines.push('', 'live_packages:');
     if (report.live.packages.length === 0) {
@@ -333,7 +306,7 @@ export function formatMarketplaceStatus(
     } else {
       for (const entry of report.live.packages) {
         lines.push(
-          `  ${entry.packageId}@${entry.version} ${entry.kind} ${entry.runtimeName}`,
+          `  ${entry.packageId}@${entry.version} ${entry.runtimeName}`,
         );
       }
     }

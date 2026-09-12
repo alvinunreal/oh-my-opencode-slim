@@ -13,30 +13,26 @@ import { MarketplaceService } from './service';
 function bundle(version = '1.0.0'): MarketplacePackageBundle {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: 'community/dispatch-agent',
       version,
-      kind: 'agent',
       displayName: 'Dispatch agent',
       description: 'A dispatch test package.',
-      instructions: 'Use the explorer role.',
+      agentName: 'dispatchagent',
+      prompt: 'Use the explorer role.',
       author: { name: 'Community' },
       tags: ['dispatch'],
       license: 'MIT',
-      compatibility: { plugin: '>=3.0.0', roleContract: '^1.0.0' },
+      compatibility: { plugin: '>=3.0.0' },
       routing: {
         description: 'Dispatch test routing.',
         keywords: ['dispatch'],
-        delegation: { when: 'When dispatching.', preferredRoles: [] },
+        when: 'When dispatching.',
       },
-      requirements: {
-        skills: { required: [], optional: [] },
-        mcps: { required: [], optional: [] },
-      },
-      capabilities: { tools: [], permissions: [] },
-      baseRole: 'explorer',
-      agentName: 'dispatchagent',
-      overrides: {},
+      skills: [],
+      mcps: [],
+      tools: [],
+      model: { source: 'explicit', candidates: ['provider/model'] },
     },
   };
 }
@@ -47,7 +43,7 @@ function download(version: string): MarketplaceRegistryDownload {
     bundle: packageBundle,
     entry: createMarketplaceRegistryEntry(packageBundle),
     indexUrl: MARKETPLACE_REGISTRY_INDEX_URL,
-    packageUrl: `https://registry.ohmyopencodeslim.com/v1/artifacts/community/dispatch-agent/${version}.json`,
+    packageUrl: `https://registry.ohmyopencodeslim.com/v2/artifacts/community/dispatch-agent/${version}.json`,
   };
 }
 

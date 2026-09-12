@@ -515,23 +515,6 @@
                   "type": "string",
                   "minLength": 1
                 }
-              },
-              "profiles": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string"
-                },
-                "additionalProperties": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
               }
             },
             "additionalProperties": false

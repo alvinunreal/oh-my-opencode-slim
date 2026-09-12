@@ -429,10 +429,11 @@ function loadConfigFromPath(
     const result = PluginConfigSchema.safeParse(rawConfig);
 
     if (!result.success) {
+      const message = 'Config does not match schema';
       options?.onWarning?.({
         path: configPath,
         kind: 'invalid-schema',
-        message: 'Config does not match schema',
+        message,
         formatted: result.error.format(),
       });
       if (!options?.silent) {
@@ -691,14 +692,6 @@ export function mergePreset(
         ...override.marketplace,
         ...(Object.hasOwn(override.marketplace, 'agents')
           ? { agents: override.marketplace.agents }
-          : {}),
-        ...(Object.hasOwn(override.marketplace, 'profiles')
-          ? {
-              profiles: {
-                ...(base.marketplace?.profiles ?? {}),
-                ...(override.marketplace.profiles ?? {}),
-              },
-            }
           : {}),
       }
     : base.marketplace;

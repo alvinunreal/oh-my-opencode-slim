@@ -142,11 +142,6 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 /** Normalized model entry with optional per-model variant. */
 export type ModelEntry = { id: string; variant?: string };
 
-export const MarketplaceProfileTargetSchema = AgentBaseRoleSchema;
-export type MarketplaceProfileTarget = z.infer<
-  typeof MarketplaceProfileTargetSchema
->;
-
 const MarketplacePackageIdSchema = z.string().trim().min(1);
 const MarketplacePackageIdsSchema = z
   .array(MarketplacePackageIdSchema)
@@ -171,44 +166,6 @@ const MarketplacePackageIdsSchema = z
 export const MarketplaceActivationSchema = z
   .object({
     agents: MarketplacePackageIdsSchema.optional(),
-    profiles: z
-      .record(z.string(), MarketplacePackageIdSchema.nullable())
-      .superRefine((profiles, ctx) => {
-        const packageIds = Object.values(profiles).filter(
-          (packageId): packageId is string => packageId !== null,
-        );
-        if (new Set(packageIds).size !== packageIds.length) {
-          ctx.addIssue({
-            code: 'custom',
-            message: 'Profile package IDs must be unique',
-          });
-        }
-        for (const target of Object.keys(profiles)) {
-          if (!MarketplaceProfileTargetSchema.safeParse(target).success) {
-            ctx.addIssue({
-              code: 'custom',
-              path: [target],
-              message: `Unsupported profile target '${target}'`,
-            });
-          }
-        }
-      })
-      .optional(),
-  })
-  .superRefine((activation, ctx) => {
-    const packageIds = [
-      ...(activation.agents ?? []),
-      ...Object.values(activation.profiles ?? {}).filter(
-        (packageId): packageId is string => packageId !== null,
-      ),
-    ];
-    if (new Set(packageIds).size !== packageIds.length) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['agents'],
-        message: 'Activation package IDs must be unique',
-      });
-    }
   })
   .strict();
 
