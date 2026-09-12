@@ -172,6 +172,33 @@ describe('smartfetch/secondary-model', () => {
     }
   });
 
+  // The helper session must name an agent (probe A2 — an agent-less body
+  // durably re-homes the session to the default primary), but it must NOT be
+  // `orchestrator`, which would make the task-session-manager adopt this
+  // throwaway session as a managed orchestrator session.
+  test('names the build agent on the helper prompt, never the orchestrator', async () => {
+    mockV2Client = createV2ClientMock([{ text: 'Answer' }]);
+
+    await runSecondaryModelWithFallback(
+      testInput,
+      models,
+      'Summarize the page',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    const body = (
+      mockV2Session.prompt.mock.calls[0]?.[0] as {
+        body?: { agent?: string };
+      }
+    )?.body;
+    expect(body?.agent).toBe('build');
+    expect(body?.agent).not.toBe('orchestrator');
+    // Resolution must not probe: the session was just created and has no
+    // history, and the mock client deliberately exposes no get/messages.
+    expect(mockV2Session).not.toHaveProperty('get');
+    expect(mockV2Session).not.toHaveProperty('messages');
+  });
+
   test('falls back to next model when prompt times out', async () => {
     mockV2Session = {
       abort: mock(async () => ({ data: true })),

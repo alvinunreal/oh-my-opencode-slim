@@ -1,7 +1,7 @@
 # Diagnosis: "build agent empty input" after orchestrator output
 
-**Status:** Resolved for interview injections.
-**Date:** 2026-08-10
+**Status:** Resolved repo-wide and guarded by a regression scan.
+**Date:** 2026-08-10 (interview fix) · 2026-09-02 (repo-wide fix + scan)
 **Related PR:** #818 (`fix/preset-tui-slash-command`) — same root class as the original `/preset` fix.
 **Suspected sibling bug reported by user:** During `superpowers` / `brainstorm` skill conversations, when the orchestrator asks for confirmation or work is interrupted (subagent completes, background task finishes), a `build` agent turn sometimes appears with an empty user input.
 
@@ -9,9 +9,74 @@
 
 The `build` agent turn with empty input is **the same class of bug** as the original `/preset` issue fixed in #818: a plugin hook calls `sessionSdk.promptAsync({ body: { parts: [createInternalAgentTextPart(...)] } })` **without specifying an `agent` field**. opencode then resolves the agent via `agents.defaultInfo()`, which falls back to the built-in `build` agent whenever `default_agent` is unset, user-overridden, or not effectively applied. The `synthetic: true` flag hides the injected text from the TUI, so the user perceives the `build` turn as having "empty input."
 
-**Update:** the incomplete-todo continuation path passes `agent: 'orchestrator'`,
-and interview injections now use the interview-only runtime boundary, which
-always targets the orchestrator. Smartfetch remains a separate call site.
+**Update (2026-09-02):** every plugin-initiated prompt now names its agent.
+`src/utils/prompt-agent.ts` owns the decision (`resolveSessionAgent()` +
+`withAgent()`), the last two agent-less call sites (interview `notify`,
+smartfetch's secondary model) were fixed, and
+`src/utils/prompt-agent.test.ts` scans all of `src/` so a new agent-less
+`session.prompt`/`promptAsync` body fails the build. The root cause was
+confirmed empirically — see [Empirical confirmation](#empirical-confirmation-probe-a2):
+the rewrite lands on accept (HTTP 204, before generation) and persists for
+every later turn.
+
+## Empirical confirmation (probe A2)
+
+Measured against opencode **1.18.26** in an isolated temp project with a
+purpose-built `probe-sub` subagent. A background child session was started,
+then prompted directly with `agent` deliberately left out of the body:
+
+```ts
+client.session.promptAsync({
+  path: { id: childID },
+  body: {
+    model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
+    // agent omitted
+    parts: [{ type: 'text', text: 'Additional instruction: also report the current date.' }],
+  },
+});
+```
+
+Raw result:
+
+```
+child = ses_f9dec1daaffecKR4yLMGtcRPLQ  agent=probe-sub  title="a2-slow-count (@probe-sub subagent)"
+child agent BEFORE prompt:        probe-sub
+promptAsync(child, no agent) ->   HTTP 204  error=null
+child agent IMMEDIATELY after:    build
+child agent AFTER turn:           build
+>> agent field CHANGED probe-sub -> build
+```
+
+Per-message agent attribution shows the session was genuinely re-homed, not
+just mislabelled — the injected turn was served by `build`, with `build`'s
+prompt and toolset, inside a session that is still a `probe-sub` subagent
+child:
+
+```json
+[
+  { "role": "user",      "agent": "probe-sub" },
+  { "role": "assistant", "agent": "probe-sub" },
+  { "role": "user",      "agent": "build" },
+  { "role": "assistant", "agent": "build" }
+]
+```
+
+The same run also established two facts the resolver relies on:
+
+- **Assistant messages are not a safe agent hint.** They report whichever
+  agent *served* a turn, which includes core's `compaction` / `summary` /
+  `title` primaries — and includes `build` in any session this bug already
+  re-homed. Only the newest **user** message is used.
+- **`mode: subagent` is not enforced at the session level.** A parentless
+  top-level session can be created and driven with a subagent-mode agent
+  (`POST /session {agent:'explore'}` → 200, `promptAsync` → 204, `GET
+  /session/:id` still reports `explore`). `mode` only controls where an agent
+  is *offered*, so the resolver may return such a name and must not
+  "correct" it.
+
+Control: the identical prompt **with** `agent` supplied explicitly left
+`session.agent` untouched and the injected instruction still steered the
+child — so naming the agent is a complete fix, not a workaround.
 
 ## Root cause (causal chain, cross-validated)
 
@@ -42,9 +107,19 @@ always targets the orchestrator. Smartfetch remains a separate call site.
 | File:line | Trigger | Body omits `agent`? | Gate |
 |---|---|---|---|
 | `src/hooks/task-session-manager/continuation-evaluator.ts` (`promptAsync`) | `session.idle` / `session.status(idle)` on orchestrator session with incomplete todos when the opt-in beta `backgroundJobs.continueOnIdle` is `true` | **No** (`agent: 'orchestrator'`) | `continueOnIdle`, process-local one-attempt gate (reserve→commit), `hasInputWait`, `isCurrentContinuation`, `isFallbackInProgress`, `backgroundJobBoard.hasTerminalUnreconciled`, malformed/active SDK short-circuits |
-| `src/interview/service.ts` | User submits interview input | **No** — uses `InterviewSessionRuntime.continue()` | `sessionBusy` lock, interview active state |
-| `src/interview/service.ts` | Interview URL notification | **No routing ambiguity** — uses `InterviewSessionRuntime.notify()` | none |
-| `src/tools/smartfetch/secondary-model.ts:252` | Smartfetch secondary model query | **Yes** | none |
+| `src/interview/service.ts` | User submits interview input | **No** — uses `InterviewSessionRuntime.continue()`, which passes `agent: 'orchestrator'` | `sessionBusy` lock, interview active state |
+| `src/interview/runtime.ts` (`notify`) | Interview URL notification | **Fixed 2026-09-02** — was `Yes` (`noReply` suppresses the turn, not the agent rewrite); now resolves the session's own agent via `resolveSessionAgent()` and falls back to `orchestrator` only for a probe-confirmed parentless session | none |
+| `src/tools/smartfetch/secondary-model.ts` | Smartfetch secondary model query | **Fixed 2026-09-02** — was `Yes`; now `withAgent(body, FALLBACK_HELPER_SESSION_AGENT)` = `build`, deliberately not `orchestrator` (which would make the task-session-manager adopt the throwaway helper as a managed orchestrator session) | none |
+
+All remaining v1 SDK prompt sites already named their agent and are covered by
+the scan: `src/hooks/orchestrator-wake/index.ts` (`agent: 'orchestrator'`),
+`src/tools/task-revive.ts` (`agent: current.agent`), `src/tools/task-message.ts`
+(`agent: job.agent`, reached through a `session.prompt.bind(session)` alias),
+`src/hooks/foreground-fallback/index.ts` (sticky `agentName`), and
+`src/interview/runtime.ts` (`continue`). `src/v2/session-submit.ts` prompts the
+**v2 host** API, whose flat `PromptInput` has no `agent` field at all (agent
+selection there is `session.switchAgent`), so it is allow-listed with that
+reason.
 
 ## Correct pattern (for comparison)
 
@@ -100,6 +175,24 @@ The interview service no longer owns raw session prompt calls. Its narrow
 orchestrator. v1 uses the nested SDK client; v2 uses a marker/context bridge and
 the v2 session methods without expanding the global client shim.
 
+Repo-wide (2026-09-02): `src/utils/prompt-agent.ts` is the single source of
+truth for the `agent` field.
+
+- `resolveSessionAgent(client, sessionId, opts)` resolves in order: recorded
+  hint → `session.get().agent` → newest **user** message agent → fallback.
+  Assistant messages are never used as a hint (they report whichever agent
+  *served* a turn — including core's `compaction`/`summary`/`title` primaries,
+  and including `build` in a session this bug already re-homed), and the
+  `SYSTEM_AGENTS` denylist rejects those names at every derived step.
+- The fallback applies only to a session confirmed parentless (or declared
+  plugin-owned via `assumeTopLevel`); an unresolvable child session gets no
+  `agent` field rather than a guess, because guessing would cause the very
+  rewrite this module prevents.
+- Plugin-created helper sessions pass `FALLBACK_HELPER_SESSION_AGENT`
+  (`build`), never `FALLBACK_TOP_LEVEL_AGENT` (`orchestrator`).
+- `withAgent(body, agent)` attaches the field and gives the regression scan one
+  recognizable shape.
+
 ### Hardening (optional, larger scope)
 1. **Input-wait guard on the interview/skill path.** Consult `hasInputWait` (or an equivalent signal) before injecting in `src/interview/service.ts`. Do not inject while the orchestrator is waiting for user input.
 2. **Post-injection agent assertion.** After each `promptAsync`, assert `current.agent` was not changed out from under the orchestrator; if it was, restore it via `setAgentModel`.
@@ -139,10 +232,15 @@ the v2 session methods without expanding the global client shim.
 
 ## Follow-up
 
-1. Smartfetch still has its own secondary-model prompt path and is outside the interview runtime boundary.
-2. Continue keeping cache-sensitive v2 interview rewriting restricted to the trailing marker message.
+1. Continue keeping cache-sensitive v2 interview rewriting restricted to the trailing marker message.
+2. The v2 host prompt path carries no `agent` field; if v2 ever needs a
+   specific agent for a plugin-initiated prompt, it must call
+   `session.switchAgent` first (as `src/v2/interview-bridge.ts` already does)
+   — `withAgent` cannot help there.
 
 ---
 
-Regression coverage lives in `src/interview/runtime.test.ts`,
+Regression coverage lives in `src/utils/prompt-agent.test.ts` (unit tests plus
+the repo-wide agent-less-prompt scan), `src/interview/runtime.test.ts`,
+`src/tools/smartfetch/secondary-model.test.ts`,
 `src/interview/finalization.test.ts`, and `src/v2/interview-bridge.test.ts`.
