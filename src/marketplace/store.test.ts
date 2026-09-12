@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -652,7 +653,7 @@ describe('MarketplaceService', () => {
       service.installFile(packageFile);
       expect(service.show('community/example').source).toEqual({
         kind: 'local',
-        path: packageFile,
+        path: realpathSync(packageFile),
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

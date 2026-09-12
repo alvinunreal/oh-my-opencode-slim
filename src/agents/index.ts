@@ -23,6 +23,7 @@ import {
   reservedRuntimeNames,
   resolveMarketplaceActivation,
 } from '../marketplace/activation';
+import { renderMarketplaceAutoDelegationBlock } from '../marketplace/routing';
 import { MARKETPLACE_TOOL_NAMES } from '../marketplace/schemas';
 import type {
   MarketplaceLivePackage,
@@ -1103,6 +1104,7 @@ export function isSubagent(name: string): name is SubagentName {
 function buildRoutingEntriesFromAgents(
   agents: readonly AgentDefinition[],
   guidanceByAgent: ReadonlyMap<string, string>,
+  marketplace?: MarketplaceActivationPlan,
 ): RoutingEntry[] {
   const entries = agents.flatMap((agent): RoutingEntry[] => {
     if (agent.name === 'council') {
@@ -1119,37 +1121,52 @@ function buildRoutingEntriesFromAgents(
     if (agent.name === 'councillor' || agent.name.startsWith('councillor-')) {
       return [];
     }
-    if (agent.baseRole) {
-      const runtimeName = agent.displayName
-        ? normalizeAgentName(agent.displayName)
-        : agent.name;
-      const routingBlock = renderRoleRoutingBlock(
-        ROLE_DEFINITIONS[agent.baseRole],
-        runtimeName,
-      );
-      return [
-        {
-          agentName: runtimeName,
-          routingBlock: appendRoutingGuidance(
-            routingBlock,
-            guidanceByAgent.get(agent.name),
-          ),
-        },
-      ];
-    }
+    const marketplaceManifest = marketplace?.agents.find(
+      (entry) => entry.manifest.agentName === agent.name,
+    )?.manifest;
     const runtimeName = agent.displayName
       ? normalizeAgentName(agent.displayName)
       : agent.name;
+    if (agent.baseRole) {
+      const roleRoutingBlock = renderRoleRoutingBlock(
+        ROLE_DEFINITIONS[agent.baseRole],
+        runtimeName,
+      );
+      const routingBlock = marketplaceManifest
+        ? renderMarketplaceAutoDelegationBlock(marketplaceManifest, runtimeName)
+        : roleRoutingBlock;
+      return [
+        {
+          agentName: runtimeName,
+          routingBlock: guidanceByAgent.has(agent.name)
+            ? appendRoutingGuidance(
+                marketplaceManifest ? roleRoutingBlock : routingBlock,
+                guidanceByAgent.get(agent.name),
+              )
+            : routingBlock,
+        },
+      ];
+    }
+    const genericRoutingBlock = [
+      `@${runtimeName}`,
+      `- Lane: ${agent.description ?? `Configured agent ${agent.name}`}`,
+    ].join('\n');
+    const routingBlock = marketplaceManifest
+      ? renderMarketplaceAutoDelegationBlock(
+          marketplaceManifest,
+          runtimeName,
+          agent.description,
+        )
+      : genericRoutingBlock;
     return [
       {
         agentName: runtimeName,
-        routingBlock: appendRoutingGuidance(
-          [
-            `@${runtimeName}`,
-            `- Lane: ${agent.description ?? `Configured agent ${agent.name}`}`,
-          ].join('\n'),
-          guidanceByAgent.get(agent.name),
-        ),
+        routingBlock: guidanceByAgent.has(agent.name)
+          ? appendRoutingGuidance(
+              marketplaceManifest ? genericRoutingBlock : routingBlock,
+              guidanceByAgent.get(agent.name),
+            )
+          : routingBlock,
       },
     ];
   });
@@ -1169,26 +1186,9 @@ function appendRoutingGuidance(
   return guidance ? `${routingBlock}\n\n${guidance}` : routingBlock;
 }
 
-function marketplaceRoutingGuidance(
-  plan: MarketplaceActivationPlan | undefined,
-  agent: AgentDefinition,
-): string | undefined {
-  const derived = plan?.agents.find(
-    (entry) => entry.manifest.agentName === agent.name,
-  );
-  const manifest = derived?.manifest;
-  if (!manifest) return undefined;
-  return [
-    `- Package: ${manifest.displayName}`,
-    `- ${manifest.routing.description}`,
-    `- **Delegate when:** ${manifest.routing.when}`,
-  ].join('\n');
-}
-
 function buildRoutingGuidance(
   runtime: RuntimeConfig,
   agents: readonly AgentDefinition[],
-  marketplace?: MarketplaceActivationPlan,
 ): ReadonlyMap<string, string> {
   const displayNameMap = new Map<string, string>();
   for (const agent of agents) {
@@ -1215,7 +1215,7 @@ function buildRoutingGuidance(
           '- **Do not delegate when:** The built-in specialists can handle the task more directly or local file ownership would conflict with another writer lane.',
           '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
         ].join('\n'))
-      : (customPrompt ?? marketplaceRoutingGuidance(marketplace, agent));
+      : customPrompt;
     if (prompt) {
       guidance.set(agent.name, rewriteRoutingPrompt(prompt, displayNameMap));
     }
@@ -1230,7 +1230,8 @@ function buildRoutingEntriesForResolvedAgents(
 ): RoutingEntry[] {
   return buildRoutingEntriesFromAgents(
     agents,
-    buildRoutingGuidance(runtime, agents, marketplace),
+    buildRoutingGuidance(runtime, agents),
+    marketplace,
   );
 }
 
