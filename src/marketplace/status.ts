@@ -2,6 +2,10 @@ import { loadPluginConfig } from '../config/loader';
 import type { MarketplaceActivation } from '../config/schema';
 import type { MarketplaceDiagnostic } from './activation';
 import { MarketplaceLockfileError } from './errors';
+import type {
+  MarketplaceReloadResult,
+  MarketplaceReloadStatus,
+} from './reload';
 import type { MarketplaceService } from './service';
 import type {
   MarketplaceStoreInspection,
@@ -11,7 +15,6 @@ import type {
 export const MARKETPLACE_RELOAD_NOTICE =
   'Applies after OpenCode reload or a new session. The live agent registry is not hot-swapped.';
 
-export type MarketplaceReloadRequired = boolean | 'unknown';
 export type MarketplaceDiagnosticProvenance = 'disk' | 'live';
 
 export interface MarketplaceLivePackage {
@@ -49,7 +52,7 @@ export interface MarketplaceStatusReport {
     diagnostics: MarketplaceStatusDiagnostic[];
   };
   diagnostics: MarketplaceStatusDiagnostic[];
-  reloadRequired: MarketplaceReloadRequired;
+  reloadStatus: MarketplaceReloadStatus;
   note: string;
 }
 
@@ -247,13 +250,15 @@ export function collectMarketplaceStatus(
   const operational =
     Boolean(inspection.operationalError) ||
     desiredDiagnostics.some((entry) => entry.code === 'operational');
-  const reloadRequired: MarketplaceReloadRequired =
+  const reloadStatus: MarketplaceReloadStatus =
     operational || !options.live || !options.desiredLive
-      ? 'unknown'
-      : !sameIdentitySet(
-          options.desiredLive.packages.map(identityKey),
-          options.live.packages.map(identityKey),
-        );
+      ? 'unavailable'
+      : sameIdentitySet(
+            options.desiredLive.packages.map(identityKey),
+            options.live.packages.map(identityKey),
+          )
+        ? 'applied'
+        : 'pending';
   return {
     installed,
     configured: {
@@ -269,8 +274,13 @@ export function collectMarketplaceStatus(
         }
       : {}),
     diagnostics: mergeDiagnostics(disk, liveDiagnostics),
-    reloadRequired,
-    note: reloadRequired === false ? '' : MARKETPLACE_RELOAD_NOTICE,
+    reloadStatus,
+    note:
+      reloadStatus === 'pending'
+        ? MARKETPLACE_RELOAD_NOTICE
+        : reloadStatus === 'unavailable'
+          ? 'Live marketplace registry state is unavailable; configuration status could not be compared.'
+          : '',
   };
 }
 
@@ -279,7 +289,7 @@ export function formatMarketplaceStatus(
 ): string {
   const lines = [
     `preset: ${report.configured.preset ?? '(none)'}`,
-    `reload_required: ${report.reloadRequired}`,
+    `reload_status: ${report.reloadStatus}`,
   ];
   if (report.note) lines.push(`note: ${report.note}`);
   lines.push('', 'installed:');
@@ -326,15 +336,38 @@ export function formatMarketplaceStatus(
 
 export function mutationReloadNotice(
   message: string,
-  reloadRequired: MarketplaceReloadRequired,
+  reload: MarketplaceReloadResult,
 ): string {
-  const lines = [message, `reload_required: ${reloadRequired}`];
-  if (reloadRequired !== false) lines.push(MARKETPLACE_RELOAD_NOTICE);
+  const lines = [
+    message,
+    `reload_status: ${reload.status}`,
+    `reload_detail: ${reload.detail}`,
+  ];
+  if (reload.status === 'pending') lines.push(MARKETPLACE_RELOAD_NOTICE);
   return lines.join('\n');
 }
 
-export function reloadRequiredAfterMutation(
+export function reloadStatusAfterMutation(
   options: CollectMarketplaceStatusOptions,
-): MarketplaceReloadRequired {
-  return collectMarketplaceStatus(options).reloadRequired;
+): MarketplaceReloadResult {
+  const report = collectMarketplaceStatus(options);
+  if (report.reloadStatus === 'applied') {
+    return {
+      status: 'applied',
+      detail:
+        'Live marketplace registry already matches the saved configuration.',
+    };
+  }
+  if (report.reloadStatus === 'pending') {
+    return {
+      status: 'pending',
+      detail:
+        'Live marketplace registry is unchanged; the mutation is pending a future reload.',
+    };
+  }
+  return {
+    status: 'unavailable',
+    detail:
+      'Live marketplace registry state is unavailable; the mutation is saved and will apply after a future reload.',
+  };
 }

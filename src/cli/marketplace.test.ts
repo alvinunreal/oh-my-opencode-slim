@@ -139,6 +139,10 @@ describe('marketplace CLI parsing', () => {
               };
             },
           },
+          reload: async () => ({
+            status: 'pending' as const,
+            detail: 'test reload pending',
+          }),
         },
       );
 
@@ -150,6 +154,7 @@ describe('marketplace CLI parsing', () => {
       expect(output[0]).toContain(
         'Installed and enabled community/example@1.2.3 in the active preset',
       );
+      expect(output[0]).toContain('reload_status: pending');
     } finally {
       console.log = originalLog;
       if (originalConfigDir === undefined) {

@@ -82,6 +82,10 @@ describe('R1 explicit CLI and tool dispatch', () => {
         projectDir: root,
         pluginVersion: '3.1.0',
         registryClient,
+        reload: async () => ({
+          status: 'pending' as const,
+          detail: 'test reload pending',
+        }),
       };
       expect(
         await marketplaceCommand(

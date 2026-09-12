@@ -81,12 +81,12 @@ function setup() {
 }
 
 describe('marketplace status', () => {
-  test('CLI without a live registry reports reload status unknown', () => {
+  test('CLI without a live registry reports reload as unavailable', () => {
     const { root, project, service } = setup();
     try {
       service.install(agentBundle());
       const report = collectMarketplaceStatus({ service, projectDir: project });
-      expect(report.reloadRequired).toBe('unknown');
+      expect(report.reloadStatus).toBe('unavailable');
       expect(report.live).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -180,14 +180,14 @@ describe('marketplace status', () => {
             entry.code === 'operational' && entry.message === 'lease timed out',
         ),
       ).toBe(true);
-      expect(report.reloadRequired).toBe('unknown');
+      expect(report.reloadStatus).toBe('unavailable');
       inspect.mockRestore();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('operational inspect leaves reload unknown even with live identities', () => {
+  test('operational inspect leaves reload unavailable even with live identities', () => {
     const { root, project, service } = setup();
     try {
       const inspect = spyOn(service.store, 'inspectAll');
@@ -202,7 +202,7 @@ describe('marketplace status', () => {
         live: { packages: [] },
         desiredLive: { packages: [] },
       });
-      expect(report.reloadRequired).toBe('unknown');
+      expect(report.reloadStatus).toBe('unavailable');
       inspect.mockRestore();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -259,7 +259,7 @@ describe('marketplace status', () => {
         live: { packages: desiredLive.packages },
         desiredLive,
       });
-      expect(matching.reloadRequired).toBe(false);
+      expect(matching.reloadStatus).toBe('applied');
       expect(
         matching.diagnostics.some(
           (entry) =>
@@ -279,7 +279,7 @@ describe('marketplace status', () => {
         },
         desiredLive,
       });
-      expect(staleName.reloadRequired).toBe(true);
+      expect(staleName.reloadStatus).toBe('pending');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -325,7 +325,7 @@ describe('marketplace status', () => {
         live: { packages: [] },
         desiredLive,
       });
-      expect(report.reloadRequired).toBe(false);
+      expect(report.reloadStatus).toBe('applied');
       expect(report.diagnostics.map((entry) => entry.code).sort()).toEqual([
         'invalid-alias',
         'missing-required-dependency',
@@ -335,7 +335,7 @@ describe('marketplace status', () => {
     }
   });
 
-  test('unreadable lockfile is operational and leaves in-session reload unknown', () => {
+  test('unreadable lockfile is operational and leaves in-session reload unavailable', () => {
     const { root, project, service } = setup();
     try {
       service.install(agentBundle());
@@ -358,7 +358,7 @@ describe('marketplace status', () => {
               /EACCES|permission/i.test(entry.message),
           ),
         ).toBe(true);
-        expect(report.reloadRequired).toBe('unknown');
+        expect(report.reloadStatus).toBe('unavailable');
       } finally {
         chmodSync(service.store.paths.lockfilePath, 0o644);
       }

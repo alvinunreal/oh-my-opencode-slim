@@ -9,7 +9,9 @@ XDG data directory. The CLI registry `install` command installs a package and
 enables its agent in the active preset in one operation. Local imports and
 in-session tool actions remain separate from preset activation. Activated agents
 apply after the next OpenCode session or reload. The live agent registry is
-never hot-swapped.
+never hot-swapped. CLI mutations automatically restart an active OpenCode v2
+managed service through `opencode service restart`; when no service is running,
+the saved configuration is marked pending for the next launch.
 
 ## CLI
 
@@ -44,12 +46,11 @@ before deleting it locally, so a separate `disable` command is unnecessary.
 The old unsafe `--force` removal path is not supported.
 
 `status` reports installed packages, configured activation, live-session
-agents when used from the in-session tool, diagnostics, and whether a
-reload is required. Diagnostics include store problems (missing, corrupt,
-or operational read failures) and activation rejections (collision,
-missing required dependency, invalid alias). Operational failures leave
-in-session `reload_required` as `unknown` because disk identity cannot be
-compared.
+agents when used from the in-session tool, diagnostics, and reload status.
+Diagnostics include store problems (missing, corrupt, or operational read
+failures) and activation rejections (collision, missing required dependency,
+invalid alias). `unavailable` means the live registry could not be compared;
+it is never represented as an unknown reload state.
 
 ## Manifest routing versions
 
@@ -72,12 +73,12 @@ invoke it.
 
 Read-only actions (list, show, verify, status) do not change activation or
 contact the registry.
-Mutating actions write the local store and plugin config only and report
-`reload_required` only when disk activation differs from this session.
-Inactive or idempotent mutations do not include a reload note. The CLI
-has no live registry, so its reload status is `unknown`. In-session
-status is also `unknown` when the store or desired activation cannot be
-read (for example EACCES).
+Mutating actions write the local store and plugin config only. They never
+restart or terminate the OpenCode service that hosts the tool call. In-session
+mutations report `reload_status: pending` when the live registry differs,
+`applied` when it already matches, and `unavailable` when it cannot be
+compared. CLI mutations report `reloaded`, `pending`, `unsupported`, or
+`unavailable` after attempting the v2 service lifecycle check.
 
 ## Status fields
 
@@ -87,7 +88,7 @@ read (for example EACCES).
 | configured_agents | Active-preset activation on disk |
 | live_packages | Packages already in this session's registry, with version, digest, and runtime name |
 | diagnostics | Store and activation issues (missing, corrupt, operational, collision, missing required dependency, invalid alias, retired), labeled `disk` or `live` |
-| reload_required | `true`/`false` when live and desired identities can be compared; `unknown` for CLI and when store/desired resolution failed operationally |
+| reload_status | `reloaded` after an active v2 service restart; `pending` with no active service or when a tool mutation awaits a future reload; `applied` when the live registry already matches; `unsupported` for v1; `unavailable` when OpenCode or registry state cannot be inspected |
 
 ## Limits
 
