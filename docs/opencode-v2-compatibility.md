@@ -84,10 +84,15 @@ degrades that single feature with a log line instead of breaking the load.
    sessions leaking), and `session.list` (v2 `Session.Info` page → the v1
    `{data}` envelope with `directory` derived from `location` and `outcome`
    mapped, used by the interview dashboard's session scan and the
-   orchestrator-wake children enumeration). The shim marks the input
-   `hostFlavor: 'v2'` and never fakes success shapes: methods the host
-   lacks degrade with an honest log (or are omitted entirely, as with
-   `session.get`, so capability probes see the truth).
+   orchestrator-wake children enumeration). Note that `remove` and `list`
+   are **not part of the stock v2 plugin session domain** — the
+   capability probes only succeed on hosts that extend it, and current
+   v2 hosts always take the degraded paths (see
+   [Not exposed to plugins: `session.list` / `session.remove`](#not-exposed-to-plugins-sessionlist-sessionremove)).
+   The shim marks the input `hostFlavor: 'v2'` and never fakes success
+   shapes: methods the host lacks degrade with an honest log (or are
+   omitted entirely, as with `session.get`, so capability probes see the
+   truth).
 2. Invokes `OhMyOpenCodeLite(pluginInput)` to reuse **all** existing build
    logic (config, agents, tools, hooks, job board, multiplexer, companion).
 3. Runs the v1 `config()` hook against a synthesized config to resolve agent
@@ -368,6 +373,48 @@ Q&A history.
   exists, `session.hook("model.request")` with mutable `headers`, if
   demand appears).
 
+### Not exposed to plugins: `session.list` / `session.remove`
+
+The v2 plugin session domain (`packages/plugin/src/promise/session.ts`,
+`SessionDomain`, mirrored by the runtime object the promise adapter
+builds) exposes exactly `create`/`get`/`switchAgent`/`switchModel`/
+`prompt`/`generate`/`command`/`synthetic`/`interrupt`/`rename`/`move`/
+`wait`/`context` — **`list` and `remove` are not handed to plugins**.
+Both endpoints exist on the host's HTTP API, but the plugin context never
+receives them. The client shim capability-probes both at runtime
+(`typeof s.list === 'function'`, `s.remove`), so a future host that
+extends the domain gets real delegation with no plugin change; on current
+v2 hosts both probes fail and the shims degrade:
+
+- **Children enumeration (orchestrator-wake).** The shim's
+  `client.session.list` returns the v1-parity empty page `{data: []}`,
+  so `session.list({parentID})`-based enumeration never yields children
+  and the scheduler always runs its **event-tracked fallback**
+  (adapter-synthesized `session.created` parentID links plus tracked
+  busy/idle statuses — the mode the doc's wake section describes as the
+  fallback is effectively the only path on v2). The gate still passes
+  because it probes the *shim's* `list` function, which always exists.
+  The interview dashboard's session scan likewise sees no sessions from
+  `list` on v2.
+- **Session delete.** `client.session.delete` is a **no-op**: the
+  smartfetch secondary-model temp-session cleanup cannot remove sessions
+  through the shim on v2 (the temp sessions simply persist; nothing
+  fails loudly).
+
+Both degradations announce themselves in the plugin log with a single
+deterministic, **one-time-per-process** warning instead of degrading
+silently (`list`) or logging on every call (`remove`):
+
+```
+[v2][shim] session.list unavailable on this host build; children enumeration falls back to event tracking
+[v2][shim] session.remove unavailable on this host build; session delete is a no-op
+```
+
+The guards are module-level booleans with fixed text — no timestamps,
+session ids, or per-call payloads — so repeated wake polls and cleanup
+calls do not flood the log (the remove warning used to fire once per
+delete attempt).
+
 ### Orchestrator-wake on v2 (children-driven degraded mode)
 
 The wake scheduler is **active on v2** in a degraded mode, configured with
@@ -384,8 +431,11 @@ How it differs from the v1 path:
   (v2 `Session.Info` → v1 envelope; `outcome` and `time.updated` mapped).
   When the listing is unavailable (missing/erroring/empty), an event-tracked
   fallback uses the adapter-synthesized `session.created` parentID links plus
-  tracked busy/idle statuses. Results are scoped to the session's directory
-  when the host reports one.
+  tracked busy/idle statuses. On stock v2 hosts `session.list` is never
+  exposed to plugins (see
+  [Not exposed to plugins](#not-exposed-to-plugins-sessionlist-sessionremove)),
+  so the event-tracked fallback is the operative path. Results are scoped
+  to the session's directory when the host reports one.
 - **Wake condition:** children with `outcome === undefined` (v2 records an
   outcome only on terminal transition: succeeded|failed|interrupted) that
   still have fresh update evidence — host `time.updated` or a tracked status

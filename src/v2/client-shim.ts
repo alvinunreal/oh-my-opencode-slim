@@ -117,6 +117,23 @@ function toV1Message(m: Record<string, unknown>) {
   };
 }
 
+/**
+ * One-time degradation notices for host surfaces the v2 plugin session
+ * domain does not expose. Verified against the upstream promise-plugin
+ * adapter (`packages/plugin/src/promise/{session,adapter}.ts`): the
+ * domain is built with exactly create/get/switchAgent/switchModel/
+ * prompt/generate/command/synthetic/interrupt/rename/move/wait/context —
+ * NO `list` and NO `remove`. On such hosts the `list` shim used to
+ * return the empty page silently (children enumeration quietly fell
+ * back to event tracking) and `delete` logged a no-op notice per call.
+ * Both now emit ONE deterministic warning per plugin process
+ * (module-level guard; fixed text, no timestamps or per-call ids) so a
+ * missing host capability is observable in the plugin log without
+ * per-poll noise.
+ */
+let warnedListUnavailable = false;
+let warnedRemoveUnavailable = false;
+
 /** v1 body model (`{providerID, modelID}`) → v2 model ref
  * (`{id, providerID}`). */
 function modelRefFromBody(body: {
@@ -216,13 +233,23 @@ function toV1SessionInfo(
  * (session id or root-only: the literal `"null"` string, with a real
  * `null` normalized to it) — and wraps the mapped page in the v1
  * `{data}` envelope. Hosts without `session.list` keep the v1-parity
- * empty page (honest absence, not a fake success).
+ * empty page (honest absence, not a fake success) after a one-time
+ * process-level warning — stock v2 hosts match this path because the
+ * plugin session domain does not expose `list` (see the notice above).
  */
 export function createSessionListShim(
   s: V2Context['session'],
 ): (args: Record<string, unknown>) => Promise<{ data: unknown[] }> {
   return async (args) => {
-    if (typeof s.list !== 'function') return { data: [] };
+    if (typeof s.list !== 'function') {
+      if (!warnedListUnavailable) {
+        warnedListUnavailable = true;
+        log(
+          '[v2][shim] session.list unavailable on this host build; children enumeration falls back to event tracking',
+        );
+      }
+      return { data: [] };
+    }
     const query = ((args?.query as Record<string, unknown> | undefined) ??
       (args as Record<string, unknown> | undefined) ??
       {}) as Record<string, unknown>;
@@ -436,15 +463,21 @@ export function buildPluginInput(
       // the same DELETE /api/session/:id. Capability-probed like `get`
       // above — smartfetch's secondary-model cleanup (the real caller)
       // relies on this to not leak temp sessions on v2. Hosts without
-      // `remove` degrade with the honest log below (no fake success).
+      // `remove` (the stock v2 plugin session domain — see the one-time
+      // notice block near the top of this file) degrade to a no-op with
+      // a single process-level warning (no fake success, no per-call
+      // noise).
       delete: s.remove
         ? async (args: Record<string, unknown>) => {
             await s.remove?.({ sessionID: sessionIDOf(args) });
           }
-        : async (args: Record<string, unknown>) => {
-            log('[v2][shim] session.remove unavailable; delete is a no-op', {
-              id: sessionIDOf(args),
-            });
+        : async () => {
+            if (!warnedRemoveUnavailable) {
+              warnedRemoveUnavailable = true;
+              log(
+                '[v2][shim] session.remove unavailable on this host build; session delete is a no-op',
+              );
+            }
           },
     },
     app: {

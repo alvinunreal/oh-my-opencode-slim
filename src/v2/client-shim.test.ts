@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   isReplayableUserMessage,
   partsFromReplayMessage,
@@ -1072,5 +1076,86 @@ describe('v2 client shim replay attachment preservation', () => {
       },
     });
     expect(prompts[0]?.files).toEqual([{ uri: 'https://example.com/x.png' }]);
+  });
+});
+
+describe('v2 client shim degradation notices (one-time per process)', () => {
+  test('list/remove unavailability logs exactly one warning each, never per call', async () => {
+    // Log-file assertions run in a subprocess: other test files
+    // mock.module the logger globally in shared-process runs, so the
+    // real logger (and its file sink) is only observable with a pristine
+    // module registry (same approach as the runtime-status
+    // reconciliation disable-notice test). The subprocess also gives the
+    // shim's module-level one-time guards a fresh process — exactly the
+    // "per plugin process" contract under test.
+    const logDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-client-shim-log-'),
+    );
+    const workerSource = `
+      const { buildPluginInput } = await import(
+        process.env.SHIM_MODULE_URL
+      );
+      const { initLogger, flushLoggerForTesting } = await import(
+        process.env.LOGGER_MODULE_URL
+      );
+      const { readFileSync } = await import('node:fs');
+      initLogger('client-shim-degradation');
+      // Stock v2 plugin session domain: no list, no remove.
+      const input = buildPluginInput({ session: {} });
+      const session = input.client.session;
+      for (let index = 0; index < 3; index += 1) {
+        await session.list({ query: {} });
+        await session.delete({ path: { id: 'ses_tmp' } });
+      }
+      await flushLoggerForTesting();
+      const contents = readFileSync(process.env.LOG_FILE_PATH, 'utf8');
+      const lines = contents.split('\\n');
+      console.log(
+        JSON.stringify({
+          listWarnings: lines.filter((line) =>
+            line.includes('session.list unavailable'),
+          ).length,
+          removeWarnings: lines.filter((line) =>
+            line.includes('session.remove unavailable'),
+          ).length,
+        }),
+      );
+    `;
+    const proc = Bun.spawn([process.execPath, '-e', workerSource], {
+      cwd: import.meta.dir,
+      env: {
+        ...process.env,
+        OPENCODE_LOG_DIR: logDir,
+        SHIM_MODULE_URL: pathToFileURL(
+          path.join(import.meta.dir, 'client-shim.ts'),
+        ).href,
+        LOGGER_MODULE_URL: pathToFileURL(
+          path.join(import.meta.dir, '../utils/logger.ts'),
+        ).href,
+        LOG_FILE_PATH: path.join(
+          logDir,
+          'oh-my-opencode-slim.client-shim-degradation.log',
+        ),
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    await fs.rm(logDir, { recursive: true, force: true });
+    if (exitCode !== 0) {
+      console.error(stderr);
+      expect(exitCode).toBe(0);
+    }
+    const counts = JSON.parse(stdout.trim()) as {
+      listWarnings: number;
+      removeWarnings: number;
+    };
+    // Three calls each, exactly one deterministic notice per capability.
+    expect(counts.listWarnings).toBe(1);
+    expect(counts.removeWarnings).toBe(1);
   });
 });
