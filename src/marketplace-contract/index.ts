@@ -8,6 +8,7 @@ import {
 } from '../marketplace/canonical';
 import { MarketplaceRetiredError } from '../marketplace/errors';
 import { isMarketplacePackageRetired } from '../marketplace/retirements';
+import { renderMarketplaceAutoDelegationBlock } from '../marketplace/routing';
 import {
   MARKETPLACE_DIGEST_DOMAIN,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION,
@@ -46,6 +47,17 @@ export {
   MarketplacePackageManifestSchema,
   MarketplaceVersionSchema,
 };
+
+/**
+ * Render the authoritative default auto-delegation block for a marketplace
+ * manifest. Owner-configured orchestrator prompts and runtime display aliases
+ * are runtime concerns and are intentionally not represented here.
+ */
+export function renderDefaultMarketplaceAutoDelegationBlock(
+  manifest: MarketplacePackageManifest,
+): string {
+  return renderMarketplaceAutoDelegationBlock(manifest);
+}
 
 export const MARKETPLACE_REGISTRY_SCHEMA_VERSION = 3 as const;
 export const DEFAULT_MARKETPLACE_REGISTRY_URL =

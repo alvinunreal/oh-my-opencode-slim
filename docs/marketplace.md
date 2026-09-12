@@ -88,5 +88,10 @@ Registry CI and static site tooling can import the narrow
 `oh-my-opencode-slim/marketplace-contract` package subpath. It provides the
 schema-v3 indexes (including retirement tombstones), deterministic
 artifact paths, manifest-summary projection, selector resolution, and the same
-canonical bundle SHA-256 digest used by the plugin store. The public contract
-does not add root-package exports.
+canonical bundle SHA-256 digest used by the plugin store. It also exports
+`renderDefaultMarketplaceAutoDelegationBlock(manifest)`, the authoritative
+default routing block for marketplace agents. Built-in extensions use the
+current built-in role routing plus the package's routing suffix; standalone
+packages use a generic lane block. This default renderer does not apply owner
+or runtime display-alias overrides. The public contract does not add
+root-package exports.
