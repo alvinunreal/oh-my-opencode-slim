@@ -76,17 +76,6 @@ export function marketplaceActivationFromRuntime(
   return runtime.plugin?.presets?.[presetName]?.marketplace;
 }
 
-/** Compose only the package-owned extension layers. */
-export function composePackagePrompt(
-  builtinPrompt: string,
-  packagePrompt: string,
-  mode: 'append' | 'replace',
-): string {
-  return mode === 'replace'
-    ? packagePrompt
-    : `${builtinPrompt}\n\n${packagePrompt}`;
-}
-
 export function reservedRuntimeNames(
   runtime: RuntimeConfig,
   ownOverrideKey?: string,

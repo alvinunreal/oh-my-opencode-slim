@@ -151,6 +151,59 @@ describe('marketplace routing renderer', () => {
     );
   });
 
+  test('keeps v3 routing metadata in the orchestrator prompt only', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-routing-v3-'));
+    try {
+      const manifest = {
+        ...v3Manifest,
+        skills: [],
+        mcps: [],
+        tools: [],
+      } satisfies MarketplacePackageManifestV3;
+      const store = new MarketplaceStore({ rootDir: root });
+      store.install({ manifest });
+      RuntimeConfig.reset(root);
+      const runtime = RuntimeConfig.init(root, {
+        preset: 'work',
+        presets: {
+          work: {
+            agents: {},
+            marketplace: { agents: [manifest.id] },
+          },
+        },
+      });
+      const registry = buildResolvedAgentRegistry(runtime, {
+        marketplaceStore: store,
+        availableMcpNames: [],
+      });
+      const activatedAgent = registry.agents.find(
+        (agent) => agent.name === manifest.agentName,
+      );
+      const route = registry.routing.find(
+        (entry) => entry.agentName === manifest.agentName,
+      );
+      const orchestrator = registry.agents.find(
+        (agent) => agent.name === 'orchestrator',
+      );
+
+      expect(activatedAgent?.config.prompt).toBe(manifest.prompt);
+      for (const metadata of [
+        '- Package:',
+        '- Package lane:',
+        '**Delegate when:**',
+        '**Avoid:**',
+      ]) {
+        expect(activatedAgent?.config.prompt).not.toContain(metadata);
+      }
+      for (const metadata of ['- Stats:', '**Delegate when:**', '**Avoid:**']) {
+        expect(route?.routingBlock).toContain(metadata);
+        expect(orchestrator?.config.prompt).toContain(metadata);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('renders a runtime display alias without changing the manifest default', () => {
     const derived = {
       ...baseManifest,
@@ -194,10 +247,22 @@ describe('marketplace routing renderer', () => {
       const route = registry.routing.find(
         (entry) => entry.agentName === 'build-agent',
       );
+      const activatedAgent = registry.agents.find(
+        (agent) => agent.name === 'routing-agent',
+      );
+      const orchestrator = registry.agents.find(
+        (agent) => agent.name === 'orchestrator',
+      );
 
       expect(route?.routingBlock).toBe(
         renderMarketplaceAutoDelegationBlock(manifest, 'build-agent'),
       );
+      expect(activatedAgent?.config.prompt).toBe(manifest.prompt);
+      expect(activatedAgent?.config.prompt).not.toContain('- Package:');
+      expect(activatedAgent?.config.prompt).not.toContain('- Package lane:');
+      expect(activatedAgent?.config.prompt).not.toContain('- Stats:');
+      expect(activatedAgent?.config.prompt).not.toContain('**Delegate when:**');
+      expect(orchestrator?.config.prompt).toContain(route?.routingBlock ?? '');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

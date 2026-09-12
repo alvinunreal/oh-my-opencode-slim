@@ -50,11 +50,13 @@ compared.
 
 ## Manifest routing versions
 
-Schema-v2 manifests retain the legacy routing object and prompt-mode behavior.
-Schema-v3 manifests use a deterministic routing object with `lane`, `stats`,
+Schema-v2 manifests retain the legacy routing object. Schema-v3 manifests use
+a deterministic routing object with `lane`, `stats`,
 `delegateWhen`, `avoid`, and optional `additionalInstructions`; extensions are
 append-only. V3 routing lines are single-line bounded values, and list order is
-preserved in the generated routing block.
+preserved in the generated routing block. For both versions, an activated
+marketplace agent receives its authored `prompt` unchanged; manifest routing
+metadata is rendered only in the orchestrator's routing prompt.
 
 ## In-session tool
 
