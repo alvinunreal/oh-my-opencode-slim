@@ -125,8 +125,7 @@ export async function marketplaceCommand(
     };
     switch (parsed.command) {
       case 'install': {
-        const packageId = (parsed.value as string).trim().split('@', 1)[0];
-        preflightMarketplaceAgentActivation(projectDir, packageId);
+        preflightMarketplaceAgentActivation(projectDir);
         const pkg = await service.installRemote(parsed.value as string);
         enableMarketplaceAgent(projectDir, pkg.manifest.id, service.store);
         console.log(

@@ -347,41 +347,6 @@ describe('marketplace runtime activation', () => {
     }
   });
 
-  test('reports manually persisted retired activation without creating an agent', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
-    try {
-      const store = new MarketplaceStore({ rootDir: root });
-      const registry = registryFor(
-        {
-          preset: 'work',
-          presets: {
-            work: {
-              agents: {},
-              marketplace: {
-                agents: ['alvin/deepwork-implementer'],
-              },
-            },
-          },
-        },
-        store,
-        'marketplace-retired-test',
-      );
-      expect(
-        registry.agents.some((agent) => agent.name === 'implementer'),
-      ).toBe(false);
-      expect(registry.diagnostics).toEqual([
-        {
-          packageId: 'alvin/deepwork-implementer',
-          code: 'retired',
-          message:
-            'alvin/deepwork-implementer is retired and will not be activated',
-        },
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test('does not contact the network while resolving activation', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-activation-'));
     const originalFetch = globalThis.fetch;

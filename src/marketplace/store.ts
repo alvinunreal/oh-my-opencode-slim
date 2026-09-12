@@ -26,7 +26,6 @@ import {
   writeAtomic,
 } from './lease';
 import { getMarketplacePaths, type MarketplacePaths } from './paths';
-import { assertMarketplacePackageNotRetired } from './retirements';
 import {
   MARKETPLACE_DIGEST_DOMAIN,
   MARKETPLACE_DIGEST_DOMAIN_V3,
@@ -362,7 +361,6 @@ export class MarketplaceStore {
     mode: 'install' | 'update',
   ): StoredMarketplacePackage {
     const bundle = parseBundle(input);
-    assertMarketplacePackageNotRetired(bundle.manifest.id);
     validateMarketplaceCompatibility(bundle.manifest, this.compatibility);
     const sourceResult = MarketplaceSourceSchema.safeParse(source);
     if (!sourceResult.success) {

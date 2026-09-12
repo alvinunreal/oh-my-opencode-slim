@@ -6,8 +6,6 @@ import {
   compareMarketplaceCodeUnits,
   digestMarketplaceBundle,
 } from '../marketplace/canonical';
-import { MarketplaceRetiredError } from '../marketplace/errors';
-import { isMarketplacePackageRetired } from '../marketplace/retirements';
 import { renderMarketplaceAutoDelegationBlock } from '../marketplace/routing';
 import {
   MARKETPLACE_DIGEST_DOMAIN,
@@ -150,10 +148,6 @@ export const MarketplaceRegistryEntryV3Schema = z
   })
   .strict();
 
-export const MarketplaceRegistryRetirementSchema = z
-  .object({ id: MarketplacePackageIdSchema })
-  .strict();
-
 function validateRegistryEntries(
   entries: readonly {
     id: string;
@@ -211,53 +205,17 @@ function validateRegistryEntries(
   }
 }
 
-const CANONICAL_MARKETPLACE_RETIREMENT_IDS = [
-  'alvin/deepwork-implementer',
-  'alvin/deepwork-recon',
-  'alvin/deepwork-reviewer',
-] as const;
-
 const MarketplaceRegistryIndexV2EndpointSchema = z
   .object({
     schemaVersion: z.literal(MARKETPLACE_REGISTRY_SCHEMA_VERSION),
     entries: z.array(MarketplaceRegistryEntrySchema).max(100_000),
-    retirements: z.array(MarketplaceRegistryRetirementSchema).max(100_000),
+    // Empty legacy retirement lists are accepted during the catalog migration;
+    // non-empty lists are rejected so tombstones cannot enter the contract.
+    retirements: z.array(z.never()).max(100_000).optional(),
   })
   .strict()
   .superRefine((index, ctx) => {
     validateRegistryEntries(index.entries, ctx);
-    const seen = new Set<string>();
-    for (let position = 0; position < index.retirements.length; position += 1) {
-      const retirement = index.retirements[position];
-      if (seen.has(retirement.id)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['retirements', position],
-          message: `Duplicate marketplace retirement ${retirement.id}`,
-        });
-      }
-      seen.add(retirement.id);
-      const previous = index.retirements[position - 1];
-      if (
-        previous &&
-        compareMarketplaceCodeUnits(previous.id, retirement.id) >= 0
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['retirements', position],
-          message: 'Marketplace retirements must be sorted by ID',
-        });
-      }
-    }
-    for (const id of CANONICAL_MARKETPLACE_RETIREMENT_IDS) {
-      if (!seen.has(id)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['retirements'],
-          message: `Registry must contain canonical retirement ${id}`,
-        });
-      }
-    }
   });
 
 export const MarketplaceRegistryIndexSchema =
@@ -265,54 +223,15 @@ export const MarketplaceRegistryIndexSchema =
 export const MarketplaceRegistryEntryV2Schema = MarketplaceRegistryEntrySchema;
 export const MarketplaceRegistryIndexV2Schema = MarketplaceRegistryIndexSchema;
 
-const validateV3Retirements = (
-  retirements: readonly MarketplaceRegistryRetirement[],
-  ctx: z.RefinementCtx,
-): void => {
-  const seen = new Set<string>();
-  for (let position = 0; position < retirements.length; position += 1) {
-    const retirement = retirements[position];
-    if (seen.has(retirement.id)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['retirements', position],
-        message: `Duplicate marketplace retirement ${retirement.id}`,
-      });
-    }
-    seen.add(retirement.id);
-    const previous = retirements[position - 1];
-    if (
-      previous &&
-      compareMarketplaceCodeUnits(previous.id, retirement.id) >= 0
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['retirements', position],
-        message: 'Marketplace retirements must be sorted by ID',
-      });
-    }
-  }
-  for (const id of CANONICAL_MARKETPLACE_RETIREMENT_IDS) {
-    if (!seen.has(id)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['retirements'],
-        message: `Registry must contain canonical retirement ${id}`,
-      });
-    }
-  }
-};
-
 export const MarketplaceRegistryIndexV3Schema = z
   .object({
     schemaVersion: z.literal(MARKETPLACE_REGISTRY_V3_SCHEMA_VERSION),
     entries: z.array(MarketplaceRegistryEntryV3Schema).max(100_000),
-    retirements: z.array(MarketplaceRegistryRetirementSchema).max(100_000),
+    retirements: z.array(z.never()).max(100_000).optional(),
   })
   .strict()
   .superRefine((index, ctx) => {
     validateRegistryEntries(index.entries, ctx);
-    validateV3Retirements(index.retirements, ctx);
   });
 
 export type MarketplaceManifestSummary = z.infer<
@@ -327,9 +246,6 @@ export type MarketplaceRegistryEntry = z.infer<
 export type MarketplaceRegistryEntryV2 = MarketplaceRegistryEntry;
 export type MarketplaceRegistryEntryV3 = z.infer<
   typeof MarketplaceRegistryEntryV3Schema
->;
-export type MarketplaceRegistryRetirement = z.infer<
-  typeof MarketplaceRegistryRetirementSchema
 >;
 export type MarketplaceRegistryIndex = z.infer<
   typeof MarketplaceRegistryIndexSchema
@@ -410,9 +326,6 @@ export function createMarketplaceRegistryEntryV3(
 
 export function createMarketplaceRegistryIndex(
   entries: readonly MarketplaceRegistryEntry[],
-  retirements: readonly MarketplaceRegistryRetirement[] = CANONICAL_MARKETPLACE_RETIREMENT_IDS.map(
-    (id) => ({ id }),
-  ),
 ): MarketplaceRegistryIndex {
   const sorted = [...entries].sort(
     (left, right) =>
@@ -420,21 +333,14 @@ export function createMarketplaceRegistryIndex(
       compare(left.version, right.version) ||
       compareMarketplaceCodeUnits(left.version, right.version),
   );
-  const sortedRetirements = [...retirements].sort((left, right) =>
-    compareMarketplaceCodeUnits(left.id, right.id),
-  );
   return parseMarketplaceRegistryIndex({
     schemaVersion: MARKETPLACE_REGISTRY_SCHEMA_VERSION,
     entries: sorted,
-    retirements: sortedRetirements,
   });
 }
 
 export function createMarketplaceRegistryIndexV3(
   entries: readonly MarketplaceRegistryEntryV3[],
-  retirements: readonly MarketplaceRegistryRetirement[] = CANONICAL_MARKETPLACE_RETIREMENT_IDS.map(
-    (id) => ({ id }),
-  ),
 ): MarketplaceRegistryIndexV3 {
   const sorted = [...entries].sort(
     (left, right) =>
@@ -442,54 +348,10 @@ export function createMarketplaceRegistryIndexV3(
       compare(left.version, right.version) ||
       compareMarketplaceCodeUnits(left.version, right.version),
   );
-  const sortedRetirements = [...retirements].sort((left, right) =>
-    compareMarketplaceCodeUnits(left.id, right.id),
-  );
   return parseMarketplaceRegistryIndexV3({
     schemaVersion: MARKETPLACE_REGISTRY_V3_SCHEMA_VERSION,
     entries: sorted,
-    retirements: sortedRetirements,
   });
-}
-
-export function retiredMarketplaceRegistryIds(
-  index: MarketplaceRegistryIndex,
-): ReadonlySet<string> {
-  return new Set(index.retirements.map(({ id }) => id));
-}
-
-export function retiredMarketplaceRegistryIdsV3(
-  index: MarketplaceRegistryIndexV3,
-): ReadonlySet<string> {
-  return new Set(index.retirements.map(({ id }) => id));
-}
-
-export function isMarketplaceRegistryIdRetired(
-  index: MarketplaceRegistryIndex,
-  id: string,
-): boolean {
-  return retiredMarketplaceRegistryIds(index).has(id);
-}
-
-export function isMarketplaceRegistryIdRetiredV3(
-  index: MarketplaceRegistryIndexV3,
-  id: string,
-): boolean {
-  return retiredMarketplaceRegistryIdsV3(index).has(id);
-}
-
-export function filterMarketplaceRegistryEntries(
-  index: MarketplaceRegistryIndex,
-): MarketplaceRegistryEntry[] {
-  const retired = retiredMarketplaceRegistryIds(index);
-  return index.entries.filter((entry) => !retired.has(entry.id));
-}
-
-export function filterMarketplaceRegistryEntriesV3(
-  index: MarketplaceRegistryIndexV3,
-): MarketplaceRegistryEntryV3[] {
-  const retired = retiredMarketplaceRegistryIdsV3(index);
-  return index.entries.filter((entry) => !retired.has(entry.id));
 }
 
 export function parseMarketplaceRegistryIndex(
@@ -615,15 +477,7 @@ export function resolveMarketplaceRegistryEntry(
   compatibility: { pluginVersion: string },
   minimumVersion?: string,
 ): MarketplaceRegistryEntry {
-  if (
-    isMarketplacePackageRetired(selector.id) ||
-    isMarketplaceRegistryIdRetired(index, selector.id)
-  ) {
-    throw new MarketplaceRetiredError(
-      `${selector.id}${selector.version ? `@${selector.version}` : ''} is retired and cannot be installed`,
-    );
-  }
-  const candidates = filterMarketplaceRegistryEntries(index).filter(
+  const candidates = index.entries.filter(
     (entry) =>
       entry.id === selector.id &&
       (selector.version === undefined || entry.version === selector.version) &&
@@ -652,15 +506,7 @@ export function resolveMarketplaceRegistryEntryV3(
   compatibility: { pluginVersion: string },
   minimumVersion?: string,
 ): MarketplaceRegistryEntryV3 {
-  if (
-    isMarketplacePackageRetired(selector.id) ||
-    isMarketplaceRegistryIdRetiredV3(index, selector.id)
-  ) {
-    throw new MarketplaceRetiredError(
-      `${selector.id}${selector.version ? `@${selector.version}` : ''} is retired and cannot be installed`,
-    );
-  }
-  const candidates = filterMarketplaceRegistryEntriesV3(index).filter(
+  const candidates = index.entries.filter(
     (entry) =>
       entry.id === selector.id &&
       (selector.version === undefined || entry.version === selector.version) &&

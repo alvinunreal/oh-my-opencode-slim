@@ -7,7 +7,6 @@ export * from './errors';
 export * from './ids';
 export * from './paths';
 export * from './registry-client';
-export * from './retirements';
 export * from './schemas';
 export * from './service';
 export * from './status';

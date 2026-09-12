@@ -599,10 +599,10 @@ teaches the orchestrator exactly when to delegate to it.
 ```jsonc
 {
   "agents": {
-    "janitor": {
+    "maintenance-agent": {
       "model": "github-copilot/gpt-5.6",
-      "prompt": "You are Janitor. Audit codebase entropy, dead code, docs drift, naming inconsistencies, and unnecessary complexity. Prefer analysis and plans over direct edits.",
-      "orchestratorPrompt": "@janitor\n- Role: Maintenance specialist for codebase cleanup and entropy reduction\n- **Delegate when:** after large refactors • cleanup/technical-debt review • dead code or docs drift is suspected\n- **Don't delegate when:** feature implementation • urgent debugging • UI/UX work"
+      "prompt": "You are a maintenance agent. Audit codebase entropy, dead code, docs drift, naming inconsistencies, and unnecessary complexity. Prefer analysis and plans over direct edits.",
+      "orchestratorPrompt": "@maintenance-agent\n- Role: Maintenance specialist for codebase cleanup and entropy reduction\n- **Delegate when:** after large refactors • cleanup/technical-debt review • dead code or docs drift is suspected\n- **Don't delegate when:** feature implementation • urgent debugging • UI/UX work"
     }
   }
 }
@@ -610,7 +610,7 @@ teaches the orchestrator exactly when to delegate to it.
 
 Notes:
 
-- Custom agent names must be safe identifiers such as `janitor` or `security-reviewer`
+- Custom agent names must be safe identifiers such as `maintenance-agent` or `code-reviewer`
 - Custom agents without a `model` are skipped with a warning
 - Disabled custom agents are not registered or injected into the orchestrator prompt
 
@@ -654,19 +654,19 @@ The field accepts either:
 }
 ```
 
-**Example: `security-reviewer` agent:**
+**Example: read-only `code-reviewer` agent:**
 
 ```jsonc
 {
   "agents": {
-    "security-reviewer": {
+    "code-reviewer": {
       "model": "anthropic/claude-sonnet-4-5",
       "permission": {
         "edit": "deny",
         "bash": "deny",
         "webfetch": "allow"
       },
-      "prompt": "You are a security reviewer. Inspect code and report findings. Do not patch anything."
+      "prompt": "You are a read-only reviewer. Inspect code and report findings. Do not patch anything."
     }
   }
 }

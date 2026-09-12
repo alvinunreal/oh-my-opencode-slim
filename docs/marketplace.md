@@ -87,7 +87,7 @@ compared. CLI mutations report `reloaded`, `pending`, `unsupported`, or
 | installed | Exact locked versions in the local store |
 | configured_agents | Active-preset activation on disk |
 | live_packages | Packages already in this session's registry, with version, digest, and runtime name |
-| diagnostics | Store and activation issues (missing, corrupt, operational, collision, missing required dependency, invalid alias, retired), labeled `disk` or `live` |
+| diagnostics | Store and activation issues (missing, corrupt, operational, collision, missing required dependency, invalid alias), labeled `disk` or `live` |
 | reload_status | `reloaded` after an active v2 service restart; `pending` with no active service or when a tool mutation awaits a future reload; `applied` when the live registry already matches; `unsupported` for v1; `unavailable` when OpenCode or registry state cannot be inspected |
 
 ## Limits
@@ -109,7 +109,7 @@ registry remains a v2-manifest index and must be parsed with its v2 parser.
 The contract also exposes separate v3 manifest/index schemas, parsers, summary
 projection, selector resolution, and the future `/v3/` registry base URL;
 v2 parsing never accepts v3 artifacts. Both contracts use deterministic
-artifact paths, retirement tombstones, and canonical bundle SHA-256 digests.
+artifact paths and canonical bundle SHA-256 digests.
 It also exports `renderDefaultMarketplaceAutoDelegationBlock(manifest)`, the
 authoritative deterministic routing block. Built-in v3 extensions use the
 current built-in role routing followed by lane, stats, delegation, and

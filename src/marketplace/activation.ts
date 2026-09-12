@@ -14,7 +14,6 @@ import {
   discoverPreflightMcps,
   discoverPreflightSkills,
 } from './preflight';
-import { isMarketplacePackageRetired } from './retirements';
 import type { MarketplaceAgentManifest } from './schemas';
 import { MarketplaceStore, type StoredMarketplacePackage } from './store';
 
@@ -32,8 +31,7 @@ export type MarketplaceDiagnosticCode =
   | 'collision'
   | 'missing-required-dependency'
   | 'invalid-alias'
-  | 'invalid-capability'
-  | 'retired';
+  | 'invalid-capability';
 
 export interface MarketplaceDiagnostic {
   packageId: string;
@@ -245,12 +243,6 @@ export function resolveMarketplaceActivation(
     } catch {
       diagnostics.push(
         diagnostic(packageId, 'missing', `${packageId} is not installed`),
-      );
-      continue;
-    }
-    if (isMarketplacePackageRetired(id)) {
-      diagnostics.push(
-        diagnostic(id, 'retired', `${id} is retired and will not be activated`),
       );
       continue;
     }

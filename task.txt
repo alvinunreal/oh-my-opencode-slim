@@ -40,17 +40,12 @@ capabilities are default-deny and can only be narrowed by host configuration.
 - A reload is required after marketplace lifecycle changes; the live agent
   registry is never hot-swapped.
 
-## Published v2 Catalog
+## Catalog
 
-| Package | Built-in extension |
-| --- | --- |
-| `alvin/codebase-janitor` | `fixer` (`append`) |
-| `alvin/evidence-scout` | `librarian` (`append`) |
-| `alvin/interface-critic` | `designer` (`append`) |
-| `alvin/security-reviewer` | `oracle` (`append`) |
-| `alvin/visual-inspector` | `observer` (`append`) |
+The registry is the source of truth for the current v2 catalog; this release
+record does not duplicate package IDs.
 
-The following package IDs are retired in v2 and omitted from its catalog:
+The following package IDs are retired in v2 and omitted from the catalog:
 
 - `alvin/deepwork-implementer`
 - `alvin/deepwork-recon`

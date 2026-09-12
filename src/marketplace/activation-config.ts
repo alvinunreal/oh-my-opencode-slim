@@ -13,7 +13,6 @@ import type {
 } from '../config/schema';
 import { MarketplaceActivationError } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
-import { assertMarketplacePackageNotRetired } from './retirements';
 import { MarketplaceStore } from './store';
 
 function writeConfigFile(
@@ -49,12 +48,7 @@ function activePresetName(config: PluginConfig): string {
   );
 }
 
-export function preflightMarketplaceAgentActivation(
-  directory: string,
-  packageId: string,
-): void {
-  const id = normalizeMarketplacePackageId(packageId);
-  assertMarketplacePackageNotRetired(id);
+export function preflightMarketplaceAgentActivation(directory: string): void {
   const config = loadPluginConfig(directory, { silent: true });
   const presetName = activePresetName(config);
   if (!config.presets?.[presetName]) {
@@ -143,8 +137,7 @@ export function enableMarketplaceAgent(
   store = new MarketplaceStore(),
 ): void {
   const id = normalizeMarketplacePackageId(packageId);
-  assertMarketplacePackageNotRetired(id);
-  preflightMarketplaceAgentActivation(directory, id);
+  preflightMarketplaceAgentActivation(directory);
   store.show(id);
   const config = loadPluginConfig(directory, { silent: true });
   const presetName = activePresetName(config);

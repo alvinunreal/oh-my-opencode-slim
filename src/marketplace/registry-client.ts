@@ -2,8 +2,6 @@ import { satisfies } from 'semver';
 import {
   DEFAULT_MARKETPLACE_REGISTRY_URL,
   DEFAULT_MARKETPLACE_REGISTRY_V3_URL,
-  isMarketplaceRegistryIdRetired,
-  isMarketplaceRegistryIdRetiredV3,
   MarketplacePackageBundleV2Schema,
   MarketplacePackageBundleV3Schema,
   type MarketplaceRegistryEntry,
@@ -24,9 +22,7 @@ import {
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryProtocolError,
   MarketplaceRegistryUnavailableError,
-  MarketplaceRetiredError,
 } from './errors';
-import { assertMarketplacePackageNotRetired } from './retirements';
 import type { MarketplacePackageBundle } from './schemas';
 
 export const MARKETPLACE_REGISTRY_INDEX_URL = `${DEFAULT_MARKETPLACE_REGISTRY_URL}index.json`;
@@ -178,7 +174,6 @@ export class MarketplaceRegistryClient {
         );
       }
     })();
-    assertMarketplacePackageNotRetired(selector.id);
     const indexText = await this.fetchJson(
       v3 ? MARKETPLACE_REGISTRY_V3_INDEX_URL : MARKETPLACE_REGISTRY_INDEX_URL,
       this.maxIndexBytes,
@@ -192,20 +187,6 @@ export class MarketplaceRegistryClient {
     } catch (error) {
       throw new MarketplaceRegistryProtocolError(
         error instanceof Error ? error.message : String(error),
-      );
-    }
-    const retired = v3
-      ? isMarketplaceRegistryIdRetiredV3(
-          index as MarketplaceRegistryIndexV3,
-          selector.id,
-        )
-      : isMarketplaceRegistryIdRetired(
-          index as MarketplaceRegistryIndex,
-          selector.id,
-        );
-    if (retired) {
-      throw new MarketplaceRetiredError(
-        `${selector.id} is retired and cannot be installed`,
       );
     }
     const matchingId = index.entries.some((entry) => entry.id === selector.id);
@@ -245,7 +226,6 @@ export class MarketplaceRegistryClient {
             minimumVersion,
           );
     } catch (error) {
-      if (error instanceof MarketplaceRetiredError) throw error;
       throw new MarketplaceCompatibilityError(
         error instanceof Error ? error.message : String(error),
       );

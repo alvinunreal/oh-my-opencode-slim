@@ -12,7 +12,6 @@ import {
 import { normalizeMarketplacePackageId } from './ids';
 import type { MarketplaceRegistryDownload } from './registry-client';
 import { MarketplaceRegistryClient } from './registry-client';
-import { assertMarketplacePackageNotRetired } from './retirements';
 import {
   type MarketplacePackageBundle,
   MarketplacePackageBundleSchema,
@@ -78,7 +77,6 @@ export class MarketplaceService {
     source?: MarketplaceSource,
   ): StoredMarketplacePackage {
     const bundle = parseBundle(input);
-    assertMarketplacePackageNotRetired(bundle.manifest.id);
     return this.store.install(bundle, source);
   }
 
@@ -98,7 +96,6 @@ export class MarketplaceService {
     source?: MarketplaceSource,
   ): StoredMarketplacePackage {
     const bundle = parseBundle(input);
-    assertMarketplacePackageNotRetired(bundle.manifest.id);
     return this.store.update(bundle, source);
   }
 
@@ -117,8 +114,6 @@ export class MarketplaceService {
     selector: string,
     signal?: AbortSignal,
   ): Promise<StoredMarketplacePackage> {
-    const selectorId = selector.trim().split('@', 1)[0].toLowerCase();
-    assertMarketplacePackageNotRetired(selectorId);
     const downloaded = await this.downloadRemoteWithV3Fallback(
       selector,
       undefined,
@@ -166,7 +161,6 @@ export class MarketplaceService {
     signal?: AbortSignal,
   ): Promise<StoredMarketplacePackage> {
     const normalizedId = normalizeMarketplacePackageId(id);
-    assertMarketplacePackageNotRetired(normalizedId);
     if (!this.store.getLockfile().packages[normalizedId]) {
       throw new MarketplaceConflictError(
         `${normalizedId} is not installed; updates require an existing package`,

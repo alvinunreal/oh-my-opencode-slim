@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MarketplacePackageBundle } from '../marketplace-contract';
@@ -23,7 +23,6 @@ import {
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryProtocolError,
   MarketplaceRegistryUnavailableError,
-  MarketplaceRetiredError,
 } from './errors';
 import {
   DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES,
@@ -32,12 +31,6 @@ import {
   MarketplaceRegistryClient,
 } from './registry-client';
 import { MarketplaceService } from './service';
-
-const canonicalRetirements = [
-  { id: 'alvin/deepwork-implementer' },
-  { id: 'alvin/deepwork-recon' },
-  { id: 'alvin/deepwork-reviewer' },
-];
 
 function bundle(
   version = '1.0.0',
@@ -107,7 +100,6 @@ function indexFor(packageBundle = bundle()): Record<string, unknown> {
         summary: projectMarketplaceManifestSummary(manifest),
       },
     ],
-    retirements: canonicalRetirements,
   };
 }
 
@@ -134,7 +126,6 @@ describe('marketplace registry contract', () => {
         ...(first.entries as unknown[]),
         ...(second.entries as unknown[]),
       ],
-      retirements: canonicalRetirements,
     };
     expect(MarketplaceRegistryIndexSchema.safeParse(validIndex).success).toBe(
       true,
@@ -185,7 +176,6 @@ describe('marketplace registry contract', () => {
         ...(indexFor(bundle('1.0.0')).entries as unknown[]),
         ...(indexFor(bundle('2.0.0')).entries as unknown[]),
       ],
-      retirements: canonicalRetirements,
     });
     expect(
       resolveMarketplaceRegistryEntry(
@@ -202,58 +192,23 @@ describe('marketplace registry contract', () => {
     ).toThrow();
   });
 
-  test('validates v3 retirement tombstones and rejects retired selectors', () => {
-    const first = indexFor(bundle('1.0.0', 'community/alpha'));
-    const second = indexFor(bundle('1.0.0', 'community/beta'));
-    const entries = [
-      ...(first.entries as unknown[]),
-      ...(second.entries as unknown[]),
-    ];
-    expect(
-      parseMarketplaceRegistryIndex({
-        schemaVersion: 3,
-        entries,
-        retirements: [...canonicalRetirements, { id: 'community/alpha' }],
-      }).schemaVersion,
-    ).toBe(3);
-    expect(() =>
-      parseMarketplaceRegistryIndex({
-        schemaVersion: 3,
-        entries,
-        retirements: [
-          ...canonicalRetirements,
-          { id: 'community/alpha' },
-          { id: 'community/alpha' },
-        ],
-      }),
-    ).toThrow('Duplicate');
-    expect(() =>
-      parseMarketplaceRegistryIndex({
-        schemaVersion: 3,
-        entries,
-        retirements: [
-          ...canonicalRetirements,
-          { id: 'community/beta' },
-          { id: 'community/alpha' },
-        ],
-      }),
-    ).toThrow('sorted');
-
-    const index = parseMarketplaceRegistryIndex({
-      schemaVersion: 3,
-      entries,
-      retirements: canonicalRetirements,
+  test('accepts empty or absent retirement lists and resolves legacy IDs', () => {
+    const legacy = indexFor(bundle('1.0.0', 'legacy/package'));
+    const withoutRetirements = parseMarketplaceRegistryIndex(legacy);
+    const withEmptyRetirements = parseMarketplaceRegistryIndex({
+      ...legacy,
+      retirements: [],
     });
-    for (const selector of [
-      { id: 'alvin/deepwork-implementer' },
-      { id: 'alvin/deepwork-implementer', version: '1.0.0' },
-    ]) {
-      expect(() =>
-        resolveMarketplaceRegistryEntry(index, selector, {
-          pluginVersion: '3.1.0',
-        }),
-      ).toThrow(MarketplaceRetiredError);
-    }
+
+    expect(withoutRetirements.retirements).toBeUndefined();
+    expect(withEmptyRetirements.retirements).toEqual([]);
+    expect(
+      resolveMarketplaceRegistryEntry(
+        withoutRetirements,
+        { id: 'legacy/package' },
+        { pluginVersion: '3.1.0' },
+      ).id,
+    ).toBe('legacy/package');
   });
 
   test('uses locale-independent code-unit ordering for JSON and catalog entries', () => {
@@ -508,7 +463,7 @@ describe('MarketplaceRegistryClient', () => {
       pluginVersion: '3.0.0-beta.6',
       fetch: async (input) => {
         malformedCalls.push(String(input));
-        return response({ schemaVersion: 3, entries: [] });
+        return response({ schemaVersion: 3, entries: [{}] });
       },
     });
     await expect(
@@ -571,45 +526,6 @@ describe('MarketplaceRegistryClient', () => {
         MARKETPLACE_REGISTRY_INDEX_URL,
         'https://registry.ohmyopencodeslim.com/v2/artifacts/community/registry-agent/1.0.0.json',
       ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('rejects policy-retired remote selectors before any fetch', async () => {
-    let fetches = 0;
-    const client = new MarketplaceRegistryClient({
-      pluginVersion: '3.1.0',
-      fetch: async () => {
-        fetches += 1;
-        return response({});
-      },
-    });
-    await expect(
-      client.download('alvin/deepwork-recon@1.0.0'),
-    ).rejects.toBeInstanceOf(MarketplaceRetiredError);
-    expect(fetches).toBe(0);
-
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-retired-remote-'));
-    try {
-      let downloads = 0;
-      const service = new MarketplaceService({
-        rootDir: root,
-        registryClient: {
-          download: async () => {
-            downloads += 1;
-            throw new Error('registry client should not be called');
-          },
-        },
-      });
-      await expect(
-        service.installRemote('alvin/deepwork-implementer'),
-      ).rejects.toBeInstanceOf(MarketplaceRetiredError);
-      await expect(
-        service.updateRemote('alvin/deepwork-reviewer'),
-      ).rejects.toBeInstanceOf(MarketplaceRetiredError);
-      expect(downloads).toBe(0);
-      expect(existsSync(service.store.paths.lockfilePath)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

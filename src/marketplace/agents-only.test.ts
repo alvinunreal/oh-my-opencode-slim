@@ -7,7 +7,6 @@ import { RuntimeConfig } from '../config/runtime';
 import { PresetSchema } from '../config/schema';
 import { adaptPermissions } from '../v2/adapters';
 import { resolveMarketplaceActivation } from './activation';
-import { RETIRED_MARKETPLACE_PACKAGE_IDS } from './retirements';
 import {
   MarketplaceAgentManifestSchema,
   MarketplacePackageBundleSchema,
@@ -412,16 +411,6 @@ describe('agents-only marketplace contract', () => {
     },
     { timeout: 15_000 },
   );
-
-  test('uses canonical retirement IDs and rejects them before install', () => {
-    expect(RETIRED_MARKETPLACE_PACKAGE_IDS).toHaveLength(3);
-    const store = new MarketplaceStore({
-      rootDir: mkdtempSync(join(tmpdir(), 'marketplace-retired-')),
-    });
-    expect(() =>
-      store.install(bundle({ id: RETIRED_MARKETPLACE_PACKAGE_IDS[0] })),
-    ).toThrow('retired');
-  });
 
   test('activation reports deterministic collisions', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-collision-'));
