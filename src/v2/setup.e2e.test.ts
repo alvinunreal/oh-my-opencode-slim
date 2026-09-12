@@ -509,4 +509,43 @@ describe('createV2Setup e2e', () => {
     expect(logText).toContain('[v2] v1 dispose hook invoked');
     expect(logText).not.toContain('[v2] v1 dispose failed');
   }, 20_000);
+
+  test('host rejecting the model.request hook name degrades: one log, no crash', async () => {
+    // Older v2 hosts reject unknown session.hook names. The chat.headers
+    // bridge must degrade exactly like the prompt hook: setup completes,
+    // every other bridge still registers, and the deterministic
+    // unavailability line lands in the plugin log exactly once.
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const baseHook = ctx.session.hook.bind(ctx.session);
+    const rejected: string[] = [];
+    (ctx.session as { hook: unknown }).hook = async (
+      name: string,
+      cb: unknown,
+    ) => {
+      if (name === 'model.request') {
+        rejected.push(name);
+        throw new Error(`unknown session hook: ${name}`);
+      }
+      return baseHook(name as 'context', cb as never);
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      expect(rejected).toEqual(['model.request']);
+      // Other session bridges unaffected by the rejection.
+      expect(calls.hooks).toContain('session:context');
+      expect(calls.hooks).toContain('session:prompt');
+      expect(calls.contextHookCb).toBeFunction();
+
+      await flushLoggerForTesting();
+      const logText = readPluginLog();
+      expect(logText).toContain(
+        '[v2] session.hook(model.request) unavailable; chat.headers not bridged',
+      );
+      expect(logText.match(/chat\.headers not bridged/g) ?? []).toHaveLength(1);
+    } finally {
+      await cleanup(); // must not throw despite the rejected hook
+    }
+  }, 20_000);
 });

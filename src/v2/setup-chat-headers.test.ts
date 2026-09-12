@@ -8,6 +8,7 @@ import {
   recordInternalAdmission,
 } from './internal-admissions';
 import {
+  __resetChatHeadersOrderingTripwireForTesting,
   type ChatHeaderSessionStates,
   createChatHeadersBridge,
   createSessionContextHandler,
@@ -62,6 +63,11 @@ describe('observeChatHeaderState', () => {
     states = new Map();
     __resetInternalAdmissionsForTesting();
   });
+
+  // NOTE: FIFO eviction itself is intentionally not unit-tested — it is
+  // the shared `pruneSessionMap` bound (MAX_PROMPT_BRIDGE_SESSIONS),
+  // already exercised by the prompt-bridge suite; pinning the numeric
+  // bound here would only couple this suite to an internal constant.
 
   test('marks internal from the trailing user message envelope metadata', () => {
     observeChatHeaderState(
@@ -153,11 +159,41 @@ describe('observeChatHeaderState', () => {
 
     expect(states.has('ses_hdr')).toBe(false);
   });
+
+  test('tool-loop scan-back relearns an earlier internal user message', () => {
+    // Mid tool loop the trailing context message is the assistant's
+    // tool-result turn; trailingUserMessage scans back to the last USER
+    // message, so the internal wake driving the loop is relearned (this
+    // is the scan-back path, distinct from the keep-stale path above,
+    // which only applies when the event carries NO user message at all).
+    observeChatHeaderState(
+      states,
+      makeContextEvent([
+        {
+          id: 'msg_wake',
+          role: 'user',
+          content: [{ type: 'text', text: 'wake reminder' }],
+          metadata: { [INTERNAL_KEY]: true },
+        },
+        {
+          id: 'msg_tool_turn',
+          role: 'assistant',
+          content: [{ type: 'tool-result', id: 'call_1' }],
+        },
+      ]),
+    );
+
+    expect(states.get('ses_hdr')).toEqual({
+      messageID: 'msg_wake',
+      internal: true,
+    });
+  });
 });
 
 describe('createChatHeadersBridge', () => {
   beforeEach(() => {
     __resetInternalAdmissionsForTesting();
+    __resetChatHeadersOrderingTripwireForTesting();
   });
 
   test('sets x-initiator: agent for an internal Copilot primary request', async () => {
@@ -225,6 +261,73 @@ describe('createChatHeadersBridge', () => {
     await createChatHeadersBridge(new Map())(event);
 
     expect(event.headers['x-initiator']).toBeUndefined();
+  });
+
+  test('ordering tripwire: unobserved session warns once, header stays unset', async () => {
+    // A primary model.request with no context-event observation for the
+    // session means the host fired the request hook before/instead of the
+    // context hook — the stale-marking direction. Drift canary only: the
+    // warning fires ONCE per process (module-global latch, verified here
+    // via the injected sink); behavior is unchanged (missing state still
+    // skips the header). The default sink logs the fixed deterministic
+    // text (see MODEL_REQUEST_BEFORE_CONTEXT_WARNING in setup.ts).
+    let driftWarnings = 0;
+    const bridge = createChatHeadersBridge(new Map(), () => {
+      driftWarnings += 1;
+    });
+    const first = makeModelRequestEvent();
+    const second = makeModelRequestEvent();
+
+    await bridge(first);
+    await bridge(second);
+
+    expect(driftWarnings).toBe(1);
+    expect(first.headers['x-initiator']).toBeUndefined();
+    expect(second.headers['x-initiator']).toBeUndefined();
+  });
+
+  test('ordering tripwire stays silent for auxiliary kinds and observed sessions', async () => {
+    let driftWarnings = 0;
+    const sink = () => {
+      driftWarnings += 1;
+    };
+    const states: ChatHeaderSessionStates = new Map([
+      ['ses_hdr', { messageID: 'msg_1', internal: false }],
+    ]);
+    // Auxiliary kinds never see context events (title/compaction/generate
+    // run their own hook shapes) — must not trip the canary.
+    await createChatHeadersBridge(
+      new Map(),
+      sink,
+    )(makeModelRequestEvent({ kind: 'title' }));
+    // Observed session (marker false): no warning, no header.
+    await createChatHeadersBridge(states, sink)(makeModelRequestEvent());
+
+    expect(driftWarnings).toBe(0);
+  });
+
+  test('escalation-only: never rewrites a pre-set agent value', async () => {
+    // Mirrors the upstream fetch-layer contract (built-in Copilot hook /
+    // applyHeaders): a pre-set x-initiator: agent is honored, never
+    // touched; a lower value (or none) escalates to agent.
+    const states: ChatHeaderSessionStates = new Map([
+      ['ses_hdr', { messageID: 'msg_1', internal: true }],
+    ]);
+
+    const preSetAgent = makeModelRequestEvent({
+      headers: { 'x-initiator': 'agent', 'x-session-affinity': 'ses_hdr' },
+    });
+    await createChatHeadersBridge(states)(preSetAgent);
+    expect(preSetAgent.headers).toEqual({
+      'x-initiator': 'agent',
+      'x-session-affinity': 'ses_hdr',
+    });
+
+    const preSetUser = makeModelRequestEvent({
+      headers: { 'x-initiator': 'user' },
+    });
+    await createChatHeadersBridge(states)(preSetUser);
+    expect(preSetUser.headers['x-initiator']).toBe('agent');
   });
 
   test('never throws on malformed events (fail-soft, logged)', async () => {

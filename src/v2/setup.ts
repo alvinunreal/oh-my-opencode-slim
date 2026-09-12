@@ -491,6 +491,23 @@ export function observeChatHeaderState(
   pruneSessionMap(states);
 }
 
+/** One-time (per process) drift canary: a primary `model.request` for a
+ * session with NO context-event observation recorded means the host fired
+ * the request hook before (or instead of) the context hook — the one
+ * dangerous ordering direction, because later requests would then read a
+ * STALE internal marker and could stamp `x-initiator: agent` on a genuine
+ * user request. Behavior is unchanged (missing state still skips the
+ * header); this only surfaces the drift deterministically. */
+const MODEL_REQUEST_BEFORE_CONTEXT_WARNING =
+  '[v2][chat-headers] model.request observed before any context event ' +
+  'for session; host hook ordering may have changed (x-initiator marking ' +
+  'may be stale)';
+let modelRequestOrderingWarned = false;
+
+export function __resetChatHeadersOrderingTripwireForTesting(): void {
+  modelRequestOrderingWarned = false;
+}
+
 /**
  * v1 `chat.headers` → v2 `session.model.request` bridge.
  *
@@ -515,19 +532,43 @@ export function observeChatHeaderState(
  *   `conversation-compaction` → `x-initiator: agent`).
  * - The decision constants and provider gate come from
  *   `src/hooks/chat-headers.ts` so both hosts stamp the same header.
+ * - Escalation-only writes: an already-present `x-initiator: agent`
+ *   (e.g. set by the built-in or another plugin hook) is never rewritten,
+ *   mirroring the upstream fetch-layer contract.
  *
  * Headers are transport-level only — no payload content is read or mutated
  * (prompt-cache safety is unaffected).
+ *
+ * @param onOrderingDrift invoked (once per process — module-global latch)
+ *   when a primary request arrives for a session with no context-event
+ *   observation; injectable so tests can observe the tripwire without
+ *   mocking the logger.
  */
 export function createChatHeadersBridge(
   states: ChatHeaderSessionStates,
+  onOrderingDrift: () => void = () => log(MODEL_REQUEST_BEFORE_CONTEXT_WARNING),
 ): (event: V2SessionModelRequestEvent) => Promise<void> {
   return async (event) => {
     try {
       if (event.kind !== 'primary') return;
+      // Ordering tripwire (primary requests always have a context event
+      // first on conforming hosts — see the canary note above). Any
+      // provider: the drift is host-wide, not Copilot-specific.
+      if (!states.has(event.sessionID)) {
+        if (!modelRequestOrderingWarned) {
+          modelRequestOrderingWarned = true;
+          onOrderingDrift();
+        }
+        return;
+      }
       if (!isCopilotProvider(event.model.providerID)) return;
       if (!states.get(event.sessionID)?.internal) return;
-      event.headers[CHAT_INITIATOR_HEADER_NAME] = CHAT_INITIATOR_HEADER_AGENT;
+      if (
+        event.headers[CHAT_INITIATOR_HEADER_NAME] !==
+        CHAT_INITIATOR_HEADER_AGENT
+      ) {
+        event.headers[CHAT_INITIATOR_HEADER_NAME] = CHAT_INITIATOR_HEADER_AGENT;
+      }
     } catch (err) {
       log('[v2] chat.headers bridge failed', String(err));
     }
@@ -1252,7 +1293,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       // v1 chat.headers marker state, learned from the context events
       // handled below and consumed by the model.request bridge registered
-      // after this block.
+      // after this block. Intentionally NOT cleared on session.deleted /
+      // dispose: entries are bounded (FIFO prune), matched by exact
+      // message id, and memory-only — stale entries age out and can never
+      // fabricate a marking (a marking requires the session's CURRENT
+      // trailing user message id to match). Clearing would only add a
+      // churn path keyed on events this bridge does not otherwise need.
       const chatHeaderStates = new Map<string, ChatHeaderSessionState>();
 
       // Native per-admission prompt hook (v2): `session.prompt` fires once

@@ -27,6 +27,13 @@
 
 const MAX_TRACKED_ADMISSIONS = 4096;
 
+/** Internal-initiator admissions by `sessionID:messageID`. Intentionally
+ * NOT cleared on session.deleted / plugin dispose: the map is bounded
+ * (FIFO prune below), matched by exact message id, and memory-only —
+ * stale entries age out and can never fabricate a marking (marking
+ * requires the session's CURRENT trailing user message id to match an
+ * admitted id). Clearing would only add a churn path keyed on events no
+ * consumer here otherwise needs. */
 const admissions = new Map<string, true>();
 let syntheticIDSequence = 0;
 

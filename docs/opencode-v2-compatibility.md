@@ -158,9 +158,15 @@ line instead of breaking the load.
       v2's built-in Copilot provider hook already marks those, and the
       native fetch layer only escalates a pre-set `x-initiator: agent`
       (never resets it to `user`), so the bridge composes with the
-      built-in. Headers are transport-level; no payload content is read or
-      mutated. Hosts that reject the hook name keep the pre-bridge
-      behavior (header simply unset) with a one-time log.
+      built-in. Known deviation: v1 also treats compaction-continuation
+      turns (`compaction_continue` part metadata) as internal; v2 core has
+      no such key and the bridge checks only the plugin metadata key, so a
+      primary continuation turn following compaction of an
+      internal-initiated session goes unmarked (false-negative only — a
+      narrow window that can only under-mark, never over-mark). Headers
+      are transport-level; no payload content is read or mutated. Hosts
+      that reject the hook name keep the pre-bridge behavior (header
+      simply unset) with a one-time log.
     - `tool.execute.before/after` → `ctx.tool.hook` via
       `createToolExecuteBridges` (`src/v2/setup.ts`): the host `subagent`
       tool is normalized to v1 `task` semantics (name mapping, `agent`→
