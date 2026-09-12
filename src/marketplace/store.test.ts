@@ -95,10 +95,10 @@ describe('MarketplaceStore', () => {
     try {
       const store = new MarketplaceStore({ rootDir: root });
       expect(() =>
-        store.install(bundle('1.0.0', { id: 'alvin/deepwork-implementer' })),
+        store.install(bundle('1.0.0', { id: 'alvin/evidence-scout' })),
       ).toThrow(MarketplaceRetiredError);
       expect(() =>
-        store.update(bundle('2.0.0', { id: 'alvin/deepwork-reviewer' })),
+        store.update(bundle('2.0.0', { id: 'alvin/visual-inspector' })),
       ).toThrow(MarketplaceRetiredError);
       expect(existsSync(store.paths.lockfilePath)).toBe(false);
       expect(existsSync(store.paths.packagesDir)).toBe(false);
