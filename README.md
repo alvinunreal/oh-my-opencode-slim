@@ -149,6 +149,9 @@ selects the highest compatible version and enables it in the active preset,
 while `ID@version` selects exactly that version. Registry update requires an
 installed package and is strictly monotonic. `enable` activates an already
 installed agent package in the active preset as a separately named agent.
+`remove` first clears that package from every user and project preset activation
+list, then deletes the local package; no separate `disable` or `--force` step
+is needed. `disable` remains available when keeping the package installed.
 Registry installs try v3 first and fall back to v2 only when v3 is unavailable
 or lacks the requested package; malformed or integrity-invalid v3 data is not
 downgraded.

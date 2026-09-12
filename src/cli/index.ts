@@ -83,7 +83,8 @@ Usage:
   bunx oh-my-opencode-slim marketplace list
   bunx oh-my-opencode-slim marketplace show <package-id> [--json]
   bunx oh-my-opencode-slim marketplace verify [package-id] [--json]
-  bunx oh-my-opencode-slim marketplace remove <package-id> [--force]
+  bunx oh-my-opencode-slim marketplace remove <package-id>
+                            Deactivate and remove the package
   bunx oh-my-opencode-slim marketplace enable <package-id>
                            Enable an already installed package
   bunx oh-my-opencode-slim marketplace disable <package-id>

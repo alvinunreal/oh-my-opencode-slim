@@ -48,7 +48,6 @@ describe('marketplace CLI parsing', () => {
     expect(parseMarketplaceArgs(['import', './package.json'])).toEqual({
       command: 'import',
       value: './package.json',
-      force: false,
       json: false,
     });
     expect(
@@ -56,7 +55,6 @@ describe('marketplace CLI parsing', () => {
     ).toEqual({
       command: 'import',
       value: './package-v2.json',
-      force: false,
       json: false,
       update: true,
     });
@@ -65,7 +63,6 @@ describe('marketplace CLI parsing', () => {
     ).toEqual({
       command: 'install',
       value: 'community/example@1.2.3',
-      force: false,
       json: false,
     });
   });
@@ -76,7 +73,6 @@ describe('marketplace CLI parsing', () => {
     expect(parseMarketplaceArgs(['list'])).toEqual({
       command: 'list',
       value: undefined,
-      force: false,
       json: false,
     });
     expect(parseMarketplaceArgs(['update', 'community/example']).command).toBe(
@@ -91,13 +87,11 @@ describe('marketplace CLI parsing', () => {
     expect(parseMarketplaceArgs(['enable', 'community/example'])).toEqual({
       command: 'enable',
       value: 'community/example',
-      force: false,
       json: false,
     });
     expect(parseMarketplaceArgs(['status', '--json'])).toEqual({
       command: 'status',
       value: undefined,
-      force: false,
       json: true,
     });
   });

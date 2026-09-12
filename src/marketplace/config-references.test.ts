@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  MarketplaceActivationReferenceError,
-  MarketplaceService,
-  readMarketplaceConfigReferences,
-} from './index';
+import { MarketplaceService } from './index';
 import type { MarketplacePackageBundle } from './schemas';
 
 const previousConfigHome = process.env.XDG_CONFIG_HOME;
@@ -43,85 +45,82 @@ afterEach(() => {
   else process.env.XDG_CONFIG_HOME = previousConfigHome;
 });
 
-describe('marketplace activation references', () => {
-  test('reads user/project preset references instead of CLI claims', () => {
+describe('marketplace activation cleanup', () => {
+  test('removes every package activation across user and project presets', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
     const configHome = join(root, 'config');
     const project = join(root, 'project');
+    const userConfigPath = join(
+      configHome,
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const projectConfigPath = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
     try {
       process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
       mkdirSync(join(project, '.opencode'), { recursive: true });
-      const configPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
       writeFileSync(
-        configPath,
+        userConfigPath,
         JSON.stringify({
           preset: 'work',
+          unrelated: { keep: true },
           presets: {
             work: {
+              agents: {},
+              marketplace: {
+                agents: ['community/referenced', 'community/user-keep'],
+              },
+            },
+            unused: {
               agents: {},
               marketplace: { agents: ['community/referenced'] },
             },
           },
         }),
       );
-      expect(readMarketplaceConfigReferences(project)).toEqual([
-        {
-          packageId: 'community/referenced',
-          configPath,
-          presetName: 'work',
-          target: 'agent',
-        },
-      ]);
+      writeFileSync(
+        projectConfigPath,
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            work: {
+              agents: {},
+              marketplace: {
+                agents: ['community/referenced', 'community/project-keep'],
+              },
+            },
+            unused: {
+              agents: {},
+              marketplace: { agents: ['community/referenced'] },
+            },
+          },
+        }),
+      );
 
       const service = new MarketplaceService({
         rootDir: join(root, 'store'),
         projectDir: project,
       });
       service.install(bundle);
-      expect(() => service.remove('community/referenced')).toThrow(
-        MarketplaceActivationReferenceError,
-      );
-      expect(() =>
-        service.remove('community/referenced', { force: true }),
-      ).not.toThrow();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+      service.remove('community/referenced');
 
-  test('resolves a project-selected preset defined in user config', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
-    const configHome = join(root, 'config');
-    const project = join(root, 'project');
-    const userConfigPath = join(configHome, 'opencode');
-    try {
-      process.env.XDG_CONFIG_HOME = configHome;
-      mkdirSync(userConfigPath, { recursive: true });
-      mkdirSync(join(project, '.opencode'), { recursive: true });
-      writeFileSync(
-        join(userConfigPath, 'oh-my-opencode-slim.json'),
-        JSON.stringify({
-          presets: {
-            shared: {
-              agents: {},
-              marketplace: { agents: ['community/referenced'] },
-            },
-          },
-        }),
-      );
-      writeFileSync(
-        join(project, '.opencode', 'oh-my-opencode-slim.json'),
-        JSON.stringify({ preset: 'shared' }),
-      );
-
-      expect(readMarketplaceConfigReferences(project)).toEqual([
-        {
-          packageId: 'community/referenced',
-          configPath: join(project, '.opencode', 'oh-my-opencode-slim.json'),
-          presetName: 'shared',
-          target: 'agent',
-        },
+      expect(service.list()).toEqual([]);
+      const userConfig = JSON.parse(readFileSync(userConfigPath, 'utf8'));
+      const projectConfig = JSON.parse(readFileSync(projectConfigPath, 'utf8'));
+      expect(userConfig.unrelated).toEqual({ keep: true });
+      expect(userConfig.presets.work.marketplace.agents).toEqual([
+        'community/user-keep',
       ]);
+      expect(userConfig.presets.unused.marketplace.agents).toEqual([]);
+      expect(projectConfig.presets.work.marketplace.agents).toEqual([
+        'community/project-keep',
+      ]);
+      expect(projectConfig.presets.unused.marketplace.agents).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

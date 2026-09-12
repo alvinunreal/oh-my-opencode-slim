@@ -140,6 +140,64 @@ describe('agents-only marketplace contract', () => {
     }
   });
 
+  test('v3 builtin model policies inherit the active built-in role model', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-v3-model-'));
+    try {
+      const store = new MarketplaceStore({
+        rootDir: root,
+        pluginVersion: '3.0.0-beta.3',
+      });
+      store.install(
+        bundle({
+          schemaVersion: 3,
+          id: 'community/interface-critic',
+          agentName: 'interface-critic',
+          description: 'A derived designer.',
+          routing: {
+            lane: 'Interface critique',
+            stats: ['Visual review'],
+            delegateWhen: ['UI review is needed'],
+            avoid: ['Backend implementation'],
+          },
+          extends: { builtin: 'designer', promptMode: 'append' },
+          model: { source: 'builtin' },
+          skills: [],
+          mcps: [],
+          tools: ['read'],
+        }),
+      );
+      RuntimeConfig.reset(root);
+      const runtime = RuntimeConfig.init(root, {
+        preset: 'work',
+        presets: {
+          work: {
+            agents: {
+              orchestrator: { model: 'omniroute/orchestrator' },
+              designer: { model: 'omniroute/ag-farm' },
+              'interface-critic': {
+                variant: 'package-variant',
+                options: { reasoningEffort: 'high' },
+              },
+            },
+            marketplace: { agents: ['community/interface-critic'] },
+          },
+        },
+      });
+
+      const registry = buildResolvedAgentRegistry(runtime, {
+        marketplaceStore: store,
+        availableMcpNames: [],
+      });
+      expect(registry.sdkConfigs['interface-critic']).toMatchObject({
+        model: 'omniroute/ag-farm',
+        variant: 'package-variant',
+        options: { reasoningEffort: 'high' },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('owner model overrides replace package fallback chains', () => {
     const cases = [
       {

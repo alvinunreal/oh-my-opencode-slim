@@ -28,7 +28,6 @@ export type MarketplaceCommandName =
 export interface MarketplaceArgs {
   command: MarketplaceCommandName;
   value?: string;
-  force: boolean;
   json: boolean;
   update?: boolean;
 }
@@ -56,18 +55,15 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
     );
   }
   const command = rawCommand as MarketplaceCommandName;
-  const force = args.includes('--force');
   const json = args.includes('--json');
   const update = args.includes('--update');
   const options = args.filter((arg) => arg.startsWith('--'));
   const allowedOptions = new Set(
-    command === 'remove'
-      ? ['--force']
-      : command === 'verify' || command === 'show' || command === 'status'
-        ? ['--json']
-        : command === 'import'
-          ? ['--update']
-          : [],
+    command === 'verify' || command === 'show' || command === 'status'
+      ? ['--json']
+      : command === 'import'
+        ? ['--update']
+        : [],
   );
   for (const option of options) {
     if (!allowedOptions.has(option)) {
@@ -96,21 +92,12 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
   if (needsValue && !positional[0]) {
     throw new Error(`marketplace ${rawCommand} requires a value`);
   }
-  if (
-    (command === 'install' || command === 'update' || command === 'import') &&
-    force
-  ) {
-    throw new Error(
-      `Option --force is not valid for marketplace ${rawCommand}`,
-    );
-  }
   if (command !== 'import' && update) {
     throw new Error('Option --update is only valid for marketplace import');
   }
   return {
     command,
     value: positional[0],
-    force,
     json,
     ...(command === 'import' && update ? { update: true } : {}),
   };
@@ -187,7 +174,7 @@ export async function marketplaceCommand(
         return results.every((result) => result.valid) ? 0 : 1;
       }
       case 'remove':
-        service.remove(parsed.value as string, { force: parsed.force });
+        service.remove(parsed.value as string);
         console.log(mutationReloadNotice(`Removed ${parsed.value}`, 'unknown'));
         return 0;
       case 'enable':

@@ -1,11 +1,5 @@
-import { findPluginConfigPaths, loadPluginConfig } from '../config/loader';
-
-export interface MarketplaceConfigReference {
-  packageId: string;
-  configPath: string;
-  presetName: string;
-  target: 'agent';
-}
+import { mutateJsonFile } from '../cli/config-io';
+import { findPluginConfigPaths } from '../config/loader';
 
 interface UnknownRecord {
   [key: string]: unknown;
@@ -15,50 +9,46 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function addReference(
-  references: MarketplaceConfigReference[],
-  value: unknown,
-  configPath: string,
-  presetName: string,
-  target: 'agent',
-): void {
-  if (typeof value !== 'string' || value.trim().length === 0) return;
-  references.push({
-    packageId: value.trim().toLowerCase(),
-    configPath,
-    presetName,
-    target,
-  });
-}
+function removeFromConfig(config: unknown, packageId: string): unknown {
+  if (!isRecord(config) || !isRecord(config.presets)) return config;
 
-function readReferencesFromMergedConfig(
-  config: unknown,
-  configPath: string,
-): MarketplaceConfigReference[] {
-  if (!isRecord(config)) return [];
-  const presetName = config.preset;
-  if (typeof presetName !== 'string') return [];
-  const presets = config.presets;
-  if (!isRecord(presets)) return [];
-
-  const references: MarketplaceConfigReference[] = [];
-  const presetValue = presets[presetName];
-  if (!isRecord(presetValue) || !isRecord(presetValue.marketplace)) return [];
-  const marketplace = presetValue.marketplace;
-  if (Array.isArray(marketplace.agents)) {
-    for (const packageId of marketplace.agents) {
-      addReference(references, packageId, configPath, presetName, 'agent');
-    }
+  let changed = false;
+  const presets = { ...config.presets };
+  for (const [presetName, presetValue] of Object.entries(presets)) {
+    if (!isRecord(presetValue) || !isRecord(presetValue.marketplace)) continue;
+    const agents = presetValue.marketplace.agents;
+    if (!Array.isArray(agents)) continue;
+    const filtered = agents.filter(
+      (value) =>
+        typeof value !== 'string' || value.trim().toLowerCase() !== packageId,
+    );
+    if (filtered.length === agents.length) continue;
+    changed = true;
+    presets[presetName] = {
+      ...presetValue,
+      marketplace: {
+        ...presetValue.marketplace,
+        agents: filtered,
+      },
+    };
   }
-  return references;
+  return changed ? { ...config, presets } : config;
 }
 
-/** Read persisted references from both user and project plugin configs. */
-export function readMarketplaceConfigReferences(
+/** Remove a package from every user and project preset activation list. */
+export function removeMarketplaceConfigReferences(
   directory: string,
-): MarketplaceConfigReference[] {
+  packageId: string,
+): void {
   const paths = findPluginConfigPaths(directory);
-  const configPath = paths.projectConfigPath ?? paths.userConfigPath;
-  const config = loadPluginConfig(directory, { silent: true });
-  return readReferencesFromMergedConfig(config, configPath ?? directory);
+  const normalizedId = packageId.trim().toLowerCase();
+  for (const configPath of new Set(
+    [paths.userConfigPath, paths.projectConfigPath].filter(
+      (value): value is string => value !== null,
+    ),
+  )) {
+    mutateJsonFile(configPath, (config) =>
+      removeFromConfig(config, normalizedId),
+    );
+  }
 }
