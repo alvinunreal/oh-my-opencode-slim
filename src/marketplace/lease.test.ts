@@ -1,548 +1,542 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import {
+  closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MarketplaceBusyError, MarketplaceLockOwnershipError } from './errors';
 import {
-  acquireMarketplaceLease,
-  acquireMarketplaceLeaseForTests,
-  generationPath,
-  heartbeatPath,
-  isHeartbeatStale,
-  type LeaseIdentity,
-  listValidGenerations,
-  publishGeneration,
-  readGenerationState,
-  readLeaseState,
-} from './lease';
-import { getMarketplacePaths } from './paths';
+  MarketplaceBusyError,
+  MarketplaceLockfileError,
+  MarketplaceLockOwnershipError,
+} from './errors';
+import { acquireMarketplaceLease, type MarketplaceLockOptions } from './lease';
+import { getMarketplacePaths, type MarketplacePaths } from './paths';
 
-const SHORT_LOCK = {
+const LOCK: MarketplaceLockOptions = {
   staleMs: 80,
-  heartbeatMs: 20,
   timeoutMs: 400,
   retryMs: 10,
-} as const;
+};
+
+const UUIDS = {
+  first: '00000000-0000-4000-8000-000000000001',
+  second: '00000000-0000-4000-8000-000000000002',
+  third: '00000000-0000-4000-8000-000000000003',
+};
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'marketplace-lease-'));
 }
 
-function expireHeartbeat(directory: string, generation: string): void {
-  const old = new Date(Date.now() - 2_000);
-  const file = heartbeatPath(directory, generation);
-  utimesSync(generationPath(directory, generation), old, old);
-  utimesSync(file, old, old);
+function entryPath(
+  lockDir: string,
+  pid: number,
+  uuid: string,
+  kind: 'candidate' | 'lease',
+): string {
+  return join(lockDir, `${pid}.${uuid}.${kind}`);
 }
 
-function writeIncompleteGeneration(
-  directory: string,
-  generation: string,
-): void {
-  const target = generationPath(directory, generation);
-  mkdirSync(target, { recursive: true });
-  writeFileSync(
-    join(target, 'meta.json'),
-    `${JSON.stringify({ generation })}\n`,
-  );
+function createEntry(
+  lockDir: string,
+  pid: number,
+  uuid: string,
+  kind: 'candidate' | 'lease',
+): string {
+  mkdirSync(lockDir, { recursive: true });
+  const filePath = entryPath(lockDir, pid, uuid, kind);
+  const fd = openSync(filePath, 'wx', 0o600);
+  closeSync(fd);
+  return filePath;
 }
 
-function creatingDirs(directory: string): string[] {
+function age(filePath: string, milliseconds = 2_000): void {
+  const old = new Date(Date.now() - milliseconds);
+  utimesSync(filePath, old, old);
+}
+
+function lockEntries(lockDir: string): string[] {
   try {
-    return readdirSync(directory).filter((name) =>
-      name.startsWith('.creating.'),
-    );
+    return readdirSync(lockDir);
   } catch {
     return [];
   }
 }
 
-async function waitForFile(filePath: string, timeoutMs = 3_000): Promise<void> {
-  const started = Date.now();
-  while (!existsSync(filePath)) {
-    if (Date.now() - started > timeoutMs) {
-      throw new Error(`Timed out waiting for ${filePath}`);
-    }
-    await Bun.sleep(10);
-  }
-}
-
-function spawnLeaseWorker(
+function spawnWorker(
+  paths: MarketplacePaths,
   body: string,
-  payload: Record<string, unknown>,
-  env: Record<string, string | undefined> = {},
+  extra: Record<string, string> = {},
 ): Bun.Subprocess {
   return Bun.spawn(
     [
       'bun',
       '-e',
-      `import { existsSync, writeFileSync } from 'node:fs';
-import { acquireMarketplaceLease } from './src/marketplace/lease.ts';
+      `import { acquireMarketplaceLease } from './src/marketplace/lease.ts';
 ${body}`,
-      JSON.stringify(payload),
+      JSON.stringify({ paths, ...extra }),
     ],
-    {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: { ...process.env, ...env },
-    },
+    { stdout: 'pipe', stderr: 'pipe' },
   );
 }
 
-async function workerOutput(
-  worker: Bun.Subprocess,
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(worker.stdout).text(),
+async function workerResult(worker: Bun.Subprocess): Promise<{
+  code: number;
+  stderr: string;
+}> {
+  const [stderr, code] = await Promise.all([
     new Response(worker.stderr).text(),
     worker.exited,
   ]);
-  return { code, stdout, stderr };
+  return { code, stderr };
 }
 
-describe('marketplace lease generations', () => {
-  test('stale cleanup does not claim a replacement generation', () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    try {
-      mkdirSync(paths.rootDir, { recursive: true });
-      const replacement: LeaseIdentity = {
-        generation: 'replacement-generation',
-        token: 'replacement-token',
-      };
-      expect(publishGeneration(paths.lockDir, replacement)).toBe(true);
-      writeIncompleteGeneration(paths.lockDir, 'stale-generation');
-      expect(() =>
-        acquireMarketplaceLease(paths, {
-          staleMs: 2_000,
-          heartbeatMs: 100,
-          timeoutMs: 120,
-          retryMs: 10,
-        }),
-      ).toThrow(MarketplaceBusyError);
-      expect(readLeaseState(paths.lockDir)?.metadata).toEqual({
-        ...replacement,
-        pid: process.pid,
-      });
-      expect(
-        existsSync(generationPath(paths.lockDir, 'stale-generation')),
-      ).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+function withKillError<T>(pid: number, code: string, operation: () => T): T {
+  const originalKill = process.kill;
+  const kill = spyOn(process, 'kill').mockImplementation(((target, signal) => {
+    if (target === pid && signal === 0) {
+      throw Object.assign(new Error(`injected ${code}`), { code });
     }
-  });
-
-  test('missing metadata is not ownership and is never deleted', () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    try {
-      writeIncompleteGeneration(paths.lockDir, 'partial-generation');
-      const owner = acquireMarketplaceLease(paths, SHORT_LOCK);
-      expect(
-        existsSync(
-          join(
-            generationPath(paths.lockDir, 'partial-generation'),
-            'meta.json',
-          ),
-        ),
-      ).toBe(true);
-      expect(
-        JSON.parse(
-          readFileSync(
-            join(
-              generationPath(paths.lockDir, 'partial-generation'),
-              'meta.json',
-            ),
-            'utf8',
-          ),
-        ),
-      ).toEqual({ generation: 'partial-generation' });
-      expect(owner.generation).not.toBe('partial-generation');
-      owner.release();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('heartbeat equal to the stale interval is still fresh', () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    try {
-      const identity: LeaseIdentity = {
-        generation: 'boundary-generation',
-        token: 'boundary-token',
-      };
-      expect(publishGeneration(paths.lockDir, identity)).toBe(true);
-      const staleMs = 200;
-      const state = readGenerationState(
-        generationPath(paths.lockDir, identity.generation),
-      );
-      if (!state) throw new Error('expected published generation state');
-      expect(
-        isHeartbeatStale(state, staleMs, state.heartbeatMtimeMs + staleMs),
-      ).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('heartbeat older than the stale interval is stale', () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    try {
-      const identity: LeaseIdentity = {
-        generation: 'stale-boundary-generation',
-        token: 'stale-boundary-token',
-      };
-      expect(publishGeneration(paths.lockDir, identity)).toBe(true);
-      const staleMs = 200;
-      const state = readGenerationState(
-        generationPath(paths.lockDir, identity.generation),
-      );
-      if (!state) throw new Error('expected published generation state');
-      expect(
-        isHeartbeatStale(state, staleMs, state.heartbeatMtimeMs + staleMs + 1),
-      ).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('synchronous commit remains owned after the stale interval', () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    let nowMs = Date.now();
-    try {
-      const owner = acquireMarketplaceLeaseForTests(
-        paths,
-        {
-          staleMs: 40,
-          heartbeatMs: 10,
-          timeoutMs: 500,
-          retryMs: 5,
-        },
-        () => nowMs,
-      );
-      const acquired = readGenerationState(
-        generationPath(paths.lockDir, owner.generation),
-      );
-      if (!acquired) throw new Error('expected owned generation');
-      nowMs = acquired.heartbeatMtimeMs;
-      const result = owner.commit(() => {
-        const during = readGenerationState(
-          generationPath(paths.lockDir, owner.generation),
-        );
-        if (!during) {
-          throw new Error('expected owned generation during commit');
-        }
-        nowMs = during.heartbeatMtimeMs + 80;
-        return 'published';
-      });
-      expect(result).toBe('published');
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        owner.generation,
-      );
-      owner.release();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('expired owner cannot commit before a replacement exists', () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    try {
-      const owner = acquireMarketplaceLease(paths, SHORT_LOCK);
-      expireHeartbeat(paths.lockDir, owner.generation);
-      let published = false;
-      expect(() =>
-        owner.commit(() => {
-          published = true;
-        }),
-      ).toThrow(MarketplaceLockOwnershipError);
-      expect(published).toBe(false);
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        owner.generation,
-      );
-      expect(() => owner.release()).not.toThrow();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('marketplace lease subprocess barriers', () => {
-  test('active breaker blocks main lock acquire', async () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    const readyPath = join(root, 'ready');
-    const holdingPath = join(root, 'holding');
-    const goPath = join(root, 'go');
-    const worker = spawnLeaseWorker(
-      `const { paths, readyPath, holdingPath, goPath, lock } = JSON.parse(process.argv[1]);
-const lease = acquireMarketplaceLease(paths, lock);
-writeFileSync(readyPath, lease.generation);
-lease.commit(() => {
-  writeFileSync(holdingPath, 'holding');
-  while (!existsSync(goPath)) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    return originalKill(target, signal);
+  }) as typeof process.kill);
+  try {
+    return operation();
+  } finally {
+    kill.mockRestore();
   }
-});
-lease.release();`,
-      { paths, readyPath, holdingPath, goPath, lock: SHORT_LOCK },
-    );
+}
+
+describe('marketplace synchronous lease lifecycle', () => {
+  test('acquires, commits, and releases one empty regular lease file', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
     try {
-      await waitForFile(holdingPath);
-      const generation = readFileSync(readyPath, 'utf8');
-      expireHeartbeat(paths.lockDir, generation);
-      expect(() =>
-        acquireMarketplaceLease(paths, { ...SHORT_LOCK, timeoutMs: 120 }),
-      ).toThrow(MarketplaceBusyError);
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        generation,
-      );
-      expect(listValidGenerations(paths.breakerDir).length).toBeGreaterThan(0);
-      writeFileSync(goPath, 'go');
-      const result = await workerOutput(worker);
-      expect(result.code).toBe(0);
+      const lease = acquireMarketplaceLease(paths, LOCK);
+      const entries = lockEntries(paths.lockDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatch(/^[1-9][0-9]*\.[0-9a-f-]+\.lease$/);
+      const stat = lstatSync(join(paths.lockDir, entries[0]));
+      expect(stat.isFile()).toBe(true);
+      expect(stat.size).toBe(0);
+      expect(() => lease.assertCurrent()).not.toThrow();
+      expect(lease.commit(() => 'done')).toBe('done');
+      lease.release();
+      expect(lockEntries(paths.lockDir)).toEqual([]);
     } finally {
-      worker.kill();
-      await worker.exited.catch(() => undefined);
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('kills a worker during private generation initialization', async () => {
+  test('operation failure preserves ownership for release', () => {
     const root = tempRoot();
     const paths = getMarketplacePaths(root);
-    const barrierDir = join(root, 'barriers');
-    mkdirSync(barrierDir, { recursive: true });
-    writeFileSync(join(barrierDir, 'prepare-generation.wait'), 'wait');
-    const worker = spawnLeaseWorker(
-      `const { paths, lock } = JSON.parse(process.argv[1]);
-acquireMarketplaceLease(paths, lock);`,
-      { paths, lock: SHORT_LOCK },
-      { MARKETPLACE_LEASE_BARRIER_DIR: barrierDir },
-    );
     try {
-      await waitForFile(join(barrierDir, 'prepare-generation.reached'));
-      expect(creatingDirs(paths.breakerDir).length).toBeGreaterThan(0);
-      worker.kill('SIGKILL');
-      await worker.exited;
-      rmSync(join(barrierDir, 'prepare-generation.wait'), { force: true });
-      const owner = acquireMarketplaceLease(paths, SHORT_LOCK);
-      expect(creatingDirs(paths.breakerDir)).toEqual([]);
-      expect(creatingDirs(paths.lockDir)).toEqual([]);
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        owner.generation,
+      const lease = acquireMarketplaceLease(paths, LOCK);
+      expect(() =>
+        lease.commit(() => {
+          throw new Error('operation failed');
+        }),
+      ).toThrow('operation failed');
+      expect(() => lease.assertCurrent()).not.toThrow();
+      expect(() => lease.release()).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('released leases cannot be used again', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    try {
+      const lease = acquireMarketplaceLease(paths, LOCK);
+      lease.release();
+      expect(() => lease.assertCurrent()).toThrow(
+        MarketplaceLockOwnershipError,
       );
+      expect(() => lease.commit(() => undefined)).toThrow(
+        MarketplaceLockOwnershipError,
+      );
+      expect(() => lease.release()).toThrow(MarketplaceLockOwnershipError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a live stale owner blocks acquisition indefinitely until release', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    try {
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      const leasePath = join(paths.lockDir, lockEntries(paths.lockDir)[0]);
+      age(leasePath);
+      expect(() =>
+        acquireMarketplaceLease(paths, { ...LOCK, timeoutMs: 120 }),
+      ).toThrow(MarketplaceBusyError);
+      expect(() => owner.assertCurrent()).not.toThrow();
       owner.release();
     } finally {
-      worker.kill();
-      await worker.exited.catch(() => undefined);
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('expired owner commit fails before replacement', async () => {
+  test('synchronous blocking work remains owned beyond the stale interval', async () => {
     const root = tempRoot();
     const paths = getMarketplacePaths(root);
-    const readyPath = join(root, 'ready');
-    const expirePath = join(root, 'expire');
-    const logPath = join(root, 'commit.log');
-    const publishedPath = join(root, 'published');
-    const worker = spawnLeaseWorker(
-      `const { paths, readyPath, expirePath, logPath, publishedPath, lock } = JSON.parse(process.argv[1]);
-const lease = acquireMarketplaceLease(paths, lock);
-writeFileSync(readyPath, lease.generation);
-while (!existsSync(expirePath)) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-}
-try {
-  lease.commit(() => writeFileSync(publishedPath, 'published'));
-  writeFileSync(logPath, 'committed');
-} catch (error) {
-  writeFileSync(logPath, error instanceof Error ? error.constructor.name : 'error');
-}`,
-      {
-        paths,
-        readyPath,
-        expirePath,
-        logPath,
-        publishedPath,
-        lock: SHORT_LOCK,
-      },
-    );
+    const resultPath = join(root, 'challenger-result');
+    const startedPath = join(root, 'challenger-started');
+    let challenger: Bun.Subprocess | undefined;
     try {
-      await waitForFile(readyPath);
-      const generation = readFileSync(readyPath, 'utf8');
-      expireHeartbeat(paths.lockDir, generation);
-      writeFileSync(expirePath, 'expired');
-      const result = await workerOutput(worker);
-      expect(result.code).toBe(0);
-      expect(readFileSync(logPath, 'utf8')).toBe(
-        'MarketplaceLockOwnershipError',
-      );
-      expect(existsSync(publishedPath)).toBe(false);
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        generation,
-      );
-    } finally {
-      worker.kill();
-      await worker.exited.catch(() => undefined);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('owner release during takeover leaves the replacement', async () => {
-    const root = tempRoot();
-    const paths = getMarketplacePaths(root);
-    const readyPath = join(root, 'ready');
-    const takeoverPath = join(root, 'takeover');
-    const logPath = join(root, 'release.log');
-    const worker = spawnLeaseWorker(
-      `const { paths, readyPath, takeoverPath, logPath, lock } = JSON.parse(process.argv[1]);
-const lease = acquireMarketplaceLease(paths, lock);
-writeFileSync(readyPath, JSON.stringify({ generation: lease.generation, token: lease.token }));
-while (!existsSync(takeoverPath)) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-}
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      challenger = spawnWorker(
+        paths,
+        `const { paths, resultPath, startedPath } = JSON.parse(process.argv[1]);
+await import('node:fs').then(({ writeFileSync }) => writeFileSync(startedPath, 'started'));
 try {
+  const lease = acquireMarketplaceLease(paths, { staleMs: 80, timeoutMs: 120, retryMs: 10 });
   lease.release();
-  writeFileSync(logPath, 'released');
+  await import('node:fs').then(({ writeFileSync }) => writeFileSync(resultPath, 'acquired'));
 } catch (error) {
-  writeFileSync(logPath, error instanceof Error ? error.constructor.name : 'error');
+  await import('node:fs').then(({ writeFileSync }) => writeFileSync(resultPath, error instanceof Error ? error.constructor.name : 'unknown'));
 }`,
-      { paths, readyPath, takeoverPath, logPath, lock: SHORT_LOCK },
-    );
-    try {
-      await waitForFile(readyPath);
-      const owner = JSON.parse(
-        readFileSync(readyPath, 'utf8'),
-      ) as LeaseIdentity;
-      expireHeartbeat(paths.lockDir, owner.generation);
-      const replacement = acquireMarketplaceLease(paths, SHORT_LOCK);
-      expect(replacement.generation).not.toBe(owner.generation);
-      writeFileSync(takeoverPath, 'taken');
-      const result = await workerOutput(worker);
-      expect(result.code).toBe(0);
-      expect(readFileSync(logPath, 'utf8')).toBe(
-        'MarketplaceLockOwnershipError',
+        { resultPath, startedPath },
       );
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        replacement.generation,
-      );
-      expect(() => replacement.assertCurrent()).not.toThrow();
-      replacement.release();
+      for (
+        let attempt = 0;
+        attempt < 200 && !existsSync(startedPath);
+        attempt++
+      ) {
+        await Bun.sleep(5);
+      }
+      expect(existsSync(startedPath)).toBe(true);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+      expect(() => owner.assertCurrent()).not.toThrow();
+      owner.commit(() => undefined);
+      owner.release();
+      await challenger.exited;
+      expect(readFileSync(resultPath, 'utf8')).toBe('MarketplaceBusyError');
     } finally {
-      worker.kill();
-      await worker.exited.catch(() => undefined);
+      challenger?.kill();
+      if (challenger) await challenger.exited.catch(() => -1);
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('three parties cannot overlap critical sections or displace a generation', async () => {
+  test('uses the default process liveness mapping for stale leases', () => {
+    for (const [code, reclaimable] of [
+      ['ESRCH', true],
+      ['EPERM', false],
+      ['EUNKNOWN', false],
+    ] as const) {
+      const root = tempRoot();
+      const paths = getMarketplacePaths(root);
+      try {
+        const stale = createEntry(paths.lockDir, 4242, UUIDS.first, 'lease');
+        age(stale);
+        if (reclaimable) {
+          const owner = withKillError(4242, code, () =>
+            acquireMarketplaceLease(paths, LOCK),
+          );
+          expect(existsSync(stale)).toBe(false);
+          owner.release();
+        } else {
+          expect(() =>
+            withKillError(4242, code, () =>
+              acquireMarketplaceLease(paths, { ...LOCK, timeoutMs: 120 }),
+            ),
+          ).toThrow(MarketplaceBusyError);
+          expect(existsSync(stale)).toBe(true);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test('aged candidates are reclaimed regardless of PID', () => {
     const root = tempRoot();
     const paths = getMarketplacePaths(root);
-    const barrierDir = join(root, 'barriers');
-    mkdirSync(barrierDir, { recursive: true });
-    writeFileSync(join(barrierDir, 'breaker-critical.wait'), 'wait');
-    const ownerReady = join(root, 'owner-ready');
-    const ownerGo = join(root, 'owner-go');
-    const staleReady = join(root, 'stale-ready');
-    const owner = spawnLeaseWorker(
-      `const { paths, ownerReady, ownerGo, lock } = JSON.parse(process.argv[1]);
-const lease = acquireMarketplaceLease(paths, lock);
-writeFileSync(ownerReady, lease.generation);
-while (!existsSync(ownerGo)) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-}
-lease.release();`,
-      {
-        paths,
-        ownerReady,
-        ownerGo,
-        lock: {
-          staleMs: 2_000,
-          heartbeatMs: 100,
-          timeoutMs: 3_000,
-          retryMs: 20,
-        },
-      },
-    );
-    let staleClaim: Bun.Subprocess | undefined;
     try {
-      await waitForFile(ownerReady);
-    } catch (error) {
-      owner.kill();
-      await owner.exited.catch(() => undefined);
-      throw error;
-    }
-    staleClaim = spawnLeaseWorker(
-      `const { paths, staleReady, lock } = JSON.parse(process.argv[1]);
-writeFileSync(staleReady, 'started');
-try {
-  acquireMarketplaceLease(paths, lock);
-  writeFileSync(staleReady + '.won', 'won');
-} catch (error) {
-  writeFileSync(staleReady + '.busy', error instanceof Error ? error.constructor.name : 'error');
-}`,
-      {
-        paths,
-        staleReady,
-        lock: {
-          staleMs: 2_000,
-          heartbeatMs: 100,
-          timeoutMs: 2_000,
-          retryMs: 20,
-        },
-      },
-      { MARKETPLACE_LEASE_BARRIER_DIR: barrierDir },
-    );
-    try {
-      const ownerGeneration = readFileSync(ownerReady, 'utf8');
-      await waitForFile(staleReady);
-      await waitForFile(join(barrierDir, 'breaker-critical.reached'));
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        ownerGeneration,
+      const candidate = createEntry(
+        paths.lockDir,
+        process.pid,
+        UUIDS.first,
+        'candidate',
       );
-      expect(() =>
-        acquireMarketplaceLease(paths, {
-          staleMs: 2_000,
-          heartbeatMs: 100,
-          timeoutMs: 120,
-          retryMs: 10,
-        }),
-      ).toThrow(MarketplaceBusyError);
-      expect(readLeaseState(paths.lockDir)?.metadata.generation).toBe(
-        ownerGeneration,
-      );
-      expect(existsSync(`${staleReady}.won`)).toBe(false);
-      writeFileSync(join(barrierDir, 'breaker-critical.go'), 'go');
-      writeFileSync(ownerGo, 'go');
-      const [ownerResult, staleResult] = await Promise.all([
-        workerOutput(owner),
-        workerOutput(staleClaim),
-      ]);
-      expect(ownerResult.code).toBe(0);
-      expect(staleResult.code).toBe(0);
+      age(candidate);
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      expect(existsSync(candidate)).toBe(false);
+      owner.release();
     } finally {
-      owner.kill();
-      staleClaim?.kill();
-      await Promise.all([
-        owner.exited.catch(() => undefined),
-        staleClaim?.exited.catch(() => undefined),
-      ]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('candidate election leaves exactly one lease under concurrent acquisition', async () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    const barrierDir = join(root, 'barrier');
+    const goPath = join(barrierDir, 'go');
+    mkdirSync(barrierDir);
+    const workers = Array.from({ length: 2 }, () =>
+      spawnWorker(
+        paths,
+        `const { paths, barrierDir, goPath } = JSON.parse(process.argv[1]);
+const fs = await import('node:fs');
+const lease = acquireMarketplaceLease(paths, { staleMs: 500, timeoutMs: 3000, retryMs: 5 }, {
+  afterCandidateCreated(candidatePath) {
+    const readyPath = barrierDir + '/' + candidatePath.split('/').pop() + '.ready';
+    fs.writeFileSync(readyPath, 'ready');
+    while (!fs.existsSync(goPath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  },
+});
+lease.release();`,
+        { barrierDir, goPath },
+      ),
+    );
+    try {
+      for (
+        let attempt = 0;
+        attempt < 300 && readdirSync(barrierDir).length < 2;
+        attempt++
+      ) {
+        await Bun.sleep(10);
+      }
+      expect(readdirSync(barrierDir)).toHaveLength(2);
+      writeFileSync(goPath, 'go');
+      const results = await Promise.all(workers.map(workerResult));
+      expect(results.every((result) => result.code === 0)).toBe(true);
+      expect(results.map((result) => result.stderr)).toEqual(['', '']);
+      expect(lockEntries(paths.lockDir)).toEqual([]);
+    } finally {
+      for (const worker of workers) worker.kill();
+      await Promise.all(workers.map((worker) => worker.exited.catch(() => -1)));
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('multiple reclaimers exclude one another', async () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    const barrierDir = join(root, 'reclaimer-barrier');
+    const goPath = join(barrierDir, 'go');
+    const active = join(root, 'active');
+    mkdirSync(barrierDir);
+    const stale = createEntry(paths.lockDir, 4242, UUIDS.first, 'lease');
+    age(stale);
+    const workers = Array.from({ length: 4 }, () =>
+      spawnWorker(
+        paths,
+        `const { paths, barrierDir, goPath } = JSON.parse(process.argv[1]);
+const fs = await import('node:fs');
+const lease = acquireMarketplaceLease(paths, { staleMs: 500, timeoutMs: 5000, retryMs: 5 }, {
+  afterCandidateCreated(candidatePath) {
+    const readyPath = barrierDir + '/' + candidatePath.split('/').pop() + '.ready';
+    fs.writeFileSync(readyPath, 'ready');
+    while (!fs.existsSync(goPath)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  },
+});
+const fd = fs.openSync(${JSON.stringify(active)}, 'wx');
+fs.closeSync(fd);
+await new Promise((resolve) => setTimeout(resolve, 25));
+fs.unlinkSync(${JSON.stringify(active)});
+lease.release();`,
+        { barrierDir, goPath },
+      ),
+    );
+    try {
+      for (
+        let attempt = 0;
+        attempt < 300 && readdirSync(barrierDir).length < 4;
+        attempt++
+      ) {
+        await Bun.sleep(10);
+      }
+      expect(readdirSync(barrierDir)).toHaveLength(4);
+      writeFileSync(goPath, 'go');
+      const results = await Promise.all(workers.map(workerResult));
+      expect(results.every((result) => result.code === 0)).toBe(true);
+      expect(results.map((result) => result.stderr)).toEqual(['', '', '', '']);
+      expect(existsSync(active)).toBe(false);
+    } finally {
+      for (const worker of workers) worker.kill();
+      await Promise.all(workers.map((worker) => worker.exited.catch(() => -1)));
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('replacement fencing unlinks only the exact unique lease path', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    try {
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      const oldPath = join(paths.lockDir, lockEntries(paths.lockDir)[0]);
+      unlinkForTest(oldPath);
+      const replacement = createEntry(
+        paths.lockDir,
+        process.pid,
+        UUIDS.second,
+        'lease',
+      );
+      expect(() => owner.release()).toThrow(MarketplaceLockOwnershipError);
+      expect(existsSync(replacement)).toBe(true);
+      unlinkForTest(replacement);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('unlink failure leaves ownership retryable while the exact file remains', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    try {
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      const leasePath = join(paths.lockDir, lockEntries(paths.lockDir)[0]);
+      const originalUnlink = fs.unlinkSync;
+      let failed = false;
+      const unlink = spyOn(fs, 'unlinkSync').mockImplementation((target) => {
+        if (!failed && target === leasePath) {
+          failed = true;
+          const error = new Error('injected unlink failure') as Error & {
+            code: string;
+          };
+          error.code = 'EACCES';
+          throw error;
+        }
+        return originalUnlink(target);
+      });
+      try {
+        expect(() => owner.release()).toThrow('injected unlink failure');
+        expect(existsSync(leasePath)).toBe(true);
+        expect(() => owner.assertCurrent()).not.toThrow();
+      } finally {
+        unlink.mockRestore();
+      }
+      owner.release();
+      expect(existsSync(leasePath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('malformed, unknown, directory, and symlink state fails closed', () => {
+    const cases = [
+      (lockDir: string) => writeFileSync(join(lockDir, 'unknown'), ''),
+      (lockDir: string) => mkdirSync(join(lockDir, `1.${UUIDS.first}.lease`)),
+      (lockDir: string) => {
+        const target = createEntry(lockDir, process.pid, UUIDS.second, 'lease');
+        rmSync(target);
+        symlinkSync('/tmp', target);
+      },
+    ];
+    for (const setup of cases) {
+      const root = tempRoot();
+      const paths = getMarketplacePaths(root);
+      try {
+        mkdirSync(paths.lockDir, { recursive: true });
+        setup(paths.lockDir);
+        expect(() => acquireMarketplaceLease(paths, LOCK)).toThrow(
+          MarketplaceLockfileError,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test('restarts a directory snapshot when a listed entry disappears', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    let injected = false;
+    try {
+      acquireMarketplaceLease(paths, LOCK);
+      const originalLstat = fs.lstatSync;
+      const leasePath = join(paths.lockDir, lockEntries(paths.lockDir)[0]);
+      const replacementPath = entryPath(
+        paths.lockDir,
+        process.pid,
+        UUIDS.third,
+        'lease',
+      );
+      const lstat = spyOn(fs, 'lstatSync').mockImplementation((target) => {
+        if (!injected && target === leasePath) {
+          injected = true;
+          fs.unlinkSync(leasePath);
+          createEntry(paths.lockDir, process.pid, UUIDS.third, 'lease');
+          throw Object.assign(new Error('entry disappeared'), {
+            code: 'ENOENT',
+          });
+        }
+        return originalLstat(target);
+      });
+      try {
+        expect(() =>
+          acquireMarketplaceLease(paths, {
+            ...LOCK,
+            timeoutMs: 80,
+          }),
+        ).toThrow(MarketplaceBusyError);
+        expect(injected).toBe(true);
+        expect(existsSync(replacementPath)).toBe(true);
+      } finally {
+        lstat.mockRestore();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('propagates non-ENOENT snapshot errors fail closed', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    try {
+      const entry = createEntry(paths.lockDir, 4242, UUIDS.first, 'lease');
+      const originalLstat = fs.lstatSync;
+      const lstat = spyOn(fs, 'lstatSync').mockImplementation((target) => {
+        if (target === entry) {
+          throw Object.assign(new Error('I/O failure'), { code: 'EIO' });
+        }
+        return originalLstat(target);
+      });
+      try {
+        expect(() => acquireMarketplaceLease(paths, LOCK)).toThrow(
+          MarketplaceLockfileError,
+        );
+      } finally {
+        lstat.mockRestore();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('times out without mutating a live owner', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    try {
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      expect(() =>
+        acquireMarketplaceLease(paths, { ...LOCK, timeoutMs: 60 }),
+      ).toThrow(MarketplaceBusyError);
+      expect(lockEntries(paths.lockDir)).toHaveLength(1);
+      owner.release();
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 });
+
+function unlinkForTest(filePath: string): void {
+  fs.unlinkSync(filePath);
+}

@@ -1,6 +1,7 @@
 import { satisfies } from 'semver';
 import {
   DEFAULT_MARKETPLACE_REGISTRY_URL,
+  isMarketplaceRegistryIdRetired,
   MarketplacePackageBundleSchema,
   type MarketplaceRegistryEntry,
   type MarketplaceRegistryIndex,
@@ -18,10 +19,7 @@ import {
   MarketplaceRetiredError,
 } from './errors';
 import { assertMarketplacePackageNotRetired } from './retirements';
-import {
-  MARKETPLACE_ROLE_CONTRACT_VERSION,
-  type MarketplacePackageBundle,
-} from './schemas';
+import type { MarketplacePackageBundle } from './schemas';
 
 export const MARKETPLACE_REGISTRY_INDEX_URL = `${DEFAULT_MARKETPLACE_REGISTRY_URL}index.json`;
 export const DEFAULT_MARKETPLACE_REGISTRY_TIMEOUT_MS = 10_000;
@@ -30,7 +28,6 @@ export const DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES = 512 * 1024;
 
 export interface MarketplaceRegistryClientOptions {
   pluginVersion: string;
-  roleContractVersion?: string;
   timeoutMs?: number;
   maxIndexBytes?: number;
   maxArtifactBytes?: number;
@@ -97,7 +94,6 @@ export class MarketplaceRegistryClient {
   private readonly timeoutMs: number;
   private readonly maxIndexBytes: number;
   private readonly maxArtifactBytes: number;
-  private readonly roleContractVersion: string;
 
   constructor(private readonly options: MarketplaceRegistryClientOptions) {
     this.fetcher = options.fetch ?? globalThis.fetch;
@@ -108,8 +104,6 @@ export class MarketplaceRegistryClient {
     this.maxArtifactBytes =
       options.maxArtifactBytes ??
       DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES;
-    this.roleContractVersion =
-      options.roleContractVersion ?? MARKETPLACE_ROLE_CONTRACT_VERSION;
   }
 
   async fetchIndex(signal?: AbortSignal): Promise<MarketplaceRegistryIndex> {
@@ -148,6 +142,11 @@ export class MarketplaceRegistryClient {
     })();
     assertMarketplacePackageNotRetired(selector.id);
     const index = await this.fetchIndex(signal);
+    if (isMarketplaceRegistryIdRetired(index, selector.id)) {
+      throw new MarketplaceRetiredError(
+        `${selector.id} is retired and cannot be installed`,
+      );
+    }
     const matchingId = index.entries.some((entry) => entry.id === selector.id);
     if (!matchingId) {
       throw new MarketplaceRegistryNotFoundError(
@@ -172,7 +171,6 @@ export class MarketplaceRegistryClient {
         selector,
         {
           pluginVersion: this.options.pluginVersion,
-          roleContractVersion: this.roleContractVersion,
         },
         minimumVersion,
       );
@@ -224,15 +222,9 @@ export class MarketplaceRegistryClient {
   }
 
   private isCompatible(bundle: MarketplacePackageBundle): boolean {
-    return (
-      satisfies(
-        this.options.pluginVersion,
-        bundle.manifest.compatibility.plugin,
-      ) &&
-      satisfies(
-        this.roleContractVersion,
-        bundle.manifest.compatibility.roleContract,
-      )
+    return satisfies(
+      this.options.pluginVersion,
+      bundle.manifest.compatibility.plugin,
     );
   }
 

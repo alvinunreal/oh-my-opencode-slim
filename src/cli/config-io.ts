@@ -448,7 +448,6 @@ function configMutationPaths(filePath: string): MarketplacePaths {
     packagesDir: join(root, 'packages'),
     lockfilePath: join(root, 'lock.json'),
     lockDir: join(root, 'lock'),
-    breakerDir: join(root, 'lock.breaker'),
     stagingDir: join(root, '.staging'),
   };
 }

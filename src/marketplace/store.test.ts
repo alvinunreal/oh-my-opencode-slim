@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -17,13 +18,11 @@ import {
   MarketplaceConflictError,
   MarketplaceIntegrityError,
   MarketplaceLockfileError,
-  MarketplaceLockOwnershipError,
   type MarketplacePackageBundle,
   MarketplaceRetiredError,
   MarketplaceService,
   MarketplaceStore,
 } from './index';
-import { heartbeatPath, publishGeneration, readLeaseState } from './lease';
 import type { MarketplacePaths } from './paths';
 
 function bundle(
@@ -32,36 +31,28 @@ function bundle(
 ): MarketplacePackageBundle {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: 'community/example',
       version,
-      kind: 'agent',
       displayName: 'Example',
       description: 'An example package',
-      instructions: 'Use the example role carefully.',
+      agentName: 'example',
+      prompt: 'Use the example role carefully.',
       author: { name: 'Example Community' },
       tags: ['example'],
       license: 'MIT',
       compatibility: {
-        plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-        roleContract: '^1.0.0',
+        plugin: '>=3.0.0-beta.3 <4.0.0',
       },
       routing: {
         description: 'Explore example code.',
         keywords: ['example'],
-        delegation: {
-          when: 'When repository exploration is needed.',
-          preferredRoles: [],
-        },
+        when: 'When repository exploration is needed.',
       },
-      baseRole: 'explorer',
-      agentName: 'example',
-      overrides: {},
-      requirements: {
-        skills: { required: [], optional: [] },
-        mcps: { required: [], optional: [] },
-      },
-      capabilities: { tools: [], permissions: [] },
+      skills: [],
+      mcps: [],
+      tools: [],
+      model: { source: 'explicit', candidates: ['provider/model'] },
       ...overrides,
     } as MarketplacePackageBundle['manifest'],
   };
@@ -71,18 +62,13 @@ function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'marketplace-store-'));
 }
 
-function markStaleGeneration(directory: string, generation: string): void {
-  const target = join(directory, 'gen', generation);
-  mkdirSync(target, { recursive: true });
-  writeFileSync(
-    join(target, 'meta.json'),
-    JSON.stringify({ generation, token: 'stale-token', pid: -1 }),
-  );
-  writeFileSync(join(target, 'heartbeat'), '');
+function markStaleLease(directory: string, pid: number, uuid: string): void {
+  mkdirSync(directory, { recursive: true });
+  const target = join(directory, `${pid}.${uuid}.lease`);
+  const fd = fsModule.openSync(target, 'wx', 0o600);
+  fsModule.closeSync(fd);
   const old = new Date(Date.now() - 2_000);
   fsModule.utimesSync(target, old, old);
-  fsModule.utimesSync(join(target, 'meta.json'), old, old);
-  fsModule.utimesSync(join(target, 'heartbeat'), old, old);
 }
 
 function spawnLockWorker(
@@ -98,7 +84,7 @@ function spawnLockWorker(
 ${body}`,
       JSON.stringify({ paths, logPath }),
     ],
-    { stdout: 'ignore', stderr: 'ignore' },
+    { stdout: 'ignore', stderr: 'pipe' },
   );
 }
 
@@ -131,12 +117,12 @@ describe('MarketplaceStore', () => {
         'community/example',
       ]);
       expect(store.getLockfile().packages['community/example']).toEqual({
-        manifestSchemaVersion: 1,
+        manifestSchemaVersion: 2,
         manifestVersion: '1.0.0',
         source: { kind: 'in-memory', label: 'programmatic' },
         digest: {
           algorithm: 'sha256',
-          domain: 'marketplace-bundle-v1',
+          domain: 'marketplace-agent-bundle-v2',
           value: installed.digest,
         },
       });
@@ -250,9 +236,7 @@ describe('MarketplaceStore', () => {
       const store = new MarketplaceStore({ rootDir: root });
       store.install(bundle());
       expect(() =>
-        store.install(
-          bundle('1.0.0', { instructions: 'Changed instructions.' }),
-        ),
+        store.install(bundle('1.0.0', { prompt: 'Changed instructions.' })),
       ).toThrow(MarketplaceConflictError);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -327,12 +311,11 @@ describe('MarketplaceStore', () => {
         lock: { timeoutMs: 10, retryMs: 1 },
       });
       mkdirSync(root, { recursive: true });
-      expect(
-        publishGeneration(store.paths.lockDir, {
-          generation: 'blocking-generation',
-          token: 'blocking-token',
-        }),
-      ).toBe(true);
+      markStaleLease(
+        store.paths.lockDir,
+        process.pid,
+        '00000000-0000-4000-8000-000000000001',
+      );
       expect(() => store.install(bundle())).toThrow(MarketplaceBusyError);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -344,10 +327,14 @@ describe('MarketplaceStore', () => {
     try {
       const store = new MarketplaceStore({
         rootDir: root,
-        lock: { staleMs: 200, heartbeatMs: 50, retryMs: 1 },
+        lock: { staleMs: 200, retryMs: 1 },
       });
       mkdirSync(root, { recursive: true });
-      markStaleGeneration(store.paths.lockDir, 'dead-lock-generation');
+      markStaleLease(
+        store.paths.lockDir,
+        999_999_999,
+        '00000000-0000-4000-8000-000000000001',
+      );
       expect(store.install(bundle()).manifest.id).toBe('community/example');
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -359,7 +346,7 @@ describe('MarketplaceStore', () => {
     const readyPath = join(root, 'worker-ready');
     const store = new MarketplaceStore({
       rootDir: root,
-      lock: { staleMs: 100, heartbeatMs: 10, timeoutMs: 30, retryMs: 1 },
+      lock: { staleMs: 500, timeoutMs: 30, retryMs: 1 },
     });
     const worker = Bun.spawn(
       [
@@ -368,7 +355,7 @@ describe('MarketplaceStore', () => {
         `import { writeFileSync } from 'node:fs';
 import { acquireMarketplaceLeaseForPaths } from './src/marketplace/store.ts';
 const { paths, readyPath } = JSON.parse(process.argv[1]);
-acquireMarketplaceLeaseForPaths(paths, { staleMs: 100, timeoutMs: 5000, heartbeatMs: 10 });
+acquireMarketplaceLeaseForPaths(paths, { staleMs: 500, timeoutMs: 5000 });
 writeFileSync(readyPath, 'ready');
 await new Promise(() => {});`,
         JSON.stringify({ paths: store.paths, readyPath }),
@@ -387,7 +374,7 @@ await new Promise(() => {});`,
       expect(() => store.list()).toThrow(MarketplaceBusyError);
       worker.kill();
       await worker.exited;
-      await Bun.sleep(250);
+      await Bun.sleep(700);
       expect(store.list()).toEqual([]);
     } finally {
       worker.kill();
@@ -400,15 +387,18 @@ await new Promise(() => {});`,
     const root = tempRoot();
     const store = new MarketplaceStore({
       rootDir: root,
-      lock: { staleMs: 1000, heartbeatMs: 100, timeoutMs: 2000, retryMs: 5 },
+      lock: { staleMs: 1000, timeoutMs: 2000, retryMs: 5 },
     });
     const logPath = join(root, 'reclaim.log');
     try {
-      markStaleGeneration(store.paths.lockDir, 'stale-lock-generation');
-      markStaleGeneration(store.paths.breakerDir, 'stale-breaker-generation');
+      markStaleLease(
+        store.paths.lockDir,
+        999_999_999,
+        '00000000-0000-4000-8000-000000000001',
+      );
       const body = `import { appendFileSync, closeSync, openSync, rmSync } from 'node:fs';
 const { paths, logPath } = JSON.parse(process.argv[1]);
-const lease = acquireMarketplaceLeaseForPaths(paths, { staleMs: 1000, heartbeatMs: 100, timeoutMs: 2000, retryMs: 5 });
+const lease = acquireMarketplaceLeaseForPaths(paths, { staleMs: 1000, timeoutMs: 2000, retryMs: 5 });
 const activePath = logPath + '.active';
 try {
   lease.commit(() => {
@@ -429,6 +419,12 @@ try {
       const exitCodes = await Promise.all(
         workers.map((worker) => worker.exited),
       );
+      const errors = await Promise.all(
+        workers.map((worker) => new Response(worker.stderr).text()),
+      );
+      if (exitCodes.some((code) => code !== 0)) {
+        throw new Error(errors.join('\n'));
+      }
       expect(exitCodes).toEqual([0, 0]);
       expect(readFileSync(logPath, 'utf8').trim().split('\n')).toEqual([
         'acquired',
@@ -436,44 +432,39 @@ try {
         'acquired',
         'released',
       ]);
-      expect(readLeaseState(store.paths.breakerDir)).toBeUndefined();
+      expect(existsSync(store.paths.lockDir)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('fences an expired owner when a replacement generation takes over', () => {
+  test('keeps a live owner authoritative after its lease becomes old', () => {
     const root = tempRoot();
     const store = new MarketplaceStore({
       rootDir: root,
-      lock: { staleMs: 200, heartbeatMs: 50, timeoutMs: 1000, retryMs: 10 },
+      lock: { staleMs: 1_000, timeoutMs: 1000, retryMs: 10 },
     });
     try {
       const owner = acquireMarketplaceLeaseForPaths(store.paths, {
-        staleMs: 200,
-        heartbeatMs: 50,
+        staleMs: 1_000,
         timeoutMs: 1000,
         retryMs: 10,
       });
       const old = new Date(Date.now() - 2_000);
-      fsModule.utimesSync(
-        heartbeatPath(store.paths.lockDir, owner.generation),
-        old,
-        old,
+      const leasePath = join(
+        store.paths.lockDir,
+        readdirSync(store.paths.lockDir)[0],
       );
-      const replacement = acquireMarketplaceLeaseForPaths(store.paths, {
-        staleMs: 200,
-        heartbeatMs: 50,
-        timeoutMs: 1000,
-        retryMs: 10,
-      });
-      expect(() => owner.release()).toThrow(MarketplaceLockOwnershipError);
-      expect(() => owner.commit(() => undefined)).toThrow(
-        MarketplaceLockOwnershipError,
-      );
-      expect(() => replacement.assertCurrent()).not.toThrow();
-      expect(() => replacement.commit(() => undefined)).not.toThrow();
-      replacement.release();
+      fsModule.utimesSync(leasePath, old, old);
+      expect(() =>
+        acquireMarketplaceLeaseForPaths(store.paths, {
+          staleMs: 1_000,
+          timeoutMs: 120,
+          retryMs: 10,
+        }),
+      ).toThrow(MarketplaceBusyError);
+      expect(() => owner.assertCurrent()).not.toThrow();
+      owner.release();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -631,7 +622,7 @@ describe('MarketplaceService', () => {
 
       expect(() =>
         service.install(
-          bundle('1.0.0', { instructions: 'A different package body.' }),
+          bundle('1.0.0', { prompt: 'A different package body.' }),
         ),
       ).toThrow(MarketplaceConflictError);
 

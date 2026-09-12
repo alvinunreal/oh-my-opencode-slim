@@ -7,12 +7,11 @@ import {
 } from './schema';
 
 describe('structured preset schema', () => {
-  it('keeps agent overrides separate from reserved marketplace activation', () => {
+  it('keeps agent overrides separate from marketplace activation', () => {
     const result = PresetSchema.safeParse({
       agents: { explorer: { model: 'provider/explorer' } },
       marketplace: {
         agents: ['community/example'],
-        profiles: { librarian: null },
       },
     });
     expect(result.success).toBe(true);
@@ -47,27 +46,23 @@ describe('structured preset schema', () => {
     }
   });
 
-  it('normalizes package IDs and validates profile targets', () => {
+  it('normalizes package IDs', () => {
     const result = PresetSchema.safeParse({
       marketplace: {
         agents: ['  community/one  '],
-        profiles: { oracle: '  community/oracle  ' },
       },
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.marketplace?.agents).toEqual(['community/one']);
-      expect(result.data.marketplace?.profiles).toEqual({
-        oracle: 'community/oracle',
-      });
     }
   });
 
-  it('rejects duplicate package IDs and unsupported profile targets', () => {
+  it('rejects duplicate package IDs and removed activation fields', () => {
     const result = PresetSchema.safeParse({
       marketplace: {
         agents: ['community/one', ' community/one '],
-        profiles: { orchestrator: 'community/one' },
+        removed: 'community/one',
       },
     });
     expect(result.success).toBe(false);

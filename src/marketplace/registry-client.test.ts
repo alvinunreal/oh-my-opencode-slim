@@ -30,6 +30,12 @@ import {
 } from './registry-client';
 import { MarketplaceService } from './service';
 
+const canonicalRetirements = [
+  { id: 'alvin/deepwork-implementer' },
+  { id: 'alvin/deepwork-recon' },
+  { id: 'alvin/deepwork-reviewer' },
+];
+
 function bundle(
   version = '1.0.0',
   id = 'community/registry-agent',
@@ -37,33 +43,26 @@ function bundle(
 ): MarketplacePackageBundle {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id,
       version,
-      kind: 'agent',
       displayName: 'Registry agent',
       description: 'A registry test package.',
-      instructions: 'Use the explorer role.',
+      agentName: 'registryagent',
+      prompt: 'Use the explorer role.',
       author: { name: 'Community' },
       tags: ['registry'],
       license: 'MIT',
-      compatibility: { plugin, roleContract: '^1.0.0' },
+      compatibility: { plugin },
       routing: {
         description: 'Explore registry fixtures.',
         keywords: ['registry'],
-        delegation: {
-          when: 'When testing registry installs.',
-          preferredRoles: [],
-        },
+        when: 'When testing registry installs.',
       },
-      requirements: {
-        skills: { required: [], optional: [] },
-        mcps: { required: [], optional: [] },
-      },
-      capabilities: { tools: [], permissions: [] },
-      baseRole: 'explorer',
-      agentName: 'registryagent',
-      overrides: {},
+      skills: [],
+      mcps: [],
+      tools: [],
+      model: { source: 'explicit', candidates: ['provider/model'] },
     },
   };
 }
@@ -71,7 +70,7 @@ function bundle(
 function indexFor(packageBundle = bundle()): Record<string, unknown> {
   const manifest = packageBundle.manifest;
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     entries: [
       {
         id: manifest.id,
@@ -79,12 +78,13 @@ function indexFor(packageBundle = bundle()): Record<string, unknown> {
         artifactPath: registryArtifactPath(manifest.id, manifest.version),
         digest: {
           algorithm: 'sha256',
-          domain: 'marketplace-bundle-v1',
+          domain: 'marketplace-agent-bundle-v2',
           value: digestMarketplaceBundle(packageBundle),
         },
         summary: projectMarketplaceManifestSummary(manifest),
       },
     ],
+    retirements: canonicalRetirements,
   };
 }
 
@@ -100,11 +100,12 @@ describe('marketplace registry contract', () => {
     const first = indexFor(bundle('1.0.0'));
     const second = indexFor(bundle('2.0.0'));
     const validIndex = {
-      schemaVersion: 1,
+      schemaVersion: 3,
       entries: [
         ...(first.entries as unknown[]),
         ...(second.entries as unknown[]),
       ],
+      retirements: canonicalRetirements,
     };
     expect(MarketplaceRegistryIndexSchema.safeParse(validIndex).success).toBe(
       true,
@@ -150,17 +151,18 @@ describe('marketplace registry contract', () => {
       version: '2.0.0',
     });
     const index = parseMarketplaceRegistryIndex({
-      schemaVersion: 1,
+      schemaVersion: 3,
       entries: [
         ...(indexFor(bundle('1.0.0')).entries as unknown[]),
         ...(indexFor(bundle('2.0.0')).entries as unknown[]),
       ],
+      retirements: canonicalRetirements,
     });
     expect(
       resolveMarketplaceRegistryEntry(
         index,
         { id: 'community/registry-agent' },
-        { pluginVersion: '3.1.0', roleContractVersion: '1.0.0' },
+        { pluginVersion: '3.1.0' },
       ).version,
     ).toBe('2.0.0');
     expect(() =>
@@ -171,7 +173,7 @@ describe('marketplace registry contract', () => {
     ).toThrow();
   });
 
-  test('validates v2 retirement tombstones and rejects retired selectors', () => {
+  test('validates v3 retirement tombstones and rejects retired selectors', () => {
     const first = indexFor(bundle('1.0.0', 'community/alpha'));
     const second = indexFor(bundle('1.0.0', 'community/beta'));
     const entries = [
@@ -180,46 +182,46 @@ describe('marketplace registry contract', () => {
     ];
     expect(
       parseMarketplaceRegistryIndex({
-        schemaVersion: 2,
+        schemaVersion: 3,
         entries,
-        retirements: [{ id: 'community/alpha' }],
+        retirements: [...canonicalRetirements, { id: 'community/alpha' }],
       }).schemaVersion,
-    ).toBe(2);
+    ).toBe(3);
     expect(() =>
       parseMarketplaceRegistryIndex({
-        schemaVersion: 2,
+        schemaVersion: 3,
         entries,
-        retirements: [{ id: 'community/missing' }],
-      }),
-    ).toThrow('no registry entry');
-    expect(() =>
-      parseMarketplaceRegistryIndex({
-        schemaVersion: 2,
-        entries,
-        retirements: [{ id: 'community/alpha' }, { id: 'community/alpha' }],
+        retirements: [
+          ...canonicalRetirements,
+          { id: 'community/alpha' },
+          { id: 'community/alpha' },
+        ],
       }),
     ).toThrow('Duplicate');
     expect(() =>
       parseMarketplaceRegistryIndex({
-        schemaVersion: 2,
+        schemaVersion: 3,
         entries,
-        retirements: [{ id: 'community/beta' }, { id: 'community/alpha' }],
+        retirements: [
+          ...canonicalRetirements,
+          { id: 'community/beta' },
+          { id: 'community/alpha' },
+        ],
       }),
     ).toThrow('sorted');
 
     const index = parseMarketplaceRegistryIndex({
-      schemaVersion: 2,
+      schemaVersion: 3,
       entries,
-      retirements: [{ id: 'community/alpha' }],
+      retirements: canonicalRetirements,
     });
     for (const selector of [
-      { id: 'community/alpha' },
-      { id: 'community/alpha', version: '1.0.0' },
+      { id: 'alvin/deepwork-implementer' },
+      { id: 'alvin/deepwork-implementer', version: '1.0.0' },
     ]) {
       expect(() =>
         resolveMarketplaceRegistryEntry(index, selector, {
           pluginVersion: '3.1.0',
-          roleContractVersion: '1.0.0',
         }),
       ).toThrow(MarketplaceRetiredError);
     }
@@ -265,14 +267,14 @@ describe('MarketplaceRegistryClient', () => {
         service.store.getLockfile().packages['community/registry-agent'].source,
       ).toEqual({
         kind: 'registry',
-        registry: 'https://registry.ohmyopencodeslim.com/v1/',
+        registry: 'https://registry.ohmyopencodeslim.com/v2/',
         indexUrl: MARKETPLACE_REGISTRY_INDEX_URL,
         packageUrl:
-          'https://registry.ohmyopencodeslim.com/v1/artifacts/community/registry-agent/1.0.0.json',
+          'https://registry.ohmyopencodeslim.com/v2/artifacts/community/registry-agent/1.0.0.json',
       });
       expect(calls).toEqual([
         MARKETPLACE_REGISTRY_INDEX_URL,
-        'https://registry.ohmyopencodeslim.com/v1/artifacts/community/registry-agent/1.0.0.json',
+        'https://registry.ohmyopencodeslim.com/v2/artifacts/community/registry-agent/1.0.0.json',
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -372,7 +374,7 @@ describe('MarketplaceRegistryClient', () => {
     const oversized = new MarketplaceRegistryClient({
       pluginVersion: '3.1.0',
       maxIndexBytes: 10,
-      fetch: async () => response({ schemaVersion: 1, entries: [] }),
+      fetch: async () => response({ schemaVersion: 3, entries: [] }),
     });
     await expect(oversized.fetchIndex()).rejects.toBeInstanceOf(
       MarketplaceRegistryProtocolError,
@@ -433,12 +435,12 @@ describe('MarketplaceRegistryClient', () => {
   test('preserves the installed state after every remote validation failure', async () => {
     const interruptedBody = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"schemaVersion":1'));
+        controller.enqueue(new TextEncoder().encode('{"schemaVersion":3'));
         controller.error(new Error('connection interrupted'));
       },
     });
     const failures = [
-      async () => response({ schemaVersion: 1, entries: [] }),
+      async () => response({ schemaVersion: 3, entries: [] }),
       async (input: RequestInfo | URL) => {
         const index = indexFor(bundle());
         (index.entries as any)[0].digest.value = '0'.repeat(64);

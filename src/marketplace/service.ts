@@ -83,7 +83,6 @@ export class MarketplaceService {
       new MarketplaceRegistryClient({
         pluginVersion:
           options.pluginVersion ?? readPluginPackageVersion() ?? '0.0.0',
-        roleContractVersion: options.roleContractVersion,
       });
   }
 

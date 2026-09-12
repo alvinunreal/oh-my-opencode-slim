@@ -12,6 +12,7 @@ import {
   MARKETPLACE_DIGEST_DOMAIN,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION,
   MarketplaceAgentManifestSchema,
+  MarketplaceAgentManifestSummarySchema,
   type MarketplaceDigest,
   MarketplaceDigestSchema,
   type MarketplacePackageBundle,
@@ -20,7 +21,6 @@ import {
   MarketplacePackageIdSchema,
   type MarketplacePackageManifest,
   MarketplacePackageManifestSchema,
-  MarketplaceProfileManifestSchema,
   type MarketplaceVersion,
   MarketplaceVersionSchema,
 } from '../marketplace/schemas';
@@ -44,26 +44,17 @@ export {
   MarketplacePackageBundleSchema,
   MarketplacePackageIdSchema,
   MarketplacePackageManifestSchema,
-  MarketplaceProfileManifestSchema,
   MarketplaceVersionSchema,
 };
 
-export const MARKETPLACE_REGISTRY_SCHEMA_VERSION = 2 as const;
+export const MARKETPLACE_REGISTRY_SCHEMA_VERSION = 3 as const;
 export const DEFAULT_MARKETPLACE_REGISTRY_URL =
-  'https://registry.ohmyopencodeslim.com/v1/' as const;
+  'https://registry.ohmyopencodeslim.com/v2/' as const;
 
-const MarketplaceAgentSummarySchema = MarketplaceAgentManifestSchema.omit({
-  instructions: true,
-});
-const MarketplaceProfileSummarySchema = MarketplaceProfileManifestSchema.omit({
-  instructions: true,
-});
+const MarketplaceAgentSummarySchema = MarketplaceAgentManifestSummarySchema;
 
-/** Public catalog metadata; package instructions never enter the index. */
-export const MarketplaceManifestSummarySchema = z.discriminatedUnion('kind', [
-  MarketplaceAgentSummarySchema,
-  MarketplaceProfileSummarySchema,
-]);
+/** Public catalog metadata; package prompts never enter the index. */
+export const MarketplaceManifestSummarySchema = MarketplaceAgentSummarySchema;
 
 export const MarketplaceRegistryEntrySchema = z
   .object({
@@ -142,15 +133,13 @@ function validateRegistryEntries(
   }
 }
 
-const MarketplaceRegistryIndexV1Schema = z
-  .object({
-    schemaVersion: z.literal(1),
-    entries: z.array(MarketplaceRegistryEntrySchema).max(100_000),
-  })
-  .strict()
-  .superRefine((index, ctx) => validateRegistryEntries(index.entries, ctx));
+const CANONICAL_MARKETPLACE_RETIREMENT_IDS = [
+  'alvin/deepwork-implementer',
+  'alvin/deepwork-recon',
+  'alvin/deepwork-reviewer',
+] as const;
 
-const MarketplaceRegistryIndexV2Schema = z
+const MarketplaceRegistryIndexV3Schema = z
   .object({
     schemaVersion: z.literal(MARKETPLACE_REGISTRY_SCHEMA_VERSION),
     entries: z.array(MarketplaceRegistryEntrySchema).max(100_000),
@@ -159,7 +148,6 @@ const MarketplaceRegistryIndexV2Schema = z
   .strict()
   .superRefine((index, ctx) => {
     validateRegistryEntries(index.entries, ctx);
-    const entryIds = new Set(index.entries.map((entry) => entry.id));
     const seen = new Set<string>();
     for (let position = 0; position < index.retirements.length; position += 1) {
       const retirement = index.retirements[position];
@@ -171,13 +159,6 @@ const MarketplaceRegistryIndexV2Schema = z
         });
       }
       seen.add(retirement.id);
-      if (!entryIds.has(retirement.id)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['retirements', position, 'id'],
-          message: `Marketplace retirement ${retirement.id} has no registry entry`,
-        });
-      }
       const previous = index.retirements[position - 1];
       if (
         previous &&
@@ -190,12 +171,18 @@ const MarketplaceRegistryIndexV2Schema = z
         });
       }
     }
+    for (const id of CANONICAL_MARKETPLACE_RETIREMENT_IDS) {
+      if (!seen.has(id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['retirements'],
+          message: `Registry must contain canonical retirement ${id}`,
+        });
+      }
+    }
   });
 
-export const MarketplaceRegistryIndexSchema = z.discriminatedUnion(
-  'schemaVersion',
-  [MarketplaceRegistryIndexV1Schema, MarketplaceRegistryIndexV2Schema],
-);
+export const MarketplaceRegistryIndexSchema = MarketplaceRegistryIndexV3Schema;
 
 export type MarketplaceManifestSummary = z.infer<
   typeof MarketplaceManifestSummarySchema
@@ -225,7 +212,7 @@ export function projectMarketplaceManifestSummary(
   manifest: MarketplacePackageManifest,
 ): MarketplaceManifestSummary {
   const parsed = MarketplacePackageBundleSchema.shape.manifest.parse(manifest);
-  const { instructions: _instructions, ...summary } = parsed;
+  const { prompt: _prompt, ...summary } = parsed;
   return summary as MarketplaceManifestSummary;
 }
 
@@ -251,7 +238,9 @@ export function createMarketplaceRegistryEntry(
 
 export function createMarketplaceRegistryIndex(
   entries: readonly MarketplaceRegistryEntry[],
-  retirements: readonly MarketplaceRegistryRetirement[] = [],
+  retirements: readonly MarketplaceRegistryRetirement[] = CANONICAL_MARKETPLACE_RETIREMENT_IDS.map(
+    (id) => ({ id }),
+  ),
 ): MarketplaceRegistryIndex {
   const sorted = [...entries].sort(
     (left, right) =>
@@ -272,9 +261,7 @@ export function createMarketplaceRegistryIndex(
 export function retiredMarketplaceRegistryIds(
   index: MarketplaceRegistryIndex,
 ): ReadonlySet<string> {
-  return new Set(
-    index.schemaVersion === 2 ? index.retirements.map(({ id }) => id) : [],
-  );
+  return new Set(index.retirements.map(({ id }) => id));
 }
 
 export function isMarketplaceRegistryIdRetired(
@@ -363,7 +350,7 @@ export function parseMarketplaceRegistrySelector(
 export function resolveMarketplaceRegistryEntry(
   index: MarketplaceRegistryIndex,
   selector: MarketplaceRegistrySelector,
-  compatibility: { pluginVersion: string; roleContractVersion: string },
+  compatibility: { pluginVersion: string },
   minimumVersion?: string,
 ): MarketplaceRegistryEntry {
   if (
@@ -382,10 +369,6 @@ export function resolveMarketplaceRegistryEntry(
       satisfies(
         compatibility.pluginVersion,
         entry.summary.compatibility.plugin,
-      ) &&
-      satisfies(
-        compatibility.roleContractVersion,
-        entry.summary.compatibility.roleContract,
       ),
   );
   const selected = [...candidates].sort(

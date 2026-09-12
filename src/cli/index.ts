@@ -85,8 +85,6 @@ Usage:
   bunx oh-my-opencode-slim marketplace remove <package-id> [--force]
   bunx oh-my-opencode-slim marketplace enable <package-id>
   bunx oh-my-opencode-slim marketplace disable <package-id>
-  bunx oh-my-opencode-slim marketplace profile <role> <package-id>
-  bunx oh-my-opencode-slim marketplace profile <role> --clear
   bunx oh-my-opencode-slim marketplace status [--json]
 
 Options:

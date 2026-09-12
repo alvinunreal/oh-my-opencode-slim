@@ -8,33 +8,26 @@ import type { MarketplacePackageBundle } from './schemas';
 
 const bundle: MarketplacePackageBundle = {
   manifest: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'community/compatible',
     version: '1.0.0',
-    kind: 'profile',
-    displayName: 'Compatible profile',
-    description: 'A compatible profile.',
-    instructions: 'Append these instructions.',
+    displayName: 'Compatible agent',
+    description: 'A compatible agent.',
+    agentName: 'compatible',
+    prompt: 'Append these instructions.',
     author: { name: 'Community' },
     tags: ['test'],
     license: 'MIT',
-    compatibility: {
-      plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-      roleContract: '^1.0.0',
-    },
+    compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
     routing: {
       description: 'Use for compatibility tests.',
       keywords: ['test'],
-      delegation: { when: 'When testing.', preferredRoles: [] },
+      when: 'When testing.',
     },
-    requirements: {
-      skills: { required: ['one'], optional: ['two'] },
-      mcps: { required: [], optional: ['three'] },
-    },
-    capabilities: { tools: ['read'], permissions: ['filesystem.read'] },
-    targetRole: 'oracle',
-    instructionMode: 'append',
-    overrides: {},
+    skills: ['one'],
+    mcps: [],
+    tools: ['read'],
+    model: { source: 'explicit', candidates: ['provider/model'] },
   },
 };
 
@@ -45,7 +38,7 @@ describe('marketplace compatibility', () => {
     expect(satisfiesPluginCompatibility('2.2.18', '^2.0.0')).toBe(true);
   });
 
-  test('rejects incompatible packages before persistence', () => {
+  test('rejects incompatible agents before persistence', () => {
     const service = new MarketplaceService({
       rootDir: '/tmp/marketplace-compatibility-test',
       pluginVersion: '1.0.0',

@@ -2,89 +2,77 @@ import { describe, expect, test } from 'bun:test';
 import {
   MarketplaceAgentManifestSchema,
   MarketplacePackageManifestSchema,
-  MarketplaceProfileManifestSchema,
   MarketplaceVersionSchema,
 } from './schemas';
 
 const common = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   id: 'community/example',
   version: '1.0.0',
   displayName: 'Example',
   description: 'An example package',
-  instructions: 'Follow these instructions.',
+  agentName: 'example',
+  prompt: 'Follow these instructions.',
   author: { name: 'Example Community' },
   tags: ['example'],
   license: 'MIT',
-  compatibility: {
-    plugin: '>=2.2.0 <3.0.0 || >=3.0.0-beta.0 <4.0.0',
-    roleContract: '^1.0.0',
-  },
+  compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
   routing: {
     description: 'Explore example code.',
+    when: 'When exploration is needed.',
     keywords: ['example'],
-    delegation: { when: 'When exploration is needed.', preferredRoles: [] },
   },
-  requirements: {
-    skills: { required: [], optional: [] },
-    mcps: { required: [], optional: [] },
-  },
-  capabilities: { tools: [], permissions: [] },
+  skills: [],
+  mcps: [],
+  tools: [],
+  model: { source: 'explicit' as const, candidates: ['provider/model'] },
 };
 
-describe('marketplace manifest schemas', () => {
+describe('agents-only marketplace manifest schemas', () => {
   test('rejects non-canonical semantic-version aliases', () => {
     expect(MarketplaceVersionSchema.safeParse('v1.0.0').success).toBe(false);
     expect(
       MarketplacePackageManifestSchema.safeParse({
         ...common,
         version: 'v1.0.0',
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
       }).success,
     ).toBe(false);
   });
 
-  test('accept only data-only agent and profile manifests', () => {
+  test('accepts standalone and single-builtin extension agents', () => {
+    expect(MarketplaceAgentManifestSchema.safeParse(common).success).toBe(true);
     expect(
       MarketplaceAgentManifestSchema.safeParse({
         ...common,
-        kind: 'agent',
-        baseRole: 'fixer',
-        agentName: 'example',
-        overrides: {},
-      }).success,
-    ).toBe(true);
-    expect(
-      MarketplaceProfileManifestSchema.safeParse({
-        ...common,
-        kind: 'profile',
-        targetRole: 'oracle',
-        instructionMode: 'append',
-        overrides: {},
+        extends: { builtin: 'explorer', promptMode: 'append' },
+        model: { source: 'builtin' },
       }).success,
     ).toBe(true);
     expect(
       MarketplacePackageManifestSchema.safeParse({
         ...common,
-        kind: 'agent',
-        baseRole: 'orchestrator',
-        agentName: 'example',
-        overrides: {},
+        extends: {
+          builtin: 'explorer',
+          promptMode: 'append',
+          extra: true,
+        },
       }).success,
     ).toBe(false);
   });
 
-  test('rejects executable or non-canonical manifest fields', () => {
+  test('rejects extension-only builtin model policy for standalone agents', () => {
+    expect(
+      MarketplaceAgentManifestSchema.safeParse({
+        ...common,
+        model: { source: 'builtin' },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('rejects executable, duplicate, and unknown manifest fields', () => {
     expect(
       MarketplacePackageManifestSchema.safeParse({
         ...common,
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
         scripts: { install: 'rm -rf /' },
       }).success,
     ).toBe(false);
@@ -92,84 +80,18 @@ describe('marketplace manifest schemas', () => {
       MarketplacePackageManifestSchema.safeParse({
         ...common,
         id: 'Community/Example',
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
       }).success,
     ).toBe(false);
     expect(
       MarketplacePackageManifestSchema.safeParse({
         ...common,
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
-        version: '^1.0.0',
+        tools: ['read', 'read'],
       }).success,
     ).toBe(false);
     expect(
       MarketplacePackageManifestSchema.safeParse({
         ...common,
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: { promptSuffix: 'not canonical' },
-      }).success,
-    ).toBe(false);
-  });
-
-  test('rejects duplicate capabilities', () => {
-    expect(
-      MarketplacePackageManifestSchema.safeParse({
-        ...common,
-        capabilities: { tools: ['read', 'read'], permissions: [] },
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
-      }).success,
-    ).toBe(false);
-    expect(
-      MarketplacePackageManifestSchema.safeParse({
-        ...common,
-        capabilities: {
-          tools: [],
-          permissions: ['network.fetch', 'network.fetch'],
-        },
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
-      }).success,
-    ).toBe(false);
-  });
-
-  test('rejects overlapping required and optional requirements', () => {
-    expect(
-      MarketplacePackageManifestSchema.safeParse({
-        ...common,
-        requirements: {
-          skills: { required: ['code-search'], optional: ['code-search'] },
-          mcps: { required: [], optional: [] },
-        },
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
-      }).success,
-    ).toBe(false);
-    expect(
-      MarketplacePackageManifestSchema.safeParse({
-        ...common,
-        requirements: {
-          skills: { required: [], optional: [] },
-          mcps: { required: ['crawl4ai'], optional: ['crawl4ai'] },
-        },
-        kind: 'agent',
-        baseRole: 'explorer',
-        agentName: 'example',
-        overrides: {},
+        unknownField: true,
       }).success,
     ).toBe(false);
   });

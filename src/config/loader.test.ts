@@ -33,12 +33,11 @@ describe('typed agent and preset merge precedence', () => {
     ).toEqual({ explorer: { model: 'higher/model' } });
   });
 
-  test('preserves omitted activation and applies explicit empty tombstones', () => {
+  test('preserves omitted activation and applies explicit empty activation', () => {
     const base = {
       agents: {},
       marketplace: {
         agents: ['community/one'],
-        profiles: { oracle: 'community/oracle' },
       },
     } satisfies Preset;
     expect(mergePreset(base, { agents: {} })).toEqual(base);
@@ -48,19 +47,16 @@ describe('typed agent and preset merge precedence', () => {
       agents: {},
       marketplace: {
         agents: [],
-        profiles: { oracle: 'community/oracle' },
       },
     });
     expect(
       mergePreset(base, {
         agents: {},
-        marketplace: { profiles: { oracle: null } },
       }),
     ).toEqual({
       agents: {},
       marketplace: {
         agents: ['community/one'],
-        profiles: { oracle: null },
       },
     });
   });

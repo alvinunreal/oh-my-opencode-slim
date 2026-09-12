@@ -4,7 +4,7 @@ export interface MarketplaceConfigReference {
   packageId: string;
   configPath: string;
   presetName: string;
-  target: 'agent' | 'profile';
+  target: 'agent';
 }
 
 interface UnknownRecord {
@@ -20,7 +20,7 @@ function addReference(
   value: unknown,
   configPath: string,
   presetName: string,
-  target: 'agent' | 'profile',
+  target: 'agent',
 ): void {
   if (typeof value !== 'string' || value.trim().length === 0) return;
   references.push({
@@ -48,13 +48,6 @@ function readReferencesFromMergedConfig(
   if (Array.isArray(marketplace.agents)) {
     for (const packageId of marketplace.agents) {
       addReference(references, packageId, configPath, presetName, 'agent');
-    }
-  }
-  if (isRecord(marketplace.profiles)) {
-    for (const packageId of Object.values(marketplace.profiles)) {
-      if (packageId !== null) {
-        addReference(references, packageId, configPath, presetName, 'profile');
-      }
     }
   }
   return references;

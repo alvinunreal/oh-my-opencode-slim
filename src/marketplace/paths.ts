@@ -6,7 +6,6 @@ export interface MarketplacePaths {
   packagesDir: string;
   lockfilePath: string;
   lockDir: string;
-  breakerDir: string;
   stagingDir: string;
 }
 
@@ -25,7 +24,6 @@ export function getMarketplacePaths(rootDir?: string): MarketplacePaths {
     packagesDir: join(root, 'packages'),
     lockfilePath: join(root, 'lock.json'),
     lockDir: join(root, 'marketplace.lock'),
-    breakerDir: join(root, 'marketplace.lock.breaker'),
     stagingDir: join(root, '.staging'),
   };
 }

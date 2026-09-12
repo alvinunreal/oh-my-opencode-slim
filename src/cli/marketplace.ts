@@ -5,7 +5,6 @@ import {
 import {
   disableMarketplacePackage,
   enableMarketplaceAgent,
-  setMarketplaceProfile,
 } from '../marketplace/activation-config';
 import {
   collectMarketplaceStatus,
@@ -23,16 +22,13 @@ export type MarketplaceCommandName =
   | 'remove'
   | 'enable'
   | 'disable'
-  | 'profile'
   | 'status';
 
 export interface MarketplaceArgs {
   command: MarketplaceCommandName;
   value?: string;
-  role?: string;
   force: boolean;
   json: boolean;
-  clear: boolean;
   update?: boolean;
 }
 
@@ -47,7 +43,6 @@ function commandSet(): readonly string[] {
     'remove',
     'enable',
     'disable',
-    'profile',
     'status',
   ];
 }
@@ -56,13 +51,12 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
   const rawCommand = args[0];
   if (!rawCommand || !commandSet().includes(rawCommand)) {
     throw new Error(
-      'Usage: marketplace install|import|list|show|verify|update|remove|enable|disable|profile|status [value] [options]',
+      'Usage: marketplace install|import|list|show|verify|update|remove|enable|disable|status [value] [options]',
     );
   }
   const command = rawCommand as MarketplaceCommandName;
   const force = args.includes('--force');
   const json = args.includes('--json');
-  const clear = args.includes('--clear');
   const update = args.includes('--update');
   const options = args.filter((arg) => arg.startsWith('--'));
   const allowedOptions = new Set(
@@ -70,11 +64,9 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
       ? ['--force']
       : command === 'verify' || command === 'show' || command === 'status'
         ? ['--json']
-        : command === 'profile'
-          ? ['--clear']
-          : command === 'import'
-            ? ['--update']
-            : [],
+        : command === 'import'
+          ? ['--update']
+          : [],
   );
   for (const option of options) {
     if (!allowedOptions.has(option)) {
@@ -85,34 +77,6 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
   }
 
   const positional = args.slice(1).filter((arg) => !arg.startsWith('--'));
-  if (command === 'profile') {
-    if (!positional[0]) {
-      throw new Error('marketplace profile requires a specialist role');
-    }
-    if (clear) {
-      if (positional.length > 1) {
-        throw new Error('marketplace profile --clear accepts only a role');
-      }
-      return {
-        command,
-        role: positional[0],
-        force,
-        json,
-        clear,
-      };
-    }
-    if (!positional[1] || positional.length > 2) {
-      throw new Error('marketplace profile requires a role and package ID');
-    }
-    return {
-      command,
-      role: positional[0],
-      value: positional[1],
-      force,
-      json,
-      clear,
-    };
-  }
   const needsValue = [
     'install',
     'import',
@@ -147,7 +111,6 @@ export function parseMarketplaceArgs(args: string[]): MarketplaceArgs {
     value: positional[0],
     force,
     json,
-    clear,
     ...(command === 'import' && update ? { update: true } : {}),
   };
 }
@@ -196,7 +159,7 @@ export async function marketplaceCommand(
       case 'list':
         for (const pkg of service.list()) {
           console.log(
-            `${pkg.manifest.id}@${pkg.manifest.version}\t${pkg.manifest.kind}\t${pkg.manifest.displayName}`,
+            `${pkg.manifest.id}@${pkg.manifest.version}\t${pkg.manifest.displayName}`,
           );
         }
         return 0;
@@ -241,22 +204,6 @@ export async function marketplaceCommand(
         console.log(
           mutationReloadNotice(
             `Disabled ${parsed.value} in the active preset`,
-            'unknown',
-          ),
-        );
-        return 0;
-      case 'profile':
-        setMarketplaceProfile(
-          projectDir,
-          parsed.role as string,
-          parsed.clear ? null : (parsed.value as string),
-          service.store,
-        );
-        console.log(
-          mutationReloadNotice(
-            parsed.clear
-              ? `Cleared the ${parsed.role} profile`
-              : `Selected ${parsed.value} for ${parsed.role}`,
             'unknown',
           ),
         );

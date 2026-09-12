@@ -6,8 +6,8 @@ make bounded HTTPS requests to the beta registry.
 
 Package manifests are data-only, exact-version locked, and stored under the
 XDG data directory. Installation and preset activation are separate: install
-a package, then enable it in the active preset. Activated agents and
-profiles apply after the next OpenCode session or reload. The live agent
+a package, then enable it in the active preset. Activated agents apply after
+the next OpenCode session or reload. The live agent
 registry is never hot-swapped.
 
 ## CLI
@@ -22,8 +22,6 @@ bunx oh-my-opencode-slim marketplace list
 bunx oh-my-opencode-slim marketplace show author/name
 bunx oh-my-opencode-slim marketplace verify [author/name]
 bunx oh-my-opencode-slim marketplace enable author/name
-bunx oh-my-opencode-slim marketplace profile librarian author/profile
-bunx oh-my-opencode-slim marketplace profile oracle --clear
 bunx oh-my-opencode-slim marketplace disable author/name
 bunx oh-my-opencode-slim marketplace remove author/name
 bunx oh-my-opencode-slim marketplace status [--json]
@@ -34,10 +32,9 @@ absolute local source path in the lockfile. Add `--update` to import a strictly
 newer version into an existing package. Registry `install` accepts an ID or an
 exact `ID@version`; an unversioned ID selects the highest compatible version.
 Registry `update` requires an installed package and selects only a strictly
-newer compatible version. `enable` activates an installed `agent` package in the active
-preset as a separately named role-derived agent. `profile` selects at most
-one installed `profile` package per supported specialist role; `--clear`
-writes a tombstone.
+newer compatible version. `enable` activates an installed agent package in the
+active preset as a separately named agent. An agent may optionally extend one
+built-in specialist.
 
 `status` reports installed packages, configured activation, live-session
 agents when used from the in-session tool, diagnostics, and whether a
@@ -70,19 +67,18 @@ read (for example EACCES).
 | Field | Meaning |
 |-------|---------|
 | installed | Exact locked versions in the local store |
-| configured_agents / configured_profiles | Active-preset activation on disk |
+| configured_agents | Active-preset activation on disk |
 | live_packages | Packages already in this session's registry, with version, digest, and runtime name |
 | diagnostics | Store and activation issues (missing, corrupt, operational, collision, missing required dependency, invalid alias, retired), labeled `disk` or `live` |
 | reload_required | `true`/`false` when live and desired identities can be compared; `unknown` for CLI and when store/desired resolution failed operationally |
 
 ## Limits
 
-- The beta registry is fixed at `https://registry.ohmyopencodeslim.com/v1/`;
+- The beta registry is fixed at `https://registry.ohmyopencodeslim.com/v2/`;
   configurable registries and redirects are not supported.
-- Required skills and MCPs are preflighted against built-in capabilities
-  and on-disk host configuration. Missing required dependencies disable
-  that package for the session. Optional requirements stay unavailable
-  and are never auto-installed.
+- Declared skills and MCPs are preflighted against built-in capabilities and
+  on-disk host configuration. Missing dependencies disable that package for
+  the session; nothing is auto-installed.
 - Startup and local `list`, `show`, `verify`, `status`, activation, and removal
   read only the local store and never contact a registry.
 
@@ -90,7 +86,7 @@ read (for example EACCES).
 
 Registry CI and static site tooling can import the narrow
 `oh-my-opencode-slim/marketplace-contract` package subpath. It provides the
-schema-v1 and schema-v2 indexes (including retirement tombstones), deterministic
+schema-v3 indexes (including retirement tombstones), deterministic
 artifact paths, manifest-summary projection, selector resolution, and the same
 canonical bundle SHA-256 digest used by the plugin store. The public contract
 does not add root-package exports.

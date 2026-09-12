@@ -45,7 +45,6 @@ export type { MarketplaceLease, MarketplaceLockOptions };
 export interface MarketplaceStoreOptions {
   rootDir?: string;
   pluginVersion?: string;
-  roleContractVersion?: string;
   lock?: Partial<MarketplaceLockOptions>;
 }
 

@@ -93,7 +93,7 @@ lifecycle, cancellation, and explicit-wait edge cases behind these tools.
 | `marketplace` | Install, inspect, and activate local offline marketplace packages |
 
 `marketplace` is orchestrator-only. list/show/verify/status are read-only.
-install/import/update/enable/disable/profile/remove write store/config only
+install/import/update/enable/disable/remove write store/config only
 and report reload only when disk activation differs from the live session.
 The CLI reports reload status as unknown. In-session status is also
 unknown when the store or desired activation cannot be read. There is no
