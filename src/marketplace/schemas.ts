@@ -5,8 +5,11 @@ import { SUPPORTED_SPECIALIST_ROLES } from '../config/agent-roles';
 import { AGENT_THEME_COLORS } from '../config/constants';
 
 export const MARKETPLACE_MANIFEST_SCHEMA_VERSION = 2 as const;
+export const MARKETPLACE_MANIFEST_SCHEMA_VERSION_V3 = 3 as const;
 export const MARKETPLACE_LOCKFILE_SCHEMA_VERSION = 2 as const;
 export const MARKETPLACE_DIGEST_DOMAIN = 'marketplace-agent-bundle-v2' as const;
+export const MARKETPLACE_DIGEST_DOMAIN_V3 =
+  'marketplace-agent-bundle-v3' as const;
 
 const packageIdPattern =
   /^[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -34,6 +37,15 @@ export const MarketplaceBuiltinSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
 export type MarketplaceBuiltin = z.infer<typeof MarketplaceBuiltinSchema>;
 
 const BoundedTextSchema = (max: number) => z.string().trim().min(1).max(max);
+const MarketplaceRoutingLineSchema = z
+  .string()
+  .refine((value) => !/[\r\n]/.test(value), {
+    message: 'Routing values must be single-line strings',
+  })
+  .trim()
+  .min(1)
+  .max(160);
+
 const UniqueStringArraySchema = z
   .array(z.string().trim().min(1).max(200))
   .max(128)
@@ -106,6 +118,23 @@ export const MarketplaceRoutingSchema = z
   })
   .strict();
 
+const UniqueRoutingLineArraySchema = z
+  .array(MarketplaceRoutingLineSchema)
+  .max(8)
+  .refine((values) => new Set(values).size === values.length, {
+    message: 'Routing values must be unique',
+  });
+
+export const MarketplaceRoutingV3Schema = z
+  .object({
+    lane: MarketplaceRoutingLineSchema,
+    stats: UniqueRoutingLineArraySchema.min(1),
+    delegateWhen: UniqueRoutingLineArraySchema.min(1),
+    avoid: UniqueRoutingLineArraySchema.min(1),
+    additionalInstructions: UniqueRoutingLineArraySchema.optional(),
+  })
+  .strict();
+
 export const MarketplaceExtensionSchema = z
   .object({
     builtin: MarketplaceBuiltinSchema,
@@ -113,69 +142,121 @@ export const MarketplaceExtensionSchema = z
   })
   .strict();
 
-const ManifestSchema = z
+export const MarketplaceExtensionV3Schema = z
   .object({
-    schemaVersion: z.literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION),
-    id: MarketplacePackageIdSchema,
-    version: MarketplaceVersionSchema,
-    displayName: BoundedTextSchema(120),
-    description: BoundedTextSchema(1000),
-    agentName: z
-      .string()
-      .trim()
-      .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'Expected a valid agent name'),
-    prompt: BoundedTextSchema(100_000),
-    routing: MarketplaceRoutingSchema,
-    skills: UniqueStringArraySchema,
-    mcps: UniqueStringArraySchema,
-    tools: z
-      .array(MarketplaceToolSchema)
-      .max(11)
-      .refine((values) => new Set(values).size === values.length, {
-        message: 'Tools must be unique',
-      }),
-    author: MarketplaceAuthorSchema,
-    tags: UniqueStringArraySchema,
-    license: BoundedTextSchema(64),
-    compatibility: MarketplaceCompatibilitySchema,
-    model: MarketplaceModelPolicySchema,
-    temperature: z.number().min(0).max(2).optional(),
-    color: z
-      .union([
-        z.string().regex(/^#[0-9a-fA-F]{6}$/),
-        z.enum(AGENT_THEME_COLORS),
-      ])
-      .optional(),
+    builtin: MarketplaceBuiltinSchema,
+    promptMode: z.literal('append'),
   })
   .strict();
 
-export const MarketplacePackageManifestSchema = ManifestSchema.extend({
+const ManifestFields = {
+  id: MarketplacePackageIdSchema,
+  version: MarketplaceVersionSchema,
+  displayName: BoundedTextSchema(120),
+  description: BoundedTextSchema(1000),
+  agentName: z
+    .string()
+    .trim()
+    .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'Expected a valid agent name'),
+  prompt: BoundedTextSchema(100_000),
+  skills: UniqueStringArraySchema,
+  mcps: UniqueStringArraySchema,
+  tools: z
+    .array(MarketplaceToolSchema)
+    .max(11)
+    .refine((values) => new Set(values).size === values.length, {
+      message: 'Tools must be unique',
+    }),
+  author: MarketplaceAuthorSchema,
+  tags: UniqueStringArraySchema,
+  license: BoundedTextSchema(64),
+  compatibility: MarketplaceCompatibilitySchema,
+  model: MarketplaceModelPolicySchema,
+  temperature: z.number().min(0).max(2).optional(),
+  color: z
+    .union([z.string().regex(/^#[0-9a-fA-F]{6}$/), z.enum(AGENT_THEME_COLORS)])
+    .optional(),
+} as const;
+
+const ManifestV2Schema = z
+  .object({
+    schemaVersion: z.literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION),
+    ...ManifestFields,
+    routing: MarketplaceRoutingSchema,
+  })
+  .strict();
+
+const ManifestV3Schema = z
+  .object({
+    schemaVersion: z.literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION_V3),
+    ...ManifestFields,
+    routing: MarketplaceRoutingV3Schema,
+  })
+  .strict();
+
+function validateBuiltinModelPolicy(
+  manifest: { model: MarketplaceModelPolicy; extends?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (manifest.model.source === 'builtin' && !manifest.extends) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['model', 'source'],
+      message: "model.source 'builtin' requires extends",
+    });
+  }
+}
+
+export const MarketplacePackageManifestV2Schema = ManifestV2Schema.extend({
   extends: MarketplaceExtensionSchema.optional(),
 })
   .strict()
-  .superRefine((manifest, ctx) => {
-    if (manifest.model.source === 'builtin' && !manifest.extends) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['model', 'source'],
-        message: "model.source 'builtin' requires extends",
-      });
-    }
-  });
+  .superRefine(validateBuiltinModelPolicy);
 
-export const MarketplaceAgentManifestSummarySchema = ManifestSchema.omit({
+export const MarketplacePackageManifestV3Schema = ManifestV3Schema.extend({
+  extends: MarketplaceExtensionV3Schema.optional(),
+})
+  .strict()
+  .superRefine(validateBuiltinModelPolicy);
+
+export const MarketplacePackageManifestSchema = z.discriminatedUnion(
+  'schemaVersion',
+  [MarketplacePackageManifestV2Schema, MarketplacePackageManifestV3Schema],
+);
+
+export const MarketplaceAgentManifestSummaryV2Schema = ManifestV2Schema.omit({
   prompt: true,
 })
   .extend({ extends: MarketplaceExtensionSchema.optional() })
   .strict();
 
+export const MarketplaceAgentManifestSummaryV3Schema = ManifestV3Schema.omit({
+  prompt: true,
+})
+  .extend({ extends: MarketplaceExtensionV3Schema.optional() })
+  .strict();
+
+export const MarketplaceAgentManifestSummarySchema = z.discriminatedUnion(
+  'schemaVersion',
+  [
+    MarketplaceAgentManifestSummaryV2Schema,
+    MarketplaceAgentManifestSummaryV3Schema,
+  ],
+);
+
 // Kept as the precise agent-manifest name for consumers of the public contract.
 export const MarketplaceAgentManifestSchema = MarketplacePackageManifestSchema;
 
 export const MarketplacePackageBundleSchema = z
-  .object({
-    manifest: MarketplacePackageManifestSchema,
-  })
+  .object({ manifest: MarketplacePackageManifestSchema })
+  .strict();
+
+export const MarketplacePackageBundleV2Schema = z
+  .object({ manifest: MarketplacePackageManifestV2Schema })
+  .strict();
+
+export const MarketplacePackageBundleV3Schema = z
+  .object({ manifest: MarketplacePackageManifestV3Schema })
   .strict();
 
 export const MarketplaceLocalSourceSchema = z
@@ -219,14 +300,44 @@ export const MarketplaceDigestSchema = z
   })
   .strict();
 
-export const MarketplaceLockEntrySchema = z
+export const MarketplaceDigestV3Schema = z
+  .object({
+    algorithm: z.literal('sha256'),
+    domain: z.literal(MARKETPLACE_DIGEST_DOMAIN_V3),
+    value: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export const MarketplaceDigestUnionSchema = z.union([
+  MarketplaceDigestSchema,
+  MarketplaceDigestV3Schema,
+]);
+
+const MarketplaceLockEntryFields = {
+  manifestVersion: MarketplaceVersionSchema,
+  source: MarketplaceSourceSchema,
+} as const;
+
+export const MarketplaceLockEntryV2Schema = z
   .object({
     manifestSchemaVersion: z.literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION),
-    manifestVersion: MarketplaceVersionSchema,
-    source: MarketplaceSourceSchema,
+    ...MarketplaceLockEntryFields,
     digest: MarketplaceDigestSchema,
   })
   .strict();
+
+export const MarketplaceLockEntryV3Schema = z
+  .object({
+    manifestSchemaVersion: z.literal(MARKETPLACE_MANIFEST_SCHEMA_VERSION_V3),
+    ...MarketplaceLockEntryFields,
+    digest: MarketplaceDigestV3Schema,
+  })
+  .strict();
+
+export const MarketplaceLockEntrySchema = z.discriminatedUnion(
+  'manifestSchemaVersion',
+  [MarketplaceLockEntryV2Schema, MarketplaceLockEntryV3Schema],
+);
 
 export const MarketplaceLockfileSchema = z
   .object({
@@ -243,13 +354,28 @@ export type MarketplaceModelPolicy = z.infer<
 export type MarketplaceAgentManifest = z.infer<
   typeof MarketplaceAgentManifestSchema
 >;
+export type MarketplaceAgentManifestV2 = z.infer<
+  typeof MarketplacePackageManifestV2Schema
+>;
+export type MarketplaceAgentManifestV3 = z.infer<
+  typeof MarketplacePackageManifestV3Schema
+>;
 export type MarketplacePackageManifest = z.infer<
   typeof MarketplacePackageManifestSchema
 >;
+export type MarketplacePackageManifestV2 = MarketplaceAgentManifestV2;
+export type MarketplacePackageManifestV3 = MarketplaceAgentManifestV3;
 export type MarketplacePackageBundle = z.infer<
   typeof MarketplacePackageBundleSchema
 >;
 export type MarketplaceSource = z.infer<typeof MarketplaceSourceSchema>;
 export type MarketplaceDigest = z.infer<typeof MarketplaceDigestSchema>;
+export type MarketplaceDigestV3 = z.infer<typeof MarketplaceDigestV3Schema>;
+export type MarketplaceLockEntryV2 = z.infer<
+  typeof MarketplaceLockEntryV2Schema
+>;
+export type MarketplaceLockEntryV3 = z.infer<
+  typeof MarketplaceLockEntryV3Schema
+>;
 export type MarketplaceLockEntry = z.infer<typeof MarketplaceLockEntrySchema>;
 export type MarketplaceLockfile = z.infer<typeof MarketplaceLockfileSchema>;

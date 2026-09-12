@@ -9,10 +9,12 @@ import {
 import {
   MarketplaceActivationReferenceError,
   MarketplaceConflictError,
+  MarketplaceRegistryNotFoundError,
   MarketplaceRegistryUnavailableError,
   MarketplaceValidationError,
 } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
+import type { MarketplaceRegistryDownload } from './registry-client';
 import { MarketplaceRegistryClient } from './registry-client';
 import { assertMarketplacePackageNotRetired } from './retirements';
 import {
@@ -32,8 +34,14 @@ export interface MarketplaceServiceOptions
   extends MarketplaceStoreOptions,
     MarketplaceCompatibilityOptions {
   projectDir?: string;
-  registryClient?: Pick<MarketplaceRegistryClient, 'download'>;
+  registryClient?: MarketplaceRegistryDownloadClient;
 }
+
+export type MarketplaceRegistryDownloadClient = Pick<
+  MarketplaceRegistryClient,
+  'download'
+> &
+  Partial<Pick<MarketplaceRegistryClient, 'downloadV3'>>;
 
 export interface MarketplaceRemoveOptions {
   force?: boolean;
@@ -73,7 +81,7 @@ function referenceMessage(
 export class MarketplaceService {
   readonly store: MarketplaceStore;
   readonly projectDir: string;
-  readonly registryClient: Pick<MarketplaceRegistryClient, 'download'>;
+  readonly registryClient: MarketplaceRegistryDownloadClient;
 
   constructor(options: MarketplaceServiceOptions = {}) {
     this.store = new MarketplaceStore(options);
@@ -132,7 +140,7 @@ export class MarketplaceService {
   ): Promise<StoredMarketplacePackage> {
     const selectorId = selector.trim().split('@', 1)[0].toLowerCase();
     assertMarketplacePackageNotRetired(selectorId);
-    const downloaded = await this.registryClient.download(
+    const downloaded = await this.downloadRemoteWithV3Fallback(
       selector,
       undefined,
       signal,
@@ -144,10 +152,34 @@ export class MarketplaceService {
     }
     return this.store.install(downloaded.bundle, {
       kind: 'registry',
-      registry: DEFAULT_MARKETPLACE_REGISTRY_URL,
+      registry: downloaded.registry ?? DEFAULT_MARKETPLACE_REGISTRY_URL,
       indexUrl: downloaded.indexUrl,
       packageUrl: downloaded.packageUrl,
     });
+  }
+
+  private async downloadRemoteWithV3Fallback(
+    selector: string,
+    minimumVersion?: string,
+    signal?: AbortSignal,
+  ): Promise<MarketplaceRegistryDownload> {
+    if (this.registryClient.downloadV3) {
+      try {
+        return await this.registryClient.downloadV3(
+          selector,
+          minimumVersion,
+          signal,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof MarketplaceRegistryUnavailableError) &&
+          !(error instanceof MarketplaceRegistryNotFoundError)
+        ) {
+          throw error;
+        }
+      }
+    }
+    return this.registryClient.download(selector, minimumVersion, signal);
   }
 
   async updateRemote(
@@ -162,7 +194,7 @@ export class MarketplaceService {
       );
     }
     const current = this.store.show(normalizedId);
-    const downloaded = await this.registryClient.download(
+    const downloaded = await this.downloadRemoteWithV3Fallback(
       current.manifest.id,
       current.manifest.version,
       signal,
@@ -174,7 +206,7 @@ export class MarketplaceService {
     }
     return this.store.update(downloaded.bundle, {
       kind: 'registry',
-      registry: DEFAULT_MARKETPLACE_REGISTRY_URL,
+      registry: downloaded.registry ?? DEFAULT_MARKETPLACE_REGISTRY_URL,
       indexUrl: downloaded.indexUrl,
       packageUrl: downloaded.packageUrl,
     });

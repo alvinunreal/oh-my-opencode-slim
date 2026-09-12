@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { ROLE_DEFINITIONS } from '../agents/role-definitions';
 import type { MarketplacePackageManifest } from '../marketplace/schemas';
-import { renderDefaultMarketplaceAutoDelegationBlock } from './index';
+import {
+  createMarketplaceRegistryEntryV3,
+  createMarketplaceRegistryIndexV3,
+  parseMarketplaceRegistryIndex,
+  parseMarketplaceRegistryIndexV3,
+  renderDefaultMarketplaceAutoDelegationBlock,
+} from './index';
 
 const manifest: MarketplacePackageManifest = {
   schemaVersion: 2,
@@ -37,5 +43,25 @@ describe('marketplace contract routing export', () => {
     expect(renderDefaultMarketplaceAutoDelegationBlock(manifest)).toBe(
       expected,
     );
+  });
+
+  test('selects the explicit v3 registry contract without widening v2 parsing', () => {
+    const v3Manifest = {
+      ...manifest,
+      schemaVersion: 3 as const,
+      routing: {
+        lane: 'Contract lane.',
+        stats: ['Fast'],
+        delegateWhen: ['The contract task matches.'],
+        avoid: ['Unbounded work.'],
+      },
+    };
+    const entry = createMarketplaceRegistryEntryV3({
+      manifest: v3Manifest,
+    });
+    const index = createMarketplaceRegistryIndexV3([entry]);
+
+    expect(parseMarketplaceRegistryIndexV3(index)).toEqual(index);
+    expect(() => parseMarketplaceRegistryIndex(index)).toThrow();
   });
 });

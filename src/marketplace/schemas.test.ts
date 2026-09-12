@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   MarketplaceAgentManifestSchema,
   MarketplacePackageManifestSchema,
+  MarketplacePackageManifestV3Schema,
   MarketplaceVersionSchema,
 } from './schemas';
 
@@ -26,6 +27,18 @@ const common = {
   mcps: [],
   tools: [],
   model: { source: 'explicit' as const, candidates: ['provider/model'] },
+};
+
+const commonV3 = {
+  ...common,
+  schemaVersion: 3 as const,
+  routing: {
+    lane: 'Bounded implementation work.',
+    stats: ['Fast execution', 'Low context overhead'],
+    delegateWhen: ['The task has a clear implementation boundary.'],
+    avoid: ['Architecture decisions'],
+    additionalInstructions: ['Report changed files and validation.'],
+  },
 };
 
 describe('agents-only marketplace manifest schemas', () => {
@@ -58,6 +71,55 @@ describe('agents-only marketplace manifest schemas', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  test('accepts v3 routing and keeps the manifest union version-aware', () => {
+    expect(MarketplacePackageManifestV3Schema.safeParse(commonV3).success).toBe(
+      true,
+    );
+    expect(MarketplaceAgentManifestSchema.safeParse(commonV3).success).toBe(
+      true,
+    );
+    expect(
+      MarketplacePackageManifestSchema.safeParse({
+        ...common,
+        schemaVersion: 3,
+        routing: commonV3.routing,
+      }).success,
+    ).toBe(true);
+  });
+
+  test('rejects invalid v3 routing values and publisher-authored policy fields', () => {
+    const invalidCases = [
+      { routing: { ...commonV3.routing, lane: 'line\nwrapped' } },
+      { routing: { ...commonV3.routing, lane: 'x'.repeat(161) } },
+      {
+        routing: { ...commonV3.routing, stats: ['duplicate', 'duplicate'] },
+      },
+      { routing: { ...commonV3.routing, stats: [] } },
+      { routing: { ...commonV3.routing, delegateWhen: [] } },
+      { routing: { ...commonV3.routing, avoid: [] } },
+      {
+        routing: {
+          ...commonV3.routing,
+          additionalInstructions: Array.from({ length: 9 }, () => 'x'),
+        },
+      },
+      {
+        extends: { builtin: 'explorer', promptMode: 'replace' },
+      },
+      { permission: { read: 'allow' } },
+      { capabilities: ['read'] },
+    ];
+
+    for (const invalid of invalidCases) {
+      expect(
+        MarketplacePackageManifestV3Schema.safeParse({
+          ...commonV3,
+          ...invalid,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   test('rejects extension-only builtin model policy for standalone agents', () => {

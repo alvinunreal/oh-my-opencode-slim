@@ -77,6 +77,7 @@ Usage:
   bunx oh-my-opencode-slim install [OPTIONS]
   bunx oh-my-opencode-slim doctor [OPTIONS]
   bunx oh-my-opencode-slim marketplace install <publisher/package[@version]>
+                           Install and enable the package in the active preset
   bunx oh-my-opencode-slim marketplace import <package.json> [--update]
   bunx oh-my-opencode-slim marketplace update <publisher/package>
   bunx oh-my-opencode-slim marketplace list
@@ -84,6 +85,7 @@ Usage:
   bunx oh-my-opencode-slim marketplace verify [package-id] [--json]
   bunx oh-my-opencode-slim marketplace remove <package-id> [--force]
   bunx oh-my-opencode-slim marketplace enable <package-id>
+                           Enable an already installed package
   bunx oh-my-opencode-slim marketplace disable <package-id>
   bunx oh-my-opencode-slim marketplace status [--json]
 
