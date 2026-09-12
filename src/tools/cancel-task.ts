@@ -429,7 +429,10 @@ function assertLease(
   }
 }
 
-function assertOrchestrator(
+/** Shared orchestrator-only guard for task control tools: requires a
+ * sessionID, rejects non-orchestrator agents, and requires the session to
+ * be orchestrator-managed. Returns the validated parent session ID. */
+export function assertOrchestrator(
   options: TaskControlToolOptions,
   toolContext: { sessionID?: string; agent?: string } | undefined,
   toolName: string,

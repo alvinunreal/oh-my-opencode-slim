@@ -1,3 +1,5 @@
+import { getGlobalStore } from '../../utils/global-store';
+
 /**
  * Process-local gate for explicit wait_for_user HITL latches.
  *
@@ -21,18 +23,14 @@ type UserWaitStore = {
   messageObjectIdentity: WeakMap<object, symbol>;
 };
 
-const STORE_KEY = Symbol.for('oh-my-opencode-slim.user-wait-gate');
+const STORE_KEY = 'oh-my-opencode-slim.user-wait-gate';
 
 function getStore(): UserWaitStore {
-  const globalWithStore = globalThis as typeof globalThis & {
-    [STORE_KEY]?: UserWaitStore;
-  };
-  globalWithStore[STORE_KEY] ??= {
+  return getGlobalStore<UserWaitStore>(STORE_KEY, () => ({
     waits: new Map(),
     lastRearmIdentity: new Map(),
     messageObjectIdentity: new WeakMap(),
-  };
-  return globalWithStore[STORE_KEY];
+  }));
 }
 
 /**

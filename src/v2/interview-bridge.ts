@@ -1,9 +1,12 @@
 import type { Server } from 'node:http';
 import type { InterviewConfig, PluginConfig } from '../config';
-import { DEFAULT_DASHBOARD_PORT } from '../interview/dashboard';
 import { createDashboardManager } from '../interview/dashboard-manager';
+import { computeInterviewMode } from '../interview/manager';
 import type { InterviewSessionRuntime } from '../interview/runtime';
-import { createInterviewServer } from '../interview/server';
+import {
+  createInterviewServer,
+  createInterviewServerDeps,
+} from '../interview/server';
 import { createInterviewService } from '../interview/service';
 import type { InterviewMessage } from '../interview/types';
 import { log } from '../utils/logger';
@@ -203,11 +206,8 @@ export function createV2InterviewBridge(
     },
   };
 
-  const dashboardEnabled =
-    config?.dashboard === true || (config?.port ?? 0) > 0;
-  const outputFolder = config?.outputFolder ?? 'interview';
-  const dashboardPort =
-    (config?.port ?? 0) > 0 ? (config?.port ?? 0) : DEFAULT_DASHBOARD_PORT;
+  const { dashboardEnabled, outputFolder, dashboardPort } =
+    computeInterviewMode(config);
   const pluginContext = { directory: process.cwd() } as never;
   const dashboardManager = dashboardEnabled
     ? createDashboardManager(
@@ -232,21 +232,9 @@ export function createV2InterviewBridge(
     createInterviewService(pluginContext, config, { runtime });
   const server = dashboardManager
     ? null
-    : createInterviewServer({
-        getState: (interviewID) => service.getInterviewState(interviewID),
-        listInterviewFiles: () => service.listInterviewFiles(),
-        listInterviews: () => service.listInterviews(),
-        submitAnswers: (interviewID, answers) =>
-          service.submitAnswers(interviewID, answers),
-        submitBlockComment: (interviewID, section, comment) =>
-          service.submitBlockComment(interviewID, section, comment),
-        submitChat: (interviewID, message) =>
-          service.submitChat(interviewID, message),
-        handleNudgeAction: (interviewID, action) =>
-          service.handleNudgeAction(interviewID, action),
-        outputFolder,
-        port: 0,
-      });
+    : createInterviewServer(
+        createInterviewServerDeps(service, outputFolder, 0),
+      );
   if (server) service.setBaseUrlResolver(() => server.ensureStarted());
 
   function registerCommand(draft: V2CommandDraft): void {

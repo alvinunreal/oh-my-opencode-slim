@@ -11,7 +11,7 @@ import {
   tryBecomeDashboard,
 } from './dashboard';
 import type { InterviewSessionRuntime } from './runtime';
-import { createInterviewServer } from './server';
+import { createInterviewServer, createInterviewServerDeps } from './server';
 import { createInterviewService } from './service';
 import type {
   InterviewRecord,
@@ -371,21 +371,9 @@ export function createDashboardManager(
       // service, exactly like the non-dashboard mode would.
       isDashboard = false;
       const resolvedOutputPath = path.join(ctx.directory, outputFolder);
-      fallbackServer = createInterviewServer({
-        getState: async (interviewId) => service.getInterviewState(interviewId),
-        listInterviewFiles: async () => service.listInterviewFiles(),
-        listInterviews: () => service.listInterviews(),
-        submitAnswers: async (interviewId, answers) =>
-          service.submitAnswers(interviewId, answers),
-        submitBlockComment: async (interviewId, section, comment) =>
-          service.submitBlockComment(interviewId, section, comment),
-        submitChat: async (interviewId, message) =>
-          service.submitChat(interviewId, message),
-        handleNudgeAction: async (interviewId, action) =>
-          service.handleNudgeAction(interviewId, action),
-        outputFolder: resolvedOutputPath,
-        port: 0,
-      });
+      fallbackServer = createInterviewServer(
+        createInterviewServerDeps(service, resolvedOutputPath, 0),
+      );
       service.setBaseUrlResolver(
         () =>
           fallbackServer?.ensureStarted() ??

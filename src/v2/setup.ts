@@ -20,6 +20,7 @@ import {
 } from '../hooks/cache-safe-injection';
 import { OhMyOpenCodeLite } from '../index';
 import type { McpConfig } from '../mcp/types';
+import { isRecord } from '../utils/guards';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import { adaptTool, applyAgentToDraft } from './adapters';
@@ -30,6 +31,7 @@ import { mapV2EventToV1 } from './event-adapter';
 import { createV2InterviewBridge } from './interview-bridge';
 import {
   createSessionSubmit,
+  joinTextParts,
   textFromContent,
   type V2CommandSubmit,
 } from './session-submit';
@@ -632,18 +634,10 @@ export interface V2ToolBridgeEvents {
   ) => Promise<void>;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
 function textContent(value: unknown): string {
   if (typeof value === 'string') return value;
   if (!Array.isArray(value)) return '';
-  return value
-    .filter(isRecord)
-    .filter((part) => part.type === 'text')
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
-    .join('');
+  return joinTextParts(value, '');
 }
 
 function renderOutput(value: unknown): string {

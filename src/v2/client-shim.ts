@@ -27,6 +27,7 @@ import {
   isInternalInitiatorPart,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
+import { joinTextParts } from './session-submit';
 import type { V2Context } from './types';
 
 /** v2 model reference accepted by `ctx.generate.text`. */
@@ -65,13 +66,10 @@ function sessionIDOf(args: Record<string, unknown>): string {
 /** Join the text parts of a v1 prompt body into v2 prompt text. */
 function textFromBody(args: Record<string, unknown>): string {
   const body = (args?.body ?? {}) as {
-    parts?: Array<{ type?: string; text?: string }>;
+    parts?: Array<unknown>;
   };
   const parts = Array.isArray(body.parts) ? body.parts : [];
-  return parts
-    .filter((p) => p?.type === 'text' && typeof p.text === 'string')
-    .map((p) => p.text as string)
-    .join('\n');
+  return joinTextParts(parts, '\n');
 }
 
 /** Map non-text v1 prompt parts (images, files) into v2 prompt `files`

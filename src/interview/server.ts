@@ -6,6 +6,7 @@ import {
 } from 'node:http';
 import { URL } from 'node:url';
 import { extractResumeSlug, readJsonBody, sendHtml, sendJson } from './helpers';
+import type { createInterviewService } from './service';
 import type {
   InterviewAnswer,
   InterviewFileItem,
@@ -67,6 +68,39 @@ function parseAnswersPayload(value: unknown): { answers: InterviewAnswer[] } {
         answer: record.answer.trim(),
       };
     }),
+  };
+}
+
+/**
+ * Server deps delegating every service operation to a single
+ * `createInterviewService` instance — the shared shape used by the
+ * per-session server, the dashboard fallback server, and the v2 interview
+ * bridge.
+ */
+export function createInterviewServerDeps(
+  service: ReturnType<typeof createInterviewService>,
+  outputFolder: string,
+  port: number,
+) {
+  return {
+    getState: (interviewId: string) => service.getInterviewState(interviewId),
+    listInterviewFiles: () => service.listInterviewFiles(),
+    listInterviews: () => service.listInterviews(),
+    submitAnswers: (interviewId: string, answers: InterviewAnswer[]) =>
+      service.submitAnswers(interviewId, answers),
+    submitBlockComment: (
+      interviewId: string,
+      section: string,
+      comment: string,
+    ) => service.submitBlockComment(interviewId, section, comment),
+    submitChat: (interviewId: string, message: string) =>
+      service.submitChat(interviewId, message),
+    handleNudgeAction: (
+      interviewId: string,
+      action: 'more-questions' | 'confirm-complete',
+    ) => service.handleNudgeAction(interviewId, action),
+    outputFolder,
+    port,
   };
 }
 

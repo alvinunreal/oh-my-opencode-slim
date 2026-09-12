@@ -3,6 +3,7 @@ import type { RevivedRunTracker } from '../hooks/task-session-manager/revived-ru
 import type { BackgroundJobSupervisor } from '../utils/background-job-supervisor';
 import { getClient } from '../utils/opencode-client';
 import {
+  assertOrchestrator,
   cancelTrackedExecution,
   type TaskControlToolOptions,
 } from './cancel-task';
@@ -28,7 +29,11 @@ export function createTaskReviveTool(
       prompt: z.string().min(1).describe('Prompt for the revived task'),
     },
     async execute(args, toolContext) {
-      const parentSessionID = assertOrchestrator(options, toolContext);
+      const parentSessionID = assertOrchestrator(
+        options,
+        toolContext,
+        'task_revive',
+      );
       const requested = args.task_id.trim();
       const prompt = args.prompt.trim();
       if (!requested) throw new Error('task_revive requires task_id');
@@ -222,21 +227,6 @@ function isReviveableRetainedJob(
     return true;
   }
   return job.state === 'reconciled' && job.terminalState !== undefined;
-}
-
-function assertOrchestrator(
-  options: TaskReviveToolOptions,
-  toolContext: { sessionID?: string; agent?: string } | undefined,
-): string {
-  const parentSessionID = toolContext?.sessionID;
-  if (!parentSessionID) throw new Error('task_revive requires sessionID');
-  if (toolContext.agent && toolContext.agent !== 'orchestrator') {
-    throw new Error('task_revive can only be used by orchestrator');
-  }
-  if (!options.shouldManageSession(parentSessionID)) {
-    throw new Error('task_revive can only be used in orchestrator sessions');
-  }
-  return parentSessionID;
 }
 
 function getApiError(response: unknown): unknown {

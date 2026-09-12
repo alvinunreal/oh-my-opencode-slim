@@ -43,6 +43,8 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 - **Type Guards** (`guards.ts`): Simple type checking utilities (`isRecord`) for runtime validation.
 
+- **Global Store** (`global-store.ts`): `getGlobalStore(key, init)` — process-local lazy singleton on `globalThis` via the `Symbol.for` registry; shared store pattern for the orchestrator-wake and user-wait gates.
+
 - **Environment Utilities** (`env.ts`): Environment variable parsing and plugin disable flag checking.
 
 - **Internal Initiator** (`internal-initiator.ts`): Marker system for identifying internally-initiated agent messages to prevent infinite loops.
@@ -151,6 +153,7 @@ re-exported).
 | `env.ts` | Environment variable utilities |
 | `escape-html.ts` | HTML escaping helper |
 | `frontmatter.ts` | Frontmatter parsing for interview documents |
+| `global-store.ts` | Process-local lazy singleton store on `globalThis` (`getGlobalStore`) |
 | `guards.ts` | Type guard utilities |
 | `internal-initiator.ts` | Internal agent message marker system |
 | `logger.ts` | File-based logging with rotation |
