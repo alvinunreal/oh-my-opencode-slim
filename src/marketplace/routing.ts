@@ -10,8 +10,7 @@ import type {
 
 function renderV2PackageSuffix(manifest: MarketplacePackageManifestV2): string {
   return [
-    `- Package: ${manifest.displayName}`,
-    `- ${manifest.routing.description}`,
+    `- Lane: ${manifest.routing.description}`,
     `- **Delegate when:** ${manifest.routing.when}`,
   ].join('\n');
 }
@@ -54,8 +53,7 @@ function renderV3ExtensionSuffix(
   manifest: MarketplacePackageManifestV3,
 ): string {
   return [
-    `- Package: ${manifest.displayName}`,
-    `- Package lane: ${manifest.routing.lane}`,
+    `- Lane: ${manifest.routing.lane}`,
     renderV3RoutingDetails(manifest),
   ].join('\n');
 }

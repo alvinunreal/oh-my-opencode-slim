@@ -108,7 +108,7 @@ v2 parsing never accepts v3 artifacts. Both contracts use deterministic
 artifact paths, retirement tombstones, and canonical bundle SHA-256 digests.
 It also exports `renderDefaultMarketplaceAutoDelegationBlock(manifest)`, the
 authoritative deterministic routing block. Built-in v3 extensions use the
-current built-in role routing followed by package lane, stats, delegation, and
+current built-in role routing followed by lane, stats, delegation, and
 avoidance guidance; standalone v3 packages include their role sentence and
 mechanically derived declared capabilities. This default renderer does not
 apply owner or runtime display-alias overrides. The public contract does not
