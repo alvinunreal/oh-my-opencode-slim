@@ -21,8 +21,9 @@ import type {
  * see ./command-marker.ts. Whole-text anchored: v2 writes the marker as
  * the entire submitted prompt, so whole-text anchoring is the contract. A
  * user-typed embedded marker must not hijack dispatch in the merged
- * session context hook. */
-const INTERVIEW_MARKER = createCommandMarkerKit({
+ * session context hook. Exported for tests: command-marker.test.ts pins
+ * the configured pattern bytes against config drift. */
+export const INTERVIEW_MARKER = createCommandMarkerKit({
   tag: 'omos-interview-command',
   trimArgs: true,
 });

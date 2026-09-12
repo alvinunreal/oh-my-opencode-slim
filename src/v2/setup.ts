@@ -66,8 +66,10 @@ type V1CommandPart = {
 };
 
 /** Generic v2 command marker kit (deepwork / reflect / loop) — shared,
- * byte-stable marker machinery; see ./command-marker.ts. */
-const COMMAND_MARKER = createCommandMarkerKit({
+ * byte-stable marker machinery; see ./command-marker.ts. Exported for
+ * tests: command-marker.test.ts pins the configured pattern bytes
+ * against config drift. */
+export const COMMAND_MARKER = createCommandMarkerKit({
   tag: 'omos-cmd-command',
   nameAttribute: 'data-name',
   namePattern: '[\\w.-]+',
