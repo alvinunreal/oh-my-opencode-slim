@@ -29,7 +29,7 @@ const MARKER_PATTERN =
  * Context events fire for every LLM request of every session; without a
  * bound a long-lived host would retain one transcript per session it has
  * ever seen. Mirrors MAX_PROMPT_BRIDGE_SESSIONS in ./setup.ts. */
-export const MAX_RETAINED_SESSIONS = 1024;
+const MAX_RETAINED_SESSIONS = 1024;
 
 /** Render the `/interview` command marker with the given arguments. */
 export function markerText(args: string): string {
@@ -316,10 +316,14 @@ export function createV2InterviewBridge(
     }
     const memo = transcripts.get(event.sessionID);
     const projectedTrailing = memo?.at(-1);
-    if (projectedTrailing) {
+    if (projectedTrailing && projectedTrailing.info?.role === trailing.role) {
       // Mutate ONLY the projected trailing message (earlier projected
       // messages stay byte-identical); the memo already holds the single
-      // projection made during the dispatch, so no second pass runs.
+      // projection made during the dispatch, so no second pass runs. The
+      // role guard keeps a mid-dispatch streamed assistant turn (appended
+      // to the memo while the command hook awaited) out of the fix-up —
+      // the raw event reference re-derives the rewritten marker on the
+      // next projection anyway.
       projectedTrailing.parts = projectContent(trailing.content);
     }
     if (!isActiveSession(event.sessionID)) {
@@ -372,12 +376,17 @@ export function createV2InterviewBridge(
     if (!sessionID) return;
 
     if (type === 'session.next.text.started') {
-      activeText.set(sessionID, '');
-      pruneRetainedSessions();
+      // Turn-text accumulation is gated on an active interview, matching
+      // beginText — nothing reads activeText for an inactive session.
+      if (isActiveSession(sessionID)) {
+        activeText.set(sessionID, '');
+        pruneRetainedSessions();
+      }
       beginText(sessionID);
       return;
     }
     if (type === 'session.next.text.delta') {
+      if (!isActiveSession(sessionID)) return;
       const text = `${activeText.get(sessionID) ?? ''}${typeof properties.delta === 'string' ? properties.delta : ''}`;
       activeText.set(sessionID, text);
       pruneRetainedSessions();
@@ -385,6 +394,10 @@ export function createV2InterviewBridge(
       return;
     }
     if (type === 'session.next.text.ended') {
+      // properties.text wins; the activeText fallback only matters for
+      // sessions whose started/deltas were retained (active interviews —
+      // otherwise the get yields undefined and the gated appendText
+      // discards the empty string anyway).
       const text =
         typeof properties.text === 'string'
           ? properties.text

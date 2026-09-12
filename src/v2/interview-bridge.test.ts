@@ -380,6 +380,46 @@ describe('v2 interview bridge', () => {
     bridge.dispose();
   });
 
+  test('a failed marker dispatch leaves retained state that the next plain event reclaims', async () => {
+    // outputFolder pointing at a regular FILE makes the dispatch's
+    // document mkdir fail, so the command hook throws mid-dispatch.
+    const blocker = `.tmp-v2-throw-${Date.now()}`;
+    await fs.writeFile(`${process.cwd()}/${blocker}`, 'blocker');
+    const bridge = createV2InterviewBridge(createContext(), {
+      outputFolder: blocker,
+    } as never);
+    try {
+      await expect(
+        bridge.handleContext(
+          markerContextEvent('ses_throw', 'throw recovery idea'),
+        ),
+      ).rejects.toThrow();
+
+      // The dispatch bound the raw event (and memoized its projection via
+      // loadMessages) before throwing — retained, but stale: no interview
+      // exists for the session.
+      expect(bridge.service.getActiveInterviewId('ses_throw')).toBeNull();
+      expect(await bridge.runtime.messages('ses_throw')).toHaveLength(1);
+
+      // The next plain context event for the now-inactive session drops
+      // the stale retained state (observeContext self-heal).
+      await bridge.handleContext({
+        sessionID: 'ses_throw',
+        agent: 'orchestrator',
+        model: {},
+        system: [],
+        tools: {},
+        messages: [
+          { id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        ],
+      });
+      expect(await bridge.runtime.messages('ses_throw')).toEqual([]);
+    } finally {
+      bridge.dispose();
+      await fs.rm(`${process.cwd()}/${blocker}`, { force: true });
+    }
+  });
+
   test('streams assistant text for interview sessions and drops deleted sessions', async () => {
     const directory = `.tmp-v2-text-${Date.now()}`;
     const synthetic = mock(async () => ({}));
