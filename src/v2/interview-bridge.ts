@@ -16,7 +16,7 @@ import type {
   V2SessionContextEvent,
 } from './types';
 
-export const INTERVIEW_COMMAND_MARKER =
+const INTERVIEW_COMMAND_MARKER =
   '<omos-interview-command>$ARGUMENTS</omos-interview-command>';
 
 // Whole-text anchored: v2 writes the marker as the entire submitted prompt,
@@ -25,6 +25,12 @@ export const INTERVIEW_COMMAND_MARKER =
 const MARKER_PATTERN =
   /^\s*<omos-interview-command>\s*([\s\S]*?)\s*<\/omos-interview-command>\s*$/;
 
+/** Cap on per-session state retained by the bridge (FIFO eviction).
+ * Context events fire for every LLM request of every session; without a
+ * bound a long-lived host would retain one transcript per session it has
+ * ever seen. Mirrors MAX_PROMPT_BRIDGE_SESSIONS in ./setup.ts. */
+export const MAX_RETAINED_SESSIONS = 1024;
+
 /** Render the `/interview` command marker with the given arguments. */
 export function markerText(args: string): string {
   // Function replacer: a string replacer would interpret `$`-sequences in
@@ -32,13 +38,19 @@ export function markerText(args: string): string {
   return INTERVIEW_COMMAND_MARKER.replace('$ARGUMENTS', () => args);
 }
 
+function projectContent(
+  content: Array<Record<string, unknown>>,
+): InterviewMessage['parts'] {
+  return content.map((part) => ({
+    type: typeof part.type === 'string' ? part.type : undefined,
+    text: typeof part.text === 'string' ? part.text : undefined,
+  }));
+}
+
 function toInterviewMessages(event: V2SessionContextEvent): InterviewMessage[] {
   return event.messages.map((message) => ({
     info: { role: message.role, id: message.id },
-    parts: message.content.map((part) => ({
-      type: typeof part.type === 'string' ? part.type : undefined,
-      text: typeof part.text === 'string' ? part.text : undefined,
-    })),
+    parts: projectContent(message.content),
   }));
 }
 
@@ -48,7 +60,6 @@ export interface V2InterviewBridge {
   registerCommand(draft: V2CommandDraft): void;
   handleContext(event: V2SessionContextEvent): Promise<void>;
   handleEvent(event: Record<string, unknown>): Promise<void>;
-  getTranscript(sessionID: string): InterviewMessage[];
   dispose(): void;
 }
 
@@ -80,16 +91,71 @@ export function createV2InterviewBridge(
   options: {
     /** Already-listening server for the dashboard role to adopt. */
     server?: Server;
+    /** Test seam: override the per-session retention cap. */
+    maxRetainedSessions?: number;
   } = {},
 ): V2InterviewBridge {
+  // Last raw context event per retained session (a reference — no
+  // projection). The InterviewMessage projection is derived lazily by
+  // runtime.messages() exactly where the interview service consumes it.
+  const rawEvents = new Map<string, V2SessionContextEvent>();
+  // Lazily derived (memoized) transcript projections + streamed assistant
+  // turns. Only populated while an interview is actually active for the
+  // session (or a marker dispatch is in flight).
   const transcripts = new Map<string, InterviewMessage[]>();
   const activeText = new Map<string, string>();
+  const maxRetainedSessions =
+    options.maxRetainedSessions ?? MAX_RETAINED_SESSIONS;
   // Reduced hosts may omit the session domain entirely.
   const methods = (ctx.session ?? {}) as V2Session;
   const submitUserText = createSessionSubmit(ctx);
 
+  function pruneRetainedSessions(): void {
+    for (const map of [rawEvents, transcripts, activeText]) {
+      while (map.size > maxRetainedSessions) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+      }
+    }
+  }
+
+  function isActiveSession(sessionID: string): boolean {
+    return service.getActiveInterviewId(sessionID) !== null;
+  }
+
+  /** Lazily derive (and memoize) the transcript projection from the
+   * retained raw event. Memoized so the projection runs at most once per
+   * context event and streamed assistant turns mutate the exact array
+   * runtime.messages() hands out. */
+  function transcriptFor(sessionID: string): InterviewMessage[] {
+    let messages = transcripts.get(sessionID);
+    if (!messages) {
+      const raw = rawEvents.get(sessionID);
+      if (!raw) return [];
+      messages = toInterviewMessages(raw);
+      transcripts.set(sessionID, messages);
+      pruneRetainedSessions();
+    }
+    return messages;
+  }
+
+  /** Track per-session state only while an interview is actually active:
+   * refresh the retained raw event (projection stays lazy), or drop stale
+   * state left by a dispatch that threw mid-flight. */
+  function observeContext(event: V2SessionContextEvent): void {
+    if (isActiveSession(event.sessionID)) {
+      rawEvents.set(event.sessionID, event);
+      transcripts.delete(event.sessionID);
+    } else if (rawEvents.has(event.sessionID)) {
+      rawEvents.delete(event.sessionID);
+      transcripts.delete(event.sessionID);
+    }
+    pruneRetainedSessions();
+  }
+
   const runtime: InterviewSessionRuntime = {
-    messages: async (sessionID) => transcripts.get(sessionID) ?? [],
+    messages: async (sessionID) => transcriptFor(sessionID),
     notify: async (sessionID, text) => {
       // synthetic only — no prompt fallback: `resume: false` admits the
       // input WITHOUT waking the session, mirroring the v1 noReply prompt
@@ -206,14 +272,24 @@ export function createV2InterviewBridge(
   }
 
   async function handleContext(event: V2SessionContextEvent): Promise<void> {
-    const messages = toInterviewMessages(event);
-    transcripts.set(event.sessionID, messages);
-
     const trailing = event.messages.at(-1);
-    if (trailing?.role !== 'user') return;
+    if (trailing?.role !== 'user') {
+      observeContext(event);
+      return;
+    }
     const text = textFromContent(trailing.content);
     const match = text.match(MARKER_PATTERN);
-    if (!match) return;
+    if (!match) {
+      observeContext(event);
+      return;
+    }
+
+    // Bind the raw event (no projection) so the dispatch below — which
+    // creates/resumes an interview and calls runtime.messages() — observes
+    // this exact transcript state, including the not-yet-rewritten marker.
+    rawEvents.set(event.sessionID, event);
+    transcripts.delete(event.sessionID);
+    pruneRetainedSessions();
 
     const output = {
       parts: [] as Array<{
@@ -233,11 +309,33 @@ export function createV2InterviewBridge(
     );
 
     applyInterviewCommandParts(trailing, text, output.parts);
-    transcripts.set(event.sessionID, toInterviewMessages(event));
+    if (rawEvents.get(event.sessionID) !== event) {
+      // A concurrent context event rebound the retained state; it owns the
+      // transcript from here on.
+      return;
+    }
+    const memo = transcripts.get(event.sessionID);
+    const projectedTrailing = memo?.at(-1);
+    if (projectedTrailing) {
+      // Mutate ONLY the projected trailing message (earlier projected
+      // messages stay byte-identical); the memo already holds the single
+      // projection made during the dispatch, so no second pass runs.
+      projectedTrailing.parts = projectContent(trailing.content);
+    }
+    if (!isActiveSession(event.sessionID)) {
+      // The dispatch produced no interview (e.g. the bare /interview
+      // ask-for-idea prompt): nothing consumes the transcript — drop the
+      // retained state.
+      rawEvents.delete(event.sessionID);
+      transcripts.delete(event.sessionID);
+    }
   }
 
+  /** Streamed assistant text is only recorded for sessions with an active
+   * interview — the only consumer of the transcript projection. */
   function appendText(sessionID: string, text: string): void {
-    const messages = transcripts.get(sessionID) ?? [];
+    if (!isActiveSession(sessionID)) return;
+    const messages = transcriptFor(sessionID);
     const last = messages.at(-1);
     if (last?.info?.role === 'assistant') {
       const part = last.parts?.find((item) => item.type === 'text');
@@ -256,7 +354,8 @@ export function createV2InterviewBridge(
   }
 
   function beginText(sessionID: string): void {
-    const messages = transcripts.get(sessionID) ?? [];
+    if (!isActiveSession(sessionID)) return;
+    const messages = transcriptFor(sessionID);
     messages.push({
       info: { role: 'assistant' },
       parts: [{ type: 'text', text: '' }],
@@ -274,12 +373,14 @@ export function createV2InterviewBridge(
 
     if (type === 'session.next.text.started') {
       activeText.set(sessionID, '');
+      pruneRetainedSessions();
       beginText(sessionID);
       return;
     }
     if (type === 'session.next.text.delta') {
       const text = `${activeText.get(sessionID) ?? ''}${typeof properties.delta === 'string' ? properties.delta : ''}`;
       activeText.set(sessionID, text);
+      pruneRetainedSessions();
       appendText(sessionID, text);
       return;
     }
@@ -297,6 +398,7 @@ export function createV2InterviewBridge(
     }
     if (type === 'session.deleted') {
       activeText.delete(sessionID);
+      rawEvents.delete(sessionID);
       transcripts.delete(sessionID);
       await (dashboardManager ?? service).handleEvent({
         event: { type: 'session.deleted', properties: { sessionID } },
@@ -317,11 +419,11 @@ export function createV2InterviewBridge(
     registerCommand,
     handleContext,
     handleEvent,
-    getTranscript: (sessionID) => transcripts.get(sessionID) ?? [],
     dispose: async () => {
       if (dashboardManager) await dashboardManager.dispose();
       server?.close();
       activeText.clear();
+      rawEvents.clear();
       transcripts.clear();
       log('[v2][interview] bridge disposed');
     },

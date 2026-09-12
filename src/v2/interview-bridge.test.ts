@@ -6,6 +6,7 @@ import {
   createV2InterviewBridge,
   markerText,
 } from './interview-bridge';
+import type { V2SessionContextEvent } from './types';
 
 function createContext(overrides?: {
   synthetic?: (input: Record<string, unknown>) => Promise<unknown>;
@@ -19,6 +20,42 @@ function createContext(overrides?: {
       rename: overrides?.rename,
       prompt: overrides?.prompt,
     },
+  };
+}
+
+/** Minimal context event whose trailing user message is the given marker. */
+function markerContextEvent(
+  sessionID: string,
+  idea: string,
+  id = 'tail',
+): V2SessionContextEvent {
+  return {
+    sessionID,
+    agent: 'orchestrator',
+    model: {},
+    system: [],
+    tools: {},
+    messages: [
+      { id, role: 'user', content: [{ type: 'text', text: markerText(idea) }] },
+    ],
+  };
+}
+
+/** Wrap a messages array so each full projection pass is counted:
+ * toInterviewMessages reads `.map` on the array exactly once per pass. */
+function countProjections(messages: V2SessionContextEvent['messages']): {
+  proxied: V2SessionContextEvent['messages'];
+  count: () => number;
+} {
+  let projections = 0;
+  return {
+    proxied: new Proxy(messages, {
+      get(target, prop) {
+        if (prop === 'map') projections += 1;
+        return Reflect.get(target, prop, target);
+      },
+    }),
+    count: () => projections,
   };
 }
 
@@ -244,44 +281,204 @@ describe('v2 interview bridge', () => {
     ]);
   });
 
-  test('projects text events and removes a deleted session', async () => {
+  test('no transcript projection for sessions without an active interview', async () => {
     const bridge = createV2InterviewBridge(createContext());
+    const { proxied, count } = countProjections([
+      { id: 'u', role: 'user', content: [{ type: 'text', text: 'hello' }] },
+    ]);
+
     await bridge.handleContext({
-      sessionID: 'ses_text',
+      sessionID: 'ses_plain',
       agent: 'orchestrator',
       model: {},
       system: [],
       tools: {},
-      messages: [
-        {
-          id: 'u',
-          role: 'user',
-          content: [{ type: 'text', text: 'hello' }],
-        },
-      ],
+      messages: proxied,
     });
+
+    // Eager design: one full projection per context event. Lazy design:
+    // none — nothing consumes the transcript without an interview.
+    expect(count()).toBe(0);
+    expect(await bridge.runtime.messages('ses_plain')).toEqual([]);
+
+    // Streaming text events for a non-interview session stay inert too.
     await bridge.handleEvent({
       type: 'session.next.text.started',
-      properties: { sessionID: 'ses_text' },
+      properties: { sessionID: 'ses_plain' },
     });
     await bridge.handleEvent({
       type: 'session.next.text.delta',
-      properties: { sessionID: 'ses_text', delta: 'one' },
+      properties: { sessionID: 'ses_plain', delta: 'ignored' },
     });
     await bridge.handleEvent({
-      type: 'session.next.text.delta',
-      properties: { sessionID: 'ses_text', delta: ' two' },
+      type: 'session.next.text.ended',
+      properties: { sessionID: 'ses_plain', text: 'ignored' },
     });
-    expect(bridge.getTranscript('ses_text').at(-1)?.parts?.[0]?.text).toBe(
-      'one two',
-    );
-
-    await bridge.handleEvent({
-      type: 'session.deleted',
-      properties: { sessionID: 'ses_text' },
-    });
-    expect(bridge.getTranscript('ses_text')).toEqual([]);
+    expect(count()).toBe(0);
+    expect(await bridge.runtime.messages('ses_plain')).toEqual([]);
     bridge.dispose();
+  });
+
+  test('marker dispatch projects the transcript exactly once', async () => {
+    const directory = `.tmp-v2-once-${Date.now()}`;
+    const synthetic = mock(async () => ({}));
+    const rename = mock(async () => ({}));
+    const bridge = createV2InterviewBridge(
+      createContext({ synthetic, rename }),
+      { outputFolder: directory } as never,
+    );
+    try {
+      const earlier = {
+        id: 'old',
+        role: 'user',
+        content: [{ type: 'text', text: 'Earlier context' }],
+      };
+      const event = markerContextEvent('ses_once', 'single projection idea');
+      event.messages.unshift(earlier);
+      const { proxied, count } = countProjections(event.messages);
+      event.messages = proxied;
+
+      await bridge.handleContext(event);
+
+      // One projection only — the dispatch's createInterview
+      // loadMessages. The eager design ran the full projection twice.
+      expect(count()).toBe(1);
+
+      // Memoized: consumption does not re-derive, and the projected
+      // trailing message reflects the marker rewrite.
+      const transcript = await bridge.runtime.messages('ses_once');
+      expect(count()).toBe(1);
+      expect(await bridge.runtime.messages('ses_once')).toBe(transcript);
+      expect(transcript).toHaveLength(2);
+      expect(transcript[0]).toEqual({
+        info: { role: 'user', id: 'old' },
+        parts: [{ type: 'text', text: 'Earlier context' }],
+      });
+      expect(transcript[1]?.parts?.[0]?.text).not.toContain(
+        '<omos-interview-command>',
+      );
+      expect(transcript[1]?.parts?.[0]?.text).toContain(
+        'single projection idea',
+      );
+      expect(transcript[1]?.parts?.[0]?.text).toContain('<interview_state>');
+    } finally {
+      bridge.dispose();
+      await fs.rm(`${process.cwd()}/${directory}`, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
+
+  test('marker dispatch that creates no interview retains nothing', async () => {
+    const bridge = createV2InterviewBridge(createContext());
+    // Bare /interview: the service pushes an ask-for-idea prompt and
+    // creates no interview — the transcript has no consumer.
+    await bridge.handleContext(markerContextEvent('ses_bare', ''));
+    expect(bridge.service.getActiveInterviewId('ses_bare')).toBeNull();
+    expect(await bridge.runtime.messages('ses_bare')).toEqual([]);
+    bridge.dispose();
+  });
+
+  test('streams assistant text for interview sessions and drops deleted sessions', async () => {
+    const directory = `.tmp-v2-text-${Date.now()}`;
+    const synthetic = mock(async () => ({}));
+    const bridge = createV2InterviewBridge(createContext({ synthetic }), {
+      outputFolder: directory,
+    } as never);
+    try {
+      // The marker dispatch creates the interview that activates retention.
+      await bridge.handleContext(markerContextEvent('ses_text', 'streaming'));
+      await bridge.handleEvent({
+        type: 'session.next.text.started',
+        properties: { sessionID: 'ses_text' },
+      });
+      await bridge.handleEvent({
+        type: 'session.next.text.delta',
+        properties: { sessionID: 'ses_text', delta: 'one' },
+      });
+      await bridge.handleEvent({
+        type: 'session.next.text.delta',
+        properties: { sessionID: 'ses_text', delta: ' two' },
+      });
+      await bridge.handleEvent({
+        type: 'session.next.text.ended',
+        properties: { sessionID: 'ses_text', text: 'one two' },
+      });
+      expect(
+        (await bridge.runtime.messages('ses_text')).at(-1)?.parts?.[0]?.text,
+      ).toBe('one two');
+
+      // A follow-up context event refreshes the retained transcript while
+      // the interview stays active (earlier turns become raw history).
+      await bridge.handleContext({
+        sessionID: 'ses_text',
+        agent: 'orchestrator',
+        model: {},
+        system: [],
+        tools: {},
+        messages: [
+          { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }] },
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'one two' }],
+          },
+          {
+            id: 'u2',
+            role: 'user',
+            content: [{ type: 'text', text: 'ANSWER' }],
+          },
+        ],
+      });
+      expect(
+        (await bridge.runtime.messages('ses_text')).at(-1)?.parts?.[0]?.text,
+      ).toBe('ANSWER');
+
+      await bridge.handleEvent({
+        type: 'session.deleted',
+        properties: { sessionID: 'ses_text' },
+      });
+      expect(await bridge.runtime.messages('ses_text')).toEqual([]);
+    } finally {
+      bridge.dispose();
+      await fs.rm(`${process.cwd()}/${directory}`, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
+
+  test('retained per-session transcripts are bounded (FIFO eviction)', async () => {
+    const directory = `.tmp-v2-bound-${Date.now()}`;
+    const synthetic = mock(async () => ({}));
+    const bridge = createV2InterviewBridge(
+      createContext({ synthetic }),
+      { outputFolder: directory } as never,
+      { maxRetainedSessions: 3 },
+    );
+    try {
+      for (let i = 0; i < 5; i++) {
+        await bridge.handleContext(
+          markerContextEvent(`ses_b${i}`, `bounded idea ${i}`),
+        );
+      }
+
+      // Oldest two sessions were evicted from bridge-side retention...
+      expect(await bridge.runtime.messages('ses_b0')).toEqual([]);
+      expect(await bridge.runtime.messages('ses_b1')).toEqual([]);
+      // ...the interviews themselves are service state and remain.
+      expect(bridge.service.getActiveInterviewId('ses_b0')).not.toBeNull();
+      // Newest retained sessions still project.
+      expect(await bridge.runtime.messages('ses_b2')).toHaveLength(1);
+      expect(await bridge.runtime.messages('ses_b4')).toHaveLength(1);
+    } finally {
+      bridge.dispose();
+      await fs.rm(`${process.cwd()}/${directory}`, {
+        recursive: true,
+        force: true,
+      });
+    }
   });
 
   test('shares one configured dashboard across multiple v2 sessions', async () => {

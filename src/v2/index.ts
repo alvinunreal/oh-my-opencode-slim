@@ -13,10 +13,7 @@
  */
 
 export type { V2InterviewBridge } from './interview-bridge';
-export {
-  createV2InterviewBridge,
-  INTERVIEW_COMMAND_MARKER,
-} from './interview-bridge';
+export { createV2InterviewBridge } from './interview-bridge';
 export { createV2Setup } from './setup';
 export type {
   ModelRef,
