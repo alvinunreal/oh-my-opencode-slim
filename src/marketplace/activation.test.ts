@@ -15,7 +15,6 @@ import {
   buildResolvedAgentRegistry,
   resolveDesiredMarketplaceLiveFromDisk,
 } from '../agents';
-import { ROLE_DEFINITIONS } from '../agents/role-definitions';
 import type { PluginConfig } from '../config';
 import { RuntimeConfig } from '../config/runtime';
 import { resolveRuntimeAgentName } from '../utils/agent-variant';
@@ -115,12 +114,7 @@ describe('marketplace runtime activation', () => {
         (agent) => agent.name === 'docsresearcher',
       );
       expect(derived?.baseRole).toBe('explorer');
-      expect(derived?.config.prompt).toContain(
-        ROLE_DEFINITIONS.explorer.basePrompt,
-      );
-      expect(derived?.config.prompt).toContain(
-        'Prefer documentation paths first.',
-      );
+      expect(derived?.config.prompt).toBe('Prefer documentation paths first.');
       expect(registry.mcpLists.docsresearcher).toEqual([]);
       expect(
         registry.routing.some((entry) => entry.agentName === 'docsresearcher'),

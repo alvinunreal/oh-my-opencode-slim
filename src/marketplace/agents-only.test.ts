@@ -6,10 +6,7 @@ import { buildResolvedAgentRegistry } from '../agents';
 import { RuntimeConfig } from '../config/runtime';
 import { PresetSchema } from '../config/schema';
 import { adaptPermissions } from '../v2/adapters';
-import {
-  composePackagePrompt,
-  resolveMarketplaceActivation,
-} from './activation';
+import { resolveMarketplaceActivation } from './activation';
 import { RETIRED_MARKETPLACE_PACKAGE_IDS } from './retirements';
 import {
   MarketplaceAgentManifestSchema,
@@ -81,15 +78,6 @@ describe('agents-only marketplace contract', () => {
     ).toBe(false);
   });
 
-  test('composes extension prompts in append and replace modes', () => {
-    expect(
-      composePackagePrompt('Builtin prompt.', 'Package prompt.', 'append'),
-    ).toBe('Builtin prompt.\n\nPackage prompt.');
-    expect(
-      composePackagePrompt('Builtin prompt.', 'Package prompt.', 'replace'),
-    ).toBe('Package prompt.');
-  });
-
   test('uses exact declared capabilities and keeps readonly extensions readonly', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-v2-'));
     try {
@@ -141,6 +129,8 @@ describe('agents-only marketplace contract', () => {
         { id: 'provider/model-b' },
       ]);
       expect(registry.sdkConfigs.derived.permission?.edit).toBe('deny');
+      expect(registry.sdkConfigs.standalone.prompt).toBe(manifest.prompt);
+      expect(registry.sdkConfigs.derived.prompt).toBe(manifest.prompt);
       expect(
         registry.agents.find((agent) => agent.name === 'explorer'),
       ).toBeDefined();

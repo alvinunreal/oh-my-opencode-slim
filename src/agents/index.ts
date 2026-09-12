@@ -17,7 +17,6 @@ import { type HostConfigSnapshot, RuntimeConfig } from '../config/runtime';
 import { applyOrchestratorModelConfig } from '../config/strip-orchestrator-model';
 import {
   type ActivatedMarketplaceAgent,
-  composePackagePrompt,
   type MarketplaceActivationPlan,
   type MarketplaceDiagnostic,
   reservedRuntimeNames,
@@ -1412,11 +1411,6 @@ export function createAgents(
       const role = activated.manifest.extends
         ? ROLE_DEFINITIONS[activated.manifest.extends.builtin]
         : undefined;
-      const override = getOverrideFromAgents(mergedAgents, name);
-      const customPrompts = loadAgentPrompt(name, {
-        preset: runtime.preset,
-        projectDirectory: options?.projectDirectory,
-      });
       const policy = activated.manifest.model;
       const model =
         policy.source === 'explicit'
@@ -1459,20 +1453,7 @@ export function createAgents(
       if (activated.manifest.color !== undefined) {
         agent.config.color = activated.manifest.color;
       }
-      agent.config.prompt = resolvePrompt(
-        name,
-        override?.prompt,
-        customPrompts.prompt,
-        role
-          ? composePackagePrompt(
-              role.basePrompt,
-              activated.manifest.prompt,
-              activated.manifest.extends?.promptMode ?? 'append',
-            )
-          : activated.manifest.prompt,
-        customPrompts.appendPrompt,
-        [TASK_REJECTION_INSTRUCTION],
-      );
+      agent.config.prompt = activated.manifest.prompt;
       return [agent];
     },
   );
