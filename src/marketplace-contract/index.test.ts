@@ -38,7 +38,7 @@ describe('marketplace contract routing export', () => {
     const expected = `${ROLE_DEFINITIONS.explorer.routingBlock.replaceAll(
       '@explorer',
       '@contract-agent',
-    )}\n\n- Package: Contract agent\n- Contract routing description.\n- **Delegate when:** The contract task matches.`;
+    )}\n\n- Lane: Contract routing description.\n- **Delegate when:** The contract task matches.`;
 
     expect(renderDefaultMarketplaceAutoDelegationBlock(manifest)).toBe(
       expected,

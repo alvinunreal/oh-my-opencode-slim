@@ -66,8 +66,7 @@ const v3Manifest: MarketplacePackageManifestV3 = {
 
 function expectedSuffix(manifest: MarketplacePackageManifest): string {
   return [
-    `- Package: ${manifest.displayName}`,
-    `- ${manifest.routing.description}`,
+    `- Lane: ${manifest.routing.description}`,
     `- **Delegate when:** ${manifest.routing.when}`,
   ].join('\n');
 }
@@ -141,8 +140,7 @@ describe('marketplace routing renderer', () => {
           '@build-agent',
         ),
         '',
-        '- Package: Routing v3 agent',
-        '- Package lane: Deterministic package lane.',
+        '- Lane: Deterministic package lane.',
         '- Stats: Fast implementation • Low context overhead',
         '- **Delegate when:** The task has a bounded implementation scope.',
         '- **Avoid:** Architecture decisions • Visual design work',
