@@ -1,0 +1,98 @@
+# Agents-Only Marketplace v2 — Release Record
+
+## Status
+
+Released and deployed.
+
+The marketplace now distributes agent packages only. The previous preparation
+plan, marketplace profiles, and role-contract model are retired.
+
+## Product Model
+
+Each marketplace package defines one agent:
+
+- **Standalone agent:** provides its complete prompt, model policy, tools,
+  skills, MCPs, routing guidance, and metadata.
+- **Built-in extension:** extends exactly one supported built-in agent:
+  `explorer`, `librarian`, `oracle`, `designer`, `fixer`, or `observer`.
+  Its prompt mode is `append` or `replace`.
+
+Marketplace packages cannot extend other marketplace packages. There are no
+marketplace profiles.
+
+Packages are data-only. They declare bounded tool, skill, and MCP requirements;
+they cannot ship executable scripts, hooks, or MCP commands. Effective
+capabilities are default-deny and can only be narrowed by host configuration.
+
+## Package, Registry, and Runtime Contracts
+
+- Agent manifests use schema version **2**.
+- Registry indexes use schema version **3** and are served from
+  `https://registry.ohmyopencodeslim.com/v2/`.
+- Each registry entry resolves an exact package version and SHA-256 artifact
+  digest.
+- `/v1/` indexes and artifacts remain immutable and continue to be served for
+  existing installations.
+- The local store is immutable by resolved version and startup remains offline.
+- Lifecycle commands are explicit: `install`, `enable`, `disable`, and
+  `remove`.
+- Activation is configured under `marketplace.agents`.
+- A reload is required after marketplace lifecycle changes; the live agent
+  registry is never hot-swapped.
+
+## Published v2 Catalog
+
+| Package | Built-in extension |
+| --- | --- |
+| `alvin/codebase-janitor` | `fixer` (`append`) |
+| `alvin/evidence-scout` | `librarian` (`append`) |
+| `alvin/interface-critic` | `designer` (`append`) |
+| `alvin/security-reviewer` | `oracle` (`append`) |
+| `alvin/visual-inspector` | `observer` (`append`) |
+
+The following package IDs are retired in v2 and omitted from its catalog:
+
+- `alvin/deepwork-implementer`
+- `alvin/deepwork-recon`
+- `alvin/deepwork-reviewer`
+
+## Release Evidence
+
+### Plugin
+
+- Published: `oh-my-opencode-slim@3.0.0-beta.3`
+- Commit: `41d538dc` — `feat(marketplace): adopt agents-only v2 model`
+- Validation: 2,794 tests passed, plus Biome CI, TypeScript, build, diff check,
+  deterministic lease concurrency coverage, and final Oracle approval.
+
+### Registry
+
+- Commits:
+  - `bbbb211` — `feat: publish agents-only v2 registry`
+  - `3ebc933` — `fix: harden registry deployment smoke`
+- Current deployed Worker version:
+  `fc5c703b-b17d-450b-9981-3b81f210a664`
+- Validation: 19 tests, build, index/artifact validation, additive and generated
+  output checks, live byte-for-byte v2 artifact verification, and final Oracle
+  approval.
+
+### Website
+
+- Commit: `d794b5a` — `feat: migrate marketplace to agents-only v2`
+- Current deployed Worker version:
+  `25e96ef7-0cdc-40d1-a227-bd92bd037e13`
+- Validation: live v2 snapshot sync/check, marketplace validation, Prettier,
+  Nuxt production build, and final Oracle approval.
+- Public smoke check passed: all five agents render, the Extensions filter
+  selects all extensions, and Registry links point to v2 manifests.
+- Cloudflare accepted a full-zone cache purge for `ohmyopencodeslim.com` after
+  the deployment.
+
+## Future Work
+
+- Add and curate new standalone or built-in-extension agent packages through
+  the v2 manifest and registry validation workflow.
+- Expand marketplace authoring and submission documentation as the contributor
+  workflow matures.
+- Keep v1 artifacts immutable while active installations continue to reference
+  them.
