@@ -364,7 +364,7 @@ describe('marketplace runtime activation', () => {
             work: {
               agents: {},
               marketplace: {
-                agents: ['alvin/evidence-scout'],
+                agents: ['alvin/deepwork-implementer'],
               },
             },
           },
@@ -373,13 +373,14 @@ describe('marketplace runtime activation', () => {
         'marketplace-retired-test',
       );
       expect(
-        registry.agents.some((agent) => agent.name === 'evidencescout'),
+        registry.agents.some((agent) => agent.name === 'implementer'),
       ).toBe(false);
       expect(registry.diagnostics).toEqual([
         {
-          packageId: 'alvin/evidence-scout',
+          packageId: 'alvin/deepwork-implementer',
           code: 'retired',
-          message: 'alvin/evidence-scout is retired and will not be activated',
+          message:
+            'alvin/deepwork-implementer is retired and will not be activated',
         },
       ]);
     } finally {

@@ -5,8 +5,6 @@ export const RETIRED_MARKETPLACE_PACKAGE_IDS = [
   'alvin/deepwork-implementer',
   'alvin/deepwork-recon',
   'alvin/deepwork-reviewer',
-  'alvin/evidence-scout',
-  'alvin/visual-inspector',
 ] as const;
 
 const retiredPackageIds = new Set<string>(RETIRED_MARKETPLACE_PACKAGE_IDS);
