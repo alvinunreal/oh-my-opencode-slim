@@ -59,10 +59,6 @@ export const AgentColorSchema = z.union([
 // Agent override configuration (distinct from SDK's AgentConfig)
 export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
 export const AgentBaseRoleSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
-export type AgentBaseRole = z.infer<typeof AgentBaseRoleSchema>;
-export type ModelInheritanceSource = z.infer<
-  typeof ModelInheritanceSourceSchema
->;
 
 export const AgentOverrideConfigSchema = z
   .object({

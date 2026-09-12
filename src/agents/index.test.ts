@@ -4,7 +4,6 @@ import {
   AgentOverrideConfigSchema,
   ALL_AGENT_NAMES,
   CouncilConfigSchema,
-  DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   PluginConfigSchema,
   SUBAGENT_NAMES,
@@ -15,7 +14,6 @@ import {
   applyModelInheritanceToConfig,
   createAgents,
   getAgentConfigs,
-  getDisabledAgents,
   isMarketplacePermissionDenied,
   isSubagent,
 } from './index';
@@ -1823,9 +1821,6 @@ describe('observer agent', () => {
     expect(names).not.toContain('designer');
   });
 
-  test('DEFAULT_DISABLED_AGENTS contains observer', () => {
-    expect(DEFAULT_DISABLED_AGENTS).toContain('observer');
-  });
 });
 
 describe('AgentOverrideConfigSchema permission validation', () => {
@@ -1948,118 +1943,6 @@ describe('createAgents with malformed disabled_tools', () => {
     );
     expect(orchestrator?.config.prompt).not.toContain(
       '`wait_for_user` is disabled',
-    );
-  });
-});
-
-describe('resolveAgentConfigModel', () => {
-  test('returns the explicit model when configured', () => {
-    const config: PluginConfig = {
-      agents: { oracle: { model: 'test/oracle-explicit' } },
-    };
-    expect(resolveAgentConfigModel(runtimeFor(config), 'oracle')).toBe(
-      'test/oracle-explicit',
-    );
-  });
-
-  test('returns the primary model of an explicit model array', () => {
-    const config: PluginConfig = {
-      agents: {
-        oracle: { model: ['test/primary', 'test/fallback'] },
-      },
-    };
-    expect(resolveAgentConfigModel(runtimeFor(config), 'oracle')).toBe(
-      'test/primary',
-    );
-  });
-
-  test('session inheritance resolves to no config model (parent session serves)', () => {
-    const config: PluginConfig = {
-      agents: { oracle: { inheritModelFrom: 'session' } },
-    };
-    expect(
-      resolveAgentConfigModel(runtimeFor(config), 'oracle'),
-    ).toBeUndefined();
-  });
-
-  test('orchestrator inheritance uses the configured orchestrator model', () => {
-    const config: PluginConfig = {
-      agents: {
-        orchestrator: { model: 'test/orch' },
-        oracle: { inheritModelFrom: 'orchestrator' },
-      },
-    };
-    expect(resolveAgentConfigModel(runtimeFor(config), 'oracle')).toBe(
-      'test/orch',
-    );
-  });
-
-  test('orchestrator inheritance without an orchestrator model leaves the config model-less', () => {
-    const config: PluginConfig = {
-      agents: { oracle: { inheritModelFrom: 'orchestrator' } },
-    };
-    expect(
-      resolveAgentConfigModel(runtimeFor(config), 'oracle'),
-    ).toBeUndefined();
-  });
-
-  test('fixer with no model inherits the librarian model', () => {
-    const config: PluginConfig = {
-      agents: { librarian: { model: 'anthropic/lib' } },
-    };
-    expect(resolveAgentConfigModel(runtimeFor(config), 'fixer')).toBe(
-      'anthropic/lib',
-    );
-  });
-
-  test('fixer without librarian falls back to the preset primary model', () => {
-    const config: PluginConfig = {
-      preset: 'default',
-      presets: {
-        default: { agents: { oracle: { model: 'test/primary' } } },
-      },
-    };
-    expect(resolveAgentConfigModel(runtimeFor(config), 'fixer')).toBe(
-      'test/primary',
-    );
-  });
-
-  test('matches the final config model createAgents produces for the fixer case', () => {
-    const config: PluginConfig = {
-      agents: { librarian: { model: 'anthropic/lib' } },
-    };
-    const runtime = runtimeFor(config);
-    const fixer = createAgents(runtime).find((a) => a.name === 'fixer');
-    expect(fixer?.config.model).toBe('anthropic/lib');
-    expect(resolveAgentConfigModel(runtime, 'fixer')).toBe(fixer?.config.model);
-  });
-
-  test('resolves a dynamic councillor primary model from the active council preset', () => {
-    const config: PluginConfig = {
-      council: CouncilConfigSchema.parse({
-        presets: {
-          default: {
-            alpha: { model: ['openai/primary', 'google/fallback'] },
-          },
-        },
-      }),
-    };
-    expect(
-      resolveAgentConfigModel(runtimeFor(config), 'councillor-alpha'),
-    ).toBe('openai/primary');
-  });
-
-  test('resolves an ACP wrapper model for background admission', () => {
-    const config: PluginConfig = {
-      acpAgents: {
-        research: {
-          command: 'research-agent',
-          wrapperModel: 'anthropic/sonnet',
-        },
-      },
-    };
-    expect(resolveAgentConfigModel(runtimeFor(config), 'research')).toBe(
-      'anthropic/sonnet',
     );
   });
 });

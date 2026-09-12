@@ -4,12 +4,10 @@ import {
   AGENT_ALIASES,
   type AgentOverrideConfig,
   ALL_AGENT_NAMES,
-  DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   loadAgentPrompt,
   loadPluginConfig,
   type PluginConfig,
-  PROTECTED_AGENTS,
   SUBAGENT_NAMES,
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
@@ -548,69 +546,6 @@ function applyModelInheritance(
   }
 }
 
-/**
- * Resolve the model an agent's final config carries, mirroring the combined
- * effect of `createAgents` fallbacks, `applyOverrides`, and the inheritance
- * passes. Returns `undefined` exactly when the agent config ends up with NO
- * model key — i.e. `inheritModelFrom: 'session'` (or `'orchestrator'` with no
- * configured orchestrator model) — in which case OpenCode serves the agent
- * with the parent session's current model.
- *
- * This is the single resolution source for both agent definition building and
- * background-task admission, so provider/model concurrency accounting keys off
- * the model the spawned subagent actually uses. Explicit `model` wins; then
- * `inheritModelFrom`; then the historical fixer → librarian fallback; then
- * the preset primary model; then the per-agent default.
- */
-export function resolveAgentConfigModel(
-  runtime: RuntimeConfig,
-  name: string,
-): string | undefined {
-  const mergedAgents = runtime.agents();
-  const override = getOverrideFromAgents(mergedAgents, name);
-  if (override?.model !== undefined) {
-    return getPrimaryModelFromOverride(override);
-  }
-  if (override?.inheritModelFrom === 'session') {
-    return undefined;
-  }
-  if (override?.inheritModelFrom === 'orchestrator') {
-    return getPrimaryModelFromOverride(
-      getOverrideFromAgents(mergedAgents, 'orchestrator'),
-    );
-  }
-  // Dynamic councillors are defined outside `agents()` under the selected
-  // council preset. Their generated agent config carries the preset model.
-  if (name.startsWith('councillor-')) {
-    const seat = name.slice('councillor-'.length);
-    const preset =
-      runtime.council?.presets?.[runtime.council.default_preset ?? 'default'];
-    return preset?.[seat]?.models?.[0]?.id;
-  }
-  // ACP agents are generated from `acpAgents`; admission is for the wrapper
-  // session, so account for its configured wrapper model when present.
-  if (runtime.acpAgents[name]?.wrapperModel) {
-    return runtime.acpAgents[name].wrapperModel;
-  }
-  if (name === 'fixer') {
-    const librarianModel = getPrimaryModelFromOverride(
-      getOverrideFromAgents(mergedAgents, 'librarian'),
-    );
-    return (
-      librarianModel ??
-      runtime.primaryModel ??
-      ROLE_DEFINITIONS.librarian.defaultModel
-    );
-  }
-  const roleName = runtime.agent(name)?.baseRole ?? name;
-  const role = ROLE_DEFINITIONS[roleName as keyof typeof ROLE_DEFINITIONS];
-  return (
-    runtime.primaryModel ??
-    role?.defaultModel ??
-    (DEFAULT_MODELS as Record<string, string | undefined>)[name]
-  );
-}
-
 function resolveMarketplaceBuiltinModel(
   runtime: RuntimeConfig,
   role: RoleDefinition,
@@ -623,7 +558,7 @@ function resolveMarketplaceBuiltinModel(
     return undefined;
   }
   if (override?.inheritModelFrom === 'orchestrator') {
-    return resolveAgentConfigModel(runtime, 'orchestrator');
+    return getPrimaryModelFromOverride(runtime.agent('orchestrator'));
   }
   return (
     runtime.primaryModel ??
@@ -1821,7 +1756,6 @@ function buildCanonicalAgentConfigs(
 
   return Object.fromEntries(entries);
 }
-
 function applyMcpPermissionRules(
   permission: unknown,
   agentMcps: readonly string[],
@@ -2238,21 +2172,4 @@ export function getAgentConfigs(
     string,
     SDKAgentConfig
   >;
-}
-
-/**
- * Get the set of disabled agent names from config, applying protection rules.
- */
-export function getDisabledAgents(config?: PluginConfig): Set<string> {
-  const userDisabled = config?.disabled_agents;
-  const disabledSource = Array.isArray(userDisabled)
-    ? userDisabled
-    : DEFAULT_DISABLED_AGENTS;
-  const disabled = new Set<string>();
-  for (const name of disabledSource) {
-    if (!PROTECTED_AGENTS.has(name)) {
-      disabled.add(name);
-    }
-  }
-  return disabled;
 }
