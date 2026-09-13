@@ -474,6 +474,16 @@ export async function handleToolExecuteAfter(
 
     const taskId = parseTaskIdFromTaskOutput(output.output);
     if (!taskId) {
+      // Host-output-drift detector: the task tool's terminal output no
+      // longer carries a parsable task id. The ~120-char preview shows
+      // what the host actually returned so format drift is diagnosable
+      // from the plugin log (board-injection has its own textPreview for
+      // synthetic parts — this one covers the native tool result path).
+      log('[task-session-manager] task output without a task id', {
+        callID: pending.callId,
+        sessionID: input.sessionID,
+        outputPreview: output.output.slice(0, 120),
+      });
       if (
         pending.resumedTaskId &&
         isMissingRememberedSessionError(output.output)

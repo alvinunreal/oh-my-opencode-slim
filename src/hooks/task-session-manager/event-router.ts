@@ -479,18 +479,35 @@ export async function handleEvent(
       : undefined;
     if (observation?.stale || observation?.activityFenceOnly) return;
     const job = observation?.job;
-    log('[task-session-manager] idle/status idle observed', {
-      sessionID: sessionId,
-      managesSession: sessionId
-        ? deps.options.shouldManageSession(sessionId)
-        : false,
-      terminalJobsPending: sessionId
-        ? (deps.terminalJobsInjectedByParent.get(sessionId)?.executions.size ??
-            0) +
-          (deps.pendingInjectedTerminalJobsByParent.get(sessionId)?.size ?? 0)
-        : 0,
-      runningJobForSession: job?.state === 'running' || false,
-    });
+    const runningJobForSession = job?.state === 'running' || false;
+    // Warn elevation: a tracked managed child (session.created-observed,
+    // not yet settled by its terminal output) reporting idle while the
+    // board holds no running record for it is the host/board drift
+    // signature — without the warn prefix these hid inside the routine
+    // idle log line. The logger is single-level text, so the severity
+    // rides the `[task-session-manager] WARN:` prefix (same convention
+    // as the `[plugin] WARN:` lines in src/index.ts).
+    const trackedManagedChildWithoutJob =
+      sessionId !== undefined &&
+      !runningJobForSession &&
+      deps.taskContextTracker.pendingManagedTaskIds.has(sessionId);
+    log(
+      trackedManagedChildWithoutJob
+        ? '[task-session-manager] WARN: idle observed for tracked managed child with no running board record'
+        : '[task-session-manager] idle/status idle observed',
+      {
+        sessionID: sessionId,
+        managesSession: sessionId
+          ? deps.options.shouldManageSession(sessionId)
+          : false,
+        terminalJobsPending: sessionId
+          ? (deps.terminalJobsInjectedByParent.get(sessionId)?.executions
+              .size ?? 0) +
+            (deps.pendingInjectedTerminalJobsByParent.get(sessionId)?.size ?? 0)
+          : 0,
+        runningJobForSession,
+      },
+    );
     if (sessionId && deps.options.shouldManageSession(sessionId)) {
       deps.idleReconciler.scheduleIdleReconciliation(sessionId);
     }
