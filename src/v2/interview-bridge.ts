@@ -31,11 +31,17 @@ export const INTERVIEW_MARKER = createCommandMarkerKit({
   trimArgs: true,
 });
 
-/** Cap on per-session state retained by the bridge (FIFO eviction).
- * Context events fire for every LLM request of every session; without a
- * bound a long-lived host would retain one transcript per session it has
- * ever seen. Mirrors MAX_PROMPT_BRIDGE_SESSIONS in ./setup.ts. */
+/** Cap on per-session state retained by the bridge (FIFO eviction of
+ * INACTIVE entries — active interviews are exempt, see
+ * pruneRetainedSessions). Context events fire for every LLM request of
+ * every session; without a bound a long-lived host would retain one
+ * transcript per session it has ever seen. Mirrors
+ * MAX_PROMPT_BRIDGE_SESSIONS in ./setup.ts. */
 const MAX_RETAINED_SESSIONS = 1024;
+
+/** One-shot guard for the all-retained-active overflow log (per process,
+ * not per bridge; deterministic text only). */
+let warnedRetentionCapExceededByActives = false;
 
 /** Render the `/interview` command marker with the given arguments. */
 export function markerText(args: string): string {
@@ -115,12 +121,32 @@ export function createV2InterviewBridge(
   const methods = (ctx.session ?? {}) as V2Session;
   const submitUserText = createSessionSubmit(ctx);
 
-  function pruneRetainedSessions(): void {
+  /** FIFO-evict inactive/stale entries down to the cap. `exempt` marks a
+   * session currently being materialized (transcriptFor during a marker
+   * dispatch's loadMessages — its interview does not exist yet, so the
+   * activity probe would evict the entry it is projecting). */
+  function pruneRetainedSessions(exempt?: string): void {
     for (const map of [rawEvents, transcripts, activeText]) {
-      while (map.size > maxRetainedSessions) {
-        const oldest = map.keys().next().value;
-        if (oldest === undefined) break;
-        map.delete(oldest);
+      let overflow = map.size - maxRetainedSessions;
+      if (overflow <= 0) continue;
+      // FIFO over inactive/stale entries only. Evicting an ACTIVE
+      // session's transcript makes runtime.messages() read [] and drives
+      // the interview service into a wrong 'completed' mode (PR #1171).
+      for (const key of map.keys()) {
+        if (overflow <= 0) break;
+        if (key === exempt) continue;
+        if (isActiveSession(key)) continue;
+        map.delete(key);
+        overflow -= 1;
+      }
+      if (overflow > 0 && !warnedRetentionCapExceededByActives) {
+        // Every remaining entry is an active interview: accept and retain
+        // — memory stays bounded by the service's live interview set,
+        // which drains on session.deleted.
+        warnedRetentionCapExceededByActives = true;
+        log(
+          '[v2][interview] retention cap exceeded by active interviews; retaining all',
+        );
       }
     }
   }
@@ -140,7 +166,10 @@ export function createV2InterviewBridge(
       if (!raw) return [];
       messages = toInterviewMessages(raw);
       transcripts.set(sessionID, messages);
-      pruneRetainedSessions();
+      // Exempt this session: during a marker dispatch, loadMessages runs
+      // BEFORE the interview record exists, so the plain activity probe
+      // would evict the entry being projected mid-dispatch.
+      pruneRetainedSessions(sessionID);
     }
     return messages;
   }
@@ -277,9 +306,11 @@ export function createV2InterviewBridge(
     // Bind the raw event (no projection) so the dispatch below — which
     // creates/resumes an interview and calls runtime.messages() — observes
     // this exact transcript state, including the not-yet-rewritten marker.
+    // No prune here: at bind time the session is not yet active, so a
+    // pre-dispatch pass could evict the in-flight marker session itself
+    // whenever the older entries are all active.
     rawEvents.set(event.sessionID, event);
     transcripts.delete(event.sessionID);
-    pruneRetainedSessions();
 
     const output = {
       parts: [] as Array<{
@@ -323,6 +354,9 @@ export function createV2InterviewBridge(
       rawEvents.delete(event.sessionID);
       transcripts.delete(event.sessionID);
     }
+    // Prune after the dispatch, once the marker session's interview (if
+    // any) exists and is therefore exempt from eviction.
+    pruneRetainedSessions();
   }
 
   /** Streamed assistant text is only recorded for sessions with an active

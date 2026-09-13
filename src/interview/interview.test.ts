@@ -2130,3 +2130,53 @@ describe('interview service abandoned-record retention', () => {
     }
   });
 });
+
+describe('interview service empty-transcript belt (v2 retention loss)', () => {
+  test('an active interview with an empty whole-transcript read stays awaiting-agent', async () => {
+    const tempDir = await fs.mkdtemp('/tmp/interview-test-');
+    try {
+      const ctx = createMockContext({ directory: tempDir });
+      const service = createInterviewService(ctx, undefined, {
+        // A runtime whose whole-transcript read is empty — impossible on
+        // v1 (real SDK reads), the exact state a live v2 interview sees
+        // when the bridge's retention eviction dropped its transcript.
+        runtime: {
+          messages: async () => [],
+          notify: async () => {},
+          continue: async () => {},
+          rename: async () => {},
+        },
+      });
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'ses_evicted',
+          arguments: 'eviction belt idea',
+        },
+        output,
+      );
+      const interviewId = service.getActiveInterviewId('ses_evicted');
+      expect(interviewId).not.toBeNull();
+
+      // Idle + no parsed state: without the belt this computed 'completed'
+      // even though the whole-transcript read was empty — the answer form
+      // vanished for a live interview (PR #1171).
+      await service.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'ses_evicted',
+            status: { type: 'idle' },
+          },
+        },
+      });
+      const state = await service.getInterviewState(interviewId as string);
+      expect(state.mode).toBe('awaiting-agent');
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});

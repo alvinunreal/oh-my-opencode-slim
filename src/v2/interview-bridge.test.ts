@@ -59,6 +59,28 @@ function countProjections(messages: V2SessionContextEvent['messages']): {
   };
 }
 
+/** Marker event whose messages array throws on the FIRST projection pass
+ * (`.map`) only: the dispatch's loadMessages rejects mid-flight, leaving
+ * the session's retained state inactive (throw-path retention), while a
+ * later projection of the same retained event succeeds. */
+function unprojectableMarkerEvent(
+  sessionID: string,
+  idea: string,
+): V2SessionContextEvent {
+  const event = markerContextEvent(sessionID, idea);
+  let armed = true;
+  event.messages = new Proxy(event.messages, {
+    get(target, prop) {
+      if (prop === 'map' && armed) {
+        armed = false;
+        throw new Error('projection blocked');
+      }
+      return Reflect.get(target, prop, target);
+    },
+  });
+  return event;
+}
+
 describe('markerText', () => {
   test('renders args byte-exact', () => {
     expect(markerText('build a notes app')).toBe(
@@ -489,8 +511,8 @@ describe('v2 interview bridge', () => {
     }
   });
 
-  test('retained per-session transcripts are bounded (FIFO eviction)', async () => {
-    const directory = `.tmp-v2-bound-${Date.now()}`;
+  test('active interviews are exempt from retention eviction (all-active over cap)', async () => {
+    const directory = `.tmp-v2-active-cap-${Date.now()}`;
     const synthetic = mock(async () => ({}));
     const bridge = createV2InterviewBridge(
       createContext({ synthetic }),
@@ -498,20 +520,57 @@ describe('v2 interview bridge', () => {
       { maxRetainedSessions: 3 },
     );
     try {
+      // Five marker dispatches, five live interviews, cap 3: every entry
+      // is active, so nothing is evictable. The cap yields to the live
+      // interview set (logged once per process) instead of dropping an
+      // active session's transcript — runtime.messages() reading [] drove
+      // performSyncInterview into a wrong mode:'completed' (PR #1171).
       for (let i = 0; i < 5; i++) {
         await bridge.handleContext(
-          markerContextEvent(`ses_b${i}`, `bounded idea ${i}`),
+          markerContextEvent(`ses_a${i}`, `active cap idea ${i}`),
         );
       }
+      for (let i = 0; i < 5; i++) {
+        expect(bridge.service.getActiveInterviewId(`ses_a${i}`)).not.toBeNull();
+        expect(await bridge.runtime.messages(`ses_a${i}`)).toHaveLength(1);
+      }
+    } finally {
+      bridge.dispose();
+      await fs.rm(`${process.cwd()}/${directory}`, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
 
-      // Oldest two sessions were evicted from bridge-side retention...
-      expect(await bridge.runtime.messages('ses_b0')).toEqual([]);
-      expect(await bridge.runtime.messages('ses_b1')).toEqual([]);
-      // ...the interviews themselves are service state and remain.
-      expect(bridge.service.getActiveInterviewId('ses_b0')).not.toBeNull();
-      // Newest retained sessions still project.
-      expect(await bridge.runtime.messages('ses_b2')).toHaveLength(1);
-      expect(await bridge.runtime.messages('ses_b4')).toHaveLength(1);
+  test('inactive retained sessions are still FIFO-evicted under cap pressure', async () => {
+    const directory = `.tmp-v2-inactive-cap-${Date.now()}`;
+    const synthetic = mock(async () => ({}));
+    const bridge = createV2InterviewBridge(
+      createContext({ synthetic }),
+      { outputFolder: directory } as never,
+      { maxRetainedSessions: 3 },
+    );
+    try {
+      // Two throw-path dispatches: retained but inactive (no interview
+      // was created — the projection inside loadMessages rejected).
+      for (const sessionID of ['ses_i0', 'ses_i1']) {
+        await expect(
+          bridge.handleContext(unprojectableMarkerEvent(sessionID, 'boom')),
+        ).rejects.toThrow('projection blocked');
+        expect(bridge.service.getActiveInterviewId(sessionID)).toBeNull();
+      }
+      // Two successful dispatches: their post-dispatch prune evicts the
+      // OLDEST inactive entry (ses_i0) once the cap is exceeded.
+      await bridge.handleContext(markerContextEvent('ses_a0', 'keep me 0'));
+      await bridge.handleContext(markerContextEvent('ses_a1', 'keep me 1'));
+
+      expect(await bridge.runtime.messages('ses_i0')).toEqual([]);
+      expect(await bridge.runtime.messages('ses_i1')).toHaveLength(1);
+      expect(
+        (await bridge.runtime.messages('ses_a0')).at(-1)?.parts?.[0]?.text,
+      ).toContain('keep me 0');
+      expect(await bridge.runtime.messages('ses_a1')).toHaveLength(1);
     } finally {
       bridge.dispose();
       await fs.rm(`${process.cwd()}/${directory}`, {
