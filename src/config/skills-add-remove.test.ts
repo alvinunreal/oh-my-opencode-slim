@@ -68,6 +68,15 @@ describe('skills_add / skills_remove directives', () => {
     expect('skills_remove' in (entry ?? {})).toBe(false);
   }
 
+  // Effective skills for a loaded config, resolved exactly the way the
+  // plugin consumes them (RuntimeConfig.agents()).
+  function effectiveAgent(
+    loaded: PluginConfig,
+    name = 'oracle',
+  ): AgentOverrideConfig {
+    return runtimeFor(loaded).agents()[name] as AgentOverrideConfig;
+  }
+
   // Resolver unit tests -----------------------------------------------------
 
   test('resolveEffectiveSkills: base + add with remove winning over add', () => {
@@ -88,10 +97,16 @@ describe('skills_add / skills_remove directives', () => {
     );
   });
 
-  test('resolveEffectiveSkills: additions without a base', () => {
+  test('resolveEffectiveSkills: additions without a base keep default grants', () => {
     expect(
       resolveEffectiveSkills('oracle', undefined, ['x', 'y'], undefined),
-    ).toEqual(['x', 'y']);
+    ).toEqual([...getDefaultGrantedSkillNames('oracle'), 'x', 'y']);
+  });
+
+  test('resolveEffectiveSkills: additions without a base, orchestrator keeps allow-all', () => {
+    expect(
+      resolveEffectiveSkills('orchestrator', undefined, ['x'], undefined),
+    ).toEqual(['*', 'x']);
   });
 
   test('resolveEffectiveSkills: removal only, orchestrator defaults to allow-all', () => {
@@ -184,6 +199,8 @@ describe('skills_add / skills_remove directives', () => {
   });
 
   // Loader E2E ---------------------------------------------------------------
+  // The loader keeps directives raw; the effective list is resolved by
+  // RuntimeConfig.agents(), so E2E assertions go through runtimeFor().
 
   test('loader: global skills + project skills_add', () => {
     writeUserConfig({
@@ -196,13 +213,14 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual([
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual([
       'codemap',
       'deepwork',
       'nexus-backend',
       'nexus-frontend',
     ]);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: global skills + project skills_remove', () => {
@@ -214,8 +232,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['codemap']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['codemap']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: simultaneous add + remove with duplicates in one layer', () => {
@@ -230,8 +249,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['a', 'c']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['a', 'c']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: agent without existing skills gains skills via skills_add', () => {
@@ -240,8 +260,13 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['x', 'y']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual([
+      ...getDefaultGrantedSkillNames('oracle'),
+      'x',
+      'y',
+    ]);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: removal only, no base list', () => {
@@ -253,12 +278,14 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.orchestrator?.skills).toEqual(['*', '!foo']);
-    expectNoDirectiveKeys(loaded.agents?.orchestrator);
-    expect(loaded.agents?.oracle?.skills).toEqual(
+    const orchestrator = effectiveAgent(loaded, 'orchestrator');
+    expect(orchestrator.skills).toEqual(['*', '!foo']);
+    expectNoDirectiveKeys(orchestrator);
+    const oracle = effectiveAgent(loaded);
+    expect(oracle.skills).toEqual(
       getDefaultGrantedSkillNames('oracle').filter((n) => n !== 'codemap'),
     );
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    expectNoDirectiveKeys(oracle);
   });
 
   test('loader: custom agent inherits project skills_add', () => {
@@ -270,8 +297,12 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.['my-agent']?.skills).toEqual(['proj-skill']);
-    expectNoDirectiveKeys(loaded.agents?.['my-agent']);
+    const effective = effectiveAgent(loaded, 'my-agent');
+    expect(effective.skills).toEqual([
+      ...getDefaultGrantedSkillNames('my-agent'),
+      'proj-skill',
+    ]);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: preset skills + project skills_add', () => {
@@ -284,8 +315,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['a', 'b', 'c']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['a', 'b', 'c']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: preset skills + project skills_remove', () => {
@@ -298,8 +330,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['a']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['a']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: root skills replace preset skills, directive still applies', () => {
@@ -313,8 +346,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['x', 'c']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['x', 'c']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: preset-layer removal survives field-level merge', () => {
@@ -329,8 +363,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['x']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['x']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: wildcard base + project removal', () => {
@@ -342,8 +377,9 @@ describe('skills_add / skills_remove directives', () => {
     });
 
     const loaded = loadPluginConfig(projectDir, { silent: true });
-    expect(loaded.agents?.oracle?.skills).toEqual(['*', '!foo']);
-    expectNoDirectiveKeys(loaded.agents?.oracle);
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['*', '!foo']);
+    expectNoDirectiveKeys(effective);
   });
 
   test('loader: plain skills entry without directives is unchanged', () => {
@@ -354,6 +390,22 @@ describe('skills_add / skills_remove directives', () => {
     const loaded = loadPluginConfig(projectDir, { silent: true });
     expect(loaded.agents?.oracle).toEqual({ skills: ['*'] });
     expectNoDirectiveKeys(loaded.agents?.oracle);
+  });
+
+  test('loader: config keeps raw directives for runtime resolution', () => {
+    writeUserConfig({
+      agents: { oracle: { skills: ['a'] } },
+    });
+    writeProjectConfig({
+      agents: { oracle: { skills_add: ['b'] } },
+    });
+
+    const loaded = loadPluginConfig(projectDir, { silent: true });
+    expect(loaded.agents?.oracle).toEqual({
+      skills: ['a'],
+      skills_add: ['b'],
+    });
+    expect(effectiveAgent(loaded).skills).toEqual(['a', 'b']);
   });
 
   // Schema validation --------------------------------------------------------
@@ -408,12 +460,64 @@ describe('skills_add / skills_remove directives', () => {
     expectNoDirectiveKeys(switched);
   });
 
+  test('runtime: higher runtime preset replaces startup-preset directive', () => {
+    writeUserConfig({
+      preset: 'p1',
+      presets: {
+        p1: { oracle: { skills_add: ['b'] } },
+        p2: { oracle: { skills_add: ['c'] } },
+      },
+      agents: { oracle: { skills: ['a'] } },
+    });
+
+    const runtime = runtimeFor(loadPluginConfig(projectDir, { silent: true }));
+    expect(runtime.agents().oracle.skills).toEqual(['a', 'b']);
+
+    runtime.setRuntimePreset('p2');
+    const switched = runtime.agents().oracle;
+    expect(switched.skills).toEqual(['a', 'c']);
+    expectNoDirectiveKeys(switched);
+  });
+
+  test('runtime: empty skills_add in higher preset suppresses startup directive', () => {
+    writeUserConfig({
+      preset: 'p1',
+      presets: {
+        p1: { oracle: { skills_add: ['b'] } },
+        p2: { oracle: { skills_add: [] } },
+      },
+      agents: { oracle: { skills: ['a'] } },
+    });
+
+    const runtime = runtimeFor(loadPluginConfig(projectDir, { silent: true }));
+    expect(runtime.agents().oracle.skills).toEqual(['a', 'b']);
+
+    runtime.setRuntimePreset('p2');
+    expect(runtime.agents().oracle.skills).toEqual(['a']);
+  });
+
   // createAgents integration ----------------------------------------------------
 
   test('createAgents: folded skills become permission grants', () => {
     const config: PluginConfig = {
       agents: {
         oracle: { skills: ['simplify'], skills_add: ['my-skill'] },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle).toBeDefined();
+    const skillPermissions = (
+      oracle?.config.permission as Record<string, unknown>
+    )?.skill as Record<string, unknown> | undefined;
+    expect(skillPermissions?.['my-skill']).toBe('allow');
+    expect(skillPermissions?.simplify).toBe('allow');
+  });
+
+  test('createAgents: add-only directive keeps default grants', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: { skills_add: ['my-skill'] },
       },
     };
     const agents = createAgents(runtimeFor(config));

@@ -11,7 +11,6 @@ import {
   PluginConfigSchema,
   WebfetchConfigSchema,
 } from './schema';
-import { normalizeAgentSkillDirectives } from './utils';
 
 /**
  * Warning kinds produced during config loading.
@@ -729,11 +728,11 @@ export function loadPluginConfig(
     }
   }
 
-  // Fold per-agent skill directives (skills_add/skills_remove) into the
-  // effective skills list so downstream consumers see plain `skills`.
-  if (config.agents) {
-    config.agents = normalizeAgentSkillDirectives(config.agents);
-  }
+  // Note: per-agent skill directives (skills_add/skills_remove) are left
+  // raw in the returned config. They are folded into the effective skills
+  // list by RuntimeConfig.agents(), the single resolution point, so runtime
+  // /preset switching re-resolves them from the raw preset layers instead
+  // of operating on an already-baked skills array.
 
   // Normalize companion config defaults
   if (config.companion) {

@@ -102,11 +102,10 @@ export function getSkillPermissionsForAgent(
 /**
  * Fold per-agent skill directives into an effective skills list.
  *
- * 1. Without a base `skills` list and without additions, there is nothing
- *    to resolve unless a removal is requested. A removal without a base
- *    starts from the agent's default grants (orchestrator defaults to
- *    allow-all, so its working base is `['*']`). Additions without a base
- *    start from an empty list - they do not inherit default grants.
+ * 1. Without a base `skills` list the working base is the agent's default
+ *    grants (orchestrator defaults to allow-all, so its working base is
+ *    `['*']`), so `skills_add` alone keeps the defaults and appends, and
+ *    `skills_remove` alone prunes from the defaults.
  * 2. The working base and `add` are concatenated, deduped (first
  *    occurrence wins), then removal entries are filtered out.
  * 3. Removals operate on final skill tokens, never expanding `'*'`: a
@@ -135,16 +134,14 @@ export function resolveEffectiveSkills(
     return undefined;
   }
 
-  // A removal without a base list starts from the agent's default grants
-  // (orchestrator defaults to allow-all). Additions without a base start
-  // from an empty list and do not inherit default grants.
+  // Without a base list the working base is the agent's default grants
+  // (orchestrator defaults to allow-all), so additions build on top of
+  // what the agent already gets and removals prune from it.
   const workingBase =
     base ??
-    (addList.length === 0
-      ? agentName === 'orchestrator'
-        ? ['*']
-        : getDefaultGrantedSkillNames(agentName)
-      : []);
+    (agentName === 'orchestrator'
+      ? ['*']
+      : getDefaultGrantedSkillNames(agentName));
 
   // Removals operate on final skill tokens: a plain name removes that
   // name, and a '!name' entry removes the exclusion token itself (lifting
