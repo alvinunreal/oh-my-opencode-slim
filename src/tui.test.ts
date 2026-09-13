@@ -32,11 +32,47 @@ function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
     agentModels: {},
     agentVariants: {},
     activeSessions: {},
+    activityPids: {},
+    sessionParents: {},
     ...overrides,
   };
 }
 
 describe('tui sidebar agents', () => {
+  test('scopes active agents to the visible conversation (#1147)', () => {
+    const snapshot = createSnapshot({
+      activeSessions: { 'c1-oracle': 'oracle', 'c2-fixer': 'fixer' },
+      sessionParents: { 'c1-oracle': 'conv-1', 'c2-fixer': 'conv-2' },
+    });
+
+    expect(getActiveSidebarAgentNames(snapshot, 'conv-1')).toEqual(
+      new Set(['oracle']),
+    );
+    expect(getActiveSidebarAgentNames(snapshot, 'conv-2')).toEqual(
+      new Set(['fixer']),
+    );
+    // Home route: no visible conversation, keep the union.
+    expect(getActiveSidebarAgentNames(snapshot)).toEqual(
+      new Set(['oracle', 'fixer']),
+    );
+  });
+
+  test('navigating into a child route keeps its own spinner visible', () => {
+    const snapshot = createSnapshot({
+      activeSessions: { 'child-a': 'oracle' },
+      sessionParents: { 'child-a': 'root-a' },
+    });
+
+    // Route points at the child; it must resolve to its root before
+    // filtering, otherwise its own spinner disappears (#1147).
+    expect(getActiveSidebarAgentNames(snapshot, 'child-a')).toEqual(
+      new Set(['oracle']),
+    );
+    expect(getActiveSidebarAgentNames(snapshot, 'root-a')).toEqual(
+      new Set(['oracle']),
+    );
+  });
+
   test('hides disabled agents when models are persisted explicitly', () => {
     const agentNames = getSidebarAgentNames(
       createSnapshot({

@@ -76,9 +76,11 @@ import {
 } from './tools/task-activity';
 import {
   clearTuiAgentActivities,
+  readTuiSnapshot,
   recordTuiAgentActivity,
   recordTuiAgentModel,
   recordTuiAgentModels,
+  recordTuiSessionParent,
 } from './tui-state';
 import {
   BackgroundJobBoard,
@@ -206,10 +208,80 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const tuiActivityDirectory = (sessionID: string): string => {
     return sessionMetadata.getDirectory(sessionID) ?? ctx.directory;
   };
+  // Sidebar activity scoping (#1147): every active session and the visible
+  // route session resolve their conversation root against the persistent
+  // sessionParents index at render time. The recorder only persists the
+  // child→parent links; roots are never stored per-activity, so a
+  // late-learned link re-roots everything consistently. Process identity
+  // cannot scope this because v2 daemons are shared across windows.
   const markTuiAgentActive = (sessionID: string, agentName: string): void => {
     const directory = tuiActivityDirectory(sessionID);
     recordTuiAgentActivity({ sessionID, agentName, active: true }, directory);
     ownedTuiActivitySessions.set(sessionID, directory);
+    void hydrateTuiSessionParent(sessionID, directory);
+  };
+  // Sessions that predate this fix or whose session.created event was
+  // missed have no link in the persistent index. Ask the host once per
+  // session and walk up to a confirmed root; absence of parentID on a
+  // valid response is a final answer (top-level chat).
+  const hydratedTuiParents = new Set<string>();
+  const hydrateTuiSessionParent = async (
+    startSessionID: string,
+    directory: string,
+  ): Promise<void> => {
+    const sessionApi = (ctx as { client?: { session?: { get?: unknown } } })
+      .client?.session;
+    if (typeof sessionApi?.get !== 'function') return;
+    const lookup = sessionApi.get as (input: {
+      path: { id: string };
+      query: { directory: string };
+    }) => Promise<{ data?: unknown; error?: unknown; parentID?: unknown }>;
+    const visited = new Set<string>();
+    let current = startSessionID;
+    while (!visited.has(current)) {
+      visited.add(current);
+      const snapshot = readTuiSnapshot(directory);
+      const known = snapshot.sessionParents[current];
+      if (known !== undefined) {
+        current = known; // Persisted link; keep walking toward the root.
+        continue;
+      }
+      if (hydratedTuiParents.has(current)) return;
+      hydratedTuiParents.add(current);
+      let parentID: unknown;
+      try {
+        // Call with the session object as receiver: the SDK's generated
+        // method reads `this._client` (#595 class of regression).
+        const response = await lookup.call(sessionApi, {
+          path: { id: current },
+          query: { directory },
+        });
+        if (response?.error !== undefined) {
+          // HTTP error resolved instead of thrown: release the slot so a
+          // later activity can retry.
+          hydratedTuiParents.delete(current);
+          return;
+        }
+        const info = response?.data;
+        if (info === null || typeof info !== 'object') {
+          // Malformed response outside the host contract: release the
+          // slot rather than caching "confirmed root" on garbage.
+          hydratedTuiParents.delete(current);
+          return;
+        }
+        parentID = (info as { parentID?: unknown }).parentID;
+      } catch {
+        hydratedTuiParents.delete(current);
+        return;
+      }
+      if (typeof parentID === 'string' && parentID !== current) {
+        recordTuiSessionParent(current, parentID, directory);
+        current = parentID;
+        continue;
+      }
+      // Valid response without a parent: confirmed root, stop.
+      return;
+    }
   };
   const markTuiAgentInactive = (sessionID: string): void => {
     const directory =
@@ -1214,6 +1286,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (event.type === 'session.created') {
         const createdSessionId = event.properties?.info?.id;
         const createdSessionDir = event.properties?.info?.directory;
+        const createdSessionParent = (
+          event.properties as { info?: { parentID?: unknown } } | undefined
+        )?.info?.parentID;
+        if (createdSessionId && typeof createdSessionParent === 'string') {
+          // Persist the child→parent link so any process can resolve the
+          // conversation root, surviving restarts and revives (#1147).
+          recordTuiSessionParent(
+            createdSessionId,
+            createdSessionParent,
+            createdSessionDir ?? ctx.directory,
+          );
+        }
         if (createdSessionId && createdSessionDir) {
           sessionMetadata.setDirectory(createdSessionId, createdSessionDir);
         }

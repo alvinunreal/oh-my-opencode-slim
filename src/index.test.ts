@@ -448,6 +448,98 @@ describe('plugin TUI agent activity', () => {
       await otherHooks.dispose?.();
     }
   });
+
+  test('hydrates the full ancestry chain with the SDK receiver intact', async () => {
+    const calls: string[] = [];
+    const receivers: unknown[] = [];
+    const sessionApi = {
+      async get(this: unknown, input: { path: { id: string } }) {
+        calls.push(input.path.id);
+        receivers.push(this);
+        const parents: Record<string, string | undefined> = {
+          grandchild: 'child',
+          child: 'root',
+          root: undefined,
+        };
+        return { data: { parentID: parents[input.path.id] } };
+      },
+    };
+    const chainHooks = await plugin({
+      client: { session: sessionApi },
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+
+    try {
+      await chainHooks?.['chat.message']?.(
+        { sessionID: 'grandchild', agent: 'fixer' } as never,
+        {} as never,
+      );
+      // Fire-and-forget hydration; give the microtask queue a beat.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const snapshot = readTuiSnapshot(projectDir);
+      expect(snapshot.sessionParents).toEqual({
+        grandchild: 'child',
+        child: 'root',
+      });
+      expect(calls).toEqual(['grandchild', 'child', 'root']);
+      // The SDK method must run with its receiver (#595 class of bug).
+      for (const receiver of receivers) {
+        expect(receiver).toBe(sessionApi);
+      }
+    } finally {
+      await chainHooks?.dispose?.();
+    }
+  });
+
+  test('does not cache an errored host lookup as a confirmed root', async () => {
+    let attempts = 0;
+    const sessionApi = {
+      async get(input: { path: { id: string } }) {
+        attempts += 1;
+        if (attempts === 1) {
+          // HTTP error resolved instead of thrown (SDK default).
+          return { error: { status: 503 }, data: undefined };
+        }
+        if (input.path.id === 'real-root') {
+          return { data: { parentID: undefined } }; // Confirmed root.
+        }
+        return { data: { parentID: 'real-root' } };
+      },
+    };
+    const retryHooks = await plugin({
+      client: { session: sessionApi },
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+
+    try {
+      await retryHooks?.['chat.message']?.(
+        { sessionID: 'orphan-a', agent: 'fixer' } as never,
+        {} as never,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(readTuiSnapshot(projectDir).sessionParents).toEqual({});
+
+      // A later activation must retry: the failed slot was released.
+      await retryHooks?.['chat.message']?.(
+        { sessionID: 'orphan-a', agent: 'fixer' } as never,
+        {} as never,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // 1st: 503 (released). 2nd: retry yields the parent. 3rd: confirms
+      // real-root has no further parent (walk to a confirmed root).
+      expect(attempts).toBe(3);
+      expect(readTuiSnapshot(projectDir).sessionParents['orphan-a']).toBe(
+        'real-root',
+      );
+    } finally {
+      await retryHooks?.dispose?.();
+    }
+  });
 });
 
 describe('background task admission model resolution', () => {

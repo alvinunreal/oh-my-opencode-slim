@@ -17,6 +17,7 @@ import { openPresetManager } from './tui-preset';
 import {
   readTuiSnapshot,
   readTuiSnapshotAsync,
+  resolveTuiSnapshotRoot,
   type TuiSnapshot,
 } from './tui-state';
 import { isPluginDisabledByEnv } from './utils/env';
@@ -199,8 +200,31 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
 
 export function getActiveSidebarAgentNames(
   snapshot: TuiSnapshot,
+  visibleRootID?: string,
 ): ReadonlySet<string> {
-  return new Set(Object.values(snapshot.activeSessions));
+  const names = new Set<string>();
+  // Both sides resolve against the same persistent sessionParents index:
+  // the visible route session (possibly a child) to its root, and every
+  // active session to its root. This keeps spinners scoped to the
+  // conversation this window is viewing (#1147) — shared v2 daemons record
+  // every window's subagents from one process, so only the session tree
+  // can separate them — and a late-learned link re-roots both sides
+  // consistently. Without a visible session (home route) keep the union.
+  const root =
+    visibleRootID === undefined
+      ? undefined
+      : resolveTuiSnapshotRoot(snapshot, visibleRootID);
+  for (const [sessionID, agentName] of Object.entries(
+    snapshot.activeSessions,
+  )) {
+    if (
+      root === undefined ||
+      resolveTuiSnapshotRoot(snapshot, sessionID) === root
+    ) {
+      names.add(agentName);
+    }
+  }
+  return names;
 }
 
 export function getSidebarActivityIndicator(
@@ -368,9 +392,10 @@ function renderSidebar(
   configInvalid: boolean,
   compactSidebar: boolean,
   now = Date.now(),
+  visibleRootID?: string,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
-  const activeAgents = getActiveSidebarAgentNames(snapshot);
+  const activeAgents = getActiveSidebarAgentNames(snapshot, visibleRootID);
   return box(
     {
       width: '100%',
@@ -562,10 +587,12 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     }
   }, 1000);
   const animationTimer = setInterval(() => {
-    if (!disposed && Object.keys(snapshot().activeSessions).length > 0) {
+    if (!disposed && getActiveSidebarAgentNames(snapshot()).size > 0) {
       setAnimationNow(Date.now());
     }
   }, ACTIVITY_FRAME_MS);
+
+  const visibleSession = () => resolveRouteSessionId(ctx.ui.router.current());
 
   const disposeSlot = ctx.ui.slot({
     append: 'sidebar.content',
@@ -578,6 +605,7 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
           configInvalid,
           compactSidebar,
           animationNow(),
+          visibleSession(),
         ),
       ),
   });
@@ -661,7 +689,7 @@ const plugin: TuiDualContractModule = {
       }
     }, 1000);
     const animationTimer = setInterval(() => {
-      if (Object.keys(snapshot().activeSessions).length > 0) {
+      if (getActiveSidebarAgentNames(snapshot()).size > 0) {
         setAnimationNow(Date.now());
       }
     }, ACTIVITY_FRAME_MS);
@@ -684,6 +712,7 @@ const plugin: TuiDualContractModule = {
               configInvalid,
               compactSidebar,
               animationNow(),
+              resolveRouteSessionId(api.route.current),
             ),
           );
         },

@@ -9,6 +9,8 @@ import {
   recordTuiAgentActivity,
   recordTuiAgentModel,
   recordTuiAgentModels,
+  recordTuiSessionParent,
+  resolveTuiSessionRoot,
 } from './tui-state';
 
 let previousXdgDataHome: string | undefined;
@@ -268,6 +270,87 @@ describe('tui-state persistence', () => {
       'openai/gpt-5.6-luna',
     );
     expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  test('scopes recorded activity to the owning conversation tree', () => {
+    recordTuiSessionParent('child-a', 'conv-1', tempDir);
+    recordTuiSessionParent('child-b', 'conv-2', tempDir);
+    recordTuiAgentActivity(
+      { sessionID: 'child-a', agentName: 'oracle', active: true },
+      tempDir,
+    );
+    recordTuiAgentActivity(
+      { sessionID: 'child-b', agentName: 'fixer', active: true },
+      tempDir,
+    );
+
+    // Roots resolve through the persistent index; render compares both
+    // sides against it, so conv-2's subagents stay out of conv-1 (#1147).
+    expect(resolveTuiSessionRoot('child-a', tempDir)).toBe('conv-1');
+    expect(resolveTuiSessionRoot('child-b', tempDir)).toBe('conv-2');
+    expect(readTuiSnapshot(tempDir).activeSessions).toEqual({
+      'child-a': 'oracle',
+      'child-b': 'fixer',
+    });
+  });
+
+  test('resolves multi-level ancestry through the index', () => {
+    recordTuiSessionParent('grandchild', 'child', tempDir);
+    recordTuiSessionParent('child', 'root', tempDir);
+
+    expect(resolveTuiSessionRoot('grandchild', tempDir)).toBe('root');
+    expect(resolveTuiSessionRoot('child', tempDir)).toBe('root');
+    expect(resolveTuiSessionRoot('root', tempDir)).toBe('root');
+  });
+
+  test('re-roots a live activity when ancestry is discovered late', () => {
+    // Revived/restarted session recorded before its parent was known.
+    recordTuiAgentActivity(
+      { sessionID: 'child-a', agentName: 'oracle', active: true },
+      tempDir,
+    );
+    expect(resolveTuiSessionRoot('child-a', tempDir)).toBe('child-a');
+
+    recordTuiSessionParent('child-a', 'root-a', tempDir);
+
+    expect(readTuiSnapshot(tempDir).sessionParents['child-a']).toBe('root-a');
+    expect(resolveTuiSessionRoot('child-a', tempDir)).toBe('root-a');
+  });
+
+  test('startup sweep keeps live foreign activities and drops dead residue', async () => {
+    const dead = Bun.spawn(['true']);
+    await dead.exited;
+    const live = Bun.spawn(['sleep', '30']);
+    try {
+      const statePath = getTuiStatePath(tempDir);
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      fs.writeFileSync(
+        statePath,
+        `${JSON.stringify({
+          version: 1,
+          updatedAt: Date.now(),
+          agentModels: {},
+          agentVariants: {},
+          activeSessions: {
+            'dead-a': 'oracle',
+            'live-b': 'fixer',
+            'legacy-c': 'explorer',
+          },
+          activityPids: {
+            'dead-a': dead.pid,
+            'live-b': live.pid,
+          },
+        })}\n`,
+      );
+
+      clearTuiAgentActivities(tempDir);
+
+      expect(readTuiSnapshot(tempDir).activeSessions).toEqual({
+        'live-b': 'fixer',
+      });
+    } finally {
+      live.kill();
+    }
   });
 
   test('clears persisted activity while preserving model state', () => {

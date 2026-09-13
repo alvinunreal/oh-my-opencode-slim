@@ -9,6 +9,20 @@ export interface TuiSnapshot {
   agentModels: Record<string, string>;
   agentVariants: Record<string, string>;
   activeSessions: Record<string, string>;
+  /**
+   * Recording process per activity; used to sweep crash residue.
+   */
+  activityPids: Record<string, number>;
+  /**
+   * Persistent child→parent index for the project, independent of live
+   * activities. The single authority for scoping: both the visible route
+   * session and every active session resolve their conversation root
+   * against this same index at render time (#1147), so a late-learned
+   * link re-roots everything consistently. Shared v2 daemons record
+   * activities for every window from one process, so process identity
+   * cannot scope the sidebar; the session tree can.
+   */
+  sessionParents: Record<string, string>;
 }
 
 const STATE_DIR = 'oh-my-opencode-slim';
@@ -55,7 +69,27 @@ function emptySnapshot(): TuiSnapshot {
     agentModels: {},
     agentVariants: {},
     activeSessions: {},
+    activityPids: {},
+    sessionParents: {},
   };
+}
+
+function parseStringRecord(value: unknown): Record<string, string> {
+  if (value === null || typeof value !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'string') out[key] = entry;
+  }
+  return out;
+}
+
+function parsePidRecord(value: unknown): Record<string, number> {
+  if (value === null || typeof value !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'number' && entry > 0) out[key] = entry;
+  }
+  return out;
 }
 
 function parseSnapshot(value: string): TuiSnapshot {
@@ -69,6 +103,8 @@ function parseSnapshot(value: string): TuiSnapshot {
     agentModels: parsed.agentModels ?? {},
     agentVariants: parsed.agentVariants ?? {},
     activeSessions: parsed.activeSessions ?? {},
+    activityPids: parsePidRecord(parsed.activityPids),
+    sessionParents: parseStringRecord(parsed.sessionParents),
   };
 }
 
@@ -250,6 +286,8 @@ function cloneSnapshot(snapshot: TuiSnapshot): TuiSnapshot {
     agentModels: { ...snapshot.agentModels },
     agentVariants: { ...snapshot.agentVariants },
     activeSessions: { ...snapshot.activeSessions },
+    activityPids: { ...snapshot.activityPids },
+    sessionParents: { ...snapshot.sessionParents },
   };
 }
 
@@ -257,7 +295,9 @@ function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
   return (
     JSON.stringify(a.agentModels) === JSON.stringify(b.agentModels) &&
     JSON.stringify(a.agentVariants) === JSON.stringify(b.agentVariants) &&
-    JSON.stringify(a.activeSessions) === JSON.stringify(b.activeSessions)
+    JSON.stringify(a.activeSessions) === JSON.stringify(b.activeSessions) &&
+    JSON.stringify(a.activityPids) === JSON.stringify(b.activityPids) &&
+    JSON.stringify(a.sessionParents) === JSON.stringify(b.sessionParents)
   );
 }
 
@@ -375,14 +415,76 @@ export function recordTuiAgentActivity(
   updateSnapshot(projectDir, (snapshot) => {
     if (input.active) {
       snapshot.activeSessions[input.sessionID] = input.agentName;
+      snapshot.activityPids[input.sessionID] = process.pid;
     } else {
       delete snapshot.activeSessions[input.sessionID];
+      delete snapshot.activityPids[input.sessionID];
     }
   });
 }
 
+// Startup cleanup: drop crash residue (dead recorder pid), legacy entries
+// written before ownership existed, and entries from this very process
+// (fresh start owns nothing yet). Keep live activities owned by other
+// windows sharing the project directory (#1147); their sidebar visibility
+// is scoped by session tree at render time, not by process.
 export function clearTuiAgentActivities(projectDir: string): void {
   updateSnapshot(projectDir, (snapshot) => {
-    snapshot.activeSessions = {};
+    for (const sessionID of Object.keys(snapshot.activeSessions)) {
+      const pid = snapshot.activityPids[sessionID];
+      if (pid === undefined || pid === process.pid || !isProcessRunning(pid)) {
+        delete snapshot.activeSessions[sessionID];
+        delete snapshot.activityPids[sessionID];
+      }
+    }
   });
+}
+
+/**
+ * Record a child→parent link so any process (recorder or TUI) can resolve
+ * a session to its conversation root, surviving restarts and revives
+ * (#1147). Roots are never stored per-activity: render resolves the
+ * visible session and every active session against this same index, so a
+ * late-learned link re-roots everything consistently.
+ */
+export function recordTuiSessionParent(
+  sessionID: string,
+  parentID: string,
+  projectDir: string,
+): void {
+  updateSnapshot(projectDir, (snapshot) => {
+    snapshot.sessionParents[sessionID] = parentID;
+  });
+}
+
+/** Resolve a session to its conversation root via the persistent index. */
+export function resolveTuiSessionRoot(
+  sessionID: string,
+  projectDir: string,
+): string {
+  return resolveSnapshotRoot(readTuiSnapshot(projectDir), sessionID);
+}
+
+/**
+ * Root of a session according to an already-loaded snapshot. Used by the
+ * render side: the visible route session (possibly a child) must be
+ * compared against activity roots, not against itself (#1147).
+ */
+export function resolveTuiSnapshotRoot(
+  snapshot: TuiSnapshot,
+  sessionID: string,
+): string {
+  return resolveSnapshotRoot(snapshot, sessionID);
+}
+
+function resolveSnapshotRoot(snapshot: TuiSnapshot, sessionID: string): string {
+  let current = sessionID;
+  const seen = new Set<string>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = snapshot.sessionParents[current];
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  return current;
 }
