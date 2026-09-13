@@ -108,10 +108,17 @@ export function getSkillPermissionsForAgent(
  *    allow-all, so its working base is `['*']`). Additions without a base
  *    start from an empty list - they do not inherit default grants.
  * 2. The working base and `add` are concatenated, deduped (first
- *    occurrence wins), then removed names are filtered out.
- * 3. If the result contains `'*'`, every deduped removal that is not
- *    itself a member of the result is appended as `'!name'` so the
- *    exclusion beats the wildcard grant.
+ *    occurrence wins), then removal entries are filtered out.
+ * 3. Removals operate on final skill tokens, never expanding `'*'`: a
+ *    plain name removes that name token, and a `'!name'` entry removes
+ *    the exclusion token itself (lifting an existing exclusion). If the
+ *    result contains `'*'`, a plain-name removal is granted implicitly by
+ *    the wildcard, so it is made explicit by appending the existing
+ *    `'!name'` exclusion token - unless that exclusion is already present.
+ *
+ * The returned token list is consumed by the existing skill permission
+ * resolver (`getSkillPermissionsForAgent`), which continues to interpret
+ * `'*'` and `'!name'` as before.
  *
  * Returns `undefined` when nothing is configured to resolve (no base, no
  * additions, no removals) so the agent keeps its default skill behavior.
@@ -139,14 +146,24 @@ export function resolveEffectiveSkills(
         : getDefaultGrantedSkillNames(agentName)
       : []);
 
+  // Removals operate on final skill tokens: a plain name removes that
+  // name, and a '!name' entry removes the exclusion token itself (lifting
+  // an existing exclusion). The wildcard is never expanded here.
   const removeSet = new Set(removeList);
   let list = [...new Set([...workingBase, ...addList])];
   list = list.filter((skill) => !removeSet.has(skill));
 
+  // A plain-name removal that the list grants implicitly via '*' must be
+  // made explicit with the existing '!name' exclusion token, unless the
+  // exclusion is already present.
   if (list.includes('*')) {
     for (const name of new Set(removeList)) {
-      if (!list.includes(name)) {
-        list.push(`!${name}`);
+      if (name.startsWith('!')) {
+        continue;
+      }
+      const exclusion = `!${name}`;
+      if (!list.includes(exclusion)) {
+        list.push(exclusion);
       }
     }
   }

@@ -138,6 +138,44 @@ describe('skills_add / skills_remove directives', () => {
     ).toEqual(['*', '!foo']);
   });
 
+  test('resolveEffectiveSkills: wildcard token list is preserved, exclusion tokens are not duplicated', () => {
+    // skills: ["*", "!legacy"], skills_add: ["project-skill"],
+    // skills_remove: ["!legacy"] -> the '!legacy' token is removed (the
+    // exclusion is lifted); '*' and the existing resolver are untouched.
+    expect(
+      resolveEffectiveSkills(
+        'oracle',
+        ['*', '!legacy'],
+        ['project-skill'],
+        ['!legacy'],
+      ),
+    ).toEqual(['*', 'project-skill']);
+  });
+
+  test('resolveEffectiveSkills: plain-name removal does not duplicate an existing exclusion', () => {
+    expect(
+      resolveEffectiveSkills('oracle', ['*', '!foo'], undefined, ['foo']),
+    ).toEqual(['*', '!foo']);
+  });
+
+  test('resolveEffectiveSkills: removing an exclusion token lifts it under wildcard', () => {
+    expect(
+      resolveEffectiveSkills('oracle', ['*', '!foo'], undefined, ['!foo']),
+    ).toEqual(['*']);
+  });
+
+  test('resolveEffectiveSkills: removing an absent exclusion token is a no-op', () => {
+    expect(
+      resolveEffectiveSkills('oracle', ['*'], undefined, ['!foo']),
+    ).toEqual(['*']);
+  });
+
+  test('resolveEffectiveSkills: removing a plain name on a concrete list where only the exclusion exists is a no-op', () => {
+    expect(
+      resolveEffectiveSkills('oracle', ['a', 'b', '!c'], ['b'], ['c']),
+    ).toEqual(['a', 'b', '!c']);
+  });
+
   test('getDefaultGrantedSkillNames: oracle grants in registry order', () => {
     const grants = getDefaultGrantedSkillNames('oracle');
     expect(grants[0]).toBe('simplify');
