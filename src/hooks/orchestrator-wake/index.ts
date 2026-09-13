@@ -1284,6 +1284,7 @@ export function createOrchestratorWakeScheduler(
       const sentKeys = recoveryBatch
         ? [...recoveryBatch.deltas.keys()].slice(0, STOPPED_RECOVERY_WAKE_CHUNK)
         : [];
+      const sentOverflowCount = recoveryBatch?.overflowCount ?? 0;
       const recoveryDelta = sentKeys
         .map((key) => recoveryBatch?.deltas.get(key))
         .filter((text): text is string => typeof text === 'string')
@@ -1336,7 +1337,6 @@ export function createOrchestratorWakeScheduler(
         const remaining = pendingStoppedRecoveries.get(sessionID);
         if (remaining) {
           for (const key of sentKeys) remaining.deltas.delete(key);
-          const sentOverflowCount = recoveryBatch?.overflowCount ?? 0;
           remaining.overflowCount = Math.max(
             0,
             remaining.overflowCount - sentOverflowCount,
