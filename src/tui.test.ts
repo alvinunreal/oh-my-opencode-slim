@@ -8,11 +8,13 @@ import { readTmuxPane } from './multiplexer/tmux-pane-registry';
 import {
   type ActiveTmuxPaneRegistration,
   applyRemoteAgentModels,
+  createSerializedRefresh,
   fetchRemoteAgentModels,
   getActiveSidebarAgentNames,
   getContrastForeground,
   getSidebarActivityIndicator,
   getSidebarAgentNames,
+  isRefreshCurrent,
   readCompactSidebar,
   readConfigInvalid,
   splitSidebarModelId,
@@ -162,6 +164,40 @@ describe('tui sidebar agents', () => {
     expect(applyRemoteAgentModels(createSnapshot({}), {}).agentModels).toEqual(
       {},
     );
+  });
+
+  test('serialized refresh skips overlap and drops a stale directory (#1133)', async () => {
+    expect(isRefreshCurrent('/a', '/a')).toBe(true);
+    expect(isRefreshCurrent('/a', '/b')).toBe(false);
+
+    let running = 0;
+    let started = 0;
+    let finished = 0;
+    const release: Array<() => void> = [];
+    const schedule = createSerializedRefresh(async () => {
+      started += 1;
+      running += 1;
+      await new Promise<void>((resolve) => {
+        release.push(() => {
+          running -= 1;
+          finished += 1;
+          resolve();
+        });
+      });
+    });
+
+    schedule();
+    schedule();
+    expect(started).toBe(1);
+    expect(running).toBe(1);
+    release[0]?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(finished).toBe(1);
+    schedule();
+    expect(started).toBe(2);
+    release[1]?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(finished).toBe(2);
   });
 
   test('uses default-enabled fallback before models are persisted', () => {

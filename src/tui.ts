@@ -345,6 +345,30 @@ async function hydrateRemoteModels(
   return applyRemoteAgentModels(snapshot, models);
 }
 
+/** Skip overlapping sidebar refreshes so a slow host fetch cannot pile up. */
+export function createSerializedRefresh(run: () => Promise<void>): () => void {
+  let inFlight = false;
+  return () => {
+    if (inFlight) return;
+    inFlight = true;
+    void run()
+      .catch(() => {
+        // Ignore render errors; this is best-effort live status.
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  };
+}
+
+/** Drop a refresh whose directory changed while the host fetch was in flight. */
+export function isRefreshCurrent(
+  startedDirectory: string,
+  currentDirectory: string,
+): boolean {
+  return startedDirectory === currentDirectory;
+}
+
 export function getActiveSidebarAgentNames(
   snapshot: TuiSnapshot,
 ): ReadonlySet<string> {
@@ -711,15 +735,20 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
       remoteCache,
     );
     if (disposed) return;
+    if (
+      !isRefreshCurrent(
+        currentDirectory,
+        ctx.location?.directory ?? process.cwd(),
+      )
+    ) {
+      return;
+    }
     setSnapshot(nextSnapshot);
     ctx.renderer.requestRender();
   };
-  void refreshSidebar();
-  const renderTimer = setInterval(() => {
-    void refreshSidebar().catch(() => {
-      // Ignore render errors; this is best-effort live status.
-    });
-  }, 1000);
+  const scheduleRefresh = createSerializedRefresh(refreshSidebar);
+  scheduleRefresh();
+  const renderTimer = setInterval(scheduleRefresh, 1000);
   const animationTimer = setInterval(() => {
     if (!disposed && Object.keys(snapshot().activeSessions).length > 0) {
       setAnimationNow(Date.now());
@@ -818,15 +847,13 @@ const plugin: TuiDualContractModule = {
         currentDirectory,
         remoteCache,
       );
+      if (!isRefreshCurrent(currentDirectory, getTuiDirectory(api))) return;
       setSnapshot(nextSnapshot);
       api.renderer.requestRender();
     };
-    void refreshSidebar();
-    const renderTimer = setInterval(() => {
-      void refreshSidebar().catch(() => {
-        // Ignore render errors; this is best-effort live status.
-      });
-    }, 1000);
+    const scheduleRefresh = createSerializedRefresh(refreshSidebar);
+    scheduleRefresh();
+    const renderTimer = setInterval(scheduleRefresh, 1000);
     const animationTimer = setInterval(() => {
       if (Object.keys(snapshot().activeSessions).length > 0) {
         setAnimationNow(Date.now());
