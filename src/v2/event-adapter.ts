@@ -34,6 +34,12 @@
  * - `session.created` early registration (task-session-manager
  *   event-router): `properties.info.{id,parentID,agent?}` — plugin
  *   relevance is gated on `info.parentID` (child sessions only).
+ * - `session.deleted` deletion cleanup (task-session-manager
+ *   rememberDeletedSession tombstone/teardown, cache-monitor session
+ *   eviction): `properties.info.id` AND `properties.sessionID` — the two
+ *   consumers read different spellings, so the synthesized event carries
+ *   both. Synthesized from v2's flat `{sessionID}` payload; no
+ *   `generation` is fabricated.
  * - `message.updated` telemetry (cache-monitor
  *   parseCompletedAssistantMessage): `properties.info.{role:'assistant',
  *   sessionID, id, time.completed, tokens.input, tokens.cache.read,
@@ -260,6 +266,11 @@ function permissionAskedToV1(
  *   are terminalized by the following idle);
  * - child `session.created` (parentID present) → v1 early-registration
  *   shape `{info: {id, parentID, title?, agent?}}`;
+ * - `session.deleted` → v1 deletion-cleanup shape with the DUAL id
+ *   spelling (`properties.info.id` + `properties.sessionID`) the v1
+ *   consumers read (cache-monitor keys on `info.id`, the event router on
+ *   either; no `generation` is fabricated so the router's
+ *   unproven-relaunch deletion fence keeps its strength);
  * - usage telemetry → v1 completed-assistant `message.updated`;
  * - `form.created/replied/cancelled` → v1 `question.asked/replied/
  *   rejected` (QuestionV1 shapes; "global"-owned forms skipped);
@@ -370,6 +381,25 @@ export function mapV2EventToV1(
       // host-provided value through when present, never fabricate one.
       if (typeof props.agent === 'string') info.agent = props.agent;
       out.push({ type: 'session.created', properties: { info } });
+    }
+  } else if (type === 'session.deleted') {
+    // v2 delivers deletion flat (`{sessionID}`); without this synthesis the
+    // v1 deletion cleanup (task-session-manager rememberDeletedSession
+    // tombstone + board teardown, cache-monitor session eviction) never
+    // fires on v2 and deleted runs resurrect via rehydrate. The v1
+    // consumers read two different spellings — `properties.info.id`
+    // (cache-monitor deletedSessionID) and `properties.sessionID`
+    // (event-router deletion handler) — so BOTH are carried. No
+    // `generation` is fabricated: the event-router's unproven-relaunch
+    // deletion fence must stay free to reject same-ID replaunch deletions.
+    if (typeof props.sessionID === 'string') {
+      out.push({
+        type: 'session.deleted',
+        properties: {
+          info: { id: props.sessionID },
+          sessionID: props.sessionID,
+        },
+      });
     }
   } else if (
     type === 'session.usage.updated' ||

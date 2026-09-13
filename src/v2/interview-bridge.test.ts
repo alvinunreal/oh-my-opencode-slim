@@ -284,6 +284,44 @@ describe('v2 interview bridge', () => {
     bridge.dispose();
   });
 
+  test('resolves sessionID from live `data`-keyed events (text + deletion)', async () => {
+    // Live v2 hosts key the event payload under `data`; reading only
+    // `event.properties` left handleEvent dead on live v2 for ALL events.
+    const bridge = createV2InterviewBridge(createContext());
+    await bridge.handleContext({
+      sessionID: 'ses_live',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        {
+          id: 'u',
+          role: 'user',
+          content: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    });
+    await bridge.handleEvent({
+      type: 'session.next.text.started',
+      data: { sessionID: 'ses_live' },
+    });
+    await bridge.handleEvent({
+      type: 'session.next.text.delta',
+      data: { sessionID: 'ses_live', delta: 'from data' },
+    });
+    expect(bridge.getTranscript('ses_live').at(-1)?.parts?.[0]?.text).toBe(
+      'from data',
+    );
+
+    await bridge.handleEvent({
+      type: 'session.deleted',
+      data: { sessionID: 'ses_live' },
+    });
+    expect(bridge.getTranscript('ses_live')).toEqual([]);
+    bridge.dispose();
+  });
+
   test('shares one configured dashboard across multiple v2 sessions', async () => {
     const directory = `.tmp-v2-dashboard-${Date.now()}`;
     const { port, server } = await bindFreePort();

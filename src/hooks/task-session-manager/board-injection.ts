@@ -826,18 +826,12 @@ export function updateFromInjectedCompletion(
     }
   }
 
-  if (deletionEpoch !== undefined && origin === undefined) {
-    failClosedSyntheticTerminal(
-      state,
-      status,
-      occurrenceId,
-      provenanceKind,
-      existing,
-      'no message.part.updated origin was observed',
-    );
-    return undefined;
-  }
-
+  // Fence-first: a remembered (possibly stale) completion occurrence must
+  // skip CLEANLY before the deletion-epoch fail-closed branch below. A
+  // known occurrence is either a duplicate in the same lifecycle or stale
+  // history from an older generation — neither may update the current
+  // board, and neither justifies poisoning the fresh generation with
+  // markStatusUncertain when its occurrence bookkeeping is absent.
   if (
     hasRememberedInjectedCompletion(
       state,
@@ -847,6 +841,18 @@ export function updateFromInjectedCompletion(
       existing?.generation,
     )
   ) {
+    return undefined;
+  }
+
+  if (deletionEpoch !== undefined && origin === undefined) {
+    failClosedSyntheticTerminal(
+      state,
+      status,
+      occurrenceId,
+      provenanceKind,
+      existing,
+      'no message.part.updated origin was observed',
+    );
     return undefined;
   }
 

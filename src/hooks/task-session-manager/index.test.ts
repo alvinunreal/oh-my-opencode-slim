@@ -6047,6 +6047,162 @@ describe('task-session-manager hook', () => {
     expect(terminalListener).not.toHaveBeenCalled();
   });
 
+  test('skips an old remembered completion after relaunch without poisoning status (fence-first)', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-stale-fence',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+    const completion = {
+      type: 'text',
+      id: 'stale-fence-occurrence',
+      synthetic: true,
+      text: [
+        '<task id="child-stale-fence" state="completed">',
+        '<summary>Background task completed: old run</summary>',
+        '<task_result>old result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    const replayable = { ...completion };
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: completion },
+      },
+    });
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [completion],
+        },
+      ],
+    } as never);
+    expect(board.get('child-stale-fence')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'old result',
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-stale-fence' },
+      },
+    });
+    const relaunched = board.registerLaunch({
+      taskID: 'child-stale-fence',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+
+    // Simulate the older lifecycle's occurrence bookkeeping being absent
+    // (only the processed-completion FENCE survives): the fence must skip
+    // the replay cleanly BEFORE the deletion-epoch fail-closed branch can
+    // mark the fresh running generation status-uncertain.
+    getBackgroundJobLifecycleLedger(board).syntheticTerminalOccurrences.clear();
+
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [replayable],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-stale-fence')).toMatchObject({
+      generation: relaunched.generation,
+      state: 'running',
+      statusUncertain: false,
+      resultSummary: undefined,
+    });
+  });
+
+  test('keeps unobserved legacy and host-message completions fail-closed after deletion', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-unobserved-weak',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-unobserved-weak' },
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-unobserved-weak',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+
+    const legacyCompletion = {
+      type: 'text',
+      synthetic: true,
+      text: [
+        '<task id="child-unobserved-weak" state="completed">',
+        '<summary>Background task completed: legacy</summary>',
+        '<task_result>legacy result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [legacyCompletion],
+        },
+      ],
+    } as never);
+    expect(board.get('child-unobserved-weak')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+    });
+
+    const hostMessageCompletion = {
+      type: 'text',
+      synthetic: true,
+      messageID: 'unobserved-weak-message',
+      text: [
+        '<task id="child-unobserved-weak" state="completed">',
+        '<summary>Background task completed: host</summary>',
+        '<task_result>host result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [hostMessageCompletion],
+        },
+      ],
+    } as never);
+    expect(board.get('child-unobserved-weak')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+      resultSummary: undefined,
+    });
+    expect(terminalListener).not.toHaveBeenCalled();
+  });
+
   test('accepts a host messageID occurrence in the current generation', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});

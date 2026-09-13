@@ -495,6 +495,34 @@ describe('createV2Setup e2e', () => {
     expect(logAfterDispose).not.toContain('ses_after');
   }, 20_000);
 
+  test('event pump synthesizes session.deleted from the live `data` shape into the v1 cleanup path', async () => {
+    const { ctx, events } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      // Live wire shape: payload keyed under `data` (verified live on
+      // beta-19365). Only the SYNTHESIZED dual-spelling session.deleted
+      // reaches the v1 event-router cleanup path — the raw passthrough is
+      // inert there — so this log line is name-specific to the mapping.
+      events.push({
+        id: 'evt_session_deleted',
+        created: 1_788_961_637_000,
+        type: 'session.deleted',
+        durable: { aggregateID: 'ses_gone', seq: 1, version: 1 },
+        data: { sessionID: 'ses_gone' },
+      });
+
+      await settlePump();
+      const logText = readPluginLog();
+      expect(logText).toContain(
+        '[task-session-manager] session.deleted observed',
+      );
+      expect(logText).toContain('ses_gone');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
   test('dispose runs the v1 dispose hook (server.instance.disposed synthesis for wake timers)', async () => {
     const { ctx } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
