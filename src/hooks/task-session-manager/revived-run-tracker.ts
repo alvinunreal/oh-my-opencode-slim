@@ -6,7 +6,13 @@ import type {
 } from '../../utils/background-job-board';
 import type { BackgroundJobStore } from '../../utils/background-job-store';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
-import { extractChildTerminalEvidence } from '../../utils/child-transcript';
+import {
+  extractChildTerminalEvidence,
+  fetchChildTranscript,
+  responseError,
+  stringifyError,
+} from '../../utils/child-transcript';
+import { isRecord } from '../../utils/guards';
 import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { getClient } from '../../utils/opencode-client';
 import { COMPLETED_WITHOUT_TEXT_DIAGNOSTIC } from '../../utils/task';
@@ -92,19 +98,14 @@ export function createRevivedRunTracker(options: {
   const captureBaseline = async (
     taskID: string,
   ): Promise<string | undefined> => {
-    const session = getClient(options.input).session;
-    const messages =
-      typeof session.messages === 'function'
-        ? session.messages.bind(session)
-        : undefined;
-    if (typeof messages !== 'function') return undefined;
-    const response = await messages({
-      path: { id: taskID },
-      query: { directory: options.input.directory },
-    });
-    const error = responseError(response);
-    if (error !== undefined) throw new Error(errorText(error));
-    const data = Array.isArray(response.data) ? response.data : [];
+    const response = await fetchChildTranscript(
+      getClient(options.input),
+      taskID,
+      options.input.directory,
+    );
+    if (response === undefined) return undefined;
+    const data =
+      isRecord(response) && Array.isArray(response.data) ? response.data : [];
     const last = data.at(-1) as SessionMessage | undefined;
     return typeof last?.info?.id === 'string' ? last.info.id : undefined;
   };
@@ -157,21 +158,19 @@ export function createRevivedRunTracker(options: {
   };
 
   async function probeRun(run: RevivedRun): Promise<boolean> {
-    const session = getClient(options.input).session;
-    const messages =
-      typeof session.messages === 'function'
-        ? session.messages.bind(session)
-        : undefined;
-    if (typeof messages !== 'function') return false;
     let response: unknown;
     try {
-      response = await messages({
-        path: { id: run.taskID },
-        query: { directory: options.input.directory },
-      });
+      response = await fetchChildTranscript(
+        getClient(options.input),
+        run.taskID,
+        options.input.directory,
+      );
     } catch {
+      // Transport failures and error payloads both degrade to "not yet
+      // settled" — the probe retries on its stabilization schedule.
       return false;
     }
+    if (response === undefined) return false;
 
     const evidence = extractChildTerminalEvidence(response, {
       baselineMessageID: run.baselineMessageID,
@@ -314,7 +313,7 @@ export function createRevivedRunTracker(options: {
           }),
       );
       const error = responseError(response);
-      if (error !== undefined) throw new Error(errorText(error));
+      if (error !== undefined) throw new Error(stringifyError(error));
       const latest = options.backgroundJobBoard.get(run.taskID);
       if (
         !latest ||
@@ -462,25 +461,4 @@ function terminalOutcome(
   return record.state === 'completed' || record.state === 'error'
     ? record.state
     : undefined;
-}
-
-function responseError(response: unknown): unknown {
-  if (!isRecord(response)) return undefined;
-  return response.error === undefined || response.error === null
-    ? undefined
-    : response.error;
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

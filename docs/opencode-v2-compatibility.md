@@ -62,9 +62,11 @@ entrypoint v2 loads when the `dist/server` directory is registered directly
 requires it. v1 uses the main entry.
 
 Verified live on OpenCode v2 (all bridges green — health check
-`bridges:11`; the event stream, bridges, and orchestrator-wake
-children-driven degraded mode are exercised end-to-end on the stable host,
-including a queued wake firing after 60 s of parent idle with a stalled
+`bridges:11`, +1 on hosts that accept the `session.model.request` hook
+name for the chat.headers bridge; the event stream, bridges, and
+orchestrator-wake children-driven degraded mode are exercised end-to-end
+on the stable host — live mock-driven re-verification on 2026-09-09
+included a queued wake firing after 60 s of parent idle with a stalled
 background child). Every v2 API the adapter touches is
 capability-probed at runtime (`typeof ctx.mcp?.transform === 'function'`,
 `s.switchModel`, `ctx.generate`, …), so a host lacking one capability
@@ -84,10 +86,15 @@ degrades that single feature with a log line instead of breaking the load.
    sessions leaking), and `session.list` (v2 `Session.Info` page → the v1
    `{data}` envelope with `directory` derived from `location` and `outcome`
    mapped, used by the interview dashboard's session scan and the
-   orchestrator-wake children enumeration). The shim marks the input
-   `hostFlavor: 'v2'` and never fakes success shapes: methods the host
-   lacks degrade with an honest log (or are omitted entirely, as with
-   `session.get`, so capability probes see the truth).
+   orchestrator-wake children enumeration). Note that `remove` and `list`
+   are **not part of the stock v2 plugin session domain** — the
+   capability probes only succeed on hosts that extend it, and current
+   v2 hosts always take the degraded paths (see
+   [Not exposed to plugins: `session.list` / `session.remove`](#not-exposed-to-plugins-sessionlist-sessionremove)).
+   The shim marks the input `hostFlavor: 'v2'` and never fakes success
+   shapes: methods the host lacks degrade with an honest log (or are
+   omitted entirely, as with `session.get`, so capability probes see the
+   truth).
 2. Invokes `OhMyOpenCodeLite(pluginInput)` to reuse **all** existing build
    logic (config, agents, tools, hooks, job board, multiplexer, companion).
 3. Runs the v1 `config()` hook against a synthesized config to resolve agent
@@ -137,6 +144,34 @@ degrades that single feature with a log line instead of breaking the load.
       context hook's per-request `chat.message` emulation narrows to
       agent/model discovery; hosts that reject the hook name keep the
       full emulation as fallback.
+    - a native `ctx.session.hook("model.request")` registration
+      (capability-guarded): the v2 equivalent of the v1 `chat.headers` hook.
+      Fires once per provider request with a mutable `headers` record the
+      host merges into the outgoing HTTP request. The bridge replays the v1
+      Copilot initiator-header semantics: for `github-copilot` /
+      `github-copilot-enterprise` primary requests whose trailing user
+      message is an internal-initiator admission (orchestrator-wake queue
+      prompts, foreground-fallback replays), it sets `x-initiator: agent`
+      so Copilot's backend does not account plugin-driven turns as user
+      activity. The internal marker is learned in-band — prompt `metadata`
+      persisted onto the transcript user message (visible on the
+      context-event envelope) plus an admission tracker for
+      `session.synthetic` wakes (synthetic admissions skip the prompt hook
+      and the host drops their metadata from the LLM envelope, so the shim
+      records a client-chosen `msg_`-prefixed admission id the host
+      honors). Auxiliary kinds (compaction/title/generate) are skipped —
+      v2's built-in Copilot provider hook already marks those, and the
+      native fetch layer only escalates a pre-set `x-initiator: agent`
+      (never resets it to `user`), so the bridge composes with the
+      built-in. Known deviation: v1 also treats compaction-continuation
+      turns (`compaction_continue` part metadata) as internal; v2 core has
+      no such key and the bridge checks only the plugin metadata key, so a
+      primary continuation turn following compaction of an
+      internal-initiated session goes unmarked (false-negative only — a
+      narrow window that can only under-mark, never over-mark). Headers
+      are transport-level; no payload content is read or mutated. Hosts
+      that reject the hook name keep the pre-bridge behavior (header
+      simply unset) with a one-time log.
     - `tool.execute.before/after` → `ctx.tool.hook` via
       `createToolExecuteBridges` (`src/v2/setup.ts`): the host `subagent`
       tool is normalized to v1 `task` semantics (name mapping, `agent`→
@@ -152,7 +187,13 @@ degrades that single feature with a log line instead of breaking the load.
       (`src/v2/event-adapter.ts`): additive synthesis only — the raw v2 event
       is always dispatched first (the interview bridge depends on it), then
       synthesized v1 shapes: flat child `session.created` → v1
-      early-registration `{info: {id, parentID, agent?}}`, usage telemetry
+      early-registration `{info: {id, parentID, agent?}}`, flat
+      `session.deleted` → the v1 deletion-cleanup shape carrying **both**
+      id spellings the v1 consumers read (`properties.info.id` for the
+      cache monitor's session eviction, `properties.sessionID` for the
+      task-session-manager's tombstone/board teardown; no `generation` is
+      fabricated, so the event-router's unproven-relaunch deletion fence
+      keeps its strength), usage telemetry
       (`session.usage.updated`/`session.step.ended`) → a deduplicated
       completed-assistant `message.updated` for the cache monitor, the Form
       flow (`form.created`/`form.replied`/`form.cancelled`) → v1
@@ -196,12 +237,13 @@ the rest, and a zero-registration load logs a loud health-check warning.
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
 | Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | — |
 | webfetch secondary-model summaries | ✅ | ✅ via `ctx.generate.text` | host without `ctx.generate` → summaries unavailable (logged) |
+| Background-job state persistence (tombstones, deletion epochs, alias high-water marks) | ➖ process-local | ✅ via `ctx.storage` | optional domain; absent → pure in-memory fallback, zero behavior change (see [Background job state](#background-job-state-rehydrate-probe-and-persistence)) |
 | Foreground model fallback (rate-limit failover) | ✅ | ✅ shim translates re-prompt into `session.switchModel` + `delivery:"steer"` prompt | — |
 | `/preset` (interactive switcher) | ✅ | ✅ TUI plugin entry (`./tui` → `dist/tui2.js`): sidebar + `/preset` dialog or `/preset <name>` fast path | The layer registers from an `append: "app"` slot render because the host's `keymap.layer` is provider-scoped (calling it from plugin `setup` throws `Keymap.Provider is missing`); the command carries an `id` and `slash.arguments`; host needs `ui.slot` + `keymap.layer`; the interactive picker needs `ui.dialog.select` while `/preset <name>` works without it; feedback uses `ui.toast.show`; config-file `preset` still applies at load |
 | TUI default agent | ✅ orchestrator | ✅ orchestrator — `draft.default("orchestrator")`; the v2 TUI honors `default_agent` and hoists the default to the head of the agent list | — |
 | Multiplexer (tmux/zellij/herdr/cmux panes) | ✅ | ❌ host-gated off (`hostFlavor: 'v2'` → `shouldEnableMultiplexer` returns false and the session manager is forced to `type: "none"`) | by design — v2 renders subagents natively |
 | Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ✅ children-driven degraded mode (`backgroundJobs.orchestratorWake.mode`) | v2 wake enumerates children via `session.list({parentID})` with an event-tracked fallback, gates on children without a terminal `outcome` (staleness-bounded), and delivers with `queue`; v2's native subagent completion nudges still cover the happy path — the port adds a periodic watchdog for stuck children and unreconciled jobs |
-| `chat.headers` (custom request headers) | ✅ | ❌ unbridged | low value: v2 exposes a model request hook (`session.hook("model.request")`, with mutable `headers`) — will bridge only if asked for |
+| `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
 | Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
 
 ## Upstream behaviors to know
@@ -217,7 +259,21 @@ currently break this plugin:
   with the optional `metadata?` key observed on some events).
   The adapter reads `data` first with `properties` as a legacy fallback and
   always writes `properties` on the synthesized v1 shapes, because that is
-  the key the v1 consumers read.
+  the key the v1 consumers read. The interview bridge's event handler
+  (`handleEvent` in `src/v2/interview-bridge.ts`) resolves its payload
+  data-first the same way — reading only `properties` had left its
+  transcript projection and deletion cleanup dead on live v2 for every
+  event (`handleContext` is unaffected; it consumes a different event
+  type).
+- **`session.deleted` is synthesized with a dual id spelling.** v2
+  delivers deletion flat (`{sessionID}`), and the v1 deletion consumers
+  read two different spellings: the cache monitor's session eviction
+  reads `properties.info.id`, while the task-session-manager's
+  deletion handler accepts `properties.sessionID`. The synthesized v1
+  event therefore carries both. Without this synthesis the deletion
+  cleanup (rehydrate tombstone, board teardown, idle-token/input-wait
+  clears) never fired on v2, and deleted runs resurrected as
+  forever-running ghost records on the next request.
 - **Lifecycle keys on `session.execution.*`.** V2 hosts publish durable
   `session.execution.started/succeeded/failed/interrupted` events
   (`{sessionID}`, plus `error` on `.failed` and `reason` on
@@ -340,6 +396,124 @@ a clear error instead of silently replaying on the model that just failed
 (other prompt callers, like the orchestrator-wake scheduler, only pin the
 current model and keep steering).
 
+## Background job state: rehydrate probe and persistence
+
+Two mechanisms keep the in-memory background job board honest against the
+host across process and plugin restarts:
+
+### Rehydrate existence probe (`session.get`)
+
+Rehydration re-registers persisted *running* task tool parts so a plugin
+restart does not orphan in-flight background lanes — but a session deleted
+while the plugin was down would resurrect as a forever-running ghost.
+After rehydration registers a task, the task-session-manager transform
+fires a fire-and-forget `client.session.get` probe per newly registered
+taskID:
+
+- **Capability-gated, not host-gated — but v2-effective.** The probe runs
+  whenever the client exposes `session.get`; hosts without it skip
+  silently. The typed NotFound classification only crosses the v2 plugin
+  boundary (the host passes the raw core effect in-process): the v1 SDK
+  wraps 4xx responses as plain `Error` with a `.cause` (or returns an
+  `{error}` tuple when `throwOnError: false`), so on v1 hosts the probe
+  runs but harmlessly never tombstones — the wrapped rejection falls into
+  the transient fail-open path. The probe lives inside the existing
+  task-session-manager transform — no new pipeline step.
+- **NotFound classification is typed, never heuristic.** A rejection
+  tombstones the task only when `err._tag === 'Session.NotFoundError'`
+  (property check; never `instanceof` or message matching — the SDK error
+  class identity is unstable across host builds). Cleanup is
+  generation-freshness-guarded: the board record's generation is captured
+  before the async `get`, and a NotFound that resolves after a legitimate
+  same-ID relaunch (new generation, tombstone cleared) skips all cleanup
+  instead of deleting the live relaunched record. On a fresh hit, the four
+  probe cleanup actions run as one synchronous block — supervisor
+  `onSessionDeleted` first (it needs the record to exist so
+  deadline-exceeded runs finalize their wall-clock timeout; same ordering
+  as the event-router/coordinator deletion paths), then the rehydrate
+  tombstone, board drop, and concurrency `releaseTask` (all idempotent; a
+  missing `releaseTask` would leak an admission slot forever). The
+  canonical full deletion cleanup (input waits, idle tokens, pending-call
+  tracker, `clearParent`, task-context tracker, snapshots) runs via the
+  `session.deleted` event path.
+- **Any other rejection fails open** — the job stays registered and the
+  normal reconciliation paths keep their chance. The probe never rejects
+  unhandled.
+- **A resolved terminal outcome settles the job** through the same
+  `updateStatus` semantics as the idle-reconciliation host-outcome path:
+  `succeeded` requires usable final assistant text (otherwise the
+  textless-completion diagnostics apply, per the #1115 precedent);
+  `failed`/`interrupted` settle as error with the host outcome recorded.
+
+Related injection hardening: a remembered (possibly stale) processed
+completion now skips *cleanly* — the fence check runs before the
+deletion-epoch fail-closed branch in `updateFromInjectedCompletion`, so
+replaying an old completion after a delete + same-ID relaunch can no
+longer poison the fresh generation with `markStatusUncertain`. Unobserved
+completions for a deleted task still fail closed for every provenance
+kind.
+
+### Persistence via `ctx.storage` (v2)
+
+When the v2 host exposes the optional `storage` domain, the plugin
+persists background-job lifecycle state through
+`src/utils/background-job-persistence.ts` (configured in `setup` before
+the v1 factory runs):
+
+- **Tombstones and deletion epochs** are write-through: every in-memory
+  ledger mutation queues a matching persisted update, so the persisted
+  state tracks the ledger (writes are fire-and-forget — a crash between
+  the in-memory mutation and the queue flush loses that persisted entry,
+  an accepted degradation to process-local behavior). Clearing a tombstone
+  on a legitimate relaunch is persisted too — a deleted-then-relaunched
+  task is *not* ghost-skipped after a restart, while its deletion epoch
+  survives for generation fencing (restored epochs keep the epoch counter
+  monotonic).
+- **Alias counters** persist the last-seen counter per
+  `<parentSessionID>:<prefix>`. A post-restart board seeds from these
+  high-water marks, so a new alias never collides with a historical one.
+  The alias→taskID mapping itself is **not** restored — old aliases
+  resolve as not-found after a restart, which is the intended improvement
+  over silently reusing them for unrelated tasks.
+- **Seeding is backend-only.** Without `ctx.storage` (v1 hosts, hosts
+  without the domain) the module is a pure in-memory no-op sink: zero
+  behavior change, fresh boards and ledgers start exactly as
+  process-local as before.
+- **Bounded and serialized.** Persisted tombstones (and their epoch
+  entries) self-cap at the 500 most recent by recorded time; writes for
+  one key are serialized in-process (no concurrent read-modify-write);
+  write failures log and degrade to process-local behavior.
+
+### Diagnostics
+
+Two log lines aid drift diagnosis (both hosts): the task tool's terminal
+output that carries no parsable task id is logged with a ~140-char
+preview (`task output without a task id` — the host-output-drift
+detector), and an idle observation for a *tracked managed child* with no
+running board record logs with a `[task-session-manager] WARN:` prefix
+instead of the routine idle line.
+
+**Secret redaction at the logger.** Every plugin log line — file sink,
+stderr fallback, and the append-failure path — passes through
+shape-based secret redaction at the logger's single compose point
+(`src/utils/redact.ts`): known vendor token prefixes (`sk-`, `gh*`,
+`glpat-`, `xox*`, `AKIA`/`ASIA`), URL credentials
+(`scheme://user:password@` — password only), authorization schemes
+(Bearer/Basic/token), and generic 32+-character opaque runs are masked
+to 4 leading + 2 trailing characters. This is a best-effort barrier
+against *accidental* leaks in short previews, not an adversarial
+guarantee: unprefixed short secrets, secrets containing run-breaking
+characters, and chunked or obfuscated content remain residual gaps,
+while long opaque non-secrets (UUIDs, hashes, long paths) are masked as
+accepted false positives. The parse-miss preview (`task output without
+a task id`) is stricter still: it is **structure-only** — tag and field
+names survive for drift diagnosis, but every value (XML attribute
+values, `key:`/`key=` prose values) is fully replaced with `[masked]`
+before slicing, because parse-miss content is untrusted-by-format and
+values (description fields in particular) carry user-authored text.
+All other log sites rely on the shape-based redaction at the logger
+choke point.
+
 ## Limitations
 
 ### Interview
@@ -361,9 +535,48 @@ Q&A history.
   v2 renders subagents natively, so the multiplexer is host-gated off on v2
   (`shouldEnableMultiplexer` / `sessionManagerMultiplexerConfig` in
   `src/index.ts`).
-- **`chat.headers`.** Not bridged (low value on v2 — a model request hook
-  exists, `session.hook("model.request")` with mutable `headers`, if
-  demand appears).
+
+### Not exposed to plugins: `session.list` / `session.remove`
+
+The v2 plugin session domain (`packages/plugin/src/promise/session.ts`,
+`SessionDomain`, mirrored by the runtime object the promise adapter
+builds) exposes exactly `create`/`get`/`switchAgent`/`switchModel`/
+`prompt`/`generate`/`command`/`synthetic`/`interrupt`/`rename`/`move`/
+`wait`/`context` — **`list` and `remove` are not handed to plugins**.
+Both endpoints exist on the host's HTTP API, but the plugin context never
+receives them. The client shim capability-probes both at runtime
+(`typeof s.list === 'function'`, `s.remove`), so a future host that
+extends the domain gets real delegation with no plugin change; on current
+v2 hosts both probes fail and the shims degrade:
+
+- **Children enumeration (orchestrator-wake).** The shim's
+  `client.session.list` returns the v1-parity empty page `{data: []}`,
+  so `session.list({parentID})`-based enumeration never yields children
+  and the scheduler always runs its **event-tracked fallback**
+  (adapter-synthesized `session.created` parentID links plus tracked
+  busy/idle statuses — the mode the doc's wake section describes as the
+  fallback is effectively the only path on v2). The gate still passes
+  because it probes the *shim's* `list` function, which always exists.
+  The interview dashboard's session scan likewise sees no sessions from
+  `list` on v2.
+- **Session delete.** `client.session.delete` is a **no-op**: the
+  smartfetch secondary-model temp-session cleanup cannot remove sessions
+  through the shim on v2 (the temp sessions simply persist; nothing
+  fails loudly).
+
+Both degradations announce themselves in the plugin log with a single
+deterministic, **one-time-per-process** warning instead of degrading
+silently (`list`) or logging on every call (`remove`):
+
+```
+[v2][shim] session.list unavailable on this host build; children enumeration falls back to event tracking
+[v2][shim] session.remove unavailable on this host build; session delete is a no-op
+```
+
+The guards are module-level booleans with fixed text — no timestamps,
+session ids, or per-call payloads — so repeated wake polls and cleanup
+calls do not flood the log (the remove warning used to fire once per
+delete attempt).
 
 ### Orchestrator-wake on v2 (children-driven degraded mode)
 
@@ -379,16 +592,18 @@ How it differs from the v1 path:
   historical probe set (`get`/`todo`/`children`/`status`/`promptAsync`).
 - **Children enumeration:** `session.list({ parentID })` through the shim
   (v2 `Session.Info` → v1 envelope; `outcome` and `time.updated` mapped).
-  The in-process session surface of current v2 hosts does not expose
-  `list`, so the empty page falls back to an event-tracked view — the
-  adapter-synthesized `session.created` parentID links plus tracked
-  busy/idle statuses — refreshed on every evaluation with the host's
+  When the listing is unavailable (missing/erroring/empty), an event-tracked
+  fallback uses the adapter-synthesized `session.created` parentID links plus
+  tracked busy/idle statuses — refreshed on every evaluation with the host's
   authoritative `outcome`/`time.updated` via `session.get` (fail-soft per
   child). A finished child is therefore terminal immediately instead of
   reading active for the whole staleness window, and a live child stays
   visible on its host evidence rather than dropping out on stale local
-  evidence. Results are scoped to the session's directory when the host
-  reports one.
+  evidence. On stock v2 hosts `session.list` is never exposed to plugins
+  (see
+  [Not exposed to plugins](#not-exposed-to-plugins-sessionlist-sessionremove)),
+  so the event-tracked fallback is the operative path. Results are scoped
+  to the session's directory when the host reports one.
 - **Wake condition:** children with `outcome === undefined` (v2 records an
   outcome only on terminal transition: succeeded|failed|interrupted) that
   still have fresh update evidence — host `time.updated` or a tracked status

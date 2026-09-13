@@ -1111,6 +1111,30 @@ describe('AgentOverrideConfigSchema color validation', () => {
   });
 });
 
+describe('council compaction exception', () => {
+  test('survives agents.council.prompt override in createAgents', () => {
+    const agents = createAgents(
+      runtimeFor({
+        council: councilConfig(),
+        agents: {
+          council: {
+            prompt:
+              'Always include these sections: ## Council Response and ## Council Summary.',
+          },
+        },
+      }),
+    );
+    const prompt = agents.find((a) => a.name === 'council')?.config.prompt;
+    expect(prompt).toContain(
+      'Always include these sections: ## Council Response and ## Council Summary.',
+    );
+    expect(prompt).toContain(
+      'if the host asks you to produce a session checkpoint or compaction summary in a specific template',
+    );
+    expect(prompt).not.toContain('You MUST follow the Synthesis Process');
+  });
+});
+
 describe('council agent model resolution', () => {
   test('council agent uses default model', () => {
     const agents = createAgents(

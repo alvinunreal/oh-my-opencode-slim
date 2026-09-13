@@ -14,6 +14,11 @@ interface ChatHeadersOutput {
   headers: Record<string, string>;
 }
 
+/** Copilot routing header the hook may set (shared with the v2 bridge in
+ * `src/v2/setup.ts` so both hosts stamp the exact same header/value). */
+export const CHAT_INITIATOR_HEADER_NAME = 'x-initiator';
+export const CHAT_INITIATOR_HEADER_AGENT = 'agent';
+
 const INTERNAL_MARKER_CACHE_LIMIT = 1000;
 const internalMarkerCache = new Map<string, boolean>();
 
@@ -25,7 +30,10 @@ function getProviderID(input: ChatHeadersInput): string {
   return input.provider.info?.id || input.model.providerID;
 }
 
-function isCopilotProvider(providerID: string): boolean {
+/** Copilot provider ids whose backend distinguishes user- vs
+ * agent-initiated requests via the `x-initiator` header. Exported for the
+ * v2 `session.model.request` bridge (`src/v2/setup.ts`). */
+export function isCopilotProvider(providerID: string): boolean {
   return (
     providerID === 'github-copilot' ||
     providerID === 'github-copilot-enterprise'
@@ -87,7 +95,7 @@ export function createChatHeadersHook(ctx: PluginInput) {
         return;
       }
 
-      output.headers['x-initiator'] = 'agent';
+      output.headers[CHAT_INITIATOR_HEADER_NAME] = CHAT_INITIATOR_HEADER_AGENT;
     },
   };
 }

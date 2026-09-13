@@ -16,6 +16,7 @@ import {
   ORCHESTRATOR_WAKE_TEXT,
   ORCHESTRATOR_WAKE_UNCHANGED_CAP,
   resolveWakeMode,
+  STOPPED_RECOVERY_OVERFLOW_TEXT,
   STOPPED_RECOVERY_QUEUE_CAP,
   STOPPED_RECOVERY_WAKE_CHUNK,
 } from './index';
@@ -131,6 +132,7 @@ function createScheduler(options?: {
   shouldManageSession?: (id: string) => boolean;
   hasInputWait?: (id: string) => boolean;
   isFallbackInProgress?: (id: string) => boolean;
+  isStoppedJobRecoveryCurrent?: (taskID: string, generation: number) => boolean;
   coordinator?: SessionLifecycle;
   directory?: string;
 }) {
@@ -152,6 +154,7 @@ function createScheduler(options?: {
     shouldManageSession: options?.shouldManageSession ?? (() => true),
     hasInputWait: options?.hasInputWait ?? (() => false),
     isFallbackInProgress: options?.isFallbackInProgress,
+    isStoppedJobRecoveryCurrent: options?.isStoppedJobRecoveryCurrent,
     coordinator: options?.coordinator,
   });
 
@@ -381,6 +384,67 @@ describe('orchestrator wake scheduler', () => {
     expect(call?.body.parts[0]?.text.match(/task: ses_a/g)?.length).toBe(1);
   });
 
+  test('revalidates queued stop facts before delivering recovery', async () => {
+    const promptAsync = mock(async () => ({}));
+    let waiting = true;
+    const current = new Set(['ses_current:3']);
+    const isCurrent = mock((taskID: string, generation: number) =>
+      current.has(`${taskID}:${generation}`),
+    );
+    const { scheduler } = createScheduler({
+      hasInputWait: () => waiting,
+      isStoppedJobRecoveryCurrent: isCurrent,
+      sessionClient: makeClient({
+        todos: [],
+        promptAsync,
+        childrenData: [{ id: 'child-2' }],
+        statusData: { 'child-2': { type: 'busy' } },
+      }),
+    });
+
+    for (const [taskID, generation] of [
+      ['ses_stale', 1],
+      ['ses_revived', 2],
+      ['ses_current', 3],
+    ] as const) {
+      scheduler.triggerStoppedJobRecovery(
+        'p1',
+        formatStoppedJobDelta({
+          alias: taskID,
+          taskID,
+          generation,
+          state: 'stopped',
+          reason: 'stopped without a terminal result',
+        }),
+        `${taskID}:${generation}`,
+      );
+    }
+
+    // The first two executions have been revived or reconciled before the
+    // parent is able to receive its queued recovery wake.
+    current.delete('ses_stale:1');
+    current.delete('ses_revived:2');
+    waiting = false;
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(0);
+
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const text =
+      (
+        promptAsync.mock.calls as unknown as Array<
+          [{ body: { parts: Array<{ text: string }> } }]
+        >
+      )[0]?.[0]?.body.parts[0]?.text ?? '';
+    expect(text).toContain('task: ses_current\n');
+    expect(text).not.toContain('task: ses_stale\n');
+    expect(text).not.toContain('task: ses_revived\n');
+    expect(isCurrent).toHaveBeenCalledWith('ses_stale', 1);
+    expect(isCurrent).toHaveBeenCalledWith('ses_revived', 2);
+    expect(isCurrent).toHaveBeenCalledWith('ses_current', 3);
+  });
+
   test('a failed recovery delivery restores the batch for the next wake', async () => {
     let fail = true;
     const promptAsync = mock(async () => {
@@ -456,7 +520,7 @@ describe('orchestrator wake scheduler', () => {
     expect(promptAsync).toHaveBeenCalledTimes(1);
   });
 
-  test('caps queued stop deltas per parent and drops the oldest', async () => {
+  test('caps queued stop deltas without losing the overflow recovery signal', async () => {
     const promptAsync = mock(async () => ({}));
     let waiting = true;
     const { scheduler } = createScheduler({
@@ -500,6 +564,7 @@ describe('orchestrator wake scheduler', () => {
     expect(text).not.toContain('task: ses_0\n');
     expect(text).toContain('task: ses_1\n');
     expect(text).not.toContain(`task: ses_${STOPPED_RECOVERY_QUEUE_CAP}\n`);
+    expect(text).toContain(STOPPED_RECOVERY_OVERFLOW_TEXT);
     expect(text.match(/<stopped-job>/g)?.length).toBe(
       STOPPED_RECOVERY_WAKE_CHUNK,
     );

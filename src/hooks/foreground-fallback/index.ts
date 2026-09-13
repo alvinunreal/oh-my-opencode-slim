@@ -915,7 +915,11 @@ export class ForegroundFallbackManager {
       }
       // Loose alias: the v2 client shim accepts extra top-level args
       // (`modelSwitch`) the way orchestrator-wake passes `delivery`.
-      const promptAsync = sessionClient.promptAsync as (
+      // Bound: the SDK's promptAsync reads `this._client`, so calling the
+      // extracted function unbound throws `undefined is not an object
+      // (evaluating 'this._client')` on the real client (same binding the
+      // revived-run tracker already applies).
+      const promptAsync = sessionClient.promptAsync.bind(sessionClient) as (
         args: Record<string, unknown> & { modelSwitch?: 'required' },
       ) => Promise<unknown>;
 

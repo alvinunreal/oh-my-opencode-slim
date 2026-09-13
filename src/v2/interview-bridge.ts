@@ -6,6 +6,7 @@ import type { InterviewSessionRuntime } from '../interview/runtime';
 import { createInterviewServer } from '../interview/server';
 import { createInterviewService } from '../interview/service';
 import type { InterviewMessage } from '../interview/types';
+import { isRecord } from '../utils/guards';
 import { log } from '../utils/logger';
 import { createSessionListShim } from './client-shim';
 import { createSessionSubmit, textFromContent } from './session-submit';
@@ -266,7 +267,15 @@ export function createV2InterviewBridge(
 
   async function handleEvent(event: Record<string, unknown>): Promise<void> {
     const type = typeof event.type === 'string' ? event.type : '';
-    const properties = (event.properties ?? {}) as Record<string, unknown>;
+    // Data-first: live v2 hosts key the event payload under `data` (the
+    // OpenCodeEvent wire shape); `properties` is the legacy/test spelling.
+    // Reading only `properties` left this handler dead on live v2 for ALL
+    // events. handleContext is unaffected (different event type).
+    const properties = isRecord(event.data)
+      ? event.data
+      : isRecord(event.properties)
+        ? event.properties
+        : {};
     const sessionID =
       (typeof properties.sessionID === 'string' && properties.sessionID) ||
       ((properties.info as { id?: string } | undefined)?.id ?? '');

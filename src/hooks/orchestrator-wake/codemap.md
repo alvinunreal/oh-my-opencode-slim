@@ -55,7 +55,9 @@ fallback), the wake condition is children without a terminal `outcome`
     `delivery: 'queue'` (v1 call shape unchanged).
   - `triggerStoppedJobRecovery`: immediate recovery wake for jobs that stopped
     without a native terminal result (separate from the periodic TODO wake;
-    bypasses the wake condition, as on v1).
+    bypasses the wake condition, as on v1). Queued facts are revalidated by
+    task ID + generation before delivery; the bounded detail queue emits an
+    overflow signal instead of silently losing excess recovery state.
   - `observeChatMessage`: real external user activity rearms the no-progress
     cap and records the observed model for continuation prompts.
 - **Gate** (`wake-gate.ts`): Process-local reservation/progress store shared

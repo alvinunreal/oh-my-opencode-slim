@@ -878,6 +878,46 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
+  test('promptAsync is invoked bound: a this-reading implementation must not throw', async () => {
+    // Regression (issue #595): the extracted promptAsync was called as a
+    // free function, so a real SDK implementation reading `this._client`
+    // threw "undefined is not an object (evaluating 'this._client')" and
+    // the fallback attempt died without delivering the replay.
+    const session: Record<string, unknown> = {
+      abort: mock(async () => {}),
+      messages: mock(async () => ({
+        data: [
+          { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
+        ],
+      })),
+      promptAsync: async function (this: { _client: unknown }) {
+        // Mirrors the generated SDK: touching the receiver crashes when
+        // invoked unbound.
+        void this._client;
+        return {};
+      },
+    };
+    currentMockSession = session;
+    installGetClientMock();
+
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-unbound',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    // No abort, no crash: the bound call delivered the replay directly.
+    expect((session.abort as ReturnType<typeof mock>).mock.calls.length).toBe(
+      0,
+    );
+  });
+
   test('v1 promptBody carries no v2 modelSwitch flag and still claims the switch', async () => {
     // v1 byte-identity: the shim-only `modelSwitch` arg must appear ONLY
     // on v2 hosts, and a v1-shaped result (no `switched` key) keeps the

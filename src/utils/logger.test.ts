@@ -363,4 +363,45 @@ describe('logger', () => {
     expect(content).toContain('"array":[1,2,3]');
     expect(content).toContain('"boolean":true');
   });
+
+  test('applies shape-based secret redaction at the compose point', async () => {
+    initLogger('session1');
+    // Runtime-joined so secret scanning does not flag the fixture.
+    const token = ['sk-', 'proj-', 'abcdef1234567890', 'abcdef'].join('');
+    log('token leaked', { data: { token } });
+    await flushLoggerForTesting();
+
+    const logPath = path.join(tmpDir, 'oh-my-opencode-slim.session1.log');
+    const content = fs.readFileSync(logPath, 'utf-8');
+    // Mask marker present, raw token gone …
+    expect(content).toContain('sk-p…ef');
+    expect(content).not.toContain(token);
+    // … while the entry furniture (timestamp + message) stays intact.
+    expect(content).toMatch(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/);
+    expect(content).toContain('token leaked');
+  });
+
+  test('stderr fallback entries are redacted too', async () => {
+    const blockedLogDir = path.join(tmpDir, 'not-a-directory');
+    fs.writeFileSync(blockedLogDir, 'not a directory');
+    process.env.OPENCODE_LOG_DIR = blockedLogDir;
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      initLogger('session1');
+      // Runtime-joined so secret scanning does not flag the fixture.
+      const token = ['ghp_', 'ABCDEFGHIJKLMNOP', 'QRSTUVWXYZ1234'].join('');
+      log('stderr leak', { token });
+      await flushLoggerForTesting();
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ghp_…34'));
+      const entry = errorSpy.mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' && call[0].includes('stderr leak'),
+      );
+      expect(entry?.[0]).not.toContain(token);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });

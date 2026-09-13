@@ -89,6 +89,12 @@ export const STOPPED_RECOVERY_QUEUE_CAP = 32;
  * for the next wake so a failed oversized join cannot wedge the batch. */
 export const STOPPED_RECOVERY_WAKE_CHUNK = 8;
 
+/** Recovery facts that overflow the bounded detail queue still produce a
+ * durable, actionable signal. The parent can consult the board for the facts
+ * whose inline details were coalesced. */
+export const STOPPED_RECOVERY_OVERFLOW_TEXT =
+  '<stopped-job-overflow>\nAdditional stopped-job recovery facts were queued beyond the inline detail limit. Consult the Background Job Board for all unreconciled stopped jobs.\n</stopped-job-overflow>';
+
 /**
  * Children-driven mode: a child with `outcome === undefined` counts as
  * inactive once its newest update evidence (host `time.updated` or a
@@ -156,6 +162,10 @@ export type OrchestratorWakeOptions = {
   hasInputWait: (sessionID: string) => boolean;
   isFallbackInProgress?: (sessionID: string) => boolean;
   coordinator?: SessionLifecycle;
+  /** Revalidate a queued stop immediately before delivering its recovery wake.
+   * The callback must check both the task generation and that the current
+   * record is still stopped and terminal-unreconciled. */
+  isStoppedJobRecoveryCurrent?: (taskID: string, generation: number) => boolean;
   /** Test seam: override interval without changing config validation. */
   intervalMs?: number;
 };
@@ -502,14 +512,34 @@ export function createOrchestratorWakeScheduler(
   const localSessions = new Map<string, LocalSessionState>();
   /** Reservations this hook owns and must release when it is disposed. */
   const localWakeOwners = new Map<string, symbol>();
+  type PendingStoppedRecovery = {
+    deltas: Map<string, string>;
+    /** Number of detail entries coalesced beyond the bounded queue. */
+    overflowCount: number;
+  };
+
   /** Sessions with a stopped job awaiting a recovery wake, carrying the
    * self-contained terminal deltas of the triggering stops (see
    * `formatStoppedJobDelta`), deduplicated per execution by
    * `(taskID, generation)`. Bounded per parent (`STOPPED_RECOVERY_QUEUE_CAP`);
-   * each wake sends at most `STOPPED_RECOVERY_WAKE_CHUNK` entries. Deltas
-   * that arrive while a recovery wake is in flight must survive its
-   * confirmation: only the keys actually sent are retired on delivery. */
-  const pendingStoppedRecoveries = new Map<string, Map<string, string>>();
+   * each wake sends at most `STOPPED_RECOVERY_WAKE_CHUNK` entries. Overflow
+   * is represented by a durable count and an inline signal rather than being
+   * silently discarded. Deltas that arrive while a recovery wake is in flight
+   * must survive its confirmation: only the keys actually sent are retired on
+   * delivery. */
+  const pendingStoppedRecoveries = new Map<string, PendingStoppedRecovery>();
+
+  function parseRecoveryKey(
+    key: string,
+  ): { taskID: string; generation: number } | undefined {
+    const separator = key.lastIndexOf(':');
+    if (separator <= 0) return undefined;
+    const taskID = key.slice(0, separator);
+    const generation = Number(key.slice(separator + 1));
+    return taskID && Number.isSafeInteger(generation) && generation >= 0
+      ? { taskID, generation }
+      : undefined;
+  }
 
   /** Queue a stop delta for the session's next recovery wake. */
   const addStoppedRecoveryDelta = (
@@ -519,20 +549,21 @@ export function createOrchestratorWakeScheduler(
   ): void => {
     let batch = pendingStoppedRecoveries.get(sessionID);
     if (!batch) {
-      batch = new Map();
+      batch = { deltas: new Map(), overflowCount: 0 };
       pendingStoppedRecoveries.set(sessionID, batch);
     }
     const key = dedupeKey ?? delta;
-    if (batch.has(key)) {
-      batch.set(key, delta);
+    if (batch.deltas.has(key)) {
+      batch.deltas.set(key, delta);
       return;
     }
-    while (batch.size >= STOPPED_RECOVERY_QUEUE_CAP) {
-      const oldest = batch.keys().next().value;
+    while (batch.deltas.size >= STOPPED_RECOVERY_QUEUE_CAP) {
+      const oldest = batch.deltas.keys().next().value;
       if (oldest === undefined) break;
-      batch.delete(oldest);
+      batch.deltas.delete(oldest);
+      batch.overflowCount += 1;
     }
-    batch.set(key, delta);
+    batch.deltas.set(key, delta);
   };
   /** Event-tracked session statuses (busy-set + parent race guard). */
   const lastStatusBySession = new Map<string, TrackedSessionStatus>();
@@ -1196,6 +1227,43 @@ export function createOrchestratorWakeScheduler(
         return;
       }
 
+      const recoveryBatch = recoveryWake
+        ? pendingStoppedRecoveries.get(sessionID)
+        : undefined;
+      if (recoveryBatch) {
+        const hadRecoveryDetails = recoveryBatch.deltas.size > 0;
+        if (options.isStoppedJobRecoveryCurrent) {
+          for (const key of recoveryBatch.deltas.keys()) {
+            const parsed = parseRecoveryKey(key);
+            if (!parsed) {
+              recoveryBatch.deltas.delete(key);
+              continue;
+            }
+            let current = false;
+            try {
+              current = options.isStoppedJobRecoveryCurrent(
+                parsed.taskID,
+                parsed.generation,
+              );
+            } catch {
+              current = false;
+            }
+            if (!current) recoveryBatch.deltas.delete(key);
+          }
+        }
+        // A stale, revived, or already-reconciled detail must not cause a
+        // recovery wake by itself. An overflow marker remains actionable even
+        // when all retained details have since gone stale.
+        if (
+          hadRecoveryDetails &&
+          recoveryBatch.deltas.size === 0 &&
+          recoveryBatch.overflowCount === 0
+        ) {
+          pendingStoppedRecoveries.delete(sessionID);
+          return;
+        }
+      }
+
       const modelSelection =
         latest.model ?? snapshot.model ?? getObservedWakeModel(sessionID);
 
@@ -1213,22 +1281,26 @@ export function createOrchestratorWakeScheduler(
       // Snapshot keys/values at send time. Do not detach the map: a stop
       // arriving during promptAsync lands in the same entry and must survive
       // confirmation. After delivery, retire only the keys that were sent.
-      const recoveryBatch = recoveryWake
-        ? pendingStoppedRecoveries.get(sessionID)
-        : undefined;
       const sentKeys = recoveryBatch
-        ? [...recoveryBatch.keys()].slice(0, STOPPED_RECOVERY_WAKE_CHUNK)
+        ? [...recoveryBatch.deltas.keys()].slice(0, STOPPED_RECOVERY_WAKE_CHUNK)
         : [];
       const recoveryDelta = sentKeys
-        .map((key) => recoveryBatch?.get(key))
+        .map((key) => recoveryBatch?.deltas.get(key))
         .filter((text): text is string => typeof text === 'string')
+        .join('\n');
+      const overflowDelta =
+        recoveryBatch && recoveryBatch.overflowCount > 0
+          ? STOPPED_RECOVERY_OVERFLOW_TEXT
+          : '';
+      const recoveryDetails = [overflowDelta, recoveryDelta]
+        .filter(Boolean)
         .join('\n');
       const body = {
         agent: 'orchestrator',
         ...(modelSelection ? { model: modelSelection.model } : {}),
         parts: [
           createInternalAgentTextPart(
-            recoveryDelta ? `${wakeText}\n${recoveryDelta}` : wakeText,
+            recoveryDetails ? `${wakeText}\n${recoveryDetails}` : wakeText,
           ),
         ],
       };
@@ -1263,8 +1335,13 @@ export function createOrchestratorWakeScheduler(
       if (recoveryWake) {
         const remaining = pendingStoppedRecoveries.get(sessionID);
         if (remaining) {
-          for (const key of sentKeys) remaining.delete(key);
-          if (remaining.size === 0) {
+          for (const key of sentKeys) remaining.deltas.delete(key);
+          const sentOverflowCount = recoveryBatch?.overflowCount ?? 0;
+          remaining.overflowCount = Math.max(
+            0,
+            remaining.overflowCount - sentOverflowCount,
+          );
+          if (remaining.deltas.size === 0 && remaining.overflowCount === 0) {
             pendingStoppedRecoveries.delete(sessionID);
           } else {
             rearmWakeProgress(sessionID);
@@ -1376,7 +1453,10 @@ export function createOrchestratorWakeScheduler(
     if (delta) {
       addStoppedRecoveryDelta(sessionID, delta, dedupeKey);
     } else if (!pendingStoppedRecoveries.has(sessionID)) {
-      pendingStoppedRecoveries.set(sessionID, new Map());
+      pendingStoppedRecoveries.set(sessionID, {
+        deltas: new Map(),
+        overflowCount: 0,
+      });
     }
     if (localSessions.get(sessionID)?.archived) {
       return;

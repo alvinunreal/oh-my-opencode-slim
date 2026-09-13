@@ -60,7 +60,9 @@ from `index.ts`) that returns the hook points OpenCode invokes.
    rehydrates historical running tasks, then injects the Background Job Board
    via cache-safe helpers
 4. Transformed messages are sent to the model
-5. chat.headers is forwarded to OpenCode's header slot
+5. chat.headers is forwarded to OpenCode's header slot (v1 hosts; on v2
+   hosts the adapter bridges the same decision to
+   `session.hook("model.request")` — see src/v2/codemap.md)
 6. Model responses/events are observed by the cache monitor (telemetry) and
    orchestrator-wake scheduler (idle nudge timing)
 ```

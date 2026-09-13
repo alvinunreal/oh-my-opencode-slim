@@ -191,7 +191,15 @@ history is rehydrated into the local job board and immediately reconciled agains
 live host session status. A missing or idle child is a stop candidate: after a
 5s confirmation grace it is surfaced as `stopped, unreconciled`, while a busy
 child remains running; status lookup failures remain uncertain rather than being
-treated as completion.
+treated as completion. When the host client exposes `session.get`, each newly
+rehydrated task is also probed for existence: a session deleted while the plugin
+was down is tombstoned and torn down instead of resurrecting as a
+forever-running ghost, and a session that already reached a terminal host
+outcome is settled to it (the typed NotFound classification is a v2
+in-process artifact — on v1 hosts the probe harmlessly never tombstones). On
+OpenCode v2 hosts with the optional `ctx.storage` domain, deletion tombstones
+and alias counters additionally persist across host restarts (see the
+[v2 compatibility doc](opencode-v2-compatibility.md#background-job-state-rehydrate-probe-and-persistence)).
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
@@ -493,6 +501,11 @@ stay visible to the parent for recovery. A later live `busy` observation can
 revive an unreconciled stopped job. After the parent has been woken and the stop
 acknowledged, stale busy cannot flip the job back to running. Only explicit
 terminal task output proves completion, error, or cancellation.
+
+Stopped-job recovery facts are checked again by task ID and run generation
+before a queued recovery wake is delivered. The inline detail queue is bounded;
+when it overflows, the wake carries an explicit overflow signal directing the
+orchestrator to inspect all unreconciled stopped jobs on the board.
 
 Malformed status entries and failed status requests are surfaced as `status
 uncertain`; they never prove that a job stopped or completed and do not confirm
