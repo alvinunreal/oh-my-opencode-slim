@@ -309,3 +309,28 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
   }
 }
 ```
+
+### Adding or removing skills on top of an inherited list
+
+`skills` is replaced wholesale when multiple config layers (user, project, preset) define it. To adjust an inherited list instead, use the `skills_add` / `skills_remove` directives. They are folded into the effective `skills` array during config resolution and stripped afterwards, so agents and hooks only ever see plain `skills`:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `skills_add` | string[] | Skill names appended to the effective list (after `skills`) |
+| `skills_remove` | string[] | Skill names removed from the effective list; removal wins over addition |
+
+```json
+{
+  "agents": {
+    "oracle": {
+      "skills_add": ["nexus-backend"],
+      "skills_remove": ["deepwork"]
+    }
+  }
+}
+```
+
+**Rules:**
+- Duplicates are removed (first occurrence wins) before removals are applied
+- If the result contains `"*"`, each removed name is appended as `"!<name>"` so the exclusion beats the wildcard grant
+- A removal on an agent without a `skills` list starts from that agent's default grants (orchestrator: all skills)

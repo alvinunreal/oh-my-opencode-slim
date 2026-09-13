@@ -10,4 +10,5 @@ export {
   getAcpAgentNames,
   getAgentOverride,
   getCustomAgentNames,
+  normalizeAgentSkillDirectives,
 } from './utils';

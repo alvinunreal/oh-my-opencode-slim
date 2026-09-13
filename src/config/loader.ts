@@ -11,6 +11,7 @@ import {
   PluginConfigSchema,
   WebfetchConfigSchema,
 } from './schema';
+import { normalizeAgentSkillDirectives } from './utils';
 
 /**
  * Warning kinds produced during config loading.
@@ -726,6 +727,12 @@ export function loadPluginConfig(
         console.warn(`[oh-my-opencode-slim] ${message}`);
       }
     }
+  }
+
+  // Fold per-agent skill directives (skills_add/skills_remove) into the
+  // effective skills list so downstream consumers see plain `skills`.
+  if (config.agents) {
+    config.agents = normalizeAgentSkillDirectives(config.agents);
   }
 
   // Normalize companion config defaults

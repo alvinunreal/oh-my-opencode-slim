@@ -86,6 +86,20 @@
                 "type": "string"
               }
             },
+            "skills_add": {
+              "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "skills_remove": {
+              "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "mcps": {
               "type": "array",
               "items": {
@@ -548,6 +562,20 @@
             "type": "string"
           },
           "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skills_add": {
+            "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skills_remove": {
+            "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
             "type": "array",
             "items": {
               "type": "string"

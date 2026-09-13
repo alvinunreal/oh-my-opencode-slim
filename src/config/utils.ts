@@ -1,3 +1,4 @@
+import { resolveEffectiveSkills } from '../cli/skills';
 import { AGENT_ALIASES, ALL_AGENT_NAMES } from './constants';
 import type { AgentOverrideConfig, PluginConfig } from './schema';
 
@@ -43,4 +44,46 @@ export function getCustomAgentNames(
 
 export function getAcpAgentNames(config: PluginConfig | undefined): string[] {
   return Object.keys(config?.acpAgents ?? {});
+}
+
+/**
+ * Fold per-agent skill directives (`skills_add` / `skills_remove`) into the
+ * effective `skills` list so downstream consumers (agent factories, hooks)
+ * only ever see a plain `skills` array. Entries without directives keep
+ * their original reference; the input record is returned unchanged when no
+ * entry needs folding.
+ */
+export function normalizeAgentSkillDirectives(
+  agents: Record<string, AgentOverrideConfig>,
+): Record<string, AgentOverrideConfig> {
+  let changed = false;
+  const result: Record<string, AgentOverrideConfig> = {};
+  for (const [name, override] of Object.entries(agents)) {
+    if (
+      override.skills_add === undefined &&
+      override.skills_remove === undefined
+    ) {
+      result[name] = override;
+      continue;
+    }
+    changed = true;
+    const effective = resolveEffectiveSkills(
+      name,
+      override.skills,
+      override.skills_add,
+      override.skills_remove,
+    );
+    const {
+      skills: _skills,
+      skills_add: _skillsAdd,
+      skills_remove: _skillsRemove,
+      ...rest
+    } = override;
+    const entry: AgentOverrideConfig = { ...rest };
+    if (effective !== undefined) {
+      entry.skills = effective;
+    }
+    result[name] = entry;
+  }
+  return changed ? result : agents;
 }

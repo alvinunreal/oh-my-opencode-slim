@@ -41,7 +41,7 @@ import type {
   PluginConfig,
   WebfetchConfig,
 } from './schema';
-import { getCustomAgentNames } from './utils';
+import { getCustomAgentNames, normalizeAgentSkillDirectives } from './utils';
 
 /** A single agent entry from the host opencode.json config. */
 export interface HostAgentConfig {
@@ -270,10 +270,10 @@ export class RuntimeConfig {
       base = mergeAgentOverrides(filePreset, base);
     }
     const runtimePreset = this.runtimePresetAgents();
-    if (!runtimePreset) {
-      return base;
-    }
-    return mergeAgentOverrides(base, runtimePreset);
+    const merged = runtimePreset
+      ? mergeAgentOverrides(base, runtimePreset)
+      : base;
+    return normalizeAgentSkillDirectives(merged);
   }
 
   /**

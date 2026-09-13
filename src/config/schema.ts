@@ -80,6 +80,18 @@ export const AgentOverrideConfigSchema = z
     temperature: z.number().min(0).max(2).optional(),
     variant: z.string().optional().catch(undefined),
     skills: z.array(z.string()).optional(), // skills this agent can use ("*" = all, "!item" = exclude)
+    skills_add: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+      ),
+    skills_remove: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
+      ),
     mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
     prompt: z.string().min(1).optional(),
     orchestratorPrompt: z.string().min(1).optional(),
