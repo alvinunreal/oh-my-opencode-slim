@@ -5,11 +5,14 @@ import {
   type BackgroundJobStore,
   type BackgroundJobSupervisor,
   type BackgroundTaskConcurrency,
+  COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
   clearBackgroundJobSuppression,
   deriveFullObjective,
   deriveTaskSessionLabel,
   getBackgroundJobLifecycleLedger,
+  isHostTerminalOutcome,
   isInternalInitiatorPart,
+  log,
   parseTaskIdFromTaskOutput,
   parseTaskStateFromOutput,
   recordBackgroundJobSuppression,
@@ -100,8 +103,8 @@ function rehydrateHistoricalRunningTasks(
     agentType: string,
     parentSessionID?: string,
   ) => string | undefined,
-): number {
-  let rehydrated = 0;
+): string[] {
+  const rehydrated: string[] = [];
   const managedOrchestratorSessionIDs = new Set<string>();
 
   for (const message of messages) {
@@ -189,7 +192,7 @@ function rehydrateHistoricalRunningTasks(
         taskID,
         getModelForAgent?.(agent, parentSessionID),
       );
-      rehydrated += 1;
+      rehydrated.push(taskID);
     }
   }
 
@@ -257,6 +260,98 @@ export function createTaskSessionManagerHook(
     for (const job of backgroundJobBoard.list(sessionID)) {
       remember(job.taskID);
     }
+  };
+
+  /**
+   * Existence probe for a task registered by rehydrate: persisted running
+   * tool parts carry no host-side liveness, so a session deleted while the
+   * plugin was down would otherwise resurrect as a forever-running ghost
+   * on the next transform. Fire-and-forget from the transform hook; never
+   * awaited there. Classification is strictly by the host's typed `_tag`
+   * property (never instanceof — the SDK error class identity is not
+   * stable across host builds — and never message matching).
+   *
+   * wait()-discipline: never `await ctx.session.wait` (or any host wait
+   * API) inside chat.transform — a busy child would hang the transform
+   * for its entire run. This probe uses session.get only. If a wait ever
+   * becomes necessary outside transforms, wrap it in Promise.race with a
+   * timeout and attach a no-op `.catch` to the abandoned promise (a later
+   * NotFoundError rejection must not surface as unhandled).
+   */
+  const probeRehydratedTaskSession = (taskID: string): void => {
+    void (async () => {
+      const client = getClient(_ctx);
+      // Same presence gate as readSessionOutcome: capability is probed,
+      // not assumed, and deliberately NOT gated on hostFlavor — v1 hosts
+      // exposing session.get benefit identically. Absent method → skip
+      // silently.
+      if (typeof client.session?.get !== 'function') return;
+      try {
+        const response = (await client.session.get({
+          path: { id: taskID },
+          query: { directory: _ctx.directory },
+        })) as {
+          data?: { outcome?: unknown };
+          outcome?: unknown;
+        };
+        const info = response?.data ?? response;
+        const outcome =
+          typeof info?.outcome === 'string' ? info.outcome : undefined;
+        if (!isHostTerminalOutcome(outcome)) return;
+        const existing = backgroundJobBoard.get(taskID);
+        if (existing?.state !== 'running') return;
+        // Settle through the same updateStatus semantics the
+        // readSessionOutcome consumers use (idle-reconciliation): a
+        // succeeded outcome is only reconciled with usable final text.
+        let resultText: string | undefined;
+        if (outcome === 'succeeded') {
+          resultText = await readFinalAssistantText(
+            client,
+            taskID,
+            _ctx.directory,
+          );
+        }
+        const settled = backgroundJobBoard.updateStatus({
+          taskID,
+          expectedGeneration: existing.generation,
+          state: outcome === 'succeeded' && resultText ? 'completed' : 'error',
+          resultSummary:
+            outcome === 'succeeded'
+              ? resultText || COMPLETED_WITHOUT_TEXT_DIAGNOSTIC
+              : `Host reported outcome: ${outcome}.`,
+        });
+        if (settled !== undefined && settled.state !== 'running') {
+          backgroundJobBoard.markReconciled(taskID);
+          log('[task-session-manager] settled rehydrated task from host', {
+            taskID,
+            alias: settled.alias,
+            parentSessionID: settled.parentSessionID,
+            outcome,
+            hasResultText: Boolean(resultText),
+          });
+        }
+        return;
+      } catch (err) {
+        if ((err as { _tag?: string })?._tag === 'Session.NotFoundError') {
+          // The session no longer exists on the host: tombstone + the
+          // full deletion-cleanup set. All four actions are idempotent but
+          // all are required — a missing releaseTask would leak an
+          // admission slot forever.
+          recordBackgroundJobSuppression(backgroundJobBoard, taskID);
+          backgroundJobBoard.drop(taskID);
+          options.backgroundTaskConcurrency?.releaseTask(taskID);
+          options.backgroundJobSupervisor?.onSessionDeleted(taskID);
+          log(
+            '[task-session-manager] rehydrated task no longer exists on host; tombstoned',
+            { taskID },
+          );
+          return;
+        }
+        // Transient/unknown errors fail open: the job stays registered and
+        // the normal reconciliation paths keep their chance. Swallowed —
+        // the fire-and-forget probe must never reject unhandled.
+      }
+    })();
   };
 
   const pendingCallTracker =
@@ -562,7 +657,7 @@ export function createTaskSessionManagerHook(
       // cache. Terminal results are left untouched (they materialize once).
       stabilizeRunningTaskParts(messages);
 
-      const rehydratedCount = rehydrateHistoricalRunningTasks(
+      const rehydratedTaskIDs = rehydrateHistoricalRunningTasks(
         messages,
         backgroundJobBoard,
         options.shouldManageSession,
@@ -571,6 +666,9 @@ export function createTaskSessionManagerHook(
         options.backgroundTaskConcurrency,
         options.getModelForAgent,
       );
+      for (const taskID of rehydratedTaskIDs) {
+        probeRehydratedTaskSession(taskID);
+      }
 
       for (const [messageIndex, message] of messages.entries()) {
         if (!isUserMessageWithParts(message)) continue;
@@ -600,7 +698,7 @@ export function createTaskSessionManagerHook(
         }
       }
 
-      if (rehydratedCount > 0) {
+      if (rehydratedTaskIDs.length > 0) {
         await runtimeStatusReconciler.reconcile();
       }
     },
