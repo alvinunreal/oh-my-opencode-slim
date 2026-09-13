@@ -6047,6 +6047,122 @@ describe('task-session-manager hook', () => {
     expect(terminalListener).not.toHaveBeenCalled();
   });
 
+  test('fail-closed after deletion defers to idle settle, not a wedge', async () => {
+    // Documents why the retained fail-closed pin above is safe: the
+    // statusUncertain running record is not a dead end. The synthesized
+    // idle pair reaches the child idle-reconcile path, readSessionOutcome
+    // confirms the terminal host outcome with final text, and the job
+    // settles — the fail-closed branch only refuses the UNPROVEN injected
+    // completion, it does not block reconciliation.
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    const first = createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-relaunch',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+
+    await first.hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-relaunch' },
+      },
+    });
+    coordinator.dispatchSessionDeleted('child-relaunch');
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+      idleReconcileDelayMs: 0,
+      sessionClient: {
+        get: mock(async () => ({ data: { outcome: 'succeeded' } })),
+        messages: mock(async () => ({
+          data: [
+            {
+              info: { id: 'm1', role: 'assistant' },
+              parts: [{ type: 'text', text: 'settled final answer' }],
+            },
+          ],
+        })),
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-relaunch',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+
+    // Exact fail-closed shape as the pin above: unobserved, unfenced
+    // explicit completion after delete + same-board relaunch.
+    const replay = {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [
+            {
+              type: 'text',
+              id: 'unobserved-completion',
+              synthetic: true,
+              text: [
+                '<task id="child-relaunch" state="completed">',
+                '<summary>Background task completed: unknown origin</summary>',
+                '<task_result>',
+                'ambiguous result',
+                '</task_result>',
+                '</task>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+    await hook['experimental.chat.messages.transform']({}, replay as never);
+    expect(board.get('child-relaunch')).toMatchObject({
+      generation: 2,
+      state: 'running',
+      statusUncertain: true,
+      terminalUnreconciled: false,
+    });
+
+    // The synthesized idle pair (event-adapter's terminal
+    // session.execution.* products) settles the job via the host outcome.
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-relaunch',
+          status: { type: 'idle' },
+        },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID: 'child-relaunch' },
+      },
+    });
+    await flushChildIdleReconcile();
+
+    expect(board.get('child-relaunch')).toMatchObject({
+      generation: 2,
+      state: 'reconciled',
+      terminalState: 'completed',
+      statusUncertain: false,
+      resultSummary: 'settled final answer',
+    });
+  });
+
   test('skips an old remembered completion after relaunch without poisoning status (fence-first)', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({

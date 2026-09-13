@@ -150,6 +150,44 @@ describe('background-job persistence', () => {
     expect(c.alias).toBe('fix-3');
   });
 
+  test('two concurrently-live boards sharing a prefix never reuse an alias', async () => {
+    const { backend } = createMemoryBackend();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+
+    const boardA = new BackgroundJobBoard();
+    expect(
+      boardA.registerLaunch({
+        taskID: 'ses_live_a1',
+        parentSessionID: 'parent-live',
+        agent: 'fixer',
+        description: 'a1',
+      }).alias,
+    ).toBe('fix-1');
+    expect(
+      boardA.registerLaunch({
+        taskID: 'ses_live_a2',
+        parentSessionID: 'parent-live',
+        agent: 'fixer',
+        description: 'a2',
+      }).alias,
+    ).toBe('fix-2');
+    await flushWrites();
+
+    // A second LIVE board in the same process must seed from the live
+    // high-water max (writtenAliasMax), not only the backend snapshot
+    // frozen at configure time — otherwise it would hand out fix-1 again.
+    const boardB = new BackgroundJobBoard();
+    expect(
+      boardB.registerLaunch({
+        taskID: 'ses_live_b1',
+        parentSessionID: 'parent-live',
+        agent: 'fixer',
+        description: 'b1',
+      }).alias,
+    ).toBe('fix-3');
+  });
+
   test('alias high-water marks never regress on concurrent bumps', async () => {
     const { backend } = createMemoryBackend();
     configureBackgroundJobPersistence(backend);

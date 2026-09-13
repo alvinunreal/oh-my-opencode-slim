@@ -377,18 +377,32 @@ After rehydration registers a task, the task-session-manager transform
 fires a fire-and-forget `client.session.get` probe per newly registered
 taskID:
 
-- **Capability-gated, not host-gated.** The probe runs whenever the client
-  exposes `session.get` (v1 hosts with the method benefit identically);
-  hosts without it skip silently. It lives inside the existing
+- **Capability-gated, not host-gated — but v2-effective.** The probe runs
+  whenever the client exposes `session.get`; hosts without it skip
+  silently. The typed NotFound classification only crosses the v2 plugin
+  boundary (the host passes the raw core effect in-process): the v1 SDK
+  wraps 4xx responses as plain `Error` with a `.cause` (or returns an
+  `{error}` tuple when `throwOnError: false`), so on v1 hosts the probe
+  runs but harmlessly never tombstones — the wrapped rejection falls into
+  the transient fail-open path. The probe lives inside the existing
   task-session-manager transform — no new pipeline step.
 - **NotFound classification is typed, never heuristic.** A rejection
   tombstones the task only when `err._tag === 'Session.NotFoundError'`
   (property check; never `instanceof` or message matching — the SDK error
-  class identity is unstable across host builds). Tombstoning runs the
-  full deletion-cleanup set in one synchronous block: rehydrate
-  tombstone, board drop, concurrency `releaseTask`, supervisor
-  `onSessionDeleted` (all idempotent; a missing `releaseTask` would leak
-  an admission slot forever).
+  class identity is unstable across host builds). Cleanup is
+  generation-freshness-guarded: the board record's generation is captured
+  before the async `get`, and a NotFound that resolves after a legitimate
+  same-ID relaunch (new generation, tombstone cleared) skips all cleanup
+  instead of deleting the live relaunched record. On a fresh hit, the four
+  probe cleanup actions run as one synchronous block — supervisor
+  `onSessionDeleted` first (it needs the record to exist so
+  deadline-exceeded runs finalize their wall-clock timeout; same ordering
+  as the event-router/coordinator deletion paths), then the rehydrate
+  tombstone, board drop, and concurrency `releaseTask` (all idempotent; a
+  missing `releaseTask` would leak an admission slot forever). The
+  canonical full deletion cleanup (input waits, idle tokens, pending-call
+  tracker, `clearParent`, task-context tracker, snapshots) runs via the
+  `session.deleted` event path.
 - **Any other rejection fails open** — the job stays registered and the
   normal reconciliation paths keep their chance. The probe never rejects
   unhandled.
@@ -413,8 +427,11 @@ persists background-job lifecycle state through
 `src/utils/background-job-persistence.ts` (configured in `setup` before
 the v1 factory runs):
 
-- **Tombstones and deletion epochs** are write-through: the in-memory
-  ledger and the persisted state can never diverge. Clearing a tombstone
+- **Tombstones and deletion epochs** are write-through: every in-memory
+  ledger mutation queues a matching persisted update, so the persisted
+  state tracks the ledger (writes are fire-and-forget — a crash between
+  the in-memory mutation and the queue flush loses that persisted entry,
+  an accepted degradation to process-local behavior). Clearing a tombstone
   on a legitimate relaunch is persisted too — a deleted-then-relaunched
   task is *not* ghost-skipped after a restart, while its deletion epoch
   survives for generation fencing (restored epochs keep the epoch counter

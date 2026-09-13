@@ -6,8 +6,11 @@
  * Design invariants:
  * - **Write-through.** `recordBackgroundJobSuppression` /
  *   `clearBackgroundJobSuppression` (background-job-store.ts) call this
- *   module on every mutation so the in-process ledger and the persisted
- *   state can never diverge. A task deleted and then legitimately
+ *   module on every mutation so the persisted state tracks the in-process
+ *   ledger. Writes are queued fire-and-forget: a crash between the
+ *   in-memory mutation and the queue flush loses that persisted entry —
+ *   an accepted degradation to process-local behavior. A task deleted and
+ *   then legitimately
  *   relaunched must NOT be ghost-skipped after a restart — clearing the
  *   tombstone on relaunch is load-bearing (the deletion EPOCH survives a
  *   clear so generation fencing keeps working).
@@ -276,12 +279,22 @@ function enforceTombstoneCap(): void {
   }
 }
 
-/** Last-seen alias counter restored from the backend (seed source). */
+/** Alias counter high-water mark: the max of the backend-restored
+ * snapshot and every value persisted in this process. Seeding from the
+ * live max too means two concurrently-live boards sharing one
+ * `<parent, prefix>` never collide even before a restart replays the
+ * backend. */
 export function aliasHighWaterMark(
   parentSessionID: string,
   prefix: string,
 ): number {
-  return loaded.aliasHighWaterMarks.get(`${parentSessionID}:${prefix}`) ?? 0;
+  const composite = `${parentSessionID}:${prefix}`;
+  return Math.max(
+    loaded.aliasHighWaterMarks.get(composite) ?? 0,
+    // writtenAliasMax is keyed by the full storage key (same key the
+    // bump writes), not the bare composite.
+    writtenAliasMax.get(aliasKey(parentSessionID, prefix)) ?? 0,
+  );
 }
 
 /**

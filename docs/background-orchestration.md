@@ -195,9 +195,10 @@ treated as completion. When the host client exposes `session.get`, each newly
 rehydrated task is also probed for existence: a session deleted while the plugin
 was down is tombstoned and torn down instead of resurrecting as a
 forever-running ghost, and a session that already reached a terminal host
-outcome is settled to it. On OpenCode v2 hosts with the optional `ctx.storage`
-domain, deletion tombstones and alias counters additionally persist across
-host restarts (see the
+outcome is settled to it (the typed NotFound classification is a v2
+in-process artifact — on v1 hosts the probe harmlessly never tombstones). On
+OpenCode v2 hosts with the optional `ctx.storage` domain, deletion tombstones
+and alias counters additionally persist across host restarts (see the
 [v2 compatibility doc](opencode-v2-compatibility.md#background-job-state-rehydrate-probe-and-persistence)).
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them

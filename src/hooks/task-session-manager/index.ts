@@ -282,10 +282,22 @@ export function createTaskSessionManagerHook(
     void (async () => {
       const client = getClient(_ctx);
       // Same presence gate as readSessionOutcome: capability is probed,
-      // not assumed, and deliberately NOT gated on hostFlavor — v1 hosts
-      // exposing session.get benefit identically. Absent method → skip
-      // silently.
+      // not assumed, and deliberately NOT gated on hostFlavor. The probe
+      // is v2-effective: the dotted `_tag === 'Session.NotFoundError'`
+      // classification only crosses the v2 plugin boundary (the host
+      // passes the raw core effect in-process). The v1 SDK wraps 4xx
+      // responses as plain `Error` with a `.cause` (or returns an
+      // `{error}` tuple when `throwOnError: false`), so on v1 the probe
+      // runs but harmlessly never tombstones — transient-error fail-open
+      // swallows the wrapped rejection. Absent method → skip silently.
       if (typeof client.session?.get !== 'function') return;
+      // Freshness anchor: the generation of the record rehydrate just
+      // registered (captured synchronously, before the async get). A
+      // legitimate same-ID relaunch while the get is in flight takes a
+      // NEW generation and clears the tombstone — a stale NotFound must
+      // not tombstone+drop the live relaunched record.
+      const generationAtProbeStart = backgroundJobBoard.get(taskID)?.generation;
+      if (generationAtProbeStart === undefined) return;
       try {
         const response = (await client.session.get({
           path: { id: taskID },
@@ -303,6 +315,7 @@ export function createTaskSessionManagerHook(
         // Settle through the same updateStatus semantics the
         // readSessionOutcome consumers use (idle-reconciliation): a
         // succeeded outcome is only reconciled with usable final text.
+        // expectedGeneration makes the settle itself generation-safe.
         let resultText: string | undefined;
         if (outcome === 'succeeded') {
           resultText = await readFinalAssistantText(
@@ -333,14 +346,35 @@ export function createTaskSessionManagerHook(
         return;
       } catch (err) {
         if ((err as { _tag?: string })?._tag === 'Session.NotFoundError') {
-          // The session no longer exists on the host: tombstone + the
-          // full deletion-cleanup set. All four actions are idempotent but
-          // all are required — a missing releaseTask would leak an
-          // admission slot forever.
+          // Freshness guard: only clean up when the board still holds the
+          // generation the probe started against. A record replaced by a
+          // same-ID relaunch (or already dropped) is not ours to delete.
+          const current = backgroundJobBoard.get(taskID);
+          if (current?.generation !== generationAtProbeStart) {
+            log(
+              '[task-session-manager] skipped stale NotFound cleanup after same-ID relaunch',
+              {
+                taskID,
+                generationAtProbeStart,
+                currentGeneration: current?.generation,
+              },
+            );
+            return;
+          }
+          // The session no longer exists on the host. The four probe
+          // cleanup actions run as one synchronous block — supervisor
+          // FIRST: its onSessionDeleted needs the record to still exist
+          // so deadline-exceeded runs finalize their wall-clock timeout
+          // (same ordering as the event-router/coordinator deletion
+          // paths). All four are idempotent but all are required — a
+          // missing releaseTask would leak an admission slot forever.
+          // The canonical full cleanup (input waits, idle tokens,
+          // pending-call tracker, clearParent, task-context tracker,
+          // snapshots) runs via the session.deleted event path.
+          options.backgroundJobSupervisor?.onSessionDeleted(taskID);
           recordBackgroundJobSuppression(backgroundJobBoard, taskID);
           backgroundJobBoard.drop(taskID);
           options.backgroundTaskConcurrency?.releaseTask(taskID);
-          options.backgroundJobSupervisor?.onSessionDeleted(taskID);
           log(
             '[task-session-manager] rehydrated task no longer exists on host; tombstoned',
             { taskID },
