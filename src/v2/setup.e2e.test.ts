@@ -523,6 +523,33 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test('ctx.storage (when present) enables background-job persistence before the v1 factory runs', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    (ctx as { storage?: unknown }).storage = {
+      get: async () => undefined,
+      set: async () => {},
+      remove: async () => {},
+      scan: async () => ({ entries: [] }),
+    };
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      await flushLoggerForTesting();
+      const logText = readPluginLog();
+      expect(logText).toContain(
+        '[v2] background-job persistence enabled via ctx.storage',
+      );
+    } finally {
+      // Reset the persistence singleton so later test files in this
+      // process see the pure memory fallback.
+      const { configureBackgroundJobPersistence } = await import(
+        '../utils/background-job-persistence'
+      );
+      configureBackgroundJobPersistence(undefined);
+      await cleanup();
+    }
+  }, 20_000);
+
   test('dispose runs the v1 dispose hook (server.instance.disposed synthesis for wake timers)', async () => {
     const { ctx } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);

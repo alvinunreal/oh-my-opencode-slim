@@ -5,6 +5,10 @@ import {
   DEFAULT_READ_CONTEXT_MIN_LINES,
   formatSystemReminder,
 } from '../config/constants';
+import {
+  aliasHighWaterMark,
+  bumpAliasHighWaterMark,
+} from './background-job-persistence';
 import type { BackgroundJobStore } from './background-job-store';
 import {
   clearBackgroundJobSuppression,
@@ -95,6 +99,11 @@ export interface BackgroundJobBoardOptions {
   maxContextLines?: number;
   readContextMinLines?: number;
   readContextMaxFiles?: number;
+  /** Alias counter high-water seed per `<parentSessionID>:<prefix>` so a
+   * post-restart board never reuses a historical alias. Defaults to the
+   * shared persistence high-water marks (0 without a storage backend —
+   * exactly the pre-persistence behavior). */
+  aliasCounterHighWater?: (parentSessionID: string, prefix: string) => number;
 }
 
 export interface BackgroundJobLaunchInput {
@@ -178,6 +187,10 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   private readonly maxContextLines: number;
   private readonly readContextMinLines: number;
   private readonly readContextMaxFiles: number;
+  private readonly aliasCounterHighWater: (
+    parentSessionID: string,
+    prefix: string,
+  ) => number;
 
   constructor(options: BackgroundJobBoardOptions = {}) {
     this.maxReusablePerAgent =
@@ -187,6 +200,8 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       options.readContextMinLines ?? DEFAULT_READ_CONTEXT_MIN_LINES;
     this.readContextMaxFiles =
       options.readContextMaxFiles ?? DEFAULT_READ_CONTEXT_MAX_FILES;
+    this.aliasCounterHighWater =
+      options.aliasCounterHighWater ?? aliasHighWaterMark;
   }
 
   addTerminalStateListener(listener: TerminalStateListener): void {
@@ -1173,8 +1188,16 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   private nextAlias(parentSessionID: string, agent: string): string {
     const prefix = AGENT_PREFIX[agent] ?? (agent.slice(0, 3) || 'job');
     const key = `${parentSessionID}:${prefix}`;
-    const next = (this.counters.get(key) ?? 0) + 1;
+    // Seed from the persisted high-water mark so a post-restart board
+    // never reuses a historical alias. The alias→taskID mapping is NOT
+    // restored: old aliases resolve as not-found, which is the intended
+    // improvement over silently reusing them for unrelated tasks.
+    const seeded = this.aliasCounterHighWater(parentSessionID, prefix);
+    const next = Math.max(this.counters.get(key) ?? 0, seeded) + 1;
     this.counters.set(key, next);
+    // Write-through: persist the last-seen counter (no-op without a
+    // storage backend).
+    bumpAliasHighWaterMark(parentSessionID, prefix, next);
 
     return `${prefix}-${next}`;
   }

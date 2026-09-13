@@ -20,6 +20,10 @@ import {
 } from '../hooks/cache-safe-injection';
 import { OhMyOpenCodeLite } from '../index';
 import type { McpConfig } from '../mcp/types';
+import {
+  configureBackgroundJobPersistence,
+  loadInitialBackgroundJobPersistence,
+} from '../utils/background-job-persistence';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import { adaptTool, applyAgentToDraft } from './adapters';
@@ -893,6 +897,31 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     const directory = resolveV2Directory(ctx);
     const disposers: Array<() => Promise<void> | void> = [];
     let v1Hooks: Record<string, unknown> | undefined;
+
+    // ── Storage domain (optional): background-job persistence ──
+    // Configured BEFORE the v1 factory runs so board/ledger creation
+    // seeds from the persisted state. Absent domain → pure in-memory
+    // fallback with zero behavior change (v1 hosts never reach here).
+    try {
+      const storage = ctx.storage;
+      if (
+        storage &&
+        typeof storage.get === 'function' &&
+        typeof storage.set === 'function' &&
+        typeof storage.remove === 'function' &&
+        typeof storage.scan === 'function'
+      ) {
+        configureBackgroundJobPersistence(storage);
+        await loadInitialBackgroundJobPersistence();
+        log('[v2] background-job persistence enabled via ctx.storage');
+      } else {
+        log(
+          '[v2] ctx.storage unavailable; background-job state stays process-local',
+        );
+      }
+    } catch (err) {
+      log('[v2] background-job persistence init failed', String(err));
+    }
 
     try {
       log('[v2] importing v1 factory...');

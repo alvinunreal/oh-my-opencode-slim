@@ -1,6 +1,7 @@
 export * from './agent-variant';
 export * from './background-job-board';
 export * from './background-job-coordinator';
+export * from './background-job-persistence';
 export * from './background-job-store';
 export * from './background-job-supervisor';
 export * from './background-task-concurrency';

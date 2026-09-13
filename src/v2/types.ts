@@ -214,6 +214,19 @@ export interface V2Context {
   event: {
     subscribe(): AsyncIterable<Record<string, unknown>>;
   };
+  /** v2 storage domain (runtime-probed optional, like session.list —
+   * hosts without it keep plugin state process-local). Mirrors the
+   * upstream StorageDomain subset: `scan` is cursor-paginated via the
+   * optional `next` field. Values are JSON. */
+  readonly storage?: {
+    get(key: string): Promise<unknown>;
+    set(key: string, value: unknown): Promise<void>;
+    remove(key: string): Promise<void>;
+    scan(options: { prefix: string; after?: string; limit?: number }): Promise<{
+      entries: Array<{ key: string; value: unknown }>;
+      next?: string;
+    }>;
+  };
   /** v2 mcp domain (present on hosts ≥ #45408; probe before use). */
   mcp?: {
     transform(cb: (draft: V2McpDraft) => void): Promise<V2Registration>;
