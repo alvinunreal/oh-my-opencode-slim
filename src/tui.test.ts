@@ -7,6 +7,8 @@ import { testRender } from '@opentui/solid';
 import { readTmuxPane } from './multiplexer/tmux-pane-registry';
 import {
   type ActiveTmuxPaneRegistration,
+  applyRemoteAgentModels,
+  fetchRemoteAgentModels,
   getActiveSidebarAgentNames,
   getContrastForeground,
   getSidebarActivityIndicator,
@@ -50,6 +52,116 @@ describe('tui sidebar agents', () => {
     expect(agentNames).toEqual(['explorer', 'fixer']);
     expect(agentNames).not.toContain('observer');
     expect(agentNames).not.toContain('librarian');
+  });
+
+  test('fills empty snapshot models from the v1 host agent list (#1133)', async () => {
+    const seen: unknown[] = [];
+    const client = {
+      app: {
+        async agents(input?: unknown) {
+          seen.push(input);
+          return {
+            data: [
+              {
+                name: 'explorer',
+                model: { providerID: 'openai', modelID: 'gpt-5.6-luna' },
+              },
+              {
+                name: 'fixer',
+                model: { providerID: 'openai', modelID: 'gpt-5.6' },
+              },
+              { name: 'unrelated', model: { providerID: 'x', modelID: 'y' } },
+              { name: 'oracle' },
+            ],
+          };
+        },
+      },
+    };
+
+    const remote = await fetchRemoteAgentModels(client, '/tmp/project');
+    expect(seen).toEqual([{ directory: '/tmp/project' }]);
+    expect(remote).toEqual({
+      explorer: 'openai/gpt-5.6-luna',
+      fixer: 'openai/gpt-5.6',
+    });
+
+    const merged = applyRemoteAgentModels(
+      createSnapshot({ agentModels: { explorer: 'local/model' } }),
+      remote,
+    );
+    expect(merged.agentModels).toEqual({
+      explorer: 'local/model',
+      fixer: 'openai/gpt-5.6',
+    });
+  });
+
+  test('fills models from the v2 agent.list contract (#1133)', async () => {
+    const seen: unknown[] = [];
+    const client = {
+      agent: {
+        async list(input?: unknown) {
+          seen.push(input);
+          return {
+            data: {
+              data: [
+                {
+                  id: 'explorer',
+                  model: { providerID: 'openai', id: 'gpt-5.6-luna' },
+                },
+                {
+                  id: 'fixer',
+                  model: { providerID: 'openai', id: 'gpt-5.6' },
+                },
+                { id: 'unrelated', model: { providerID: 'x', id: 'y' } },
+                { id: 'oracle' },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const remote = await fetchRemoteAgentModels(client, '/srv/project');
+    expect(seen).toEqual([{ location: { directory: '/srv/project' } }]);
+    expect(remote).toEqual({
+      explorer: 'openai/gpt-5.6-luna',
+      fixer: 'openai/gpt-5.6',
+    });
+  });
+
+  test('fills models from nested v2.agent.list (#1133)', async () => {
+    const seen: unknown[] = [];
+    const client = {
+      v2: {
+        agent: {
+          async list(input?: unknown) {
+            seen.push(input);
+            return {
+              data: {
+                location: { directory: '/srv/project' },
+                data: [
+                  {
+                    id: 'explorer',
+                    model: { providerID: 'openai', id: 'gpt-5.6-luna' },
+                  },
+                ],
+              },
+            };
+          },
+        },
+      },
+    };
+
+    const remote = await fetchRemoteAgentModels(client, '/srv/project');
+    expect(seen).toEqual([{ location: { directory: '/srv/project' } }]);
+    expect(remote).toEqual({ explorer: 'openai/gpt-5.6-luna' });
+  });
+
+  test('remote model fetch is a no-op without a host client', async () => {
+    expect(await fetchRemoteAgentModels(undefined, '/tmp/project')).toEqual({});
+    expect(applyRemoteAgentModels(createSnapshot({}), {}).agentModels).toEqual(
+      {},
+    );
   });
 
   test('uses default-enabled fallback before models are persisted', () => {

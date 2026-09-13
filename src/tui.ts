@@ -7,7 +7,11 @@ import { type ColorInput, parseColor, RGBA } from '@opentui/core';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { createSignal } from 'solid-js';
-import { DEFAULT_DISABLED_AGENTS, SUBAGENT_NAMES } from './config/constants';
+import {
+  ALL_AGENT_NAMES,
+  DEFAULT_DISABLED_AGENTS,
+  SUBAGENT_NAMES,
+} from './config/constants';
 import { loadPluginConfig } from './config/loader';
 import {
   recordTmuxPane,
@@ -195,6 +199,150 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
   return configuredAgents.length > 0
     ? configuredAgents
     : FALLBACK_SIDEBAR_AGENTS;
+}
+
+type AgentListFn = (input?: unknown) => Promise<unknown>;
+
+function asFunction(value: unknown): AgentListFn | undefined {
+  return typeof value === 'function' ? (value as AgentListFn) : undefined;
+}
+
+function unwrapAgentList(response: unknown): unknown[] {
+  if (Array.isArray(response)) return response;
+  if (!response || typeof response !== 'object') return [];
+  const data = (response as { data?: unknown }).data;
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    const nested = (data as { data?: unknown }).data;
+    if (Array.isArray(nested)) return nested;
+  }
+  return [];
+}
+
+function remoteAgentName(entry: unknown): string | undefined {
+  if (!entry || typeof entry !== 'object') return undefined;
+  const rec = entry as { name?: unknown; id?: unknown };
+  if (typeof rec.name === 'string') return rec.name;
+  if (typeof rec.id === 'string') return rec.id;
+  return undefined;
+}
+
+function remoteModelId(model: unknown): string | undefined {
+  if (!model || typeof model !== 'object') return undefined;
+  const rec = model as {
+    providerID?: unknown;
+    modelID?: unknown;
+    id?: unknown;
+  };
+  if (typeof rec.providerID !== 'string') return undefined;
+  const id =
+    typeof rec.modelID === 'string'
+      ? rec.modelID
+      : typeof rec.id === 'string'
+        ? rec.id
+        : undefined;
+  return id ? `${rec.providerID}/${id}` : undefined;
+}
+
+function modelsFromAgentList(response: unknown): Record<string, string> {
+  const models: Record<string, string> = {};
+  for (const entry of unwrapAgentList(response)) {
+    const name = remoteAgentName(entry);
+    const model = remoteModelId(
+      (entry as { model?: unknown } | undefined)?.model,
+    );
+    if (!name || !model) continue;
+    if ((ALL_AGENT_NAMES as readonly string[]).includes(name)) {
+      models[name] = model;
+    }
+  }
+  return models;
+}
+
+/**
+ * Remote-attach fallback (#1133): the server-side plugin writes
+ * tui-state.json on the server's filesystem, which a remote TUI cannot
+ * see, so every model renders as "pending". Resolve agent models through
+ * the host SDK instead. Only fills gaps — local snapshot entries win.
+ *
+ * v1 TUI (`api.client`, `@opencode-ai/sdk/v2`): `app.agents({ directory })`
+ * with `{ name, model: { providerID, modelID } }`.
+ * v2 TUI: `agent.list({ location: { directory } })` or
+ * `v2.agent.list(...)` with `{ id, model: { providerID, id } }`.
+ */
+export async function fetchRemoteAgentModels(
+  client: unknown,
+  directory: string,
+): Promise<Record<string, string>> {
+  const rec = client as
+    | {
+        app?: { agents?: unknown };
+        agent?: { list?: unknown };
+        v2?: { agent?: { list?: unknown } };
+      }
+    | undefined;
+  if (!rec) return {};
+
+  try {
+    const v1Agents = asFunction(rec.app?.agents);
+    if (v1Agents) {
+      return modelsFromAgentList(await v1Agents.call(rec.app, { directory }));
+    }
+    const v2Receiver = rec.agent ?? rec.v2?.agent;
+    const v2List = asFunction(v2Receiver?.list);
+    if (!v2List) return {};
+    return modelsFromAgentList(
+      await v2List.call(v2Receiver, { location: { directory } }),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/** Local snapshot entries win; remote fills empty/missing agent models (#1133). */
+export function applyRemoteAgentModels(
+  snapshot: TuiSnapshot,
+  remote: Record<string, string>,
+): TuiSnapshot {
+  if (Object.keys(remote).length === 0) return snapshot;
+  return {
+    ...snapshot,
+    agentModels: { ...remote, ...snapshot.agentModels },
+  };
+}
+
+const REMOTE_RETRY_MS = 5_000;
+
+interface RemoteModelCache {
+  directory?: string;
+  models?: Record<string, string>;
+  at?: number;
+}
+
+async function hydrateRemoteModels(
+  snapshot: TuiSnapshot,
+  client: unknown,
+  directory: string,
+  cache: RemoteModelCache,
+): Promise<TuiSnapshot> {
+  if (Object.keys(snapshot.agentModels).length > 0) return snapshot;
+  const now = Date.now();
+  const cached =
+    cache.directory === directory && cache.models !== undefined
+      ? cache.models
+      : undefined;
+  const cacheFresh =
+    cached !== undefined &&
+    (Object.keys(cached).length > 0 ||
+      (cache.at !== undefined && now - cache.at < REMOTE_RETRY_MS));
+  if (cached !== undefined && cacheFresh) {
+    return applyRemoteAgentModels(snapshot, cached);
+  }
+  const models = await fetchRemoteAgentModels(client, directory);
+  cache.directory = directory;
+  cache.models = models;
+  cache.at = now;
+  return applyRemoteAgentModels(snapshot, models);
 }
 
 export function getActiveSidebarAgentNames(
@@ -499,6 +647,7 @@ interface V2TuiSlotClaim {
 
 interface V2TuiContext {
   location?: { directory: string };
+  client?: unknown;
   renderer: { requestRender: () => void };
   theme: V2TuiThemeTokens;
   ui: {
@@ -544,22 +693,32 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
   };
   syncTmuxPaneRegistration(ctx.ui.router.current(), tmuxRegistration);
   let disposed = false;
-  const renderTimer = setInterval(async () => {
+  const remoteCache: RemoteModelCache = {};
+  const refreshSidebar = async () => {
     if (disposed) return;
-    try {
-      const currentDirectory = ctx.location?.directory ?? process.cwd();
-      syncTmuxPaneRegistration(ctx.ui.router.current(), tmuxRegistration);
-      const nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
-      if (disposed) return;
-      if (currentDirectory !== configDirectory) {
-        configDirectory = currentDirectory;
-        ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
-      }
-      setSnapshot(nextSnapshot);
-      ctx.renderer.requestRender();
-    } catch {
-      // Ignore render errors; this is best-effort live status.
+    const currentDirectory = ctx.location?.directory ?? process.cwd();
+    syncTmuxPaneRegistration(ctx.ui.router.current(), tmuxRegistration);
+    let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
+    if (disposed) return;
+    if (currentDirectory !== configDirectory) {
+      configDirectory = currentDirectory;
+      ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
     }
+    nextSnapshot = await hydrateRemoteModels(
+      nextSnapshot,
+      ctx.client,
+      currentDirectory,
+      remoteCache,
+    );
+    if (disposed) return;
+    setSnapshot(nextSnapshot);
+    ctx.renderer.requestRender();
+  };
+  void refreshSidebar();
+  const renderTimer = setInterval(() => {
+    void refreshSidebar().catch(() => {
+      // Ignore render errors; this is best-effort live status.
+    });
   }, 1000);
   const animationTimer = setInterval(() => {
     if (!disposed && Object.keys(snapshot().activeSessions).length > 0) {
@@ -644,21 +803,29 @@ const plugin: TuiDualContractModule = {
       lastRecordedAt: 0,
     };
     syncTmuxPaneRegistration(api.route.current, tmuxRegistration);
-    const renderTimer = setInterval(async () => {
-      try {
-        const currentDirectory = getTuiDirectory(api);
-        syncTmuxPaneRegistration(api.route.current, tmuxRegistration);
-        const nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
-        if (currentDirectory !== configDirectory) {
-          configDirectory = currentDirectory;
-          ({ configInvalid, compactSidebar } =
-            readConfigState(configDirectory));
-        }
-        setSnapshot(nextSnapshot);
-        api.renderer.requestRender();
-      } catch {
-        // Ignore render errors; this is best-effort live status.
+    const remoteCache: RemoteModelCache = {};
+    const refreshSidebar = async () => {
+      const currentDirectory = getTuiDirectory(api);
+      syncTmuxPaneRegistration(api.route.current, tmuxRegistration);
+      let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
+      if (currentDirectory !== configDirectory) {
+        configDirectory = currentDirectory;
+        ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
       }
+      nextSnapshot = await hydrateRemoteModels(
+        nextSnapshot,
+        (api as { client?: unknown }).client,
+        currentDirectory,
+        remoteCache,
+      );
+      setSnapshot(nextSnapshot);
+      api.renderer.requestRender();
+    };
+    void refreshSidebar();
+    const renderTimer = setInterval(() => {
+      void refreshSidebar().catch(() => {
+        // Ignore render errors; this is best-effort live status.
+      });
     }, 1000);
     const animationTimer = setInterval(() => {
       if (Object.keys(snapshot().activeSessions).length > 0) {
