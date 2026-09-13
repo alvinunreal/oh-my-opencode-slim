@@ -5,6 +5,8 @@ import {
 } from '@opencode-ai/plugin';
 import type { BackgroundJobLease } from '../utils/background-job-board';
 import type { BackgroundJobStore } from '../utils/background-job-store';
+import { responseError, stringifyError } from '../utils/child-transcript';
+import { isRecord } from '../utils/guards';
 import { getClient } from '../utils/opencode-client';
 import { delay } from '../utils/polling';
 import {
@@ -203,8 +205,8 @@ async function abortAndVerifySession(
     throw error;
   }
   assertLease(options.backgroundJobBoard, lease, execution);
-  const responseError = operationError(response);
-  if (responseError !== undefined) throw new Error(errorText(responseError));
+  const error = responseError(response);
+  if (error !== undefined) throw new Error(stringifyError(error));
   if (operationBoolean(response) === false) {
     throw new Error(`Session abort was not confirmed: ${taskID}`);
   }
@@ -480,31 +482,10 @@ async function getSessionParentID(
   }
 }
 
-function operationError(response: unknown): unknown {
-  if (!isRecord(response)) return undefined;
-  return response.error === undefined || response.error === null
-    ? undefined
-    : response.error;
-}
-
 function operationBoolean(response: unknown): boolean | undefined {
   if (response === true || response === false) return response;
   if (!isRecord(response)) return undefined;
   return typeof response.data === 'boolean' ? response.data : undefined;
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function unknownTaskOutput(taskID: string, message: string): string {

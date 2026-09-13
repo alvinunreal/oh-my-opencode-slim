@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { extractChildTerminalEvidence } from './child-transcript';
+import type { PluginInput } from '@opencode-ai/plugin';
+import {
+  extractChildTerminalEvidence,
+  fetchChildTranscript,
+} from './child-transcript';
 
 function message(overrides: {
   id?: string;
@@ -249,5 +253,106 @@ describe('extractChildTerminalEvidence', () => {
     });
     // Whole-string trim only: inner padding between parts is preserved.
     expect(evidence).toEqual({ kind: 'ready', text: 'first  \n\nsecond' });
+  });
+});
+
+describe('fetchChildTranscript', () => {
+  function clientWith(
+    session: Record<string, unknown> | undefined,
+  ): PluginInput['client'] {
+    // Structural stand-in mirroring the v2 client-shim's degraded hosts.
+    return { session } as PluginInput['client'];
+  }
+
+  test('returns the raw response on success', async () => {
+    const response = { data: [] };
+    const client = clientWith({ messages: () => response });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).resolves.toBe(response);
+  });
+
+  test('passes sessionID and directory through path and query', async () => {
+    const seen: unknown[] = [];
+    const client = clientWith({
+      messages(...args: unknown[]) {
+        seen.push(args[0]);
+        return { data: [] };
+      },
+    });
+    await fetchChildTranscript(client, 'ses_child', '/test');
+    expect(seen[0]).toEqual({
+      path: { id: 'ses_child' },
+      query: { directory: '/test' },
+    });
+  });
+
+  test('binds session.messages to the session object', async () => {
+    const session: Record<string, unknown> = {};
+    session.messages = function (this: unknown) {
+      expect(this).toBe(session);
+      return { data: [] };
+    };
+    await fetchChildTranscript(clientWith(session), 'ses_child', '/test');
+  });
+
+  test('returns undefined when session.messages is not callable', async () => {
+    await expect(
+      fetchChildTranscript(clientWith({}), 'ses_child', '/test'),
+    ).resolves.toBeUndefined();
+    await expect(
+      fetchChildTranscript(clientWith(undefined), 'ses_child', '/test'),
+    ).resolves.toBeUndefined();
+  });
+
+  test('propagates transport failures', async () => {
+    const client = clientWith({
+      messages: () => Promise.reject(new Error('transport down')),
+    });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).rejects.toThrow('transport down');
+  });
+
+  test('string error payload is surfaced as-is', async () => {
+    const client = clientWith({
+      messages: () => ({ error: 'session not found' }),
+    });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).rejects.toThrow('session not found');
+  });
+
+  test('Error payload is surfaced via its message', async () => {
+    const client = clientWith({
+      messages: () => ({ error: new Error('boom') }),
+    });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).rejects.toThrow('boom');
+  });
+
+  test('object error payload is JSON-stringified', async () => {
+    const client = clientWith({
+      messages: () => ({ error: { code: 500, message: 'internal' } }),
+    });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).rejects.toThrow('{"code":500,"message":"internal"}');
+  });
+
+  test('error: null is not an error (mirrors pinned extractor semantics)', async () => {
+    const response = { data: [], error: null };
+    const client = clientWith({ messages: () => response });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).resolves.toBe(response);
+  });
+
+  test('non-record responses are returned untouched', async () => {
+    const client = clientWith({ messages: () => 'flat-shape' });
+    await expect(
+      fetchChildTranscript(client, 'ses_child', '/test'),
+    ).resolves.toBe('flat-shape');
   });
 });

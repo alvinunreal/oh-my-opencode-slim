@@ -14,7 +14,10 @@ import {
   parseTaskStateFromOutput,
   recordBackgroundJobSuppression,
 } from '../../utils';
-import { extractChildTerminalEvidence } from '../../utils/child-transcript';
+import {
+  extractChildTerminalEvidence,
+  fetchChildTranscript,
+} from '../../utils/child-transcript';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { getClient } from '../../utils/opencode-client';
 import type { SessionLifecycle } from '../session-lifecycle';
@@ -48,21 +51,21 @@ import {
 /** Extract the final assistant text from a child session transcript
  * (v1-shaped {data:[{info,parts}]} via the client shim's messages). Used
  * by the quiescent-outcome settle path so completed jobs reconcile with a
- * usable result summary instead of a placeholder. Delegates to the shared
- * extractor; the v2 shim shape drops `info.time`, so the strict
- * completion-time requirement is off (terminality is confirmed via the
- * host outcome gate before this runs). */
+ * usable result summary instead of a placeholder. Delegates the fetch to
+ * the shared `fetchChildTranscript` (which surfaces `response.error` as
+ * a thrown Error — absorbed here, the settle path degrades to no text)
+ * and classification to the shared extractor; the v2 shim shape drops
+ * `info.time`, so the strict completion-time requirement is off
+ * (terminality is confirmed via the host outcome gate before this
+ * runs). */
 async function readFinalAssistantText(
   client: ReturnType<typeof getClient>,
   sessionID: string,
   directory: string,
 ): Promise<string | undefined> {
-  if (typeof client.session?.messages !== 'function') return undefined;
   try {
-    const response = await client.session.messages({
-      path: { id: sessionID },
-      query: { directory },
-    });
+    const response = await fetchChildTranscript(client, sessionID, directory);
+    if (response === undefined) return undefined;
     const evidence = extractChildTerminalEvidence(response, {
       // v2 shim shape: flat {id, role} info without time/finish.
       requireCompletionTime: false,
