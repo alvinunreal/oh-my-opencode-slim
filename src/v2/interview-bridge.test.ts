@@ -318,8 +318,8 @@ describe('v2 interview bridge', () => {
       messages: proxied,
     });
 
-    // Eager design: one full projection per context event. Lazy design:
-    // none — nothing consumes the transcript without an interview.
+    // Active-only projection: nothing consumes or snapshots the transcript
+    // without an interview.
     expect(count()).toBe(0);
     expect(await bridge.runtime.messages('ses_plain')).toEqual([]);
 
@@ -383,6 +383,56 @@ describe('v2 interview bridge', () => {
         'single projection idea',
       );
       expect(transcript[1]?.parts?.[0]?.text).toContain('<interview_state>');
+    } finally {
+      bridge.dispose();
+      await fs.rm(`${process.cwd()}/${directory}`, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
+
+  test('snapshots active transcripts before downstream part injection', async () => {
+    const directory = `.tmp-v2-snapshot-${Date.now()}`;
+    const bridge = createV2InterviewBridge(createContext(), {
+      outputFolder: directory,
+    } as never);
+    try {
+      await bridge.handleContext(
+        markerContextEvent('ses_snapshot', 'snapshot'),
+      );
+
+      const event: V2SessionContextEvent = {
+        sessionID: 'ses_snapshot',
+        agent: 'orchestrator',
+        model: {},
+        system: [],
+        tools: {},
+        messages: [
+          {
+            id: 'answer',
+            role: 'user',
+            content: [{ type: 'text', text: 'the answer' }],
+          },
+        ],
+      };
+      await bridge.handleContext(event);
+
+      // The setup context hook runs downstream transforms after the interview
+      // bridge. Their synthetic/metadata parts must not enter the transcript.
+      event.messages[0].content.push({
+        type: 'text',
+        text: 'injected by downstream transform',
+        synthetic: true,
+        metadata: { source: 'bridge-test' },
+      });
+
+      expect(await bridge.runtime.messages('ses_snapshot')).toEqual([
+        {
+          info: { role: 'user', id: 'answer' },
+          parts: [{ type: 'text', text: 'the answer' }],
+        },
+      ]);
     } finally {
       bridge.dispose();
       await fs.rm(`${process.cwd()}/${directory}`, {

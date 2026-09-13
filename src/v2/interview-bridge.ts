@@ -64,6 +64,21 @@ function toInterviewMessages(event: V2SessionContextEvent): InterviewMessage[] {
   }));
 }
 
+/** Copy the context surface used by the interview transcript before another
+ * context transform can mutate it. The v2 host reuses the event object while
+ * downstream transforms add synthetic parts and metadata. */
+function snapshotContextEvent(
+  event: V2SessionContextEvent,
+): V2SessionContextEvent {
+  return {
+    ...event,
+    messages: event.messages.map((message) => ({
+      ...message,
+      content: message.content.map((part) => ({ ...part })),
+    })),
+  };
+}
+
 export interface V2InterviewBridge {
   readonly service: ReturnType<typeof createInterviewService>;
   readonly runtime: InterviewSessionRuntime;
@@ -106,13 +121,13 @@ export function createV2InterviewBridge(
     maxRetainedSessions?: number;
   } = {},
 ): V2InterviewBridge {
-  // Last raw context event per retained session (a reference — no
-  // projection). The InterviewMessage projection is derived lazily by
-  // runtime.messages() exactly where the interview service consumes it.
+  // Last snapshotted context event per retained session. Active interview
+  // events are snapshotted and projected before downstream context transforms
+  // can mutate the host-owned event.
   const rawEvents = new Map<string, V2SessionContextEvent>();
-  // Lazily derived (memoized) transcript projections + streamed assistant
-  // turns. Only populated while an interview is actually active for the
-  // session (or a marker dispatch is in flight).
+  // Memoized transcript projections + streamed assistant turns. Only
+  // populated while an interview is actually active for the session (or a
+  // marker dispatch is in flight).
   const transcripts = new Map<string, InterviewMessage[]>();
   const activeText = new Map<string, string>();
   const maxRetainedSessions =
@@ -155,10 +170,23 @@ export function createV2InterviewBridge(
     return service.getActiveInterviewId(sessionID) !== null;
   }
 
-  /** Lazily derive (and memoize) the transcript projection from the
-   * retained raw event. Memoized so the projection runs at most once per
-   * context event and streamed assistant turns mutate the exact array
-   * runtime.messages() hands out. */
+  /** Retain an isolated event and its projection before downstream context
+   * transforms run. Keep the host event as a throw-path fallback so malformed
+   * events preserve the bridge's existing recovery behavior. */
+  function retainProjectedEvent(
+    event: V2SessionContextEvent,
+  ): V2SessionContextEvent {
+    rawEvents.set(event.sessionID, event);
+    transcripts.delete(event.sessionID);
+    const snapshot = snapshotContextEvent(event);
+    rawEvents.set(event.sessionID, snapshot);
+    transcripts.set(event.sessionID, toInterviewMessages(snapshot));
+    return snapshot;
+  }
+
+  /** Return the memoized transcript projection from the retained snapshot.
+   * The lazy fallback is only for a failed eager projection, so a failed
+   * dispatch can still be retried. Successful retention never reaches it. */
   function transcriptFor(sessionID: string): InterviewMessage[] {
     let messages = transcripts.get(sessionID);
     if (!messages) {
@@ -175,12 +203,11 @@ export function createV2InterviewBridge(
   }
 
   /** Track per-session state only while an interview is actually active:
-   * refresh the retained raw event (projection stays lazy), or drop stale
-   * state left by a dispatch that threw mid-flight. */
+   * eagerly snapshot and project the event, or drop stale state left by a
+   * dispatch that threw mid-flight. */
   function observeContext(event: V2SessionContextEvent): void {
     if (isActiveSession(event.sessionID)) {
-      rawEvents.set(event.sessionID, event);
-      transcripts.delete(event.sessionID);
+      retainProjectedEvent(event);
     } else if (rawEvents.has(event.sessionID)) {
       rawEvents.delete(event.sessionID);
       transcripts.delete(event.sessionID);
@@ -303,14 +330,14 @@ export function createV2InterviewBridge(
       return;
     }
 
-    // Bind the raw event (no projection) so the dispatch below — which
-    // creates/resumes an interview and calls runtime.messages() — observes
-    // this exact transcript state, including the not-yet-rewritten marker.
+    // Snapshot and project before the dispatch below — which creates/resumes
+    // an interview and calls runtime.messages() — so downstream context
+    // transforms cannot make their injected parts interview-visible. The
+    // snapshot includes the not-yet-rewritten marker.
     // No prune here: at bind time the session is not yet active, so a
     // pre-dispatch pass could evict the in-flight marker session itself
     // whenever the older entries are all active.
-    rawEvents.set(event.sessionID, event);
-    transcripts.delete(event.sessionID);
+    const boundSnapshot = retainProjectedEvent(event);
 
     const output = {
       parts: [] as Array<{
@@ -330,7 +357,7 @@ export function createV2InterviewBridge(
     );
 
     applyInterviewCommandParts(trailing, text, output.parts);
-    if (rawEvents.get(event.sessionID) !== event) {
+    if (rawEvents.get(event.sessionID) !== boundSnapshot) {
       // A concurrent context event rebound the retained state; it owns the
       // transcript from here on.
       return;
@@ -343,7 +370,7 @@ export function createV2InterviewBridge(
       // projection made during the dispatch, so no second pass runs. The
       // role guard keeps a mid-dispatch streamed assistant turn (appended
       // to the memo while the command hook awaited) out of the fix-up —
-      // the raw event reference re-derives the rewritten marker on the
+      // the snapshotted event re-derives the rewritten marker on the
       // next projection anyway.
       projectedTrailing.parts = projectContent(trailing.content);
     }
