@@ -13,7 +13,12 @@ import {
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
-import { deepMerge, loadPluginConfig, type MultiplexerConfig } from './config';
+import {
+  deepMerge,
+  getResolvedPreset,
+  loadPluginConfig,
+  type MultiplexerConfig,
+} from './config';
 import { parseList } from './config/agent-mcps';
 import {
   AGENT_ALIASES,
@@ -301,13 +306,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Reapply that persisted preset so each fresh generation creates agents
     // with the correct models.
     const runtimePreset = RuntimeConfig.get(ctx.directory).getRuntimePreset();
-    if (runtimePreset && config.presets?.[runtimePreset]) {
+    const runtimePresetConfig = getResolvedPreset(config, runtimePreset);
+    if (runtimePreset && runtimePresetConfig) {
       config.preset = runtimePreset;
       // Re-merge runtime preset into config.agents (loadPluginConfig
       // already merged the config-file preset, not the runtime one).
       // Runtime preset is override so it wins over config-file preset.
-      const presetAgents = config.presets[runtimePreset];
-      config.agents = deepMerge(config.agents, presetAgents);
+      config.agents = deepMerge(config.agents, runtimePresetConfig);
     } else if (runtimePreset) {
       // Preset was deleted from config since last switch - clear stale state
       RuntimeConfig.get(ctx.directory).setRuntimePreset(null);
@@ -890,8 +895,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // preset data may persist. Apply that persisted selection after normal
       // model resolution for the current generation.
       const runtimePresetName = runtime.getRuntimePreset();
-      if (runtimePresetName && config.presets?.[runtimePresetName]) {
-        const runtimePreset = config.presets[runtimePresetName];
+      const runtimePreset = getResolvedPreset(config, runtimePresetName);
+      if (runtimePresetName && runtimePreset) {
         for (const [agentName, override] of Object.entries(runtimePreset)) {
           // Resolve legacy alias keys (e.g. "explore" → "explorer")
           // so presets using aliases work in this path.
@@ -991,8 +996,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       applyOrchestratorModelConfig({
         agents: configAgent,
         enabled: runtime.stripOrchestratorModel,
-        presets: runtime.plugin?.presets,
-        configPreset: runtime.preset,
+        resolvedPresets: config.resolvedPresets,
+        configPreset: config.preset,
         runtimePreset: runtimePresetName,
       });
       // This is the source of truth for admission. It is intentionally
