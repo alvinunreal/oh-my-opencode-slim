@@ -751,6 +751,46 @@ describe('plugin config model inheritance', () => {
     }
   });
 
+  test('config() keeps compaction exception after host council prompt override', async () => {
+    const hooks = await loadConfiguredPlugin({
+      council: {
+        presets: { default: { alpha: { model: 'test/councillor' } } },
+      },
+      agents: {
+        council: { displayName: 'ArchitectureCouncil' },
+      },
+    });
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        council: { prompt: 'Always include ## Council Response.' },
+        ArchitectureCouncil: {
+          prompt: 'Always include ## Council Summary.',
+        },
+      },
+    };
+
+    try {
+      await hooks.config?.(hostConfig);
+      const agents = hostConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+      for (const key of ['council', 'ArchitectureCouncil'] as const) {
+        expect(agents[key]?.prompt).toContain(
+          'if the host asks you to produce a session checkpoint or compaction summary in a specific template',
+        );
+      }
+      expect(agents.council?.prompt).toContain(
+        'Always include ## Council Response.',
+      );
+      expect(agents.ArchitectureCouncil?.prompt).toContain(
+        'Always include ## Council Summary.',
+      );
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('config() writes the visible orchestrator display name as default_agent', async () => {
     const hooks = await loadConfiguredPlugin({
       council: {

@@ -220,6 +220,13 @@ describe('revived run tracker', () => {
     ).toBe(false);
     expect(scheduled).toHaveLength(1);
 
+    // Drain the probe's microtask chain: the shared fetch helper adds a
+    // couple of await hops, so give the chain a bounded settle loop
+    // rather than pinning an exact tick count.
+    const settle = async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    };
+
     for (
       let attempt = 0;
       harness.board.get('ses_child')?.state === 'running' && attempt < 4;
@@ -228,8 +235,8 @@ describe('revived run tracker', () => {
       const callback = scheduled.shift();
       if (!callback) throw new Error('missing stabilization probe');
       callback();
-      await Promise.resolve();
-      await Promise.resolve();
+      await settle();
+      await settle();
     }
 
     expect(harness.board.get('ses_child')).toMatchObject({

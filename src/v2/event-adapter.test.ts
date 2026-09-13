@@ -861,3 +861,93 @@ describe('mapV2EventToV1 permission field mapping', () => {
     expect(hook.hasInputWait('parent-1')).toBe(false);
   });
 });
+
+describe('mapV2EventToV1 session.deleted synthesis', () => {
+  // v2 delivers deletion flat ({sessionID}) under `data` on live hosts;
+  // without synthesis the v1 deletion cleanup (task-session-manager
+  // rememberDeletedSession + cache-monitor deletedSessionID) never fires on
+  // v2. The v1 consumers read two different spellings of the session id —
+  // properties.info.id (cache-monitor) and properties.sessionID (event
+  // router) — so the synthesized event must carry BOTH.
+  function liveDeletedEvent(sessionID: string): Record<string, unknown> {
+    return deepFreeze({
+      id: 'evt_session_deleted',
+      created: 1_788_961_637_000,
+      type: 'session.deleted',
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      data: { sessionID },
+    });
+  }
+
+  test('legacy `properties` spelling synthesizes the dual-spelling v1 shape', () => {
+    const ev = deepFreeze({
+      type: 'session.deleted',
+      properties: { sessionID: 'ses_del' },
+    });
+    const out = mapV2EventToV1(ev);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toBe(ev);
+    expect(out[1]).toEqual({
+      type: 'session.deleted',
+      properties: {
+        info: { id: 'ses_del' },
+        sessionID: 'ses_del',
+      },
+    });
+  });
+
+  test('live `data` spelling synthesizes the same dual-spelling v1 shape', () => {
+    const ev = liveDeletedEvent('ses_gone');
+    const out = mapV2EventToV1(ev);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toBe(ev);
+    expect(out[1]).toEqual({
+      type: 'session.deleted',
+      properties: {
+        info: { id: 'ses_gone' },
+        sessionID: 'ses_gone',
+      },
+    });
+  });
+
+  test('session.deleted without a sessionID stays passthrough-only', () => {
+    const ev = deepFreeze({ type: 'session.deleted', properties: {} });
+    expect(mapV2EventToV1(ev)).toEqual([ev]);
+    const emptyData = deepFreeze({
+      type: 'session.deleted',
+      data: {},
+    });
+    expect(mapV2EventToV1(emptyData)).toEqual([emptyData]);
+  });
+
+  test('synthesized session.deleted feeds the real task-session-manager cleanup (tombstone)', async () => {
+    const { createTaskSessionManagerHook } = await import(
+      '../hooks/task-session-manager'
+    );
+    const { BackgroundJobBoard, getBackgroundJobLifecycleLedger } =
+      await import('../utils');
+    const board = new BackgroundJobBoard();
+    const hook = createTaskSessionManagerHook({} as never, {
+      maxSessionsPerAgent: 2,
+      maxRetainedSnapshots: 2,
+      backgroundJobBoard: board,
+      shouldManageSession: (id: string) => id === 'parent-1',
+    });
+    board.registerLaunch({
+      taskID: 'child-del',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      description: 'deletion synthesis e2e',
+      now: 0,
+    });
+    // Dispatch like the v2 pump: raw first, then every synthesized product.
+    // The raw data-keyed event is inert in the v1 handler (no properties);
+    // only the synthesized dual-spelling shape can record the tombstone.
+    for (const mapped of mapV2EventToV1(liveDeletedEvent('child-del'))) {
+      await hook.event({ event: mapped });
+    }
+    expect(
+      getBackgroundJobLifecycleLedger(board).tombstones.has('child-del'),
+    ).toBe(true);
+  });
+});

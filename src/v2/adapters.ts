@@ -40,18 +40,19 @@ const V2_DEFAULT_PERMISSIONS = [
   { action: 'read', resource: '*.env.example', effect: 'allow' },
 ];
 
-/** Map v1 permission keys to v2 (action, resource). v1 `task` is v2 `subagent`;
- * v1 `bash` is v2 `execute`. */
+/** Map a v1 permission key (the tool) to v2 (action, resource). The host
+ * evaluator matches the tool against `action` and the path/pattern against
+ * `resource`. v1 `task` is v2 `subagent`; v1 `bash` is v2 `execute`. */
 function v1PermKeyToV2(
   key: string,
 ): Array<{ action: string; resource: string }> {
   if (key === 'task') return [{ action: 'subagent', resource: '*' }];
   if (key === 'bash')
     return [
-      { action: '*', resource: 'execute' },
-      { action: '*', resource: 'bash' },
+      { action: 'execute', resource: '*' },
+      { action: 'bash', resource: '*' },
     ];
-  return [{ action: '*', resource: key }];
+  return [{ action: key, resource: '*' }];
 }
 
 /** Convert a v1 permission map (or shorthand string) into v2 permission rules. */
@@ -66,20 +67,26 @@ export function adaptPermissions(
     return rules;
   }
   if (perm && typeof perm === 'object') {
-    for (const [resource, effect] of Object.entries(
+    for (const [tool, effect] of Object.entries(
       perm as Record<string, unknown>,
     )) {
       if (typeof effect === 'string') {
-        for (const target of v1PermKeyToV2(resource)) {
+        for (const target of v1PermKeyToV2(tool)) {
           rules.push({ ...target, effect });
         }
       } else if (effect && typeof effect === 'object') {
-        // nested {tool: {pattern: effect}}
-        for (const [sub, subEffect] of Object.entries(
+        // nested {tool: {pattern: effect}} → action=tool, resource=pattern
+        for (const [pattern, subEffect] of Object.entries(
           effect as Record<string, unknown>,
         )) {
           if (typeof subEffect === 'string') {
-            rules.push({ action: sub, resource, effect: subEffect });
+            for (const target of v1PermKeyToV2(tool)) {
+              rules.push({
+                action: target.action,
+                resource: pattern,
+                effect: subEffect,
+              });
+            }
           }
         }
       }
@@ -210,7 +217,7 @@ export function applyAgentToDraft(
     if (Array.isArray(v1.tools)) {
       for (const t of v1.tools as unknown[]) {
         if (typeof t === 'string') {
-          toolsAllow.push({ action: '*', resource: t, effect: 'allow' });
+          toolsAllow.push({ action: t, resource: '*', effect: 'allow' });
         }
       }
     }

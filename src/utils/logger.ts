@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { redactSecretsForLog } from './redact';
 
 const LOG_PREFIX = 'oh-my-opencode-slim.';
 const LOG_SUFFIX = '.log';
@@ -144,7 +145,14 @@ export function log(message: string, data?: unknown): void {
       }
     }
 
-    const logEntry = `[${timestamp}] ${message} ${dataStr}\n`;
+    // Redaction choke point: every sink below (file append, stderr, and
+    // the append-failure stderr fallback) receives this one composed,
+    // already-redacted entry, so no call site can bypass the masking.
+    // Best-effort shape-based barrier against accidental credential
+    // leaks — see src/utils/redact.ts for the documented limits.
+    const logEntry = redactSecretsForLog(
+      `[${timestamp}] ${message} ${dataStr}\n`,
+    );
 
     if (sink.kind === 'stderr') {
       safeStderr(logEntry.trimEnd());

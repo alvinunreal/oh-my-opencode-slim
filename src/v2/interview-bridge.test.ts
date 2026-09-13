@@ -6,7 +6,6 @@ import {
   createV2InterviewBridge,
   markerText,
 } from './interview-bridge';
-import type { V2SessionContextEvent } from './types';
 
 function createContext(overrides?: {
   synthetic?: (input: Record<string, unknown>) => Promise<unknown>;
@@ -21,64 +20,6 @@ function createContext(overrides?: {
       prompt: overrides?.prompt,
     },
   };
-}
-
-/** Minimal context event whose trailing user message is the given marker. */
-function markerContextEvent(
-  sessionID: string,
-  idea: string,
-  id = 'tail',
-): V2SessionContextEvent {
-  return {
-    sessionID,
-    agent: 'orchestrator',
-    model: {},
-    system: [],
-    tools: {},
-    messages: [
-      { id, role: 'user', content: [{ type: 'text', text: markerText(idea) }] },
-    ],
-  };
-}
-
-/** Wrap a messages array so each full projection pass is counted:
- * toInterviewMessages reads `.map` on the array exactly once per pass. */
-function countProjections(messages: V2SessionContextEvent['messages']): {
-  proxied: V2SessionContextEvent['messages'];
-  count: () => number;
-} {
-  let projections = 0;
-  return {
-    proxied: new Proxy(messages, {
-      get(target, prop) {
-        if (prop === 'map') projections += 1;
-        return Reflect.get(target, prop, target);
-      },
-    }),
-    count: () => projections,
-  };
-}
-
-/** Marker event whose messages array throws on the FIRST projection pass
- * (`.map`) only: the dispatch's loadMessages rejects mid-flight, leaving
- * the session's retained state inactive (throw-path retention), while a
- * later projection of the same retained event succeeds. */
-function unprojectableMarkerEvent(
-  sessionID: string,
-  idea: string,
-): V2SessionContextEvent {
-  const event = markerContextEvent(sessionID, idea);
-  let armed = true;
-  event.messages = new Proxy(event.messages, {
-    get(target, prop) {
-      if (prop === 'map' && armed) {
-        armed = false;
-        throw new Error('projection blocked');
-      }
-      return Reflect.get(target, prop, target);
-    },
-  });
-  return event;
 }
 
 describe('markerText', () => {
@@ -303,331 +244,116 @@ describe('v2 interview bridge', () => {
     ]);
   });
 
-  test('no transcript projection for sessions without an active interview', async () => {
+  test('snapshots transcript before downstream part injection', async () => {
     const bridge = createV2InterviewBridge(createContext());
-    const { proxied, count } = countProjections([
-      { id: 'u', role: 'user', content: [{ type: 'text', text: 'hello' }] },
-    ]);
-
-    await bridge.handleContext({
-      sessionID: 'ses_plain',
+    const event = {
+      sessionID: 'ses_snapshot',
       agent: 'orchestrator',
       model: {},
       system: [],
       tools: {},
-      messages: proxied,
+      messages: [
+        {
+          id: 'answer',
+          role: 'user',
+          content: [{ type: 'text', text: 'the answer' }],
+        },
+      ],
+    };
+
+    await bridge.handleContext(event);
+    event.messages[0].content.push({
+      type: 'text',
+      text: 'injected by downstream transform',
+      synthetic: true,
+      metadata: { source: 'bridge-test' },
     });
 
-    // Active-only projection: nothing consumes or snapshots the transcript
-    // without an interview.
-    expect(count()).toBe(0);
-    expect(await bridge.runtime.messages('ses_plain')).toEqual([]);
+    expect(bridge.getTranscript('ses_snapshot')).toEqual([
+      {
+        info: { role: 'user', id: 'answer' },
+        parts: [{ type: 'text', text: 'the answer' }],
+      },
+    ]);
+    bridge.dispose();
+  });
 
-    // Streaming text events for a non-interview session stay inert too.
+  test('projects text events and removes a deleted session', async () => {
+    const bridge = createV2InterviewBridge(createContext());
+    await bridge.handleContext({
+      sessionID: 'ses_text',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        {
+          id: 'u',
+          role: 'user',
+          content: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    });
     await bridge.handleEvent({
       type: 'session.next.text.started',
-      properties: { sessionID: 'ses_plain' },
+      properties: { sessionID: 'ses_text' },
     });
     await bridge.handleEvent({
       type: 'session.next.text.delta',
-      properties: { sessionID: 'ses_plain', delta: 'ignored' },
+      properties: { sessionID: 'ses_text', delta: 'one' },
     });
     await bridge.handleEvent({
-      type: 'session.next.text.ended',
-      properties: { sessionID: 'ses_plain', text: 'ignored' },
+      type: 'session.next.text.delta',
+      properties: { sessionID: 'ses_text', delta: ' two' },
     });
-    expect(count()).toBe(0);
-    expect(await bridge.runtime.messages('ses_plain')).toEqual([]);
+    expect(bridge.getTranscript('ses_text').at(-1)?.parts?.[0]?.text).toBe(
+      'one two',
+    );
+
+    await bridge.handleEvent({
+      type: 'session.deleted',
+      properties: { sessionID: 'ses_text' },
+    });
+    expect(bridge.getTranscript('ses_text')).toEqual([]);
     bridge.dispose();
   });
 
-  test('marker dispatch projects the transcript exactly once', async () => {
-    const directory = `.tmp-v2-once-${Date.now()}`;
-    const synthetic = mock(async () => ({}));
-    const rename = mock(async () => ({}));
-    const bridge = createV2InterviewBridge(
-      createContext({ synthetic, rename }),
-      { outputFolder: directory } as never,
-    );
-    try {
-      const earlier = {
-        id: 'old',
-        role: 'user',
-        content: [{ type: 'text', text: 'Earlier context' }],
-      };
-      const event = markerContextEvent('ses_once', 'single projection idea');
-      event.messages.unshift(earlier);
-      const { proxied, count } = countProjections(event.messages);
-      event.messages = proxied;
-
-      await bridge.handleContext(event);
-
-      // One projection only — the dispatch's createInterview
-      // loadMessages. The eager design ran the full projection twice.
-      expect(count()).toBe(1);
-
-      // Memoized: consumption does not re-derive, and the projected
-      // trailing message reflects the marker rewrite.
-      const transcript = await bridge.runtime.messages('ses_once');
-      expect(count()).toBe(1);
-      expect(await bridge.runtime.messages('ses_once')).toBe(transcript);
-      expect(transcript).toHaveLength(2);
-      expect(transcript[0]).toEqual({
-        info: { role: 'user', id: 'old' },
-        parts: [{ type: 'text', text: 'Earlier context' }],
-      });
-      expect(transcript[1]?.parts?.[0]?.text).not.toContain(
-        '<omos-interview-command>',
-      );
-      expect(transcript[1]?.parts?.[0]?.text).toContain(
-        'single projection idea',
-      );
-      expect(transcript[1]?.parts?.[0]?.text).toContain('<interview_state>');
-    } finally {
-      bridge.dispose();
-      await fs.rm(`${process.cwd()}/${directory}`, {
-        recursive: true,
-        force: true,
-      });
-    }
-  });
-
-  test('snapshots active transcripts before downstream part injection', async () => {
-    const directory = `.tmp-v2-snapshot-${Date.now()}`;
-    const bridge = createV2InterviewBridge(createContext(), {
-      outputFolder: directory,
-    } as never);
-    try {
-      await bridge.handleContext(
-        markerContextEvent('ses_snapshot', 'snapshot'),
-      );
-
-      const event: V2SessionContextEvent = {
-        sessionID: 'ses_snapshot',
-        agent: 'orchestrator',
-        model: {},
-        system: [],
-        tools: {},
-        messages: [
-          {
-            id: 'answer',
-            role: 'user',
-            content: [{ type: 'text', text: 'the answer' }],
-          },
-        ],
-      };
-      await bridge.handleContext(event);
-
-      // The setup context hook runs downstream transforms after the interview
-      // bridge. Their synthetic/metadata parts must not enter the transcript.
-      event.messages[0].content.push({
-        type: 'text',
-        text: 'injected by downstream transform',
-        synthetic: true,
-        metadata: { source: 'bridge-test' },
-      });
-
-      expect(await bridge.runtime.messages('ses_snapshot')).toEqual([
-        {
-          info: { role: 'user', id: 'answer' },
-          parts: [{ type: 'text', text: 'the answer' }],
-        },
-      ]);
-    } finally {
-      bridge.dispose();
-      await fs.rm(`${process.cwd()}/${directory}`, {
-        recursive: true,
-        force: true,
-      });
-    }
-  });
-
-  test('marker dispatch that creates no interview retains nothing', async () => {
+  test('resolves sessionID from live `data`-keyed events (text + deletion)', async () => {
+    // Live v2 hosts key the event payload under `data`; reading only
+    // `event.properties` left handleEvent dead on live v2 for ALL events.
     const bridge = createV2InterviewBridge(createContext());
-    // Bare /interview: the service pushes an ask-for-idea prompt and
-    // creates no interview — the transcript has no consumer.
-    await bridge.handleContext(markerContextEvent('ses_bare', ''));
-    expect(bridge.service.getActiveInterviewId('ses_bare')).toBeNull();
-    expect(await bridge.runtime.messages('ses_bare')).toEqual([]);
+    await bridge.handleContext({
+      sessionID: 'ses_live',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        {
+          id: 'u',
+          role: 'user',
+          content: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    });
+    await bridge.handleEvent({
+      type: 'session.next.text.started',
+      data: { sessionID: 'ses_live' },
+    });
+    await bridge.handleEvent({
+      type: 'session.next.text.delta',
+      data: { sessionID: 'ses_live', delta: 'from data' },
+    });
+    expect(bridge.getTranscript('ses_live').at(-1)?.parts?.[0]?.text).toBe(
+      'from data',
+    );
+
+    await bridge.handleEvent({
+      type: 'session.deleted',
+      data: { sessionID: 'ses_live' },
+    });
+    expect(bridge.getTranscript('ses_live')).toEqual([]);
     bridge.dispose();
-  });
-
-  test('a failed marker dispatch leaves retained state that the next plain event reclaims', async () => {
-    // outputFolder pointing at a regular FILE makes the dispatch's
-    // document mkdir fail, so the command hook throws mid-dispatch.
-    const blocker = `.tmp-v2-throw-${Date.now()}`;
-    await fs.writeFile(`${process.cwd()}/${blocker}`, 'blocker');
-    const bridge = createV2InterviewBridge(createContext(), {
-      outputFolder: blocker,
-    } as never);
-    try {
-      await expect(
-        bridge.handleContext(
-          markerContextEvent('ses_throw', 'throw recovery idea'),
-        ),
-      ).rejects.toThrow();
-
-      // The dispatch bound the raw event (and memoized its projection via
-      // loadMessages) before throwing — retained, but stale: no interview
-      // exists for the session.
-      expect(bridge.service.getActiveInterviewId('ses_throw')).toBeNull();
-      expect(await bridge.runtime.messages('ses_throw')).toHaveLength(1);
-
-      // The next plain context event for the now-inactive session drops
-      // the stale retained state (observeContext self-heal).
-      await bridge.handleContext({
-        sessionID: 'ses_throw',
-        agent: 'orchestrator',
-        model: {},
-        system: [],
-        tools: {},
-        messages: [
-          { id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] },
-        ],
-      });
-      expect(await bridge.runtime.messages('ses_throw')).toEqual([]);
-    } finally {
-      bridge.dispose();
-      await fs.rm(`${process.cwd()}/${blocker}`, { force: true });
-    }
-  });
-
-  test('streams assistant text for interview sessions and drops deleted sessions', async () => {
-    const directory = `.tmp-v2-text-${Date.now()}`;
-    const synthetic = mock(async () => ({}));
-    const bridge = createV2InterviewBridge(createContext({ synthetic }), {
-      outputFolder: directory,
-    } as never);
-    try {
-      // The marker dispatch creates the interview that activates retention.
-      await bridge.handleContext(markerContextEvent('ses_text', 'streaming'));
-      await bridge.handleEvent({
-        type: 'session.next.text.started',
-        properties: { sessionID: 'ses_text' },
-      });
-      await bridge.handleEvent({
-        type: 'session.next.text.delta',
-        properties: { sessionID: 'ses_text', delta: 'one' },
-      });
-      await bridge.handleEvent({
-        type: 'session.next.text.delta',
-        properties: { sessionID: 'ses_text', delta: ' two' },
-      });
-      await bridge.handleEvent({
-        type: 'session.next.text.ended',
-        properties: { sessionID: 'ses_text', text: 'one two' },
-      });
-      expect(
-        (await bridge.runtime.messages('ses_text')).at(-1)?.parts?.[0]?.text,
-      ).toBe('one two');
-
-      // A follow-up context event refreshes the retained transcript while
-      // the interview stays active (earlier turns become raw history).
-      await bridge.handleContext({
-        sessionID: 'ses_text',
-        agent: 'orchestrator',
-        model: {},
-        system: [],
-        tools: {},
-        messages: [
-          { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }] },
-          {
-            id: 'a1',
-            role: 'assistant',
-            content: [{ type: 'text', text: 'one two' }],
-          },
-          {
-            id: 'u2',
-            role: 'user',
-            content: [{ type: 'text', text: 'ANSWER' }],
-          },
-        ],
-      });
-      expect(
-        (await bridge.runtime.messages('ses_text')).at(-1)?.parts?.[0]?.text,
-      ).toBe('ANSWER');
-
-      await bridge.handleEvent({
-        type: 'session.deleted',
-        properties: { sessionID: 'ses_text' },
-      });
-      expect(await bridge.runtime.messages('ses_text')).toEqual([]);
-    } finally {
-      bridge.dispose();
-      await fs.rm(`${process.cwd()}/${directory}`, {
-        recursive: true,
-        force: true,
-      });
-    }
-  });
-
-  test('active interviews are exempt from retention eviction (all-active over cap)', async () => {
-    const directory = `.tmp-v2-active-cap-${Date.now()}`;
-    const synthetic = mock(async () => ({}));
-    const bridge = createV2InterviewBridge(
-      createContext({ synthetic }),
-      { outputFolder: directory } as never,
-      { maxRetainedSessions: 3 },
-    );
-    try {
-      // Five marker dispatches, five live interviews, cap 3: every entry
-      // is active, so nothing is evictable. The cap yields to the live
-      // interview set (logged once per process) instead of dropping an
-      // active session's transcript — runtime.messages() reading [] drove
-      // performSyncInterview into a wrong mode:'completed' (PR #1171).
-      for (let i = 0; i < 5; i++) {
-        await bridge.handleContext(
-          markerContextEvent(`ses_a${i}`, `active cap idea ${i}`),
-        );
-      }
-      for (let i = 0; i < 5; i++) {
-        expect(bridge.service.getActiveInterviewId(`ses_a${i}`)).not.toBeNull();
-        expect(await bridge.runtime.messages(`ses_a${i}`)).toHaveLength(1);
-      }
-    } finally {
-      bridge.dispose();
-      await fs.rm(`${process.cwd()}/${directory}`, {
-        recursive: true,
-        force: true,
-      });
-    }
-  });
-
-  test('inactive retained sessions are still FIFO-evicted under cap pressure', async () => {
-    const directory = `.tmp-v2-inactive-cap-${Date.now()}`;
-    const synthetic = mock(async () => ({}));
-    const bridge = createV2InterviewBridge(
-      createContext({ synthetic }),
-      { outputFolder: directory } as never,
-      { maxRetainedSessions: 3 },
-    );
-    try {
-      // Two throw-path dispatches: retained but inactive (no interview
-      // was created — the projection inside loadMessages rejected).
-      for (const sessionID of ['ses_i0', 'ses_i1']) {
-        await expect(
-          bridge.handleContext(unprojectableMarkerEvent(sessionID, 'boom')),
-        ).rejects.toThrow('projection blocked');
-        expect(bridge.service.getActiveInterviewId(sessionID)).toBeNull();
-      }
-      // Two successful dispatches: their post-dispatch prune evicts the
-      // OLDEST inactive entry (ses_i0) once the cap is exceeded.
-      await bridge.handleContext(markerContextEvent('ses_a0', 'keep me 0'));
-      await bridge.handleContext(markerContextEvent('ses_a1', 'keep me 1'));
-
-      expect(await bridge.runtime.messages('ses_i0')).toEqual([]);
-      expect(await bridge.runtime.messages('ses_i1')).toHaveLength(1);
-      expect(
-        (await bridge.runtime.messages('ses_a0')).at(-1)?.parts?.[0]?.text,
-      ).toContain('keep me 0');
-      expect(await bridge.runtime.messages('ses_a1')).toHaveLength(1);
-    } finally {
-      bridge.dispose();
-      await fs.rm(`${process.cwd()}/${directory}`, {
-        recursive: true,
-        force: true,
-      });
-    }
   });
 
   test('shares one configured dashboard across multiple v2 sessions', async () => {

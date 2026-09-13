@@ -6,6 +6,7 @@ import {
 import {
   applyModelInheritanceToConfig,
   createAgents,
+  ensureCouncilCompactionException,
   getAgentConfigs,
   isSubagent,
   resolvePrimaryModelValue,
@@ -995,6 +996,24 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         configPreset: runtime.preset,
         runtimePreset: runtimePresetName,
       });
+
+      // Host `agent.council.prompt` wins the shallow merge above and can
+      // drop the compaction exception applied in createAgents. Re-apply to
+      // the canonical key and the visible display-name alias.
+      const councilPlugin = agents.council as
+        | { displayName?: string }
+        | undefined;
+      const councilKeys = new Set<string>(['council']);
+      if (typeof councilPlugin?.displayName === 'string') {
+        councilKeys.add(normalizeAgentName(councilPlugin.displayName));
+      }
+      for (const key of councilKeys) {
+        const entry = configAgent[key] as Record<string, unknown> | undefined;
+        if (typeof entry?.prompt === 'string') {
+          entry.prompt = ensureCouncilCompactionException(entry.prompt);
+        }
+      }
+
       // This is the source of truth for admission. It is intentionally
       // captured only after every host/plugin merge and the final model
       // inheritance, array-primary, preset, and orchestrator-model passes.

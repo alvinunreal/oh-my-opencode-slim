@@ -15,6 +15,7 @@ import {
   deriveFullObjective,
   deriveTaskSessionLabel,
   guardCompletedStatusText,
+  maskTaskOutputStructure,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
   parseTaskStatusOutput,
@@ -474,6 +475,23 @@ export async function handleToolExecuteAfter(
 
     const taskId = parseTaskIdFromTaskOutput(output.output);
     if (!taskId) {
+      // Host-output-drift detector: the task tool's terminal output no
+      // longer carries a parsable task id. The preview shows what the
+      // host actually returned so format drift is diagnosable from the
+      // plugin log (board-injection has its own textPreview for
+      // synthetic parts — this one covers the native tool result path).
+      // Structure-preserving VALUE masking (maskTaskOutputStructure):
+      // parse-miss content is untrusted-by-format, so tag/field names
+      // survive for drift diagnosis but every value is fully hidden as
+      // [masked] — description fields carry orchestrator/user-authored
+      // text. The full string is masked BEFORE slicing (a straddling
+      // secret cannot leak a raw prefix); the logger-level redaction
+      // remains the backstop for every other log site.
+      log('[task-session-manager] task output without a task id', {
+        callID: pending.callId,
+        sessionID: input.sessionID,
+        outputPreview: maskTaskOutputStructure(output.output).slice(0, 140),
+      });
       if (
         pending.resumedTaskId &&
         isMissingRememberedSessionError(output.output)

@@ -1,5 +1,5 @@
 /**
- * Shared child-session transcript evidence extraction.
+ * Shared child-session transcript evidence extraction and fetch.
  *
  * Two consumers need "what did the child session end with?":
  * - `revived-run-tracker` (revive probes, strict v1 transcript shape)
@@ -10,8 +10,19 @@
  * Both previously carried their own (and subtly different) extraction
  * logic. This module is the single source of truth for reading a v1-style
  * `{data: [{info, parts}]}` messages response and classifying the
- * trailing assistant turn.
+ * trailing assistant turn — and for fetching that transcript:
+ * `fetchChildTranscript` binds the client's `session.messages` endpoint
+ * (degraded hosts may not expose it) and surfaces `response.error` as a
+ * normalized `Error`, replacing the bind/call/unwrap boilerplate that was
+ * previously duplicated at every call site. `responseError` and
+ * `stringifyError` are the shared response-error extraction and error-text
+ * helpers for session-endpoint call sites (revive probes, notification
+ * transport, task cancellation).
  */
+
+import type { PluginInput } from '@opencode-ai/plugin';
+
+import { isRecord } from './guards';
 
 interface ChildTranscriptOptions {
   /** Only consider messages after this baseline message id (revive flow). */
@@ -38,6 +49,56 @@ export type ChildTerminalEvidence =
   | { kind: 'no-assistant' }
   | { kind: 'no-new-messages' };
 
+/**
+ * Fetch a child session's transcript via `client.session.messages`.
+ *
+ * Returns the raw response, or `undefined` when the host client does not
+ * expose a callable `session.messages` endpoint (degraded hosts) — each
+ * call site decides how to degrade. Transport failures propagate to the
+ * caller. A `response.error` payload is surfaced as a normalized `Error`
+ * whose message is `stringifyError(response.error)`, matching the
+ * error-surfacing style previously duplicated at the call sites.
+ */
+export async function fetchChildTranscript(
+  client: PluginInput['client'],
+  sessionID: string,
+  directory: string,
+): Promise<unknown> {
+  const session = client.session;
+  const messages =
+    typeof session?.messages === 'function'
+      ? session.messages.bind(session)
+      : undefined;
+  if (typeof messages !== 'function') return undefined;
+  const response = await messages({
+    path: { id: sessionID },
+    query: { directory },
+  });
+  const error = responseError(response);
+  if (error !== undefined) throw new Error(stringifyError(error));
+  return response;
+}
+
+/** Extract a non-null `response.error` payload from an SDK-style
+ * response; `undefined` when the response carries no error. */
+export function responseError(response: unknown): unknown {
+  if (!isRecord(response)) return undefined;
+  return response.error === undefined || response.error === null
+    ? undefined
+    : response.error;
+}
+
+/** Normalize an unknown error payload to a displayable message string. */
+export function stringifyError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 interface LooseMessage {
   info?: {
     id?: unknown;
@@ -47,20 +108,6 @@ interface LooseMessage {
     time?: { completed?: unknown };
   };
   parts?: unknown[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }
 
 export function extractChildTerminalEvidence(
