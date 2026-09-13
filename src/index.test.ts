@@ -540,6 +540,48 @@ describe('plugin TUI agent activity', () => {
       await retryHooks?.dispose?.();
     }
   });
+
+  test('does not cache a malformed parentID as a confirmed root', async () => {
+    let attempts = 0;
+    const sessionApi = {
+      async get(input: { path: { id: string } }) {
+        attempts += 1;
+        if (attempts === 1) {
+          // Malformed non-string parent: contract violation, not a root.
+          return { data: { parentID: 123 } };
+        }
+        return { data: { parentID: 'fixed-root' } };
+      },
+    };
+    const malformedHooks = await plugin({
+      client: { session: sessionApi },
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+
+    try {
+      await malformedHooks?.['chat.message']?.(
+        { sessionID: 'broken-a', agent: 'fixer' } as never,
+        {} as never,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(readTuiSnapshot(projectDir).sessionParents).toEqual({});
+
+      // A later activation must retry: the malformed slot was released.
+      await malformedHooks?.['chat.message']?.(
+        { sessionID: 'broken-a', agent: 'fixer' } as never,
+        {} as never,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(attempts).toBeGreaterThanOrEqual(2);
+      expect(readTuiSnapshot(projectDir).sessionParents['broken-a']).toBe(
+        'fixed-root',
+      );
+    } finally {
+      await malformedHooks?.dispose?.();
+    }
+  });
 });
 
 describe('background task admission model resolution', () => {

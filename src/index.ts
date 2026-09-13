@@ -279,6 +279,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         current = parentID;
         continue;
       }
+      if (parentID !== undefined && parentID !== null) {
+        // Malformed non-string parent: release the slot so a later
+        // activity can retry instead of caching a false confirmed root.
+        hydratedTuiParents.delete(current);
+      }
       // Valid response without a parent: confirmed root, stop.
       return;
     }

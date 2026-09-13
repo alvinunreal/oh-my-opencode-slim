@@ -587,7 +587,12 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     }
   }, 1000);
   const animationTimer = setInterval(() => {
-    if (!disposed && getActiveSidebarAgentNames(snapshot()).size > 0) {
+    // Same scoping as the render: hidden foreign-conversation activity
+    // must not keep this window's sidebar rerendering every frame.
+    if (
+      !disposed &&
+      getActiveSidebarAgentNames(snapshot(), visibleSession()).size > 0
+    ) {
       setAnimationNow(Date.now());
     }
   }, ACTIVITY_FRAME_MS);
@@ -689,7 +694,14 @@ const plugin: TuiDualContractModule = {
       }
     }, 1000);
     const animationTimer = setInterval(() => {
-      if (getActiveSidebarAgentNames(snapshot()).size > 0) {
+      // Same scoping as the render: hidden foreign-conversation activity
+      // must not keep this window's sidebar rerendering every frame.
+      if (
+        getActiveSidebarAgentNames(
+          snapshot(),
+          resolveRouteSessionId(api.route.current),
+        ).size > 0
+      ) {
         setAnimationNow(Date.now());
       }
     }, ACTIVITY_FRAME_MS);
