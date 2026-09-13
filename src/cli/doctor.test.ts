@@ -326,6 +326,30 @@ describe('runDoctorCheck', () => {
     expect(result.presetCheck).toEqual({ preset: 'mypreset', ok: true });
   });
 
+  test('resolves environment-interpolated parent names in the merged graph', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'child',
+        presets: {
+          base: { oracle: { model: 'base/model' } },
+          child: { $extends: '{env:PARENT_PRESET}' },
+        },
+      }),
+    );
+    process.env.PARENT_PRESET = 'base';
+
+    const result = runDoctorCheck(projectDir);
+
+    expect(result.ok).toBe(true);
+    expect(result.configs[1].ok).toBe(true);
+    expect(result.presetGraphCheck).toEqual({ ok: true });
+    expect(result.presetCheck).toEqual({ preset: 'child', ok: true });
+  });
+
   test('preset check fails for missing preset', () => {
     const projectDir = path.join(tempDir, 'project');
     const configDir = path.join(projectDir, '.opencode');

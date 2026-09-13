@@ -29,15 +29,21 @@ import type {
 } from '@opencode-ai/plugin/tui';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert } from '@opentui/solid';
-import type { AgentOverrideConfig, Preset } from './config';
+import type {
+  AgentOverrideConfig,
+  PluginConfig,
+  Preset,
+  ResolvedPreset,
+} from './config';
 import { ALL_AGENT_NAMES } from './config/constants';
-import { loadPluginConfig } from './config/loader';
+import { loadPluginConfig, PresetInheritanceError } from './config/loader';
 import {
-  deletePreset,
+  deletePresetResult,
+  readRawUserPreset,
   removeAgentFromPreset,
   setAgentOverride,
   switchPresetOnDisk,
-  writePreset,
+  writePresetResult,
 } from './tools/preset-switch';
 import type { TuiSnapshot } from './tui-state';
 
@@ -72,8 +78,10 @@ export function openPresetManager(
 }
 
 function showPresetList(state: ManagerState): void {
-  const config = loadPluginConfig(state.directory, { silent: true });
+  const config = loadConfigForTui(state);
+  if (!config) return;
   const presets = config.presets ?? {};
+  const resolvedPresets = config.resolvedPresets ?? {};
   const names = Object.keys(presets);
   const activePreset = config.preset ?? null;
 
@@ -86,7 +94,7 @@ function showPresetList(state: ManagerState): void {
   const options: TuiDialogSelectOption<string>[] = names.map((name) => ({
     title: name === activePreset ? `${name} (active)` : name,
     value: name,
-    description: describePreset(presets[name]),
+    description: describePreset(resolvedPresets[name] ?? {}),
   }));
   options.push({
     title: '+ Create new preset',
@@ -166,7 +174,8 @@ function applyPresetWithMessage(
   presetName: string,
   title: string,
 ): void {
-  const config = loadPluginConfig(state.directory, { silent: true });
+  const config = loadConfigForTui(state);
+  if (!config) return;
   const result = switchPresetOnDisk(state.directory, presetName, config);
   state.api.ui.dialog.clear();
   state.api.ui.toast({
@@ -187,14 +196,16 @@ function confirmDeletePreset(state: ManagerState, presetName: string): void {
         title: 'Delete preset',
         message: `Delete preset "${presetName}"? This cannot be undone.`,
         onConfirm: () => {
-          const ok = deletePreset(state.directory, presetName);
+          const result = deletePresetResult(state.directory, presetName);
+          const ok = result.ok;
           state.api.ui.dialog.clear();
           state.api.ui.toast({
             variant: ok ? 'success' : 'warning',
             title: ok ? 'Preset deleted' : 'Delete failed',
             message: ok
               ? `Deleted preset "${presetName}".`
-              : `Could not delete "${presetName}" (it may not exist in the user config file).`,
+              : (result.message ??
+                `Could not delete "${presetName}" (it may not exist in the user config file).`),
           });
           showPresetList(state);
         },
@@ -232,10 +243,9 @@ function promptAndCreatePreset(
           }
           // Check for name collision before opening an empty working copy,
           // to avoid silently overwriting an existing preset on save.
-          const config = loadPluginConfig(state.directory, {
-            silent: true,
-          });
-          if (config.presets?.[name]) {
+          const config = loadConfigForTui(state);
+          if (!config) return;
+          if (config.presets && Object.hasOwn(config.presets, name)) {
             confirmOverwritePreset(state, name, onCancel);
             return;
           }
@@ -273,22 +283,27 @@ function confirmOverwritePreset(
 }
 
 function editPreset(state: ManagerState, presetName: string): void {
-  const config = loadPluginConfig(state.directory, { silent: true });
-  const preset = config.presets?.[presetName] ?? {};
+  const config = loadConfigForTui(state);
+  if (!config) return;
+  const preset = readRawUserPreset(state.directory, presetName) ?? {};
+  const resolvedPreset = config.resolvedPresets?.[presetName] ?? {};
   // Work on a shallow copy so in-memory edits don't mutate the loaded config.
-  editPresetWorkingCopy(state, presetName, { ...preset });
+  editPresetWorkingCopy(state, presetName, { ...preset }, resolvedPreset);
 }
 
 function editPresetWorkingCopy(
   state: ManagerState,
   presetName: string,
   working: Preset,
+  effective: ResolvedPreset = metadataFreePreset(working),
 ): void {
-  const agentNames = Object.keys(working);
+  const agentNames = Object.keys(effective).filter(
+    (name) => name !== '$extends',
+  );
   const options: TuiDialogSelectOption<string>[] = agentNames.map((name) => ({
     title: name,
     value: name,
-    description: describeOverride(working[name]),
+    description: describeOverride(effective[name]),
   }));
   options.push({ title: '+ Add agent', value: ACTION_ADD_AGENT });
   options.push({ title: '− Remove agent', value: '__omo_remove_agent__' });
@@ -356,7 +371,9 @@ function promptAddAgent(
   presetName: string,
   working: Preset,
 ): void {
-  const present = new Set(Object.keys(working));
+  const present = new Set(
+    Object.keys(working).filter((name) => name !== '$extends'),
+  );
   const available = ALL_AGENT_NAMES.filter((n) => !present.has(n));
   if (available.length === 0) {
     state.api.ui.toast({
@@ -399,7 +416,7 @@ function promptRemoveAgent(
   presetName: string,
   working: Preset,
 ): void {
-  const agentNames = Object.keys(working);
+  const agentNames = Object.keys(working).filter((name) => name !== '$extends');
   if (agentNames.length === 0) {
     state.api.ui.toast({
       variant: 'info',
@@ -451,18 +468,29 @@ function savePreset(
   // Strip agents whose override is empty — they add nothing to the preset.
   const cleaned: Preset = {};
   for (const [agent, override] of Object.entries(working)) {
+    if (agent === '$extends') {
+      if (typeof override === 'string' || override === null) {
+        cleaned.$extends = override;
+      }
+      continue;
+    }
+    if (typeof override !== 'object' || override === null) {
+      continue;
+    }
     if (Object.keys(override).length > 0) {
       cleaned[agent] = override;
     }
   }
-  const ok = writePreset(state.directory, presetName, cleaned);
+  const result = writePresetResult(state.directory, presetName, cleaned);
+  const ok = result.ok;
   if (!silent) {
     state.api.ui.toast({
       variant: ok ? 'success' : 'warning',
       title: ok ? 'Preset saved' : 'Save failed',
       message: ok
         ? `Saved preset "${presetName}" to config.`
-        : `Could not write preset "${presetName}" to the config file.`,
+        : (result.message ??
+          `Could not write preset "${presetName}" to the config file.`),
     });
   }
   if (returnToList) {
@@ -772,11 +800,23 @@ function pickOptions(
 
 // --- formatting helpers (also used by the simple list view if needed) ---
 
-function describePreset(preset: Preset): string {
-  const parts = Object.entries(preset).map(
+function describePreset(preset: Preset | ResolvedPreset): string {
+  const displayPreset =
+    '$extends' in preset ? metadataFreePreset(preset as Preset) : preset;
+  const parts = Object.entries(displayPreset).map(
     ([agent, override]) => `${agent}: ${describeOverride(override)}`,
   );
   return parts.length > 0 ? parts.join(', ') : '(empty)';
+}
+
+function metadataFreePreset(preset: Preset): ResolvedPreset {
+  const result: ResolvedPreset = {};
+  for (const [agent, override] of Object.entries(preset)) {
+    if (agent !== '$extends' && typeof override === 'object') {
+      result[agent] = override as AgentOverrideConfig;
+    }
+  }
+  return result;
 }
 
 function describeOverride(override: AgentOverrideConfig): string {
@@ -794,4 +834,19 @@ function describeOverride(override: AgentOverrideConfig): string {
   if (override.options && Object.keys(override.options).length > 0)
     bits.push('options');
   return bits.length > 0 ? bits.join(', ') : '(unset)';
+}
+
+function loadConfigForTui(state: ManagerState): PluginConfig | undefined {
+  try {
+    return loadPluginConfig(state.directory, { silent: true });
+  } catch (error) {
+    if (!(error instanceof PresetInheritanceError)) throw error;
+    state.api.ui.dialog.clear();
+    state.api.ui.toast({
+      variant: 'warning',
+      title: 'Preset graph invalid',
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }

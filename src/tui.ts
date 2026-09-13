@@ -8,7 +8,7 @@ import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { createSignal } from 'solid-js';
 import { DEFAULT_DISABLED_AGENTS, SUBAGENT_NAMES } from './config/constants';
-import { loadPluginConfig } from './config/loader';
+import { loadPluginConfig, PresetInheritanceError } from './config/loader';
 import {
   recordTmuxPane,
   removeTmuxPane,
@@ -451,22 +451,28 @@ function readConfigState(directory: string): {
   compactSidebar: boolean;
 } {
   let configInvalid = false;
-  const config = loadPluginConfig(directory, {
-    silent: true,
-    onWarning: (warning) => {
-      // Only genuinely broken configs (parse/load/schema failures) mark the
-      // sidebar invalid. Benign deprecation notices (deprecated-key) and
-      // missing-preset do not, otherwise a config that loads fine would be
-      // shown as "Config invalid".
-      if (
-        warning.kind === 'invalid-json' ||
-        warning.kind === 'invalid-schema' ||
-        warning.kind === 'read-error'
-      ) {
-        configInvalid = true;
-      }
-    },
-  });
+  let config: ReturnType<typeof loadPluginConfig>;
+  try {
+    config = loadPluginConfig(directory, {
+      silent: true,
+      onWarning: (warning) => {
+        // Only genuinely broken configs (parse/load/schema failures) mark
+        // the sidebar invalid. Benign deprecation notices and missing presets
+        // still load successfully.
+        if (
+          warning.kind === 'invalid-json' ||
+          warning.kind === 'invalid-schema' ||
+          warning.kind === 'read-error'
+        ) {
+          configInvalid = true;
+        }
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof PresetInheritanceError)) throw error;
+    configInvalid = true;
+    return { configInvalid, compactSidebar: true };
+  }
   const compactSidebar = config.compactSidebar ?? true;
   return { configInvalid, compactSidebar };
 }

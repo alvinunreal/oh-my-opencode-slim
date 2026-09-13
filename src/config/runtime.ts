@@ -30,7 +30,7 @@ import {
   SUBAGENT_NAMES,
 } from './constants';
 import type { CouncilConfig } from './council-schema';
-import { deepMerge } from './loader';
+import { deepMerge, getResolvedPreset } from './loader';
 import type {
   AcpAgentsConfig,
   AgentOverrideConfig,
@@ -263,7 +263,7 @@ export class RuntimeConfig {
   agents(): Record<string, AgentOverrideConfig> {
     let base = this.pluginConfig?.agents ?? {};
     const filePreset = this.pluginConfig?.preset
-      ? this.pluginConfig.presets?.[this.pluginConfig.preset]
+      ? getResolvedPreset(this.pluginConfig, this.pluginConfig.preset)
       : undefined;
     if (filePreset) {
       base = mergeAgentOverrides(filePreset, base);
@@ -444,7 +444,7 @@ export class RuntimeConfig {
    */
   get primaryModel(): string | undefined {
     const activePreset = this.preset
-      ? this.pluginConfig?.presets?.[this.preset]
+      ? getResolvedPreset(this.pluginConfig, this.preset)
       : undefined;
     if (!activePreset) {
       return undefined;
@@ -530,7 +530,7 @@ export class RuntimeConfig {
     if (!name) {
       return undefined;
     }
-    return this.pluginConfig?.presets?.[name];
+    return getResolvedPreset(this.pluginConfig, name);
   }
 
   /** Alias-aware override lookup inside a merged agents record. */

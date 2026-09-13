@@ -4,9 +4,12 @@ import {
   findPluginConfigPaths,
   mergePluginConfigs,
   normalizeDisabledArrayKeys,
+  PresetInheritanceError,
+  type PresetInheritanceErrorCode,
+  parseConfigContent,
+  resolvePresetInheritance,
 } from '../config/loader';
 import { type PluginConfig, PluginConfigSchema } from '../config/schema';
-import { stripJsonComments } from './config-io';
 
 export type DoctorArgs = {
   json?: boolean;
@@ -49,11 +52,20 @@ export type PresetCheckResult = {
   error?: { kind: 'missing-preset'; message: string };
 };
 
+export type PresetGraphCheckResult = {
+  ok: boolean;
+  error?: {
+    kind: PresetInheritanceErrorCode;
+    message: string;
+  };
+};
+
 export type DoctorResult = {
   ok: boolean;
   project: string;
   configs: ConfigCheckResult[];
   presetCheck?: PresetCheckResult;
+  presetGraphCheck?: PresetGraphCheckResult;
 };
 
 function checkConfigFile(
@@ -83,7 +95,7 @@ function checkConfigFile(
     // Strip a UTF-8 BOM so a BOM-prefixed config is not misdiagnosed as
     // invalid JSON (matches the loader's behavior).
     const content = fs.readFileSync(configPath, 'utf-8').replace(/^\uFEFF/, '');
-    const rawConfig = JSON.parse(stripJsonComments(content));
+    const rawConfig = parseConfigContent(content);
     // Normalize disabled_* keys exactly like the loader does before schema
     // validation, so a string value (e.g. "explorer") is not diagnosed as a
     // false invalid-schema error. Report each normalization to the user.
@@ -165,7 +177,10 @@ function checkPreset(
     return undefined;
   }
 
-  if (!mergedConfig.presets?.[presetName]) {
+  if (
+    !mergedConfig.presets ||
+    !Object.hasOwn(mergedConfig.presets, presetName)
+  ) {
     return {
       preset: presetName,
       ok: false,
@@ -177,6 +192,27 @@ function checkPreset(
   }
 
   return { preset: presetName, ok: true };
+}
+
+function checkPresetGraph(
+  mergedConfig: PluginConfig,
+): PresetGraphCheckResult | undefined {
+  if (!mergedConfig.presets) return undefined;
+  try {
+    resolvePresetInheritance(mergedConfig.presets);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof PresetInheritanceError) {
+      return {
+        ok: false,
+        error: {
+          kind: error.code,
+          message: error.message,
+        },
+      };
+    }
+    throw error;
+  }
 }
 
 function getMergedConfig(
@@ -199,18 +235,22 @@ export function runDoctorCheck(cwd: string): DoctorResult {
   const hasInvalidConfig = configs.some((c) => !c.ok);
 
   let presetCheckResult: DoctorResult['presetCheck'] | undefined;
+  let presetGraphCheck: DoctorResult['presetGraphCheck'] | undefined;
   if (!hasInvalidConfig) {
     const mergedConfig = getMergedConfig(userCheck.config, projectCheck.config);
+    presetGraphCheck = checkPresetGraph(mergedConfig);
     presetCheckResult = checkPreset(mergedConfig);
   }
 
   return {
     ok:
       configs.every((c) => c.ok) &&
+      (!presetGraphCheck || presetGraphCheck.ok) &&
       (!presetCheckResult || presetCheckResult.ok),
     project: cwd,
     configs,
     presetCheck: presetCheckResult,
+    presetGraphCheck,
   };
 }
 
@@ -249,6 +289,15 @@ export function formatHumanDoctorResult(result: DoctorResult): string {
 
     if (result.presetCheck.error) {
       lines.push(`  ${result.presetCheck.error.message}`);
+    }
+  }
+
+  if (result.presetGraphCheck) {
+    lines.push('');
+    const status = result.presetGraphCheck.ok ? '✓' : '✗';
+    lines.push(`[preset graph] ${status}`);
+    if (result.presetGraphCheck.error) {
+      lines.push(`  ${result.presetGraphCheck.error.message}`);
     }
   }
 

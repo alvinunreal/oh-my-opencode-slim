@@ -10,7 +10,7 @@ describe('applyOrchestratorModelConfig', () => {
     applyOrchestratorModelConfig({
       agents,
       enabled: true,
-      presets: undefined,
+      resolvedPresets: undefined,
       configPreset: undefined,
       runtimePreset: null,
     });
@@ -29,14 +29,14 @@ describe('applyOrchestratorModelConfig', () => {
     applyOrchestratorModelConfig({
       agents: disabled,
       enabled: false,
-      presets: undefined,
+      resolvedPresets: undefined,
       configPreset: undefined,
       runtimePreset: null,
     });
     applyOrchestratorModelConfig({
       agents: presetOverride,
       enabled: true,
-      presets: {
+      resolvedPresets: {
         file: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
       },
       configPreset: 'file',
@@ -61,7 +61,7 @@ describe('applyOrchestratorModelConfig', () => {
     applyOrchestratorModelConfig({
       agents,
       enabled: true,
-      presets: {
+      resolvedPresets: {
         file: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
         runtime: { explorer: { model: 'openai/gpt-5-mini' } },
       },
@@ -80,7 +80,7 @@ describe('applyOrchestratorModelConfig', () => {
     applyOrchestratorModelConfig({
       agents,
       enabled: true,
-      presets: {
+      resolvedPresets: {
         file: { explorer: { model: 'openai/gpt-5-mini' } },
         runtime: { orchestrator: { model: 'anthropic/claude-sonnet-4' } },
       },
@@ -100,7 +100,7 @@ describe('applyOrchestratorModelConfig', () => {
     applyOrchestratorModelConfig({
       agents,
       enabled: true,
-      presets: undefined,
+      resolvedPresets: undefined,
       configPreset: undefined,
       runtimePreset: null,
     });
@@ -117,7 +117,7 @@ describe('applyOrchestratorModelConfig', () => {
     applyOrchestratorModelConfig({
       agents,
       enabled: true,
-      presets: undefined,
+      resolvedPresets: undefined,
       configPreset: undefined,
       runtimePreset: null,
     });

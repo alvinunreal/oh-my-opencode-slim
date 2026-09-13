@@ -4,13 +4,31 @@ import { stripJsonComments } from '../cli/config-io';
 import { getConfigSearchDirs } from '../cli/paths';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
 import {
+  type AgentOverrideConfig,
   BackgroundJobsConfigSchema,
   InterviewConfigSchema,
   LEGACY_FALLBACK_KEYS,
   type PluginConfig,
   PluginConfigSchema,
+  type Preset,
+  type ResolvedPreset,
   WebfetchConfigSchema,
 } from './schema';
+
+export type PresetInheritanceErrorCode =
+  | 'PRESET_INHERITANCE_MISSING_PARENT'
+  | 'PRESET_INHERITANCE_CYCLE';
+
+/** A fatal semantic error in the merged preset inheritance graph. */
+export class PresetInheritanceError extends Error {
+  readonly code: PresetInheritanceErrorCode;
+
+  constructor(code: PresetInheritanceErrorCode, message: string) {
+    super(message);
+    this.name = 'PresetInheritanceError';
+    this.code = code;
+  }
+}
 
 /**
  * Warning kinds produced during config loading.
@@ -260,6 +278,26 @@ function retainExplicitBackgroundJobsFields(
 }
 
 /**
+ * Parse config text using the same JSONC and environment interpolation rules
+ * as the normal loader. Callers that need to preserve raw values can disable
+ * interpolation while still reusing the JSONC parser.
+ */
+export function parseConfigContent(
+  content: string,
+  options?: { interpolate?: boolean },
+): unknown {
+  const stripped = stripJsonComments(content);
+  const source =
+    options?.interpolate === false
+      ? stripped
+      : stripped.replace(
+          /\{env:([^}]+)\}/g,
+          (_, varName) => process.env[varName] ?? '',
+        );
+  return JSON.parse(source);
+}
+
+/**
  * Load and validate plugin configuration from a specific file path.
  * Supports both .json and .jsonc formats (JSON with comments).
  * Returns null if the file doesn't exist, is invalid, or cannot be read.
@@ -280,12 +318,7 @@ function loadConfigFromPath(
     // Use stripJsonComments to support JSONC format (comments and trailing commas)
     let rawConfig: unknown;
     try {
-      const stripped = stripJsonComments(content);
-      const interpolated = stripped.replace(
-        /\{env:([^}]+)\}/g,
-        (_, varName) => process.env[varName] ?? '',
-      );
-      rawConfig = JSON.parse(interpolated);
+      rawConfig = parseConfigContent(content);
     } catch (error) {
       // Empty file or JSON parse error is treated as invalid-json
       const message = error instanceof Error ? error.message : String(error);
@@ -594,7 +627,7 @@ export function mergePluginConfigs(
     ...base,
     ...override,
     agents: deepMerge(base.agents, override.agents),
-    presets: deepMerge(base.presets, override.presets),
+    presets: mergePresetMaps(base.presets, override.presets),
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
@@ -651,6 +684,113 @@ export function deepMerge<T extends Record<string, unknown>>(
   return result;
 }
 
+function mergePresetMaps(
+  base?: Record<string, Preset>,
+  override?: Record<string, Preset>,
+): Record<string, Preset> | undefined {
+  if (!base) return override;
+  if (!override) return base;
+
+  const result = Object.create(null) as Record<string, Preset>;
+  for (const name of Object.keys(base)) {
+    Object.defineProperty(result, name, {
+      configurable: true,
+      enumerable: true,
+      value: base[name],
+      writable: true,
+    });
+  }
+  for (const name of Object.keys(override)) {
+    const value = Object.hasOwn(base, name)
+      ? (deepMerge(base[name], override[name]) as Preset)
+      : override[name];
+    Object.defineProperty(result, name, {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
+  }
+  return result;
+}
+
+function stripPresetMetadata(preset: Preset): ResolvedPreset {
+  const agents: ResolvedPreset = {};
+  for (const [name, override] of Object.entries(preset)) {
+    if (name !== '$extends') {
+      agents[name] = override as AgentOverrideConfig;
+    }
+  }
+  return agents;
+}
+
+/**
+ * Resolve every preset in a fully merged raw preset graph.
+ *
+ * Parent declarations are intentionally read only after schema validation;
+ * graph errors are semantic and therefore remain fatal to the caller.
+ */
+export function resolvePresetInheritance(
+  presets?: Record<string, Preset>,
+): Record<string, ResolvedPreset> {
+  const rawPresets = presets ?? {};
+  const resolved = new Map<string, ResolvedPreset>();
+
+  const resolve = (name: string, pathFromRoot: string[]): ResolvedPreset => {
+    if (resolved.has(name)) return resolved.get(name) as ResolvedPreset;
+
+    const cycleStart = pathFromRoot.indexOf(name);
+    if (cycleStart !== -1) {
+      const cyclePath = [...pathFromRoot.slice(cycleStart), name];
+      throw new PresetInheritanceError(
+        'PRESET_INHERITANCE_CYCLE',
+        `Preset inheritance cycle: ${cyclePath.join(' -> ')}`,
+      );
+    }
+
+    if (!Object.hasOwn(rawPresets, name)) {
+      const referencePath = [...pathFromRoot, name].join(' -> ');
+      throw new PresetInheritanceError(
+        'PRESET_INHERITANCE_MISSING_PARENT',
+        `Preset "${pathFromRoot.at(-1)}" extends missing preset "${name}" (${referencePath})`,
+      );
+    }
+    const preset = rawPresets[name];
+
+    const parent = preset.$extends
+      ? resolve(preset.$extends, [...pathFromRoot, name])
+      : undefined;
+    const ownAgents = stripPresetMetadata(preset);
+    const effective = deepMerge(parent, ownAgents) ?? {};
+    resolved.set(name, effective);
+    return effective;
+  };
+
+  for (const name of Object.keys(rawPresets)) {
+    resolve(name, []);
+  }
+
+  return Object.fromEntries(resolved);
+}
+
+/**
+ * Return the metadata-free preset used by runtime consumers.
+ *
+ * Loaded configurations already carry the derived map. The fallback keeps
+ * direct in-memory callers on the same raw/resolved boundary without making
+ * them reimplement inheritance handling.
+ */
+export function getResolvedPreset(
+  config: PluginConfig | undefined,
+  name: string | null | undefined,
+): ResolvedPreset | undefined {
+  if (!name) return undefined;
+
+  const resolved =
+    config?.resolvedPresets ?? resolvePresetInheritance(config?.presets);
+  return Object.hasOwn(resolved, name) ? resolved[name] : undefined;
+}
+
 /**
  * Load plugin configuration from user and project config files, merging them appropriately.
  *
@@ -703,9 +843,24 @@ export function loadPluginConfig(
     config.preset = envPreset;
   }
 
+  // Resolve and validate the complete merged graph before selecting a preset.
+  // Keep raw definitions for persistence-oriented consumers.
+  if (config.presets) {
+    Object.defineProperty(config, 'resolvedPresets', {
+      configurable: true,
+      enumerable: false,
+      value: resolvePresetInheritance(config.presets),
+      writable: true,
+    });
+  }
+
   // Resolve preset and merge with root agents
   if (config.preset) {
-    const preset = config.presets?.[config.preset];
+    const preset =
+      config.resolvedPresets &&
+      Object.hasOwn(config.resolvedPresets, config.preset)
+        ? config.resolvedPresets[config.preset]
+        : undefined;
     if (preset) {
       // Merge preset agents with root agents (root overrides)
       config.agents = deepMerge(preset, config.agents);

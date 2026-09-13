@@ -103,3 +103,7 @@ companion/target/
 .slim/deepwork/
 .codegraph/
 .worktrees/
+
+# openspec
+openspec/.worktrees/
+.worktrees/
