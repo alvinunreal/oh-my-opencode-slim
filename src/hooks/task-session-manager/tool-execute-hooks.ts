@@ -18,6 +18,7 @@ import {
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
   parseTaskStatusOutput,
+  redactSecretsForLog,
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
@@ -479,10 +480,12 @@ export async function handleToolExecuteAfter(
       // what the host actually returned so format drift is diagnosable
       // from the plugin log (board-injection has its own textPreview for
       // synthetic parts — this one covers the native tool result path).
+      // Redacted: plugin logs are collected into public GitHub issues by
+      // the report flow, and parse-miss content is untrusted-by-format.
       log('[task-session-manager] task output without a task id', {
         callID: pending.callId,
         sessionID: input.sessionID,
-        outputPreview: output.output.slice(0, 120),
+        outputPreview: redactSecretsForLog(output.output.slice(0, 120)),
       });
       if (
         pending.resumedTaskId &&

@@ -205,6 +205,41 @@ describe('rehydrate session.get existence probe', () => {
     expect(releaseTask).not.toHaveBeenCalled();
   });
 
+  test('a terminal outcome resolving after a same-ID relaunch does not settle the new run', async () => {
+    const board = new BackgroundJobBoard();
+    const gate = deferred<void>();
+    const hook = createHook({
+      board,
+      // Hold the probe's get in flight until the relaunch below lands.
+      getSession: mock(() =>
+        gate.promise.then(async () => ({ outcome: 'failed' })),
+      ),
+    });
+
+    // Rehydrate registers generation 1 and the probe starts against it.
+    await runTransform(hook, 'child-stale-settle');
+    const relaunched = board.registerLaunch({
+      taskID: 'child-stale-settle',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'legitimate relaunch while probe in flight',
+    });
+    expect(relaunched.generation).toBe(2);
+
+    // The stale probe's terminal outcome resolves only now — it must NOT
+    // terminalize the relaunched generation (updateStatus rejects via
+    // the probe-start generation; no markReconciled).
+    gate.resolve();
+    await flushProbe();
+
+    expect(board.get('child-stale-settle')).toMatchObject({
+      generation: relaunched.generation,
+      state: 'running',
+      terminalState: undefined,
+      resultSummary: undefined,
+    });
+  });
+
   test('transient probe rejection fails open (job stays registered)', async () => {
     const board = new BackgroundJobBoard();
     const hook = createHook({

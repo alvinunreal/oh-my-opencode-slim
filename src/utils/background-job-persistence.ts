@@ -26,9 +26,12 @@
  *   today.
  * - **Serialized writes.** Every storage mutation for one key is chained
  *   through an in-process queue, so concurrent callers never race a
- *   read-modify-write on the same key. Writes are fire-and-forget with
- *   logged (never thrown) failures — persistence loss degrades to
- *   today's process-local behavior.
+ *   read-modify-write on the same key. Queued writes are also fenced
+ *   across reconfigurations: a write enqueued before a configure() call
+ *   refuses to execute afterwards, so it can never land on — and reorder
+ *   against new-epoch writes on — the replacement backend. Writes are
+ *   fire-and-forget with logged (never thrown) failures — persistence
+ *   loss degrades to today's process-local behavior.
  *
  * Alias counters persist the last-seen counter per
  * `<parentSessionID>:<prefix>`; a post-restart board seeds its counters
@@ -98,15 +101,37 @@ const liveTombstones = new Map<string, PersistedTombstoneEntry>();
 const writeQueues = new Map<string, Promise<void>>();
 /** In-process max of every value ever persisted per alias key. */
 const writtenAliasMax = new Map<string, number>();
+/**
+ * Reconfiguration fence: incremented on every configure() call. Queued
+ * writes capture the epoch at enqueue time and refuse to execute after a
+ * reconfiguration — an already-scheduled promise chain would otherwise
+ * read the module-global backend at execution time and land a stale
+ * write on the NEW backend, reordering against new-epoch writes for the
+ * same key (e.g. resurrecting a tombstone a newer clear removed).
+ */
+let configEpoch = 0;
 
 function enqueueWrite(key: string, op: () => Promise<void>): void {
+  const epochAtEnqueue = configEpoch;
   const prior = writeQueues.get(key) ?? Promise.resolve();
-  const next = prior.then(op).catch((err) => {
-    log('[background-job-persistence] write failed', {
-      key,
-      err: err instanceof Error ? err.message : String(err),
+  const next = prior
+    .then(() => {
+      if (epochAtEnqueue !== configEpoch) {
+        // Refuse to run: the new epoch's writes own the state now.
+        log(
+          '[background-job-persistence] discarded stale persistence write across reconfiguration',
+          { key },
+        );
+        return;
+      }
+      return op();
+    })
+    .catch((err) => {
+      log('[background-job-persistence] write failed', {
+        key,
+        err: err instanceof Error ? err.message : String(err),
+      });
     });
-  });
   writeQueues.set(key, next);
   void next.then(() => {
     if (writeQueues.get(key) === next) writeQueues.delete(key);
@@ -123,6 +148,10 @@ function enqueueWrite(key: string, op: () => Promise<void>): void {
 export function configureBackgroundJobPersistence(
   storage: BackgroundJobStorageBackend | undefined,
 ): void {
+  // Fence off every write queued by the previous epoch before swapping
+  // the backend: queued ops compare their captured epoch against the new
+  // one and refuse to execute (see enqueueWrite).
+  configEpoch += 1;
   backend = storage;
   loaded = emptyState();
   liveTombstones.clear();

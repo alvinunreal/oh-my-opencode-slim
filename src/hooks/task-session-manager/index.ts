@@ -315,7 +315,10 @@ export function createTaskSessionManagerHook(
         // Settle through the same updateStatus semantics the
         // readSessionOutcome consumers use (idle-reconciliation): a
         // succeeded outcome is only reconciled with usable final text.
-        // expectedGeneration makes the settle itself generation-safe.
+        // The settle is bound to the generation captured at probe start
+        // (same freshness anchor as the NotFound guard below): a probe
+        // that started at gen N must not terminalize a same-ID relaunch
+        // (gen N+1) that landed while the get was in flight.
         let resultText: string | undefined;
         if (outcome === 'succeeded') {
           resultText = await readFinalAssistantText(
@@ -326,7 +329,7 @@ export function createTaskSessionManagerHook(
         }
         const settled = backgroundJobBoard.updateStatus({
           taskID,
-          expectedGeneration: existing.generation,
+          expectedGeneration: generationAtProbeStart,
           state: outcome === 'succeeded' && resultText ? 'completed' : 'error',
           resultSummary:
             outcome === 'succeeded'

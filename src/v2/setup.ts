@@ -915,6 +915,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         await loadInitialBackgroundJobPersistence();
         log('[v2] background-job persistence enabled via ctx.storage');
       } else {
+        // Storage-less reactivation: actively reset to the documented
+        // process-local fallback instead of retaining the previous
+        // activation's backend/seed state (fenced — pending writes from
+        // the old epoch are discarded).
+        configureBackgroundJobPersistence(undefined);
         log(
           '[v2] ctx.storage unavailable; background-job state stays process-local',
         );

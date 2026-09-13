@@ -52,6 +52,15 @@ function flushWrites() {
   return new Promise((resolve) => setTimeout(resolve, 10));
 }
 
+/** Manually-resolved promise for holding queued writes in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe('background-job persistence', () => {
   beforeEach(() => {
     configureBackgroundJobPersistence(undefined);
@@ -186,6 +195,44 @@ describe('background-job persistence', () => {
         description: 'b1',
       }).alias,
     ).toBe('fix-3');
+  });
+
+  test('writes queued before a reconfiguration never land on the new backend', async () => {
+    const gate = deferred<void>();
+    const { backend: backendA, map: mapA } = createMemoryBackend();
+    const gatedA: BackgroundJobStorageBackend = {
+      ...backendA,
+      set: (key, value) => gate.promise.then(() => backendA.set(key, value)),
+      remove: (key) => gate.promise.then(() => backendA.remove(key)),
+    };
+    configureBackgroundJobPersistence(gatedA);
+    await loadInitialBackgroundJobPersistence();
+
+    // Tombstone + epoch writes queue behind the gate (old epoch).
+    recordSuppression('ses_stale_cross', 1);
+
+    const { backend: backendB, map: mapB } = createMemoryBackend();
+    configureBackgroundJobPersistence(backendB);
+    await loadInitialBackgroundJobPersistence();
+
+    gate.resolve();
+    await flushWrites();
+
+    // The stale queued op is discarded, not executed: it touches neither
+    // the old backend (refuse-to-run) nor — critically — the new one.
+    expect(
+      [...mapA.keys()].some((key) => key.includes('ses_stale_cross')),
+    ).toBe(false);
+    expect(
+      [...mapB.keys()].some((key) => key.includes('ses_stale_cross')),
+    ).toBe(false);
+
+    // New-epoch writes on the new backend work normally.
+    recordSuppression('ses_fresh_cross', 2);
+    await flushWrites();
+    expect(
+      [...mapB.keys()].some((key) => key.includes('ses_fresh_cross')),
+    ).toBe(true);
   });
 
   test('alias high-water marks never regress on concurrent bumps', async () => {

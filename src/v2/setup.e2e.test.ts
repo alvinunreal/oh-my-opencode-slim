@@ -525,11 +525,25 @@ describe('createV2Setup e2e', () => {
 
   test('ctx.storage (when present) enables background-job persistence before the v1 factory runs', async () => {
     const { ctx } = makeMockV2Context(projectDir);
+    // Pre-seeded persisted tombstone: proves the storage activation
+    // loads backend state, and later that a storage-less reactivation
+    // resets it instead of retaining the previous activation.
+    const seeded = new Map<string, unknown>([
+      [
+        'omo/bgj/tombstone/ses_seeded_before_setup',
+        { taskID: 'ses_seeded_before_setup', epoch: 1, recordedAt: 1 },
+      ],
+    ]);
     (ctx as { storage?: unknown }).storage = {
-      get: async () => undefined,
+      get: async (key: string) => seeded.get(key),
       set: async () => {},
       remove: async () => {},
-      scan: async () => ({ entries: [] }),
+      scan: async () => ({
+        entries: [...seeded.entries()].map(([key, value]) => ({
+          key,
+          value,
+        })),
+      }),
     };
     const cleanup = await createV2Setup()(ctx);
 
@@ -539,6 +553,19 @@ describe('createV2Setup e2e', () => {
       expect(logText).toContain(
         '[v2] background-job persistence enabled via ctx.storage',
       );
+      const persistence = await import('../utils/background-job-persistence');
+      expect(
+        persistence
+          .persistedBackgroundJobState()
+          .tombstones.has('ses_seeded_before_setup'),
+      ).toBe(true);
+
+      // A storage-less reactivation resets to the documented
+      // process-local fallback instead of retaining this activation's
+      // backend/seed state.
+      const { ctx: bareCtx } = makeMockV2Context(projectDir);
+      await (await createV2Setup()(bareCtx))();
+      expect(persistence.persistedBackgroundJobState().tombstones.size).toBe(0);
     } finally {
       // Reset the persistence singleton so later test files in this
       // process see the pure memory fallback.
@@ -548,7 +575,7 @@ describe('createV2Setup e2e', () => {
       configureBackgroundJobPersistence(undefined);
       await cleanup();
     }
-  }, 20_000);
+  }, 30_000);
 
   test('dispose runs the v1 dispose hook (server.instance.disposed synthesis for wake timers)', async () => {
     const { ctx } = makeMockV2Context(projectDir);
