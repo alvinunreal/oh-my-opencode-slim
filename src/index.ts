@@ -203,6 +203,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
   });
   const ownedTuiActivitySessions = new Map<string, string>();
+  // Busy/retry arrived before the session's agent was known. chat.message
+  // latches the agent and flushes these so the spinner still starts.
+  const pendingTuiBusySessions = new Set<string>();
   const tuiActivityDirectory = (sessionID: string): string => {
     return sessionMetadata.getDirectory(sessionID) ?? ctx.directory;
   };
@@ -1159,13 +1162,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           sessionMetadata.markOrchestratorActive(eventSessionID);
           const agentName = sessionMetadata.getAgent(eventSessionID);
           if (agentName) {
+            pendingTuiBusySessions.delete(eventSessionID);
             markTuiAgentActive(eventSessionID, agentName);
+          } else {
+            pendingTuiBusySessions.add(eventSessionID);
           }
         } else if (
           event.type === 'session.idle' ||
           (event.type === 'session.status' && statusType === 'idle') ||
           event.type === 'session.deleted'
         ) {
+          pendingTuiBusySessions.delete(eventSessionID);
           sessionMetadata.markOrchestratorIdle(eventSessionID);
           markTuiAgentInactive(eventSessionID);
         }
@@ -1438,10 +1445,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (agent) {
         foregroundFallback.registerSessionAgent(input.sessionID, agent);
         sessionMetadata.setAgent(input.sessionID, agent);
-        markTuiAgentActive(input.sessionID, agent);
-        // A chat message means this session is actively working. This also
-        // covers the race where session.status busy fires before the
-        // session's agent is known.
+        // Spinner follows session.status, not chat.message: v2 context
+        // hooks re-deliver chat.message after idle and would otherwise
+        // relight a finished row (and the parent of a background child).
+        // An already-active session (busy under a stale/unknown agent)
+        // refreshes the association so the row follows the real agent.
+        if (
+          pendingTuiBusySessions.has(input.sessionID) ||
+          ownedTuiActivitySessions.has(input.sessionID)
+        ) {
+          pendingTuiBusySessions.delete(input.sessionID);
+          markTuiAgentActive(input.sessionID, agent);
+        }
         companionManager.onSessionStatus({
           sessionId: input.sessionID,
           agent,
