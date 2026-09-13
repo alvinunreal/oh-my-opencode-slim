@@ -191,6 +191,18 @@ describe('skills_add / skills_remove directives', () => {
     ).toEqual(['a', 'b', '!c']);
   });
 
+  test('resolveEffectiveSkills: additions do not override an inherited wildcard exclusion', () => {
+    expect(
+      resolveEffectiveSkills('oracle', ['*', '!foo'], ['foo'], undefined),
+    ).toEqual(['*', '!foo']);
+  });
+
+  test('resolveEffectiveSkills: additions skip excluded names on concrete lists too', () => {
+    expect(
+      resolveEffectiveSkills('oracle', ['a', '!b'], ['b', 'c'], undefined),
+    ).toEqual(['a', '!b', 'c']);
+  });
+
   test('getDefaultGrantedSkillNames: oracle grants in registry order', () => {
     const grants = getDefaultGrantedSkillNames('oracle');
     expect(grants[0]).toBe('simplify');
@@ -382,6 +394,20 @@ describe('skills_add / skills_remove directives', () => {
     expectNoDirectiveKeys(effective);
   });
 
+  test('loader: project skills_add does not re-grant an excluded skill', () => {
+    writeUserConfig({
+      agents: { oracle: { skills: ['*', '!foo'] } },
+    });
+    writeProjectConfig({
+      agents: { oracle: { skills_add: ['foo', 'bar'] } },
+    });
+
+    const loaded = loadPluginConfig(projectDir, { silent: true });
+    const effective = effectiveAgent(loaded);
+    expect(effective.skills).toEqual(['*', '!foo', 'bar']);
+    expectNoDirectiveKeys(effective);
+  });
+
   test('loader: plain skills entry without directives is unchanged', () => {
     writeUserConfig({
       agents: { oracle: { skills: ['*'] } },
@@ -528,5 +554,20 @@ describe('skills_add / skills_remove directives', () => {
     )?.skill as Record<string, unknown> | undefined;
     expect(skillPermissions?.['my-skill']).toBe('allow');
     expect(skillPermissions?.simplify).toBe('allow');
+  });
+
+  test('createAgents: added skill that the base list excludes stays denied', () => {
+    const config: PluginConfig = {
+      agents: {
+        oracle: { skills: ['*', '!foo'], skills_add: ['foo'] },
+      },
+    };
+    const agents = createAgents(runtimeFor(config));
+    const oracle = agents.find((a) => a.name === 'oracle');
+    expect(oracle).toBeDefined();
+    const skillPermissions = (
+      oracle?.config.permission as Record<string, unknown>
+    )?.skill as Record<string, unknown> | undefined;
+    expect(skillPermissions?.foo).toBe('deny');
   });
 });

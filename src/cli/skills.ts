@@ -106,8 +106,11 @@ export function getSkillPermissionsForAgent(
  *    grants (orchestrator defaults to allow-all, so its working base is
  *    `['*']`), so `skills_add` alone keeps the defaults and appends, and
  *    `skills_remove` alone prunes from the defaults.
- * 2. The working base and `add` are concatenated, deduped (first
- *    occurrence wins), then removal entries are filtered out.
+ * 2. The working base and `add` are concatenated and deduped (first
+ *    occurrence wins). Additions matching an exclusion (`'!name'`) token
+ *    in the base are dropped, because the resolver applies tokens in order
+ *    and a later plain grant would override the inherited deny. Then
+ *    removal entries are filtered out.
  * 3. Removals operate on final skill tokens, never expanding `'*'`: a
  *    plain name removes that name token, and a `'!name'` entry removes
  *    the exclusion token itself (lifting an existing exclusion). If the
@@ -143,11 +146,23 @@ export function resolveEffectiveSkills(
       ? ['*']
       : getDefaultGrantedSkillNames(agentName));
 
+  // Exclusion tokens in the base list deny those skills, and the resolver
+  // applies tokens in order, so a later plain grant would overwrite the
+  // earlier deny. Additions must not override an inherited exclusion;
+  // lifting one is the explicit job of a '!name' removal entry.
+  const excluded = new Set(
+    workingBase
+      .filter((token) => token.startsWith('!'))
+      .map((token) => token.slice(1)),
+  );
+
   // Removals operate on final skill tokens: a plain name removes that
   // name, and a '!name' entry removes the exclusion token itself (lifting
   // an existing exclusion). The wildcard is never expanded here.
   const removeSet = new Set(removeList);
-  let list = [...new Set([...workingBase, ...addList])];
+  let list = [
+    ...new Set([...workingBase, ...addList.filter((a) => !excluded.has(a))]),
+  ];
   list = list.filter((skill) => !removeSet.has(skill));
 
   // A plain-name removal that the list grants implicitly via '*' must be

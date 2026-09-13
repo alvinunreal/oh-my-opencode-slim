@@ -334,4 +334,5 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
 - Duplicates are removed (first occurrence wins) before removals are applied
 - If the result contains `"*"`, each removed name is appended as `"!<name>"` so the exclusion beats the wildcard grant
 - On an agent without a `skills` list, directives resolve against that agent's default grants (orchestrator: all skills), so `skills_add` keeps the defaults and appends, and `skills_remove` prunes from them
+- `skills_add` never overrides an inherited exclusion: adding a name that the effective list already excludes (as `"!<name>"`) is a no-op. To re-allow it, lift the exclusion with a `skills_remove` entry of the form `"!<name>"`
 - A removal entry of the form `"!<name>"` removes the exclusion token itself (it lifts an existing exclusion); the `"*"` token is never expanded
