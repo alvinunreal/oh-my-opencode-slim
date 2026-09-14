@@ -95,13 +95,17 @@ export function createTaskReviveTool(
           >
         | undefined;
       try {
+        const observedLiveBusyAt = current.lastLiveBusyAt;
         baselineMessageID = await revivedRunTracker.captureBaseline(
           current.taskID,
         );
         // captureBaseline awaits network I/O; the record may have changed
-        // while we waited (e.g. a late busy observation revived the old
-        // generation). Revalidate against the live record before sending
-        // anything: never relaunch over a session that is running again.
+        // while we waited. Revalidate against the live record before
+        // sending anything: never relaunch over a session that is
+        // running again. A live relaunch lease keeps the board record
+        // stopped while a revive is in flight (the busy observation only
+        // advances lastLiveBusyAt), so treat any movement of that
+        // timestamp as fresh activity and refuse.
         const rechecked = getCurrentReviveJob(
           options,
           parentSessionID,
@@ -109,10 +113,14 @@ export function createTaskReviveTool(
           captured.taskID,
           captured.generation,
         );
+        const freshLiveActivity =
+          rechecked.lastLiveBusyAt !== undefined &&
+          rechecked.lastLiveBusyAt !== observedLiveBusyAt;
         if (
           !options.backgroundJobBoard.validateLease(relaunchLease) ||
           rechecked.state === 'running' ||
-          !isReviveableRetainedJob(rechecked)
+          !isReviveableRetainedJob(rechecked) ||
+          freshLiveActivity
         ) {
           throw new Error(
             `Task ${requested} became active again (${rechecked.state}) before the revive prompt was sent; the prompt was NOT sent and no duplicate was launched. Use task_status to inspect it.`,

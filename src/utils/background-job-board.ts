@@ -463,6 +463,25 @@ export class BackgroundJobBoard implements BackgroundJobStore {
 
     if (existing.deadlineExceededAt !== undefined) return existing;
 
+    // A live relaunch lease owns the relaunch decision for this
+    // generation: a busy observation arriving while a revive is in
+    // flight must not resurrect the stopped record underneath it. The
+    // observation is still recorded so the revive's revalidation can
+    // refuse on fresh activity instead of sending the prompt.
+    const relaunchLease = this.liveLeases.get(taskID);
+    if (
+      relaunchLease?.kind === 'relaunch' &&
+      relaunchLease.generation === existing.generation &&
+      existing.state === 'stopped'
+    ) {
+      const leased: BackgroundJobRecord = {
+        ...existing,
+        lastLiveBusyAt: now,
+      };
+      this.jobs.set(taskID, leased);
+      return leased;
+    }
+
     const isStaleTerminal =
       isCanonicalTerminalState(existing.state) ||
       existing.state === 'reconciled' ||

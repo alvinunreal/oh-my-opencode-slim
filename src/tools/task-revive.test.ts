@@ -246,10 +246,12 @@ describe('task_revive tool', () => {
 
   test('refuses to relaunch when a late busy revives the generation during baseline capture', async () => {
     // P1 regression: captureBaseline awaits network I/O. If a live busy
-    // observation flips the stopped record back to running while the
-    // baseline is in flight, the revive must NOT send promptAsync over
-    // the still-active generation, must not bump the board generation,
-    // and must release the relaunch lease.
+    // observation arrives while the baseline is in flight, the revive
+    // must NOT send promptAsync over the still-active generation, must
+    // not bump the board generation, and must release the relaunch
+    // lease. With the lease held, the busy observation keeps the record
+    // stopped and only advances lastLiveBusyAt; the revive refuses on
+    // that fresh-activity signal.
     let resolveBaseline: (id: string | undefined) => void = () => {};
     const baselineGate = new Promise<string | undefined>((resolve) => {
       resolveBaseline = resolve;
@@ -278,8 +280,9 @@ describe('task_revive tool', () => {
     await expect(pending).rejects.toThrow(/became active again/);
     expect(promptAsync).toHaveBeenCalledTimes(0);
     expect(board.get('ses_1')).toMatchObject({
-      state: 'running',
+      state: 'stopped',
       generation: 1,
+      lastLiveBusyAt: 115,
     });
     // The relaunch lease was released: a new acquire on the same
     // generation succeeds.

@@ -1264,6 +1264,41 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
+  test('live busy cannot resurrect a stopped job under a relaunch lease', () => {
+    // P1 regression: while a task_revive holds the relaunch lease for a
+    // stopped generation, a busy observation must not flip the record
+    // back to running underneath the in-flight revive. The observation
+    // is recorded (lastLiveBusyAt) so the revive can refuse on fresh
+    // activity; once the lease is released, a later busy can revive.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 100,
+    });
+    const generation = board.get('ses_1')?.generation;
+    board.markStopped('ses_1', 'no result', 150, generation, 150);
+
+    const lease = board.acquireRelaunchLease('ses_1', generation ?? 1);
+    expect(lease).toBeDefined();
+
+    const leased = board.markRunningFromLiveSession('ses_1', 200, generation);
+    expect(leased).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: true,
+      lastLiveBusyAt: 200,
+    });
+
+    if (lease) board.releaseLease(lease);
+
+    const revived = board.markRunningFromLiveSession('ses_1', 201, generation);
+    expect(revived).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+  });
+
   test('live busy session does not reopen non-cancelled terminal jobs', () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
