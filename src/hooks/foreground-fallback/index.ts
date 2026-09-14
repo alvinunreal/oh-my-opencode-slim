@@ -593,6 +593,7 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    if (!this.hasResolvedAgent(sessionID)) return;
     // No chain → no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
     if (!this.hasFallbackChain(sessionID)) return;
@@ -627,6 +628,7 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    if (!this.hasResolvedAgent(sessionID)) return;
     if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
 
@@ -666,7 +668,16 @@ export class ForegroundFallbackManager {
       const observedModel = this.sessionModel.get(sessionID);
       let currentModel = observedModel;
       const agentName = this.sessionAgent.get(sessionID);
-      const chain = this.resolveChain(agentName, currentModel);
+      if (!agentName) {
+        log(
+          '[foreground-fallback] agent identity unavailable, skipping fallback',
+          {
+            sessionID,
+          },
+        );
+        return;
+      }
+      const chain = this.resolveChain(agentName);
       // Callers pre-check via hasFallbackChain; keep as defensive guard only.
       if (!chain.length) return;
 
@@ -834,7 +845,7 @@ export class ForegroundFallbackManager {
             ),
           ],
           model: ref,
-          ...(agentName ? { agent: agentName } : {}),
+          agent: agentName,
         },
       };
 
@@ -896,14 +907,19 @@ export class ForegroundFallbackManager {
   // Chain resolution
   // ---------------------------------------------------------------------------
 
-  /** True when resolveChain yields at least one model for this session. */
+  private hasResolvedAgent(sessionID: string): boolean {
+    const agentName = this.sessionAgent.get(sessionID);
+    if (agentName) return true;
+    log('[foreground-fallback] agent identity unavailable, skipping fallback', {
+      sessionID,
+    });
+    return false;
+  }
+
+  /** True when the resolved agent has at least one configured model. */
   private hasFallbackChain(sessionID: string): boolean {
-    return (
-      this.resolveChain(
-        this.sessionAgent.get(sessionID),
-        this.sessionModel.get(sessionID),
-      ).length > 0
-    );
+    const agentName = this.sessionAgent.get(sessionID);
+    return agentName !== undefined && this.resolveChain(agentName).length > 0;
   }
 
   /**
@@ -913,44 +929,13 @@ export class ForegroundFallbackManager {
    * 1. Agent name known AND has a configured chain → return it directly
    * 2. Agent name known but NO chain → return [] (no fallback; never
    *    bleed into other agents' chains)
-   * 3. Agent name unknown, current model known → search all chains for
-   *    the model to infer which chain to use
-   * 4. Nothing matches → flatten all chains as a last resort (only
-   *    reached when both agent name and current model are unavailable)
+   * 3. Agent name unknown → return [] rather than guessing the owning agent
    */
-  private resolveChain(
-    agentName: string | undefined,
-    currentModel: string | undefined,
-  ): string[] {
-    if (agentName) {
-      const chain = this.chains[agentName];
-      if (chain) return chain;
-      // Any known agent without a configured chain: no fallback.
-      // Don't bleed into other agents' chains via model-matching —
-      // that switches the session to the wrong agent (e.g. Build
-      // inherits Orchestrator's chain and becomes Orchestrator).
-      return [];
-    }
-
-    // Agent unknown: try to infer from the current model.
-    if (currentModel) {
-      for (const chain of Object.values(this.chains)) {
-        if (chain.includes(currentModel)) return chain;
-      }
-    }
-
-    // Last resort: merged list across all agents preserving insertion order.
-    // Only reached when both agent name and current model are unavailable.
-    const all: string[] = [];
-    const seen = new Set<string>();
-    for (const chain of Object.values(this.chains)) {
-      for (const m of chain) {
-        if (!seen.has(m)) {
-          seen.add(m);
-          all.push(m);
-        }
-      }
-    }
-    return all;
+  private resolveChain(agentName: string | undefined): string[] {
+    if (!agentName) return [];
+    // Any known agent without a configured chain: no fallback.
+    // Don't bleed into other agents' chains — that switches the session to
+    // the wrong agent (e.g. Build inherits Orchestrator's chain).
+    return this.chains[agentName] ?? [];
   }
 }

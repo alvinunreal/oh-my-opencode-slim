@@ -41,23 +41,6 @@ type OpencodeClient = PluginInput['client'];
  */
 export const FALLBACK_TOP_LEVEL_AGENT = 'orchestrator';
 
-/**
- * Fallback for sessions the *plugin itself* created as throwaway helpers
- * (e.g. smartfetch's secondary-model session).
- *
- * Never use {@link FALLBACK_TOP_LEVEL_AGENT} for those: a message tagged
- * `orchestrator` makes the task-session-manager adopt the helper as a managed
- * orchestrator session (`registerSessionAsOrchestrator`, reached from any
- * `agent: 'orchestrator'` message), which then attracts phase reminders,
- * post-tool nudges, background job board injection, companion busy/idle flips,
- * and the orchestrator system prompt — billed on every helper turn. `build` is
- * a core agent that is always registered (`omo` only disables conflicting
- * built-ins and explicitly preserves `build`/`plan`, see
- * `src/cli/config-io.ts` `disableDefaultAgents`) and no plugin hook keys off
- * it.
- */
-export const FALLBACK_HELPER_SESSION_AGENT = 'build';
-
 /** Agent names are plain identifiers; anything else would 400 the prompt. */
 const AGENT_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
@@ -71,13 +54,44 @@ const AGENT_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
  * Observing one must never make the plugin prompt as one: that would re-home
  * the user's session to `compaction`/`summary`/`title` — the same durable
  * rewrite this module exists to prevent. Derived candidates matching this set
- * are skipped in favour of the next candidate or the fallback agent.
+ * are never eligible for helper sessions.
  */
 export const SYSTEM_AGENTS: ReadonlySet<string> = new Set([
   'compaction',
   'summary',
   'title',
 ]);
+
+/**
+ * Select a registered agent for a plugin-created helper session.
+ *
+ * The list is supplied by the plugin generation rather than read from disk,
+ * so disabled agents and custom agent configuration are reflected without a
+ * hot-path config read. The orchestrator is deliberately excluded because an
+ * `agent: 'orchestrator'` message makes the task-session manager adopt the
+ * throwaway session as a managed orchestrator session.
+ */
+export function resolveHelperSessionAgent(
+  availableAgents: Iterable<string>,
+  finalAgentConfig?: Record<string, unknown>,
+): string | undefined {
+  for (const name of availableAgents) {
+    if (name === FALLBACK_TOP_LEVEL_AGENT || SYSTEM_AGENTS.has(name)) continue;
+
+    const config = finalAgentConfig?.[name];
+    if (
+      config &&
+      typeof config === 'object' &&
+      !Array.isArray(config) &&
+      (config as Record<string, unknown>).disable === true
+    ) {
+      continue;
+    }
+
+    return name;
+  }
+  return undefined;
+}
 
 export interface ResolveSessionAgentOptions {
   /**
@@ -103,9 +117,7 @@ export interface ResolveSessionAgentOptions {
   probe?: boolean;
   /**
    * Override the top-level fallback agent. Defaults to
-   * {@link FALLBACK_TOP_LEVEL_AGENT} (correct for real user sessions);
-   * plugin-created helper sessions must pass
-   * {@link FALLBACK_HELPER_SESSION_AGENT}.
+   * {@link FALLBACK_TOP_LEVEL_AGENT} (correct for real user sessions).
    */
   fallbackAgent?: string;
   /**

@@ -109,7 +109,7 @@ child — so naming the agent is a complete fix, not a workaround.
 | `src/hooks/task-session-manager/continuation-evaluator.ts` (`promptAsync`) | `session.idle` / `session.status(idle)` on orchestrator session with incomplete todos when the opt-in beta `backgroundJobs.continueOnIdle` is `true` | **No** (`agent: 'orchestrator'`) | `continueOnIdle`, process-local one-attempt gate (reserve→commit), `hasInputWait`, `isCurrentContinuation`, `isFallbackInProgress`, `backgroundJobBoard.hasTerminalUnreconciled`, malformed/active SDK short-circuits |
 | `src/interview/service.ts` | User submits interview input | **No** — uses `InterviewSessionRuntime.continue()`, which passes `agent: 'orchestrator'` | `sessionBusy` lock, interview active state |
 | `src/interview/runtime.ts` (`notify`) | Interview URL notification | **Fixed 2026-09-02** — was `Yes` (`noReply` suppresses the turn, not the agent rewrite); now resolves the session's own agent via `resolveSessionAgent()` and falls back to `orchestrator` only for a probe-confirmed parentless session | none |
-| `src/tools/smartfetch/secondary-model.ts` | Smartfetch secondary model query | **Fixed 2026-09-02** — was `Yes`; now `withAgent(body, FALLBACK_HELPER_SESSION_AGENT)` = `build`, deliberately not `orchestrator` (which would make the task-session-manager adopt the throwaway helper as a managed orchestrator session) | none |
+| `src/tools/smartfetch/secondary-model.ts` | Smartfetch secondary model query | **Fixed 2026-09-02** — was `Yes`; now names a helper agent selected from the in-memory registered agents, deliberately not `orchestrator` (which would make the task-session-manager adopt the throwaway helper as a managed orchestrator session) | none |
 
 All remaining v1 SDK prompt sites already named their agent and are covered by
 the scan: `src/hooks/orchestrator-wake/index.ts` (`agent: 'orchestrator'`),
@@ -188,8 +188,10 @@ truth for the `agent` field.
   plugin-owned via `assumeTopLevel`); an unresolvable child session gets no
   `agent` field rather than a guess, because guessing would cause the very
   rewrite this module prevents.
-- Plugin-created helper sessions pass `FALLBACK_HELPER_SESSION_AGENT`
-  (`build`), never `FALLBACK_TOP_LEVEL_AGENT` (`orchestrator`).
+- Plugin-created helper sessions pass the first safe agent from the in-memory
+  plugin registrations, and never `FALLBACK_TOP_LEVEL_AGENT`
+  (`orchestrator`). If none is registered, the secondary-model enhancement is
+  skipped rather than issuing an agent-less prompt.
 - `withAgent(body, agent)` attaches the field and gives the regression scan one
   recognizable shape.
 

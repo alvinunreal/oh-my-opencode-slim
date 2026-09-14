@@ -1,6 +1,5 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { getClient } from '../../utils/opencode-client';
-import { FALLBACK_HELPER_SESSION_AGENT } from '../../utils/prompt-agent';
 import { abortSessionWithTimeout } from '../../utils/session';
 import { MAX_MODEL_CONTENT_CHARS } from './constants';
 import type { CachedFetch, SecondaryModel } from './types';
@@ -109,6 +108,7 @@ export function decideSecondaryModelUse(
   fetchResult: CachedFetch,
   prompt: string | undefined,
   secondaryModels: SecondaryModel[],
+  helperAgent?: string,
 ) {
   if (!prompt?.trim()) return { use: false, reason: 'no_prompt' as const };
   if (!secondaryModels.length) {
@@ -116,6 +116,9 @@ export function decideSecondaryModelUse(
       use: false,
       reason: 'no_secondary_model_configured' as const,
     };
+  }
+  if (!helperAgent) {
+    return { use: false, reason: 'no_helper_agent_available' as const };
   }
   if (!fetchResult.markdown.trim()) {
     return { use: false, reason: 'empty_content' as const };
@@ -276,6 +279,7 @@ async function runSecondaryModel(
   model: SecondaryModel,
   prompt: string,
   content: string,
+  helperAgent: string,
   parentSessionID?: string,
 ) {
   const generateText = readV2GenerateText(input);
@@ -344,7 +348,7 @@ async function runSecondaryModel(
         // primary and durably rewrite the session agent
         // (docs/agents/build-agent-empty-input-diagnosis.md, probe A2).
         //
-        // `build` rather than the orchestrator on purpose: a message tagged
+        // A non-orchestrator agent is selected on purpose: a message tagged
         // `orchestrator` makes the task-session-manager adopt this throwaway
         // session as a managed orchestrator session
         // (`registerSessionAsOrchestrator`), which then attracts phase
@@ -352,12 +356,10 @@ async function runSecondaryModel(
         // companion busy/idle flips, and the orchestrator system prompt on
         // every fetch.
         //
-        // Named inline rather than through `resolveSessionAgent(..., { probe:
-        // false, assumeTopLevel: true, fallbackAgent })`, which could only
-        // ever return this same constant: the ceremony bought an await and
-        // obscured the fact that the value is fixed. NOTE: a user who
-        // disables the `build` agent in opencode.json breaks this prompt.
-        agent: FALLBACK_HELPER_SESSION_AGENT,
+        // Named inline rather than resolved from the helper session: the
+        // selected agent comes from the in-memory registrations captured at
+        // plugin construction, and probing this new session buys nothing.
+        agent: helperAgent,
         model: modelOnly,
         // The v1 runtime reads the variant from the body top level and
         // strips unknown keys from `model`; the SDK type omits it, so
@@ -434,7 +436,10 @@ export async function runSecondaryModelWithFallback(
   prompt: string,
   content: string,
   parentSessionID?: string,
+  helperAgent?: string,
 ) {
+  if (!helperAgent) return undefined;
+
   let lastError: unknown;
   for (const model of models) {
     try {
@@ -443,6 +448,7 @@ export async function runSecondaryModelWithFallback(
         model,
         prompt,
         content,
+        helperAgent,
         parentSessionID,
       );
       if (!isUsableSecondaryText(result.text)) {

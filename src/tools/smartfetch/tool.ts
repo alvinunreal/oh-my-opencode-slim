@@ -663,6 +663,7 @@ export function createWebfetchTool(
           fetchResult,
           args.prompt,
           secondaryModels,
+          options.helperAgent,
         );
         const metadata = args.include_metadata
           ? frontmatter({
@@ -723,6 +724,7 @@ export function createWebfetchTool(
             args.prompt || '',
             fetchResult.markdown,
             ctx.sessionID,
+            options.helperAgent,
           );
         } catch (error: unknown) {
           secondaryModelError =

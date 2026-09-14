@@ -2,9 +2,9 @@ import { describe, expect, mock, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import {
-  FALLBACK_HELPER_SESSION_AGENT,
   FALLBACK_TOP_LEVEL_AGENT,
   normalizeAgentHint,
+  resolveHelperSessionAgent,
   resolveSessionAgent,
   SYSTEM_AGENTS,
   withAgent,
@@ -77,6 +77,43 @@ describe('normalizeAgentHint', () => {
       parts: [],
       agent: 'compaction',
     });
+  });
+});
+
+describe('resolveHelperSessionAgent', () => {
+  test('selects the first available registered helper agent', () => {
+    expect(
+      resolveHelperSessionAgent(['orchestrator', 'explorer', 'councillor']),
+    ).toBe('explorer');
+  });
+
+  test('selects another registered agent when earlier ones are absent', () => {
+    expect(
+      resolveHelperSessionAgent(['orchestrator', 'librarian', 'councillor']),
+    ).toBe('librarian');
+  });
+
+  test('skips registered agents disabled in the final host config', () => {
+    expect(
+      resolveHelperSessionAgent(['orchestrator', 'explorer', 'librarian'], {
+        explorer: { disable: true },
+      }),
+    ).toBe('librarian');
+  });
+
+  test('returns no helper when every registered agent is disabled', () => {
+    expect(
+      resolveHelperSessionAgent(['orchestrator', 'explorer', 'librarian'], {
+        explorer: { disable: true },
+        librarian: { disable: true },
+      }),
+    ).toBeUndefined();
+  });
+
+  test('returns no helper when every registered agent is unsafe', () => {
+    expect(
+      resolveHelperSessionAgent(['orchestrator', 'compaction', 'summary']),
+    ).toBeUndefined();
   });
 });
 
@@ -279,16 +316,16 @@ describe('resolveSessionAgent', () => {
   // M7: plugin-created helper sessions must not be tagged `orchestrator`,
   // which would make src/index.ts adopt them as managed orchestrator
   // sessions (reminders, nudges, board injection, companion status).
-  test('helper sessions fall back to a core agent, not the orchestrator', async () => {
+  test('helper sessions can use a non-orchestrator fallback', async () => {
     const client = createClient({});
 
     const agent = await resolveSessionAgent(client, 'helper-1', {
       assumeTopLevel: true,
       probe: false,
-      fallbackAgent: FALLBACK_HELPER_SESSION_AGENT,
+      fallbackAgent: 'councillor',
     });
 
-    expect(agent).toBe('build');
+    expect(agent).toBe('councillor');
     expect(agent).not.toBe(FALLBACK_TOP_LEVEL_AGENT);
   });
 
@@ -493,13 +530,15 @@ function maskNonCode(source: string): string {
 }
 
 /**
- * Extract the text between `(` at `parenIndex` and its matching `)`,
- * skipping over strings, template literals, and comments.
+ * Extract the text between an opening delimiter at `openerIndex` and its
+ * matching closing delimiter, skipping over strings, template literals, and
+ * comments.
  */
-function extractCallArgs(source: string, parenIndex: number): string {
-  const stack: string[] = ['('];
+function extractCallArgs(source: string, openerIndex: number): string {
+  const opener = source[openerIndex];
+  const stack: string[] = [opener];
   let quote: string | null = null;
-  let index = parenIndex + 1;
+  let index = openerIndex + 1;
 
   while (index < source.length) {
     const ch = source[index] as string;
@@ -548,18 +587,185 @@ function extractCallArgs(source: string, parenIndex: number): string {
         index++;
         continue;
       }
-      if (stack.length === 0) return source.slice(parenIndex + 1, index);
+      if (stack.length === 0) return source.slice(openerIndex + 1, index);
       index++;
       continue;
     }
     index++;
   }
 
-  return source.slice(parenIndex + 1);
+  return source.slice(openerIndex + 1);
+}
+
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  const stack: string[] = [];
+  let quote: string | null = null;
+
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (quote) {
+      if (ch === '\\') {
+        index++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push(ch);
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      stack.pop();
+      continue;
+    }
+    if (ch === ',' && stack.length === 0) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+
+  parts.push(text.slice(start));
+  return parts;
+}
+
+const STATICALLY_ABSENT_AGENT_VALUE =
+  /^(?:undefined|null|void\s+0)(?:\s+as\b[\s\S]*)?$/;
+
+function unwrapParenthesizedExpression(text: string): string {
+  let expression = text.trim();
+  while (expression.startsWith('(') && expression.endsWith(')')) {
+    expression = expression.slice(1, -1).trim();
+  }
+  return expression;
+}
+
+function splitTopLevelConditional(
+  text: string,
+): { whenTrue: string; whenFalse: string } | undefined {
+  const stack: string[] = [];
+  let questionIndex = -1;
+  let nestedQuestions = 0;
+
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    const next = text[index + 1] ?? '';
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push(ch);
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      stack.pop();
+      continue;
+    }
+    if (stack.length > 0) continue;
+
+    if (ch === '?' && next !== '?' && next !== '.' && questionIndex === -1) {
+      questionIndex = index;
+      continue;
+    }
+    if (questionIndex === -1) continue;
+    if (ch === '?') {
+      nestedQuestions++;
+      continue;
+    }
+    if (ch === ':' && nestedQuestions > 0) {
+      nestedQuestions--;
+      continue;
+    }
+    if (ch === ':') {
+      return {
+        whenTrue: text.slice(questionIndex + 1, index),
+        whenFalse: text.slice(index + 1),
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function isStaticallyAbsentAgentValue(value: string): boolean {
+  const expression = unwrapParenthesizedExpression(
+    splitTopLevel(value)[0]?.replace(/^\s*:\s*/, '') ?? value,
+  );
+  if (STATICALLY_ABSENT_AGENT_VALUE.test(expression)) return true;
+
+  const conditional = splitTopLevelConditional(expression);
+  return conditional
+    ? isStaticallyAbsentAgentValue(conditional.whenTrue) ||
+        isStaticallyAbsentAgentValue(conditional.whenFalse)
+    : false;
+}
+
+function hasTopLevelAgentProperty(text: string): boolean {
+  const stack: string[] = [];
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quoteEnd = text.indexOf(ch, index + 1);
+      index = quoteEnd === -1 ? text.length : quoteEnd;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push(ch);
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      stack.pop();
+      continue;
+    }
+    if (
+      stack.length === 0 &&
+      text.startsWith('agent', index) &&
+      !/[\w$]/.test(text[index - 1] ?? '') &&
+      !/[\w$]/.test(text[index + 5] ?? '') &&
+      /^\s*:/.test(text.slice(index + 5))
+    ) {
+      const value = text.slice(index + 5);
+      if (isStaticallyAbsentAgentValue(value)) {
+        return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function withAgentCallNamesAgent(text: string, start: number): boolean {
+  const withAgentIndex = text.indexOf('(', start);
+  if (withAgentIndex === -1) return false;
+  const args = extractCallArgs(text, withAgentIndex);
+  const secondArgument = splitTopLevel(args)[1]?.trim();
+  return Boolean(
+    secondArgument && !isStaticallyAbsentAgentValue(secondArgument),
+  );
 }
 
 function namesAgent(text: string): boolean {
-  return /\bwithAgent\s*\(/.test(text) || /(^|[\s{,([])agent\s*:/.test(text);
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('withAgent')) {
+    return withAgentCallNamesAgent(text, text.indexOf('withAgent'));
+  }
+
+  const body = /\bbody\s*:\s*/.exec(text);
+  if (body) {
+    let valueStart = body.index + body[0].length;
+    while (/\s/.test(text[valueStart] ?? '')) valueStart++;
+    if (text[valueStart] === '{') {
+      return hasTopLevelAgentProperty(extractCallArgs(text, valueStart));
+    }
+    if (text.startsWith('withAgent', valueStart)) {
+      return withAgentCallNamesAgent(text, valueStart);
+    }
+  }
+
+  return hasTopLevelAgentProperty(text);
 }
 
 /**
@@ -575,7 +781,7 @@ function declaredValueNamesAgent(source: string, identifier: string): boolean {
 
   const valueStart = declaration.index + declaration[0].length;
   const opener = source[valueStart];
-  if (opener === '{' || opener === '(') {
+  if (opener === '{') {
     return namesAgent(extractCallArgs(source, valueStart));
   }
   // Non-literal initializer: inspect the rest of the statement.
@@ -713,11 +919,114 @@ describe('agent-less prompt regression guard', () => {
     expect(findViolations('fixture.ts', source)).toEqual([]);
   });
 
+  test('scanner rejects an agent field nested under another body field', () => {
+    const source = [
+      'await client.session.prompt({',
+      '  path: { id: sessionID },',
+      "  body: { parts: [], metadata: { agent: 'fixer' } },",
+      '});',
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', source)).toEqual([
+      'fixture.ts:1 - client.session.prompt(',
+    ]);
+  });
+
+  test('scanner does not treat a later nested agent as a spread agent', () => {
+    const source = [
+      'await client.session.prompt({',
+      '  path: { id: sessionID },',
+      "  body: { parts: [], ...defaults, metadata: { agent: 'fixer' } },",
+      '});',
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', source)).toEqual([
+      'fixture.ts:1 - client.session.prompt(',
+    ]);
+  });
+
+  test('scanner rejects withAgent when its agent argument is undefined', () => {
+    const source = [
+      'await client.session.prompt({',
+      '  path: { id: sessionID },',
+      '  body: withAgent({ parts: [] }, undefined),',
+      '});',
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', source)).toEqual([
+      'fixture.ts:1 - client.session.prompt(',
+    ]);
+  });
+
+  test.each(['undefined', 'null', 'void 0'])(
+    'scanner rejects a statically absent agent field: %s',
+    (value) => {
+      const source = [
+        'await client.session.prompt({',
+        '  path: { id: sessionID },',
+        `  body: { agent: ${value}, parts: [] },`,
+        '});',
+      ].join('\n');
+
+      expect(findViolations('fixture.ts', source)).toEqual([
+        'fixture.ts:1 - client.session.prompt(',
+      ]);
+    },
+  );
+
+  test.each(['undefined', 'null', 'void 0'])(
+    'scanner rejects withAgent with a statically absent agent: %s',
+    (value) => {
+      const source = [
+        'await client.session.prompt({',
+        '  path: { id: sessionID },',
+        `  body: withAgent({ parts: [] }, ${value}),`,
+        '});',
+      ].join('\n');
+
+      expect(findViolations('fixture.ts', source)).toEqual([
+        'fixture.ts:1 - client.session.prompt(',
+      ]);
+    },
+  );
+
+  test.each(['undefined', 'null', 'void 0'])(
+    'scanner rejects a conditional agent field ending in %s',
+    (value) => {
+      const source = [
+        'await client.session.prompt({',
+        '  path: { id: sessionID },',
+        `  body: { agent: condition ? agentName : ${value}, parts: [] },`,
+        '});',
+      ].join('\n');
+
+      expect(findViolations('fixture.ts', source)).toEqual([
+        'fixture.ts:1 - client.session.prompt(',
+      ]);
+    },
+  );
+
+  test.each(['undefined', 'null', 'void 0'])(
+    'scanner rejects withAgent with a conditional agent ending in %s',
+    (value) => {
+      const source = [
+        'await client.session.prompt({',
+        '  path: { id: sessionID },',
+        `  body: withAgent({ parts: [] }, condition ? agentName : ${value}),`,
+        '});',
+      ].join('\n');
+
+      expect(findViolations('fixture.ts', source)).toEqual([
+        'fixture.ts:1 - client.session.prompt(',
+      ]);
+    },
+  );
+
   test('scanner resolves a body declared as a local variable', () => {
     const compliant = [
       'const promptBody = {',
+      '  agent: agentName,',
       '  parts: [],',
-      '  ...(agentName ? { agent: agentName } : {}),',
       '};',
       'await sessionClient.promptAsync({ path: { id }, body: promptBody });',
     ].join('\n');
@@ -732,6 +1041,20 @@ describe('agent-less prompt regression guard', () => {
     ]);
   });
 
+  test('scanner rejects a conditional agent spread', () => {
+    const source = [
+      'const promptBody = {',
+      '  parts: [],',
+      '  ...(agentName ? { agent: agentName } : {}),',
+      '};',
+      'await sessionClient.promptAsync({ path: { id }, body: promptBody });',
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', source)).toEqual([
+      'fixture.ts:5 - sessionClient.promptAsync(',
+    ]);
+  });
+
   // src/hooks/foreground-fallback passes the whole args object as one bare
   // identifier, so the scan has to follow the declaration instead of falling
   // back to the pass-through allowlist.
@@ -739,7 +1062,7 @@ describe('agent-less prompt regression guard', () => {
     const compliant = [
       'const promptBody = {',
       '  path: { id: sessionID },',
-      '  body: { parts, ...(agentName ? { agent: agentName } : {}) },',
+      '  body: { agent: agentName, parts },',
       '};',
       'await sessionClient.promptAsync(promptBody);',
     ].join('\n');

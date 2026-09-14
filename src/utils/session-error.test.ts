@@ -164,6 +164,19 @@ describe('sessionErrorMessage', () => {
     expect(sessionErrorMessage(undefined, 'fallback')).toBe('fallback');
     expect(sessionErrorMessage('  spaced  ', 'fallback')).toBe('spaced');
   });
+
+  test('prefers specific data.message over a generic top-level message', () => {
+    expect(
+      sessionErrorMessage(
+        {
+          name: 'ProviderAuthError',
+          message: 'Request failed',
+          data: { message: 'invalid api key' },
+        },
+        'fallback',
+      ),
+    ).toBe('invalid api key');
+  });
 });
 
 // ---------------------------------------------------------------------------

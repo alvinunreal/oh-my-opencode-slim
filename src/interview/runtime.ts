@@ -34,13 +34,15 @@ export function createV1InterviewSessionRuntime(
       // (docs/agents/build-agent-empty-input-diagnosis.md, probe A2).
       // Resolve the agent the session is actually running under — newest USER
       // message wins, so a native compaction/summary turn can never be
-      // mistaken for it — and fall back to `orchestrator` only once the probe
-      // has confirmed the session has no parentID (interviews always run on
-      // the user's own top-level session). An unresolvable child session
-      // yields no `agent` field rather than a guess.
+      // mistaken for it. Interviews target the user's own top-level session,
+      // so probe failures safely fall back to `orchestrator`; a probe-confirmed
+      // child is skipped rather than receiving an agent-less prompt or a
+      // guessed agent.
       const agent = await resolveSessionAgent(client, sessionID, {
+        assumeTopLevel: true,
         directory: ctx.directory,
       });
+      if (!agent) return;
       await client.session.prompt({
         path: { id: sessionID },
         body: withAgent(

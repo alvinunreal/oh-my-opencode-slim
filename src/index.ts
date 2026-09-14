@@ -67,6 +67,7 @@ import {
   createWebfetchTool,
 } from './tools';
 import { pickAgentModelRef } from './tools/smartfetch/secondary-model';
+import type { SmartfetchOptions } from './tools/smartfetch/types';
 import {
   applyActivityEvent,
   resolveEventSessionID,
@@ -89,6 +90,7 @@ import {
 import type { ContextFile } from './utils/background-job-board';
 import { isPluginDisabledByEnv } from './utils/env';
 import { initLogger, log } from './utils/logger';
+import { resolveHelperSessionAgent } from './utils/prompt-agent';
 import { SessionMetadataStore } from './utils/session-metadata';
 import { collapseSystemInPlace } from './utils/system-collapse';
 import { createV2Setup } from './v2';
@@ -282,6 +284,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
   >;
+  let smartfetchOptions: SmartfetchOptions;
 
   // Counters for post-init health check (set inside try, checked outside)
   let toolCount = 0;
@@ -378,13 +381,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       return models.length > 0 ? models : undefined;
     })();
-    webfetch = createWebfetchTool(ctx, {
+    smartfetchOptions = {
       binaryDir: undefined,
       webfetchModels,
       explorerModel: pickAgentModelRef(runtime.agent('explorer')?.model),
       librarianModel: pickAgentModelRef(runtime.agent('librarian')?.model),
       smallModelRef: () => runtime.smallModel(),
-    });
+      helperAgent: resolveHelperSessionAgent(
+        agentDefs.map((agent) => agent.name),
+      ),
+    };
+    webfetch = createWebfetchTool(ctx, smartfetchOptions);
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
       maxContextLines: runtime.backgroundJobs.maxContextLines,
@@ -1000,6 +1007,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // captured only after every host/plugin merge and the final model
       // inheritance, array-primary, preset, and orchestrator-model passes.
       finalHostAgentConfig = configAgent;
+      // SmartFetch is constructed before the host config hook runs. Refresh
+      // its shared options from the final in-memory registrations so a host
+      // `disable: true` entry cannot leave a disabled helper selected.
+      smartfetchOptions.helperAgent = resolveHelperSessionAgent(
+        agentDefs.map((agent) => agent.name),
+        finalHostAgentConfig,
+      );
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as

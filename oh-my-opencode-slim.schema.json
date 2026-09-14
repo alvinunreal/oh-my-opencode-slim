@@ -1166,7 +1166,7 @@
           "properties": {
             "defaultConcurrency": {
               "default": 0,
-              "description": "Maximum concurrently running native background tasks. 0 means unlimited.",
+              "description": "Maximum concurrently running native background tasks. 0 disables the default cap.",
               "type": "integer",
               "minimum": 0,
               "maximum": 1000

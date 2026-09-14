@@ -173,8 +173,8 @@ export function sessionErrorMessage(error: unknown, fallback: string): string {
   const data =
     typeof err.data === 'object' && err.data !== null ? err.data : {};
   for (const candidate of [
-    err.message,
     (data as { message?: unknown }).message,
+    err.message,
   ]) {
     if (typeof candidate === 'string' && candidate.trim().length > 0) {
       return candidate.trim();

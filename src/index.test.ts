@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { MultiplexerConfig } from './config';
@@ -7,6 +7,7 @@ import pluginModuleDefault, {
   sessionManagerMultiplexerConfig,
   shouldEnableMultiplexer,
 } from './index';
+import { CACHE } from './tools/smartfetch/cache';
 import { readTuiSnapshot } from './tui-state';
 
 function createPluginClient(
@@ -815,6 +816,156 @@ describe('plugin config model inheritance', () => {
       },
       { orchestrator: { model: 'openai/parent' } },
     );
+  });
+});
+
+describe('SmartFetch helper agent config-hook selection', () => {
+  let originalEnv: typeof process.env;
+  let originalFetch: typeof globalThis.fetch;
+  const configDirs: string[] = [];
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    originalFetch = globalThis.fetch;
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch;
+    CACHE.clear();
+    process.env = originalEnv;
+    while (configDirs.length > 0) {
+      const configDir = configDirs.pop();
+      if (configDir) {
+        await rm(configDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  async function loadSmartfetchPlugin() {
+    const configDir = await mkdtemp('/tmp/oh-my-opencode-smartfetch-agent-');
+    configDirs.push(configDir);
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_DATA_HOME: `${configDir}/data`,
+      XDG_CACHE_HOME: `${configDir}/cache`,
+      OPENCODE_LOG_DIR: `${configDir}/logs`,
+    };
+    await Bun.write(
+      `${configDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        webfetch: { model: 'provider/smartfetch-helper' },
+      }),
+    );
+
+    const session = {
+      create: mock(async () => ({ data: { id: 'smartfetch-secondary' } })),
+      prompt: mock(async () => ({
+        data: { parts: [{ type: 'text', text: 'secondary answer' }] },
+      })),
+      delete: mock(async () => ({ data: true })),
+      abort: mock(async () => ({ data: true })),
+    };
+    const client = {
+      app: { log: mock(async () => ({})) },
+      session,
+      tool: { ids: mock(async () => ({ data: ['read'] })) },
+    };
+    const hooks = await plugin({
+      client,
+      directory: configDir,
+      worktree: configDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    return { client, configDir, hooks };
+  }
+
+  function installFetchedArticle(): void {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          'SmartFetch retrieves documentation and can summarize the fetched page with a configured secondary model. This article contains enough words to pass the content quality guard used by the tool.',
+          { status: 200, headers: { 'content-type': 'text/plain' } },
+        ),
+    ) as unknown as typeof fetch;
+  }
+
+  async function executeSmartfetch(
+    hooks: Awaited<ReturnType<typeof plugin>>,
+    url: string,
+  ) {
+    const webfetch = hooks.tool?.webfetch;
+    expect(webfetch).toBeDefined();
+    return webfetch?.execute(
+      {
+        url,
+        format: 'markdown',
+        extract_main: true,
+        prefer_llms_txt: 'never',
+        include_metadata: true,
+        save_binary: false,
+        prompt: 'Summarize the article',
+      },
+      {
+        ask: async () => undefined,
+        metadata: () => undefined,
+        abort: new AbortController().signal,
+        directory: '/tmp/smartfetch-agent-test',
+      } as never,
+    );
+  }
+
+  test('skips a host-disabled first helper candidate after the config hook', async () => {
+    installFetchedArticle();
+    const { client, configDir, hooks } = await loadSmartfetchPlugin();
+
+    try {
+      await hooks.config?.({ agent: { explorer: { disable: true } } });
+      await executeSmartfetch(
+        hooks,
+        `https://smartfetch.example/disabled-first-${configDir.slice(-6)}`,
+      );
+
+      const body = client.session.prompt.mock.calls[0]?.[0] as {
+        body?: { agent?: string };
+      };
+      expect(body.body?.agent).toBe('librarian');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('uses no helper when every registered helper is host-disabled', async () => {
+    installFetchedArticle();
+    const { client, hooks } = await loadSmartfetchPlugin();
+    const disabledHelpers = [
+      'explorer',
+      'librarian',
+      'oracle',
+      'designer',
+      'fixer',
+      'councillor',
+    ];
+
+    try {
+      await hooks.config?.({
+        agent: Object.fromEntries(
+          disabledHelpers.map((name) => [name, { disable: true }]),
+        ),
+      });
+      const result = await executeSmartfetch(
+        hooks,
+        'https://smartfetch.example/all-disabled',
+      );
+
+      expect(result).toContain('secondary_model_skipped_reason');
+      expect(result).toContain('no_helper_agent_available');
+      expect(client.session.create).not.toHaveBeenCalled();
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 });
 

@@ -102,7 +102,7 @@ describe('v1 interview session runtime', () => {
     });
   });
 
-  test('notify never guesses an agent for a child session', async () => {
+  test('notify skips a child session when its agent cannot be resolved', async () => {
     const session = {
       get: mock(async () => ({ data: { id: 'ses_2', parentID: 'ses_1' } })),
       messages: mock(async () => ({ data: [] })),
@@ -114,9 +114,32 @@ describe('v1 interview session runtime', () => {
 
     await runtime.notify('ses_2', 'ready');
 
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  test('notify falls back to orchestrator when agent probes fail', async () => {
+    const session = {
+      get: mock(async () => {
+        throw new Error('session probe failed');
+      }),
+      messages: mock(async () => {
+        throw new Error('message probe failed');
+      }),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_1', 'ready');
+
     expect(session.prompt).toHaveBeenCalledWith({
-      path: { id: 'ses_2' },
-      body: { noReply: true, parts: [{ type: 'text', text: 'ready' }] },
+      path: { id: 'ses_1' },
+      body: {
+        noReply: true,
+        parts: [{ type: 'text', text: 'ready' }],
+        agent: 'orchestrator',
+      },
     });
   });
 });
