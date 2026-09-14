@@ -138,6 +138,9 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
       {} as never,
       output as never,
     );
+    // Real pipeline order (src/index.ts): the drift trailing nudge is
+    // published AFTER the job board, never before it.
+    await postFileToolNudge.deliverTrailingNudge({} as never, output as never);
   };
 
   return {

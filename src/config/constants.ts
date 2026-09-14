@@ -60,11 +60,17 @@ export const MAX_POLL_TIME_MS = 5 * 60 * 1000; // 5 minutes
 // Workflow reminders
 export const PHASE_REMINDER_TEXT = `!IMPORTANT! Scheduler workflow: First choose the lightest workflow that fits the work. If direct execution is justified, complete it and verify proportionately. Otherwise: plan lanes/dependencies → dispatch background specialists → track task IDs → wait for hook-driven completion → reconcile terminal results → verify. !END!`;
 
+export const IMPLEMENTATION_DRIFT_NUDGE_TEXT = `!IMPORTANT! Delegation check: you just used an implementation tool (edit/write/shell/patch) as the coordinator. Unless this is one isolated, low-risk action, stop implementing it yourself and dispatch the bounded work to the right specialist (task with background: true), then reconcile its result. !END!`;
+
 export function formatSystemReminder(text: string): string {
   return `<system-reminder>\n${text}\n</system-reminder>`;
 }
 
 export const PHASE_REMINDER = formatSystemReminder(PHASE_REMINDER_TEXT);
+
+export const IMPLEMENTATION_DRIFT_NUDGE = formatSystemReminder(
+  IMPLEMENTATION_DRIFT_NUDGE_TEXT,
+);
 
 export const WRITABLE_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 - Prefer dedicated file tools for normal code work: glob/grep/ast_grep_search for discovery, read for file contents, and edit/write/apply_patch for targeted source changes.

@@ -1728,6 +1728,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         typedOutput as never,
       );
       await taskSessionManagerHook.injectBackgroundJobBoard(input, typedOutput);
+      // Late-phase trailing nudge (#1012): published strictly after the
+      // job board and phase-reminder so neither hook can anchor on or
+      // append to the volatile message (checkpoint anchor safety).
+      await postFileToolNudge.deliverTrailingNudge(
+        input as never,
+        typedOutput as never,
+      );
     },
 
     'tool.execute.after': async (input, output) => {

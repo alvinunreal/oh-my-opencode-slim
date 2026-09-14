@@ -305,6 +305,18 @@ exports[`cache-impact snapshots (update deliberately — see file header) transf
       },
       {
         "metadata": {
+          "oh-my-opencode-slim.implementationDriftNudge": true,
+        },
+        "synthetic": true,
+        "text": 
+"<system-reminder>
+!IMPORTANT! Delegation check: you just used an implementation tool (edit/write/shell/patch) as the coordinator. Unless this is one isolated, low-risk action, stop implementing it yourself and dispatch the bounded work to the right specialist (task with background: true), then reconcile its result. !END!
+</system-reminder>"
+,
+        "type": "text",
+      },
+      {
+        "metadata": {
           "oh-my-opencode-slim.phaseReminder": true,
         },
         "synthetic": true,
@@ -448,6 +460,18 @@ exports[`cache-impact snapshots (update deliberately — see file header) transf
     "parts": [
       {
         "text": "final adjustments please",
+        "type": "text",
+      },
+      {
+        "metadata": {
+          "oh-my-opencode-slim.implementationDriftNudge": true,
+        },
+        "synthetic": true,
+        "text": 
+"<system-reminder>
+!IMPORTANT! Delegation check: you just used an implementation tool (edit/write/shell/patch) as the coordinator. Unless this is one isolated, low-risk action, stop implementing it yourself and dispatch the bounded work to the right specialist (task with background: true), then reconcile its result. !END!
+</system-reminder>"
+,
         "type": "text",
       },
       {
