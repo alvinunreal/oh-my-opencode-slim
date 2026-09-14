@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { createOpencodeClient } from '@opencode-ai/sdk';
 import { createRevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import { BackgroundJobBoard } from '../utils/background-job-board';
 import { createCancelTaskTool } from './cancel-task';
@@ -407,6 +408,40 @@ describe('task_revive tool', () => {
       generation: 1,
       state: 'reconciled',
       statusUncertain: false,
+    });
+  });
+
+  test('v1 SDK serializes only the body: the delivery hint never reaches the wire', async () => {
+    // v1 compatibility evidence for the queue-delivery fence: the hint
+    // travels as a client-side argument, and the real @opencode-ai/sdk
+    // request pipeline must serialize ONLY `body` into the HTTP request.
+    // A captured fetch observes the wire shape directly.
+    const captured = new Map<string, unknown>();
+    const client = createOpencodeClient({
+      baseUrl: 'http://127.0.0.1:1',
+      fetch: async (request: Request) => {
+        captured.set('url', request.url);
+        captured.set('body', await request.text());
+        return new Response('{}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+    await client.session.promptAsync({
+      path: { id: 'ses_1' },
+      query: { directory: '/test/project' },
+      body: { agent: 'explorer', parts: [{ type: 'text', text: 'go' }] },
+      // Extra top-level argument, exactly as task-revive sends it.
+      delivery: 'queue',
+    } as Parameters<typeof client.session.promptAsync>[0] &
+      Record<string, unknown>);
+
+    expect(captured.get('url')).toContain('/session/ses_1/prompt_async');
+    const wireBody = JSON.parse(String(captured.get('body')));
+    expect(wireBody).toEqual({
+      agent: 'explorer',
+      parts: [{ type: 'text', text: 'go' }],
     });
   });
 });
