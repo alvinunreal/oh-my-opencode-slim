@@ -397,11 +397,46 @@ export function buildPluginInput(
           // reasoning-effort variant (v1 prompt bodies carry no variant
           // slot). A non-empty string overrides the ref's variant so
           // switchModel does not reset it to the host default.
-          const switchRef =
+          const explicitVariant =
             typeof args?.modelVariant === 'string' && args.modelVariant
-              ? { ...ref, variant: args.modelVariant }
-              : ref;
-          if (s.switchModel) {
+              ? args.modelVariant
+              : undefined;
+          const switchRef = explicitVariant
+            ? { ...ref, variant: explicitVariant }
+            : ref;
+          // Variant preservation: internal callers (orchestrator-wake,
+          // task-message, foreground-fallback) pin the session's CURRENT
+          // model without a variant opinion. Re-asserting such a pin via
+          // switchModel resets the host-side reasoning-effort variant to
+          // default (the wake-variant-reset regression). A variant-less
+          // ref that already matches the session model is therefore a
+          // no-op pin: skip the switch entirely, read at delivery time so
+          // a mid-flight user variant change wins. Explicit variants
+          // (including 'default') and cross-model pins still switch.
+          // Hosts without session.get (or failing it) keep the legacy
+          // variant-free switch behavior.
+          let skipSwitch = false;
+          if (!explicitVariant && s.get) {
+            try {
+              const info = await s.get({ sessionID: sessionIDOf(args) });
+              const current = isRecord(info) ? info.model : undefined;
+              skipSwitch =
+                isRecord(current) &&
+                current.providerID === switchRef.providerID &&
+                current.id === switchRef.id;
+            } catch {
+              // Fail-soft: cannot prove the pin matches — switch as before.
+            }
+          }
+          if (skipSwitch) {
+            // The session already runs the pinned model (with its current
+            // variant); the switch claim stays truthful without a call.
+            switched = true;
+            log(
+              '[v2][shim] pin matches current model; variant-preserving skip of session.switchModel',
+              { id: sessionIDOf(args), model: switchRef },
+            );
+          } else if (s.switchModel) {
             // The prompt delivery is the load-bearing action: a failed
             // model switch degrades to steering on the CURRENT model
             // (logged here; `switched: false` on the result) instead of

@@ -616,6 +616,16 @@ How it differs from the v1 path:
   The wake model pin carries the session model's variant as the v2-only
   `modelVariant` argument, so `switchModel` preserves the reasoning-effort
   setting instead of resetting it to the host default.
+- **Variant-preserving skip (shim-level guard):** a variant-less model pin
+  that already matches the session's current model (same provider + id,
+  read via `session.get` at delivery time) is treated as "continue on this
+  model": the shim skips `switchModel` entirely instead of resetting the
+  variant to default. This covers every internal caller that pins the
+  current model without a variant opinion (wake pins, task-message,
+  same-model fallback steps) even when the pin's source lost the variant.
+  Explicit variants (including `default` via `modelVariant`) and
+  cross-model pins still switch. Hosts without `session.get`, or a failing
+  `get`, keep the legacy variant-free switch.
 - **Fingerprint:** children-only (id + outcome + tracked status + update
   evidence); the two-wake no-progress cap still bounds cost.
 

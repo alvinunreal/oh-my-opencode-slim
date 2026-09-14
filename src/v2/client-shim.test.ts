@@ -899,6 +899,116 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
     expect(Object.hasOwn(model, 'variant')).toBe(false);
   });
 
+  test('promptAsync preserves the current variant when a variant-less pin matches the session model', async () => {
+    const seq: Array<{ m: string; i: unknown }> = [];
+    const promptAsync = makePromptAsync({
+      get: async () => ({
+        model: { providerID: 'test', id: 'model-a', variant: 'max' },
+      }),
+      switchModel: async (i: unknown) => {
+        seq.push({ m: 'switchModel', i });
+      },
+      prompt: async (i: unknown) => {
+        seq.push({ m: 'prompt', i });
+        return {};
+      },
+    } as never);
+    const res = (await promptAsync({
+      path: { id: 'ses_1' },
+      body: {
+        model: { providerID: 'test', modelID: 'model-a' },
+        parts: [{ type: 'text', text: 'wake reminder' }],
+      },
+    })) as { switched?: boolean };
+    // The pin names the model the session already runs on; asserting no
+    // variant must not reset the user's reasoning-effort selection.
+    expect(seq.map((c) => c.m)).toEqual(['prompt']);
+    // Session is on the requested model — the switch claim stays truthful.
+    expect(res.switched).toBe(true);
+  });
+
+  test('promptAsync explicit modelVariant still switches when the pin matches the session model', async () => {
+    const seq: Array<{ m: string; i: unknown }> = [];
+    const promptAsync = makePromptAsync({
+      get: async () => ({
+        model: { providerID: 'test', id: 'model-a', variant: 'max' },
+      }),
+      switchModel: async (i: unknown) => {
+        seq.push({ m: 'switchModel', i });
+      },
+      prompt: async (i: unknown) => {
+        seq.push({ m: 'prompt', i });
+        return {};
+      },
+    } as never);
+    await promptAsync({
+      path: { id: 'ses_1' },
+      body: {
+        model: { providerID: 'test', modelID: 'model-a' },
+        parts: [{ type: 'text', text: 'fallback replay' }],
+      },
+      modelVariant: 'default',
+    });
+    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
+    const switchCall = seq[0] as { i: { model: unknown } };
+    expect(switchCall.i.model).toEqual({
+      id: 'model-a',
+      providerID: 'test',
+      variant: 'default',
+    });
+  });
+
+  test('promptAsync still switches when the pin targets a different model than the session', async () => {
+    const seq: Array<{ m: string; i: unknown }> = [];
+    const promptAsync = makePromptAsync({
+      get: async () => ({
+        model: { providerID: 'test', id: 'model-b', variant: 'max' },
+      }),
+      switchModel: async (i: unknown) => {
+        seq.push({ m: 'switchModel', i });
+      },
+      prompt: async (i: unknown) => {
+        seq.push({ m: 'prompt', i });
+        return {};
+      },
+    } as never);
+    await promptAsync({
+      path: { id: 'ses_1' },
+      body: {
+        model: { providerID: 'test', modelID: 'model-a' },
+        parts: [{ type: 'text', text: 'fallback replay' }],
+      },
+    });
+    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
+    const switchCall = seq[0] as { i: { model: unknown } };
+    expect(switchCall.i.model).toEqual({ id: 'model-a', providerID: 'test' });
+  });
+
+  test('promptAsync degrades to the variant-free switch when session get fails', async () => {
+    const seq: Array<{ m: string; i: unknown }> = [];
+    const promptAsync = makePromptAsync({
+      get: async () => {
+        throw new Error('session.get failed');
+      },
+      switchModel: async (i: unknown) => {
+        seq.push({ m: 'switchModel', i });
+      },
+      prompt: async (i: unknown) => {
+        seq.push({ m: 'prompt', i });
+        return {};
+      },
+    } as never);
+    const res = (await promptAsync({
+      path: { id: 'ses_1' },
+      body: {
+        model: { providerID: 'test', modelID: 'model-a' },
+        parts: [{ type: 'text', text: 'wake reminder' }],
+      },
+    })) as { switched?: boolean };
+    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
+    expect(res.switched).toBe(true);
+  });
+
   test('promptAsync modelVariant without a body model does not switch models', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const promptAsync = makePromptAsync({
