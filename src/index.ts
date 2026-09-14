@@ -25,6 +25,7 @@ import { RuntimeConfig } from './config/runtime';
 import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
 import { HEALTH_CHECK, minimumExpectedToolCount } from './health-check';
 import {
+  createAbsolutePathRescueHook,
   createApplyPatchHook,
   createAutoUpdateCheckerHook,
   createCacheMonitorHook,
@@ -241,6 +242,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
   let searchPathGuard: ReturnType<typeof createSearchPathGuardHook>;
+  let absolutePathRescue: ReturnType<typeof createAbsolutePathRescueHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
   let toolLoopGuard: ToolLoopGuardHook;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
@@ -595,6 +597,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     applyPatch = createApplyPatchHook(ctx);
 
     searchPathGuard = createSearchPathGuardHook(ctx);
+
+    absolutePathRescue = createAbsolutePathRescueHook(ctx);
 
     jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
     toolLoopGuard = createToolLoopGuardHook();
@@ -1334,6 +1338,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     'tool.execute.before': async (input, output) => {
       await applyPatch['tool.execute.before'](input as never, output as never);
+      // Rewrite guessed non-existing absolute paths BEFORE the search
+      // guard: the guard blocks grep/glob on missing paths, so running
+      // the rescue after it would never see a rescuable path (#1143).
+      await absolutePathRescue['tool.execute.before'](
+        input as never,
+        output as never,
+      );
       await searchPathGuard['tool.execute.before'](
         input as never,
         output as never,

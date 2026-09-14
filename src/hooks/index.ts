@@ -1,3 +1,4 @@
+export { createAbsolutePathRescueHook } from './absolute-path-rescue';
 export { createApplyPatchHook } from './apply-patch';
 export { createAutoUpdateCheckerHook } from './auto-update-checker';
 export { createCacheMonitorHook } from './cache-monitor';
