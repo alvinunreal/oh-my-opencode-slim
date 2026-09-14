@@ -89,6 +89,30 @@ async function flushNotify(): Promise<void> {
   for (let i = 0; i < 15; i += 1) await Promise.resolve();
 }
 
+/** Toggle-able transcript: baseline only until `probe` flips true, then a
+ * completed assistant turn after the baseline. */
+function completedTranscript(
+  probe: () => boolean,
+  text = 'new result',
+): () => unknown {
+  return () =>
+    probe()
+      ? {
+          data: [
+            { info: { id: 'baseline', role: 'user' }, parts: [] },
+            {
+              info: {
+                id: 'assistant-1',
+                role: 'assistant',
+                time: { completed: 2 },
+              },
+              parts: [{ type: 'text', text }],
+            },
+          ],
+        }
+      : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] };
+}
+
 afterEach(() => {
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;
@@ -98,22 +122,7 @@ describe('revived run tracker', () => {
   test('publishes a newer completed assistant turn and notifies the parent', async () => {
     let probe = false;
     const harness = createHarness(
-      () =>
-        probe
-          ? {
-              data: [
-                { info: { id: 'baseline', role: 'user' }, parts: [] },
-                {
-                  info: {
-                    id: 'assistant-1',
-                    role: 'assistant',
-                    time: { completed: 2 },
-                  },
-                  parts: [{ type: 'text', text: 'new result' }],
-                },
-              ],
-            }
-          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      completedTranscript(() => probe),
       undefined,
       true,
     );
@@ -167,22 +176,7 @@ describe('revived run tracker', () => {
   test('notifies the parent in its current selection instead of hardcoded orchestrator', async () => {
     let probe = false;
     const harness = createHarness(
-      () =>
-        probe
-          ? {
-              data: [
-                { info: { id: 'baseline', role: 'user' }, parts: [] },
-                {
-                  info: {
-                    id: 'assistant-1',
-                    role: 'assistant',
-                    time: { completed: 2 },
-                  },
-                  parts: [{ type: 'text', text: 'new result' }],
-                },
-              ],
-            }
-          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      completedTranscript(() => probe),
       undefined,
       false,
       {
@@ -217,22 +211,7 @@ describe('revived run tracker', () => {
   test('forwards the resolved variant as modelVariant on the notification', async () => {
     let probe = false;
     const harness = createHarness(
-      () =>
-        probe
-          ? {
-              data: [
-                { info: { id: 'baseline', role: 'user' }, parts: [] },
-                {
-                  info: {
-                    id: 'assistant-1',
-                    role: 'assistant',
-                    time: { completed: 2 },
-                  },
-                  parts: [{ type: 'text', text: 'new result' }],
-                },
-              ],
-            }
-          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      completedTranscript(() => probe),
       undefined,
       false,
       {
@@ -274,22 +253,7 @@ describe('revived run tracker', () => {
       release = resolve;
     });
     const harness = createHarness(
-      () =>
-        probe
-          ? {
-              data: [
-                { info: { id: 'baseline', role: 'user' }, parts: [] },
-                {
-                  info: {
-                    id: 'assistant-1',
-                    role: 'assistant',
-                    time: { completed: 2 },
-                  },
-                  parts: [{ type: 'text', text: 'new result' }],
-                },
-              ],
-            }
-          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      completedTranscript(() => probe),
       undefined,
       false,
       {

@@ -1390,6 +1390,9 @@ export function createOrchestratorWakeScheduler(
         // slot, so the wake model's reasoning-effort variant travels as the
         // v2-only `modelVariant`; the shim merges it into the switchModel
         // ref. Absent variant leaves the call shape unchanged.
+        // `modelSelection: 'inherit'` marks this as a lifecycle
+        // continuation (#1079): the v2 shim takes the host's persisted
+        // selection instead of re-pinning this snapshot model.
         await (
           sessionSdk.promptAsync as (
             args: Record<string, unknown>,
@@ -1399,14 +1402,26 @@ export function createOrchestratorWakeScheduler(
           query: { directory },
           body,
           delivery: 'queue',
+          modelSelection: 'inherit',
           ...(wakeVariant ? { modelVariant: wakeVariant } : {}),
           throwOnError: true,
         });
       } else {
-        await sessionSdk.promptAsync({
+        // v1 path: the send-time-resolved body model is applied directly
+        // by the host (no switchModel, so no stale-pin revert race). The
+        // cast drops nothing on v1 — the SDK discards unknown root fields
+        // (same RequestInit path as `delivery`, #1192) — while v2 hosts
+        // in todo mode read `modelSelection` and get the same
+        // lifecycle-inherit semantics as children mode.
+        await (
+          sessionSdk.promptAsync as (
+            args: Record<string, unknown>,
+          ) => Promise<unknown>
+        )({
           path: { id: sessionID },
           query: { directory },
           body,
+          modelSelection: 'inherit',
           throwOnError: true,
         });
       }

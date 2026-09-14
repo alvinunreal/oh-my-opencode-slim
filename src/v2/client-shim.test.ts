@@ -309,7 +309,7 @@ describe('v2 client shim delegation', () => {
     expect(result).toMatchObject({ admitted: true });
   });
 
-  test('internal continuation inherits persisted host selection instead of switching', async () => {
+  test("lifecycle continuation with modelSelection:'inherit' inherits the persisted host selection", async () => {
     // #1079: a lifecycle pin (with or without variant) is a snapshot.
     // By delivery time the host may already be on another model/variant;
     // switchModel would revert the user's selection.
@@ -340,6 +340,7 @@ describe('v2 client shim delegation', () => {
         model: { providerID: 'anthropic', modelID: 'claude-x' },
         parts: [createInternalAgentTextPart('wake with model pin')],
       },
+      modelSelection: 'inherit',
       modelVariant: 'high',
     });
     expect(seq.map((c) => c.m)).toEqual(['synthetic']);
@@ -1033,7 +1034,10 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
     expect(seq.map((e) => e.m)).toEqual(['prompt']);
   });
 
-  test('internal continuation does not switchModel onto a stale pin when the host already moved', async () => {
+  test('interview-style internal continuation keeps its explicit pin (switchModel runs)', async () => {
+    // Pure-internal body WITHOUT modelSelection:'inherit': the interview
+    // runtime tracks its own model, so the pin is real and must apply
+    // (Greptile P1 on #1195).
     const seq: Array<{ m: string; i: unknown }> = [];
     const promptAsync = makePromptAsync({
       get: async () => ({
@@ -1054,47 +1058,17 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
     await promptAsync({
       path: { id: 'ses_1' },
       body: {
-        agent: 'plan',
+        agent: 'orchestrator',
         model: { providerID: 'test', modelID: 'model-a' },
-        parts: [createInternalAgentTextPart('wake reminder')],
-      },
-      delivery: 'queue',
-    });
-    expect(seq.map((c) => c.m)).toEqual(['synthetic']);
-  });
-
-  test('internal continuation with explicit variant still inherits when the host moved', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const promptAsync = makePromptAsync({
-      get: async () => ({
-        model: { providerID: 'test', id: 'model-b', variant: 'default' },
-      }),
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      synthetic: async (i: unknown) => {
-        seq.push({ m: 'synthetic', i });
-        return {};
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-    } as never);
-    await promptAsync({
-      path: { id: 'ses_1' },
-      body: {
-        agent: 'plan',
-        model: { providerID: 'test', modelID: 'model-a' },
-        parts: [createInternalAgentTextPart('wake reminder')],
+        parts: [createInternalAgentTextPart('interview next question')],
       },
       delivery: 'queue',
       modelVariant: 'high',
     });
-    expect(seq.map((c) => c.m)).toEqual(['synthetic']);
+    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'synthetic']);
   });
 
-  test('internal continuation without synthetic still does not switch onto a stale pin', async () => {
+  test('lifecycle inherit without synthetic still skips the stale pin on the degraded prompt path', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const promptAsync = makePromptAsync({
       get: async () => ({
@@ -1116,6 +1090,7 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
         parts: [createInternalAgentTextPart('wake reminder')],
       },
       delivery: 'queue',
+      modelSelection: 'inherit',
       modelVariant: 'high',
     });
     expect(seq.map((c) => c.m)).toEqual(['prompt']);

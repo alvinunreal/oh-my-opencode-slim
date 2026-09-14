@@ -353,11 +353,17 @@ export function buildPluginInput(
       // without session.switchModel must fail loudly instead of silently
       // replaying on the model that just failed); default callers pass the
       // session's CURRENT model as a pin (orchestrator-wake) and keep the
-      // honest degrade-with-log steer.
+      // honest degrade-with-log steer. The optional `modelSelection:
+      // 'inherit'` argument opts a pure-internal caller into LIFECYCLE
+      // continuation semantics (#1079): the body pin is a snapshot, so the
+      // host's persisted selection wins and switchModel is skipped. Callers
+      // with a REAL pin must not pass it (interview continuations track
+      // their own model and keep the switch).
       promptAsync: async (
         args: Record<string, unknown> & {
           delivery?: 'steer' | 'queue';
           modelSwitch?: 'required';
+          modelSelection?: 'inherit';
           modelVariant?: string;
         },
       ) => {
@@ -392,13 +398,17 @@ export function buildPluginInput(
         }
         const ref = modelRefFromBody(body);
         let switched = false;
-        // Lifecycle continuations (wake / terminal notify) must inherit
-        // the host's persisted selection. A body pin — with or without
-        // variant — is a snapshot that can be stale by delivery time
-        // (#1079). Mixed bodies (foreground-fallback replay) still
-        // switch; `modelSwitch: 'required'` still switches.
+        // Lifecycle continuations that OPT IN via `modelSelection:
+        // 'inherit'` (wake / terminal notify) take the host's persisted
+        // selection: their body pin — with or without variant — is a
+        // snapshot that can be stale by delivery time (#1079). Purely
+        // internal bodies WITHOUT the flag keep the pin semantics: the
+        // interview runtime tracks its own model and must keep switching.
+        // Mixed bodies (foreground-fallback replay) still switch;
+        // `modelSwitch: 'required'` still switches.
         const inheritPersistedSelection =
-          isPureInternalInitiatorBody(args) && args?.modelSwitch !== 'required';
+          args?.modelSelection === 'inherit' &&
+          args?.modelSwitch !== 'required';
         if (ref && !inheritPersistedSelection) {
           // `modelVariant` is the v2-only channel for the wake model's
           // reasoning-effort variant (v1 prompt bodies carry no variant

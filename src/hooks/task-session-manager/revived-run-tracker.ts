@@ -332,6 +332,11 @@ export function createRevivedRunTracker(options: {
             // Extra root fields are dropped by the v1 SDK RequestInit
             // path (same pattern as task-revive #1192).
             delivery: 'queue',
+            // Lifecycle continuation (#1079): on v2 the shim inherits the
+            // host's persisted selection instead of re-pinning the resolved
+            // snapshot model. On v1 the flag is dropped by the SDK and the
+            // explicit body model applies.
+            modelSelection: 'inherit',
             ...(selection?.variant ? { modelVariant: selection.variant } : {}),
             body: {
               agent: notifyAgent,

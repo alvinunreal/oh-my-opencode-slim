@@ -757,6 +757,45 @@ describe('background task admission model resolution', () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
+  /** Admit two session-inheriting fixer tasks; the second must stay
+   * queued behind the parent's single provider slot. */
+  async function expectSecondTaskQueued(sessionID: string): Promise<void> {
+    const before = hooks?.['tool.execute.before'];
+    expect(before).toBeFunction();
+    const first = before?.(
+      { tool: 'task', sessionID, callID: 'call-1' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'first task',
+        },
+      } as never,
+    );
+    const second = before?.(
+      { tool: 'task', sessionID, callID: 'call-2' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      } as never,
+    );
+    // Slot release happens via board terminal outcomes, out of scope here.
+    await first;
+    const outcome = await Promise.race([
+      second?.then(
+        () => 'admitted',
+        (e) => `rejected:${String(e)}`,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('still-queued'), 100),
+      ),
+    ]);
+    expect(outcome).toBe('still-queued');
+  }
+
   test('chat.message records the session model so session-inheriting tasks queue behind the parent provider cap', async () => {
     // chat.message fires before message.updated and carries the message's
     // model. Without recording it, a session-inheriting fixer task would be
@@ -770,44 +809,7 @@ describe('background task admission model resolution', () => {
       {} as never,
     );
 
-    const before = hooks?.['tool.execute.before'];
-    expect(before).toBeFunction();
-
-    const first = before?.(
-      { tool: 'task', sessionID: 'orchestrator-1', callID: 'call-1' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'first task',
-        },
-      } as never,
-    );
-    const second = before?.(
-      { tool: 'task', sessionID: 'orchestrator-1', callID: 'call-2' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'second task',
-        },
-      } as never,
-    );
-
-    // The first fixer task holds the single openai slot (resolved from the
-    // parent's model recorded by chat.message); the second must stay queued.
-    // (Slot release happens via board terminal outcomes, out of scope here.)
-    await first;
-    const outcome = await Promise.race([
-      second?.then(
-        () => 'admitted',
-        (e) => `rejected:${String(e)}`,
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve('still-queued'), 100),
-      ),
-    ]);
-    expect(outcome).toBe('still-queued');
+    await expectSecondTaskQueued('orchestrator-1');
   });
 
   test('internal initiator chat.message does not overwrite the tracked session model', async () => {
@@ -829,40 +831,7 @@ describe('background task admission model resolution', () => {
       {} as never,
     );
 
-    const before = hooks?.['tool.execute.before'];
-    expect(before).toBeFunction();
-    const first = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'first task',
-        },
-      } as never,
-    );
-    const second = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'second task',
-        },
-      } as never,
-    );
-
-    await first;
-    const outcome = await Promise.race([
-      second?.then(
-        () => 'admitted',
-        (e) => `rejected:${String(e)}`,
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve('still-queued'), 100),
-      ),
-    ]);
-    expect(outcome).toBe('still-queued');
+    await expectSecondTaskQueued('plan-1');
   });
 
   test('message.updated of an internal admission does not overwrite the tracked model', async () => {
@@ -904,38 +873,7 @@ describe('background task admission model resolution', () => {
       },
     } as never);
 
-    const before = hooks?.['tool.execute.before'];
-    const first = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'first task',
-        },
-      } as never,
-    );
-    const second = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'second task',
-        },
-      } as never,
-    );
-    await first;
-    const outcome = await Promise.race([
-      second?.then(
-        () => 'admitted',
-        (e) => `rejected:${String(e)}`,
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve('still-queued'), 100),
-      ),
-    ]);
-    expect(outcome).toBe('still-queued');
+    await expectSecondTaskQueued('plan-1');
     __resetInternalAdmissionsForTesting();
   });
 
@@ -979,38 +917,7 @@ describe('background task admission model resolution', () => {
       },
     } as never);
 
-    const before = hooks?.['tool.execute.before'];
-    const first = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'first task',
-        },
-      } as never,
-    );
-    const second = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'second task',
-        },
-      } as never,
-    );
-    await first;
-    const outcome = await Promise.race([
-      second?.then(
-        () => 'admitted',
-        (e) => `rejected:${String(e)}`,
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve('still-queued'), 100),
-      ),
-    ]);
-    expect(outcome).toBe('still-queued');
+    await expectSecondTaskQueued('plan-1');
     __resetInternalAdmissionsForTesting();
   });
 
@@ -1038,38 +945,7 @@ describe('background task admission model resolution', () => {
       {} as never,
     );
 
-    const before = hooks?.['tool.execute.before'];
-    const first = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'first task',
-        },
-      } as never,
-    );
-    const second = before?.(
-      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'fixer',
-          description: 'second task',
-        },
-      } as never,
-    );
-    await first;
-    const outcome = await Promise.race([
-      second?.then(
-        () => 'admitted',
-        (e) => `rejected:${String(e)}`,
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve('still-queued'), 100),
-      ),
-    ]);
-    expect(outcome).toBe('still-queued');
+    await expectSecondTaskQueued('plan-1');
     __resetInternalAdmissionsForTesting();
   });
 });

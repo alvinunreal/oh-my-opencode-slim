@@ -101,11 +101,27 @@ export class SessionMetadataStore {
     }
 
     while (this.#insertionOrder.size > this.#maxEntries) {
-      const evictableSessionID = [...this.#insertionOrder.keys()].find(
-        (candidate) =>
-          !this.#activeOrchestratorSessionIDs.has(candidate) &&
-          !this.#taskManagedSessionIDs.has(candidate),
-      );
+      // Eviction preference: unprotected entries first, then task-managed
+      // ones (oldest first — membership is permanent, so without this
+      // fallback a run of delegating parents would grow the store past
+      // its configured bound), and only as a last resort in-flight
+      // orchestrator sessions. The cap exists precisely to bound retention
+      // when deletion events are missed, so it must always be enforceable.
+      const candidates = [...this.#insertionOrder.keys()];
+      const evictableSessionID =
+        candidates.find(
+          (candidate) =>
+            !this.#activeOrchestratorSessionIDs.has(candidate) &&
+            !this.#taskManagedSessionIDs.has(candidate),
+        ) ??
+        candidates.find(
+          (candidate) =>
+            !this.#activeOrchestratorSessionIDs.has(candidate) &&
+            this.#taskManagedSessionIDs.has(candidate),
+        ) ??
+        candidates.find((candidate) =>
+          this.#activeOrchestratorSessionIDs.has(candidate),
+        );
       if (evictableSessionID === undefined) return;
 
       this.#insertionOrder.delete(evictableSessionID);
@@ -113,6 +129,7 @@ export class SessionMetadataStore {
       this.#models.delete(evictableSessionID);
       this.#directories.delete(evictableSessionID);
       this.#taskManagedSessionIDs.delete(evictableSessionID);
+      this.#activeOrchestratorSessionIDs.delete(evictableSessionID);
       this.#onEvict?.(evictableSessionID);
     }
   }
