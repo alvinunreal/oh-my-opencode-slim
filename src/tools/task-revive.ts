@@ -2,6 +2,7 @@ import { type ToolDefinition, tool } from '@opencode-ai/plugin';
 import type { RevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import type { BackgroundJobSupervisor } from '../utils/background-job-supervisor';
 import { getClient } from '../utils/opencode-client';
+import { getRuntimeSessionStatusSnapshot } from '../utils/session-runtime-status';
 import {
   assertOrchestrator,
   cancelTrackedExecution,
@@ -127,6 +128,31 @@ export function createTaskReviveTool(
           );
         }
         current = rechecked;
+        // Fence the send against independent host-level resumes. The
+        // board record stays stopped under the relaunch lease, so the
+        // host's live status map is the only place an independently
+        // resumed session shows up. On v2 hosts promptAsync degrades to
+        // steering an in-flight run instead of rejecting it, so a busy
+        // or retry entry must refuse here; an unverifiable map refuses
+        // rather than guessing. A verified-absent entry means no active
+        // runner: the session is idle and safe to prompt.
+        const liveSnapshot = await getRuntimeSessionStatusSnapshot(
+          options.input,
+        );
+        const liveStatus = liveSnapshot.statuses.get(current.taskID);
+        if (liveStatus === 'busy' || liveStatus === 'retry') {
+          throw new Error(
+            `Task ${requested} is executing at the host (live status: ${liveStatus}); the revive prompt was NOT sent and no duplicate was launched. Use task_status to inspect it.`,
+          );
+        }
+        if (
+          liveSnapshot.error !== undefined ||
+          liveSnapshot.malformedSessionIDs.has(current.taskID)
+        ) {
+          throw new Error(
+            `Task ${requested} could not be verified against the live session map (${liveSnapshot.error ?? 'malformed entry'}); the revive prompt was NOT sent. Retry task_revive.`,
+          );
+        }
         const session = getClient(options.input).session;
         if (typeof session.promptAsync !== 'function') {
           throw new Error('The host session does not support promptAsync');

@@ -291,6 +291,32 @@ describe('task_revive tool', () => {
     if (reLease) board.releaseLease(reLease);
   });
 
+  test('refuses to relaunch when the host reports the session busy even if the board is stopped', async () => {
+    // P1 regression (host fence): the board record stays stopped under
+    // the relaunch lease, but the session may have resumed
+    // independently at the host. On v2 hosts promptAsync degrades to
+    // steering an in-flight run instead of rejecting it, so a live
+    // busy/retry entry must refuse before the prompt is sent.
+    const { board, promptAsync, status, taskRevive } = createTool({
+      status: async () => ({ data: { ses_1: { type: 'busy' } } }),
+    });
+    stoppedSession(board);
+
+    await expect(
+      taskRevive.execute({ task_id: 'ses_1', prompt: 'continue' }, context),
+    ).rejects.toThrow(/executing at the host/);
+
+    expect(promptAsync).toHaveBeenCalledTimes(0);
+    expect(status).toHaveBeenCalled();
+    expect(board.get('ses_1')).toMatchObject({
+      state: 'stopped',
+      generation: 1,
+    });
+    const reLease = board.acquireRelaunchLease('ses_1', 1);
+    expect(reLease).toBeDefined();
+    if (reLease) board.releaseLease(reLease);
+  });
+
   test('rejects an uncertain retained terminal job', async () => {
     const { board, promptAsync, taskRevive } = createTool();
     board.registerLaunch({
