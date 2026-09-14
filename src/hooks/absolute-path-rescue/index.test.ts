@@ -148,6 +148,23 @@ describe('absolute-path-rescue hook', () => {
     expect(findRescuedSuffix(guessed, workspace)).toBe(workspace);
   });
 
+  test('forward slashes in a guess segment like a Windows drive path', () => {
+    // On win32 path.sep is '\': a C:/Users/… guess with a dropped
+    // parent must segment the same as the workspace. Simulated with a
+    // win32-flavored path module and an injected `exists` so the test
+    // is meaningful on every platform.
+    const win32Path = path.win32;
+    const target = 'C:\\Users\\dev\\Work\\Parent\\Project\\src\\app.ts';
+    const guessed = 'C:/Users/dev/Work/Project/src/app.ts'; // Parent dropped
+    const rescued = findRescuedSuffix(
+      guessed,
+      'C:\\Users\\dev\\Work\\Parent\\Project',
+      win32Path,
+      (p) => p === target,
+    );
+    expect(rescued).toBe(target);
+  });
+
   test('rejects candidates whose stat fails for non-ENOENT reasons', () => {
     // /src/app.ts/extra crosses a FILE component: stat yields ENOTDIR,
     // which must NOT count as an existing candidate.

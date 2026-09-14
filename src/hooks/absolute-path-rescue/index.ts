@@ -43,7 +43,7 @@ interface ToolExecuteBeforeOutput {
   };
 }
 
-type PathOperations = Pick<typeof path, 'isAbsolute' | 'join' | 'resolve'>;
+type PathOperations = Pick<typeof path, 'isAbsolute' | 'join' | 'resolve' | 'sep'>;
 
 interface RescueOptions {
   pathOperations?: PathOperations;
@@ -96,14 +96,19 @@ export function findRescuedSuffix(
   pathOperations: PathOperations = path,
   exists: (p: string) => boolean = defaultExists,
 ): string | null {
+  // Segment with the injected flavor's separator throughout: on win32
+  // the workspace resolves to backslashes while a guess may arrive with
+  // forward slashes (C:/Users/…), which Windows treats as absolute —
+  // normalize so both sides segment identically (#1186 review).
+  const sep = pathOperations.sep;
   const root = pathOperations.resolve(workspace);
   const resolvedRaw = pathOperations.resolve(raw);
-  if (resolvedRaw === root || resolvedRaw.startsWith(`${root}${path.sep}`)) {
+  if (resolvedRaw === root || resolvedRaw.startsWith(`${root}${sep}`)) {
     return null;
   }
 
-  const sep = path.sep;
-  const guessSegments = raw.split(sep).filter((s) => s.length > 0);
+  const normalized = sep === '/' ? raw : raw.replaceAll('/', sep);
+  const guessSegments = normalized.split(sep).filter((s) => s.length > 0);
   if (guessSegments.some((s) => s === '..' || s === '.')) return null;
   const rootSegments = root.split(sep).filter((s) => s.length > 0);
 
