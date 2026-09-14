@@ -377,8 +377,9 @@ describe('createV2Setup e2e', () => {
       });
 
       // (2) Write-back rewrite: a v2 `sessionID` that is not a
-      // resolvable/valid task id maps to v1 `task_id`, gets deleted by
-      // the v1 guard, and disappears from the v2 input on write-back.
+      // resolvable/valid task id maps to v1 `task_id`, the v1 guard
+      // refuses it explicitly (no silent drop, no duplicate spawn), and
+      // the rejection propagates through the v2 before-bridge.
       const resumeEvent = {
         tool: 'subagent',
         sessionID: 'ses_parent',
@@ -395,10 +396,9 @@ describe('createV2Setup e2e', () => {
       };
       const resumeHook = calls.toolBeforeCb;
       if (!resumeHook) throw new Error('tool:execute.before not captured');
-      await resumeHook(resumeEvent);
-      expect(resumeEvent.input).not.toHaveProperty('sessionID');
-      expect(resumeEvent.input).not.toHaveProperty('task_id');
-      expect(resumeEvent.input).not.toHaveProperty('subagent_type');
+      await expect(resumeHook(resumeEvent)).rejects.toThrow(
+        /did not drop the id and did not create another session/,
+      );
 
       // (3) v2 subagent result: plain-text background output. The
       // after-bridge maps content → v1 `output` under tool 'task'; the

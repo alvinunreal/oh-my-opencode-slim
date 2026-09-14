@@ -167,9 +167,10 @@ retaining its session, then inspect and reconcile any partial file changes befor
 launching replacement work. Use `task_revive` to resume a retained session with a
 new instruction.
 
-A cancelled or errored retained session may be revived immediately once its
-retained state has been verified safe. Acknowledgement controls parent and
-job-board consumption and reusable-pool display, not same-session revival.
+A cancelled, errored, or stopped retained session may be revived immediately
+once its retained state has been verified safe. Acknowledgement controls parent
+and job-board consumption and reusable-pool display, not same-session revival.
+`task()` never drops an explicit `task_id` to spawn another session.
 
 Terminal jobs are reconciled automatically after their result is injected into
 the orchestrator session. That lifecycle state is not proof the output was used;
@@ -339,10 +340,12 @@ The prompt/runtime treats background tasks as a small job board:
 | result | Final task output once terminal |
 | status certainty | `status uncertain` when the live status map is malformed or unavailable; it never implies completion |
 
-Cancelled and errored sessions can remain retained for a later `task_revive`.
-They may be revived immediately once their retained state has been verified safe.
-Acknowledgement controls parent and job-board consumption and reusable-pool
-display, not same-session revival.
+Cancelled, errored, and stopped sessions can remain retained for a later
+`task_revive`. They may be revived immediately once their retained state has
+been verified safe. Acknowledgement controls parent and job-board consumption
+and reusable-pool display, not same-session revival. Stopped sessions stay out
+of the ordinary `task()` reuse pool because that generation has no terminal
+result; after ack they appear under Retained / Recovery.
 
 The current todo list can represent user-visible work, but task IDs and file
 ownership need to be explicit in the orchestrator's working context.
@@ -496,11 +499,13 @@ valid map is not immediately terminal: the first observation starts a 5s
 confirmation grace and keeps the job `running, status uncertain`. Repeat
 non-busy evidence after that grace records `stopped, unreconciled` rather than
 `completed`: it means execution ended before a native terminal task result was
-delivered, not that the task succeeded. Stopped sessions are never reusable and
-stay visible to the parent for recovery. A later live `busy` observation can
-revive an unreconciled stopped job. After the parent has been woken and the stop
-acknowledged, stale busy cannot flip the job back to running. Only explicit
-terminal task output proves completion, error, or cancellation.
+delivered, not that the task succeeded. Stopped sessions are never reusable
+through `task()` and stay visible to the parent for recovery with `task_revive`.
+A later live `busy` observation can revive an unreconciled stopped job. After
+the parent has been woken and the stop acknowledged, stale busy cannot flip the
+job back to running; the session remains listed under Retained / Recovery until
+revived or evicted. Only explicit terminal task output proves completion, error,
+or cancellation.
 
 Stopped-job recovery facts are checked again by task ID and run generation
 before a queued recovery wake is delivered. The inline detail queue is bounded;

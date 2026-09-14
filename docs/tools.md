@@ -68,10 +68,12 @@ stops the generation but retains its session; it does not roll back partial edit
 After cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
 
-`task_revive` resumes a retained session with a new instruction. A cancelled or
-errored retained session may be revived immediately once its retained state has
-been verified safe. Acknowledgement controls parent and job-board consumption and
-reusable-pool display, not same-session revival.
+`task_revive` resumes a retained session with a new instruction. A cancelled,
+errored, or stopped retained session may be revived immediately once its
+retained state has been verified safe. Acknowledgement controls parent and
+job-board consumption and reusable-pool display, not same-session revival.
+`task()` refuses an explicit `task_id` it cannot resume instead of dropping it
+and spawning another session.
 
 `wait_for_user` is also orchestrator-only. The orchestrator uses it as the final
 tool action after providing concrete instructions for external manual work. Its

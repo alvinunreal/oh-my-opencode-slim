@@ -98,6 +98,27 @@ export function createTaskReviveTool(
         baselineMessageID = await revivedRunTracker.captureBaseline(
           current.taskID,
         );
+        // captureBaseline awaits network I/O; the record may have changed
+        // while we waited (e.g. a late busy observation revived the old
+        // generation). Revalidate against the live record before sending
+        // anything: never relaunch over a session that is running again.
+        const rechecked = getCurrentReviveJob(
+          options,
+          parentSessionID,
+          requested,
+          captured.taskID,
+          captured.generation,
+        );
+        if (
+          !options.backgroundJobBoard.validateLease(relaunchLease) ||
+          rechecked.state === 'running' ||
+          !isReviveableRetainedJob(rechecked)
+        ) {
+          throw new Error(
+            `Task ${requested} became active again (${rechecked.state}) before the revive prompt was sent; the prompt was NOT sent and no duplicate was launched. Use task_status to inspect it.`,
+          );
+        }
+        current = rechecked;
         const session = getClient(options.input).session;
         if (typeof session.promptAsync !== 'function') {
           throw new Error('The host session does not support promptAsync');
@@ -219,6 +240,7 @@ function isReviveableRetainedJob(
   >,
 ): boolean {
   if (job.statusUncertain) return false;
+  if (job.state === 'stopped') return true;
   if (
     job.state === 'completed' ||
     job.state === 'error' ||

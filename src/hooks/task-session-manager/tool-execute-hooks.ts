@@ -37,8 +37,63 @@ interface TaskArgs {
   background?: unknown;
 }
 
+interface ResumeRefusalJob {
+  taskID: string;
+  alias: string;
+  agent: string;
+  state: string;
+  terminalUnreconciled: boolean;
+}
+
 function normalizeObjectiveKey(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function refuseExplicitTaskId(
+  requested: string,
+  message: string,
+  details?: Record<string, unknown>,
+): never {
+  log('[task-session-manager] refused explicit task_id', {
+    task_id: requested,
+    ...details,
+  });
+  throw new Error(message);
+}
+
+function refuseKnownTaskResume(
+  requested: string,
+  job: ResumeRefusalJob,
+  agentType: string,
+): never {
+  const label = `${job.alias} / ${job.taskID}`;
+  if (job.agent !== agentType) {
+    refuseExplicitTaskId(
+      requested,
+      `${label}: agent is ${job.agent}, not ${agentType}. task() cannot resume this session. No new session was created.`,
+      { state: job.state, agent: job.agent, requestedAgent: agentType },
+    );
+  }
+  if (job.state === 'stopped') {
+    const ack = job.terminalUnreconciled ? 'unreconciled' : 'acknowledged';
+    refuseExplicitTaskId(
+      requested,
+      `${label}: stopped, ${ack}; task() cannot resume this session. Use task_revive with a new prompt. No new session was created.`,
+      { state: job.state, acknowledged: !job.terminalUnreconciled },
+    );
+  }
+  if (job.terminalUnreconciled) {
+    refuseExplicitTaskId(
+      requested,
+      `${label}: ${job.state}, unreconciled; task() cannot resume until acknowledgement. Use task_revive now, or wait for ack then task(). No new session was created.`,
+      { state: job.state, terminalUnreconciled: true },
+    );
+  }
+  refuseExplicitTaskId(
+    requested,
+    `${label}: ${job.state}; task() cannot resume this session. Use task_revive with a new prompt. No new session was created.`,
+    { state: job.state },
+  );
 }
 
 export async function handleToolExecuteBefore(
@@ -95,7 +150,11 @@ export async function handleToolExecuteBefore(
     args.subagent_type.trim() === ''
   ) {
     if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
-      delete args.task_id;
+      const requested = args.task_id.trim();
+      refuseExplicitTaskId(
+        requested,
+        `Task ${requested}: task() requires a valid subagent_type with an explicit task_id. The task_id was not dropped; no new session was created.`,
+      );
     }
     return;
   }
@@ -175,11 +234,14 @@ export async function handleToolExecuteBefore(
       }
 
       if (knownManagedTask) {
-        delete args.task_id;
+        refuseKnownTaskResume(requested, knownManagedTask, agentType);
       } else if (SESSION_ID_PATTERN.test(requested)) {
         pendingCall.resumedTaskId = requested;
       } else {
-        delete args.task_id;
+        refuseExplicitTaskId(
+          requested,
+          `Unknown task ID or alias: ${requested}. task() did not drop the id and did not create another session.`,
+        );
       }
     } else {
       const relaunchLease = deps.backgroundJobBoard.acquireRelaunchLease(

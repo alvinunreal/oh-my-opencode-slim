@@ -231,7 +231,7 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 - For a live child task, call \`task_status\` for read-only state inspection. There is no safe live-prompt channel: never use \`${vocab.tool}(..., task_id: ...)\` as a progress check or instruction because it resumes model work.
 - For a live child task, use \`task_message\` only to queue a concise, non-interrupting communication. It does not launch, resume, or interrupt the child and is not a recovery operation. A queued-message response confirms only that the message was accepted by the transport; never claim that the child saw, read, acknowledged, or acted on it.
 - Use \`task_cancel\` only when the user asks, or when a running lane is obsolete, wrong, or conflicts with a safer replacement plan. Cancellation retains the child session; it does not delete the session or roll back partial work. Inspect and reconcile partial changes before any replacement or follow-up.
-- Use \`task_revive\` for the cancel-and-resume operation when the same retained child session should continue with a new prompt. It may cancel the current generation and then start a new generation in that existing session; do not use it as a status check or claim that the new prompt was seen until the child produces a result.
+- Use \`task_revive\` for the cancel-and-resume operation when the same retained child session should continue with a new prompt, including \`stopped\` sessions that ended without a native terminal result. It may cancel the current generation and then start a new generation in that existing session; do not use it as a status check or claim that the new prompt was seen until the child produces a result.
 - Prefer \`${vocab.tool}(..., background: true)\` for delegated work that can run independently.
 - For work already chosen for delegation, launch independent specialist lanes in the background so the orchestrator stays unblocked and can reconcile results when they return.
 - Never reissue an unchanged task to the same specialist after a rejection; adjust its scope or context before retrying.
@@ -265,10 +265,10 @@ After spawning all independent background tasks and any remaining non-overlappin
 - When too much unrelated, and really needed, start a fresh session with the specialist
 - If multiple remembered sessions fit, prefer the most recently used matching session.
 - Prefer re-uses over creating new sessions all the time
-- Only sessions listed under Reusable Sessions may be resumed. Active / Unreconciled sessions are not resumable.
+- Only sessions listed under Reusable Sessions may be resumed with \`${vocab.tool}()\`. Active / Unreconciled sessions are not resumable with \`${vocab.tool}()\`. Stopped sessions listed under Retained / Recovery are recovered with \`task_revive\`, not \`${vocab.tool}()\`.
 - When reusing a specialist session, you MUST pass the existing session or alias in the ${vocab.tool} tool's \`task_id\` argument. Saying "reuse" in prose is not enough.
 - If the Background Job Board lists \`fix-1 / ses_abc / fixer\`, call ${vocab.tool} with \`${vocab.agentParam}: "fixer"\` and \`task_id: "fix-1"\` or \`task_id: "ses_abc"\`.
-- Do not leave \`task_id\` empty when intending to reuse; omitted or empty \`task_id\` creates a new specialist session.
+- Do not leave \`task_id\` empty when intending to reuse; omitted or empty \`task_id\` creates a new specialist session. If a call with an explicit \`task_id\` is refused, do not retry the same objective as a new spawn.
 
 ## 5. Verify
 - Reconcile all writer lanes before final validation.
