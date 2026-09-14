@@ -157,13 +157,26 @@ export function createTaskReviveTool(
         if (typeof session.promptAsync !== 'function') {
           throw new Error('The host session does not support promptAsync');
         }
-        const response = await session.promptAsync({
+        // Close the check-then-act window for good: a session can become
+        // active between the live-status read above and this send. On v2
+        // hosts the default prompt delivery is `steer`, which injects into
+        // an in-flight run instead of rejecting; `queue` makes the send
+        // safe (the prompt waits for idle, v1 prompt_async semantics) so a
+        // raced revive can never steer or duplicate an active run. The v1
+        // SDK ignores the extra client-side argument (not part of the HTTP
+        // request); the v2 shim threads it to the host.
+        const response = await (
+          session.promptAsync as (
+            args: Record<string, unknown>,
+          ) => Promise<unknown>
+        )({
           path: { id: current.taskID },
           query: { directory: options.input.directory },
           body: {
             agent: current.agent,
             parts: [{ type: 'text', text: prompt }],
           },
+          delivery: 'queue',
         });
         const responseError = getApiError(response);
         if (responseError !== undefined) {

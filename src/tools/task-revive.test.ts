@@ -109,6 +109,7 @@ describe('task_revive tool', () => {
         agent: 'explorer',
         parts: [{ type: 'text', text: 'Continue the investigation' }],
       },
+      delivery: 'queue',
     });
     const call = promptAsync.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(call.body).not.toHaveProperty('noReply', true);
