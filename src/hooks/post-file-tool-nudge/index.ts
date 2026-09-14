@@ -214,16 +214,25 @@ function reconcileStableNudges(
       continue;
     }
     const eligible = getEligibleMessage(message);
-    const shouldHave =
+    // History eligibility is immutable for an existing message (its
+    // preceding block cannot change); the session gate is NOT — it reads
+    // mutable agent metadata. A part that history still qualifies must
+    // stay even if the gate flipped to false after that part was
+    // rendered: removing it would rewrite the cached prompt prefix. The
+    // gate only decides whether a MISSING part may be appended now.
+    const historyQualifies =
       eligible !== undefined &&
-      isAllowedSession(options, allowed, eligible.sessionID) &&
       precedingBlockUsedNudgeTools(messages, index, eligible.sessionID);
+    const shouldHave =
+      historyQualifies &&
+      eligible !== undefined &&
+      isAllowedSession(options, allowed, eligible.sessionID);
     let kept = false;
     message.parts = message.parts.filter((part) => {
       if (!isTaggedPart(part, IMPLEMENTATION_DRIFT_NUDGE_METADATA_KEY)) {
         return true;
       }
-      if (shouldHave && !kept) {
+      if (historyQualifies && !kept) {
         kept = true;
         return true;
       }

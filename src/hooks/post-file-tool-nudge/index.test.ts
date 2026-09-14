@@ -272,9 +272,38 @@ describe('post-file-tool-nudge hook', () => {
       assistantToolBlock(['Read']),
     ];
 
-    await hook['experimental.chat.messages.transform']({}, { messages });
+    // The gate is lazy by design (P2 fix): the stable path only consults
+    // it when history qualifies, so the trailing path exercises it here.
+    await deliver(hook, messages);
     expect(trailingNudges(messages)).toHaveLength(0);
     expect(seenSessionIDs).toEqual(['s1']);
+  });
+
+  test('a gate flip to false never removes an already-rendered stable part', async () => {
+    // Greptile P2: shouldInject reads mutable agent metadata. A part
+    // injected while the gate was true must survive a later render with
+    // the gate false — removing it would rewrite the cached prefix.
+    let eligible = true;
+    const hook = createPostFileToolNudgeHook({
+      coordinator: new SessionLifecycle(() => {}),
+      shouldInject: () => eligible,
+    });
+    const nextUser = orchestratorMessage();
+    const messages: unknown[] = [
+      orchestratorMessage(),
+      assistantToolBlock(['edit']),
+      nextUser,
+    ];
+
+    await deliver(hook, messages);
+    expect(reminderParts(nextUser)).toHaveLength(1);
+    const rendered = JSON.stringify(nextUser.parts);
+
+    eligible = false;
+    await deliver(hook, messages);
+
+    expect(reminderParts(nextUser)).toHaveLength(1);
+    expect(JSON.stringify(nextUser.parts)).toBe(rendered);
   });
 
   test('keeps sessions isolated', async () => {
