@@ -87,6 +87,7 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
     providerConcurrency: {},
     modelConcurrency: {},
   },
+  sameProviderPolicy: {},
   waitForUserGuard: true,
 };
 

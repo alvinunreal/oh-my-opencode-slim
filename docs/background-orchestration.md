@@ -547,6 +547,38 @@ state keeps its slot forever, and queued tasks as well as the orchestrator's
 opt-in wall-clock supervisor below so stalled tasks are eventually forced to
 a terminal state and release their slots.
 
+### Same-Provider Foreground Conversion
+
+`backgroundJobs.sameProviderPolicy` (see
+[Configuration](configuration.md#background-job-management)) is an opt-in
+per-provider policy for local inference backends that execute multiple
+logical agent sessions on one shared model runtime (one accelerator, one
+KV-context pool). Running a foreground parent and a same-provider background
+child concurrently on such a backend can reduce throughput from repeated
+model/KV context switching between the two large sessions:
+
+```jsonc
+{
+  "backgroundJobs": {
+    "sameProviderPolicy": {
+      "lm-nexus": "foreground"
+    }
+  }
+}
+```
+
+When the parent session's current model and the child agent's resolved model
+both resolve to a provider configured with `"foreground"`, the
+`tool.execute.before` hook rewrites the explicit
+`task(..., background: true)` request to `background: false` before the
+pending call is created. The task then runs through the existing foreground
+path unchanged: it skips background concurrency admission (no semaphore
+slot), is not wall-clock supervised, executes synchronously on the host, and
+its status is registered through the existing foreground bookkeeping.
+Unconfigured providers, different providers, and undeterminable providers
+leave `background: true` untouched (fail-open); the default (omitted)
+behavior is unchanged.
+
 ### Opt-in Wall-clock Supervisor
 
 The plugin can apply a one-shot wall-clock deadline to native background task

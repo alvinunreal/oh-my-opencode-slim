@@ -25,6 +25,7 @@ import { RuntimeConfig } from './config/runtime';
 import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
 import { HEALTH_CHECK, minimumExpectedToolCount } from './health-check';
 import {
+  createAbsolutePathRescueHook,
   createApplyPatchHook,
   createAutoUpdateCheckerHook,
   createCacheMonitorHook,
@@ -193,6 +194,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let mcps: ReturnType<typeof createBuiltinMcps>;
   let multiplexerConfig: MultiplexerConfig;
   let multiplexerEnabled: boolean;
+  // Host flavor ('v2' on OpenCode v2 hosts via the client shim, undefined on
+  // v1). Survives the try block so prompt-assembly hooks can use it.
+  let hostFlavor: string | undefined;
   let multiplexerSessionManager: MultiplexerSessionManager;
   let autoUpdateChecker: ReturnType<typeof createAutoUpdateCheckerHook>;
   const sessionMetadata = new SessionMetadataStore({
@@ -205,6 +209,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
   });
   const ownedTuiActivitySessions = new Map<string, string>();
+  // Busy/retry arrived before the session's agent was known. chat.message
+  // latches the agent and flushes these so the spinner still starts.
+  const pendingTuiBusySessions = new Set<string>();
   const tuiActivityDirectory = (sessionID: string): string => {
     return sessionMetadata.getDirectory(sessionID) ?? ctx.directory;
   };
@@ -318,6 +325,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let postFileToolNudge: ReturnType<typeof createPostFileToolNudgeHook>;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
   let searchPathGuard: ReturnType<typeof createSearchPathGuardHook>;
+  let absolutePathRescue: ReturnType<typeof createAbsolutePathRescueHook>;
   let jsonErrorRecovery: ReturnType<typeof createJsonErrorRecoveryHook>;
   let toolLoopGuard: ToolLoopGuardHook;
   let postFileToolNudgeAfter: (i: unknown, o: unknown) => Promise<void>;
@@ -394,14 +402,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     runtime = RuntimeConfig.get(ctx.directory);
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
-    agentDefs = createAgents(runtime, { projectDirectory: ctx.directory });
-    agents = getAgentConfigs(runtime, { projectDirectory: ctx.directory });
+    // Host flavor marker ('v2' on OpenCode v2 hosts, set by the v2 client
+    // shim; absent on v1). Threads the native delegation vocabulary into
+    // prompt assembly so v2 prompts say subagent(...)/agent directly.
+    hostFlavor = (ctx as Parameters<Plugin>[0] & { hostFlavor?: string })
+      .hostFlavor;
+    agentDefs = createAgents(runtime, {
+      projectDirectory: ctx.directory,
+      hostFlavor,
+    });
+    agents = getAgentConfigs(runtime, {
+      projectDirectory: ctx.directory,
+      hostFlavor,
+    });
 
     // Parse multiplexer config with defaults
     multiplexerConfig = runtime.multiplexer;
-
-    const hostFlavor = (ctx as Parameters<Plugin>[0] & { hostFlavor?: string })
-      .hostFlavor;
 
     multiplexerEnabled = shouldEnableMultiplexer({
       hostFlavor,
@@ -564,6 +580,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (parentSessionID
           ? sessionMetadata.getModel(parentSessionID)
           : undefined),
+      sameProviderPolicy: runtime.backgroundJobs.sameProviderPolicy,
+      getSessionModel: (sessionID) => sessionMetadata.getModel(sessionID),
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {
@@ -670,6 +688,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     applyPatch = createApplyPatchHook(ctx);
 
     searchPathGuard = createSearchPathGuardHook(ctx);
+
+    absolutePathRescue = createAbsolutePathRescueHook(ctx);
 
     jsonErrorRecovery = createJsonErrorRecoveryHook(ctx);
     toolLoopGuard = createToolLoopGuardHook();
@@ -1234,13 +1254,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           sessionMetadata.markOrchestratorActive(eventSessionID);
           const agentName = sessionMetadata.getAgent(eventSessionID);
           if (agentName) {
+            pendingTuiBusySessions.delete(eventSessionID);
             markTuiAgentActive(eventSessionID, agentName);
+          } else {
+            pendingTuiBusySessions.add(eventSessionID);
           }
         } else if (
           event.type === 'session.idle' ||
           (event.type === 'session.status' && statusType === 'idle') ||
           event.type === 'session.deleted'
         ) {
+          pendingTuiBusySessions.delete(eventSessionID);
           sessionMetadata.markOrchestratorIdle(eventSessionID);
           markTuiAgentInactive(eventSessionID);
         }
@@ -1421,6 +1445,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     'tool.execute.before': async (input, output) => {
       await applyPatch['tool.execute.before'](input as never, output as never);
+      // Rewrite guessed non-existing absolute paths BEFORE the search
+      // guard: the guard blocks grep/glob on missing paths, so running
+      // the rescue after it would never see a rescuable path (#1143).
+      await absolutePathRescue['tool.execute.before'](
+        input as never,
+        output as never,
+      );
       await searchPathGuard['tool.execute.before'](
         input as never,
         output as never,
@@ -1525,10 +1556,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (agent) {
         foregroundFallback.registerSessionAgent(input.sessionID, agent);
         sessionMetadata.setAgent(input.sessionID, agent);
-        markTuiAgentActive(input.sessionID, agent);
-        // A chat message means this session is actively working. This also
-        // covers the race where session.status busy fires before the
-        // session's agent is known.
+        // Spinner follows session.status, not chat.message: v2 context
+        // hooks re-deliver chat.message after idle and would otherwise
+        // relight a finished row (and the parent of a background child).
+        // An already-active session (busy under a stale/unknown agent)
+        // refreshes the association so the row follows the real agent.
+        if (
+          pendingTuiBusySessions.has(input.sessionID) ||
+          ownedTuiActivitySessions.has(input.sessionID)
+        ) {
+          pendingTuiBusySessions.delete(input.sessionID);
+          markTuiAgentActive(input.sessionID, agent);
+        }
         companionManager.onSessionStatus({
           sessionId: input.sessionID,
           agent,
@@ -1593,7 +1632,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const orchestratorPrompt =
             typeof orchestratorDef?.config?.prompt === 'string'
               ? orchestratorDef.config.prompt
-              : buildOrchestratorPrompt(runtime.disabledAgents);
+              : buildOrchestratorPrompt(
+                  runtime.disabledAgents,
+                  undefined,
+                  true,
+                  true,
+                  hostFlavor,
+                );
           output.system[0] = `${output.system[0] || ''}\n\n${orchestratorPrompt}`;
         }
       }

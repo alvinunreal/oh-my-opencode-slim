@@ -1,5 +1,6 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
 import { WRITABLE_FILE_OPERATIONS_RULES } from '../config';
+import { delegationVocabulary } from '../v2/adapters';
 
 export interface AgentDefinition {
   name: string;
@@ -125,6 +126,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
  * @param disabledAgents - Set of disabled agent names to exclude from the prompt
  * @param waitForUserEnabled - Whether explicit text-only HITL waiting is available
  * @param wakeSchedulerEnabled - Whether the orchestrator wake scheduler can resume the session after idle
+ * @param hostFlavor - Host flavor marker ('v2' on OpenCode v2 hosts); selects the native delegation vocabulary
  * @returns The complete orchestrator prompt string
  */
 export function buildOrchestratorPrompt(
@@ -132,7 +134,12 @@ export function buildOrchestratorPrompt(
   excludeDescriptions?: string[],
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
+  hostFlavor?: string,
 ): string {
+  // Native delegation vocabulary: `subagent(...)` with `agent` on v2 hosts,
+  // `task(...)` with `subagent_type` on v1. Construction-time constant per
+  // host, so the prompt stays byte-stable across a session (cache-safe).
+  const vocab = delegationVocabulary(hostFlavor);
   // Filter agent descriptions
   const enabledAgents = Object.entries(AGENT_DESCRIPTIONS)
     .filter(([name]) => !disabledAgents?.has(name))
@@ -219,13 +226,13 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 
 ### Background Task Discipline
 - Before dispatching a specialist, check the Background Job Board and current conversation for an existing task that already covers the objective.
-- \`task_result\` returns only a completed specialist's final assistant message, and can be called by any parent session that owns the task. Never use \`task(..., task_id: ...)\` to fetch output: that resumes the child and starts new model work.
+- \`task_result\` returns only a completed specialist's final assistant message, and can be called by any parent session that owns the task. Never use \`${vocab.tool}(..., task_id: ...)\` to fetch output: that resumes the child and starts new model work.
 - Before retrying completed work whose result appears missing or incomplete, retrieve it with \`task_result\`. Dispatch again only when the retrieved result does not satisfy the objective.
-- For a live child task, call \`task_status\` for read-only state inspection. There is no safe live-prompt channel: never use \`task(..., task_id: ...)\` as a progress check or instruction because it resumes model work.
+- For a live child task, call \`task_status\` for read-only state inspection. There is no safe live-prompt channel: never use \`${vocab.tool}(..., task_id: ...)\` as a progress check or instruction because it resumes model work.
 - For a live child task, use \`task_message\` only to queue a concise, non-interrupting communication. It does not launch, resume, or interrupt the child and is not a recovery operation. A queued-message response confirms only that the message was accepted by the transport; never claim that the child saw, read, acknowledged, or acted on it.
 - Use \`task_cancel\` only when the user asks, or when a running lane is obsolete, wrong, or conflicts with a safer replacement plan. Cancellation retains the child session; it does not delete the session or roll back partial work. Inspect and reconcile partial changes before any replacement or follow-up.
 - Use \`task_revive\` for the cancel-and-resume operation when the same retained child session should continue with a new prompt. It may cancel the current generation and then start a new generation in that existing session; do not use it as a status check or claim that the new prompt was seen until the child produces a result.
-- Prefer \`task(..., background: true)\` for delegated work that can run independently.
+- Prefer \`${vocab.tool}(..., background: true)\` for delegated work that can run independently.
 - For work already chosen for delegation, launch independent specialist lanes in the background so the orchestrator stays unblocked and can reconcile results when they return.
 - Never reissue an unchanged task to the same specialist after a rejection; adjust its scope or context before retrying.
 - Continue orchestration only on non-overlapping work; otherwise briefly report what was launched and stop.
@@ -241,7 +248,7 @@ After spawning all independent background tasks and any remaining non-overlappin
 `
     : ''
 }### Active Task Amendments
-- A task in the Active / Unreconciled section is still running and cannot receive another \`task\` call, even with its \`task_id\`. Do not try to resume, replace, or cancel it merely because the user adds to its existing scope.
+- A task in the Active / Unreconciled section is still running and cannot receive another \`${vocab.tool}\` call, even with its \`task_id\`. Do not try to resume, replace, or cancel it merely because the user adds to its existing scope.
 - For an additive request to a running lane, record the amendment in the parent conversation, tell the user it is queued, and wait for that lane's terminal result. Then resume the same specialist only after its session appears in Reusable Sessions.
 - Cancel a running task only when its current objective is genuinely obsolete or must be replaced. Never create-and-cancel speculative duplicate sessions.
 - A \`running [resumed]\` board label reflects lifecycle bookkeeping, not confirmation that a new instruction reached the specialist.
@@ -259,8 +266,8 @@ After spawning all independent background tasks and any remaining non-overlappin
 - If multiple remembered sessions fit, prefer the most recently used matching session.
 - Prefer re-uses over creating new sessions all the time
 - Only sessions listed under Reusable Sessions may be resumed. Active / Unreconciled sessions are not resumable.
-- When reusing a specialist session, you MUST pass the existing session or alias in the task tool's \`task_id\` argument. Saying "reuse" in prose is not enough.
-- If the Background Job Board lists \`fix-1 / ses_abc / fixer\`, call task with \`subagent_type: "fixer"\` and \`task_id: "fix-1"\` or \`task_id: "ses_abc"\`.
+- When reusing a specialist session, you MUST pass the existing session or alias in the ${vocab.tool} tool's \`task_id\` argument. Saying "reuse" in prose is not enough.
+- If the Background Job Board lists \`fix-1 / ses_abc / fixer\`, call ${vocab.tool} with \`${vocab.agentParam}: "fixer"\` and \`task_id: "fix-1"\` or \`task_id: "ses_abc"\`.
 - Do not leave \`task_id\` empty when intending to reuse; omitted or empty \`task_id\` creates a new specialist session.
 
 ## 5. Verify
@@ -316,12 +323,14 @@ export function createOrchestratorAgent(
   excludeDescriptions?: string[],
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
+  hostFlavor?: string,
 ): AgentDefinition {
   const basePrompt = buildOrchestratorPrompt(
     disabledAgents,
     excludeDescriptions,
     waitForUserEnabled,
     wakeSchedulerEnabled,
+    hostFlavor,
   );
   const prompt = resolvePrompt(
     'orchestrator',

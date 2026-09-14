@@ -18,12 +18,15 @@ import {
   runWithSyntheticPartCacheHintScope,
   type SyntheticPartCacheHint,
   setDefaultSyntheticPartCacheHint,
+  stripTaggedContent,
 } from '../hooks/cache-safe-injection';
 import {
   CHAT_INITIATOR_HEADER_AGENT,
   CHAT_INITIATOR_HEADER_NAME,
   isCopilotProvider,
 } from '../hooks/chat-headers';
+import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
 import type { McpConfig } from '../mcp/types';
 import {
@@ -51,6 +54,7 @@ import type {
   V2CommandDefinition,
   V2CommandDraft,
   V2Context,
+  V2SessionCompactionEvent,
   V2SessionContextEvent,
   V2SessionModelRequestEvent,
   V2SessionPromptEvent,
@@ -575,6 +579,68 @@ export function createChatHeadersBridge(
       }
     } catch (err) {
       log('[v2] chat.headers bridge failed', String(err));
+    }
+  };
+}
+
+/**
+ * Metadata keys whose tagged synthetic parts the compaction bridge
+ * strips: the plugin's content injections (phase reminders +
+ * post-file-tool nudges share PHASE_REMINDER_METADATA_KEY, background
+ * job boards carry BACKGROUND_JOB_BOARD_METADATA_KEY). Imported from
+ * their owning modules so the strip set cannot drift from the injection
+ * set. Untagged synthetic parts (e.g. command-marker expansions) are
+ * deliberately NOT in this list — they are conversation content, not
+ * plugin bookkeeping.
+ */
+const COMPACTION_STRIP_METADATA_KEYS: readonly string[] = [
+  PHASE_REMINDER_METADATA_KEY,
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+];
+
+/**
+ * Native `session.compaction` hook bridge (v2.0.0+).
+ *
+ * The host's session summarizer fires `compaction` with the request's
+ * message list; without this bridge the summary would bake the plugin's
+ * volatile injected content (background job boards, phase reminders)
+ * into the compacted transcript permanently. The callback strips ONLY
+ * tagged synthetic parts, reusing `stripTaggedContent` from
+ * cache-safe-injection (the same helper every injection strips with) —
+ * user text, command markers, untagged synthetic parts, and message
+ * order are untouched; messages consisting solely of tagged parts (the
+ * volatile trailing-message shape) are dropped.
+ *
+ * Deliberately read-only on the rest of the event: `system` is never
+ * rewritten (open host bug: the compaction system prompt may be absent —
+ * adding one would corrupt the request) and `result` is host-owned.
+ * Fail-soft like every other bridge.
+ */
+export function createSessionCompactionBridge(
+  metadataKeys: readonly string[] = COMPACTION_STRIP_METADATA_KEYS,
+): (event: V2SessionCompactionEvent) => Promise<void> {
+  return async (event) => {
+    try {
+      if (!event || typeof event !== 'object') return;
+      if (!Array.isArray(event.messages)) return;
+      // Same v1-view bridging as the context handler's messages
+      // transform: `parts` shares the `content` array reference so
+      // in-place part edits propagate, and `event.messages` is rebuilt
+      // because stripTaggedContent splices messages it empties.
+      const v1messages = event.messages.map((m) => ({
+        info: m,
+        parts: m.content,
+      }));
+      for (const key of metadataKeys) {
+        stripTaggedContent(v1messages, key);
+      }
+      event.messages = v1messages.map((m) => {
+        const info = m.info as { content?: unknown };
+        info.content = m.parts;
+        return m.info;
+      }) as V2SessionCompactionEvent['messages'];
+    } catch (err) {
+      log('[v2] compaction bridge failed', String(err));
     }
   };
 }
@@ -1405,6 +1471,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             String(err),
           );
         }
+      }
+
+      // v2 native compaction hook (v2.0.0+): strip the plugin's tagged
+      // synthetic injections from the host's summarization request so
+      // the compacted transcript never bakes volatile board/status
+      // content. Hook-name rejection degrades exactly like prompt /
+      // model.request above: one log, no crash (older hosts keep seeing
+      // injected content — a summary-quality issue only).
+      try {
+        const compactionReg = await ctx.session.hook(
+          'compaction',
+          createSessionCompactionBridge(),
+        );
+        disposers.push(() => compactionReg.dispose());
+        log('[v2] compaction bridge registered (session.compaction)');
+      } catch (err) {
+        log(
+          '[v2] session.hook(compaction) unavailable; compaction sees tagged content',
+          String(err),
+        );
       }
     } catch (err) {
       log('[v2] session.hook(context) failed', String(err));

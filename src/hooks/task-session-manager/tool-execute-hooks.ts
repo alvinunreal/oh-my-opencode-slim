@@ -25,6 +25,7 @@ import { log } from '../../utils/logger';
 import { SESSION_ID_PATTERN } from '../../utils/session';
 import { isMissingRememberedSessionError } from './board-injection';
 import type { PendingTaskCall } from './pending-call-tracker';
+import { convertSameProviderBackgroundTask } from './same-provider-policy';
 import { normalizeLateCancelledTaskOutput } from './status-utils';
 import { extractReadFiles } from './task-context-tracker';
 
@@ -65,6 +66,10 @@ export async function handleToolExecuteBefore(
       agentType: string,
       parentSessionID?: string,
     ) => string | undefined;
+    /** Current "provider/model" for a session (parent metadata store). */
+    getSessionModel?: (sessionID: string) => string | undefined;
+    /** Opt-in provider → "foreground" map for same-provider conversion. */
+    sameProviderPolicy?: Record<string, 'foreground'>;
     getLifecycleEpoch?: () => number;
   },
 ): Promise<void> {
@@ -96,7 +101,29 @@ export async function handleToolExecuteBefore(
   }
 
   const agentType = args.subagent_type.trim();
-  const background = args.background === true;
+  let background = args.background === true;
+  if (background) {
+    const conversion = convertSameProviderBackgroundTask({
+      agentType,
+      parentSessionID: input.sessionID,
+      args,
+      policy: deps.sameProviderPolicy,
+      getParentModel: (id) => deps.getSessionModel?.(id),
+      getChildModel: (agent, parent) => deps.getModelForAgent?.(agent, parent),
+    });
+    if (conversion.converted) {
+      background = false;
+      log(
+        '[task-session-manager] same-provider background task converted to foreground',
+        {
+          parentProvider: conversion.parentProvider,
+          childProvider: conversion.childProvider,
+          agentType,
+          parentSessionID: input.sessionID,
+        },
+      );
+    }
+  }
 
   const label = deriveTaskSessionLabel({
     description:

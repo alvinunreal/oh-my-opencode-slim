@@ -431,4 +431,58 @@ describe('PluginConfigSchema backgroundJobs', () => {
       );
     }
   });
+
+  it('accepts sameProviderPolicy entries with the foreground policy', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: {
+        sameProviderPolicy: { 'lm-nexus': 'foreground' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({
+        'lm-nexus': 'foreground',
+      });
+    }
+  });
+
+  it('accepts an empty sameProviderPolicy map', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { sameProviderPolicy: {} },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({});
+    }
+  });
+
+  it('leaves default behavior unchanged when sameProviderPolicy is omitted', () => {
+    const withDefaults = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+    expect(withDefaults.success).toBe(true);
+    if (withDefaults.success) {
+      expect(withDefaults.data.backgroundJobs?.sameProviderPolicy).toEqual({});
+    }
+
+    const absent = PluginConfigSchema.safeParse({});
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect(absent.data.backgroundJobs).toBeUndefined();
+    }
+  });
+
+  it('rejects invalid sameProviderPolicy values', () => {
+    for (const sameProviderPolicy of [
+      { foo: 'background' },
+      { foo: 1 },
+      'foreground',
+    ]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: { sameProviderPolicy },
+        }).success,
+      ).toBe(false);
+    }
+  });
 });

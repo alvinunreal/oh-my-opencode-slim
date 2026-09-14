@@ -1213,6 +1213,19 @@
           },
           "additionalProperties": false
         },
+        "sameProviderPolicy": {
+          "default": {},
+          "description": "Opt-in per-provider policy for native background tasks: when the parent session and the child agent both resolve to a provider listed here with value \"foreground\", the background request is converted to foreground execution (existing foreground path, no concurrency admission). Unlisted or unknown providers keep background behavior. Default {} (no conversion).",
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string",
+            "const": "foreground"
+          }
+        },
         "waitForUserGuard": {
           "default": true,
           "description": "When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.",

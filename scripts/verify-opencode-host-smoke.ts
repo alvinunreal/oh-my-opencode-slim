@@ -47,6 +47,25 @@ function run(
 }
 
 function parsePackJson(output: string) {
+  // npm <=11 prints a JSON array; npm 12 prints an object keyed by package
+  // name. Parse the whole output first, then fall back to slicing the first
+  // JSON array (older npm could prefix warnings on stdout).
+  const trimmed = output.trim();
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed as Array<{ filename?: string }>;
+    }
+    if (parsed && typeof parsed === 'object') {
+      const entries = Object.values(parsed);
+      if (entries.length > 0) {
+        return entries as Array<{ filename?: string }>;
+      }
+    }
+  } catch {
+    // fall through to the array-slice heuristic
+  }
+
   const start = output.indexOf('[');
   const end = output.lastIndexOf(']');
 

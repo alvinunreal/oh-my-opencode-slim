@@ -1019,6 +1019,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "Aveer",
+      "name": "Aveer",
+      "avatar_url": "https://avatars.githubusercontent.com/u/84144527?v=4",
+      "profile": "https://github.com/Aveer",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

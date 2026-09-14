@@ -165,6 +165,7 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
+| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit `task(..., background: true)` call is converted to the existing foreground execution path. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. |
@@ -361,6 +362,38 @@ models mid-flight (e.g. foreground model fallback) moves its accounting to
 the new model. The scheduler is process-scoped: when the plugin re-inits on a
 config update, running slots and queued tickets survive, so admission state
 is not reset mid-run.
+
+`sameProviderPolicy` is an opt-in per-provider policy for local inference
+backends that execute multiple logical agent sessions on one shared
+accelerator/model runtime. When a foreground parent and a same-provider
+background child run concurrently on such a backend, throughput can degrade
+from repeated model/KV context switching between the two large sessions.
+When the parent session's current model and the child agent's resolved model
+both resolve to a provider configured with `"foreground"`, the explicit
+`task(..., background: true)` request is converted to the existing foreground
+execution path:
+
+```jsonc
+{
+  "backgroundJobs": {
+    "sameProviderPolicy": {
+      "lm-nexus": "foreground"
+    }
+  }
+}
+```
+
+- Same provider with `"foreground"` configured → the background request is
+  converted to foreground (no concurrency admission, no wall-clock
+  supervision, synchronous host execution).
+- Different providers → unchanged.
+- Provider not configured → unchanged.
+- Either provider undeterminable → unchanged (fail-open).
+
+Default (omitted) behavior is unchanged. This does not change
+`orchestratorWake` or `defaultConcurrency`/`providerConcurrency`/
+`modelConcurrency` semantics: a converted task simply bypasses background
+admission like any foreground task.
 
 Two behaviors to know about when concurrency is enabled:
 

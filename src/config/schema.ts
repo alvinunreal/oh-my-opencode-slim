@@ -268,6 +268,12 @@ export const BackgroundJobsConfigSchema = z.object({
       'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
     ),
   concurrency: BackgroundTaskConcurrencyConfigSchema,
+  sameProviderPolicy: z
+    .record(z.string().min(1), z.literal('foreground'))
+    .default({})
+    .describe(
+      'Opt-in per-provider policy for native background tasks: when the parent session and the child agent both resolve to a provider listed here with value "foreground", the background request is converted to foreground execution (existing foreground path, no concurrency admission). Unlisted or unknown providers keep background behavior. Default {} (no conversion).',
+    ),
   waitForUserGuard: z
     .boolean()
     .default(true)

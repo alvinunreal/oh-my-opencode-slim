@@ -12,6 +12,7 @@ import {
 import { getAgentMcpList } from '../config/agent-mcps';
 import type { RuntimeConfig } from '../config/runtime';
 import { escapeRegExp, normalizeAgentName } from '../utils/agent-variant';
+import { delegationVocabulary } from '../v2/adapters';
 
 import {
   createCouncilAgent,
@@ -424,12 +425,16 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
  * Instantiates the orchestrator and all subagents, applying user config and defaults.
  *
  * @param runtime - Runtime configuration interface (plugin layer, preset-aware)
+ * @param options - Optional options including projectDirectory and hostFlavor
  * @returns Array of agent definitions (orchestrator first, then subagents)
  */
 export function createAgents(
   runtime: RuntimeConfig,
-  options?: { projectDirectory?: string },
+  options?: { projectDirectory?: string; hostFlavor?: string },
 ): AgentDefinition[] {
+  // Native delegation vocabulary for the host flavor ('v2' → subagent/agent,
+  // v1/default → task/subagent_type). Construction-time constant — cache-safe.
+  const vocab = delegationVocabulary(options?.hostFlavor);
   const mergedAgents = runtime.agents();
   const disabled = new Set(runtime.disabledAgents);
   if (!runtime.council) {
@@ -659,6 +664,7 @@ export function createAgents(
     councillorAgents.length > 0 ? ['council'] : undefined,
     !runtime.disabledTools.includes('wait_for_user'),
     runtime.backgroundJobs.orchestratorWake.enabled,
+    options?.hostFlavor,
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
@@ -782,10 +788,10 @@ export function createAgents(
     const dispatchList = councillorAgents
       .map(
         (a: AgentDefinition) =>
-          `   - task(subagent_type='${a.name}', description='Councillor ${getCouncillorSeatName(a.name)} on <brief topic>', prompt=<user's question>)`,
+          `   - ${vocab.tool}(${vocab.agentParam}='${a.name}', description='Councillor ${getCouncillorSeatName(a.name)} on <brief topic>', prompt=<user's question>)`,
       )
       .join('\n');
-    updatedPrompt = `${updatedPrompt}\n\n## Council Mode\n\nWhen you need to run a council or the user asks for consensus/multiple opinions, use this procedure INSTEAD of delegating to @council:\n\n1. If the question references an external resource (PR, URL, issue, doc), fetch its content FIRST using your own tools (webfetch/bash/gh), then embed a concise summary in the prompt you send to each councillor — councillors have read-only codebase access only and cannot fetch external content themselves.\n2. Dispatch the user's question (with any fetched context) to each councillor in PARALLEL via task():\n${dispatchList}\n3. Collect ALL councillor responses. If any councillor returns empty or does not respond within 3 minutes, proceed without it — do not wait indefinitely. If a councillor's response is empty, retry that councillor once before continuing.\n4. Call task(subagent_type='council', description='Synthesize council report') with a prompt that includes the original user question AND all councillor responses. For each councillor, label its response with its seat name AND its model (e.g. "alpha (gpt-5.6-luna)"). Format each councillor's seat name and response clearly separated. If a councillor failed or timed out, include that status explicitly (e.g. "beta (gemini-3-pro): FAILED/TIMED OUT") instead of omitting it. Skip only councillors that returned empty after one retry.\n5. Present the council's synthesized report.\n\nThis ensures each councillor runs with its own model and the council agent synthesizes the full multi-model consensus.`;
+    updatedPrompt = `${updatedPrompt}\n\n## Council Mode\n\nWhen you need to run a council or the user asks for consensus/multiple opinions, use this procedure INSTEAD of delegating to @council:\n\n1. If the question references an external resource (PR, URL, issue, doc), fetch its content FIRST using your own tools (webfetch/bash/gh), then embed a concise summary in the prompt you send to each councillor — councillors have read-only codebase access only and cannot fetch external content themselves.\n2. Dispatch the user's question (with any fetched context) to each councillor in PARALLEL via ${vocab.tool}():\n${dispatchList}\n3. Collect ALL councillor responses. If any councillor returns empty or does not respond within 3 minutes, proceed without it — do not wait indefinitely. If a councillor's response is empty, retry that councillor once before continuing.\n4. Call ${vocab.tool}(${vocab.agentParam}='council', description='Synthesize council report') with a prompt that includes the original user question AND all councillor responses. For each councillor, label its response with its seat name AND its model (e.g. "alpha (gpt-5.6-luna)"). Format each councillor's seat name and response clearly separated. If a councillor failed or timed out, include that status explicitly (e.g. "beta (gemini-3-pro): FAILED/TIMED OUT") instead of omitting it. Skip only councillors that returned empty after one retry.\n5. Present the council's synthesized report.\n\nThis ensures each councillor runs with its own model and the council agent synthesizes the full multi-model consensus.`;
   }
 
   orchestrator.config.prompt = updatedPrompt;
@@ -798,12 +804,12 @@ export function createAgents(
  * Converts agent definitions to SDK config format and applies classification metadata.
  *
  * @param runtime - Runtime configuration interface (plugin layer, preset-aware)
- * @param options - Optional options including projectDirectory
+ * @param options - Optional options including projectDirectory and hostFlavor
  * @returns Record mapping agent names to their SDK configurations
  */
 export function getAgentConfigs(
   runtime: RuntimeConfig,
-  options?: { projectDirectory?: string },
+  options?: { projectDirectory?: string; hostFlavor?: string },
 ): Record<string, SDKAgentConfig> {
   const agents = createAgents(runtime, options);
 
