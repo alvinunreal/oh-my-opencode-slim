@@ -392,7 +392,14 @@ export function buildPluginInput(
         }
         const ref = modelRefFromBody(body);
         let switched = false;
-        if (ref) {
+        // Lifecycle continuations (wake / terminal notify) must inherit
+        // the host's persisted selection. A body pin — with or without
+        // variant — is a snapshot that can be stale by delivery time
+        // (#1079). Mixed bodies (foreground-fallback replay) still
+        // switch; `modelSwitch: 'required'` still switches.
+        const inheritPersistedSelection =
+          isPureInternalInitiatorBody(args) && args?.modelSwitch !== 'required';
+        if (ref && !inheritPersistedSelection) {
           // `modelVariant` is the v2-only channel for the wake model's
           // reasoning-effort variant (v1 prompt bodies carry no variant
           // slot). A non-empty string overrides the ref's variant so
@@ -404,26 +411,23 @@ export function buildPluginInput(
           const switchRef = explicitVariant
             ? { ...ref, variant: explicitVariant }
             : ref;
-          // Variant preservation: internal callers (orchestrator-wake,
-          // task-message, foreground-fallback) pin the session's CURRENT
-          // model without a variant opinion. Re-asserting such a pin via
-          // switchModel resets the host-side reasoning-effort variant to
-          // default (the wake-variant-reset regression). A variant-less
-          // ref that already matches the session model is therefore a
-          // no-op pin: skip the switch entirely, read at delivery time so
-          // a mid-flight user variant change wins. Explicit variants
-          // (including 'default') and cross-model pins still switch.
-          // Hosts without session.get (or failing it) keep the legacy
-          // variant-free switch behavior.
+          // Variant preservation: pin-callers that name the session's
+          // CURRENT model without a variant opinion must not reset the
+          // host-side reasoning-effort variant (wake-variant-reset).
+          // Explicit variants and required fallback switches still
+          // switch. Hosts without session.get keep the legacy switch.
           let skipSwitch = false;
-          if (!explicitVariant && s.get) {
+          if (s.get && args?.modelSwitch !== 'required') {
             try {
               const info = await s.get({ sessionID: sessionIDOf(args) });
               const current = isRecord(info) ? info.model : undefined;
-              skipSwitch =
+              const pinMatchesCurrent =
                 isRecord(current) &&
                 current.providerID === switchRef.providerID &&
                 current.id === switchRef.id;
+              if (pinMatchesCurrent && !explicitVariant) {
+                skipSwitch = true;
+              }
             } catch {
               // Fail-soft: cannot prove the pin matches — switch as before.
             }
@@ -466,6 +470,11 @@ export function buildPluginInput(
               { id: sessionIDOf(args) },
             );
           }
+        } else if (inheritPersistedSelection && ref) {
+          log(
+            '[v2][shim] internal continuation inherits persisted host selection; skip session.switchModel',
+            { id: sessionIDOf(args), model: ref },
+          );
         }
         if (internalViaSynthetic) {
           // Client-chosen message id: v2 `Session.synthetic` honors

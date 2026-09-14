@@ -8,6 +8,7 @@ import pluginModuleDefault, {
   shouldEnableMultiplexer,
 } from './index';
 import { readTuiSnapshot } from './tui-state';
+import { createInternalAgentTextPart } from './utils/internal-initiator';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
@@ -490,6 +491,12 @@ describe('plugin TUI agent activity', () => {
     } as never);
 
     try {
+      await chainHooks?.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'grandchild', status: { type: 'busy' } },
+        },
+      } as never);
       await chainHooks?.['chat.message']?.(
         { sessionID: 'grandchild', agent: 'fixer' } as never,
         {} as never,
@@ -535,6 +542,12 @@ describe('plugin TUI agent activity', () => {
     } as never);
 
     try {
+      await retryHooks?.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'orphan-a', status: { type: 'busy' } },
+        },
+      } as never);
       await retryHooks?.['chat.message']?.(
         { sessionID: 'orphan-a', agent: 'fixer' } as never,
         {} as never,
@@ -543,6 +556,12 @@ describe('plugin TUI agent activity', () => {
       expect(readTuiSnapshot(projectDir).sessionParents).toEqual({});
 
       // A later activation must retry: the failed slot was released.
+      await retryHooks?.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'orphan-a', status: { type: 'busy' } },
+        },
+      } as never);
       await retryHooks?.['chat.message']?.(
         { sessionID: 'orphan-a', agent: 'fixer' } as never,
         {} as never,
@@ -562,7 +581,7 @@ describe('plugin TUI agent activity', () => {
   test('does not cache a malformed parentID as a confirmed root', async () => {
     let attempts = 0;
     const sessionApi = {
-      async get(input: { path: { id: string } }) {
+      async get(_input: { path: { id: string } }) {
         attempts += 1;
         if (attempts === 1) {
           // Malformed non-string parent: contract violation, not a root.
@@ -579,6 +598,12 @@ describe('plugin TUI agent activity', () => {
     } as never);
 
     try {
+      await malformedHooks?.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'broken-a', status: { type: 'busy' } },
+        },
+      } as never);
       await malformedHooks?.['chat.message']?.(
         { sessionID: 'broken-a', agent: 'fixer' } as never,
         {} as never,
@@ -587,6 +612,12 @@ describe('plugin TUI agent activity', () => {
       expect(readTuiSnapshot(projectDir).sessionParents).toEqual({});
 
       // A later activation must retry: the malformed slot was released.
+      await malformedHooks?.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'broken-a', status: { type: 'busy' } },
+        },
+      } as never);
       await malformedHooks?.['chat.message']?.(
         { sessionID: 'broken-a', agent: 'fixer' } as never,
         {} as never,
@@ -599,6 +630,8 @@ describe('plugin TUI agent activity', () => {
     } finally {
       await malformedHooks?.dispose?.();
     }
+  });
+
   test('chat.message does not light a spinner without session.status busy', async () => {
     await hooks?.['chat.message']?.(
       { sessionID: 'orch', agent: 'orchestrator' } as never,
@@ -775,6 +808,269 @@ describe('background task admission model resolution', () => {
       ),
     ]);
     expect(outcome).toBe('still-queued');
+  });
+
+  test('internal initiator chat.message does not overwrite the tracked session model', async () => {
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'plan',
+        model: { providerID: 'openai', modelID: 'gpt-4o' },
+      } as never,
+      {} as never,
+    );
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', modelID: 'claude' },
+        parts: [createInternalAgentTextPart('child completed')],
+      } as never,
+      {} as never,
+    );
+
+    const before = hooks?.['tool.execute.before'];
+    expect(before).toBeFunction();
+    const first = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'first task',
+        },
+      } as never,
+    );
+    const second = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      } as never,
+    );
+
+    await first;
+    const outcome = await Promise.race([
+      second?.then(
+        () => 'admitted',
+        (e) => `rejected:${String(e)}`,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('still-queued'), 100),
+      ),
+    ]);
+    expect(outcome).toBe('still-queued');
+  });
+
+  test('message.updated of an internal admission does not overwrite the tracked model', async () => {
+    const { __resetInternalAdmissionsForTesting } = await import(
+      './v2/internal-admissions'
+    );
+    __resetInternalAdmissionsForTesting();
+
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'plan',
+        model: { providerID: 'openai', modelID: 'gpt-4o' },
+      } as never,
+      {} as never,
+    );
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', modelID: 'claude' },
+        messageID: 'msg_internal',
+        parts: [createInternalAgentTextPart('child completed')],
+      } as never,
+      {} as never,
+    );
+    await hooks?.event?.({
+      event: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_internal',
+            sessionID: 'plan-1',
+            agent: 'orchestrator',
+            providerID: 'anthropic',
+            modelID: 'claude',
+          },
+        },
+      },
+    } as never);
+
+    const before = hooks?.['tool.execute.before'];
+    const first = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'first task',
+        },
+      } as never,
+    );
+    const second = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      } as never,
+    );
+    await first;
+    const outcome = await Promise.race([
+      second?.then(
+        () => 'admitted',
+        (e) => `rejected:${String(e)}`,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('still-queued'), 100),
+      ),
+    ]);
+    expect(outcome).toBe('still-queued');
+    __resetInternalAdmissionsForTesting();
+  });
+
+  test('message.updated of an assistant reply to an internal admission does not overwrite the tracked model', async () => {
+    const { __resetInternalAdmissionsForTesting } = await import(
+      './v2/internal-admissions'
+    );
+    __resetInternalAdmissionsForTesting();
+
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'plan',
+        model: { providerID: 'openai', modelID: 'gpt-4o' },
+      } as never,
+      {} as never,
+    );
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', modelID: 'claude' },
+        messageID: 'msg_internal',
+        parts: [createInternalAgentTextPart('child completed')],
+      } as never,
+      {} as never,
+    );
+    await hooks?.event?.({
+      event: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_assistant',
+            parentID: 'msg_internal',
+            sessionID: 'plan-1',
+            agent: 'orchestrator',
+            providerID: 'anthropic',
+            modelID: 'claude',
+          },
+        },
+      },
+    } as never);
+
+    const before = hooks?.['tool.execute.before'];
+    const first = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'first task',
+        },
+      } as never,
+    );
+    const second = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      } as never,
+    );
+    await first;
+    const outcome = await Promise.race([
+      second?.then(
+        () => 'admitted',
+        (e) => `rejected:${String(e)}`,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('still-queued'), 100),
+      ),
+    ]);
+    expect(outcome).toBe('still-queued');
+    __resetInternalAdmissionsForTesting();
+  });
+
+  test('v2 agent-discovery without parts does not overwrite tracked selection', async () => {
+    const { recordInternalAdmission, __resetInternalAdmissionsForTesting } =
+      await import('./v2/internal-admissions');
+    __resetInternalAdmissionsForTesting();
+    recordInternalAdmission('plan-1', 'msg_discovery');
+
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'plan',
+        model: { providerID: 'openai', modelID: 'gpt-4o' },
+      } as never,
+      {} as never,
+    );
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'plan-1',
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', modelID: 'claude' },
+        messageID: 'msg_discovery',
+      } as never,
+      {} as never,
+    );
+
+    const before = hooks?.['tool.execute.before'];
+    const first = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-1' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'first task',
+        },
+      } as never,
+    );
+    const second = before?.(
+      { tool: 'task', sessionID: 'plan-1', callID: 'call-2' } as never,
+      {
+        args: {
+          background: true,
+          subagent_type: 'fixer',
+          description: 'second task',
+        },
+      } as never,
+    );
+    await first;
+    const outcome = await Promise.race([
+      second?.then(
+        () => 'admitted',
+        (e) => `rejected:${String(e)}`,
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('still-queued'), 100),
+      ),
+    ]);
+    expect(outcome).toBe('still-queued');
+    __resetInternalAdmissionsForTesting();
   });
 });
 

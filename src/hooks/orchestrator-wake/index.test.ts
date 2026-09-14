@@ -133,6 +133,13 @@ function createScheduler(options?: {
   hasInputWait?: (id: string) => boolean;
   isFallbackInProgress?: (id: string) => boolean;
   isStoppedJobRecoveryCurrent?: (taskID: string, generation: number) => boolean;
+  hasPendingDelegatedWork?: (id: string) => boolean;
+  resolveSelection?: (sessionID: string) => Promise<{
+    agent?: string;
+    model?: { providerID: string; modelID: string };
+    variant?: string;
+    provenance: 'host-persisted' | 'observed-external' | 'unknown';
+  }>;
   coordinator?: SessionLifecycle;
   directory?: string;
 }) {
@@ -155,6 +162,8 @@ function createScheduler(options?: {
     hasInputWait: options?.hasInputWait ?? (() => false),
     isFallbackInProgress: options?.isFallbackInProgress,
     isStoppedJobRecoveryCurrent: options?.isStoppedJobRecoveryCurrent,
+    hasPendingDelegatedWork: options?.hasPendingDelegatedWork,
+    resolveSelection: options?.resolveSelection,
     coordinator: options?.coordinator,
   });
 
@@ -1784,6 +1793,43 @@ describe('children-driven degraded mode (v2)', () => {
     expect(call.modelVariant).toBe('max');
   });
 
+  test('v2 children wake does not mix a new model with a leftover variant', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      hostFlavor: 'v2',
+      intervalMs: 60_000,
+      resolveSelection: async () => ({
+        agent: 'orchestrator',
+        model: { providerID: 'test', modelID: 'model-b' },
+        provenance: 'host-persisted',
+      }),
+      sessionClient: makeV2Client({
+        promptAsync,
+        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
+        get: mock(async () => ({
+          data: {
+            model: { providerID: 'test', id: 'model-a', variant: 'high' },
+          },
+        })),
+      }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    const call = (
+      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
+    )[0]?.[0] as {
+      modelVariant?: string;
+      body: { model?: { providerID: string; modelID: string } };
+    };
+    expect(call.body.model).toEqual({
+      providerID: 'test',
+      modelID: 'model-b',
+    });
+    expect(call.modelVariant).toBeUndefined();
+  });
+
   test('v2 children wake omits modelVariant when the model has none', async () => {
     const promptAsync = mock(async () => ({}));
     const { scheduler } = createScheduler({
@@ -2416,6 +2462,206 @@ describe('children enumeration fallback (v2)', () => {
     });
     await clock.advance(60_000);
     expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('wakes a non-orchestrator parent in its current selection when delegated work is pending', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: (id) => id === 'orch',
+      hasPendingDelegatedWork: (id) => id === 'plan',
+      resolveSelection: async () => ({
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'plan-model' },
+        variant: 'max',
+        provenance: 'host-persisted',
+      }),
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'plan' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const call = (
+      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
+    )[0]?.[0] as {
+      body: {
+        agent: string;
+        model?: { providerID: string; modelID: string };
+      };
+    };
+    expect(call.body.agent).toBe('plan');
+    expect(call.body.model).toEqual({
+      providerID: 'test',
+      modelID: 'plan-model',
+    });
+  });
+
+  test('does not wake a non-orchestrator parent with no delegated work', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: (id) => id === 'orch',
+      hasPendingDelegatedWork: () => false,
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'plan' } },
+    });
+    await clock.advance(120_000);
+    expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('recovers a stopped job on a Plan parent with pending delegated work', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: () => false,
+      hasPendingDelegatedWork: (id) => id === 'plan',
+      resolveSelection: async () => ({
+        agent: 'plan',
+        provenance: 'observed-external',
+      }),
+      sessionClient: makeClient({
+        todos: [],
+        promptAsync,
+        childrenData: [{ id: 'child-2' }],
+        statusData: { 'child-2': { type: 'busy' } },
+      }),
+    });
+    scheduler.triggerStoppedJobRecovery('plan');
+    await clock.advance(0);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const call = (
+      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
+    )[0]?.[0] as { body: { agent: string } };
+    expect(call.body.agent).toBe('plan');
+  });
+
+  test('does not mix a new model with a leftover variant from another model', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: () => true,
+      resolveSelection: async () => ({
+        agent: 'orchestrator',
+        model: { providerID: 'test', modelID: 'model-b' },
+        provenance: 'host-persisted',
+      }),
+      sessionClient: makeClient({
+        promptAsync,
+        model: { providerID: 'test', id: 'model-a', variant: 'high' },
+      }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const call = (
+      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
+    )[0]?.[0] as {
+      modelVariant?: string;
+      body: { model?: { providerID: string; modelID: string } };
+    };
+    expect(call.body.model).toEqual({
+      providerID: 'test',
+      modelID: 'model-b',
+    });
+    expect(call.modelVariant).toBeUndefined();
+  });
+
+  test('aborts the wake when an external message arrives during selection resolve', async () => {
+    const promptAsync = mock(async () => ({}));
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { scheduler } = createScheduler({
+      shouldManageSession: () => true,
+      resolveSelection: async () => {
+        await gate;
+        return { agent: 'orchestrator', provenance: 'host-persisted' };
+      },
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    scheduler.observeChatMessage(
+      {
+        sessionID: 'p1',
+        messageID: 'm-user',
+        model: { providerID: 'obs', modelID: 'seen' },
+      },
+      {
+        message: { id: 'm-user', role: 'user', sessionID: 'p1' },
+        parts: [{ type: 'text', text: 'user typed' }],
+      },
+    );
+    release?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('does not wake Plan when host selection is Plan and no delegated work remains', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: () => true,
+      hasPendingDelegatedWork: () => false,
+      resolveSelection: async () => ({
+        agent: 'plan',
+        provenance: 'host-persisted',
+      }),
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('drops a stop fact that goes stale during selection resolve', async () => {
+    const promptAsync = mock(async () => ({}));
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const current = new Set(['ses_stale:1']);
+    const { scheduler } = createScheduler({
+      isStoppedJobRecoveryCurrent: (taskID, generation) =>
+        current.has(`${taskID}:${generation}`),
+      hasPendingDelegatedWork: () => true,
+      resolveSelection: async () => {
+        await gate;
+        return { agent: 'orchestrator', provenance: 'host-persisted' };
+      },
+      sessionClient: makeClient({
+        todos: [],
+        promptAsync,
+        childrenData: [{ id: 'child-2' }],
+        statusData: { 'child-2': { type: 'busy' } },
+      }),
+    });
+    scheduler.triggerStoppedJobRecovery(
+      'p1',
+      formatStoppedJobDelta({
+        alias: 'ses_stale',
+        taskID: 'ses_stale',
+        generation: 1,
+        state: 'stopped',
+        reason: 'stopped without a terminal result',
+      }),
+      'ses_stale:1',
+    );
+    await clock.advance(0);
+    current.delete('ses_stale:1');
+    release?.();
+    // Drain microtasks past the resolver continuation, the post-await
+    // guards and the second prune before asserting the negative (#1079
+    // Oracle r3 P2: two ticks could observe the pre-await state).
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(promptAsync).not.toHaveBeenCalled();
   });
 });
 

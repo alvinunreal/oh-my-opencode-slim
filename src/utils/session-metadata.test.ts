@@ -60,4 +60,25 @@ describe('SessionMetadataStore', () => {
     expect(store.hasAgent('old-session')).toBe(false);
     expect(evicted).toEqual(['old-session']);
   });
+
+  test('task-managed membership does not rewrite the selected agent', () => {
+    const store = new SessionMetadataStore({ maxEntries: 4 });
+    store.setAgent('plan-1', 'plan');
+    store.markTaskManaged('plan-1');
+
+    expect(store.getAgent('plan-1')).toBe('plan');
+    expect(store.isTaskManaged('plan-1')).toBe(true);
+  });
+
+  test('keeps a task-managed Plan session through metadata overflow', () => {
+    const store = new SessionMetadataStore({ maxEntries: 2 });
+    store.setAgent('plan-1', 'plan');
+    store.markTaskManaged('plan-1');
+    store.setAgent('old-specialist', 'explore');
+    store.setAgent('newer-specialist', 'fixer');
+
+    expect(store.getAgent('plan-1')).toBe('plan');
+    expect(store.isTaskManaged('plan-1')).toBe(true);
+    expect(store.hasAgent('old-specialist')).toBe(false);
+  });
 });

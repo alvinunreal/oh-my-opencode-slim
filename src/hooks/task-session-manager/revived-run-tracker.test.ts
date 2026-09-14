@@ -7,7 +7,15 @@ function createHarness(
   messages: () => unknown,
   prompt = mock(async () => ({})),
   assertBound = false,
-  options: { stabilizationProbeDelayMs?: number } = {},
+  options: {
+    stabilizationProbeDelayMs?: number;
+    resolveSelection?: (sessionID: string) => Promise<{
+      agent?: string;
+      model?: { providerID: string; modelID: string };
+      variant?: string;
+      provenance: 'host-persisted' | 'observed-external' | 'unknown';
+    }>;
+  } = {},
 ) {
   const board = new BackgroundJobBoard();
   board.registerLaunch({
@@ -75,6 +83,11 @@ function createHarness(
 
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
+
+/** notifyParent is fire-and-forget from probe(); drain its microtasks. */
+async function flushNotify(): Promise<void> {
+  for (let i = 0; i < 15; i += 1) await Promise.resolve();
+}
 
 afterEach(() => {
   globalThis.setTimeout = realSetTimeout;
@@ -145,6 +158,167 @@ describe('revived run tracker', () => {
     )?.body?.parts?.[0]?.text;
     expect(notifiedText).toContain('<task ');
     expect(notifiedText).toContain(SLIM_INTERNAL_INITIATOR_MARKER);
+    expect(
+      (harness.prompt.mock.calls[0]?.[0] as { delivery?: string } | undefined)
+        ?.delivery,
+    ).toBe('queue');
+  });
+
+  test('notifies the parent in its current selection instead of hardcoded orchestrator', async () => {
+    let probe = false;
+    const harness = createHarness(
+      () =>
+        probe
+          ? {
+              data: [
+                { info: { id: 'baseline', role: 'user' }, parts: [] },
+                {
+                  info: {
+                    id: 'assistant-1',
+                    role: 'assistant',
+                    time: { completed: 2 },
+                  },
+                  parts: [{ type: 'text', text: 'new result' }],
+                },
+              ],
+            }
+          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      undefined,
+      false,
+      {
+        resolveSelection: async () => ({
+          agent: 'plan',
+          model: { providerID: 'test', modelID: 'plan-model' },
+          provenance: 'host-persisted',
+        }),
+      },
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      delivery: 'queue',
+      body: {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'plan-model' },
+      },
+    });
+  });
+
+  test('forwards the resolved variant as modelVariant on the notification', async () => {
+    let probe = false;
+    const harness = createHarness(
+      () =>
+        probe
+          ? {
+              data: [
+                { info: { id: 'baseline', role: 'user' }, parts: [] },
+                {
+                  info: {
+                    id: 'assistant-1',
+                    role: 'assistant',
+                    time: { completed: 2 },
+                  },
+                  parts: [{ type: 'text', text: 'new result' }],
+                },
+              ],
+            }
+          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      undefined,
+      false,
+      {
+        resolveSelection: async () => ({
+          agent: 'plan',
+          model: { providerID: 'test', modelID: 'plan-model' },
+          variant: 'max',
+          provenance: 'host-persisted',
+        }),
+      },
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      delivery: 'queue',
+      modelVariant: 'max',
+      body: {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'plan-model' },
+      },
+    });
+  });
+
+  test('does not send after dispose during selection resolve', async () => {
+    let probe = false;
+    let entered = false;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = createHarness(
+      () =>
+        probe
+          ? {
+              data: [
+                { info: { id: 'baseline', role: 'user' }, parts: [] },
+                {
+                  info: {
+                    id: 'assistant-1',
+                    role: 'assistant',
+                    time: { completed: 2 },
+                  },
+                  parts: [{ type: 'text', text: 'new result' }],
+                },
+              ],
+            }
+          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      undefined,
+      false,
+      {
+        resolveSelection: async () => {
+          entered = true;
+          await gate;
+          return { agent: 'plan', provenance: 'host-persisted' };
+        },
+      },
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    const pending = harness.tracker.probe(
+      harness.run.taskID,
+      harness.run.generation,
+    );
+    for (let i = 0; i < 20 && !entered; i += 1) await Promise.resolve();
+    expect(entered).toBe(true);
+    harness.tracker.dispose();
+    release?.();
+    await pending;
+    expect(harness.prompt).not.toHaveBeenCalled();
   });
 
   test('keeps a non-terminal idle turn running and rejects historical output', async () => {
@@ -325,6 +499,74 @@ describe('revived run tracker', () => {
 
     expect(harness.board.get('ses_child')?.state).toBe('reconciled');
     expect(prompt).toHaveBeenCalledTimes(2);
+  });
+
+  test('re-resolves agent and model on each notification retry', async () => {
+    let attempts = 0;
+    const prompt = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('parent unavailable');
+      return {};
+    });
+    const selections = [
+      {
+        agent: 'orchestrator',
+        model: { providerID: 'test', modelID: 'model-a' },
+        provenance: 'host-persisted' as const,
+      },
+      {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'model-b' },
+        provenance: 'host-persisted' as const,
+      },
+    ];
+    const harness = createHarness(
+      () => ({
+        data: [
+          { info: { id: 'baseline', role: 'user' }, parts: [] },
+          {
+            info: {
+              id: 'assistant-1',
+              role: 'assistant',
+              time: { completed: 2 },
+            },
+            parts: [{ type: 'text', text: 'done' }],
+          },
+        ],
+      }),
+      prompt,
+      false,
+      {
+        resolveSelection: async () =>
+          selections[Math.min(attempts, selections.length - 1)] ??
+          selections[0],
+      },
+    );
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: 'baseline',
+      description: 'inspect the change',
+    });
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await flushNotify();
+
+    expect(harness.prompt).toHaveBeenCalledTimes(2);
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        agent: 'orchestrator',
+        model: { providerID: 'test', modelID: 'model-a' },
+      },
+    });
+    expect(harness.prompt.mock.calls[1]?.[0]).toMatchObject({
+      body: {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'model-b' },
+      },
+    });
   });
 
   test('holds the terminal notification lease while parent transport is active', async () => {

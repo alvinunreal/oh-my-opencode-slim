@@ -15,6 +15,7 @@ import {
 import { isRecord } from '../../utils/guards';
 import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { getClient } from '../../utils/opencode-client';
+import type { SessionSelection } from '../../utils/session-selection';
 import { COMPLETED_WITHOUT_TEXT_DIAGNOSTIC } from '../../utils/task';
 
 const DEFAULT_NOTIFICATION_RETRIES = 3;
@@ -83,6 +84,12 @@ export function createRevivedRunTracker(options: {
   onSettled?: (taskID: string) => void;
   contextFilesForPrompt?: (taskID: string) => ContextFile[];
   pruneContext?: () => void;
+  /** Resolve the parent session's CURRENT agent/model selection at send
+   * time (#1079): a terminal notification must continue the parent in
+   * the mode the session uses now, never a hardcoded `orchestrator`.
+   * Resolved on EVERY attempt (retries re-enter the send path). When
+   * absent or unresolved, behavior falls back to `orchestrator`. */
+  resolveSelection?: (sessionID: string) => Promise<SessionSelection>;
 }): RevivedRunTracker {
   const runs = new Map<string, RevivedRun>();
   const maxNotificationRetries =
@@ -269,6 +276,31 @@ export function createRevivedRunTracker(options: {
         discardRun(run);
         return;
       }
+      const state = record.state === 'completed' ? 'completed' : 'error';
+      const tag = state === 'completed' ? 'task_result' : 'task_error';
+      const summary =
+        state === 'completed'
+          ? `Background task completed: ${run.description}`
+          : `Background task failed: ${run.description}`;
+      // Resolve BEFORE acquiring the lease: a hung host read must not
+      // pin the notification lease. Host `session.get` is bounded inside
+      // resolveCurrentSelection; metadata still completes the hierarchy
+      // if that read times out (#1079 Oracle r2).
+      const selection = options.resolveSelection
+        ? await options
+            .resolveSelection(run.parentSessionID)
+            .catch((): undefined => undefined)
+        : undefined;
+      if (disposed || runs.get(run.taskID) !== run) return;
+      const latestBeforeSend = options.backgroundJobBoard.get(run.taskID);
+      if (
+        !latestBeforeSend ||
+        latestBeforeSend.generation !== run.generation ||
+        terminalOutcome(latestBeforeSend) !== run.terminalState
+      ) {
+        discardRun(run);
+        return;
+      }
       const lease = options.backgroundJobBoard.acquireTerminalNotificationLease(
         run.taskID,
         run.generation,
@@ -277,12 +309,7 @@ export function createRevivedRunTracker(options: {
         scheduleNotificationRetry(run, record);
         return;
       }
-      const state = record.state === 'completed' ? 'completed' : 'error';
-      const tag = state === 'completed' ? 'task_result' : 'task_error';
-      const summary =
-        state === 'completed'
-          ? `Background task completed: ${run.description}`
-          : `Background task failed: ${run.description}`;
+      const notifyAgent = selection?.agent ?? 'orchestrator';
       const text = [
         `<task id="${run.taskID}" state="${state}">`,
         `<summary>${summary}</summary>`,
@@ -296,11 +323,19 @@ export function createRevivedRunTracker(options: {
         options.backgroundJobBoard,
         lease,
         () =>
-          promptAsync({
+          (promptAsync as (args: Record<string, unknown>) => Promise<unknown>)({
             path: { id: run.parentSessionID },
             query: { directory: options.input.directory },
+            // v1 prompt_async queues; 'queue' preserves that on v2 hosts
+            // ('steer' — the shim default — would hijack an in-flight
+            // parent run, the same TOCTOU #1192 closed for task-revive).
+            // Extra root fields are dropped by the v1 SDK RequestInit
+            // path (same pattern as task-revive #1192).
+            delivery: 'queue',
+            ...(selection?.variant ? { modelVariant: selection.variant } : {}),
             body: {
-              agent: 'orchestrator',
+              agent: notifyAgent,
+              ...(selection?.model ? { model: selection.model } : {}),
               // Internal-initiator part (synthetic flag + metadata + marker):
               // the v2 client-shim routes these through session.synthetic so
               // the notification stays machine-context instead of a visible

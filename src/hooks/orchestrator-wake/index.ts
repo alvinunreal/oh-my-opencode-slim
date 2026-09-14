@@ -26,6 +26,7 @@ import {
 } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import type { SessionSelection } from '../../utils/session-selection';
 import type { SessionLifecycle } from '../session-lifecycle';
 import {
   type ContinuationModelSelection,
@@ -166,6 +167,17 @@ export type OrchestratorWakeOptions = {
    * The callback must check both the task generation and that the current
    * record is still stopped and terminal-unreconciled. */
   isStoppedJobRecoveryCurrent?: (taskID: string, generation: number) => boolean;
+  /** Resolve the session's CURRENT agent/model selection at send time
+   * (#1079): a lifecycle wake must continue the parent in the mode the
+   * session uses now, never a hardcoded `orchestrator`. When absent or
+   * unresolved, behavior falls back to the historical orchestrator wake. */
+  resolveSelection?: (sessionID: string) => Promise<SessionSelection>;
+  /** True when the parent session has delegated work pending: live
+   * children or terminal-unreconciled records (#1079). In that state a
+   * lifecycle wake stays eligible even when the user switched the
+   * session to a non-orchestrator agent — the wake continues in the
+   * CURRENT selection instead of forcing `orchestrator`. */
+  hasPendingDelegatedWork?: (sessionID: string) => boolean;
   /** Test seam: override interval without changing config validation. */
   intervalMs?: number;
 };
@@ -541,6 +553,35 @@ export function createOrchestratorWakeScheduler(
       : undefined;
   }
 
+  /** Drop stop facts that are no longer current. Repeat after every
+   * await so a child revived during selection resolve is not sent. */
+  function pruneStoppedRecoveryDeltas(
+    batch: PendingStoppedRecovery | undefined,
+  ): boolean {
+    if (!batch) return false;
+    const hadRecoveryDetails = batch.deltas.size > 0;
+    if (options.isStoppedJobRecoveryCurrent) {
+      for (const key of batch.deltas.keys()) {
+        const parsed = parseRecoveryKey(key);
+        if (!parsed) {
+          batch.deltas.delete(key);
+          continue;
+        }
+        let current = false;
+        try {
+          current = options.isStoppedJobRecoveryCurrent(
+            parsed.taskID,
+            parsed.generation,
+          );
+        } catch {
+          current = false;
+        }
+        if (!current) batch.deltas.delete(key);
+      }
+    }
+    return hadRecoveryDetails;
+  }
+
   /** Queue a stop delta for the session's next recovery wake. */
   const addStoppedRecoveryDelta = (
     sessionID: string,
@@ -717,10 +758,23 @@ export function createOrchestratorWakeScheduler(
     if (rearmProgress) rearmWakeProgress(sessionID);
   }
 
+  /** #1079: a parent with delegated work pending stays wake-eligible
+   * even after the user switched it to a non-orchestrator agent — the
+   * wake then continues in the CURRENT selection (resolveSelection)
+   * instead of being dropped or forcing `orchestrator`. Without
+   * pending delegated work, only orchestrator sessions schedule wakes
+   * (a random Plan/Build TODO must not become a wake reason). */
+  function canObserveSelection(sessionID: string): boolean {
+    return (
+      options.shouldManageSession(sessionID) ||
+      (options.hasPendingDelegatedWork?.(sessionID) ?? false)
+    );
+  }
+
   function canSchedule(sessionID: string): boolean {
     if (!enabled) return false;
     if (!capabilities.ready) return false;
-    if (!options.shouldManageSession(sessionID)) return false;
+    if (!canObserveSelection(sessionID)) return false;
     if (localSessions.get(sessionID)?.archived) return false;
     if (options.hasInputWait(sessionID)) return false;
     if (options.isFallbackInProgress?.(sessionID)) return false;
@@ -1231,26 +1285,7 @@ export function createOrchestratorWakeScheduler(
         ? pendingStoppedRecoveries.get(sessionID)
         : undefined;
       if (recoveryBatch) {
-        const hadRecoveryDetails = recoveryBatch.deltas.size > 0;
-        if (options.isStoppedJobRecoveryCurrent) {
-          for (const key of recoveryBatch.deltas.keys()) {
-            const parsed = parseRecoveryKey(key);
-            if (!parsed) {
-              recoveryBatch.deltas.delete(key);
-              continue;
-            }
-            let current = false;
-            try {
-              current = options.isStoppedJobRecoveryCurrent(
-                parsed.taskID,
-                parsed.generation,
-              );
-            } catch {
-              current = false;
-            }
-            if (!current) recoveryBatch.deltas.delete(key);
-          }
-        }
+        const hadRecoveryDetails = pruneStoppedRecoveryDeltas(recoveryBatch);
         // A stale, revived, or already-reconciled detail must not cause a
         // recovery wake by itself. An overflow marker remains actionable even
         // when all retained details have since gone stale.
@@ -1266,6 +1301,50 @@ export function createOrchestratorWakeScheduler(
 
       const modelSelection =
         latest.model ?? snapshot.model ?? getObservedWakeModel(sessionID);
+
+      // #1079: resolve the session's CURRENT selection at send time. A
+      // lifecycle wake continues the parent in the agent/model it uses
+      // now; `orchestrator` is only the fallback when nothing else is
+      // observable (matching the historical behavior for sessions that
+      // always ran orchestrator).
+      const selection = options.resolveSelection
+        ? await options.resolveSelection(sessionID).catch(() => undefined)
+        : undefined;
+      // The await above is a new race window: an external message can
+      // bump generation / end idle, and a Plan/Build host selection
+      // must not ride in on stale orchestrator metadata.
+      if (state.generation !== generation) return;
+      if (!state.continuousIdle) return;
+      if (!canSchedule(sessionID)) {
+        suppress(sessionID);
+        return;
+      }
+      const wakeAgent = selection?.agent ?? 'orchestrator';
+      if (
+        wakeAgent !== 'orchestrator' &&
+        !(options.hasPendingDelegatedWork?.(sessionID) ?? false)
+      ) {
+        return;
+      }
+      // Re-prune stop facts after the selection await: a child can leave
+      // stopped/unreconciled while parent generation stays put (#1079 r2).
+      if (recoveryBatch) {
+        const hadRecoveryDetails = pruneStoppedRecoveryDeltas(recoveryBatch);
+        if (
+          hadRecoveryDetails &&
+          recoveryBatch.deltas.size === 0 &&
+          recoveryBatch.overflowCount === 0
+        ) {
+          pendingStoppedRecoveries.delete(sessionID);
+          return;
+        }
+      }
+      // Keep model+variant as one selection. Mixing a new model with a
+      // leftover variant from another model produces B/max from A/max.
+      const wakeModel = selection?.model ?? modelSelection?.model;
+      const wakeVariant = selection?.model
+        ? selection.variant
+        : modelSelection?.variant;
 
       // Reserve before promptAsync so a failed call cannot storm retries and
       // concurrent hook instances cannot double-wake.
@@ -1297,8 +1376,8 @@ export function createOrchestratorWakeScheduler(
         .filter(Boolean)
         .join('\n');
       const body = {
-        agent: 'orchestrator',
-        ...(modelSelection ? { model: modelSelection.model } : {}),
+        agent: wakeAgent,
+        ...(wakeModel ? { model: wakeModel } : {}),
         parts: [
           createInternalAgentTextPart(
             recoveryDetails ? `${wakeText}\n${recoveryDetails}` : wakeText,
@@ -1320,9 +1399,7 @@ export function createOrchestratorWakeScheduler(
           query: { directory },
           body,
           delivery: 'queue',
-          ...(modelSelection?.variant
-            ? { modelVariant: modelSelection.variant }
-            : {}),
+          ...(wakeVariant ? { modelVariant: wakeVariant } : {}),
           throwOnError: true,
         });
       } else {
@@ -1395,7 +1472,6 @@ export function createOrchestratorWakeScheduler(
       !sessionID ||
       (typeof outputMessage?.role === 'string' &&
         outputMessage.role !== 'user') ||
-      !options.shouldManageSession(sessionID) ||
       !Array.isArray(parts) ||
       parts.some(isInternalInitiatorPart) ||
       !parts.some(
@@ -1406,7 +1482,13 @@ export function createOrchestratorWakeScheduler(
           ((part.type === 'text' && typeof part.text === 'string') ||
             part.type === 'file' ||
             part.type === 'image'),
-      )
+      ) ||
+      // #1079: observe external selections for ANY wake-eligible session
+      // (orchestrator OR a parent with pending delegated work). Gating on
+      // orchestrator identity alone would leave a Plan/Build parent's
+      // observed model stale — and that parent can now be woken in its
+      // CURRENT agent.
+      !canObserveSelection(sessionID)
     ) {
       return;
     }
@@ -1446,7 +1528,7 @@ export function createOrchestratorWakeScheduler(
       disposed ||
       !enabled ||
       !capabilities.ready ||
-      !options.shouldManageSession(sessionID)
+      !canObserveSelection(sessionID)
     ) {
       return;
     }
@@ -1510,7 +1592,7 @@ export function createOrchestratorWakeScheduler(
     if (!sessionID) return;
 
     if (type === 'session.updated') {
-      if (options.shouldManageSession(sessionID)) {
+      if (canObserveSelection(sessionID)) {
         const archiveState = readEventArchiveState(input.event);
         if (archiveState === true) {
           suppressArchivedSession(sessionID);
@@ -1547,14 +1629,14 @@ export function createOrchestratorWakeScheduler(
     }
 
     if (isInputWaitAskEvent(type)) {
-      if (options.shouldManageSession(sessionID)) {
+      if (canObserveSelection(sessionID)) {
         suppress(sessionID);
       }
       return;
     }
 
     if (isIdleEvent(type, properties)) {
-      if (options.shouldManageSession(sessionID)) {
+      if (canObserveSelection(sessionID)) {
         clearExpectingWakeBusy(sessionID);
         if (pendingStoppedRecoveries.has(sessionID)) {
           if (localSessions.get(sessionID)?.archived) {
@@ -1570,7 +1652,7 @@ export function createOrchestratorWakeScheduler(
     }
 
     if (isBusyEvent(type, properties)) {
-      if (options.shouldManageSession(sessionID)) {
+      if (canObserveSelection(sessionID)) {
         // Wake-initiated busy preserves the no-progress cap; external busy rearms.
         const wakeBusy = isExpectingWakeBusy(sessionID);
         endIdleSpell(sessionID, !wakeBusy);
@@ -1584,7 +1666,7 @@ export function createOrchestratorWakeScheduler(
         properties?.status?.type !== 'idle' &&
         properties?.status?.type !== 'busy')
     ) {
-      if (options.shouldManageSession(sessionID)) {
+      if (canObserveSelection(sessionID)) {
         // Errors / retry are external lifecycle — rearm.
         clearExpectingWakeBusy(sessionID);
         endIdleSpell(sessionID, true);
