@@ -191,6 +191,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let mcps: ReturnType<typeof createBuiltinMcps>;
   let multiplexerConfig: MultiplexerConfig;
   let multiplexerEnabled: boolean;
+  // Host flavor ('v2' on OpenCode v2 hosts via the client shim, undefined on
+  // v1). Survives the try block so prompt-assembly hooks can use it.
+  let hostFlavor: string | undefined;
   let multiplexerSessionManager: MultiplexerSessionManager;
   let autoUpdateChecker: ReturnType<typeof createAutoUpdateCheckerHook>;
   const sessionMetadata = new SessionMetadataStore({
@@ -317,14 +320,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     runtime = RuntimeConfig.get(ctx.directory);
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
-    agentDefs = createAgents(runtime, { projectDirectory: ctx.directory });
-    agents = getAgentConfigs(runtime, { projectDirectory: ctx.directory });
+    // Host flavor marker ('v2' on OpenCode v2 hosts, set by the v2 client
+    // shim; absent on v1). Threads the native delegation vocabulary into
+    // prompt assembly so v2 prompts say subagent(...)/agent directly.
+    hostFlavor = (ctx as Parameters<Plugin>[0] & { hostFlavor?: string })
+      .hostFlavor;
+    agentDefs = createAgents(runtime, {
+      projectDirectory: ctx.directory,
+      hostFlavor,
+    });
+    agents = getAgentConfigs(runtime, {
+      projectDirectory: ctx.directory,
+      hostFlavor,
+    });
 
     // Parse multiplexer config with defaults
     multiplexerConfig = runtime.multiplexer;
-
-    const hostFlavor = (ctx as Parameters<Plugin>[0] & { hostFlavor?: string })
-      .hostFlavor;
 
     multiplexerEnabled = shouldEnableMultiplexer({
       hostFlavor,
@@ -1506,7 +1517,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const orchestratorPrompt =
             typeof orchestratorDef?.config?.prompt === 'string'
               ? orchestratorDef.config.prompt
-              : buildOrchestratorPrompt(runtime.disabledAgents);
+              : buildOrchestratorPrompt(
+                  runtime.disabledAgents,
+                  undefined,
+                  true,
+                  true,
+                  hostFlavor,
+                );
           output.system[0] = `${output.system[0] || ''}\n\n${orchestratorPrompt}`;
         }
       }

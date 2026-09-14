@@ -5,6 +5,8 @@
  * - `adaptPermissions`: v1 permission map → v2 Rule[] (with v2 permissive base +
  *   `task`→`subagent`, `bash`→`execute` mapping).
  * - `rewritePromptForV2`: rewrite v1 delegation syntax in agent/system prompts.
+ * - `delegationVocabulary`: native per-flavor delegation tool/param names for
+ *   prompt-build sites (v2 `subagent`/`agent` vs v1 `task`/`subagent_type`).
  * - `adaptTool`: v1 ToolDefinition ({description,args,execute}) → v2 Tool.Info.
  * - `applyAgentToDraft`: mutate a v2 agent draft entry from a v1 agent config.
  */
@@ -103,6 +105,29 @@ export function rewritePromptForV2(text: unknown): unknown {
   return text
     .replace(/\bsubagent_type\b/g, 'agent')
     .replace(/\btask\s*\(/g, 'subagent(');
+}
+
+/** Native delegation vocabulary for a host flavor. v2 hosts expose the
+ * built-in `subagent` tool with the `agent` parameter; v1 hosts (and any
+ * unknown flavor) use `task` with `subagent_type`. Prompt-build sites call
+ * this so generated text matches the host's actual tool directly, instead
+ * of emitting v1 wording and relying on `rewritePromptForV2` — which
+ * remains as belt-and-suspenders for user-customized presets that still
+ * contain v1 wording. */
+export interface DelegationVocabulary {
+  /** Name of the host's delegation tool: `subagent` on v2, `task` on v1. */
+  tool: string;
+  /** Name of the tool's agent-selector parameter: `agent` on v2,
+   * `subagent_type` on v1. */
+  agentParam: string;
+}
+
+export function delegationVocabulary(
+  hostFlavor: string | undefined,
+): DelegationVocabulary {
+  return hostFlavor === 'v2'
+    ? { tool: 'subagent', agentParam: 'agent' }
+    : { tool: 'task', agentParam: 'subagent_type' };
 }
 
 /** Adapt a v1 tool definition ({description, args, execute}) to a v2 tool. */
