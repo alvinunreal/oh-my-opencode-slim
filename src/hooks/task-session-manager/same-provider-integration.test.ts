@@ -1,9 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
-import {
-  BackgroundJobBoard,
-  BackgroundTaskConcurrency,
-} from '../../utils';
+import { BackgroundJobBoard, BackgroundTaskConcurrency } from '../../utils';
 import { createTaskSessionManagerHook } from './index';
 
 // Route getClient back to _ctx.client so the _ctx.client.session mock works
@@ -28,8 +25,7 @@ type IntegrationHookOptions = {
   sameProviderPolicy?: Record<string, 'foreground'>;
 };
 
-type TaskSessionManagerHook =
-  ReturnType<typeof createTaskSessionManagerHook>;
+type TaskSessionManagerHook = ReturnType<typeof createTaskSessionManagerHook>;
 
 function createHook(options?: IntegrationHookOptions) {
   return createTaskSessionManagerHook(
