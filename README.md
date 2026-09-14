@@ -645,7 +645,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | Doc | What it covers |
 |-----|----------------|
 | **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
-| **[OpenCode v2 Compatibility](docs/opencode-v2-compatibility.md)** | Run the same plugin on `opencode2`: feature matrix, minimum v2 builds, version pinning |
+| **[OpenCode v2 Compatibility](docs/opencode-v2-compatibility.md)** | Run the same plugin on `opencode2`: feature matrix, v2.0.x compatibility baseline, version pinning |
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Project Customization](docs/project-local-customization.md)** | Repository-specific custom agents, prompt overrides, per-agent skills, and precedence |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
