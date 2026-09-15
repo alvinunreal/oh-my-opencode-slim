@@ -18,9 +18,10 @@ import type {
 } from './types';
 
 type PathGuardContext = {
-  rootReal: Promise<string>;
+  root: string;
+  rootReal?: Promise<string>;
+  worktree?: string;
   worktreeReal?: Promise<string>;
-  realCache: Map<string, Promise<string>>;
 };
 
 type FileCacheContext = {
@@ -107,44 +108,35 @@ function createPathGuardContext(
   root: string,
   worktree: string | undefined,
 ): PathGuardContext {
-  return {
-    rootReal: real(root),
-    worktreeReal: worktree && worktree !== '/' ? real(worktree) : undefined,
-    realCache: new Map(),
-  };
-}
-
-async function realCached(
-  ctx: PathGuardContext,
-  target: string,
-): Promise<string> {
-  const resolvedTarget = path.resolve(target);
-  let pending = ctx.realCache.get(resolvedTarget);
-  if (!pending) {
-    pending = real(resolvedTarget);
-    ctx.realCache.set(resolvedTarget, pending);
-  }
-
-  return await pending;
+  return { root, worktree };
 }
 
 async function guard(ctx: PathGuardContext, target: string): Promise<void> {
-  const [targetReal, rootReal] = await Promise.all([
-    realCached(ctx, target),
-    ctx.rootReal,
-  ]);
-  if (inside(rootReal, targetReal)) {
+  const targetReal = await real(target);
+  // Both resolutions are lazy: whichever rejects first is observed here,
+  // and the other is never created, so no promise is left unhandled.
+  ctx.rootReal ??= real(ctx.root);
+  if (inside(await ctx.rootReal, targetReal)) {
     return;
   }
 
+  if (!ctx.worktree) {
+    throw createApplyPatchBlockedError(
+      `patch contains path outside workspace root: ${target}`,
+    );
+  }
+
+  // Resolve the worktree lazily: patches whose targets all live inside root
+  // never pay for it, and its rejection stays observed inside this flow
+  // instead of becoming an unhandled promise.
+  ctx.worktreeReal ??= ctx.worktree !== '/' ? real(ctx.worktree) : undefined;
   if (!ctx.worktreeReal) {
     throw createApplyPatchBlockedError(
       `patch contains path outside workspace root: ${target}`,
     );
   }
 
-  const treeReal = await ctx.worktreeReal;
-  if (inside(treeReal, targetReal)) {
+  if (inside(await ctx.worktreeReal, targetReal)) {
     return;
   }
 

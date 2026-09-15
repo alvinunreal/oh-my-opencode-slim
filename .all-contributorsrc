@@ -974,6 +974,60 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "gitslim",
+      "name": "gitslim",
+      "avatar_url": "https://avatars.githubusercontent.com/u/24612825?v=4",
+      "profile": "https://github.com/gitslim",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "xiaolf0813",
+      "name": "xiaolf0813",
+      "avatar_url": "https://avatars.githubusercontent.com/u/314566924?v=4",
+      "profile": "https://github.com/xiaolf0813",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "BaconDroid",
+      "name": "BaconDroid",
+      "avatar_url": "https://avatars.githubusercontent.com/u/11067111?v=4",
+      "profile": "https://github.com/BaconDroid",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "bferanmi806-sketch",
+      "name": "Enoch",
+      "avatar_url": "https://avatars.githubusercontent.com/u/277080233?v=4",
+      "profile": "https://sprightly-strudel-e1f939.netlify.app/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "mxalbert1996",
+      "name": "Albert Chang",
+      "avatar_url": "https://avatars.githubusercontent.com/u/9391933?v=4",
+      "profile": "https://github.com/mxalbert1996",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "Aveer",
+      "name": "Aveer",
+      "avatar_url": "https://avatars.githubusercontent.com/u/84144527?v=4",
+      "profile": "https://github.com/Aveer",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

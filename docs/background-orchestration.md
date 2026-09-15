@@ -167,9 +167,10 @@ retaining its session, then inspect and reconcile any partial file changes befor
 launching replacement work. Use `task_revive` to resume a retained session with a
 new instruction.
 
-A cancelled or errored retained session may be revived immediately once its
-retained state has been verified safe. Acknowledgement controls parent and
-job-board consumption and reusable-pool display, not same-session revival.
+A cancelled, errored, or stopped retained session may be revived immediately
+once its retained state has been verified safe. Acknowledgement controls parent
+and job-board consumption and reusable-pool display, not same-session revival.
+`task()` never drops an explicit `task_id` to spawn another session.
 
 Terminal jobs are reconciled automatically after their result is injected into
 the orchestrator session. That lifecycle state is not proof the output was used;
@@ -191,7 +192,15 @@ history is rehydrated into the local job board and immediately reconciled agains
 live host session status. A missing or idle child is a stop candidate: after a
 5s confirmation grace it is surfaced as `stopped, unreconciled`, while a busy
 child remains running; status lookup failures remain uncertain rather than being
-treated as completion.
+treated as completion. When the host client exposes `session.get`, each newly
+rehydrated task is also probed for existence: a session deleted while the plugin
+was down is tombstoned and torn down instead of resurrecting as a
+forever-running ghost, and a session that already reached a terminal host
+outcome is settled to it (the typed NotFound classification is a v2
+in-process artifact — on v1 hosts the probe harmlessly never tombstones). On
+OpenCode v2 hosts with the optional `ctx.storage` domain, deletion tombstones
+and alias counters additionally persist across host restarts (see the
+[v2 compatibility doc](opencode-v2-compatibility.md#background-job-state-rehydrate-probe-and-persistence)).
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
@@ -331,10 +340,12 @@ The prompt/runtime treats background tasks as a small job board:
 | result | Final task output once terminal |
 | status certainty | `status uncertain` when the live status map is malformed or unavailable; it never implies completion |
 
-Cancelled and errored sessions can remain retained for a later `task_revive`.
-They may be revived immediately once their retained state has been verified safe.
-Acknowledgement controls parent and job-board consumption and reusable-pool
-display, not same-session revival.
+Cancelled, errored, and stopped sessions can remain retained for a later
+`task_revive`. They may be revived immediately once their retained state has
+been verified safe. Acknowledgement controls parent and job-board consumption
+and reusable-pool display, not same-session revival. Stopped sessions stay out
+of the ordinary `task()` reuse pool because that generation has no terminal
+result; after ack they appear under Retained / Recovery.
 
 The current todo list can represent user-visible work, but task IDs and file
 ownership need to be explicit in the orchestrator's working context.
@@ -359,15 +370,19 @@ periodic internal wake prompt so incomplete TODOs are not abandoned. This is
   "backgroundJobs": {
     "orchestratorWake": {
       "enabled": true,
-      "intervalMs": 300000
+      "intervalMs": 300000,
+      "mode": "auto"
     }
   }
 }
 ```
 
 `intervalMs` must be an integer from `60000` to `2147483647`. `0` is invalid.
-Set `enabled: false` to disable wakes while keeping idle reconciliation and
-background-job orchestration.
+`mode` selects the wake condition: `"auto"` (default) uses todo-gating on v1
+hosts and children-driven mode on v2 hosts; `"todo"` and `"children"` pin one
+mode (an explicit `"todo"` degrades to children on hosts without the todo
+API). Set `enabled: false` to disable wakes while keeping idle reconciliation
+and background-job orchestration.
 
 Behavior:
 
@@ -383,6 +398,10 @@ Behavior:
 - Suppress/clear on question/permission input waits, `wait_for_user`, foreground
   fallback, session busy, session deletion, external user messages, and server
   disposal.
+- `session.time.archived` is authoritative when available. Archived sessions do
+  not receive periodic or stopped-job-recovery wakes; archive updates cancel
+  timers and stale evaluations, while an unarchive permits future lifecycle
+  activity. v2 hosts without `session.get()` use observed session updates.
 - One in-flight evaluation/wake per session. Status/waits/generation are
   rechecked immediately before `promptAsync`. Cooldown/reservation is recorded
   before the call so a failed `promptAsync` cannot storm retries.
@@ -406,8 +425,20 @@ The scheduler does **not** perform automatic cancellation and does not rely on
 the local job board. When no incomplete TODOs remain, it ends the current idle
 spell and stops polling until new activity.
 
-**v2 availability:** the v2 shim lacks the required session APIs, so this
-capability-gated feature remains inactive there.
+**v2 hosts (children-driven degraded mode):** v2 has no todo/children/status
+surfaces, so with `mode: "auto"` the scheduler runs in children-driven mode.
+The wake condition becomes "children without a terminal `outcome`" — v2
+records an outcome (succeeded|failed|interrupted) only on terminal transition —
+plus pending stopped-job recovery. Children are enumerated via
+`session.list({parentID})` (event-tracked fallback from `session.created`
+links when the listing is unavailable), scoped to the session's directory, and
+a child with no fresh update evidence (host `time.updated` or a tracked status
+change within 3× the interval) counts as inactive. The wake prompt asks the
+orchestrator to check on unfinished background child sessions and unreconciled
+jobs, is delivered with `queue` semantics (like v1's queued prompt_async), and
+the children-only fingerprint keeps the two-wake no-progress cap bounding
+cost. v2's native subagent completion nudges still cover the happy path; this
+watchdog covers stuck children and unreconciled jobs.
 
 For external manual work, the orchestrator first gives the user concrete steps,
 then calls `wait_for_user` as its final tool action. This explicit signal covers
@@ -468,11 +499,18 @@ valid map is not immediately terminal: the first observation starts a 5s
 confirmation grace and keeps the job `running, status uncertain`. Repeat
 non-busy evidence after that grace records `stopped, unreconciled` rather than
 `completed`: it means execution ended before a native terminal task result was
-delivered, not that the task succeeded. Stopped sessions are never reusable and
-stay visible to the parent for recovery. A later live `busy` observation can
-revive an unreconciled stopped job. After the parent has been woken and the stop
-acknowledged, stale busy cannot flip the job back to running. Only explicit
-terminal task output proves completion, error, or cancellation.
+delivered, not that the task succeeded. Stopped sessions are never reusable
+through `task()` and stay visible to the parent for recovery with `task_revive`.
+A later live `busy` observation can revive an unreconciled stopped job. After
+the parent has been woken and the stop acknowledged, stale busy cannot flip the
+job back to running; the session remains listed under Retained / Recovery until
+revived or evicted. Only explicit terminal task output proves completion, error,
+or cancellation.
+
+Stopped-job recovery facts are checked again by task ID and run generation
+before a queued recovery wake is delivered. The inline detail queue is bounded;
+when it overflows, the wake carries an explicit overflow signal directing the
+orchestrator to inspect all unreconciled stopped jobs on the board.
 
 Malformed status entries and failed status requests are surfaced as `status
 uncertain`; they never prove that a job stopped or completed and do not confirm
@@ -513,6 +551,38 @@ state keeps its slot forever, and queued tasks as well as the orchestrator's
 `task` calls block behind it. When you enable `concurrency`, pair it with the
 opt-in wall-clock supervisor below so stalled tasks are eventually forced to
 a terminal state and release their slots.
+
+### Same-Provider Foreground Conversion
+
+`backgroundJobs.sameProviderPolicy` (see
+[Configuration](configuration.md#background-job-management)) is an opt-in
+per-provider policy for local inference backends that execute multiple
+logical agent sessions on one shared model runtime (one accelerator, one
+KV-context pool). Running a foreground parent and a same-provider background
+child concurrently on such a backend can reduce throughput from repeated
+model/KV context switching between the two large sessions:
+
+```jsonc
+{
+  "backgroundJobs": {
+    "sameProviderPolicy": {
+      "lm-nexus": "foreground"
+    }
+  }
+}
+```
+
+When the parent session's current model and the child agent's resolved model
+both resolve to a provider configured with `"foreground"`, the
+`tool.execute.before` hook rewrites the explicit
+`task(..., background: true)` request to `background: false` before the
+pending call is created. The task then runs through the existing foreground
+path unchanged: it skips background concurrency admission (no semaphore
+slot), is not wall-clock supervised, executes synchronously on the host, and
+its status is registered through the existing foreground bookkeeping.
+Unconfigured providers, different providers, and undeterminable providers
+leave `background: true` untouched (fail-open); the default (omitted)
+behavior is unchanged.
 
 ### Opt-in Wall-clock Supervisor
 

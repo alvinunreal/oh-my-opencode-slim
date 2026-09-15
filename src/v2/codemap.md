@@ -15,13 +15,14 @@ v2 registrations. v1 behavior is unchanged.
 | Path | Role |
 |---|---|
 | `index.ts` | Barrel: re-exports `createV2Setup` and the v2 context types. Imported by `src/index.ts` for the dual `default` export. |
-| `setup.ts` | `createV2Setup()` → the `setup(ctx)` orchestrator v2 calls. Capability-guards reduced/TUI-side hosts (no `agent.transform`). Registers agents, tools, MCPs, commands, the merged context hook, tool-execute bridges, and the event pump — each independently try/catch-guarded with a zero-registration health check. Exports the pure command-marker helpers (`wrapCommandMarker`/`parseCommandMarker`/`stripCommandMarker`), `createCommandRegistration`, `applyCommandMarkerToContext`, the merged context-hook builder `createSessionContextHandler`, the tool-execute bridge factory `createToolExecuteBridges`, and `adaptMcpServer`. |
+| `setup.ts` | `createV2Setup()` → the `setup(ctx)` orchestrator v2 calls. Capability-guards reduced/TUI-side hosts (no `agent.transform`). Registers agents, tools, MCPs, commands, the merged context hook, the chat.headers `session.model.request` bridge, tool-execute bridges, and the event pump — each independently try/catch-guarded with a zero-registration health check. Exports the pure command-marker helpers (`wrapCommandMarker`/`parseCommandMarker`/`stripCommandMarker`), `createCommandRegistration`, `applyCommandMarkerToContext`, the merged context-hook builder `createSessionContextHandler`, the chat-headers bridge (`observeChatHeaderState`/`createChatHeadersBridge` + `ChatHeaderSessionState`), the tool-execute bridge factory `createToolExecuteBridges`, and `adaptMcpServer`. |
 | `types.ts` | v2 plugin context surface (`V2Context` + draft/event types), mirrored locally (v2 plugin package is not a build-time dependency). Runtime-probed session methods (`get`/`interrupt`/`switchModel`/`context`/`prompt`/`synthetic`/`rename`/`switchAgent`) and the optional `mcp` domain are declared optional with probe notes. |
 | `session-submit.ts` | Shared `createSessionSubmit` (prompt-only user-prompt submit via `ctx.session.prompt`) + `textFromContent`; used by both the generic command bridge and the interview bridge to avoid a setup↔bridge import cycle. |
-| `client-shim.ts` | `buildPluginInput`: constructs a v1-shaped `PluginInput` with a **real-delegation** client — v1 SDK call shapes translate to v2 flat session calls (`get`, `interrupt`, `context`, `prompt` with `delivery:"steer"`, `rename`), with honest degradation (log or omit) where the host lacks the method. `resolveV2Directory` prefers `ctx.location.directory` (#45403+) with a `process.cwd()` fallback. `promptAsync` encapsulates the v2 model-switch semantics (`switchModel` before the prompt) that power the v1 foreground-fallback pipeline. Marks the input `hostFlavor: 'v2'` (multiplexer gating in `src/index.ts`) and threads the probed `generate.text` channel as `experimental_v2`. Never fakes success shapes (no invented `serverUrl`). |
+| `client-shim.ts` | `buildPluginInput`: constructs a v1-shaped `PluginInput` with a **real-delegation** client — v1 SDK call shapes translate to v2 flat session calls (`get`, `interrupt`, `context`, `prompt` with `delivery:"steer"`, `rename`), with honest degradation (log or omit) where the host lacks the method. `resolveV2Directory` prefers `ctx.location.directory` (#45403+) with a `process.cwd()` fallback. `promptAsync` encapsulates the v2 model-switch semantics (`switchModel` before the prompt) and accepts an optional `delivery` argument (default `"steer"` for the foreground-fallback replay; the orchestrator-wake scheduler passes `"queue"` to match v1's queued prompt_async) plus an optional `modelSwitch: 'required'` argument (foreground-fallback: a host without `session.switchModel` rejects the replay with a typed `V2SwitchModelUnavailableError` instead of silently replaying on the failed model; pin-callers keep the logged steer) and an optional `modelVariant` argument (wake model pin: merged into the `switchModel` ref so the host keeps the session's reasoning-effort variant; a variant-less pin that already matches the session's current model — checked via `session.get` at delivery time, fail-soft — skips `switchModel` entirely so variant-less pins from any internal caller can no longer reset the reasoning-effort variant to default; explicit variants and cross-model pins still switch). A failing `switchModel` degrades to steering on the current model — logged, with `switched: false` attached to the result so foreground-fallback can gate its switch bookkeeping on the truth (#1125); internal-initiator body parts (wake prompts) route through `session.synthetic` when the host provides it (`resume: true`, same `delivery`, metadata carried, client-chosen `msg_`-prefixed admission id recorded in `internal-admissions.ts` so the chat-headers bridge can classify the wake) so the wake text stays model-visible without being persisted/rendered as a user bubble — without it they map to prompt `metadata` so the session-prompt bridge can restore the v1 part marker (degraded host: visible wake message). `session.list` maps v2 `Session.Info` to the v1 `{data}` envelope including `outcome`/`time.updated`/`directory` (interview dashboard scan + orchestrator-wake children enumeration). Marks the input `hostFlavor: 'v2'` (multiplexer gating and wake-mode resolution in `src/index.ts` / `src/hooks/orchestrator-wake/`) and threads the probed `generate.text` channel as `experimental_v2`. Never fakes success shapes (no invented `serverUrl`). |
+| `internal-admissions.ts` | Bounded tracker of internal-initiator admissions (`recordInternalAdmission`/`isInternalAdmission` + `createInternalSyntheticMessageID`): the in-band marker source for the chat-headers bridge on v2 (prompt-metadata admissions recorded by the session-prompt bridge; synthetic admissions recorded by the client shim with the client-chosen id the v2 `Session.synthetic` endpoint honors and preserves on the LLM context message). |
 | `delegation.ts` | v2↔v1 delegation tool normalization: `toolNameToV1` (`subagent`→`task`), `subagentArgsToV1` (`agent`→`subagent_type`, `sessionID`→`task_id`), `v1ArgsToSubagent` (reverse). Lets the whole v1 pipeline (task-session-manager, job board, `task_*` tools) run on v2's host `subagent` tool with zero changes. |
-| `event-adapter.ts` | `mapV2EventToV1`: additive-only v2→v1 event synthesis for the event pump. Raw event always first (interview bridge consumes it); then idle `session.status` → `session.idle`, flat child `session.created` → v1 early-registration `{info:{id,parentID,agent?}}`, usage telemetry (`session.usage.updated`/`session.step.ended`) → deduplicated completed-assistant `message.updated` (deterministic fingerprint id; no wall-clock/randomness). |
-| `tui.ts` | v2 TUI plugin entry (`./tui` export → `dist/tui2.js`): re-exports the v1 dual-contract TUI (`../tui`) and extends its v2 `setup` with the `/preset` keymap flow (`ui.dialog.select` + toast; persists via `switchPresetOnDisk`; `/preset <name>` fast path). Capability-guarded: builds without `keymap.layer`/`ui.dialog.select` keep the sidebar and lose only `/preset`. |
+| `event-adapter.ts` | `mapV2EventToV1`: additive-only v2→v1 event synthesis for the event pump. Raw event always first (interview bridge consumes it); payload is read from the live wire key `data` (`{id, created, type, location?, durable?, metadata?, data}` — verified live on v2 hosts) with `properties` as the legacy/test fallback, while every synthesized shape writes `properties` (what the v1 consumers read). Syntheses: `session.execution.*` → v1 busy/idle/error lifecycle shapes, flat child `session.created` → v1 early-registration `{info:{id,parentID,agent?}}`, usage telemetry (`session.usage.updated`/`session.step.ended`) → deduplicated completed-assistant `message.updated` (deterministic fingerprint id; no wall-clock/randomness). |
+| `tui.ts` | v2 TUI plugin entry (`./tui` export → `dist/tui2.js`): re-exports the v1 dual-contract TUI (`../tui`) and extends its v2 `setup` with the `/preset` keymap flow. The layer registers from an `append: "app"` slot render because the host's `keymap.layer` is provider-scoped (calling it from `setup` throws `Keymap.Provider is missing`), using the host's thunk + full command schema (`id`, `palette`, `slash.arguments`); feedback via `ui.toast.show`; persists via `switchPresetOnDisk`; `/preset <name>` fast path. Capability-guarded: hosts without `ui.slot`/`keymap.layer` keep the sidebar and lose only `/preset`; the interactive picker additionally needs `ui.dialog.select`. |
 | `adapters.ts` | Shape adapters: `parseModelRef`, `adaptPermissions` (v1 map → v2 Rule[] + v2 permissive base + `task`→`subagent`/`bash`→`execute` mapping), `rewritePromptForV2` (`task(`→`subagent(`), `adaptTool`, `applyAgentToDraft`. |
 | `interview-bridge.ts` | v2-only `/interview` marker command, trailing-message context bridge, v2 interview runtime, and per-session transcript projections. |
 | `setup-command.test.ts` | Unit tests for the command marker helpers, add-only draft registration, the shared submit helper, and the merged context-hook seam. |
@@ -52,6 +53,14 @@ v2 registrations. v1 behavior is unchanged.
      generic command marker dispatch (whole-text-anchored markers recovered
      from the trailing user message and routed to the v1
      `command.execute.before` hook)
+   - `chat.headers` → `ctx.session.hook("model.request")` (capability-
+     probed): per-provider-request HTTP headers. The context hook records
+     the trailing user message identity + internal-initiator marker per
+     session (`observeChatHeaderState`); the `model.request` handler
+     (`createChatHeadersBridge`) sets `x-initiator: agent` on Copilot
+     primary requests for internal admissions (shared constants/predicate
+     with `src/hooks/chat-headers.ts`; transport-level only, no payload
+     mutation)
    - `tool.execute.before/after` → `ctx.tool.hook` via
      `createToolExecuteBridges`: subagent→task name/args normalization
      (`delegation.ts`), a mutable args view written back after the hook
@@ -125,15 +134,20 @@ expanding the global v2 client surface.
   session pipeline cannot substitute.
 - Build: `build:v2` bundles `src/index.ts` (which pulls in `src/v2/`) into
   `dist/server/index.js` (self-contained except `jsdom`) — the directory
-  entrypoint v2 hosts ≥ beta-18743 require, also served via the
+  entrypoint 2.x hosts require, also served via the
   `./server` package subpath (the exports map resolves it directly);
   `build:tui` bundles `src/v2/tui.ts` into `dist/tui2.js`.
 
 ## Limitations (see `docs/opencode-v2-compatibility.md`)
 
-Multiplexer and orchestrator-wake are v1-only by design (v2 renders subagents
-natively; the host `subagent` tool notifies the parent itself). MCP
-registration needs `ctx.mcp.transform` ≥ #45408 (older builds: config-only
-snippet). Model switching needs `session.switchModel` ≥ #43718; directory
-needs `ctx.location` ≥ #45403 (older builds: cwd). Companion is unverified on
-v2. Prompt-cache safety rules are unchanged (trailing-message-only mutation).
+Multiplexer is v1-only by design (v2 renders subagents natively). The
+orchestrator-wake scheduler runs on v2 in children-driven degraded mode
+(list+promptAsync gate, `session.list({parentID})` enumeration with the
+event-tracked fallback, outcome-based condition with a 3×-interval staleness
+bound, `queue` delivery — see `src/hooks/orchestrator-wake/codemap.md`).
+MCP registration needs `ctx.mcp.transform` ≥ #45408 (hosts without it fall
+back to a config-only snippet). Model switching needs
+`session.switchModel` ≥ #43718; directory needs `ctx.location` ≥ #45403
+(hosts without it fall back to cwd). Companion is
+unverified on v2. Prompt-cache safety rules are unchanged
+(trailing-message-only mutation).

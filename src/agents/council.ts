@@ -4,7 +4,18 @@ import { createSynthesisOnlyPermission } from './permissions';
 // NOTE: Councillor system prompts live in the councillor agent factory.
 // The council agent synthesizes councillor responses passed by the orchestrator.
 
-const COUNCIL_SYNTHESIS_REINFORCEMENT = `\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually by name, then produce the required output with a synthesized Council Response, a Per-Councillor Details section using each councillor's exact seat name (e.g. "alpha", not the model label), and a Council Summary with Consensus Level (unanimous|majority|split), Agreed Points, Disagreements + resolution, Remaining Uncertainty, and Recommended Action.`;
+export const COUNCIL_COMPACTION_EXCEPTION =
+  'Exception: if the host asks you to produce a session checkpoint or compaction summary in a specific template, follow that template exactly and do not use the council report format.';
+
+/** Idempotent: `createAgents` and the later host-agent merge can drop
+ * the exception. Re-apply it to the effective council prompt without
+ * duplicating or imposing the synthesis reinforcement. */
+export function ensureCouncilCompactionException(prompt: string): string {
+  if (prompt.includes(COUNCIL_COMPACTION_EXCEPTION)) return prompt;
+  return `${prompt}\n\n${COUNCIL_COMPACTION_EXCEPTION}`;
+}
+
+const COUNCIL_SYNTHESIS_REINFORCEMENT = `\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually by name, then produce the required output with a synthesized Council Response, a Per-Councillor Details section using each councillor's exact seat name (e.g. "alpha", not the model label), and a Council Summary with Consensus Level (unanimous|majority|split), Agreed Points, Disagreements + resolution, Remaining Uncertainty, and Recommended Action. ${COUNCIL_COMPACTION_EXCEPTION}`;
 
 const COUNCIL_AGENT_PROMPT = `You are the Council agent - a \
 synthesizer for multi-model consensus.
@@ -31,6 +42,8 @@ key insight and unique contribution by name
 - Don't just average responses - choose the best approach and improve upon it
 
 **Required Output Format**:
+${COUNCIL_COMPACTION_EXCEPTION}
+
 Always include these sections in your final response:
 
 ## Council Response

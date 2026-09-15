@@ -169,7 +169,13 @@ function parseAdd(lines: string[], index: number, mode: ParseMode) {
     at += 1;
   }
 
-  return { content: contents.join('\n'), next: at };
+  // Canonical Add representation: either empty (no lines) or newline-
+  // terminated. `+a` followed by `+` must describe two lines ("a\n\n"),
+  // not collapse into one; a lone `+` is a single empty line ("\n").
+  return {
+    content: contents.length === 0 ? '' : `${contents.join('\n')}\n`,
+    next: at,
+  };
 }
 
 function parsePatchInternal(patchText: string, mode: ParseMode): ParsedPatch {
@@ -320,7 +326,12 @@ function renderAddContents(contents: string): string[] {
     return [];
   }
 
-  return contents.split('\n').map((line) => `+${line}`);
+  // Drop only the terminator's empty element, retaining unterminated lines.
+  const lines = contents.split('\n');
+  if (contents.endsWith('\n')) {
+    lines.pop();
+  }
+  return lines.map((line) => `+${line}`);
 }
 
 export function formatPatch(patch: ParsedPatch): string {

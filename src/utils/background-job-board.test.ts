@@ -23,6 +23,23 @@ describe('BackgroundJobBoard', () => {
       terminalUnreconciled: false,
     });
     expect(board.hasRunning('parent-1')).toBe(true);
+    expect(board.hasRunningJobs()).toBe(true);
+  });
+  test('hasRunningJobs is false once no job is running', () => {
+    const board = new BackgroundJobBoard();
+    expect(board.hasRunningJobs()).toBe(false);
+    board.registerLaunch({
+      taskID: 'ses_idle',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config',
+    });
+    board.updateStatus({
+      taskID: 'ses_idle',
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    expect(board.hasRunningJobs()).toBe(false);
   });
   test('markUsed lands strictly after completion even with equal timestamps', () => {
     const board = new BackgroundJobBoard();
@@ -446,6 +463,117 @@ describe('BackgroundJobBoard', () => {
       updatedAt: 300,
     });
     expect(board.formatForPrompt('parent-1')).toContain('Reusable Sessions');
+  });
+
+  test('lists acknowledged stopped sessions as retained recovery, not reusable', () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_stopped',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'idle review',
+      now: 100,
+    });
+    board.markStopped('ses_stopped', 'no native result', 110, undefined, 110);
+
+    const unreconciled = board.formatForPrompt('parent-1');
+    expect(unreconciled).toContain(
+      'ora-1 / ses_stopped / oracle / stopped, unreconciled',
+    );
+    expect(unreconciled).not.toContain('#### Retained / Recovery');
+    expect(
+      board.resolveReusable('parent-1', 'ses_stopped', 'oracle'),
+    ).toBeUndefined();
+
+    board.markReconciled('ses_stopped');
+
+    const prompt = board.formatForPrompt('parent-1');
+    expect(prompt).toContain('#### Retained / Recovery');
+    expect(prompt).toContain(
+      'ora-1 / ses_stopped / oracle / stopped, retained',
+    );
+    expect(prompt).toContain(
+      'Recovery: no terminal result; recoverable with task_revive, not task()',
+    );
+    expect(prompt).toContain(
+      'Stopped sessions without a terminal result are retained for task_revive, not task().',
+    );
+    expect(prompt).toContain('#### Reusable Sessions\n- none');
+    expect(prompt).not.toContain('stopped, unreconciled');
+    expect(
+      board.resolveReusable('parent-1', 'ses_stopped', 'oracle'),
+    ).toBeUndefined();
+    expect(
+      board.formatForPromptWithMetadata('parent-1')
+        ?.terminalUnreconciledTaskIDs,
+    ).toEqual([]);
+  });
+
+  test('trimRetained evicts acknowledged stopped sessions beyond the per-agent cap', () => {
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    board.registerLaunch({
+      taskID: 'ses_old',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      now: 100,
+    });
+    board.markStopped('ses_old', 'no native result', 110, undefined, 110);
+    board.markReconciled('ses_old', 120);
+
+    board.registerLaunch({
+      taskID: 'ses_new',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      now: 200,
+    });
+    board.markStopped('ses_new', 'no native result', 210, undefined, 210);
+    board.markReconciled('ses_new', 220);
+
+    expect(board.get('ses_old')).toBeUndefined();
+    expect(board.get('ses_new')).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('releaseLease re-applies retention caps shielded by an in-flight lease', () => {
+    // P2 regression: an ACK landing while a revive holds the relaunch
+    // lease shields retained-stopped entries from trimRetained. When the
+    // revive fails and releases the lease, the per-agent cap must be
+    // re-applied — evicting the oldest acknowledged stopped entry that
+    // was shielded while the lease was live.
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    board.registerLaunch({
+      taskID: 'ses_a',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      now: 100,
+    });
+    board.markStopped('ses_a', 'no native result', 110, undefined, 110);
+    board.markReconciled('ses_a', 120);
+
+    // ses_a holds a relaunch lease (revive in flight).
+    const lease = board.acquireRelaunchLease('ses_a', 1);
+    expect(lease).toBeDefined();
+
+    board.registerLaunch({
+      taskID: 'ses_b',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      now: 200,
+    });
+    board.markStopped('ses_b', 'no native result', 210, undefined, 210);
+    // ACK of ses_b while ses_a is leased: the shielded ses_a survives the
+    // per-agent cap of 1 because leased entries are excluded.
+    board.markReconciled('ses_b', 220);
+    expect(board.get('ses_a')).toBeDefined();
+    expect(board.get('ses_b')).toBeDefined();
+
+    // Releasing the lease re-applies the cap without the shield: the
+    // oldest retained entry (ses_a) is evicted.
+    if (lease) expect(board.releaseLease(lease)).toBe(true);
+    expect(board.get('ses_a')).toBeUndefined();
+    expect(board.get('ses_b')).toMatchObject({ state: 'stopped' });
   });
 
   test('does not expose unreconciled terminal jobs as reusable', () => {
@@ -1131,6 +1259,41 @@ describe('BackgroundJobBoard', () => {
 
     const later = board.markRunningFromLiveSession('ses_1', 151, generation);
     expect(later).toMatchObject({
+      state: 'running',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('live busy cannot resurrect a stopped job under a relaunch lease', () => {
+    // P1 regression: while a task_revive holds the relaunch lease for a
+    // stopped generation, a busy observation must not flip the record
+    // back to running underneath the in-flight revive. The observation
+    // is recorded (lastLiveBusyAt) so the revive can refuse on fresh
+    // activity; once the lease is released, a later busy can revive.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 100,
+    });
+    const generation = board.get('ses_1')?.generation;
+    board.markStopped('ses_1', 'no result', 150, generation, 150);
+
+    const lease = board.acquireRelaunchLease('ses_1', generation ?? 1);
+    expect(lease).toBeDefined();
+
+    const leased = board.markRunningFromLiveSession('ses_1', 200, generation);
+    expect(leased).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: true,
+      lastLiveBusyAt: 200,
+    });
+
+    if (lease) board.releaseLease(lease);
+
+    const revived = board.markRunningFromLiveSession('ses_1', 201, generation);
+    expect(revived).toMatchObject({
       state: 'running',
       terminalUnreconciled: false,
     });

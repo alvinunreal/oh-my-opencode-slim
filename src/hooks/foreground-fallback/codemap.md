@@ -48,7 +48,7 @@ OpenCode Event (message.updated/session.error/session.status)
     ↓
 ForegroundFallbackManager.handleEvent()
     ↓
-Retryable error detection via isRetryableError() / isFailoverError()
+Failover error detection via isFailoverError()
     ↓
 tryFallback(sessionID) [deduplicated, in-progress guarded]
     ↓

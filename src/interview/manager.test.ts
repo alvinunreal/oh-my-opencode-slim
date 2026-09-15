@@ -3,9 +3,12 @@ import * as fs from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import type { PluginConfig } from '../config';
-import { readDashboardAuthFile } from './dashboard';
+import { DEFAULT_DASHBOARD_PORT, readDashboardAuthFile } from './dashboard';
 import { createDashboardManager } from './dashboard-manager';
-import { createInterviewManager as createInterviewManagerImpl } from './manager';
+import {
+  computeInterviewMode,
+  createInterviewManager as createInterviewManagerImpl,
+} from './manager';
 import { bindFreePort } from './test-port';
 
 // Intercept getClient so the manager's service uses the same session mocks.
@@ -53,6 +56,9 @@ function createMockContext(overrides?: {
 }) {
   const messagesData = overrides?.messagesData ?? [];
   const sessionMock = {
+    get: mock(async (args: { path: { id: string } }) => ({
+      data: { id: args.path.id },
+    })),
     messages: mock(async () => ({ data: messagesData })),
     prompt: mock(async (args: any) => {
       if (overrides?.promptImpl) {
@@ -522,8 +528,6 @@ describe('interview manager - session registration', () => {
       dashboard: true,
     });
 
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
     const intervalHandles: Array<{ unref: ReturnType<typeof mock> }> = [];
     const setIntervalSpy = mock(() => {
       const handle = { unref: mock(() => {}) };
@@ -533,15 +537,17 @@ describe('interview manager - session registration', () => {
     const clearIntervalSpy = mock(() => {});
 
     try {
-      (globalThis as any).setInterval = setIntervalSpy;
-      (globalThis as any).clearInterval = clearIntervalSpy;
-
       createInterviewManager(dashboardCtx, config, { server });
 
       // Wait for dashboard init
       await new Promise((r) => setTimeout(r, 100));
 
-      const clientManager = createInterviewManager(clientCtx, config);
+      const clientManager = createInterviewManager(clientCtx, config, {
+        timers: {
+          setInterval: setIntervalSpy as never,
+          clearInterval: clearIntervalSpy as never,
+        },
+      });
 
       // Wait for client init to connect to the dashboard
       await new Promise((r) => setTimeout(r, 100));
@@ -571,8 +577,6 @@ describe('interview manager - session registration', () => {
       expect(clearIntervalSpy).toHaveBeenCalledWith(fallbackTimerHandle);
       expect(fallbackTimerHandle?.unref).toHaveBeenCalledTimes(1);
     } finally {
-      (globalThis as any).setInterval = originalSetInterval;
-      (globalThis as any).clearInterval = originalClearInterval;
       await fs.rm(dashboardDir, { recursive: true, force: true });
       await fs.rm(clientDir, { recursive: true, force: true });
     }
@@ -1350,5 +1354,63 @@ describe('interview manager - dashboard election failure fallback', () => {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
       tcpServer.close();
     }
+  });
+});
+
+describe('computeInterviewMode', () => {
+  test('undefined config resolves to per-session defaults', () => {
+    expect(computeInterviewMode(undefined)).toEqual({
+      dashboardEnabled: false,
+      outputFolder: 'interview',
+      dashboardPort: DEFAULT_DASHBOARD_PORT,
+    });
+  });
+
+  test('dashboard flag enables dashboard mode with the default port', () => {
+    expect(
+      computeInterviewMode({
+        maxQuestions: 2,
+        outputFolder: 'interview',
+        autoOpenBrowser: true,
+        port: 0,
+        dashboard: true,
+      }),
+    ).toEqual({
+      dashboardEnabled: true,
+      outputFolder: 'interview',
+      dashboardPort: DEFAULT_DASHBOARD_PORT,
+    });
+  });
+
+  test('an explicit port enables dashboard mode and wins over the default', () => {
+    expect(
+      computeInterviewMode({
+        maxQuestions: 2,
+        outputFolder: 'interview',
+        autoOpenBrowser: true,
+        port: 4321,
+        dashboard: false,
+      }),
+    ).toEqual({
+      dashboardEnabled: true,
+      outputFolder: 'interview',
+      dashboardPort: 4321,
+    });
+  });
+
+  test('a custom output folder is passed through untouched', () => {
+    expect(
+      computeInterviewMode({
+        maxQuestions: 3,
+        outputFolder: 'specs/interviews',
+        autoOpenBrowser: false,
+        port: 0,
+        dashboard: false,
+      }),
+    ).toEqual({
+      dashboardEnabled: false,
+      outputFolder: 'specs/interviews',
+      dashboardPort: DEFAULT_DASHBOARD_PORT,
+    });
   });
 });

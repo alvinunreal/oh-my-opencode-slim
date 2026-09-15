@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { InterviewConfig } from '../config';
-import { createInterviewServer } from './server';
+import { createInterviewServer, createInterviewServerDeps } from './server';
 import { createInterviewService } from './service';
 
 export function createPerSessionInterviewServer(
@@ -21,21 +21,9 @@ export function createPerSessionInterviewServer(
 } {
   const service = createInterviewService(ctx, interviewConfig);
   const resolvedOutputPath = path.join(ctx.directory, outputFolder);
-  const server = createInterviewServer({
-    getState: async (interviewId) => service.getInterviewState(interviewId),
-    listInterviewFiles: async () => service.listInterviewFiles(),
-    listInterviews: () => service.listInterviews(),
-    submitAnswers: async (interviewId, answers) =>
-      service.submitAnswers(interviewId, answers),
-    submitBlockComment: async (interviewId, section, comment) =>
-      service.submitBlockComment(interviewId, section, comment),
-    submitChat: async (interviewId, message) =>
-      service.submitChat(interviewId, message),
-    handleNudgeAction: async (interviewId, action) =>
-      service.handleNudgeAction(interviewId, action),
-    outputFolder: resolvedOutputPath,
-    port: 0,
-  });
+  const server = createInterviewServer(
+    createInterviewServerDeps(service, resolvedOutputPath, 0),
+  );
   service.setBaseUrlResolver(() => server.ensureStarted());
   let disposed = false;
 

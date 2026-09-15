@@ -36,12 +36,32 @@ export function createSessionSubmit(ctx: V2Context): V2CommandSubmit {
   };
 }
 
+/**
+ * Join the text of `type: 'text'` content parts with `separator`.
+ *
+ * Non-text parts and text parts whose `text` is not a string are dropped.
+ * With an empty separator this is byte-identical to keeping such parts as
+ * empty strings — the join only inserts bytes between kept parts.
+ */
+export function joinTextParts(
+  parts: ReadonlyArray<unknown>,
+  separator: string,
+): string {
+  return parts
+    .filter(
+      (part): part is { text: string } =>
+        typeof part === 'object' &&
+        part !== null &&
+        (part as { type?: unknown }).type === 'text' &&
+        typeof (part as { text?: unknown }).text === 'string',
+    )
+    .map((part) => part.text)
+    .join(separator);
+}
+
 /** Join the text parts of a v2 message content array. */
 export function textFromContent(
   content: Array<Record<string, unknown>>,
 ): string {
-  return content
-    .filter((part) => part.type === 'text')
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
-    .join('');
+  return joinTextParts(content, '');
 }

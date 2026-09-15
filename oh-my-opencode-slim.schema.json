@@ -86,6 +86,20 @@
                 "type": "string"
               }
             },
+            "skills_add": {
+              "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "skills_remove": {
+              "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "mcps": {
               "type": "array",
               "items": {
@@ -548,6 +562,20 @@
             "type": "string"
           },
           "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skills_add": {
+            "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skills_remove": {
+            "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
             "type": "array",
             "items": {
               "type": "string"
@@ -1115,9 +1143,10 @@
         "orchestratorWake": {
           "default": {
             "enabled": true,
-            "intervalMs": 300000
+            "intervalMs": 300000,
+            "mode": "auto"
           },
-          "description": "Periodic orchestrator wake scheduler for idle sessions with incomplete todos. Default enabled at a 5-minute interval. Requires host session APIs (session.get, todo, children, status, promptAsync); inactive on the v2 shim.",
+          "description": "Periodic orchestrator wake scheduler for idle sessions. v1: requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. v2: runs in children-driven degraded mode (requires session.list + promptAsync) and wakes while un-finished child sessions remain. Default enabled at a 5-minute interval.",
           "type": "object",
           "properties": {
             "enabled": {
@@ -1131,6 +1160,16 @@
               "type": "integer",
               "minimum": 60000,
               "maximum": 2147483647
+            },
+            "mode": {
+              "default": "auto",
+              "description": "Wake-condition source. \"auto\" uses todo-gating on v1 hosts and children-driven degraded mode on v2 hosts (no todo surface there); \"todo\" or \"children\" pin one mode, degrading to children when the host lacks the todo API. Default \"auto\".",
+              "type": "string",
+              "enum": [
+                "auto",
+                "todo",
+                "children"
+              ]
             }
           }
         },
@@ -1202,6 +1241,19 @@
           },
           "additionalProperties": false
         },
+        "sameProviderPolicy": {
+          "default": {},
+          "description": "Opt-in per-provider policy for native background tasks: when the parent session and the child agent both resolve to a provider listed here with value \"foreground\", the background request is converted to foreground execution (existing foreground path, no concurrency admission). Unlisted or unknown providers keep background behavior. Default {} (no conversion).",
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string",
+            "const": "foreground"
+          }
+        },
         "waitForUserGuard": {
           "default": true,
           "description": "When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.",
@@ -1219,6 +1271,20 @@
         "maxRetries": {
           "default": 3,
           "description": "Number of consecutive 429/rate-limit responses tolerated on the same model before aborting (or swapping to the next fallback model when a chain is configured).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "initialRetryDelayMs": {
+          "default": 0,
+          "description": "Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retryDelayMs": {
+          "default": 500,
+          "description": "Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
@@ -1404,7 +1470,7 @@
           },
           "wrapperModel": {
             "type": "string",
-            "pattern": "^[^/\\s]+\\/[^\\s]+$"
+            "pattern": "^[^/\\s]+\\/.+$"
           },
           "timeoutMs": {
             "default": 0,

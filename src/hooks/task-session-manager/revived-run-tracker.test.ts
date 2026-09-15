@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
+import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils/internal-initiator';
 import { createRevivedRunTracker } from './revived-run-tracker';
 
 function createHarness(
   messages: () => unknown,
   prompt = mock(async () => ({})),
   assertBound = false,
-  options: { stabilizationProbeDelayMs?: number } = {},
+  options: {
+    stabilizationProbeDelayMs?: number;
+    resolveSelection?: (sessionID: string) => Promise<{
+      agent?: string;
+      model?: { providerID: string; modelID: string };
+      variant?: string;
+      provenance: 'host-persisted' | 'observed-external' | 'unknown';
+    }>;
+  } = {},
 ) {
   const board = new BackgroundJobBoard();
   board.registerLaunch({
@@ -75,6 +84,35 @@ function createHarness(
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
 
+/** notifyParent is fire-and-forget from probe(); drain its microtasks. */
+async function flushNotify(): Promise<void> {
+  for (let i = 0; i < 15; i += 1) await Promise.resolve();
+}
+
+/** Toggle-able transcript: baseline only until `probe` flips true, then a
+ * completed assistant turn after the baseline. */
+function completedTranscript(
+  probe: () => boolean,
+  text = 'new result',
+): () => unknown {
+  return () =>
+    probe()
+      ? {
+          data: [
+            { info: { id: 'baseline', role: 'user' }, parts: [] },
+            {
+              info: {
+                id: 'assistant-1',
+                role: 'assistant',
+                time: { completed: 2 },
+              },
+              parts: [{ type: 'text', text }],
+            },
+          ],
+        }
+      : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] };
+}
+
 afterEach(() => {
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;
@@ -84,22 +122,7 @@ describe('revived run tracker', () => {
   test('publishes a newer completed assistant turn and notifies the parent', async () => {
     let probe = false;
     const harness = createHarness(
-      () =>
-        probe
-          ? {
-              data: [
-                { info: { id: 'baseline', role: 'user' }, parts: [] },
-                {
-                  info: {
-                    id: 'assistant-1',
-                    role: 'assistant',
-                    time: { completed: 2 },
-                  },
-                  parts: [{ type: 'text', text: 'new result' }],
-                },
-              ],
-            }
-          : { data: [{ info: { id: 'baseline', role: 'user' }, parts: [] }] },
+      completedTranscript(() => probe),
       undefined,
       true,
     );
@@ -123,9 +146,143 @@ describe('revived run tracker', () => {
       path: { id: 'parent' },
       body: {
         agent: 'orchestrator',
-        parts: [{ type: 'text', synthetic: true }],
+        // The notification part must carry the internal-initiator metadata
+        // (and marker suffix) so the v2 client-shim routes it through
+        // session.synthetic — a bare `synthetic: true` part drops its flag
+        // in the flat prompt translation and regresses into a visible
+        // user message + external-user-activity classification (#1157).
+        parts: [
+          {
+            type: 'text',
+            synthetic: true,
+            metadata: { 'oh-my-opencode-slim.internalInitiator': true },
+          },
+        ],
       },
     });
+    const notifiedText = (
+      harness.prompt.mock.calls[0]?.[0] as
+        | { body?: { parts?: Array<{ text?: string }> } }
+        | undefined
+    )?.body?.parts?.[0]?.text;
+    expect(notifiedText).toContain('<task ');
+    expect(notifiedText).toContain(SLIM_INTERNAL_INITIATOR_MARKER);
+    expect(
+      (harness.prompt.mock.calls[0]?.[0] as { delivery?: string } | undefined)
+        ?.delivery,
+    ).toBe('queue');
+  });
+
+  test('notifies the parent in its current selection instead of hardcoded orchestrator', async () => {
+    let probe = false;
+    const harness = createHarness(
+      completedTranscript(() => probe),
+      undefined,
+      false,
+      {
+        resolveSelection: async () => ({
+          agent: 'plan',
+          model: { providerID: 'test', modelID: 'plan-model' },
+          provenance: 'host-persisted',
+        }),
+      },
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      delivery: 'queue',
+      body: {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'plan-model' },
+      },
+    });
+  });
+
+  test('forwards the resolved variant as modelVariant on the notification', async () => {
+    let probe = false;
+    const harness = createHarness(
+      completedTranscript(() => probe),
+      undefined,
+      false,
+      {
+        resolveSelection: async () => ({
+          agent: 'plan',
+          model: { providerID: 'test', modelID: 'plan-model' },
+          variant: 'max',
+          provenance: 'host-persisted',
+        }),
+      },
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      delivery: 'queue',
+      modelVariant: 'max',
+      body: {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'plan-model' },
+      },
+    });
+  });
+
+  test('does not send after dispose during selection resolve', async () => {
+    let probe = false;
+    let entered = false;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = createHarness(
+      completedTranscript(() => probe),
+      undefined,
+      false,
+      {
+        resolveSelection: async () => {
+          entered = true;
+          await gate;
+          return { agent: 'plan', provenance: 'host-persisted' };
+        },
+      },
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    const pending = harness.tracker.probe(
+      harness.run.taskID,
+      harness.run.generation,
+    );
+    for (let i = 0; i < 20 && !entered; i += 1) await Promise.resolve();
+    expect(entered).toBe(true);
+    harness.tracker.dispose();
+    release?.();
+    await pending;
+    expect(harness.prompt).not.toHaveBeenCalled();
   });
 
   test('keeps a non-terminal idle turn running and rejects historical output', async () => {
@@ -201,6 +358,13 @@ describe('revived run tracker', () => {
     ).toBe(false);
     expect(scheduled).toHaveLength(1);
 
+    // Drain the probe's microtask chain: the shared fetch helper adds a
+    // couple of await hops, so give the chain a bounded settle loop
+    // rather than pinning an exact tick count.
+    const settle = async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    };
+
     for (
       let attempt = 0;
       harness.board.get('ses_child')?.state === 'running' && attempt < 4;
@@ -209,8 +373,8 @@ describe('revived run tracker', () => {
       const callback = scheduled.shift();
       if (!callback) throw new Error('missing stabilization probe');
       callback();
-      await Promise.resolve();
-      await Promise.resolve();
+      await settle();
+      await settle();
     }
 
     expect(harness.board.get('ses_child')).toMatchObject({
@@ -299,6 +463,74 @@ describe('revived run tracker', () => {
 
     expect(harness.board.get('ses_child')?.state).toBe('reconciled');
     expect(prompt).toHaveBeenCalledTimes(2);
+  });
+
+  test('re-resolves agent and model on each notification retry', async () => {
+    let attempts = 0;
+    const prompt = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('parent unavailable');
+      return {};
+    });
+    const selections = [
+      {
+        agent: 'orchestrator',
+        model: { providerID: 'test', modelID: 'model-a' },
+        provenance: 'host-persisted' as const,
+      },
+      {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'model-b' },
+        provenance: 'host-persisted' as const,
+      },
+    ];
+    const harness = createHarness(
+      () => ({
+        data: [
+          { info: { id: 'baseline', role: 'user' }, parts: [] },
+          {
+            info: {
+              id: 'assistant-1',
+              role: 'assistant',
+              time: { completed: 2 },
+            },
+            parts: [{ type: 'text', text: 'done' }],
+          },
+        ],
+      }),
+      prompt,
+      false,
+      {
+        resolveSelection: async () =>
+          selections[Math.min(attempts, selections.length - 1)] ??
+          selections[0],
+      },
+    );
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: 'baseline',
+      description: 'inspect the change',
+    });
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await flushNotify();
+
+    expect(harness.prompt).toHaveBeenCalledTimes(2);
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        agent: 'orchestrator',
+        model: { providerID: 'test', modelID: 'model-a' },
+      },
+    });
+    expect(harness.prompt.mock.calls[1]?.[0]).toMatchObject({
+      body: {
+        agent: 'plan',
+        model: { providerID: 'test', modelID: 'model-b' },
+      },
+    });
   });
 
   test('holds the terminal notification lease while parent transport is active', async () => {
@@ -441,5 +673,222 @@ describe('revived run tracker', () => {
     });
     harness.tracker.onTerminal(cancelled);
     expect(harness.tracker.isTracked(next.taskID, next.generation)).toBe(true);
+  });
+
+  // Controlled clock for the transport-timeout scenarios below: capture
+  // timer registrations so the 10s transport timeout can be fired without
+  // waiting, and track clearTimeout so a cancelled retry is provable.
+  function installCapturedTimers() {
+    const timers = new Map<number, { delay: number; callback: () => void }>();
+    const cleared = new Set<number>();
+    let nextId = 0;
+    globalThis.setTimeout = ((callback: () => void, delay = 0) => {
+      const id = ++nextId;
+      timers.set(id, { delay, callback });
+      return id;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((id: number) => {
+      cleared.add(id);
+      timers.delete(id);
+    }) as typeof clearTimeout;
+    const settle = async () => {
+      for (let i = 0; i < 15; i += 1) await Promise.resolve();
+    };
+    const fire = (delay: number) => {
+      for (const [id, timer] of [...timers.entries()]) {
+        if (timer.delay !== delay) continue;
+        timers.delete(id);
+        timer.callback();
+        return id;
+      }
+      return undefined;
+    };
+    const soleSurviving = (delay: number) =>
+      [...timers.values()].find((timer) => timer.delay === delay);
+    return { timers, cleared, settle, fire, soleSurviving };
+  }
+
+  test('late transport success after timeout marks sent and cancels the retry', async () => {
+    const clock = installCapturedTimers();
+    let resolvePrompt: ((value: unknown) => void) | undefined;
+    const prompt = mock(
+      () =>
+        new Promise((resolve) => {
+          resolvePrompt = resolve;
+        }),
+    );
+    const harness = createHarness(() => ({ data: [] }), prompt);
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      description: 'inspect the change',
+    });
+    const terminal = harness.board.updateStatus({
+      taskID: harness.run.taskID,
+      expectedGeneration: harness.run.generation,
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    if (!terminal) throw new Error('missing terminal record');
+    harness.tracker.onTerminal(terminal);
+    await clock.settle();
+    expect(harness.prompt).toHaveBeenCalledTimes(1);
+
+    // Local 10s transport timeout fires while promptAsync is still pending.
+    clock.fire(10_000);
+    await clock.settle();
+    const retryTimer = clock.soleSurviving(0);
+    expect(retryTimer).toBeDefined();
+
+    // The original transport settles successfully AFTER the timeout.
+    resolvePrompt?.({});
+    await clock.settle();
+
+    expect(harness.prompt).toHaveBeenCalledTimes(1);
+    expect([...clock.timers.values()]).not.toContain(retryTimer);
+  });
+
+  test('late transport failure after timeout keeps the retry path', async () => {
+    const clock = installCapturedTimers();
+    let rejectPrompt: ((reason: unknown) => void) | undefined;
+    const prompt = mock(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectPrompt = reject;
+        }),
+    );
+    const harness = createHarness(() => ({ data: [] }), prompt);
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      description: 'inspect the change',
+    });
+    const terminal = harness.board.updateStatus({
+      taskID: harness.run.taskID,
+      expectedGeneration: harness.run.generation,
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    if (!terminal) throw new Error('missing terminal record');
+    harness.tracker.onTerminal(terminal);
+    await clock.settle();
+
+    clock.fire(10_000);
+    await clock.settle();
+    expect(clock.soleSurviving(0)).toBeDefined();
+
+    // The original transport fails after the timeout: the retry must stay
+    // armed and deliver the notification on the next attempt.
+    rejectPrompt?.(new Error('host unavailable'));
+    await clock.settle();
+    expect(clock.soleSurviving(0)).toBeDefined();
+
+    clock.fire(0);
+    await clock.settle();
+    expect(harness.prompt).toHaveBeenCalledTimes(2);
+  });
+
+  test('late transport error envelope after timeout is not delivery', async () => {
+    const clock = installCapturedTimers();
+    let resolvePrompt: ((value: unknown) => void) | undefined;
+    const prompt = mock(
+      () =>
+        new Promise((resolve) => {
+          resolvePrompt = resolve;
+        }),
+    );
+    const harness = createHarness(() => ({ data: [] }), prompt);
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      description: 'inspect the change',
+    });
+    const terminal = harness.board.updateStatus({
+      taskID: harness.run.taskID,
+      expectedGeneration: harness.run.generation,
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    if (!terminal) throw new Error('missing terminal record');
+    harness.tracker.onTerminal(terminal);
+    await clock.settle();
+    expect(harness.prompt).toHaveBeenCalledTimes(1);
+
+    clock.fire(10_000);
+    await clock.settle();
+
+    // The transport PROMISE resolves, but with a host error envelope —
+    // a resolved SDK call without throwOnError is not a delivered
+    // notification. The retry must stay armed.
+    resolvePrompt?.({ error: { message: 'host rejected' } });
+    await clock.settle();
+    expect(clock.soleSurviving(0)).toBeDefined();
+
+    clock.fire(0);
+    await clock.settle();
+    expect(harness.prompt).toHaveBeenCalledTimes(2);
+  });
+
+  test('late success while a retry waits on selection prevents a second send', async () => {
+    const clock = installCapturedTimers();
+    let resolvePrompt: ((value: unknown) => void) | undefined;
+    const prompt = mock(
+      () =>
+        new Promise((resolve) => {
+          resolvePrompt = resolve;
+        }),
+    );
+    // First selection resolves immediately (attempt 1 sends); the second
+    // call (retry) blocks until released, modeling a slow host read.
+    let selectionCalls = 0;
+    let releaseSecondSelection: (() => void) | undefined;
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecondSelection = resolve;
+    });
+    const harness = createHarness(() => ({ data: [] }), prompt, false, {
+      resolveSelection: async () => {
+        selectionCalls += 1;
+        if (selectionCalls >= 2) await secondGate;
+        return { agent: 'plan', provenance: 'host-persisted' };
+      },
+    });
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      description: 'inspect the change',
+    });
+    const terminal = harness.board.updateStatus({
+      taskID: harness.run.taskID,
+      expectedGeneration: harness.run.generation,
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    if (!terminal) throw new Error('missing terminal record');
+    harness.tracker.onTerminal(terminal);
+    await clock.settle();
+    expect(harness.prompt).toHaveBeenCalledTimes(1);
+
+    // Local timeout: retry armed and fired; the retry passes its entry
+    // guard (sent is still false) and parks on the selection await.
+    clock.fire(10_000);
+    await clock.settle();
+    clock.fire(0);
+    await clock.settle();
+    expect(selectionCalls).toBeGreaterThanOrEqual(2);
+
+    // The ORIGINAL transport settles successfully after everything: the
+    // notification is delivered, sent is marked, and the parked retry
+    // must not acquire the lease or send again.
+    resolvePrompt?.({});
+    await clock.settle();
+    releaseSecondSelection?.();
+    await clock.settle();
+    await clock.settle();
+
+    expect(harness.prompt).toHaveBeenCalledTimes(1);
   });
 });

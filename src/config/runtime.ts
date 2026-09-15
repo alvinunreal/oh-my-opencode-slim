@@ -41,7 +41,7 @@ import type {
   PluginConfig,
   WebfetchConfig,
 } from './schema';
-import { getCustomAgentNames } from './utils';
+import { getCustomAgentNames, normalizeAgentSkillDirectives } from './utils';
 
 /** A single agent entry from the host opencode.json config. */
 export interface HostAgentConfig {
@@ -79,7 +79,7 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   readContextMinLines: DEFAULT_READ_CONTEXT_MIN_LINES,
   readContextMaxFiles: DEFAULT_READ_CONTEXT_MAX_FILES,
   maxRetainedSnapshots: DEFAULT_MAX_RETAINED_SNAPSHOTS,
-  orchestratorWake: { enabled: true, intervalMs: 300_000 },
+  orchestratorWake: { enabled: true, intervalMs: 300_000, mode: 'auto' },
   wallClockTimeoutMs: 0,
   abortGraceMs: 10_000,
   concurrency: {
@@ -87,12 +87,15 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
     providerConcurrency: {},
     modelConcurrency: {},
   },
+  sameProviderPolicy: {},
   waitForUserGuard: true,
 };
 
 const DEFAULT_FALLBACK: FailoverConfig = {
   enabled: true,
   maxRetries: 3,
+  initialRetryDelayMs: 0,
+  retryDelayMs: 500,
 };
 
 /** First model from an override's model field (string or array). */
@@ -267,10 +270,10 @@ export class RuntimeConfig {
       base = mergeAgentOverrides(filePreset, base);
     }
     const runtimePreset = this.runtimePresetAgents();
-    if (!runtimePreset) {
-      return base;
-    }
-    return mergeAgentOverrides(base, runtimePreset);
+    const merged = runtimePreset
+      ? mergeAgentOverrides(base, runtimePreset)
+      : base;
+    return normalizeAgentSkillDirectives(merged);
   }
 
   /**

@@ -826,18 +826,12 @@ export function updateFromInjectedCompletion(
     }
   }
 
-  if (deletionEpoch !== undefined && origin === undefined) {
-    failClosedSyntheticTerminal(
-      state,
-      status,
-      occurrenceId,
-      provenanceKind,
-      existing,
-      'no message.part.updated origin was observed',
-    );
-    return undefined;
-  }
-
+  // Fence-first: a remembered (possibly stale) completion occurrence must
+  // skip CLEANLY before the deletion-epoch fail-closed branch below. A
+  // known occurrence is either a duplicate in the same lifecycle or stale
+  // history from an older generation — neither may update the current
+  // board, and neither justifies poisoning the fresh generation with
+  // markStatusUncertain when its occurrence bookkeeping is absent.
   if (
     hasRememberedInjectedCompletion(
       state,
@@ -847,6 +841,18 @@ export function updateFromInjectedCompletion(
       existing?.generation,
     )
   ) {
+    return undefined;
+  }
+
+  if (deletionEpoch !== undefined && origin === undefined) {
+    failClosedSyntheticTerminal(
+      state,
+      status,
+      occurrenceId,
+      provenanceKind,
+      existing,
+      'no message.part.updated origin was observed',
+    );
     return undefined;
   }
 
@@ -1183,8 +1189,13 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
   if (!sessionID || !state.shouldManageSession(sessionID)) return;
   if (!anchor) return;
 
-  const shapeKey = promptShapeKey(realMessages(messages, state.metadataKey));
-  reconcileConsumedTerminalJobs(state, sessionID, shapeKey);
+  // Hash the real history only when a prior terminal delivery needs
+  // reconciliation or a new one is about to be registered.
+  let shapeKey: string | undefined;
+  if (state.terminalJobsInjectedByParent.has(sessionID)) {
+    shapeKey = promptShapeKey(realMessages(messages, state.metadataKey));
+    reconcileConsumedTerminalJobs(state, sessionID, shapeKey);
+  }
 
   const boardMeta =
     state.backgroundJobBoard.formatForPromptWithMetadata(sessionID);
@@ -1196,12 +1207,14 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
   );
   if (!textPart || isInternalInitiatorPart(textPart)) return;
 
-  rememberInjectedTerminalJobs(
-    state,
-    sessionID,
-    boardMeta.terminalUnreconciledTaskIDs,
-    shapeKey,
-  );
+  if (boardMeta.terminalUnreconciledTaskIDs.length > 0) {
+    rememberInjectedTerminalJobs(
+      state,
+      sessionID,
+      boardMeta.terminalUnreconciledTaskIDs,
+      shapeKey ?? promptShapeKey(realMessages(messages, state.metadataKey)),
+    );
+  }
 
   // Placement rules — correctness first, then prompt-cache safety.
   //

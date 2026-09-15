@@ -30,6 +30,7 @@ import type { V2Context } from './types';
 
 type CapturedTool = {
   name: string;
+  options?: { codemode?: boolean };
   execute: (input: unknown, context: unknown) => Promise<unknown>;
 };
 
@@ -314,6 +315,13 @@ describe('createV2Setup e2e', () => {
     expect(calls.agentUpdates.map((u) => u.id)).toContain('orchestrator');
     expect(calls.agentDefault).toBe('orchestrator');
     expect(calls.toolAdds.length).toBeGreaterThan(0);
+    // CodeMode split (upstream Tool.snapshot): every registered tool must
+    // carry `options: { codemode: false }` or it never becomes a direct
+    // model-visible tool definition — it lands in the `execute` tool's
+    // confined JS runtime and session catalogs yield `Unknown tool: ...`.
+    for (const tool of calls.toolAdds) {
+      expect(tool.options).toEqual({ codemode: false });
+    }
     expect(calls.commandAdds.map((c) => c.name)).toContain('deepwork');
     expect(calls.mcpSets.map((m) => m.name)).toEqual(['context7', 'gh_grep']);
     expect(calls.mcpSets.map((m) => m.config)).toEqual([
@@ -321,6 +329,7 @@ describe('createV2Setup e2e', () => {
       expect.objectContaining({ type: 'remote' }),
     ]);
     expect(calls.hooks).toContain('session:context');
+    expect(calls.hooks).toContain('session:prompt');
     expect(calls.hooks).toContain('tool:execute.before');
     expect(calls.hooks).toContain('tool:execute.after');
     expect(calls.contextHookCb).toBeFunction();
@@ -368,8 +377,9 @@ describe('createV2Setup e2e', () => {
       });
 
       // (2) Write-back rewrite: a v2 `sessionID` that is not a
-      // resolvable/valid task id maps to v1 `task_id`, gets deleted by
-      // the v1 guard, and disappears from the v2 input on write-back.
+      // resolvable/valid task id maps to v1 `task_id`, the v1 guard
+      // refuses it explicitly (no silent drop, no duplicate spawn), and
+      // the rejection propagates through the v2 before-bridge.
       const resumeEvent = {
         tool: 'subagent',
         sessionID: 'ses_parent',
@@ -386,10 +396,9 @@ describe('createV2Setup e2e', () => {
       };
       const resumeHook = calls.toolBeforeCb;
       if (!resumeHook) throw new Error('tool:execute.before not captured');
-      await resumeHook(resumeEvent);
-      expect(resumeEvent.input).not.toHaveProperty('sessionID');
-      expect(resumeEvent.input).not.toHaveProperty('task_id');
-      expect(resumeEvent.input).not.toHaveProperty('subagent_type');
+      await expect(resumeHook(resumeEvent)).rejects.toThrow(
+        /did not drop the id and did not create another session/,
+      );
 
       // (3) v2 subagent result: plain-text background output. The
       // after-bridge maps content → v1 `output` under tool 'task'; the
@@ -442,11 +451,11 @@ describe('createV2Setup e2e', () => {
     events.push(v2UsageEvent('ses_cache', { input: 500, read: 9000 }));
     events.push(v2UsageEvent('ses_cache', { input: 12000, read: 0 }));
 
-    // Idle session.status → synthesized session.idle reaches the v1
-    // event-router (which logs the observation for any session id).
+    // Terminal execution.succeeded → synthesized idle pair reaches the
+    // v1 event-router (which logs the observation for any session id).
     events.push({
-      type: 'session.status',
-      properties: { sessionID: 'ses_cache', status: { type: 'idle' } },
+      type: 'session.execution.succeeded',
+      properties: { sessionID: 'ses_cache' },
     });
 
     await settlePump();
@@ -472,8 +481,8 @@ describe('createV2Setup e2e', () => {
     );
     events.push(v2UsageEvent('ses_after', { input: 12000, read: 0 }));
     events.push({
-      type: 'session.status',
-      properties: { sessionID: 'ses_after', status: { type: 'idle' } },
+      type: 'session.execution.succeeded',
+      properties: { sessionID: 'ses_after' },
     });
     await settlePump();
 
@@ -484,5 +493,141 @@ describe('createV2Setup e2e', () => {
     ).length;
     expect(bustWarningsAfter).toBe(bustWarningsAtDispose);
     expect(logAfterDispose).not.toContain('ses_after');
+  }, 20_000);
+
+  test('event pump synthesizes session.deleted from the live `data` shape into the v1 cleanup path', async () => {
+    const { ctx, events } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      // Live wire shape: payload keyed under `data` (verified live).
+      // Only the SYNTHESIZED dual-spelling session.deleted
+      // reaches the v1 event-router cleanup path — the raw passthrough is
+      // inert there — so this log line is name-specific to the mapping.
+      events.push({
+        id: 'evt_session_deleted',
+        created: 1_788_961_637_000,
+        type: 'session.deleted',
+        durable: { aggregateID: 'ses_gone', seq: 1, version: 1 },
+        data: { sessionID: 'ses_gone' },
+      });
+
+      await settlePump();
+      const logText = readPluginLog();
+      expect(logText).toContain(
+        '[task-session-manager] session.deleted observed',
+      );
+      expect(logText).toContain('ses_gone');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('ctx.storage (when present) enables background-job persistence before the v1 factory runs', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    // Pre-seeded persisted tombstone: proves the storage activation
+    // loads backend state, and later that a storage-less reactivation
+    // resets it instead of retaining the previous activation.
+    const seeded = new Map<string, unknown>([
+      [
+        'omo/bgj/tombstone/ses_seeded_before_setup',
+        { taskID: 'ses_seeded_before_setup', epoch: 1, recordedAt: 1 },
+      ],
+    ]);
+    (ctx as { storage?: unknown }).storage = {
+      get: async (key: string) => seeded.get(key),
+      set: async () => {},
+      remove: async () => {},
+      scan: async () => ({
+        entries: [...seeded.entries()].map(([key, value]) => ({
+          key,
+          value,
+        })),
+      }),
+    };
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      await flushLoggerForTesting();
+      const logText = readPluginLog();
+      expect(logText).toContain(
+        '[v2] background-job persistence enabled via ctx.storage',
+      );
+      const persistence = await import('../utils/background-job-persistence');
+      expect(
+        persistence
+          .persistedBackgroundJobState()
+          .tombstones.has('ses_seeded_before_setup'),
+      ).toBe(true);
+
+      // A storage-less reactivation resets to the documented
+      // process-local fallback instead of retaining this activation's
+      // backend/seed state.
+      const { ctx: bareCtx } = makeMockV2Context(projectDir);
+      await (await createV2Setup()(bareCtx))();
+      expect(persistence.persistedBackgroundJobState().tombstones.size).toBe(0);
+    } finally {
+      // Reset the persistence singleton so later test files in this
+      // process see the pure memory fallback.
+      const { configureBackgroundJobPersistence } = await import(
+        '../utils/background-job-persistence'
+      );
+      configureBackgroundJobPersistence(undefined);
+      await cleanup();
+    }
+  }, 30_000);
+
+  test('dispose runs the v1 dispose hook (server.instance.disposed synthesis for wake timers)', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    await cleanup();
+    await flushLoggerForTesting();
+
+    // The v1 dispose hook synthesizes `server.instance.disposed` into the
+    // v1 event consumers — orchestrator-wake scheduler timers/state,
+    // task-session manager. Without this wiring, host teardown would leak
+    // the scheduler's unref'd wake timers.
+    const logText = readPluginLog();
+    expect(logText).toContain('[v2] v1 dispose hook invoked');
+    expect(logText).not.toContain('[v2] v1 dispose failed');
+  }, 20_000);
+
+  test('host rejecting the model.request hook name degrades: one log, no crash', async () => {
+    // Older v2 hosts reject unknown session.hook names. The chat.headers
+    // bridge must degrade exactly like the prompt hook: setup completes,
+    // every other bridge still registers, and the deterministic
+    // unavailability line lands in the plugin log exactly once.
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const baseHook = ctx.session.hook.bind(ctx.session);
+    const rejected: string[] = [];
+    (ctx.session as { hook: unknown }).hook = async (
+      name: string,
+      cb: unknown,
+    ) => {
+      if (name === 'model.request') {
+        rejected.push(name);
+        throw new Error(`unknown session hook: ${name}`);
+      }
+      return baseHook(name as 'context', cb as never);
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      expect(rejected).toEqual(['model.request']);
+      // Other session bridges unaffected by the rejection.
+      expect(calls.hooks).toContain('session:context');
+      expect(calls.hooks).toContain('session:prompt');
+      expect(calls.contextHookCb).toBeFunction();
+
+      await flushLoggerForTesting();
+      const logText = readPluginLog();
+      expect(logText).toContain(
+        '[v2] session.hook(model.request) unavailable; chat.headers not bridged',
+      );
+      expect(logText.match(/chat\.headers not bridged/g) ?? []).toHaveLength(1);
+    } finally {
+      await cleanup(); // must not throw despite the rejected hook
+    }
   }, 20_000);
 });

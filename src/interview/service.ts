@@ -479,7 +479,14 @@ export function createInterviewService(
                 ? 'awaiting-user'
                 : parsed.latestAssistantError
                   ? 'error'
-                  : !parsed.state &&
+                  : // An empty WHOLE-transcript read (impossible on v1
+                    // runtimes; reachable on v2 only via bridge retention
+                    // loss) must not read as 'completed' — the answer form
+                    // would vanish for a live interview. Keyed on
+                    // allMessages, NOT interviewMessages: an empty
+                    // post-base slice legitimately awaits the first answer.
+                    !parsed.state &&
+                      allMessages.length > 0 &&
                       sessionBusy.get(interview.sessionID) === false
                     ? 'completed'
                     : 'awaiting-agent',

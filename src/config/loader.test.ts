@@ -549,6 +549,51 @@ describe('onWarning callback', () => {
     expect(config.agents?.oracle?.model).toBe('valid/model');
   });
 
+  test('loads a council with spaced model IDs without an invalid-schema warning', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: 'openai/gpt-5.6-luna' } },
+        council: {
+          default_preset: 'spaced',
+          presets: {
+            spaced: {
+              scalar: { model: 'of/MiniMax M3' },
+              fallback: {
+                model: [
+                  'of/Kimi K2.6',
+                  {
+                    id: 'opencode-omniroute-live/of/Qwen3.8 27b',
+                    variant: 'high',
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toEqual([]);
+    expect(config.agents?.oracle?.model).toBe('openai/gpt-5.6-luna');
+    expect(config.council?.presets.spaced?.scalar?.model).toBe('of/MiniMax M3');
+    expect(config.council?.presets.spaced?.fallback?.models).toEqual([
+      { id: 'of/Kimi K2.6', variant: undefined },
+      {
+        id: 'opencode-omniroute-live/of/Qwen3.8 27b',
+        variant: 'high',
+      },
+    ]);
+  });
+
   test('deprecated tmux key calls onWarning with deprecated-key and still loads', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -629,6 +674,7 @@ describe('onWarning callback', () => {
     expect(config.backgroundJobs?.orchestratorWake).toEqual({
       enabled: false,
       intervalMs: 120_000,
+      mode: 'auto',
     });
     expect(config.backgroundJobs).not.toHaveProperty('continueOnIdle');
     expect(config.autoUpdate).toBe(false);

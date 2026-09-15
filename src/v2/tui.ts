@@ -31,6 +31,23 @@ export interface PresetOption {
   description?: string;
 }
 
+/** A keymap command as accepted by the host's `keymap.layer` reducer. */
+export interface V2KeymapCommand {
+  id: string;
+  title?: string;
+  group?: string;
+  palette?: boolean;
+  bind?: string;
+  slash?: { name: string; aliases?: string[]; arguments?: boolean };
+  run: (input?: string) => void | Promise<void>;
+}
+
+/** A `ui.slot` render runs under the host's Keymap.Provider. */
+type V2SlotApi = (claim: {
+  append: string;
+  render: () => null;
+}) => (() => void) | undefined;
+
 /**
  * v2 TUI preset-switcher surface. Complements the sidebar context that
  * `../tui` mirrors (location/renderer/theme/ui.slot/ui.router); hosts may
@@ -46,26 +63,32 @@ export interface V2PresetTuiContext {
         current?: Value;
       }) => Promise<Value | undefined>;
     };
-    toast?: (toast: {
-      title?: string;
-      message: string;
-      variant?: string;
-    }) => void;
+    toast?: {
+      show?: (toast: {
+        title?: string;
+        message: string;
+        variant?: string;
+      }) => void;
+    };
+    slot?: V2SlotApi;
   };
   keymap?: {
-    layer: (layer: {
-      commands: Array<{
-        title?: string;
-        slash?: { name: string; aliases?: string[] };
-        run: (input?: string) => void | Promise<void>;
-      }>;
-    }) => { dispose(): void };
+    layer: (
+      layer: () => {
+        mode?: string;
+        commands: V2KeymapCommand[];
+      },
+    ) => void;
   };
 }
 
 /** Combined v2 TUI context: sidebar surface from `../tui` + preset surface. */
 export type V2TuiPluginContext = Parameters<(typeof omoTui)['setup']>[0] &
   V2PresetTuiContext;
+
+const PRESET_COMMAND_ID = 'omo.preset';
+const PRESET_COMMAND_TITLE = 'OMO: switch preset';
+const PRESET_APP_SLOT = 'app';
 
 const NO_PRESETS_MESSAGE =
   'No presets configured. Define presets in oh-my-opencode-slim.jsonc.';
@@ -112,7 +135,12 @@ export async function runPresetFlow(
   presetArg?: string,
 ): Promise<void> {
   const directory = ctx.location?.directory ?? process.cwd();
-  const toast = (message: string) => ctx.ui?.toast?.({ message });
+  const toast = (message: string) => {
+    const toastApi = ctx.ui?.toast;
+    if (toastApi && typeof toastApi.show === 'function') {
+      toastApi.show({ message });
+    }
+  };
   try {
     const config = loadPluginConfig(directory, { silent: true });
 
@@ -146,6 +174,31 @@ export async function runPresetFlow(
 }
 
 /**
+ * Build the `/preset` keymap layer thunk. The host invokes `layer` as a
+ * thunk from inside a `ui.slot` render (which runs under the
+ * Keymap.Provider) — calling it directly from plugin `setup` throws
+ * `Keymap.Provider is missing`. The command needs an `id` because the
+ * host's reducer rejects slash/palette commands without one.
+ */
+function buildPresetLayer(
+  ctx: V2PresetTuiContext,
+): () => { mode: string; commands: V2KeymapCommand[] } {
+  return () => ({
+    mode: 'global',
+    commands: [
+      {
+        id: PRESET_COMMAND_ID,
+        title: PRESET_COMMAND_TITLE,
+        group: 'System',
+        palette: true,
+        slash: { name: 'preset', arguments: true },
+        run: (input?: string) => void runPresetFlow(ctx, input),
+      },
+    ],
+  });
+}
+
+/**
  * Dual contract, same as `../tui`: v1 hosts validate `{ id, tui }`, v2 hosts
  * validate `{ id, setup }`; both ignore extra keys. The `tui` field is the
  * identical v1 factory reference; the `setup` wraps the base v2 setup
@@ -162,25 +215,31 @@ const plugin = {
     const baseCleanup = await omoTui.setup(ctx);
     if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
 
-    if (typeof ctx.keymap?.layer === 'function') {
-      try {
-        const layer = ctx.keymap.layer({
-          commands: [
-            {
-              title: 'OMO: switch preset',
-              slash: { name: 'preset' },
-              run: (input) => void runPresetFlow(ctx, input),
-            },
-          ],
-        });
-        disposers.push(() => layer.dispose());
-      } catch (err) {
-        // Older v2 builds without a working keymap keep the sidebar; /preset
-        // stays unavailable there (documented v2 limitation).
-        log('[v2][tui] keymap.layer failed', String(err));
-      }
+    const slotApi = (ctx.ui as { slot?: V2SlotApi } | undefined)?.slot;
+    if (typeof slotApi !== 'function') {
+      log('[v2][tui] ui.slot unavailable; /preset disabled on this build');
     } else {
-      log('[v2][tui] keymap.layer unavailable; /preset disabled on this build');
+      try {
+        const disposeSlot = slotApi({
+          append: PRESET_APP_SLOT,
+          render: () => {
+            if (typeof ctx.keymap?.layer === 'function') {
+              try {
+                ctx.keymap.layer(buildPresetLayer(ctx));
+              } catch (err) {
+                log('[v2][tui] keymap.layer failed', String(err));
+              }
+            }
+            return null;
+          },
+        });
+        if (typeof disposeSlot === 'function') disposers.push(disposeSlot);
+      } catch (err) {
+        log(
+          '[v2][tui] ui.slot registration failed; /preset disabled',
+          String(err),
+        );
+      }
     }
 
     return () => {

@@ -16,6 +16,21 @@ type TerminalStateListener = (taskID: string) => void;
 type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
 
 /**
+ * Identity projection event for accepted/removed launches. Consumed by the
+ * host plugin to mirror alias↔session links into TUI state; consumers must
+ * be best-effort (failures are logged, never propagated to the launch).
+ */
+export interface BackgroundJobIdentityEvent {
+  kind: 'registered' | 'removed';
+  taskID: string;
+  parentSessionID: string;
+  agent: string;
+  alias: string;
+}
+
+type LaunchIdentityListener = (event: BackgroundJobIdentityEvent) => void;
+
+/**
  * BackgroundJobCoordinator owns the lifecycle policy for background jobs.
  * It sits between the board and its consumers, providing:
  * - Subscription interface for terminal state notifications (replaces fire-and-forget)
@@ -29,6 +44,7 @@ type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
 export class BackgroundJobCoordinator implements BackgroundJobStore {
   private terminalStateListeners: TerminalStateListener[] = [];
   private terminalOutcomeListeners: TerminalOutcomeListener[] = [];
+  private launchIdentityListeners: LaunchIdentityListener[] = [];
   // Stores session IDs (which equal task IDs) awaiting close after background job completes
   private readonly deferredIdleCloses = new Set<string>();
 
@@ -37,6 +53,26 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     this.board.addTerminalStateListener((taskID) => {
       this.handleTerminalState(taskID);
     });
+  }
+
+  // ── Launch identity projection (best-effort, sidebar details) ─────
+
+  addLaunchIdentityListener(listener: LaunchIdentityListener): void {
+    this.launchIdentityListeners.push(listener);
+  }
+
+  private notifyLaunchIdentity(event: BackgroundJobIdentityEvent): void {
+    for (const listener of this.launchIdentityListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        log('Coordinator launch identity listener threw', {
+          taskID: event.taskID,
+          kind: event.kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   // ── Terminal state notification (guaranteed delivery) ─────────────
@@ -135,7 +171,15 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
   // ── Mutation methods (sole writer to board) ──────────────────────
 
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord {
-    return this.board.registerLaunch(input);
+    const record = this.board.registerLaunch(input);
+    this.notifyLaunchIdentity({
+      kind: 'registered',
+      taskID: record.taskID,
+      parentSessionID: record.parentSessionID,
+      agent: record.agent,
+      alias: record.alias,
+    });
+    return record;
   }
 
   acquireCancellationLease(
@@ -346,6 +390,10 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     return this.board.list(parentSessionID);
   }
 
+  hasRunningJobs(): boolean {
+    return this.board.hasRunningJobs();
+  }
+
   hasRunning(parentSessionID: string): boolean {
     return this.board.hasRunning(parentSessionID);
   }
@@ -373,10 +421,32 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
   }
 
   clearParent(parentSessionID: string): void {
+    // Capture identities before the board removes them so the projection
+    // can retract aliases for every affected record.
+    const removed = this.board.list(parentSessionID);
     this.board.clearParent(parentSessionID);
+    for (const record of removed) {
+      this.notifyLaunchIdentity({
+        kind: 'removed',
+        taskID: record.taskID,
+        parentSessionID: record.parentSessionID,
+        agent: record.agent,
+        alias: record.alias,
+      });
+    }
   }
 
   drop(taskID: string): void {
+    const record = this.board.get(taskID);
     this.board.drop(taskID);
+    if (record) {
+      this.notifyLaunchIdentity({
+        kind: 'removed',
+        taskID: record.taskID,
+        parentSessionID: record.parentSessionID,
+        agent: record.agent,
+        alias: record.alias,
+      });
+    }
   }
 }

@@ -222,6 +222,60 @@ function isImagePart(p: ImagePart): boolean {
   return false;
 }
 
+// Memo of already-materialized data-URL attachments. Key is
+// targetDir + effective filename + sha256(url) — never the raw base64.
+// Suffixed collision names (`-N`) are not stored: the obstacle may be
+// gone next transform. Hits revalidate with lstat (regular file only).
+const resolvedAttachmentByKey = new Map<string, string>();
+const RESOLVED_ATTACHMENT_MAX = 256;
+
+function attachmentMemoKey(
+  targetDir: string,
+  dataUrl: string,
+  effectiveName: string,
+): string {
+  return `${targetDir}\n${effectiveName}\n${createHash('sha256').update(dataUrl).digest('hex')}`;
+}
+
+function isSuffixedResolution(filePath: string): boolean {
+  return /-[0-9a-f]{8}-\d+\.[^.]+$/.test(basename(filePath));
+}
+
+function rememberResolvedAttachment(
+  targetDir: string,
+  dataUrl: string,
+  effectiveName: string,
+  filePath: string,
+): void {
+  if (isSuffixedResolution(filePath)) return;
+  const key = attachmentMemoKey(targetDir, dataUrl, effectiveName);
+  if (
+    !resolvedAttachmentByKey.has(key) &&
+    resolvedAttachmentByKey.size >= RESOLVED_ATTACHMENT_MAX
+  ) {
+    const oldest = resolvedAttachmentByKey.keys().next().value;
+    if (oldest !== undefined) resolvedAttachmentByKey.delete(oldest);
+  }
+  resolvedAttachmentByKey.set(key, filePath);
+}
+
+function recalledResolvedAttachment(
+  targetDir: string,
+  dataUrl: string,
+  effectiveName: string,
+): string | null {
+  const key = attachmentMemoKey(targetDir, dataUrl, effectiveName);
+  const saved = resolvedAttachmentByKey.get(key);
+  if (!saved) return null;
+  try {
+    if (lstatSync(saved).isFile()) return saved;
+  } catch {
+    // gone
+  }
+  resolvedAttachmentByKey.delete(key);
+  return null;
+}
+
 function decodeDataUrl(url: string): { mime: string; data: Buffer } | null {
   const match = url.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
@@ -238,6 +292,11 @@ function extFromMime(mime: string): string {
     'image/bmp': '.bmp',
   };
   return map[mime] ?? '.png';
+}
+
+function extFromMimeFromUrl(url: string): string {
+  const match = url.match(/^data:([^;,]+)/);
+  return match ? extFromMime(match[1]) : '.png';
 }
 
 function sanitizeFilename(name: string): string {
@@ -495,26 +554,38 @@ export function processImageAttachments(args: {
       const filename =
         (p.filename as string | undefined) ?? (p.name as string | undefined);
       if (url) {
+        const sanitizedFilename = filename
+          ? sanitizeFilename(filename)
+          : undefined;
+        const baseName = sanitizedFilename
+          ? sanitizedFilename.replace(/\.[^.]+$/, '') || 'image'
+          : 'image';
+        const ext = sanitizedFilename
+          ? extname(sanitizedFilename) || extFromMimeFromUrl(url)
+          : extFromMimeFromUrl(url);
+        const effectiveName = `${baseName}-${ext}`;
+        const recalled = recalledResolvedAttachment(
+          targetDir,
+          url,
+          effectiveName,
+        );
+        if (recalled) {
+          savedPaths.push(recalled);
+          savedImageParts.add(p);
+          continue;
+        }
         const decoded = decodeDataUrl(url);
         if (decoded) {
           const hash = createHash('sha1')
             .update(decoded.data)
             .digest('hex')
             .slice(0, 8);
-          const sanitizedFilename = filename
-            ? sanitizeFilename(filename)
-            : undefined;
-          const baseName = sanitizedFilename
-            ? sanitizedFilename.replace(/\.[^.]+$/, '') || 'image'
-            : 'image';
-          const ext = sanitizedFilename
-            ? extname(sanitizedFilename) || extFromMime(decoded.mime)
-            : extFromMime(decoded.mime);
           const name = `${baseName}-${hash}${ext}`;
           const filePath = writeUniqueFile(targetDir, name, decoded.data, log);
           if (filePath) {
             savedPaths.push(filePath);
             savedImageParts.add(p);
+            rememberResolvedAttachment(targetDir, url, effectiveName, filePath);
           }
         }
       }

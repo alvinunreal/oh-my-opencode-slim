@@ -7,18 +7,22 @@ import { type CmuxSessionRecord, CmuxSessionStore } from './session-state';
 
 export interface CmuxSessionEvent {
   type: string;
-  properties?: {
-    info?: {
-      id?: string;
-      parentID?: string;
-      title?: string;
-      directory?: string;
-      sessionID?: string;
-    };
-    part?: { sessionID?: string };
+  properties?: CmuxSessionEventPayload;
+  /** Live v2 hosts key the payload under `data`. */
+  data?: CmuxSessionEventPayload;
+}
+
+interface CmuxSessionEventPayload {
+  info?: {
+    id?: string;
+    parentID?: string;
+    title?: string;
+    directory?: string;
     sessionID?: string;
-    status?: { type: string };
   };
+  part?: { sessionID?: string };
+  sessionID?: string;
+  status?: { type: string };
 }
 
 interface BackgroundJobs {
@@ -49,6 +53,8 @@ const ACTIVITY_EVENTS = new Set([
   'message.part.updated',
   'message.part.delta',
   'message.part.removed',
+  'session.next.text.delta',
+  'session.next.reasoning.delta',
 ]);
 const MIN_LIFETIME_MS = 10_000;
 const IDLE_CONFIRMATIONS = 3;
@@ -131,8 +137,8 @@ export class CmuxSessionLifecycle {
 
   async onSessionCreated(event: CmuxSessionEvent): Promise<void> {
     if (this.disposed) return;
-    this.claimLatePaneOrphans();
     if (event.type !== 'session.created') return;
+    this.claimLatePaneOrphans();
     const info = event.properties?.info;
     if (!info?.id || !info.parentID) return;
     if (this.permanentlyClosedSessions?.has(info.id)) return;
@@ -171,12 +177,15 @@ export class CmuxSessionLifecycle {
 
   async onSessionStatus(event: CmuxSessionEvent): Promise<void> {
     if (this.disposed) return;
-    this.claimLatePaneOrphans();
+    const isActivity = ACTIVITY_EVENTS.has(event.type);
+    // Token-stream deltas fire per chunk. Claiming orphans is for
+    // lifecycle transitions, not the heartbeat path.
+    if (!isActivity) this.claimLatePaneOrphans();
     const session = this.eventSession(event);
     if (!session) return;
     const owned = this.store.get(session);
     if (!owned || owned.owner !== this.owner) return;
-    if (ACTIVITY_EVENTS.has(event.type)) {
+    if (isActivity) {
       this.activity(session);
       return;
     }
@@ -1017,11 +1026,12 @@ export class CmuxSessionLifecycle {
   }
 
   private eventSession(event: CmuxSessionEvent): string | undefined {
+    const payload = event.data ?? event.properties;
     return (
-      event.properties?.sessionID ??
-      event.properties?.info?.sessionID ??
-      event.properties?.part?.sessionID ??
-      event.properties?.info?.id
+      payload?.sessionID ??
+      payload?.info?.sessionID ??
+      payload?.part?.sessionID ??
+      payload?.info?.id
     );
   }
 

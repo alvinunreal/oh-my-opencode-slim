@@ -25,7 +25,8 @@
   implementation without expanding the global client shim.
 
 - `manager.ts` (composition root)
-  - Chooses mode via `interview.dashboard === true || interview.port > 0`:
+  - Chooses mode via the shared pure `computeInterviewMode` (also used by the
+    v2 interview bridge): `interview.dashboard === true || interview.port > 0`:
     - per-session mode → `createPerSessionInterviewServer` (`session-server.ts`)
     - dashboard mode → `createDashboardManager` (`dashboard-manager.ts`)
   - Returns event hooks:
@@ -68,6 +69,9 @@
 
 - `createInterviewServer` (`server.ts`)
   - Owns the per-session HTTP endpoints; HTML rendering lives in `ui.ts`.
+  - `createInterviewServerDeps(service, outputFolder, port)` builds the
+    service-delegating deps object shared by the per-session server, the
+    dashboard fallback server, and the v2 interview bridge.
   - Supports:
     - `GET /`, `GET /api/interviews`, `GET /interview/{id}`
     - `GET /api/interviews/{id}/state`

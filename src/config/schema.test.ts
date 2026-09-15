@@ -1,5 +1,59 @@
 import { describe, expect, it } from 'bun:test';
-import { InterviewConfigSchema, PluginConfigSchema } from './schema';
+import {
+  InterviewConfigSchema,
+  PluginConfigSchema,
+  ProviderModelIdSchema,
+} from './schema';
+
+describe('ProviderModelIdSchema', () => {
+  it('accepts and preserves model remainders with spaces and nested segments', () => {
+    const ids = [
+      'of/MiniMax M3',
+      'of/Kimi K2.6',
+      'opencode-omniroute-live/of/Qwen3.8 27b',
+      'openai/gpt-5.6-luna',
+    ];
+
+    for (const id of ids) {
+      const result = ProviderModelIdSchema.safeParse(id);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toBe(id);
+      }
+    }
+  });
+
+  it('rejects missing provider/model parts and whitespace in the provider', () => {
+    for (const id of [
+      'model',
+      '/model',
+      'provider/',
+      ' provider/model',
+      'provider name/model',
+    ]) {
+      expect(ProviderModelIdSchema.safeParse(id).success).toBe(false);
+    }
+  });
+});
+
+describe('PluginConfigSchema ACP wrapper models', () => {
+  it('accepts and preserves a wrapper model ID with spaces and nested segments', () => {
+    const wrapperModel = 'opencode-omniroute-live/of/MiniMax M3';
+    const result = PluginConfigSchema.safeParse({
+      acpAgents: {
+        helper: {
+          command: 'acp-helper',
+          wrapperModel,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.acpAgents?.helper?.wrapperModel).toBe(wrapperModel);
+    }
+  });
+});
 
 describe('PluginConfigSchema image_routing', () => {
   it('accepts image_routing: direct with observer disabled', () => {
@@ -144,7 +198,7 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
   });
 
-  it('defaults orchestratorWake to enabled with a 5-minute interval', () => {
+  it('defaults orchestratorWake to enabled with a 5-minute interval and auto mode', () => {
     const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
 
     expect(result.success).toBe(true);
@@ -152,6 +206,7 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
         enabled: true,
         intervalMs: 300_000,
+        mode: 'auto',
       });
     }
   });
@@ -168,7 +223,30 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
         enabled: false,
         intervalMs: 120_000,
+        mode: 'auto',
       });
+    }
+  });
+
+  it('accepts explicit orchestratorWake.mode values', () => {
+    for (const mode of ['auto', 'todo', 'children'] as const) {
+      const result = PluginConfigSchema.safeParse({
+        backgroundJobs: { orchestratorWake: { mode } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.backgroundJobs?.orchestratorWake?.mode).toBe(mode);
+      }
+    }
+  });
+
+  it('rejects unknown orchestratorWake.mode values', () => {
+    for (const mode of ['child', 'todos', 'AUTO', '', null]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: { orchestratorWake: { mode } },
+        }).success,
+      ).toBe(false);
     }
   });
 
@@ -351,6 +429,60 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(PluginConfigSchema.safeParse({ backgroundJobs }).success).toBe(
         false,
       );
+    }
+  });
+
+  it('accepts sameProviderPolicy entries with the foreground policy', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: {
+        sameProviderPolicy: { 'lm-nexus': 'foreground' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({
+        'lm-nexus': 'foreground',
+      });
+    }
+  });
+
+  it('accepts an empty sameProviderPolicy map', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { sameProviderPolicy: {} },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({});
+    }
+  });
+
+  it('leaves default behavior unchanged when sameProviderPolicy is omitted', () => {
+    const withDefaults = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+    expect(withDefaults.success).toBe(true);
+    if (withDefaults.success) {
+      expect(withDefaults.data.backgroundJobs?.sameProviderPolicy).toEqual({});
+    }
+
+    const absent = PluginConfigSchema.safeParse({});
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect(absent.data.backgroundJobs).toBeUndefined();
+    }
+  });
+
+  it('rejects invalid sameProviderPolicy values', () => {
+    for (const sameProviderPolicy of [
+      { foo: 'background' },
+      { foo: 1 },
+      'foreground',
+    ]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: { sameProviderPolicy },
+        }).success,
+      ).toBe(false);
     }
   });
 });

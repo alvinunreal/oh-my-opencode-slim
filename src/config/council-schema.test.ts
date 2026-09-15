@@ -7,36 +7,42 @@ import {
 } from './council-schema';
 
 describe('CouncillorConfigSchema', () => {
-  test('validates config with model and optional variant', () => {
+  test('accepts and preserves a scalar model ID with spaces', () => {
     const result = CouncillorConfigSchema.safeParse({
-      model: 'openai/gpt-5.6-luna',
+      model: 'of/MiniMax M3',
       variant: 'low',
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.model).toBe('openai/gpt-5.6-luna');
+      expect(result.data.model).toBe('of/MiniMax M3');
       expect(result.data.variant).toBe('low');
       // A single-model config normalizes to a one-entry chain.
       expect(result.data.models).toEqual([
-        { id: 'openai/gpt-5.6-luna', variant: 'low' },
+        { id: 'of/MiniMax M3', variant: 'low' },
       ]);
     }
   });
 
-  test('accepts an ordered model fallback chain', () => {
+  test('preserves ordered mixed fallback entries with spaced model IDs', () => {
     const result = CouncillorConfigSchema.safeParse({
       model: [
-        'openai/gpt-5.6-luna',
-        { id: 'google/gemini-3-pro', variant: 'high' },
+        'of/Kimi K2.6',
+        {
+          id: 'opencode-omniroute-live/of/Qwen3.8 27b',
+          variant: 'high',
+        },
       ],
     });
     expect(result.success).toBe(true);
     if (result.success) {
       // Primary model stays on `model` for backward compatibility.
-      expect(result.data.model).toBe('openai/gpt-5.6-luna');
+      expect(result.data.model).toBe('of/Kimi K2.6');
       expect(result.data.models).toEqual([
-        { id: 'openai/gpt-5.6-luna', variant: undefined },
-        { id: 'google/gemini-3-pro', variant: 'high' },
+        { id: 'of/Kimi K2.6', variant: undefined },
+        {
+          id: 'opencode-omniroute-live/of/Qwen3.8 27b',
+          variant: 'high',
+        },
       ]);
     }
   });
@@ -99,12 +105,12 @@ test('preset with only legacy "master" key results in empty councillors', () => 
   }
 });
 
-test('unwraps legacy nested "councillors" key in preset', () => {
+test('unwraps legacy nested "councillors" key with spaced model IDs', () => {
   const config = {
     presets: {
       default: {
         councillors: {
-          alpha: { model: 'openai/gpt-5.6-luna' },
+          alpha: { model: 'of/MiniMax M3' },
           beta: { model: 'openai/gpt-5.3-codex' },
         },
       },
@@ -117,7 +123,7 @@ test('unwraps legacy nested "councillors" key in preset', () => {
   if (result.success) {
     const preset = result.data.presets.default;
     expect(Object.keys(preset)).toEqual(['alpha', 'beta']);
-    expect(preset.alpha.model).toBe('openai/gpt-5.6-luna');
+    expect(preset.alpha.model).toBe('of/MiniMax M3');
     expect(preset.beta.model).toBe('openai/gpt-5.3-codex');
   }
 });

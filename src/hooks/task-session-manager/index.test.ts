@@ -1792,11 +1792,17 @@ describe('task-session-manager hook', () => {
       const beforeAcknowledgement = {
         args: { subagent_type: 'oracle', task_id: original.alias },
       };
-      await hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: `${state}-before-ack` },
-        beforeAcknowledgement,
-      );
-      expect(beforeAcknowledgement.args.task_id).toBeUndefined();
+      await expect(
+        hook['tool.execute.before'](
+          {
+            tool: 'task',
+            sessionID: 'parent-1',
+            callID: `${state}-before-ack`,
+          },
+          beforeAcknowledgement,
+        ),
+      ).rejects.toThrow(/unreconciled; task\(\) cannot resume/);
+      expect(beforeAcknowledgement.args.task_id).toBe(original.alias);
 
       board.markReconciled(original.taskID);
 
@@ -1822,6 +1828,47 @@ describe('task-session-manager hook', () => {
         terminalUnreconciled: false,
       });
     }
+  });
+
+  test('refuses stopped sessions through task() before and after acknowledgement', async () => {
+    const board = new BackgroundJobBoard();
+    const original = board.registerLaunch({
+      taskID: 'child-stopped',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'idle review',
+      now: 100,
+    });
+    board.markStopped(original.taskID, 'no native result', 110, undefined, 110);
+    const { hook } = createHook({ backgroundJobBoard: board });
+
+    const beforeAcknowledgement = {
+      args: { subagent_type: 'oracle', task_id: original.alias },
+    };
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'stopped-before-ack' },
+        beforeAcknowledgement,
+      ),
+    ).rejects.toThrow(/stopped, unreconciled; task\(\) cannot resume/);
+    expect(beforeAcknowledgement.args.task_id).toBe(original.alias);
+
+    board.markReconciled(original.taskID);
+
+    const afterAcknowledgement = {
+      args: { subagent_type: 'oracle', task_id: original.alias },
+    };
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'stopped-after-ack' },
+        afterAcknowledgement,
+      ),
+    ).rejects.toThrow(/stopped, acknowledged; task\(\) cannot resume/);
+    expect(afterAcknowledgement.args.task_id).toBe(original.alias);
+    expect(board.get(original.taskID)).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: false,
+    });
   });
 
   test('keeps task timeout as a running timed-out job', async () => {
@@ -2201,6 +2248,7 @@ describe('task-session-manager hook', () => {
       taskID: 'child-1',
       parentSessionID: 'parent-1',
     });
+    board.markReconciled('child-1');
     const { hook } = createHook({ backgroundJobBoard: board });
 
     await hook['tool.execute.before'](
@@ -4610,6 +4658,209 @@ describe('task-session-manager hook', () => {
     expect(job?.resultSummary).toBe('Internal server error');
   });
 
+  test('child session.error preserves serialized NamedError detail (data.message)', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'audit the diff',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    // The core publishes session errors via NamedError.toObject():
+    // `{ name, data }` with the message inside data (APIError,
+    // ProviderAuthError, ...). A top-level-only read loses it (#1200).
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'APIError',
+            data: {
+              message: 'stream stall timeout',
+              isRetryable: true,
+            },
+          },
+        },
+      },
+    });
+
+    const job = board.get('child-1');
+    expect(job?.state).toBe('error');
+    expect(job?.resultSummary).toBe('stream stall timeout');
+  });
+
+  test('child session.error without any message falls back to generic summary', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'designer',
+      description: 'design ui',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { name: 'APIError', data: { isRetryable: false } },
+        },
+      },
+    });
+
+    const job = board.get('child-1');
+    expect(job?.state).toBe('error');
+    expect(job?.resultSummary).toBe('Session error');
+  });
+
+  test('child session.error prefers data.message over top-level message', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      description: 'audit the diff',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'APIError',
+            message: 'Instance name (generic)',
+            data: { message: 'stream stall timeout', isRetryable: true },
+          },
+        },
+      },
+    });
+
+    // NamedError instances carry their class name as the top-level
+    // message; the human-readable detail is data.message.
+    expect(board.get('child-1')?.resultSummary).toBe('stream stall timeout');
+  });
+
+  test('child session.error with empty data.message falls back to top-level message', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'designer',
+      description: 'design ui',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'AI_APICallError',
+            message: 'Internal server error',
+            data: { message: '' },
+          },
+        },
+      },
+    });
+
+    expect(board.get('child-1')?.resultSummary).toBe('Internal server error');
+  });
+
+  test('child session.error with whitespace-only data.message falls back to top-level message', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'designer',
+      description: 'design ui',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    // A whitespace-only nested message must not bypass the fallback and
+    // leave an empty board summary (Greptile PR #1202 review).
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'AI_APICallError',
+            message: 'Internal server error',
+            data: { message: '   ' },
+          },
+        },
+      },
+    });
+
+    expect(board.get('child-1')?.resultSummary).toBe('Internal server error');
+  });
+
+  test('managed session.error preserves serialized NamedError detail (data.message)', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      // No chain / chain exhausted / fallback disabled → error is final.
+      willAttemptFallback: () => false,
+    });
+
+    board.registerLaunch({
+      taskID: 'parent-1',
+      parentSessionID: 'root-1',
+      agent: 'orchestrator',
+      description: 'background session',
+    });
+    board.updateStatus({ taskID: 'parent-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'parent-1',
+          error: {
+            name: 'ProviderAuthError',
+            data: { providerID: 'acme', message: 'Invalid API key' },
+          },
+        },
+      },
+    });
+
+    const job = board.get('parent-1');
+    expect(job?.state).toBe('error');
+    expect(job?.resultSummary).toBe('Invalid API key');
+  });
+
   test('child session.error during fallback is not recorded on board', async () => {
     const board = new BackgroundJobBoard();
     // isFallbackInProgress is currently always-false for real children
@@ -4725,11 +4976,13 @@ describe('task-session-manager hook', () => {
     const unreconciled = {
       args: { subagent_type: 'oracle', task_id: 'ora-1' },
     };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-      unreconciled,
-    );
-    expect(unreconciled.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+        unreconciled,
+      ),
+    ).rejects.toThrow(/unreconciled; task\(\) cannot resume/);
+    expect(unreconciled.args.task_id).toBe('ora-1');
 
     board.markReconciled('done-1');
 
@@ -4779,7 +5032,7 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('exp-1');
   });
 
-  test('task alias is dropped when subagent_type is missing', async () => {
+  test('task alias is refused when subagent_type is missing', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
     board.registerLaunch({
@@ -4790,15 +5043,16 @@ describe('task-session-manager hook', () => {
     });
 
     const resume = { args: { task_id: 'exp-1' } };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
-      resume,
-    );
-
-    expect(resume.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+        resume,
+      ),
+    ).rejects.toThrow(/requires a valid subagent_type/);
+    expect(resume.args.task_id).toBe('exp-1');
   });
 
-  test('task alias is dropped when subagent_type is invalid', async () => {
+  test('task alias is refused when subagent_type is invalid', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
     board.registerLaunch({
@@ -4811,12 +5065,13 @@ describe('task-session-manager hook', () => {
     const resume = {
       args: { subagent_type: 123, task_id: 'exp-1' },
     };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
-      resume,
-    );
-
-    expect(resume.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+        resume,
+      ),
+    ).rejects.toThrow(/requires a valid subagent_type/);
+    expect(resume.args.task_id).toBe('exp-1');
   });
 
   test('custom subagent raw session task_id is preserved', async () => {
@@ -4869,11 +5124,13 @@ describe('task-session-manager hook', () => {
     board.markReconciled('child-1');
 
     const wrongAgent = { args: { subagent_type: 'oracle', task_id: 'exp-1' } };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'agent' },
-      wrongAgent,
-    );
-    expect(wrongAgent.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'agent' },
+        wrongAgent,
+      ),
+    ).rejects.toThrow(/agent is explorer, not oracle/);
+    expect(wrongAgent.args.task_id).toBe('exp-1');
   });
 
   test('resuming reusable job relaunches running and removes reusable entry', async () => {
@@ -5019,16 +5276,17 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('ses_existing');
   });
 
-  test('still drops unknown reusable aliases', async () => {
+  test('refuses unknown reusable aliases without dropping task_id', async () => {
     const { hook } = createHook();
     const resume = { args: { subagent_type: 'fixer', task_id: 'fix-99' } };
 
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
-      resume,
-    );
-
-    expect(resume.args.task_id).toBeUndefined();
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+        resume,
+      ),
+    ).rejects.toThrow(/Unknown task ID or alias: fix-99/);
+    expect(resume.args.task_id).toBe('fix-99');
   });
 
   test('reads before and after launch attach with unique-line counts and caps', async () => {
@@ -6043,6 +6301,278 @@ describe('task-session-manager hook', () => {
       state: 'running',
       statusUncertain: true,
       terminalUnreconciled: false,
+    });
+    expect(terminalListener).not.toHaveBeenCalled();
+  });
+
+  test('fail-closed after deletion defers to idle settle, not a wedge', async () => {
+    // Documents why the retained fail-closed pin above is safe: the
+    // statusUncertain running record is not a dead end. The synthesized
+    // idle pair reaches the child idle-reconcile path, readSessionOutcome
+    // confirms the terminal host outcome with final text, and the job
+    // settles — the fail-closed branch only refuses the UNPROVEN injected
+    // completion, it does not block reconciliation.
+    const coordinator = new SessionLifecycle(() => {});
+    const board = new BackgroundJobBoard();
+    const first = createHook({
+      backgroundJobBoard: board,
+      coordinator,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-relaunch',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+
+    await first.hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-relaunch' },
+      },
+    });
+    coordinator.dispatchSessionDeleted('child-relaunch');
+
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+      idleReconcileDelayMs: 0,
+      sessionClient: {
+        get: mock(async () => ({ data: { outcome: 'succeeded' } })),
+        messages: mock(async () => ({
+          data: [
+            {
+              info: { id: 'm1', role: 'assistant' },
+              parts: [{ type: 'text', text: 'settled final answer' }],
+            },
+          ],
+        })),
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-relaunch',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+
+    // Exact fail-closed shape as the pin above: unobserved, unfenced
+    // explicit completion after delete + same-board relaunch.
+    const replay = {
+      messages: [
+        {
+          info: {
+            role: 'user',
+            agent: 'orchestrator',
+            sessionID: 'parent-1',
+          },
+          parts: [
+            {
+              type: 'text',
+              id: 'unobserved-completion',
+              synthetic: true,
+              text: [
+                '<task id="child-relaunch" state="completed">',
+                '<summary>Background task completed: unknown origin</summary>',
+                '<task_result>',
+                'ambiguous result',
+                '</task_result>',
+                '</task>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+    await hook['experimental.chat.messages.transform']({}, replay as never);
+    expect(board.get('child-relaunch')).toMatchObject({
+      generation: 2,
+      state: 'running',
+      statusUncertain: true,
+      terminalUnreconciled: false,
+    });
+
+    // The synthesized idle pair (event-adapter's terminal
+    // session.execution.* products) settles the job via the host outcome.
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'child-relaunch',
+          status: { type: 'idle' },
+        },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID: 'child-relaunch' },
+      },
+    });
+    await flushChildIdleReconcile();
+
+    expect(board.get('child-relaunch')).toMatchObject({
+      generation: 2,
+      state: 'reconciled',
+      terminalState: 'completed',
+      statusUncertain: false,
+      resultSummary: 'settled final answer',
+    });
+  });
+
+  test('skips an old remembered completion after relaunch without poisoning status (fence-first)', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-stale-fence',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+    const completion = {
+      type: 'text',
+      id: 'stale-fence-occurrence',
+      synthetic: true,
+      text: [
+        '<task id="child-stale-fence" state="completed">',
+        '<summary>Background task completed: old run</summary>',
+        '<task_result>old result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    const replayable = { ...completion };
+    await hook.event({
+      event: {
+        type: 'message.part.updated',
+        properties: { part: completion },
+      },
+    });
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [completion],
+        },
+      ],
+    } as never);
+    expect(board.get('child-stale-fence')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'old result',
+    });
+
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-stale-fence' },
+      },
+    });
+    const relaunched = board.registerLaunch({
+      taskID: 'child-stale-fence',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+
+    // Simulate the older lifecycle's occurrence bookkeeping being absent
+    // (only the processed-completion FENCE survives): the fence must skip
+    // the replay cleanly BEFORE the deletion-epoch fail-closed branch can
+    // mark the fresh running generation status-uncertain.
+    getBackgroundJobLifecycleLedger(board).syntheticTerminalOccurrences.clear();
+
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [replayable],
+        },
+      ],
+    } as never);
+
+    expect(board.get('child-stale-fence')).toMatchObject({
+      generation: relaunched.generation,
+      state: 'running',
+      statusUncertain: false,
+      resultSummary: undefined,
+    });
+  });
+
+  test('keeps unobserved legacy and host-message completions fail-closed after deletion', async () => {
+    const board = new BackgroundJobBoard();
+    const terminalListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      runtimeStatusReconcileDelayMs: 60_000,
+    });
+    board.registerLaunch({
+      taskID: 'child-unobserved-weak',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'first run',
+    });
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { sessionID: 'child-unobserved-weak' },
+      },
+    });
+    board.registerLaunch({
+      taskID: 'child-unobserved-weak',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'second run',
+    });
+
+    const legacyCompletion = {
+      type: 'text',
+      synthetic: true,
+      text: [
+        '<task id="child-unobserved-weak" state="completed">',
+        '<summary>Background task completed: legacy</summary>',
+        '<task_result>legacy result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [legacyCompletion],
+        },
+      ],
+    } as never);
+    expect(board.get('child-unobserved-weak')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+    });
+
+    const hostMessageCompletion = {
+      type: 'text',
+      synthetic: true,
+      messageID: 'unobserved-weak-message',
+      text: [
+        '<task id="child-unobserved-weak" state="completed">',
+        '<summary>Background task completed: host</summary>',
+        '<task_result>host result</task_result>',
+        '</task>',
+      ].join('\n'),
+    };
+    await hook['experimental.chat.messages.transform']({}, {
+      messages: [
+        {
+          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
+          parts: [hostMessageCompletion],
+        },
+      ],
+    } as never);
+    expect(board.get('child-unobserved-weak')).toMatchObject({
+      state: 'running',
+      statusUncertain: true,
+      resultSummary: undefined,
     });
     expect(terminalListener).not.toHaveBeenCalled();
   });

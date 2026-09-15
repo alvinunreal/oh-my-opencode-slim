@@ -122,6 +122,8 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `presets.<name>.<agent>.displayName` | string | - | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
 | `presets.<name>.<agent>.color` | string | - | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `presets.<name>.<agent>.skills` | string[] | - | Skills the agent can use (`"*"`, `"!item"`, explicit list) |
+| `presets.<name>.<agent>.skills_add` | string[] | - | Skill names added to the effective skills list at config resolution (applies to `agents.<agent>` entries too). Removal via `skills_remove` wins. Folded into `skills` and stripped; see [Skills Assignment](skills.md#adding-or-removing-skills-on-top-of-an-inherited-list) |
+| `presets.<name>.<agent>.skills_remove` | string[] | - | Skill names removed from the effective skills list at config resolution (applies to `agents.<agent>` entries too). Wins over `skills_add`. Folded into `skills` and stripped; see [Skills Assignment](skills.md#adding-or-removing-skills-on-top-of-an-inherited-list) |
 | `presets.<name>.<agent>.mcps` | string[] | - | MCPs the agent can use (`"*"`, `"!item"`, explicit list) |
 | `presets.<name>.<agent>.options` | object | - | Provider-specific model options passed to the AI SDK (e.g., `textVerbosity`, `thinking` budget) |
 | `agents.<customAgent>.model` | string\|array | - | Required for custom agents inferred from unknown `agents` keys |
@@ -157,17 +159,21 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.readContextMaxFiles` | integer | `8` | Maximum number of recent read-context files shown per reusable child session (0–50) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxRetainedSnapshots` | integer | `20` | Maximum board snapshots retained per checkpoint cache epoch (1–100). Adding a snapshot beyond the limit starts a new epoch with only the current snapshot, intentionally creating one cache miss See [Background Job Management](#background-job-management). |
 | `backgroundJobs.strategy` | `"latest"` \| `"checkpoint-compatible"` | `"latest"` | Board injection strategy. `latest` preserves the current strip-and-replace behavior; `checkpoint-compatible` appends only when the formatted board changes and uses `backgroundJobs.maxRetainedSnapshots` per cache epoch. Cache state resets on compaction/session boundaries and is lost on plugin restart See [Background Job Management](#background-job-management). |
-| `backgroundJobs.orchestratorWake.enabled` | boolean | `true` | When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts (default every 5 minutes of continuous parent idle). Requires host session APIs; inactive on the v2 shim. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
+| `backgroundJobs.orchestratorWake.enabled` | boolean | `true` | When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts (default every 5 minutes of continuous parent idle). Requires host session APIs. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.intervalMs` | integer | `300000` | Continuous parent-idle interval between wake evaluations (`60000`–`2147483647` ms). `0` is invalid. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
+| `backgroundJobs.orchestratorWake.mode` | string | `"auto"` | Wake-condition source: `"auto"` uses todo-gating on OpenCode v1 and children-driven degraded mode on v2 hosts; `"todo"`/`"children"` pin one mode (explicit `"todo"` degrades to children where no todo API exists). See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
 | `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
+| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit `task(..., background: true)` call is converted to the existing foreground execution path. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. |
 | `fallback.maxRetries` | number | `3` | Consecutive retryable 429 responses allowed for the same foreground model before Slim aborts or selects the next configured fallback model. It does not cap OpenCode provider retries or background subagent retries. |
+| `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. |
+| `fallback.retryDelayMs` | number | `500` | Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables. |
 | `council.presets` | object | - | **Required if using council.** Named councillor presets See [Council configuration note](#council-configuration-note). |
 | `council.presets.<name>.<councillor>.model` | string | - | Councillor model See [Council configuration note](#council-configuration-note). |
 | `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant See [Council configuration note](#council-configuration-note). |
@@ -240,6 +246,10 @@ subprocess.
 
 ### Council configuration note
 
+- Councillor `model` and ACP `wrapperModel` values use `provider/model`
+  references. The provider must be nonempty and cannot contain whitespace or
+  `/`; the nonempty model remainder is retained verbatim and may contain spaces
+  and nested `/` values, such as `opencode-omniroute-live/of/MiniMax M3`.
 - The **Council agent model** is configured like any other agent, for example in
   `presets.<name>.council.model`.
 - The **councillor models** are configured separately under
@@ -312,7 +322,8 @@ The wall-clock supervisor is separately opt-in and remains disabled unless
     "maxRetainedSnapshots": 10,
     "orchestratorWake": {
       "enabled": true,
-      "intervalMs": 300000
+      "intervalMs": 300000,
+      "mode": "auto"
     },
     "wallClockTimeoutMs": 900000,
     "abortGraceMs": 10000,
@@ -329,7 +340,8 @@ The wall-clock supervisor is separately opt-in and remains disabled unless
 }
 ```
 
-`orchestratorWake` defaults to enabled with a 5-minute continuous-idle interval.
+`orchestratorWake` defaults to enabled with a 5-minute continuous-idle
+interval and `"auto"` mode (todo-gated on v1 hosts, children-driven on v2).
 Set `enabled: false` to keep idle reconciliation and background-job orchestration
 without periodic wake prompts. See the
 [Background Orchestration](background-orchestration.md) guide for the concept,
@@ -352,6 +364,38 @@ models mid-flight (e.g. foreground model fallback) moves its accounting to
 the new model. The scheduler is process-scoped: when the plugin re-inits on a
 config update, running slots and queued tickets survive, so admission state
 is not reset mid-run.
+
+`sameProviderPolicy` is an opt-in per-provider policy for local inference
+backends that execute multiple logical agent sessions on one shared
+accelerator/model runtime. When a foreground parent and a same-provider
+background child run concurrently on such a backend, throughput can degrade
+from repeated model/KV context switching between the two large sessions.
+When the parent session's current model and the child agent's resolved model
+both resolve to a provider configured with `"foreground"`, the explicit
+`task(..., background: true)` request is converted to the existing foreground
+execution path:
+
+```jsonc
+{
+  "backgroundJobs": {
+    "sameProviderPolicy": {
+      "lm-nexus": "foreground"
+    }
+  }
+}
+```
+
+- Same provider with `"foreground"` configured → the background request is
+  converted to foreground (no concurrency admission, no wall-clock
+  supervision, synchronous host execution).
+- Different providers → unchanged.
+- Provider not configured → unchanged.
+- Either provider undeterminable → unchanged (fail-open).
+
+Default (omitted) behavior is unchanged. This does not change
+`orchestratorWake` or `defaultConcurrency`/`providerConcurrency`/
+`modelConcurrency` semantics: a converted task simply bypasses background
+admission like any foreground task.
 
 Two behaviors to know about when concurrency is enabled:
 

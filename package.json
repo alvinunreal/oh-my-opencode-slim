@@ -1,6 +1,6 @@
 {
   "name": "oh-my-opencode-slim",
-  "version": "2.2.18",
+  "version": "2.2.20",
   "packageManager": "bun@1.3.14",
   "description": "Lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode",
   "main": "dist/index.js",
@@ -94,12 +94,13 @@
     "turndown": "^7.2.4"
   },
   "optionalDependencies": {
-    "@opentui/core": "0.5.8",
-    "@opentui/solid": "0.5.8",
+    "@opentui/core": "0.5.11",
+    "@opentui/solid": "0.5.11",
     "solid-js": "1.9.12"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
+    "@opencode/plugin": "2.0.3",
     "@types/jsdom": "28",
     "@types/node": "^26.1.1",
     "@types/turndown": "^5.0.6",

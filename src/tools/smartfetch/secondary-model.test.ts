@@ -2,9 +2,10 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { MAX_MODEL_CONTENT_CHARS } from './constants';
 import {
   _testConfig,
+  decideSecondaryModelUse,
   runSecondaryModelWithFallback as runSecondaryModelWithFallbackImpl,
 } from './secondary-model';
-import type { SecondaryModel } from './types';
+import type { CachedFetch, SecondaryModel } from './types';
 
 type SecondaryModelArgs = Parameters<typeof runSecondaryModelWithFallbackImpl>;
 
@@ -100,6 +101,21 @@ describe('smartfetch/secondary-model', () => {
   ];
 
   const testInput = { directory: '/tmp/project' } as never;
+
+  test('allows v2 generation without a registered helper agent', () => {
+    const decision = decideSecondaryModelUse(
+      {
+        markdown: 'This is enough content for the secondary model to use.',
+        wordCount: 30,
+      } as CachedFetch,
+      'Summarize this',
+      models,
+      undefined,
+      true,
+    );
+
+    expect(decision).toEqual({ use: true, reason: 'prompt_present' });
+  });
 
   afterEach(() => {
     mock.restore();

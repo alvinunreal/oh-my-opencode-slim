@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { createReadOnlyAgentPermission } from '../agents/permissions';
 import {
   adaptPermissions,
   applyAgentToDraft,
@@ -7,11 +8,38 @@ import {
 } from './adapters';
 import type { V2AgentDraft } from './types';
 
+function globMatch(pattern: string, value: string): boolean {
+  if (pattern === '*') return true;
+  if (pattern === value) return true;
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`).test(value);
+}
+
+function evaluatePermission(
+  rules: Array<{ action: string; resource: string; effect: string }>,
+  tool: string,
+  resource = '*',
+): string {
+  const match = [...rules]
+    .reverse()
+    .find((r) => globMatch(r.action, tool) && globMatch(r.resource, resource));
+  return match?.effect ?? 'ask';
+}
+
 describe('parseModelRef', () => {
   test('parses provider/model', () => {
     expect(parseModelRef('anthropic/claude-3.5')).toEqual({
       providerID: 'anthropic',
       id: 'claude-3.5',
+    });
+  });
+
+  test('retains nested spaced model suffixes after the first slash', () => {
+    expect(parseModelRef('opencode-omniroute-live/of/MiniMax M3')).toEqual({
+      providerID: 'opencode-omniroute-live',
+      id: 'of/MiniMax M3',
     });
   });
 
@@ -59,22 +87,22 @@ describe('adaptPermissions', () => {
   test('maps v1 bash -> v2 execute and bash', () => {
     const rules = adaptPermissions({ bash: 'deny' });
     expect(rules).toContainEqual({
-      action: '*',
-      resource: 'execute',
+      action: 'execute',
+      resource: '*',
       effect: 'deny',
     });
     expect(rules).toContainEqual({
-      action: '*',
-      resource: 'bash',
+      action: 'bash',
+      resource: '*',
       effect: 'deny',
     });
   });
 
-  test('nested permission object becomes action/resource rule', () => {
+  test('nested permission object becomes action=tool, resource=pattern', () => {
     const rules = adaptPermissions({ skill: { codemap: 'allow' } });
     expect(rules).toContainEqual({
-      action: 'codemap',
-      resource: 'skill',
+      action: 'skill',
+      resource: 'codemap',
       effect: 'allow',
     });
   });
@@ -84,12 +112,27 @@ describe('adaptPermissions', () => {
     // to actually deny.
     const rules = adaptPermissions({ webfetch: 'deny' });
     const denyIdx = rules.findIndex(
-      (r) => r.resource === 'webfetch' && r.effect === 'deny',
+      (r) => r.action === 'webfetch' && r.effect === 'deny',
     );
     const broadAllowIdx = rules.findIndex(
       (r) => r.action === '*' && r.resource === '*' && r.effect === 'allow',
     );
     expect(denyIdx).toBeGreaterThan(broadAllowIdx);
+  });
+
+  test('read-only councillor permissions allow glob/grep/read on real paths', () => {
+    const rules = adaptPermissions(createReadOnlyAgentPermission());
+    expect(evaluatePermission(rules, 'glob', 'src/**/*.ts')).toBe('allow');
+    expect(evaluatePermission(rules, 'grep', 'src/v2/adapters.ts')).toBe(
+      'allow',
+    );
+    expect(evaluatePermission(rules, 'read', 'src/v2/adapters.ts')).toBe(
+      'allow',
+    );
+    expect(evaluatePermission(rules, 'edit', 'src/v2/adapters.ts')).toBe(
+      'deny',
+    );
+    expect(evaluatePermission(rules, 'bash', 'ls')).toBe('deny');
   });
 });
 
@@ -194,10 +237,10 @@ describe('applyAgentToDraft', () => {
     const rules = calls[0].agent.permissions as Array<Record<string, unknown>>;
     const toolsAllowIdx = rules.findIndex(
       (r) =>
-        r.resource === 'webfetch' && r.effect === 'allow' && r.action === '*',
+        r.action === 'webfetch' && r.effect === 'allow' && r.resource === '*',
     );
     const denyIdx = rules.findIndex(
-      (r) => r.resource === 'webfetch' && r.effect === 'deny',
+      (r) => r.action === 'webfetch' && r.effect === 'deny',
     );
     expect(toolsAllowIdx).toBeGreaterThanOrEqual(0);
     expect(denyIdx).toBeGreaterThan(toolsAllowIdx); // deny wins under findLast

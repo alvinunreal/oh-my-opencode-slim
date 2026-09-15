@@ -180,7 +180,9 @@ type FileSnapshot =
   | { type: 'missing' }
   | {
       type: 'file';
-      text: string;
+      // Raw bytes: rolling back must restore binary files byte-for-byte,
+      // which utf-8 decoding cannot guarantee.
+      bytes: Buffer;
       mode: number;
     };
 
@@ -195,7 +197,7 @@ async function readSnapshot(filePath: string): Promise<FileSnapshot> {
 
     return {
       type: 'file',
-      text: await fs.readFile(filePath, 'utf-8'),
+      bytes: await fs.readFile(filePath),
       mode: stat.mode & 0o7777,
     };
   } catch (error) {
@@ -220,7 +222,7 @@ async function restoreSnapshot(
   }
 
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await writeFileAtomically(filePath, snapshot.text, snapshot.mode);
+  await writeFileAtomically(filePath, snapshot.bytes, snapshot.mode);
 }
 
 function createTempSiblingPath(target: string): string {
@@ -232,14 +234,14 @@ function createTempSiblingPath(target: string): string {
 
 async function writeFileAtomically(
   target: string,
-  text: string,
+  data: string | Buffer,
   mode?: number,
 ): Promise<void> {
   const tempPath = createTempSiblingPath(target);
 
   try {
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(tempPath, text, 'utf-8');
+    await fs.writeFile(tempPath, data);
     if (mode !== undefined) {
       await fs.chmod(tempPath, mode);
     }
@@ -352,32 +354,48 @@ export async function applyPreparedChanges(
 
   assertPreparedApplyPreconditions(changes, snapshots);
 
+  // Effective mode per path as changes are applied sequentially: a move
+  // transfers the source mode to the destination, so later writes on that
+  // destination must keep it instead of falling back to the initial
+  // snapshot (which may not exist yet).
+  const effectiveModes = new Map<string, number | undefined>();
+  function effectiveMode(filePath: string): number | undefined {
+    if (effectiveModes.has(filePath)) {
+      return effectiveModes.get(filePath);
+    }
+
+    return getSnapshotMode(snapshots.get(filePath) ?? { type: 'missing' });
+  }
+
   try {
     for (const change of changes) {
       if (change.type === 'add') {
         await writeFileAtomically(change.file, change.text);
+        // A (re)created path has no prior mode to preserve: drop any mode
+        // tracked for it so later writes do not resurrect a stale one.
+        effectiveModes.set(change.file, undefined);
         continue;
       }
 
       if (change.type === 'delete') {
         await fs.unlink(change.file);
+        effectiveModes.set(change.file, undefined);
         continue;
       }
 
       if (change.move && change.move !== change.file) {
-        await writeFileAtomically(
-          change.move,
-          change.text,
-          getSnapshotMode(snapshots.get(change.file) ?? { type: 'missing' }),
-        );
+        const mode = effectiveMode(change.file);
+        await writeFileAtomically(change.move, change.text, mode);
         await fs.unlink(change.file);
+        effectiveModes.set(change.move, mode);
+        effectiveModes.set(change.file, undefined);
         continue;
       }
 
       await writeFileAtomically(
         change.file,
         change.text,
-        getSnapshotMode(snapshots.get(change.file) ?? { type: 'missing' }),
+        effectiveMode(change.file),
       );
     }
   } catch (error) {

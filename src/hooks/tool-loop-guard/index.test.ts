@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { ToolLoopGuardHook } from './hook';
-import { createToolLoopGuardHook, LOOP_GUARD_WARNING } from './hook';
+import {
+  createToolLoopGuardHook,
+  LOOP_GUARD_WARNING,
+  WAIT_GUARD_MARKER,
+  WAIT_GUARD_WARNING,
+} from './hook';
 
 function beforeInput(
   overrides: Partial<{ tool: string; sessionID: string; callID: string }> = {},
@@ -288,14 +293,12 @@ describe('tool-loop-guard', () => {
     expect(completedOutput3.output).toContain(LOOP_GUARD_WARNING);
   });
 
-  test('task and task lifecycle/control tools (cancel, message, revive, wait) remain exempt', async () => {
+  test('task and task lifecycle/control tools (cancel, message, revive) remain exempt', async () => {
     const exemptTools = [
       { tool: 'task', args: { subagent_type: 'explorer', prompt: 'find x' } },
       { tool: 'task_cancel', args: { task_id: 'child-1' } },
       { tool: 'task_message', args: { task_id: 'child-1', message: 'hello' } },
       { tool: 'task_revive', args: { task_id: 'child-1' } },
-      { tool: 'wait_for_user', args: {} },
-      { tool: 'wait_for_background_tasks', args: {} },
     ];
 
     for (const { tool: toolName, args } of exemptTools) {
@@ -467,5 +470,127 @@ describe('tool-loop-guard', () => {
       );
       expect(output.output).not.toContain(LOOP_GUARD_WARNING);
     }
+  });
+
+  test('first wait_for_user call passes through untouched', async () => {
+    const output = await runToolCall(
+      'wait_for_user',
+      'w1',
+      { reason: 'user must restart the server' },
+      'state: waiting_for_user\nreason: user must restart the server',
+    );
+    expect(output.output).not.toContain(WAIT_GUARD_WARNING);
+  });
+
+  test('second wait_for_user call with different reason still warns', async () => {
+    await runToolCall(
+      'wait_for_user',
+      'w1',
+      { reason: 'user must restart the server' },
+      'state: waiting_for_user\nreason: user must restart the server',
+    );
+    const output = await runToolCall(
+      'wait_for_user',
+      'w2',
+      { reason: 'idle wake again' },
+      'state: waiting_for_user\nreason: idle wake again',
+    );
+    expect(output.output).toContain(WAIT_GUARD_WARNING);
+  });
+
+  test('third wait_for_user call is refused', async () => {
+    for (let i = 1; i <= 2; i++) {
+      await runToolCall(
+        'wait_for_user',
+        `w${i}`,
+        { reason: `reason ${i}` },
+        `state: waiting_for_user\nreason: reason ${i}`,
+      );
+    }
+    await expect(
+      hook['tool.execute.before'](
+        beforeInput({ tool: 'wait_for_user', callID: 'w3' }),
+        {
+          args: { reason: 'reason 3' },
+        },
+      ),
+    ).rejects.toThrow('end your turn');
+  });
+
+  test('wait_for_user and wait_for_background_tasks share one stream', async () => {
+    await runToolCall(
+      'wait_for_user',
+      'w1',
+      { reason: 'waiting on user' },
+      'state: waiting_for_user',
+    );
+    const output = await runToolCall(
+      'wait_for_background_tasks',
+      'w2',
+      {},
+      'state: waiting',
+    );
+    expect(output.output).toContain(WAIT_GUARD_WARNING);
+    await expect(
+      hook['tool.execute.before'](
+        beforeInput({ tool: 'wait_for_background_tasks', callID: 'w3' }),
+        { args: {} },
+      ),
+    ).rejects.toThrow('end your turn');
+  });
+
+  test('observeNewUserMessage resets the wait counter', async () => {
+    await runToolCall(
+      'wait_for_user',
+      'w1',
+      { reason: 'waiting on user' },
+      'state: waiting_for_user',
+    );
+    hook.observeNewUserMessage('s1', 'msg-1');
+    const output = await runToolCall(
+      'wait_for_user',
+      'w2',
+      { reason: 'waiting again after reply' },
+      'state: waiting_for_user',
+    );
+    expect(output.output).not.toContain(WAIT_GUARD_WARNING);
+  });
+
+  test('resetTurn resets the wait counter', async () => {
+    await runToolCall(
+      'wait_for_user',
+      'w1',
+      { reason: 'waiting on user' },
+      'state: waiting_for_user',
+    );
+    hook.resetTurn('s1');
+    const output = await runToolCall(
+      'wait_for_user',
+      'w2',
+      { reason: 'new turn wait' },
+      'state: waiting_for_user',
+    );
+    expect(output.output).not.toContain(WAIT_GUARD_WARNING);
+  });
+
+  test('wait tool calls do not poison the fingerprint stream', async () => {
+    await runToolCall(
+      'wait_for_user',
+      'w1',
+      { reason: 'waiting on user' },
+      'state: waiting_for_user',
+    );
+    await runToolCall(
+      'wait_for_user',
+      'w2',
+      { reason: 'still waiting' },
+      'state: waiting_for_user',
+    );
+    // Identical read calls still warn on the 3rd consecutive call.
+    await runIdenticalCall('c1', { filePath: 'a.ts' });
+    await runIdenticalCall('c2', { filePath: 'a.ts' });
+    const o3 = await runIdenticalCall('c3', { filePath: 'a.ts' });
+    expect(o3.output).toContain(LOOP_GUARD_WARNING);
+    expect(o3.output).not.toContain(WAIT_GUARD_MARKER);
   });
 });

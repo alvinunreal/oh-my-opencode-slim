@@ -12,6 +12,9 @@ export function toolNameToV1(tool: string): string {
   return tool.toLowerCase() === DELEGATION_TOOL_V2 ? DELEGATION_TOOL_V1 : tool;
 }
 
+/** Shallow-copy record view with an `{}` fallback for non-objects.
+ * Deliberately NOT `isRecord` from `utils/guards` (a pure type guard):
+ * both subagentArgsToV1 copies rely on the copy + fallback semantics. */
 function asRecord(input: unknown): Record<string, unknown> {
   return input && typeof input === 'object'
     ? { ...(input as Record<string, unknown>) }

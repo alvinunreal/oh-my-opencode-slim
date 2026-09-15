@@ -122,14 +122,17 @@ describe('v2 tui preset plugin', () => {
           dialog: {
             select: (args: unknown) => Promise<string | undefined>;
           };
-          toast: (toast: { message: string }) => void;
+          toast?: { show: (toast: { message: string }) => void };
         };
       };
       toasts: string[];
       selectArgs: () => unknown;
     }
 
-    function makeStubCtx(selection: string | undefined): PresetStubCtx {
+    function makeStubCtx(
+      selection: string | undefined,
+      withToast = true,
+    ): PresetStubCtx {
       const toasts: string[] = [];
       let capturedSelectArgs: unknown;
       const ctx = {
@@ -141,9 +144,15 @@ describe('v2 tui preset plugin', () => {
               return selection;
             },
           },
-          toast: (toast: { message: string }) => {
-            toasts.push(toast.message);
-          },
+          ...(withToast
+            ? {
+                toast: {
+                  show: (toast: { message: string }) => {
+                    toasts.push(toast.message);
+                  },
+                },
+              }
+            : {}),
         },
       };
       return { ctx, toasts, selectArgs: () => capturedSelectArgs };
@@ -218,25 +227,41 @@ describe('v2 tui preset plugin', () => {
       expect(stub.toasts[0]).toContain('No presets configured');
       expect(stub.selectArgs()).toBeUndefined();
     });
+
+    test('applies a named preset without a toast surface', async () => {
+      writeUserConfig({
+        presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+      });
+      const stub = makeStubCtx('cheap', false);
+
+      await runPresetFlow(stub.ctx, 'cheap');
+
+      expect(readUserConfig().preset).toBe('cheap');
+    });
   });
 
   describe('plugin module', () => {
+    interface KeymapCommandStub {
+      id?: string;
+      title?: string;
+      group?: string;
+      palette?: boolean;
+      slash?: { name: string; aliases?: string[]; arguments?: boolean };
+      run: (input?: string) => void | Promise<void>;
+    }
+
     interface SetupStub {
       ctx: Record<string, unknown>;
-      slotClaims: Array<{ append?: string }>;
-      layers: Array<{
-        commands: Array<{
-          title?: string;
-          slash?: { name: string };
-          run: (input?: string) => void | Promise<void>;
-        }>;
-      }>;
+      slotClaims: Array<{ append?: string; render?: () => unknown }>;
+      layers: Array<{ mode?: string; commands: KeymapCommandStub[] }>;
+      renderAppSlot: () => void;
       keymapDisposed: () => boolean;
       slotDisposeCalls: () => number;
     }
 
-    function makeSetupCtx(withKeymap = true): SetupStub {
-      const slotClaims: Array<{ append?: string }> = [];
+    function makeSetupCtx(options: { keymap?: boolean } = {}): SetupStub {
+      const { keymap = true } = options;
+      const slotClaims: Array<{ append?: string; render?: () => unknown }> = [];
       const layers: SetupStub['layers'] = [];
       let slotDisposeCalls = 0;
       let keymapDisposed = false;
@@ -249,7 +274,7 @@ describe('v2 tui preset plugin', () => {
           border: { default: '#3a3a3a' },
         },
         ui: {
-          slot: (claim: { append?: string }) => {
+          slot: (claim: { append?: string; render?: () => unknown }) => {
             slotClaims.push(claim);
             return () => {
               slotDisposeCalls += 1;
@@ -260,10 +285,10 @@ describe('v2 tui preset plugin', () => {
           },
         },
       };
-      if (withKeymap) {
+      if (keymap) {
         ctx.keymap = {
-          layer: (layer: SetupStub['layers'][number]) => {
-            layers.push(layer);
+          layer: (thunk: () => SetupStub['layers'][number]) => {
+            layers.push(thunk());
             return {
               dispose: () => {
                 keymapDisposed = true;
@@ -276,6 +301,10 @@ describe('v2 tui preset plugin', () => {
         ctx,
         slotClaims,
         layers,
+        renderAppSlot: () => {
+          const claim = slotClaims.find((slot) => slot.append === 'app');
+          claim?.render?.();
+        },
         keymapDisposed: () => keymapDisposed,
         slotDisposeCalls: () => slotDisposeCalls,
       };
@@ -287,7 +316,7 @@ describe('v2 tui preset plugin', () => {
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 
-    test('setup registers the sidebar slot and the /preset keymap layer', async () => {
+    test('setup registers the sidebar slot and the /preset layer in the app slot render', async () => {
       const stub = makeSetupCtx();
       let cleanup: (() => void) | undefined;
       try {
@@ -295,30 +324,76 @@ describe('v2 tui preset plugin', () => {
           stub.ctx as unknown as V2TuiPluginContext,
         )) as (() => void) | undefined;
 
-        expect(stub.slotClaims).toHaveLength(1);
-        expect(stub.slotClaims[0]?.append).toBe('sidebar.content');
+        expect(stub.slotClaims.map((slot) => slot.append)).toEqual([
+          'sidebar.content',
+          'app',
+        ]);
+        expect(stub.layers).toHaveLength(0);
+
+        stub.renderAppSlot();
+
         expect(stub.layers).toHaveLength(1);
-        expect(stub.layers[0]?.commands[0]?.slash?.name).toBe('preset');
+        const layer = stub.layers[0];
+        expect(layer?.mode).toBe('global');
+        const command = layer?.commands[0];
+        expect(command?.id).toBe('omo.preset');
+        expect(command?.title).toBe('OMO: switch preset');
+        expect(command?.group).toBe('System');
+        expect(command?.palette).toBe(true);
+        expect(command?.slash).toEqual({ name: 'preset', arguments: true });
         expect(stub.keymapDisposed()).toBe(false);
 
         cleanup?.();
         cleanup = undefined;
-        expect(stub.keymapDisposed()).toBe(true);
-        expect(stub.slotDisposeCalls()).toBe(1);
+        expect(stub.keymapDisposed()).toBe(false);
+        expect(stub.slotDisposeCalls()).toBe(2);
       } finally {
         cleanup?.();
       }
     });
 
+    test('re-invokes layer on every app slot render', async () => {
+      const stub = makeSetupCtx();
+      const cleanup = (await tui2Plugin.setup(
+        stub.ctx as unknown as V2TuiPluginContext,
+      )) as (() => void) | undefined;
+
+      stub.renderAppSlot();
+      stub.renderAppSlot();
+
+      expect(stub.layers).toHaveLength(2);
+      cleanup?.();
+    });
+
+    test('runs the preset flow when the registered command is invoked', async () => {
+      writeUserConfig({
+        presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+      });
+      const stub = makeSetupCtx();
+      const cleanup = (await tui2Plugin.setup(
+        stub.ctx as unknown as V2TuiPluginContext,
+      )) as (() => void) | undefined;
+
+      stub.renderAppSlot();
+      await stub.layers[0]?.commands[0]?.run('cheap');
+
+      expect(readUserConfig().preset).toBe('cheap');
+      cleanup?.();
+    });
+
     test('setup keeps the sidebar when keymap.layer is unavailable', async () => {
-      const stub = makeSetupCtx(false);
+      const stub = makeSetupCtx({ keymap: false });
       let cleanup: (() => void) | undefined;
       try {
         cleanup = (await tui2Plugin.setup(
           stub.ctx as unknown as V2TuiPluginContext,
         )) as (() => void) | undefined;
 
-        expect(stub.slotClaims).toHaveLength(1);
+        expect(stub.slotClaims.map((slot) => slot.append)).toEqual([
+          'sidebar.content',
+          'app',
+        ]);
+        stub.renderAppSlot();
         expect(stub.layers).toHaveLength(0);
       } finally {
         cleanup?.();

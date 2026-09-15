@@ -87,10 +87,21 @@ describe('admission runtime leases', () => {
       concurrencyTicket: queued,
     });
 
+    // Attach the outcome capture BEFORE teardown: the teardown timer
+    // rejects `queued.ready` inside its own macrotask, and a handler
+    // attached only after the following `await` leaves an
+    // unhandled-rejection window that CI runtimes can report as a test
+    // failure (seen on the #1194 CI run; the window exists regardless
+    // of runner speed).
+    const queuedOutcome = queued.ready.then(
+      () => 'resolved',
+      (error: unknown) => String((error as Error)?.message),
+    );
+
     owner.release();
     owner.release();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await expect(queued.ready).rejects.toThrow(
+    expect(await queuedOutcome).toBe(
       'Background task concurrency queue was cancelled',
     );
     expect(owner.backgroundTaskConcurrency.snapshot()).toEqual({

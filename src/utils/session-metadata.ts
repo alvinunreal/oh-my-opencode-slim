@@ -6,6 +6,10 @@ export class SessionMetadataStore {
   readonly #directories = new Map<string, string>();
   readonly #insertionOrder = new Map<string, undefined>();
   readonly #activeOrchestratorSessionIDs = new Set<string>();
+  /** Sessions that dispatched background work. Distinct from the user's
+   * current agent selection (#1079): a Plan/Build parent that called
+   * `task` stays task-managed without being rewritten to orchestrator. */
+  readonly #taskManagedSessionIDs = new Set<string>();
   readonly #maxEntries: number;
   readonly #onEvict?: SessionMetadataEviction;
 
@@ -61,12 +65,22 @@ export class SessionMetadataStore {
     this.#activeOrchestratorSessionIDs.delete(sessionID);
   }
 
+  markTaskManaged(sessionID: string): void {
+    this.#taskManagedSessionIDs.add(sessionID);
+    this.#track(sessionID);
+  }
+
+  isTaskManaged(sessionID: string): boolean {
+    return this.#taskManagedSessionIDs.has(sessionID);
+  }
+
   delete(sessionID: string): void {
     this.#agents.delete(sessionID);
     this.#models.delete(sessionID);
     this.#directories.delete(sessionID);
     this.#insertionOrder.delete(sessionID);
     this.#activeOrchestratorSessionIDs.delete(sessionID);
+    this.#taskManagedSessionIDs.delete(sessionID);
   }
 
   get size(): number {
@@ -87,15 +101,35 @@ export class SessionMetadataStore {
     }
 
     while (this.#insertionOrder.size > this.#maxEntries) {
-      const evictableSessionID = [...this.#insertionOrder.keys()].find(
-        (candidate) => !this.#activeOrchestratorSessionIDs.has(candidate),
-      );
+      // Eviction preference: unprotected entries first, then task-managed
+      // ones (oldest first — membership is permanent, so without this
+      // fallback a run of delegating parents would grow the store past
+      // its configured bound), and only as a last resort in-flight
+      // orchestrator sessions. The cap exists precisely to bound retention
+      // when deletion events are missed, so it must always be enforceable.
+      const candidates = [...this.#insertionOrder.keys()];
+      const evictableSessionID =
+        candidates.find(
+          (candidate) =>
+            !this.#activeOrchestratorSessionIDs.has(candidate) &&
+            !this.#taskManagedSessionIDs.has(candidate),
+        ) ??
+        candidates.find(
+          (candidate) =>
+            !this.#activeOrchestratorSessionIDs.has(candidate) &&
+            this.#taskManagedSessionIDs.has(candidate),
+        ) ??
+        candidates.find((candidate) =>
+          this.#activeOrchestratorSessionIDs.has(candidate),
+        );
       if (evictableSessionID === undefined) return;
 
       this.#insertionOrder.delete(evictableSessionID);
       this.#agents.delete(evictableSessionID);
       this.#models.delete(evictableSessionID);
       this.#directories.delete(evictableSessionID);
+      this.#taskManagedSessionIDs.delete(evictableSessionID);
+      this.#activeOrchestratorSessionIDs.delete(evictableSessionID);
       this.#onEvict?.(evictableSessionID);
     }
   }

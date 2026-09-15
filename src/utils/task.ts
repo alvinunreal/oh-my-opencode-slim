@@ -4,6 +4,19 @@
 
 export type TaskOutputState = 'running' | 'completed' | 'error' | 'cancelled';
 
+/** OpenCode v2 host Session.Info.outcome values that mark a terminal
+ * transition. Anything else (absent, malformed, or a future nonterminal
+ * value) must NOT be treated as terminal evidence. */
+export const HOST_TERMINAL_OUTCOMES = new Set([
+  'succeeded',
+  'failed',
+  'interrupted',
+]);
+
+export function isHostTerminalOutcome(outcome: string | undefined): boolean {
+  return outcome !== undefined && HOST_TERMINAL_OUTCOMES.has(outcome);
+}
+
 export interface TaskLaunchOutput {
   taskID: string;
   state: 'running';

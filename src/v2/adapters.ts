@@ -5,12 +5,14 @@
  * - `adaptPermissions`: v1 permission map → v2 Rule[] (with v2 permissive base +
  *   `task`→`subagent`, `bash`→`execute` mapping).
  * - `rewritePromptForV2`: rewrite v1 delegation syntax in agent/system prompts.
+ * - `delegationVocabulary`: native per-flavor delegation tool/param names for
+ *   prompt-build sites (v2 `subagent`/`agent` vs v1 `task`/`subagent_type`).
  * - `adaptTool`: v1 ToolDefinition ({description,args,execute}) → v2 Tool.Info.
  * - `applyAgentToDraft`: mutate a v2 agent draft entry from a v1 agent config.
  */
 
 import { log } from '../utils/logger';
-import type { ModelRef, V2AgentDraft } from './types';
+import type { ModelRef, V2AgentDraft, V2ToolDefinition } from './types';
 
 /** Parse a v1 "provider/model" string into a v2 Model.Ref. */
 export function parseModelRef(model: unknown): ModelRef | undefined {
@@ -40,18 +42,19 @@ const V2_DEFAULT_PERMISSIONS = [
   { action: 'read', resource: '*.env.example', effect: 'allow' },
 ];
 
-/** Map v1 permission keys to v2 (action, resource). v1 `task` is v2 `subagent`;
- * v1 `bash` is v2 `execute`. */
+/** Map a v1 permission key (the tool) to v2 (action, resource). The host
+ * evaluator matches the tool against `action` and the path/pattern against
+ * `resource`. v1 `task` is v2 `subagent`; v1 `bash` is v2 `execute`. */
 function v1PermKeyToV2(
   key: string,
 ): Array<{ action: string; resource: string }> {
   if (key === 'task') return [{ action: 'subagent', resource: '*' }];
   if (key === 'bash')
     return [
-      { action: '*', resource: 'execute' },
-      { action: '*', resource: 'bash' },
+      { action: 'execute', resource: '*' },
+      { action: 'bash', resource: '*' },
     ];
-  return [{ action: '*', resource: key }];
+  return [{ action: key, resource: '*' }];
 }
 
 /** Convert a v1 permission map (or shorthand string) into v2 permission rules. */
@@ -66,20 +69,26 @@ export function adaptPermissions(
     return rules;
   }
   if (perm && typeof perm === 'object') {
-    for (const [resource, effect] of Object.entries(
+    for (const [tool, effect] of Object.entries(
       perm as Record<string, unknown>,
     )) {
       if (typeof effect === 'string') {
-        for (const target of v1PermKeyToV2(resource)) {
+        for (const target of v1PermKeyToV2(tool)) {
           rules.push({ ...target, effect });
         }
       } else if (effect && typeof effect === 'object') {
-        // nested {tool: {pattern: effect}}
-        for (const [sub, subEffect] of Object.entries(
+        // nested {tool: {pattern: effect}} → action=tool, resource=pattern
+        for (const [pattern, subEffect] of Object.entries(
           effect as Record<string, unknown>,
         )) {
           if (typeof subEffect === 'string') {
-            rules.push({ action: sub, resource, effect: subEffect });
+            for (const target of v1PermKeyToV2(tool)) {
+              rules.push({
+                action: target.action,
+                resource: pattern,
+                effect: subEffect,
+              });
+            }
           }
         }
       }
@@ -98,13 +107,36 @@ export function rewritePromptForV2(text: unknown): unknown {
     .replace(/\btask\s*\(/g, 'subagent(');
 }
 
+/** Native delegation vocabulary for a host flavor. v2 hosts expose the
+ * built-in `subagent` tool with the `agent` parameter; v1 hosts (and any
+ * unknown flavor) use `task` with `subagent_type`. Prompt-build sites call
+ * this so generated text matches the host's actual tool directly, instead
+ * of emitting v1 wording and relying on `rewritePromptForV2` — which
+ * remains as belt-and-suspenders for user-customized presets that still
+ * contain v1 wording. */
+export interface DelegationVocabulary {
+  /** Name of the host's delegation tool: `subagent` on v2, `task` on v1. */
+  tool: string;
+  /** Name of the tool's agent-selector parameter: `agent` on v2,
+   * `subagent_type` on v1. */
+  agentParam: string;
+}
+
+export function delegationVocabulary(
+  hostFlavor: string | undefined,
+): DelegationVocabulary {
+  return hostFlavor === 'v2'
+    ? { tool: 'subagent', agentParam: 'agent' }
+    : { tool: 'task', agentParam: 'subagent_type' };
+}
+
 /** Adapt a v1 tool definition ({description, args, execute}) to a v2 tool. */
 export function adaptTool(
   name: string,
   v1Tool: Record<string, unknown>,
   directory: string,
   inputSchema: unknown,
-): Record<string, unknown> {
+): V2ToolDefinition {
   const description =
     (v1Tool.description as string | undefined) ?? `Tool ${name}`;
 
@@ -116,6 +148,13 @@ export function adaptTool(
     name,
     description,
     input: inputSchema,
+    // CodeMode opt-out (official plugin pattern, packages/plugin README):
+    // v2's Tool.snapshot() only turns `codemode: false` tools into direct
+    // model-visible tool definitions. Without this flag the tool registers
+    // cleanly but is confined to the `execute` tool's JS runtime — session
+    // tool catalogs then yield `Unknown tool: <name>`. Additive field;
+    // older hosts ignore it.
+    options: { codemode: false },
     execute: async (input: unknown, context: unknown) => {
       if (!execute) return { output: {} };
       const ctx = context as {
@@ -203,7 +242,7 @@ export function applyAgentToDraft(
     if (Array.isArray(v1.tools)) {
       for (const t of v1.tools as unknown[]) {
         if (typeof t === 'string') {
-          toolsAllow.push({ action: '*', resource: t, effect: 'allow' });
+          toolsAllow.push({ action: t, resource: '*', effect: 'allow' });
         }
       }
     }

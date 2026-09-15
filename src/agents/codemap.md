@@ -132,10 +132,9 @@ export function getAgentConfigs(config?: PluginConfig): Record<string, SDKAgentC
 The main plugin entry point (`src/index.ts`) consumes the agent system:
 
 ```typescript
-import { createAgents, getAgentConfigs, getDisabledAgents } from './agents';
+import { createAgents, getAgentConfigs } from './agents';
 
 // During plugin initialization:
-const disabledAgents = getDisabledAgents(config);
 const agentDefs = createAgents(config);
 const agents = getAgentConfigs(config);
 

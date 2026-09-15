@@ -3,22 +3,12 @@ import {
   type CouncillorModelEntry,
   normalizeCouncillorModels,
 } from '../utils/councillor-models';
+import { ProviderModelIdSchema } from './model-id-schema';
 
 export type { CouncillorModelEntry };
 
-/**
- * Validates model IDs in "provider/model" format.
- * Inlined here to avoid circular dependency with schema.ts.
- */
-const ModelIdSchema = z
-  .string()
-  .regex(
-    /^[^/\s]+\/[^\s]+$/,
-    'Expected provider/model format (e.g. "openai/gpt-5.6-luna")',
-  );
-
 const CouncillorModelEntrySchema = z.object({
-  id: ModelIdSchema,
+  id: ProviderModelIdSchema,
   variant: z.string().optional(),
 });
 
@@ -29,8 +19,10 @@ const CouncillorModelEntrySchema = z.object({
  */
 const CouncillorModelSchema = z
   .union([
-    ModelIdSchema,
-    z.array(z.union([ModelIdSchema, CouncillorModelEntrySchema])).min(1),
+    ProviderModelIdSchema,
+    z
+      .array(z.union([ProviderModelIdSchema, CouncillorModelEntrySchema]))
+      .min(1),
   ])
   .describe(
     'Model ID in provider/model format (e.g. "openai/gpt-5.6-luna"), or an ' +

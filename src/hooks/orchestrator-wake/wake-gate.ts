@@ -3,6 +3,8 @@
  * in-flight ownership. Shared across independently created hook instances in
  * the same JS process via globalThis + Symbol.for.
  */
+
+import { getGlobalStore } from '../../utils/global-store';
 import type { ContinuationModelSelection } from '../task-session-manager/continuation-model-selection';
 
 export type WakeProgressState = {
@@ -24,20 +26,16 @@ type WakeGateStore = {
   order: string[];
 };
 
-const STORE_KEY = Symbol.for('oh-my-opencode-slim.orchestrator-wake-gate');
+const STORE_KEY = 'oh-my-opencode-slim.orchestrator-wake-gate';
 const MAX_TRACKED_SESSIONS = 256;
 
 function getStore(): WakeGateStore {
-  const globalWithStore = globalThis as typeof globalThis & {
-    [STORE_KEY]?: WakeGateStore;
-  };
-  globalWithStore[STORE_KEY] ??= {
+  return getGlobalStore<WakeGateStore>(STORE_KEY, () => ({
     progress: new Map(),
     inFlight: new Map(),
     releaseWaiters: new Map(),
     order: [],
-  };
-  return globalWithStore[STORE_KEY];
+  }));
 }
 
 function touchOrder(sessionID: string): void {

@@ -29,8 +29,9 @@ function splitFileLines(text: string): FileLines {
   const eol = text.match(/\r\n|\n|\r/)?.[0] === '\r\n' ? '\r\n' : '\n';
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const hasFinalNewline = normalized.endsWith('\n');
-  const lines = normalized.split('\n');
-  if (hasFinalNewline) {
+  // Empty text is zero lines, not one empty line; '\n' is one empty line.
+  const lines = normalized.length === 0 ? [] : normalized.split('\n');
+  if (lines.length > 0 && hasFinalNewline) {
     lines.pop();
   }
 
@@ -149,6 +150,8 @@ export function locateChunk(
       rewritten,
       strategy: undefined,
       matchComparator: match.comparator,
+      canonical_start: match.index,
+      canonical_end: match.index + canonical_old_lines.length,
     };
   }
 
@@ -178,6 +181,8 @@ export function locateChunk(
         rewritten: true,
         strategy: 'prefix/suffix',
         matchComparator: 'exact',
+        canonical_start: canonicalStart,
+        canonical_end: canonicalEnd,
       };
     }
   }
@@ -205,6 +210,8 @@ export function locateChunk(
         rewritten: true,
         strategy: 'lcs',
         matchComparator: 'exact',
+        canonical_start: rescued.hit.start,
+        canonical_end: rescued.hit.start + rescued.hit.del,
       };
     }
   }
@@ -268,6 +275,8 @@ function resolveUpdateChunksFromFileLines(
           rewritten: false,
           strategy,
           matchComparator: 'exact',
+          canonical_start: lines.length,
+          canonical_end: lines.length,
         });
         start = lines.length;
         continue;
@@ -312,6 +321,8 @@ function resolveUpdateChunksFromFileLines(
           rewritten: !anchorMatch.exact,
           strategy: anchorMatch.exact ? strategy : 'anchor',
           matchComparator: anchorMatch.comparator,
+          canonical_start: insertAt,
+          canonical_end: insertAt,
         });
         start = insertAt;
         continue;
@@ -336,6 +347,8 @@ function resolveUpdateChunksFromFileLines(
         rewritten: true,
         strategy,
         matchComparator: anchorMatch.comparator,
+        canonical_start: insertAt,
+        canonical_end: insertAt + 1,
       });
       start = insertAt;
       continue;

@@ -24,15 +24,15 @@ describe('withAgent', () => {
     });
   });
 
-  test('omits the field when the agent is unresolvable', () => {
-    expect(withAgent({ parts: [] }, undefined)).toEqual({ parts: [] });
+  test('rejects an unresolvable agent before constructing a prompt body', () => {
+    expect(() => withAgent({ parts: [] }, undefined as never)).toThrow(
+      'Cannot create a prompt without a valid agent',
+    );
   });
 
   test('ignores blank and malformed agent names', () => {
-    expect(withAgent({ parts: [] }, '   ')).toEqual({ parts: [] });
-    expect(withAgent({ parts: [] }, 'not a valid agent')).toEqual({
-      parts: [],
-    });
+    expect(() => withAgent({ parts: [] }, '   ')).toThrow();
+    expect(() => withAgent({ parts: [] }, 'not a valid agent')).toThrow();
   });
 
   test('trims a padded agent name', () => {
@@ -99,6 +99,14 @@ describe('resolveHelperSessionAgent', () => {
         explorer: { disable: true },
       }),
     ).toBe('librarian');
+  });
+
+  test('skips the disabled build agent for v1 helper sessions', () => {
+    expect(
+      resolveHelperSessionAgent(['orchestrator', 'build', 'explorer'], {
+        build: { disable: true },
+      }),
+    ).toBe('explorer');
   });
 
   test('returns no helper when every registered agent is disabled', () => {
@@ -208,9 +216,7 @@ describe('resolveSessionAgent', () => {
         })),
       });
 
-      expect(
-        await resolveSessionAgent(client, 's1', { assumeTopLevel: true }),
-      ).toBe(FALLBACK_TOP_LEVEL_AGENT);
+      expect(await resolveSessionAgent(client, 's1')).toBeUndefined();
     }
   });
 
@@ -233,7 +239,7 @@ describe('resolveSessionAgent', () => {
 
     expect(
       await resolveSessionAgent(client, 's1', { assumeTopLevel: true }),
-    ).toBe(FALLBACK_TOP_LEVEL_AGENT);
+    ).toBeUndefined();
   });
 
   test('rejects a system agent passed as a hint', async () => {
@@ -278,12 +284,15 @@ describe('resolveSessionAgent', () => {
     ).toBeUndefined();
   });
 
-  test('uses assumeTopLevel when the session cannot be inspected', async () => {
+  test('uses assumeTopLevel only when probing is explicitly disabled', async () => {
     const client = createClient({});
 
     expect(await resolveSessionAgent(client, 's1')).toBeUndefined();
     expect(
-      await resolveSessionAgent(client, 's1', { assumeTopLevel: true }),
+      await resolveSessionAgent(client, 's1', {
+        assumeTopLevel: true,
+        probe: false,
+      }),
     ).toBe(FALLBACK_TOP_LEVEL_AGENT);
   });
 
@@ -308,6 +317,7 @@ describe('resolveSessionAgent', () => {
     expect(
       await resolveSessionAgent(client, 's1', {
         assumeTopLevel: true,
+        probe: false,
         fallbackAgent: 'librarian',
       }),
     ).toBe('librarian');
@@ -329,7 +339,7 @@ describe('resolveSessionAgent', () => {
     expect(agent).not.toBe(FALLBACK_TOP_LEVEL_AGENT);
   });
 
-  test('survives SDK failures', async () => {
+  test('suppresses fallback after SDK failures leave the session unverified', async () => {
     const client = createClient({
       get: mock(async () => {
         throw new Error('offline');
@@ -339,9 +349,26 @@ describe('resolveSessionAgent', () => {
       }),
     });
 
+    expect(await resolveSessionAgent(client, 's1')).toBeUndefined();
+  });
+
+  test('does not treat failed SDK envelopes as parentless session records', async () => {
+    const client = createClient({
+      get: mock(async () => ({
+        data: undefined,
+        error: { message: 'session lookup failed' },
+      })),
+      messages: mock(async () => ({
+        data: undefined,
+        error: { message: 'message lookup failed' },
+      })),
+    });
+
     expect(
-      await resolveSessionAgent(client, 's1', { assumeTopLevel: true }),
-    ).toBe(FALLBACK_TOP_LEVEL_AGENT);
+      await resolveSessionAgent(client, 'child-like', {
+        assumeTopLevel: true,
+      }),
+    ).toBeUndefined();
   });
 
   test('ignores an agent on a message with no role', async () => {
@@ -349,9 +376,7 @@ describe('resolveSessionAgent', () => {
       messages: mock(async () => ({ data: [{ info: { agent: 'explorer' } }] })),
     });
 
-    expect(
-      await resolveSessionAgent(client, 's1', { assumeTopLevel: true }),
-    ).toBe(FALLBACK_TOP_LEVEL_AGENT);
+    expect(await resolveSessionAgent(client, 's1')).toBeUndefined();
   });
 
   test('rejects malformed agent values from the SDK', async () => {
@@ -362,9 +387,7 @@ describe('resolveSessionAgent', () => {
       })),
     });
 
-    expect(await resolveSessionAgent(client, 's1')).toBe(
-      FALLBACK_TOP_LEVEL_AGENT,
-    );
+    expect(await resolveSessionAgent(client, 's1')).toBeUndefined();
   });
 });
 
@@ -426,9 +449,9 @@ const TYPE_ONLY_PROMPT_FILES = new Map<string, string>([
   ],
 ]);
 
-/** `x.session.prompt(`, `client.session.promptAsync(`, `sessionSdk.promptAsync(`, ... */
-const PROMPT_CALL_PATTERN =
-  /([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\.\s*(prompt|promptAsync)\s*\(/g;
+/** `x.session.prompt(`, `client.session.promptAsync(`, and casted calls. */
+const PROMPT_MEMBER_PATTERN =
+  /[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*(?:prompt|promptAsync)\b/g;
 
 /** Wrappers that take a full prompt args object and must name the agent too. */
 const WRAPPER_CALL_PATTERN = /\b(promptWithTimeout)\s*\(/g;
@@ -440,19 +463,59 @@ const WRAPPER_CALL_PATTERN = /\b(promptWithTimeout)\s*\(/g;
  */
 const BOUND_ALIAS_PATTERN =
   /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*(?:prompt|promptAsync)\s*\.\s*bind\s*\(/g;
+const CONDITIONAL_BOUND_ALIAS_PATTERN =
+  /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*\?\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*(?:prompt|promptAsync)\s*\.\s*bind\s*\(/g;
 
 function boundPromptAliasPattern(source: string): RegExp | undefined {
   const aliases = new Set<string>();
-  BOUND_ALIAS_PATTERN.lastIndex = 0;
-  let match = BOUND_ALIAS_PATTERN.exec(source);
-  while (match) {
-    if (match[1]) aliases.add(match[1]);
-    match = BOUND_ALIAS_PATTERN.exec(source);
+  for (const declarationPattern of [
+    BOUND_ALIAS_PATTERN,
+    CONDITIONAL_BOUND_ALIAS_PATTERN,
+  ]) {
+    declarationPattern.lastIndex = 0;
+    let match = declarationPattern.exec(source);
+    while (match) {
+      if (match[1]) aliases.add(match[1]);
+      match = declarationPattern.exec(source);
+    }
   }
   if (aliases.size === 0) return undefined;
   // The negative lookbehind keeps `session.prompt(` out of this matcher so a
-  // member call is not reported twice by PROMPT_CALL_PATTERN as well.
-  return new RegExp(`(?<![.\\w$])(${[...aliases].join('|')})\\s*\\(`, 'g');
+  // member call is not reported twice. Include casted alias invocations too.
+  const names = [...aliases]
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  return new RegExp(
+    `(?<![.\\w$])(?:(${names})\\s*\\(|\\(\\s*(${names})\\s+as[\\s\\S]*?\\)\\s*\\()`,
+    'g',
+  );
+}
+
+function promptInvocationOpening(
+  source: string,
+  memberEnd: number,
+): number | undefined {
+  let index = memberEnd;
+  while (/\s/.test(source[index] ?? '')) index++;
+  if (source[index] === '(') return index;
+  if (!/^as\b/.test(source.slice(index))) return undefined;
+
+  index += 2;
+  let depth = 0;
+  while (index < source.length) {
+    const ch = source[index];
+    if (ch === '(') depth++;
+    if (ch === ')') {
+      if (depth > 0) depth--;
+      if (depth === 0) {
+        index++;
+        while (/\s/.test(source[index] ?? '')) index++;
+        return source[index] === '(' ? index : undefined;
+      }
+    }
+    index++;
+  }
+  return undefined;
 }
 
 function listSourceFiles(dir: string): string[] {
@@ -823,7 +886,7 @@ function findViolations(relativePath: string, rawSource: string): string[] {
   // Any `<receiver>.prompt(` / `.promptAsync(` is scanned; files that legitimately
   // cannot carry an agent are named in the allowlists above.
   const matchers: RegExp[] = [
-    PROMPT_CALL_PATTERN,
+    PROMPT_MEMBER_PATTERN,
     WRAPPER_CALL_PATTERN,
     ...(boundAliases ? [boundAliases] : []),
   ];
@@ -832,7 +895,14 @@ function findViolations(relativePath: string, rawSource: string): string[] {
     pattern.lastIndex = 0;
     let match = pattern.exec(source);
     while (match) {
-      const parenIndex = match.index + match[0].length - 1;
+      const parenIndex =
+        pattern === PROMPT_MEMBER_PATTERN
+          ? promptInvocationOpening(source, match.index + match[0].length)
+          : match.index + match[0].length - 1;
+      if (parenIndex === undefined) {
+        match = pattern.exec(source);
+        continue;
+      }
       const isDeclaration = /\bfunction\s*$/.test(source.slice(0, match.index));
       if (!isDeclaration) {
         const args = extractCallArgs(source, parenIndex);
@@ -846,7 +916,11 @@ function findViolations(relativePath: string, rawSource: string): string[] {
 
         if (!compliant) {
           violations.push(
-            `${relativePath}:${lineOf(source, match.index)} - ${match[0].trim()}`,
+            `${relativePath}:${lineOf(source, match.index)} - ${
+              pattern === PROMPT_MEMBER_PATTERN
+                ? `${match[0].trim()}(`
+                : match[0].trim()
+            }`,
           );
         }
       }
@@ -906,6 +980,24 @@ describe('agent-less prompt regression guard', () => {
     ].join('\n');
 
     expect(findViolations('fixture.ts', source)).toEqual([]);
+  });
+
+  test('scanner handles a casted prompt member call', () => {
+    const violating = [
+      'await (sessionClient.promptAsync as PromptFn)({',
+      '  path: { id }, body: { parts: [] },',
+      '});',
+    ].join('\n');
+    const compliant = [
+      'await (sessionClient.promptAsync as PromptFn)({',
+      "  path: { id }, body: { agent: 'fixer', parts: [] },",
+      '});',
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', violating)).toEqual([
+      'fixture.ts:1 - sessionClient.promptAsync(',
+    ]);
+    expect(findViolations('fixture.ts', compliant)).toEqual([]);
   });
 
   test('scanner accepts a withAgent-wrapped body', () => {
@@ -1109,6 +1201,42 @@ describe('agent-less prompt regression guard', () => {
 
     expect(findViolations('fixture.ts', violating)).toEqual([
       'fixture.ts:2 - prompt(',
+    ]);
+    expect(findViolations('fixture.ts', compliant)).toEqual([]);
+  });
+
+  test('scanner follows a casted bound prompt alias', () => {
+    const violating = [
+      'const prompt = session.prompt.bind(session);',
+      'await (prompt as PromptFn)({ body: { parts: [] } });',
+    ].join('\n');
+    const compliant = [
+      'const prompt = session.prompt.bind(session);',
+      "await (prompt as PromptFn)({ body: { agent: 'fixer', parts: [] } });",
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', violating)).toEqual([
+      'fixture.ts:2 - (prompt as PromptFn)(',
+    ]);
+    expect(findViolations('fixture.ts', compliant)).toEqual([]);
+  });
+
+  test('scanner follows a conditional casted bound prompt alias', () => {
+    const violating = [
+      "const promptAsync = typeof session.promptAsync === 'function'",
+      '  ? session.promptAsync.bind(session)',
+      '  : undefined;',
+      'await (promptAsync as PromptFn)({ body: { parts: [] } });',
+    ].join('\n');
+    const compliant = [
+      "const promptAsync = typeof session.promptAsync === 'function'",
+      '  ? session.promptAsync.bind(session)',
+      '  : undefined;',
+      "await (promptAsync as PromptFn)({ body: { agent: 'fixer', parts: [] } });",
+    ].join('\n');
+
+    expect(findViolations('fixture.ts', violating)).toEqual([
+      'fixture.ts:4 - (promptAsync as PromptFn)(',
     ]);
     expect(findViolations('fixture.ts', compliant)).toEqual([]);
   });

@@ -17,7 +17,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Core Abstractions
 
-- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks spawned by sub-agents. Implements a reusable session pool pattern with automatic cleanup and reconciliation hooks. Tracks task state (running, stopped, completed, error, cancelled), maintains context files, and provides prompt-ready summaries for agent coordination. `stopped` records an ended runtime session without fabricated task success and is never reusable. Idle/absent observations start a 5s stop-confirmation grace (`stopConfirmationStartedAt`); live busy resets it. After a confirmed stop has been acknowledged, stale busy cannot reopen the job.
+- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks spawned by sub-agents. Implements a reusable session pool pattern with automatic cleanup and reconciliation hooks. Tracks task state (running, stopped, completed, error, cancelled), maintains context files, and provides prompt-ready summaries for agent coordination. `stopped` records an ended runtime session without fabricated task success and is never reusable through `task()`; recovery is `task_revive`, and acknowledged stopped jobs appear under Retained / Recovery. Idle/absent observations start a 5s stop-confirmation grace (`stopConfirmationStartedAt`); live busy resets it. After a confirmed stop has been acknowledged, stale busy cannot reopen the job.
 
 - **BackgroundJobStore** (`background-job-store.ts`): Atomic state-store contract (terminal transitions, leases, wall-clock deadline claims) implemented by the board; the single terminal-publication boundary.
 
@@ -37,8 +37,6 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 - **Prompt Agent** (`prompt-agent.ts`): Single source of truth for the `agent` field on plugin-initiated prompts. `resolveSessionAgent()` resolves the agent a session is running under (recorded hint → `session.get` → newest **user** message → fallback, only for a session confirmed/declared parentless) and `withAgent()` attaches it to a prompt body. `resolveHelperSessionAgent()` selects an available non-orchestrator agent from the in-memory plugin registrations for throwaway helper sessions, so disabled agents are not named and helpers are not adopted as managed orchestrator sessions. An agent-less `session.prompt`/`promptAsync` body makes the runtime resolve its default primary and **permanently rewrite the session's agent** (`docs/agents/build-agent-empty-input-diagnosis.md`, probe A2), so `SYSTEM_AGENTS` (`compaction`/`summary`/`title`) are never derived and assistant messages are never trusted as hints. `prompt-agent.test.ts` scans all of `src/` and fails the build on any prompt call site that omits the field — with **no receiver-name filter**, since a `/session/i` heuristic previously hid `src/v2/client-shim.ts`'s own `s.prompt(` site (narrow, documented allowlists for the `promptWithTimeout` pass-through wrapper, the two v2 flat-host prompt files, and the type-only call contract). Probe reads accept an optional `directory` forwarded as `query.directory`, matching every other `session.get`/`session.messages` call site.
 
-- **Session Error** (`session-error.ts`): Narrow classifiers for child-session errors — `isTransportError` (wire faults only: the 5 transport codes mirrored from `src/hooks/foreground-fallback/index.ts` plus a widened set of socket/undici codes, and the bare message phrasings copied verbatim from that file's `TRANSPORT_MESSAGE_PATTERNS`, with a drift test pinning the copy and asserting the extras stay disjoint from the mirror), `transportSessionErrorReason` (text that reports the outcome as UNKNOWN rather than failed, since a lost wire does not mean a dead child), `isAbortedSessionError` (`MessageAbortedError`), and `sessionErrorMessage`. Deliberately narrower than `isFailoverError`: rate limits and provider outages must stay real errors. The patterns are copied rather than imported because `src/utils` must not depend on `src/hooks`.
-
 - **Logger** (`logger.ts`): File-based logging with 7-day retention, automatic directory creation, and write queuing. Logs are written to `~/.local/share/opencode/log/oh-my-opencode-slim.<sessionId>.log` and cleaned up on initialization.
 
 - **Session Utilities** (`session.ts`): Timeout handling, session abort coordination, model reference parsing, and session content extraction. Provides `promptWithTimeout` and `extractSessionResult` for safe session operations.
@@ -46,6 +44,8 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 - **Task Utilities** (`task.ts`): XML-inspired task output parsing for extracting task IDs, states, and results from tool output strings. Used for resumption and status tracking.
 
 - **Type Guards** (`guards.ts`): Simple type checking utilities (`isRecord`) for runtime validation.
+
+- **Global Store** (`global-store.ts`): `getGlobalStore(key, init)` — process-local lazy singleton on `globalThis` via the `Symbol.for` registry; shared store pattern for the orchestrator-wake and user-wait gates.
 
 - **Environment Utilities** (`env.ts`): Environment variable parsing and plugin disable flag checking.
 
@@ -136,8 +136,8 @@ export { extractZip } from './zip-extractor';
 ```
 
 This allows consumers to import from `src/utils` rather than individual files.
-Session metadata, the opencode client accessor, the prompt-agent and
-session-error helpers, and the type-only call-shape contract are intentionally
+Session metadata, the opencode client accessor, the prompt-agent helper, and
+the type-only call-shape contract are intentionally
 imported directly from their modules (not re-exported): prompt call sites
 should name `src/utils/prompt-agent` explicitly so the regression scan and its
 allowlist stay easy to audit.
@@ -157,6 +157,7 @@ allowlist stay easy to audit.
 | `env.ts` | Environment variable utilities |
 | `escape-html.ts` | HTML escaping helper |
 | `frontmatter.ts` | Frontmatter parsing for interview documents |
+| `global-store.ts` | Process-local lazy singleton store on `globalThis` (`getGlobalStore`) |
 | `guards.ts` | Type guard utilities |
 | `internal-initiator.ts` | Internal agent message marker system |
 | `logger.ts` | File-based logging with rotation |
@@ -164,7 +165,6 @@ allowlist stay easy to audit.
 | `polling.ts` | Generic poll helper |
 | `prompt-agent.ts` | Resolves a session's current agent and attaches it to prompt bodies (prevents the default-`build` session rewrite); guarded by a repo-wide scan test |
 | `session-calls.contract.ts` | Compile-time client call-shape contract (type-only) |
-| `session-error.ts` | Transport-fault / abort / message classifiers for session errors |
 | `session-metadata.ts` | Bounded session → agent/directory store |
 | `session-runtime-status.ts` | Bounded live session-status map reads |
 | `session.ts` | Session timeout, abort, and extraction utilities |

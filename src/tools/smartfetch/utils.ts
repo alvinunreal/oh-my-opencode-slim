@@ -1,8 +1,9 @@
 import { Readability } from '@mozilla/readability';
-import { JSDOM, VirtualConsole } from 'jsdom';
+import type { VirtualConsole } from 'jsdom';
 import TurndownService from 'turndown';
 import { escapeHtml } from '../../utils/escape-html';
 import { parseFrontmatter } from '../../utils/frontmatter';
+import { type JsdomModule, loadJSDOM } from '../../utils/jsdom';
 import type { CachedFetch, ExtractedContent } from './types';
 
 export { escapeHtml, parseFrontmatter };
@@ -37,8 +38,9 @@ export function withCssTreeWarningsSuppressed<T>(fn: () => T): T {
  */
 export function withJsdomCssParsingErrorsSuppressed<T>(
   fn: (vc: VirtualConsole) => T,
+  VirtualConsoleClass: JsdomModule['VirtualConsole'],
 ): T {
-  const vc = new VirtualConsole();
+  const vc = new VirtualConsoleClass();
   vc.on('jsdomError', (error) => {
     const type = (error as Error & { type?: string }).type;
     if (type !== 'css-parsing') console.error(error);
@@ -315,11 +317,15 @@ export async function extractFromHtml(
   finalUrl: string,
   extractMain: boolean,
 ): Promise<ExtractedContent> {
-  const dom = withCssTreeWarningsSuppressed(() =>
-    withJsdomCssParsingErrorsSuppressed(
-      (vc) => new JSDOM(html, { url: finalUrl, virtualConsole: vc }),
-    ),
-  );
+  const { JSDOM, VirtualConsole } = await loadJSDOM();
+  const createDom = () =>
+    withCssTreeWarningsSuppressed(() =>
+      withJsdomCssParsingErrorsSuppressed(
+        (vc) => new JSDOM(html, { url: finalUrl, virtualConsole: vc }),
+        VirtualConsole,
+      ),
+    );
+  const dom = createDom();
   const document = dom.window.document;
   const title = document.title || undefined;
   const canonical =
@@ -341,11 +347,7 @@ export async function extractFromHtml(
     .slice(0, 12);
 
   if (extractMain) {
-    const readerDom = withCssTreeWarningsSuppressed(() =>
-      withJsdomCssParsingErrorsSuppressed(
-        (vc) => new JSDOM(html, { url: finalUrl, virtualConsole: vc }),
-      ),
-    );
+    const readerDom = createDom();
     const article = new Readability(readerDom.window.document).parse();
     if (article?.content?.trim()) {
       const articleContainer = readerDom.window.document.createElement('div');

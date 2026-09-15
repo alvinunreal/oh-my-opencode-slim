@@ -728,6 +728,12 @@ export function loadPluginConfig(
     }
   }
 
+  // Note: per-agent skill directives (skills_add/skills_remove) are left
+  // raw in the returned config. They are folded into the effective skills
+  // list by RuntimeConfig.agents(), the single resolution point, so runtime
+  // /preset switching re-resolves them from the raw preset layers instead
+  // of operating on an already-baked skills array.
+
   // Normalize companion config defaults
   if (config.companion) {
     config.companion = {

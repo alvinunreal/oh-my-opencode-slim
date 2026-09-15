@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
 import { SessionLifecycle } from '../session-lifecycle';
-import {
-  ForegroundFallbackManager,
-  isFailoverError,
-  isRetryableError,
-} from './index';
+import { ForegroundFallbackManager, isFailoverError } from './index';
 
 // ACCEPTANCE GAP: config() hook behaviour is not covered by CI — verify live.
 
@@ -39,6 +35,7 @@ function createMockClient(overrides?: {
   abortImpl?: () => Promise<unknown>;
   includePromptAsync?: boolean;
   messagesData?: unknown[];
+  getData?: unknown;
 }) {
   const promptAsync = mock(async (args: unknown) => {
     if (overrides?.promptAsyncImpl) return overrides.promptAsyncImpl(args);
@@ -53,8 +50,10 @@ function createMockClient(overrides?: {
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
     ],
   }));
+  const get = mock(async () => ({ data: overrides?.getData }));
   const session: Record<string, unknown> = {
     abort,
+    get,
     messages,
   };
   if (overrides?.includePromptAsync !== false) {
@@ -71,7 +70,7 @@ function createMockClient(overrides?: {
     client: {
       session,
     } as never,
-    mocks: { promptAsync, abort, messages },
+    mocks: { promptAsync, abort, messages, get },
   };
 }
 
@@ -108,22 +107,22 @@ describe('isFailoverError', () => {
   });
 
   test('returns true for 429 status code', () => {
-    expect(isRetryableError({ data: { statusCode: 429 } })).toBe(true);
+    expect(isFailoverError({ data: { statusCode: 429 } })).toBe(true);
   });
 
   test('returns true for "rate limit" in message', () => {
-    expect(isRetryableError({ message: 'Rate limit exceeded' })).toBe(true);
+    expect(isFailoverError({ message: 'Rate limit exceeded' })).toBe(true);
   });
 
   test('returns true for "quota exceeded" in responseBody', () => {
-    expect(isRetryableError({ data: { responseBody: 'quota exceeded' } })).toBe(
+    expect(isFailoverError({ data: { responseBody: 'quota exceeded' } })).toBe(
       true,
     );
   });
 
   test('returns true for bailian "quota has been exhausted" (issue #1083)', () => {
     expect(
-      isRetryableError({
+      isFailoverError({
         message:
           'Your token-plan 1-week quota has been exhausted. The quota will reset at 08-27 15:33:00 UTC.',
       }),
@@ -144,25 +143,78 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test('returns true for content-policy moderation rejections (cyber_policy)', () => {
+    // OpenAI moderation surfaces as HTTP 400 invalid_request with the
+    // provider-specific policy code; deterministic per provider, so the next
+    // model in the chain must be tried instead of failing the request.
+    expect(
+      isFailoverError(
+        'AI_APICallError: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber',
+      ),
+    ).toBe(true);
+    expect(
+      isFailoverError({
+        data: {
+          statusCode: 400,
+          message:
+            'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber',
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isFailoverError({
+        data: {
+          statusCode: 400,
+          responseBody:
+            '{"error":{"type":"invalid_request","code":"cyber_policy"}}',
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isFailoverError({
+        data: {
+          statusCode: 400,
+          responseBody:
+            '{"error":{"code":"content_policy_violation","message":"Your request was rejected as a result of our safety system."}}',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  test('returns false for generic flagged/policy wording without the moderation signature', () => {
+    // Only the structured code or the exact provider wording match; ordinary
+    // errors mentioning "flagged", "cybersecurity", or "policy" stay hard
+    // errors.
+    expect(
+      isFailoverError({ message: 'request flagged for review by the proxy' }),
+    ).toBe(false);
+    expect(
+      isFailoverError({ message: 'analysis of cybersecurity topics rejected' }),
+    ).toBe(false);
+    expect(
+      isFailoverError({ message: 'policy update required for this model' }),
+    ).toBe(false);
+  });
+
   test('returns true for "usage exceeded"', () => {
-    expect(isRetryableError({ message: 'usage exceeded' })).toBe(true);
+    expect(isFailoverError({ message: 'usage exceeded' })).toBe(true);
   });
 
   test('returns true for "overloaded"', () => {
-    expect(isRetryableError({ message: 'overloaded_error' })).toBe(true);
+    expect(isFailoverError({ message: 'overloaded_error' })).toBe(true);
   });
 
   test('returns true for "Insufficient balance."', () => {
-    expect(isRetryableError({ message: 'Insufficient balance.' })).toBe(true);
+    expect(isFailoverError({ message: 'Insufficient balance.' })).toBe(true);
   });
 
   test('returns true for "Service Unavailable"', () => {
-    expect(isRetryableError({ message: 'Service Unavailable' })).toBe(true);
+    expect(isFailoverError({ message: 'Service Unavailable' })).toBe(true);
   });
 
   test('returns true for "Monthly usage limit reached"', () => {
     expect(
-      isRetryableError({
+      isFailoverError({
         message: 'Monthly usage limit reached. Resets in X days.',
       }),
     ).toBe(true);
@@ -170,7 +222,7 @@ describe('isFailoverError', () => {
 
   test('returns true for "5-hour usage limit reached"', () => {
     expect(
-      isRetryableError({
+      isFailoverError({
         message: '5-hour usage limit reached. Resets in 36min.',
       }),
     ).toBe(true);
@@ -178,90 +230,90 @@ describe('isFailoverError', () => {
 
   test('returns true for "Weekly usage limit reached"', () => {
     expect(
-      isRetryableError({
+      isFailoverError({
         message: 'Weekly usage limit reached. Resets in 2 days.',
       }),
     ).toBe(true);
   });
 
   test('returns false for non-rate-limit error', () => {
-    expect(isRetryableError({ message: 'invalid API key' })).toBe(false);
+    expect(isFailoverError({ message: 'invalid API key' })).toBe(false);
   });
 
   test('returns false for null', () => {
-    expect(isRetryableError(null)).toBe(false);
+    expect(isFailoverError(null)).toBe(false);
   });
 
   test('returns true for string error with rate-limit message', () => {
-    expect(isRetryableError('Usage exceeded')).toBe(true);
-    expect(isRetryableError('rate limit exceeded')).toBe(true);
-    expect(isRetryableError('quota exceeded')).toBe(true);
+    expect(isFailoverError('Usage exceeded')).toBe(true);
+    expect(isFailoverError('rate limit exceeded')).toBe(true);
+    expect(isFailoverError('quota exceeded')).toBe(true);
   });
 
   test('returns false for non-object', () => {
-    expect(isRetryableError(42)).toBe(false);
+    expect(isFailoverError(42)).toBe(false);
   });
 
   test('returns true for 403 status code', () => {
-    expect(isRetryableError({ data: { statusCode: 403 } })).toBe(true);
+    expect(isFailoverError({ data: { statusCode: 403 } })).toBe(true);
   });
 
   test('returns true for 401 status code', () => {
-    expect(isRetryableError({ statusCode: 401 })).toBe(true);
-    expect(isRetryableError({ data: { statusCode: 401 } })).toBe(true);
+    expect(isFailoverError({ statusCode: 401 })).toBe(true);
+    expect(isFailoverError({ data: { statusCode: 401 } })).toBe(true);
   });
 
   test('returns true for 410 Gone (model end-of-life)', () => {
-    expect(isRetryableError({ statusCode: 410 })).toBe(true);
-    expect(isRetryableError({ data: { statusCode: 410 } })).toBe(true);
+    expect(isFailoverError({ statusCode: 410 })).toBe(true);
+    expect(isFailoverError({ data: { statusCode: 410 } })).toBe(true);
     expect(
-      isRetryableError({
+      isFailoverError({
         message:
           "The model 'mistralai/mistral-small-4-119b-2603' has reached its end of life on 2026-07-27T00:00:00Z and is no longer available.",
       }),
     ).toBe(true);
     // The AI SDK surfaces HTTP 410 as the bare title "Gone" in the message.
-    expect(isRetryableError({ message: 'AI_APICallError: Gone' })).toBe(true);
-    expect(isRetryableError('Gone')).toBe(true);
+    expect(isFailoverError({ message: 'AI_APICallError: Gone' })).toBe(true);
+    expect(isFailoverError('Gone')).toBe(true);
   });
 
   test('returns true for 401 upstream provider error message', () => {
     expect(
-      isRetryableError(
+      isFailoverError(
         'AI_APICallError: Upstream request failed: [401] Provider returned error',
       ),
     ).toBe(true);
     expect(
-      isRetryableError({
+      isFailoverError({
         message:
           'AI_APICallError: Upstream request failed: [401] Provider returned error',
       }),
     ).toBe(true);
     expect(
-      isRetryableError({ data: { message: 'Upstream request failed [401]' } }),
+      isFailoverError({ data: { message: 'Upstream request failed [401]' } }),
     ).toBe(true);
   });
 
   test('returns true for "Forbidden" in message', () => {
-    expect(isRetryableError({ message: '403 Forbidden' })).toBe(true);
+    expect(isFailoverError({ message: '403 Forbidden' })).toBe(true);
   });
 
   test('returns true for "blocked by gateway" in message', () => {
-    expect(isRetryableError({ message: 'blocked by gateway' })).toBe(true);
+    expect(isFailoverError({ message: 'blocked by gateway' })).toBe(true);
   });
 
   test('returns true for "forbidden" (lowercase) in message', () => {
-    expect(isRetryableError({ message: 'forbidden' })).toBe(true);
+    expect(isFailoverError({ message: 'forbidden' })).toBe(true);
   });
 
   test('returns true for NewAPI "no available channel" error shapes', () => {
     const message =
       'No available channel for model gpt-5.6-luna under group Codex专用 (distributor) (request id: abc123)';
 
-    expect(isRetryableError(message)).toBe(true);
-    expect(isRetryableError({ message })).toBe(true);
+    expect(isFailoverError(message)).toBe(true);
+    expect(isFailoverError({ message })).toBe(true);
     expect(
-      isRetryableError({
+      isFailoverError({
         data: { statusCode: 400, responseBody: message },
       }),
     ).toBe(true);
@@ -271,15 +323,15 @@ describe('isFailoverError', () => {
     const message =
       'auth_unavailable: no auth available (providers=cli-proxy-api, model=gemini-3.6-flash)';
 
-    expect(isRetryableError(message)).toBe(true);
-    expect(isRetryableError({ message })).toBe(true);
+    expect(isFailoverError(message)).toBe(true);
+    expect(isFailoverError({ message })).toBe(true);
     expect(
-      isRetryableError({
+      isFailoverError({
         data: { statusCode: 400, responseBody: message },
       }),
     ).toBe(true);
     expect(
-      isRetryableError({
+      isFailoverError({
         data: {
           responseBody:
             '{"error":{"message":"auth_unavailable: no auth available","type":"server_error","code":"internal_server_error"}}',
@@ -289,20 +341,20 @@ describe('isFailoverError', () => {
   });
 
   test('returns true for "cannot connect to API" transport errors', () => {
-    expect(isRetryableError('Cannot connect to API')).toBe(true);
-    expect(isRetryableError('stream error: Cannot connect to API')).toBe(true);
+    expect(isFailoverError('Cannot connect to API')).toBe(true);
+    expect(isFailoverError('stream error: Cannot connect to API')).toBe(true);
     expect(
-      isRetryableError({ message: 'stream error: Cannot connect to API' }),
+      isFailoverError({ message: 'stream error: Cannot connect to API' }),
     ).toBe(true);
   });
 
   test('returns false for non-API connection errors', () => {
-    expect(isRetryableError('Cannot connect to database')).toBe(false);
+    expect(isFailoverError('Cannot connect to database')).toBe(false);
   });
 
   test('returns false for permanent channel-not-found errors', () => {
     expect(
-      isRetryableError({
+      isFailoverError({
         message: 'channel not found for model gpt-5.6-luna',
       }),
     ).toBe(false);
@@ -387,7 +439,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -411,7 +463,78 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     ];
     expect(call[0].path.id).toBe('sess-1');
+    expect(mocks.messages).toHaveBeenCalledWith({
+      path: { id: 'sess-1' },
+      query: { directory: '/test' },
+    });
+    expect(call[0].query).toEqual({ directory: '/test' });
     // Should have picked the next model after anthropic/claude-opus-4-5
+    expect(call[0].body.model.providerID).toBe('openai');
+    expect(call[0].body.model.modelID).toBe('gpt-4o');
+  });
+
+  test('recovers the foreground agent from the authoritative session record', async () => {
+    ({ mocks } = createMockClient({ getData: { id: 'sess-authoritative' } }));
+    mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-authoritative',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.get).toHaveBeenCalledWith({
+      path: { id: 'sess-authoritative' },
+      query: { directory: '/test' },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.agent).toBe(
+      'orchestrator',
+    );
+  });
+
+  test('triggers fallback on content-policy moderation session.error', async () => {
+    // End-to-end regression: a cyber_policy rejection (HTTP 400
+    // invalid_request in production) must advance the fallback chain to the
+    // next model instead of failing the session outright.
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-1',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'user',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-1',
+        error: {
+          message:
+            'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber',
+        },
+      },
+    });
+
+    expect(mocks.abort).toHaveBeenCalledTimes(0);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+
+    const call = mocks.promptAsync.mock.calls[0] as [
+      {
+        sessionID: string;
+        model: { providerID: string; modelID: string };
+      },
+    ];
+    expect(call[0].path.id).toBe('sess-1');
     expect(call[0].body.model.providerID).toBe('openai');
     expect(call[0].body.model.modelID).toBe('gpt-4o');
   });
@@ -425,7 +548,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -462,7 +585,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -499,7 +622,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -535,7 +658,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -572,7 +695,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -596,7 +719,7 @@ describe('ForegroundFallbackManager session.error', () => {
     ({ mocks } = createMockClient({
       messagesData: [
         {},
-        { info: { role: 'assistant' }, parts: [] },
+        { info: { role: 'user' }, parts: [] },
         { parts: [{ type: 'text', text: 'no info' }] },
         {
           info: { role: 'user' },
@@ -616,7 +739,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -663,7 +786,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -705,7 +828,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -799,6 +922,213 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
+  test('promptAsync is invoked bound: a this-reading implementation must not throw', async () => {
+    // Regression (issue #595): the extracted promptAsync was called as a
+    // free function, so a real SDK implementation reading `this._client`
+    // threw "undefined is not an object (evaluating 'this._client')" and
+    // the fallback attempt died without delivering the replay.
+    const session: Record<string, unknown> = {
+      abort: mock(async () => {}),
+      messages: mock(async () => ({
+        data: [
+          { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
+        ],
+      })),
+      promptAsync: async function (this: { _client: unknown }) {
+        // Mirrors the generated SDK: touching the receiver crashes when
+        // invoked unbound.
+        void this._client;
+        return {};
+      },
+    };
+    currentMockSession = session;
+    installGetClientMock();
+
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-unbound',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    // No abort, no crash: the bound call delivered the replay directly.
+    expect((session.abort as ReturnType<typeof mock>).mock.calls.length).toBe(
+      0,
+    );
+  });
+
+  test('v1 promptBody carries no v2 modelSwitch flag and still claims the switch', async () => {
+    // v1 byte-identity: the shim-only `modelSwitch` arg must appear ONLY
+    // on v2 hosts, and a v1-shaped result (no `switched` key) keeps the
+    // model-switch bookkeeping.
+    const { mocks } = createMockClient();
+    const onModelChanged = mock();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+      undefined,
+      onModelChanged,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-1',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-1',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
+    expect('modelSwitch' in call[0]).toBe(false);
+    expect(onModelChanged).toHaveBeenCalledTimes(1);
+    expect(onModelChanged).toHaveBeenCalledWith('sess-1', 'openai/gpt-4o');
+  });
+
+  test('v2 host promptBody requests a required model switch', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+      hostFlavor: 'v2',
+    } as any);
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-v2',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-v2',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
+    expect(call[0].modelSwitch).toBe('required');
+  });
+
+  test('switched:false result (v2 switch failure) skips the switch claim', async () => {
+    // The v2 shim degrades a failed switchModel into a prompt delivered on
+    // the CURRENT model; the manager must not record a model switch that
+    // did not happen (sessionModel feeds chain descent, the callback
+    // migrates provider accounting, the toast claims a switch).
+    const { mocks } = createMockClient({
+      promptAsyncImpl: async () => ({ switched: false }),
+    });
+    const onModelChanged = mock();
+    const showToast = mock(async () => ({}));
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test', hostFlavor: 'v2', client: { tui: { showToast } } },
+      3,
+      undefined,
+      onModelChanged,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-degrade',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-degrade',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    // The prompt was delivered exactly once — no busy-session abort dance.
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(onModelChanged).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  test('typed no-switchModel rejection is not treated as a busy session', async () => {
+    // Hosts without session.switchModel reject the required-switch replay
+    // with V2SwitchModelUnavailableError; aborting + retrying cannot fix a
+    // missing host capability, so the error must surface after ONE call.
+    const switchErr = new Error(
+      '[v2] host provides no session.switchModel; cannot switch model for fallback prompt',
+    );
+    switchErr.name = 'V2SwitchModelUnavailableError';
+    const { mocks } = createMockClient({
+      promptAsyncImpl: async () => {
+        throw switchErr;
+      },
+    });
+    const onModelChanged = mock();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test', hostFlavor: 'v2' } as any,
+      3,
+      undefined,
+      onModelChanged,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-noswitch',
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-noswitch',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(onModelChanged).not.toHaveBeenCalled();
+  });
+
   test('shows a toast when fallback switches models on a transient error', async () => {
     const { mocks } = createMockClient();
     const showToast = mock(async () => ({}));
@@ -815,7 +1145,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -854,7 +1184,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -887,7 +1217,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -903,6 +1233,49 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(showToast).not.toHaveBeenCalled();
   });
+
+  test('preserves nested spaced model IDs in the fallback prompt request', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      {
+        explorer: [
+          'opencode-omniroute-live/of/MiniMax M3',
+          'opencode-omniroute-live/of/Qwen3.8 27b',
+        ],
+      },
+      true,
+      { directory: '/test' } as any,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-spaced-model-id',
+          agent: 'explorer',
+          providerID: 'opencode-omniroute-live',
+          modelID: 'of/MiniMax M3',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-spaced-model-id',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.model).toEqual({
+      providerID: 'opencode-omniroute-live',
+      modelID: 'of/Qwen3.8 27b',
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -910,6 +1283,98 @@ describe('ForegroundFallbackManager session.error', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager message.updated', () => {
+  test('ignores stale assistant identity and accepts the later user identity', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains({
+        explorer: ['openai/gpt-4o-mini', 'anthropic/claude-haiku'],
+      }),
+      true,
+      { directory: '/test' } as any,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'compaction-child',
+          agent: 'compaction',
+          providerID: 'openai',
+          modelID: 'gpt-4o-mini',
+          role: 'assistant',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'compaction-child',
+          agent: 'explorer',
+          providerID: 'openai',
+          modelID: 'gpt-4o-mini',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'compaction-child',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.agent).toBe('explorer');
+  });
+
+  test('rejects malformed and system identities without poisoning a session', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains({
+        oracle: ['openai/oracle-primary', 'openai/oracle-fallback'],
+      }),
+      true,
+      { directory: '/test' } as any,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'identity-child',
+          agent: 'not a valid agent',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'identity-child',
+          agent: 'compaction',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'subagent.session.created',
+      properties: { sessionID: 'identity-child', agentName: 'oracle' },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'identity-child',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.agent).toBe('oracle');
+  });
+
   test('tracks model from message.updated and falls back on error', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -924,6 +1389,7 @@ describe('ForegroundFallbackManager message.updated', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -954,6 +1420,7 @@ describe('ForegroundFallbackManager message.updated', () => {
           agent: 'explorer',
           providerID: 'openai',
           modelID: 'gpt-4o-mini',
+          role: 'user',
           error: { message: 'quota exceeded' },
         },
       },
@@ -1003,6 +1470,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1122,6 +1590,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1154,6 +1623,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1203,6 +1673,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1238,6 +1709,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1273,6 +1745,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1308,6 +1781,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1341,6 +1815,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1373,6 +1848,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1408,6 +1884,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1468,6 +1945,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1545,6 +2023,7 @@ describe('ForegroundFallbackManager session.status', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1620,7 +2099,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1648,7 +2127,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           info: {
             sessionID,
             agent: 'orchestrator',
-            role: 'assistant',
+            role: 'user',
             providerID: 'openai',
             modelID: 'gpt-4o',
             time: { created: 1, completed: 2 },
@@ -1661,7 +2140,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           info: {
             sessionID,
             agent: 'orchestrator',
-            role: 'assistant',
+            role: 'user',
             providerID: 'anthropic',
             modelID: 'claude-opus-4-5',
           },
@@ -1703,7 +2182,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1739,7 +2218,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
             agent: 'orchestrator',
             providerID: 'openai',
             modelID: 'gpt-b',
-            role: 'assistant',
+            role: 'user',
           },
         },
       });
@@ -1774,7 +2253,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-4o',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1811,7 +2290,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1833,7 +2312,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
             agent: 'orchestrator',
             providerID: 'openai',
             modelID: 'gpt-4o-mini',
-            role: 'assistant',
+            role: 'user',
           },
         },
       });
@@ -1921,6 +2400,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
+          role: 'user',
         },
       },
     });
@@ -1957,6 +2437,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'model-x',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -1980,6 +2461,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'model-y',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -2009,7 +2491,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2068,7 +2550,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2133,7 +2615,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2166,7 +2648,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
             sessionID: 'sess-incomplete-recovery',
             providerID: 'openai',
             modelID: 'gpt-c',
-            role: 'assistant',
+            role: 'user',
             time: { created: 1 },
           },
         },
@@ -2199,6 +2681,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
+          role: 'user',
         },
       },
     });
@@ -2293,6 +2776,7 @@ describe('ForegroundFallbackManager deduplication', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -2401,6 +2885,7 @@ describe('ForegroundFallbackManager session.deleted', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -2461,6 +2946,7 @@ describe('ForegroundFallbackManager session.deleted', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -2651,6 +3137,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
           agent: 'build',
           providerID: 'openai',
           modelID: 'gpt-5.6',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -2686,6 +3173,7 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
           agent: 'councillor',
           providerID: 'openai',
           modelID: 'gpt-5.4',
+          role: 'user',
         },
       },
     });
@@ -2720,6 +3208,7 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
           agent: 'councillor',
           providerID: 'openai',
           modelID: 'gpt-5.4',
+          role: 'user',
         },
       },
     });
@@ -2754,6 +3243,7 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -2797,6 +3287,7 @@ describe('ForegroundFallbackManager disableChain', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -2824,6 +3315,7 @@ describe('ForegroundFallbackManager disableChain', () => {
           agent: 'explorer',
           providerID: 'openai',
           modelID: 'gpt-4o-mini',
+          role: 'user',
           error: { message: 'quota exceeded' },
         },
       },

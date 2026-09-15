@@ -6,7 +6,16 @@ import type {
 } from '../../utils/background-job-board';
 import type { BackgroundJobStore } from '../../utils/background-job-store';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
+import {
+  extractChildTerminalEvidence,
+  fetchChildTranscript,
+  responseError,
+  stringifyError,
+} from '../../utils/child-transcript';
+import { isRecord } from '../../utils/guards';
+import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { getClient } from '../../utils/opencode-client';
+import type { SessionSelection } from '../../utils/session-selection';
 import { COMPLETED_WITHOUT_TEXT_DIAGNOSTIC } from '../../utils/task';
 
 const DEFAULT_NOTIFICATION_RETRIES = 3;
@@ -75,6 +84,12 @@ export function createRevivedRunTracker(options: {
   onSettled?: (taskID: string) => void;
   contextFilesForPrompt?: (taskID: string) => ContextFile[];
   pruneContext?: () => void;
+  /** Resolve the parent session's CURRENT agent/model selection at send
+   * time (#1079): a terminal notification must continue the parent in
+   * the mode the session uses now, never a hardcoded `orchestrator`.
+   * Resolved on EVERY attempt (retries re-enter the send path). When
+   * absent or unresolved, behavior falls back to `orchestrator`. */
+  resolveSelection?: (sessionID: string) => Promise<SessionSelection>;
 }): RevivedRunTracker {
   const runs = new Map<string, RevivedRun>();
   const maxNotificationRetries =
@@ -90,19 +105,14 @@ export function createRevivedRunTracker(options: {
   const captureBaseline = async (
     taskID: string,
   ): Promise<string | undefined> => {
-    const session = getClient(options.input).session;
-    const messages =
-      typeof session.messages === 'function'
-        ? session.messages.bind(session)
-        : undefined;
-    if (typeof messages !== 'function') return undefined;
-    const response = await messages({
-      path: { id: taskID },
-      query: { directory: options.input.directory },
-    });
-    const error = responseError(response);
-    if (error !== undefined) throw new Error(errorText(error));
-    const data = Array.isArray(response.data) ? response.data : [];
+    const response = await fetchChildTranscript(
+      getClient(options.input),
+      taskID,
+      options.input.directory,
+    );
+    if (response === undefined) return undefined;
+    const data =
+      isRecord(response) && Array.isArray(response.data) ? response.data : [];
     const last = data.at(-1) as SessionMessage | undefined;
     return typeof last?.info?.id === 'string' ? last.info.id : undefined;
   };
@@ -155,68 +165,48 @@ export function createRevivedRunTracker(options: {
   };
 
   async function probeRun(run: RevivedRun): Promise<boolean> {
-    const session = getClient(options.input).session;
-    const messages =
-      typeof session.messages === 'function'
-        ? session.messages.bind(session)
-        : undefined;
-    if (typeof messages !== 'function') return false;
     let response: unknown;
     try {
-      response = await messages({
-        path: { id: run.taskID },
-        query: { directory: options.input.directory },
-      });
+      response = await fetchChildTranscript(
+        getClient(options.input),
+        run.taskID,
+        options.input.directory,
+      );
     } catch {
+      // Transport failures and error payloads both degrade to "not yet
+      // settled" — the probe retries on its stabilization schedule.
       return false;
     }
+    if (response === undefined) return false;
 
-    const data =
-      isRecord(response) && Array.isArray(response.data)
-        ? (response.data as SessionMessage[])
-        : [];
-    const baselineIndex = run.baselineMessageID
-      ? data.findIndex((message) => message.info?.id === run.baselineMessageID)
-      : -1;
-    if (run.baselineMessageID && baselineIndex < 0) return false;
-
-    const lastIndex = data.length - 1;
-    const last = data[lastIndex];
-    if (last?.info?.role !== 'assistant') return false;
-    if (lastIndex <= baselineIndex) return false;
-    if (typeof last.info.time?.completed !== 'number') return false;
-    if (last.info.finish === 'tool-calls' || last.info.finish === 'unknown') {
-      return false;
-    }
-    if (hasPendingToolCall(data, baselineIndex)) return false;
-    if (last.info.error !== undefined) {
-      const result = errorText(last.info.error);
-      const updated = options.backgroundJobBoard.updateStatus({
-        taskID: run.taskID,
-        expectedGeneration: run.generation,
-        state: 'error',
-        resultSummary: result || 'Revived child session failed.',
-      });
-      return updated?.generation === run.generation && finish(run, updated);
-    }
-    const text = (last.parts ?? [])
-      .filter(
-        (part) =>
-          part.type === 'text' &&
-          typeof part.text === 'string' &&
-          part.text.length > 0,
-      )
-      .map((part) => part.text as string)
-      .join('\n\n')
-      .trim();
-    if (text.length > 0) {
-      const updated = options.backgroundJobBoard.updateStatus({
-        taskID: run.taskID,
-        expectedGeneration: run.generation,
-        state: 'completed',
-        resultSummary: text,
-      });
-      return updated?.generation === run.generation && finish(run, updated);
+    const evidence = extractChildTerminalEvidence(response, {
+      baselineMessageID: run.baselineMessageID,
+    });
+    switch (evidence.kind) {
+      case 'no-new-messages':
+      case 'no-assistant':
+      case 'pending':
+        return false;
+      case 'error': {
+        const updated = options.backgroundJobBoard.updateStatus({
+          taskID: run.taskID,
+          expectedGeneration: run.generation,
+          state: 'error',
+          resultSummary: evidence.errorText || 'Revived child session failed.',
+        });
+        return updated?.generation === run.generation && finish(run, updated);
+      }
+      case 'ready': {
+        const updated = options.backgroundJobBoard.updateStatus({
+          taskID: run.taskID,
+          expectedGeneration: run.generation,
+          state: 'completed',
+          resultSummary: evidence.text,
+        });
+        return updated?.generation === run.generation && finish(run, updated);
+      }
+      case 'textless':
+        break;
     }
 
     if (run.stabilizationProbes >= maxStabilizationProbes) {
@@ -286,6 +276,37 @@ export function createRevivedRunTracker(options: {
         discardRun(run);
         return;
       }
+      const state = record.state === 'completed' ? 'completed' : 'error';
+      const tag = state === 'completed' ? 'task_result' : 'task_error';
+      const summary =
+        state === 'completed'
+          ? `Background task completed: ${run.description}`
+          : `Background task failed: ${run.description}`;
+      // Resolve BEFORE acquiring the lease: a hung host read must not
+      // pin the notification lease. Host `session.get` is bounded inside
+      // resolveCurrentSelection; metadata still completes the hierarchy
+      // if that read times out (#1079 Oracle r2).
+      const selection = options.resolveSelection
+        ? await options
+            .resolveSelection(run.parentSessionID)
+            .catch((): undefined => undefined)
+        : undefined;
+      if (disposed || runs.get(run.taskID) !== run || run.notification.sent) {
+        return;
+      }
+      // Revalidate AFTER the selection await: a late success from a
+      // previous attempt may have marked this notification sent while the
+      // retry was pending here — sending again would duplicate the
+      // terminal result (Oracle r2 P1.2).
+      const latestBeforeSend = options.backgroundJobBoard.get(run.taskID);
+      if (
+        !latestBeforeSend ||
+        latestBeforeSend.generation !== run.generation ||
+        terminalOutcome(latestBeforeSend) !== run.terminalState
+      ) {
+        discardRun(run);
+        return;
+      }
       const lease = options.backgroundJobBoard.acquireTerminalNotificationLease(
         run.taskID,
         run.generation,
@@ -294,12 +315,7 @@ export function createRevivedRunTracker(options: {
         scheduleNotificationRetry(run, record);
         return;
       }
-      const state = record.state === 'completed' ? 'completed' : 'error';
-      const tag = state === 'completed' ? 'task_result' : 'task_error';
-      const summary =
-        state === 'completed'
-          ? `Background task completed: ${run.description}`
-          : `Background task failed: ${run.description}`;
+      const notifyAgent = selection?.agent ?? 'orchestrator';
       const text = [
         `<task id="${run.taskID}" state="${state}">`,
         `<summary>${summary}</summary>`,
@@ -313,17 +329,50 @@ export function createRevivedRunTracker(options: {
         options.backgroundJobBoard,
         lease,
         () =>
-          promptAsync({
+          (promptAsync as (args: Record<string, unknown>) => Promise<unknown>)({
             path: { id: run.parentSessionID },
             query: { directory: options.input.directory },
+            // v1 prompt_async queues; 'queue' preserves that on v2 hosts
+            // ('steer' — the shim default — would hijack an in-flight
+            // parent run, the same TOCTOU #1192 closed for task-revive).
+            // Extra root fields are dropped by the v1 SDK RequestInit
+            // path (same pattern as task-revive #1192).
+            delivery: 'queue',
+            // Lifecycle continuation (#1079): on v2 the shim inherits the
+            // host's persisted selection instead of re-pinning the resolved
+            // snapshot model. On v1 the flag is dropped by the SDK and the
+            // explicit body model applies.
+            modelSelection: 'inherit',
+            ...(selection?.variant ? { modelVariant: selection.variant } : {}),
             body: {
-              agent: 'orchestrator',
-              parts: [{ type: 'text', synthetic: true, text }],
+              agent: notifyAgent,
+              ...(selection?.model ? { model: selection.model } : {}),
+              // Internal-initiator part (synthetic flag + metadata + marker):
+              // the v2 client-shim routes these through session.synthetic so
+              // the notification stays machine-context instead of a visible
+              // user message, and the session-prompt bridge classifies the
+              // admission as internal (not external user activity). A bare
+              // `synthetic: true` part loses its flag in the flat v2 prompt
+              // translation (#1157).
+              parts: [createInternalAgentTextPart(text)],
             },
           }),
+        // Late settlement after the local timeout: a SUCCESS means the
+        // host DID accept the notification — mark it delivered and cancel
+        // the pending retry so the same terminal result is never sent to
+        // the parent twice. A late FAILURE keeps the retry scheduled.
+        (outcome) => {
+          if (!outcome.ok) return;
+          if (disposed || runs.get(run.taskID) !== run) return;
+          run.notification.sent = true;
+          if (run.notification.retryTimer) {
+            clearTimeout(run.notification.retryTimer);
+            run.notification.retryTimer = undefined;
+          }
+        },
       );
       const error = responseError(response);
-      if (error !== undefined) throw new Error(errorText(error));
+      if (error !== undefined) throw new Error(stringifyError(error));
       const latest = options.backgroundJobBoard.get(run.taskID);
       if (
         !latest ||
@@ -410,6 +459,7 @@ async function awaitNotificationTransport<T>(
   backgroundJobBoard: BackgroundJobStore,
   lease: BackgroundJobLease,
   operation: () => Promise<T>,
+  onLateSettlement?: (outcome: { ok: boolean }) => void,
 ): Promise<T> {
   let settled = false;
   let timedOut = false;
@@ -419,12 +469,23 @@ async function awaitNotificationTransport<T>(
     .then(
       (value) => {
         settled = true;
-        if (timedOut) backgroundJobBoard.releaseLease(lease);
+        if (timedOut) {
+          backgroundJobBoard.releaseLease(lease);
+          // A resolved promise is NOT delivery: the SDK can resolve with
+          // an `{ error }` envelope when throwOnError is off. Classify
+          // with the same check the normal path uses (Oracle r2 P1.1).
+          onLateSettlement?.({
+            ok: responseError(value) === undefined,
+          });
+        }
         return value;
       },
       (error: unknown) => {
         settled = true;
-        if (timedOut) backgroundJobBoard.releaseLease(lease);
+        if (timedOut) {
+          backgroundJobBoard.releaseLease(lease);
+          onLateSettlement?.({ ok: false });
+        }
         throw error;
       },
     );
@@ -471,38 +532,4 @@ function terminalOutcome(
   return record.state === 'completed' || record.state === 'error'
     ? record.state
     : undefined;
-}
-
-function hasPendingToolCall(
-  messages: SessionMessage[],
-  baselineIndex: number,
-): boolean {
-  return messages.slice(baselineIndex + 1).some((message) =>
-    (message.parts ?? []).some((part) => {
-      if (part.type !== 'tool') return false;
-      const status = part.state?.status;
-      return status !== 'completed' && status !== 'error';
-    }),
-  );
-}
-
-function responseError(response: unknown): unknown {
-  if (!isRecord(response)) return undefined;
-  return response.error === undefined || response.error === null
-    ? undefined
-    : response.error;
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

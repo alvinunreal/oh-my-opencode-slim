@@ -340,7 +340,9 @@ function normalizeModel(model: string | undefined): string | undefined {
   return value || undefined;
 }
 
-function providerFromModel(model: string | undefined): string | undefined {
+export function providerFromModel(
+  model: string | undefined,
+): string | undefined {
   if (!model) return undefined;
   const slash = model.indexOf('/');
   return slash > 0 ? model.slice(0, slash) : undefined;

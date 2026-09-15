@@ -131,7 +131,12 @@ describe('RuntimeConfig', () => {
       providerConcurrency: {},
       modelConcurrency: {},
     });
-    expect(runtime.fallback).toEqual({ enabled: true, maxRetries: 3 });
+    expect(runtime.fallback).toEqual({
+      enabled: true,
+      maxRetries: 3,
+      initialRetryDelayMs: 0,
+      retryDelayMs: 500,
+    });
     expect(runtime.webfetch.enabled).toBe(true);
     expect(runtime.acpAgents).toEqual({});
     expect(runtime.companion).toBeUndefined();
@@ -365,6 +370,41 @@ describe('RuntimeConfig', () => {
     expect(runtime.runtimeChains['councillor-alpha']).toEqual([
       'provider/a1',
       'provider/a2',
+    ]);
+  });
+
+  test('modelArrays and runtimeChains retain nested spaced IDs and variants', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      preset: 'spaced',
+      presets: {
+        spaced: {
+          explorer: {
+            model: [
+              {
+                id: 'opencode-omniroute-live/of/MiniMax M3',
+                variant: 'fast',
+              },
+              { id: 'of/Kimi K2.6', variant: 'balanced' },
+              'opencode-omniroute-live/of/Qwen3.8 27b',
+            ],
+          },
+        },
+      },
+    });
+
+    expect(runtime.modelArrays.explorer).toEqual([
+      {
+        id: 'opencode-omniroute-live/of/MiniMax M3',
+        variant: 'fast',
+      },
+      { id: 'of/Kimi K2.6', variant: 'balanced' },
+      { id: 'opencode-omniroute-live/of/Qwen3.8 27b' },
+    ]);
+    expect(runtime.runtimeChains.explorer).toEqual([
+      'opencode-omniroute-live/of/MiniMax M3',
+      'of/Kimi K2.6',
+      'opencode-omniroute-live/of/Qwen3.8 27b',
     ]);
   });
 

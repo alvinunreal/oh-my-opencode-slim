@@ -109,6 +109,7 @@ export function decideSecondaryModelUse(
   prompt: string | undefined,
   secondaryModels: SecondaryModel[],
   helperAgent?: string,
+  v2GenerateTextAvailable = false,
 ) {
   if (!prompt?.trim()) return { use: false, reason: 'no_prompt' as const };
   if (!secondaryModels.length) {
@@ -117,7 +118,7 @@ export function decideSecondaryModelUse(
       reason: 'no_secondary_model_configured' as const,
     };
   }
-  if (!helperAgent) {
+  if (!helperAgent && !v2GenerateTextAvailable) {
     return { use: false, reason: 'no_helper_agent_available' as const };
   }
   if (!fetchResult.markdown.trim()) {
@@ -219,6 +220,10 @@ function readV2GenerateText(input: PluginInput): V2GenerateText | undefined {
   return typeof channel === 'function'
     ? (channel as V2GenerateText)
     : undefined;
+}
+
+export function hasV2GenerateText(input: PluginInput): boolean {
+  return readV2GenerateText(input) !== undefined;
 }
 
 /**
@@ -438,7 +443,8 @@ export async function runSecondaryModelWithFallback(
   parentSessionID?: string,
   helperAgent?: string,
 ) {
-  if (!helperAgent) return undefined;
+  const generateText = readV2GenerateText(input);
+  if (!helperAgent && !generateText) return undefined;
 
   let lastError: unknown;
   for (const model of models) {
@@ -448,7 +454,9 @@ export async function runSecondaryModelWithFallback(
         model,
         prompt,
         content,
-        helperAgent,
+        // The v2 channel does not use helperAgent; the guard above ensures
+        // the v1 branch can never receive an absent agent.
+        helperAgent as string,
         parentSessionID,
       );
       if (!isUsableSecondaryText(result.text)) {

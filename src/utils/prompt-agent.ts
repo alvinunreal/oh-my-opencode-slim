@@ -154,11 +154,25 @@ export function normalizeAgentHint(value: unknown): string | undefined {
   return normalized;
 }
 
-/** Unwrap `{ data }` SDK envelopes; some call styles return the value raw. */
+/**
+ * Unwrap SDK envelopes; some call styles return the value raw.
+ *
+ * An error envelope is not a raw session record. Treating
+ * `{ data: undefined, error: ... }` as the record itself makes the caller see
+ * an object with no parent and incorrectly establish parentlessness.
+ */
 function unwrapData(response: unknown): unknown {
   if (!response || typeof response !== 'object') return undefined;
-  const envelope = response as { data?: unknown };
-  return envelope.data !== undefined ? envelope.data : response;
+  const envelope = response as { data?: unknown; error?: unknown };
+  if (
+    'error' in envelope &&
+    envelope.error !== undefined &&
+    envelope.error !== null
+  ) {
+    return undefined;
+  }
+  if ('data' in envelope) return envelope.data;
+  return response;
 }
 
 /**
@@ -220,9 +234,9 @@ async function safely<T>(
  *
  * Candidates in {@link SYSTEM_AGENTS} are skipped at every derived step.
  *
- * Returns `undefined` only when nothing could be resolved for a session that
- * is not known to be top-level. Callers then omit `agent` — no better option
- * exists, and inventing one would rewrite a subagent session's agent.
+ * Returns `undefined` when the session is not positively known to be
+ * parentless. Callers then suppress the prompt — no better option exists, and
+ * inventing one would rewrite a subagent session's agent.
  */
 export async function resolveSessionAgent(
   client: OpencodeClient,
@@ -259,7 +273,15 @@ export async function resolveSessionAgent(
       if (fromSession) return fromSession;
       if (info && typeof info === 'object') {
         const parentID = (info as { parentID?: unknown }).parentID;
-        hasParent = typeof parentID === 'string' && parentID.length > 0;
+        const id = (info as { id?: unknown }).id;
+        if (typeof parentID === 'string' && parentID.length > 0) {
+          hasParent = true;
+        } else if (typeof id === 'string' && id.length > 0) {
+          // A usable session record without a parent is positive evidence of
+          // a top-level session. Do not infer this from an error envelope or
+          // an arbitrary object with no session identity.
+          hasParent = false;
+        }
       }
     }
 
@@ -276,9 +298,13 @@ export async function resolveSessionAgent(
     }
   }
 
-  // A probe result always wins over the caller's assumption.
+  // An attempted probe must positively establish parentlessness before the
+  // fallback may be used. `assumeTopLevel` is only valid when probing is
+  // explicitly disabled (for plugin-created sessions or an authoritative
+  // caller guarantee); a failed or malformed probe must never guess.
   const topLevel =
-    hasParent === undefined ? options.assumeTopLevel === true : !hasParent;
+    hasParent === false ||
+    (options.probe === false && options.assumeTopLevel === true);
   if (topLevel) {
     log('[prompt-agent] falling back to top-level agent', {
       sessionId,
@@ -295,13 +321,17 @@ export async function resolveSessionAgent(
  * Attach a resolved agent to a prompt body.
  *
  * Keeps the "which agent?" decision out of the call site and gives the
- * regression scan a single recognisable shape. When `agent` is `undefined`
- * (unresolvable child session) the field is omitted rather than guessed.
+ * regression scan a single recognisable shape. Callers must suppress their
+ * prompt when identity cannot be established; this boundary never emits an
+ * agent-less body.
  */
 export function withAgent<T extends object>(
   body: T,
-  agent: string | undefined,
-): T & { agent?: string } {
+  agent: string,
+): T & { agent: string } {
   const normalized = normalizeAgentName(agent);
-  return normalized ? { ...body, agent: normalized } : { ...body };
+  if (!normalized) {
+    throw new Error('Cannot create a prompt without a valid agent');
+  }
+  return { ...body, agent: normalized };
 }
