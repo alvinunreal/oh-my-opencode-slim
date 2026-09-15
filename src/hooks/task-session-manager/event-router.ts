@@ -298,8 +298,8 @@ export async function handleEvent(
       clearIdleTimers(sessionID: string): void;
       clearAllTimers(): string[];
     };
-    /** Sessions with a deferred inline 401/410 awaiting fallback outcome. */
-    deferredInlineErrors: Set<string>;
+    /** Sessions with a deferred failover error awaiting fallback outcome. */
+    deferredFallbackErrors: Set<string>;
     backgroundJobBoard: BackgroundJobStore;
     pendingCallTracker: {
       peekByParentAndAgent(
@@ -547,10 +547,10 @@ export async function handleEvent(
     // session being idle is itself the completion signal.
     // Delayed so FG can claim the session before we mark completed.
     if (job && sessionId && job.state === 'running') {
-      if (deps.deferredInlineErrors.has(sessionId)) {
-        // A persistent 401/410 was deferred for fallback recovery but the
-        // session ended without one: terminalize as error instead of the
-        // false completion the child-idle path would record.
+      if (deps.deferredFallbackErrors.has(sessionId)) {
+        // A failover error was deferred for fallback recovery but the session
+        // ended without one: terminalize as error instead of the false
+        // completion the child-idle path would record.
         deps.idleReconciler.scheduleErrorTerminalize(
           sessionId,
           observedAt,
@@ -613,7 +613,7 @@ export async function handleEvent(
         (isInlineFailoverError(props.error) &&
           !deps.options.willAttemptFallback?.(sessionId))
       ) {
-        deps.deferredInlineErrors.delete(sessionId);
+        deps.deferredFallbackErrors.delete(sessionId);
         deps.terminalJobsInjectedByParent.delete(sessionId);
         deps.pendingInjectedTerminalJobsByParent.delete(sessionId);
         // Record non-retryable errors on the job board so the
@@ -642,7 +642,7 @@ export async function handleEvent(
       } else if (isInlineFailoverError(props.error)) {
         // Recovery possible: defer. The idle backstop terminalizes this
         // if the fallback fails silently; busy/deleted clears it.
-        deps.deferredInlineErrors.add(sessionId);
+        deps.deferredFallbackErrors.add(sessionId);
       }
     } else if (sessionId) {
       // Child subagent sessions are not orchestrators, so the block
@@ -652,7 +652,23 @@ export async function handleEvent(
       // `completed` — a false success. A child with no fallback chain has
       // nothing to retry into, so surface the failure on the board.
       const props = input.event.properties as { error?: unknown } | undefined;
-      if (deps.options.isFallbackInProgress?.(sessionId)) return;
+      const fallbackCanRecover =
+        deps.options.willAttemptFallback?.(sessionId) ?? false;
+      const failoverEligible =
+        props?.error !== undefined && isFailoverError(props.error);
+      if (
+        failoverEligible &&
+        (fallbackCanRecover || deps.options.isFallbackInProgress?.(sessionId))
+      ) {
+        // Foreground fallback is awaited before this router runs. The
+        // fallback therefore may already have left inProgress even though
+        // this same error is the trigger it just recovered. Keep retryable
+        // errors out of terminal bookkeeping while the chain remains able to
+        // recover; an idle backstop records the failure if recovery never
+        // produces live work.
+        deps.deferredFallbackErrors.add(sessionId);
+        return;
+      }
       const job = observation?.job ?? deps.backgroundJobBoard.get(sessionId);
       if (job && job.state === 'running') {
         // This is a final synchronous generation check, not a claim that
@@ -714,9 +730,9 @@ export async function handleEvent(
     // timer; clearIdleTimers handles the child timer.
     if (sessionId) {
       deps.idleReconciler.clearIdleTimers(sessionId);
-      // Live busy after a deferred 401/410 means the fallback re-prompt
+      // Live busy after a deferred failover error means the fallback re-prompt
       // (or continued work) recovered the session — the error is not final.
-      deps.deferredInlineErrors.delete(sessionId);
+      deps.deferredFallbackErrors.delete(sessionId);
     }
     const before = sessionId
       ? (observation?.job ?? deps.backgroundJobBoard.get(sessionId))

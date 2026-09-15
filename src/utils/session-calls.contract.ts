@@ -77,10 +77,17 @@ client.session.create({
 });
 
 // prompt (secondary-model, session.ts promptWithTimeout)
+// `agent` is mandatory in practice, not by type: an agent-less body makes the
+// runtime resolve its default primary and durably rewrite the session's agent
+// (see src/utils/prompt-agent.ts and
+// docs/agents/build-agent-empty-input-diagnosis.md, probe A2). The type
+// contract only pins the shape; the repo-wide scan in
+// src/utils/prompt-agent.test.ts enforces the field.
 client.session.prompt({
   path: { id: 'ses_x' },
   query: { directory: '/d' },
   body: {
+    agent: 'build',
     model: { providerID: 'p', modelID: 'm' },
     system: 's',
     tools: { read: false },

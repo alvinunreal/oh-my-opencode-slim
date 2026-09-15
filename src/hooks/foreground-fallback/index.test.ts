@@ -35,6 +35,7 @@ function createMockClient(overrides?: {
   abortImpl?: () => Promise<unknown>;
   includePromptAsync?: boolean;
   messagesData?: unknown[];
+  getData?: unknown;
 }) {
   const promptAsync = mock(async (args: unknown) => {
     if (overrides?.promptAsyncImpl) return overrides.promptAsyncImpl(args);
@@ -49,8 +50,10 @@ function createMockClient(overrides?: {
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
     ],
   }));
+  const get = mock(async () => ({ data: overrides?.getData }));
   const session: Record<string, unknown> = {
     abort,
+    get,
     messages,
   };
   if (overrides?.includePromptAsync !== false) {
@@ -67,7 +70,7 @@ function createMockClient(overrides?: {
     client: {
       session,
     } as never,
-    mocks: { promptAsync, abort, messages },
+    mocks: { promptAsync, abort, messages, get },
   };
 }
 
@@ -433,9 +436,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -459,9 +463,38 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     ];
     expect(call[0].path.id).toBe('sess-1');
+    expect(mocks.messages).toHaveBeenCalledWith({
+      path: { id: 'sess-1' },
+      query: { directory: '/test' },
+    });
+    expect(call[0].query).toEqual({ directory: '/test' });
     // Should have picked the next model after anthropic/claude-opus-4-5
     expect(call[0].body.model.providerID).toBe('openai');
     expect(call[0].body.model.modelID).toBe('gpt-4o');
+  });
+
+  test('recovers the foreground agent from the authoritative session record', async () => {
+    ({ mocks } = createMockClient({ getData: { id: 'sess-authoritative' } }));
+    mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-authoritative',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.get).toHaveBeenCalledWith({
+      path: { id: 'sess-authoritative' },
+      query: { directory: '/test' },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.agent).toBe(
+      'orchestrator',
+    );
   });
 
   test('triggers fallback on content-policy moderation session.error', async () => {
@@ -473,9 +506,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -511,9 +545,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -547,9 +582,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -583,9 +619,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -618,9 +655,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -654,9 +692,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -680,7 +719,7 @@ describe('ForegroundFallbackManager session.error', () => {
     ({ mocks } = createMockClient({
       messagesData: [
         {},
-        { info: { role: 'assistant' }, parts: [] },
+        { info: { role: 'user' }, parts: [] },
         { parts: [{ type: 'text', text: 'no info' }] },
         {
           info: { role: 'user' },
@@ -697,9 +736,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -743,9 +783,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -784,9 +825,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -839,6 +881,7 @@ describe('ForegroundFallbackManager session.error', () => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
+    mgr.registerSessionAgent('sess-no-prompt-async', 'orchestrator');
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -864,6 +907,7 @@ describe('ForegroundFallbackManager session.error', () => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
+    mgr.registerSessionAgent('sess-busy', 'orchestrator');
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -938,9 +982,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -971,9 +1016,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-v2',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1013,9 +1059,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-degrade',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1062,9 +1109,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-noswitch',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1094,9 +1142,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1132,9 +1181,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1164,9 +1214,10 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         info: {
           sessionID: 'sess-1',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1204,7 +1255,7 @@ describe('ForegroundFallbackManager session.error', () => {
           agent: 'explorer',
           providerID: 'opencode-omniroute-live',
           modelID: 'of/MiniMax M3',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1232,6 +1283,98 @@ describe('ForegroundFallbackManager session.error', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager message.updated', () => {
+  test('ignores stale assistant identity and accepts the later user identity', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains({
+        explorer: ['openai/gpt-4o-mini', 'anthropic/claude-haiku'],
+      }),
+      true,
+      { directory: '/test' } as any,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'compaction-child',
+          agent: 'compaction',
+          providerID: 'openai',
+          modelID: 'gpt-4o-mini',
+          role: 'assistant',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'compaction-child',
+          agent: 'explorer',
+          providerID: 'openai',
+          modelID: 'gpt-4o-mini',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'compaction-child',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.agent).toBe('explorer');
+  });
+
+  test('rejects malformed and system identities without poisoning a session', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains({
+        oracle: ['openai/oracle-primary', 'openai/oracle-fallback'],
+      }),
+      true,
+      { directory: '/test' } as any,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'identity-child',
+          agent: 'not a valid agent',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'identity-child',
+          agent: 'compaction',
+          role: 'user',
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'subagent.session.created',
+      properties: { sessionID: 'identity-child', agentName: 'oracle' },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'identity-child',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0].body.agent).toBe('oracle');
+  });
+
   test('tracks model from message.updated and falls back on error', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -1243,8 +1386,10 @@ describe('ForegroundFallbackManager message.updated', () => {
       properties: {
         info: {
           sessionID: 'sess-2',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -1275,6 +1420,7 @@ describe('ForegroundFallbackManager message.updated', () => {
           agent: 'explorer',
           providerID: 'openai',
           modelID: 'gpt-4o-mini',
+          role: 'user',
           error: { message: 'quota exceeded' },
         },
       },
@@ -1321,8 +1467,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-retry-abort-before-prompt',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1439,8 +1587,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-4',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1470,8 +1620,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-5',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1518,8 +1670,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-retry-no-reason',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1552,8 +1706,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-retry',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1586,8 +1742,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-retry2',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1620,8 +1778,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-error-field',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1652,8 +1812,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-str-error',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1683,8 +1845,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-status-message-410',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1717,8 +1881,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-nonrl',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1776,8 +1942,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-stale',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1852,8 +2020,10 @@ describe('ForegroundFallbackManager session.status', () => {
       properties: {
         info: {
           sessionID: 'sess-genuine-retry',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -1929,7 +2099,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -1957,7 +2127,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           info: {
             sessionID,
             agent: 'orchestrator',
-            role: 'assistant',
+            role: 'user',
             providerID: 'openai',
             modelID: 'gpt-4o',
             time: { created: 1, completed: 2 },
@@ -1970,7 +2140,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           info: {
             sessionID,
             agent: 'orchestrator',
-            role: 'assistant',
+            role: 'user',
             providerID: 'anthropic',
             modelID: 'claude-opus-4-5',
           },
@@ -2012,7 +2182,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2048,7 +2218,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
             agent: 'orchestrator',
             providerID: 'openai',
             modelID: 'gpt-b',
-            role: 'assistant',
+            role: 'user',
           },
         },
       });
@@ -2083,7 +2253,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-4o',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2120,7 +2290,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2142,7 +2312,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
             agent: 'orchestrator',
             providerID: 'openai',
             modelID: 'gpt-4o-mini',
-            role: 'assistant',
+            role: 'user',
           },
         },
       });
@@ -2227,8 +2397,10 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       properties: {
         info: {
           sessionID: 's',
+          agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
+          role: 'user',
         },
       },
     });
@@ -2265,6 +2437,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'model-x',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -2288,6 +2461,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
           agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'model-y',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -2314,9 +2488,10 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       properties: {
         info: {
           sessionID: 'sess-loop',
+          agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2372,9 +2547,10 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       properties: {
         info: {
           sessionID: 'sess-recover',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2436,9 +2612,10 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       properties: {
         info: {
           sessionID: 'sess-incomplete-recovery',
+          agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
-          role: 'assistant',
+          role: 'user',
         },
       },
     });
@@ -2471,7 +2648,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
             sessionID: 'sess-incomplete-recovery',
             providerID: 'openai',
             modelID: 'gpt-c',
-            role: 'assistant',
+            role: 'user',
             time: { created: 1 },
           },
         },
@@ -2501,8 +2678,10 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       properties: {
         info: {
           sessionID: 'sess-solo',
+          agent: 'orchestrator',
           providerID: 'openai',
           modelID: 'gpt-b',
+          role: 'user',
         },
       },
     });
@@ -2546,6 +2725,7 @@ describe('ForegroundFallbackManager deduplication', () => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
+    mgr.registerSessionAgent('sess-dup', 'orchestrator');
 
     const event = {
       type: 'session.error',
@@ -2566,6 +2746,8 @@ describe('ForegroundFallbackManager deduplication', () => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
+    mgr.registerSessionAgent('sess-A', 'orchestrator');
+    mgr.registerSessionAgent('sess-B', 'orchestrator');
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -2591,8 +2773,10 @@ describe('ForegroundFallbackManager deduplication', () => {
       properties: {
         info: {
           sessionID: 'sess-cascade',
+          agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -2701,12 +2885,14 @@ describe('ForegroundFallbackManager session.deleted', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
 
     // Cleanup via coordinator
     coordinator.dispatchSessionDeleted('sess-del');
+    mgr.registerSessionAgent('sess-del', 'orchestrator');
 
     // After deletion, a new rate-limit on the same ID should behave as a fresh
     // session (no prior model known → uses chain from start, dedup cleared)
@@ -2719,15 +2905,15 @@ describe('ForegroundFallbackManager session.deleted', () => {
     });
 
     // Should have triggered (dedup was cleared by session.deleted)
-    // and should pick the first chain model (no current model seed after deletion)
+    // and should pick the first fallback model after the known agent's primary
+    // is inferred as the current model.
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     const call = mocks.promptAsync.mock.calls[0] as [
       { model: { providerID: string; modelID: string } },
     ];
     // orchestrator chain: ['anthropic/claude-opus-4-5', 'openai/gpt-4o', 'google/gemini-2.5-pro']
-    // no current model → first untried = anthropic/claude-opus-4-5
-    expect(call[0].body.model.providerID).toBe('anthropic');
-    expect(call[0].body.model.modelID).toBe('claude-opus-4-5');
+    expect(call[0].body.model.providerID).toBe('openai');
+    expect(call[0].body.model.modelID).toBe('gpt-4o');
   });
 
   test('ignores session.deleted with no sessionID', async () => {
@@ -2760,12 +2946,14 @@ describe('ForegroundFallbackManager session.deleted', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
 
     // Cleanup via coordinator
     coordinator.dispatchSessionDeleted('sess-info-del');
+    mgr.registerSessionAgent('sess-info-del', 'orchestrator');
 
     // State is cleared: a new rate-limit on same ID should behave as fresh session
     await mgr.handleEvent({
@@ -2908,9 +3096,9 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('uses cross-agent last-resort only when agent name is unknown', async () => {
-    // When the agent name is genuinely unknown AND current model is not in any
-    // chain, the last-resort flattened chain is acceptable.
+  test('does not prompt when agent name is unknown', async () => {
+    // Without a conclusive agent identity, fallback must stop rather than
+    // guessing which configured agent should own the replacement prompt.
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       { orchestrator: ['openai/gpt-4o'] },
@@ -2927,13 +3115,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       },
     });
 
-    // Falls through to last-resort → picks first model from any chain
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [
-      { model: { providerID: string; modelID: string } },
-    ];
-    expect(call[0].body.model.providerID).toBe('openai');
-    expect(call[0].body.model.modelID).toBe('gpt-4o');
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
   test('does NOT bleed into other agent chains for non-omos agents without a chain', async () => {
@@ -2955,6 +3137,7 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
           agent: 'build',
           providerID: 'openai',
           modelID: 'gpt-5.6',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -2990,6 +3173,7 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
           agent: 'councillor',
           providerID: 'openai',
           modelID: 'gpt-5.4',
+          role: 'user',
         },
       },
     });
@@ -3024,6 +3208,7 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
           agent: 'councillor',
           providerID: 'openai',
           modelID: 'gpt-5.4',
+          role: 'user',
         },
       },
     });
@@ -3058,6 +3243,7 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
         },
       },
     });
@@ -3101,6 +3287,7 @@ describe('ForegroundFallbackManager disableChain', () => {
           agent: 'orchestrator',
           providerID: 'anthropic',
           modelID: 'claude-opus-4-5',
+          role: 'user',
           error: { message: 'rate limit exceeded' },
         },
       },
@@ -3128,6 +3315,7 @@ describe('ForegroundFallbackManager disableChain', () => {
           agent: 'explorer',
           providerID: 'openai',
           modelID: 'gpt-4o-mini',
+          role: 'user',
           error: { message: 'quota exceeded' },
         },
       },

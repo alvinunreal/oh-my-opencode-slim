@@ -23,6 +23,8 @@ export type SmartfetchOptions = {
   explorerModel?: string;
   /** Librarian agent model id, resolved from in-memory config at construction. */
   librarianModel?: string;
+  /** Live helper selection; absent disables enhancement safely. */
+  helperAgent?: string;
 };
 
 export type SecondaryModel = {

@@ -412,8 +412,8 @@ export function createTaskSessionManagerHook(
     string,
     Map<string, BackgroundJobExecution>
   >();
-  /** Managed sessions with a deferred inline 401/410 awaiting fallback outcome. */
-  const deferredInlineErrors = new Set<string>();
+  /** Managed sessions with a deferred failover error awaiting fallback outcome. */
+  const deferredFallbackErrors = new Set<string>();
 
   // Forward refs for circular deps — set after corresponding managers exist.
   // These are captured by closure in createIdleReconciler and only called
@@ -431,11 +431,11 @@ export function createTaskSessionManagerHook(
     backgroundJobBoard,
     reconcileInjectedTerminalJobs: (parentSessionID: string) =>
       reconcileInjectedTerminalJobs(injectionState, parentSessionID),
-    // Fallback could not recover a deferred 401/410; drop the deferred
+    // Fallback could not recover a deferred error; drop the deferred
     // error and its injected-terminal tracking so the board shows the
     // failure and follow-up reconciliation keeps consistent state.
     onErrorTerminalize: (sessionID: string) => {
-      deferredInlineErrors.delete(sessionID);
+      deferredFallbackErrors.delete(sessionID);
       terminalJobsInjectedByParent.delete(sessionID);
       pendingInjectedTerminalJobsByParent.delete(sessionID);
     },
@@ -774,7 +774,7 @@ export function createTaskSessionManagerHook(
         const sessionID =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
         if (sessionID) {
-          deferredInlineErrors.delete(sessionID);
+          deferredFallbackErrors.delete(sessionID);
           if (!options.isFallbackInProgress?.(sessionID)) {
             const hardTimedOut =
               backgroundJobBoard.field(sessionID, 'deadlineExceededAt') !==
@@ -792,7 +792,7 @@ export function createTaskSessionManagerHook(
         idleSessionTokens,
         options,
         idleReconciler,
-        deferredInlineErrors,
+        deferredFallbackErrors,
         backgroundJobBoard,
         pendingCallTracker,
         taskContextTracker,

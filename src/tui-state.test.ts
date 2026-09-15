@@ -555,7 +555,9 @@ describe('tui-state persistence', () => {
 
     // In-place rewrite (same inode, same length): mtime restored via
     // utimes. ctime cannot be restored by userspace, so the memo must
-    // invalidate and re-record the value from the real file.
+    // invalidate and re-record the value from the real file. The stat seam
+    // makes the ctime change deterministic across filesystems whose clock
+    // resolution lets the rewrite and mtime restoration share one tick.
     const external = readTuiSnapshot(tempDir);
     external.agentModels.explorer = 'model-y';
     const fd = fs.openSync(filePath, 'w');
@@ -566,7 +568,17 @@ describe('tui-state persistence', () => {
     expect(statAfter.ino).toBe(statBefore.ino);
     expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
 
-    recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
+    const originalStatSync = fs.statSync;
+    const statSpy = spyOn(fs, 'statSync').mockImplementation((...args) => {
+      const stat = originalStatSync(...args);
+      if (String(args[0]) !== filePath) return stat;
+      return Object.assign(stat, { ctimeMs: statBefore.ctimeMs + 1 });
+    });
+    try {
+      recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
+    } finally {
+      statSpy.mockRestore();
+    }
     expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe('model-x');
   });
 

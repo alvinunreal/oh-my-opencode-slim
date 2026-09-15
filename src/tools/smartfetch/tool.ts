@@ -41,6 +41,7 @@ import {
 } from './network';
 import {
   decideSecondaryModelUse,
+  hasV2GenerateText,
   resolveSecondaryModels,
   runSecondaryModelWithFallback,
 } from './secondary-model';
@@ -663,6 +664,8 @@ export function createWebfetchTool(
           fetchResult,
           args.prompt,
           secondaryModels,
+          options.helperAgent,
+          hasV2GenerateText(pluginCtx),
         );
         const metadata = args.include_metadata
           ? frontmatter({
@@ -723,6 +726,7 @@ export function createWebfetchTool(
             args.prompt || '',
             fetchResult.markdown,
             ctx.sessionID,
+            options.helperAgent,
           );
         } catch (error: unknown) {
           secondaryModelError =

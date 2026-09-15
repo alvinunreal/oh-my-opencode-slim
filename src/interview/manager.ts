@@ -30,6 +30,11 @@ export function createInterviewManager(
   options: {
     /** Already-listening server for the dashboard role to adopt. */
     server?: Server;
+    /** Timer seams for isolating the dashboard session fallback poller. */
+    timers?: {
+      setInterval: typeof setInterval;
+      clearInterval: typeof clearInterval;
+    };
   } = {},
 ): {
   registerCommand: (config: Record<string, unknown>) => void;

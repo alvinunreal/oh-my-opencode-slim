@@ -108,6 +108,8 @@ export function decideSecondaryModelUse(
   fetchResult: CachedFetch,
   prompt: string | undefined,
   secondaryModels: SecondaryModel[],
+  helperAgent?: string,
+  v2GenerateTextAvailable = false,
 ) {
   if (!prompt?.trim()) return { use: false, reason: 'no_prompt' as const };
   if (!secondaryModels.length) {
@@ -115,6 +117,9 @@ export function decideSecondaryModelUse(
       use: false,
       reason: 'no_secondary_model_configured' as const,
     };
+  }
+  if (!helperAgent && !v2GenerateTextAvailable) {
+    return { use: false, reason: 'no_helper_agent_available' as const };
   }
   if (!fetchResult.markdown.trim()) {
     return { use: false, reason: 'empty_content' as const };
@@ -217,6 +222,10 @@ function readV2GenerateText(input: PluginInput): V2GenerateText | undefined {
     : undefined;
 }
 
+export function hasV2GenerateText(input: PluginInput): boolean {
+  return readV2GenerateText(input) !== undefined;
+}
+
 /**
  * v2 path: one-shot `ctx.generate.text`, no temporary session.
  *
@@ -275,6 +284,7 @@ async function runSecondaryModel(
   model: SecondaryModel,
   prompt: string,
   content: string,
+  helperAgent: string,
   parentSessionID?: string,
 ) {
   const generateText = readV2GenerateText(input);
@@ -336,6 +346,25 @@ async function runSecondaryModel(
       path: { id: sessionId },
       query: { directory },
       body: {
+        // This helper session is created by the plugin moments earlier and is
+        // deleted in the `finally` below: it has no history, so there is no
+        // "current agent" to preserve and nothing to resolve. The agent must
+        // still be NAMED: omitting it lets OpenCode resolve its default
+        // primary and durably rewrite the session agent
+        // (docs/agents/build-agent-empty-input-diagnosis.md, probe A2).
+        //
+        // A non-orchestrator agent is selected on purpose: a message tagged
+        // `orchestrator` makes the task-session-manager adopt this throwaway
+        // session as a managed orchestrator session
+        // (`registerSessionAsOrchestrator`), which then attracts phase
+        // reminders, post-tool nudges, background-job-board injection,
+        // companion busy/idle flips, and the orchestrator system prompt on
+        // every fetch.
+        //
+        // Named inline rather than resolved from the helper session: the
+        // selected agent comes from the in-memory registrations captured at
+        // plugin construction, and probing this new session buys nothing.
+        agent: helperAgent,
         model: modelOnly,
         // The v1 runtime reads the variant from the body top level and
         // strips unknown keys from `model`; the SDK type omits it, so
@@ -346,7 +375,7 @@ async function runSecondaryModel(
         tools: disabledTools,
         parts: [
           {
-            type: 'text',
+            type: 'text' as const,
             text: buildPrompt(truncatedContent, effectivePrompt),
           },
         ],
@@ -412,7 +441,11 @@ export async function runSecondaryModelWithFallback(
   prompt: string,
   content: string,
   parentSessionID?: string,
+  helperAgent?: string,
 ) {
+  const generateText = readV2GenerateText(input);
+  if (!helperAgent && !generateText) return undefined;
+
   let lastError: unknown;
   for (const model of models) {
     try {
@@ -421,6 +454,9 @@ export async function runSecondaryModelWithFallback(
         model,
         prompt,
         content,
+        // The v2 channel does not use helperAgent; the guard above ensures
+        // the v1 branch can never receive an absent agent.
+        helperAgent as string,
         parentSessionID,
       );
       if (!isUsableSecondaryText(result.text)) {

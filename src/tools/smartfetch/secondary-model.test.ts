@@ -1,7 +1,33 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { MAX_MODEL_CONTENT_CHARS } from './constants';
-import { _testConfig, runSecondaryModelWithFallback } from './secondary-model';
-import type { SecondaryModel } from './types';
+import {
+  _testConfig,
+  decideSecondaryModelUse,
+  runSecondaryModelWithFallback as runSecondaryModelWithFallbackImpl,
+} from './secondary-model';
+import type { CachedFetch, SecondaryModel } from './types';
+
+type SecondaryModelArgs = Parameters<typeof runSecondaryModelWithFallbackImpl>;
+
+// The v1 session tests use a registered mock helper agent. Production passes
+// this value from the plugin's actual agent definitions.
+function runSecondaryModelWithFallback(
+  input: SecondaryModelArgs[0],
+  models: SecondaryModelArgs[1],
+  prompt: SecondaryModelArgs[2],
+  content: SecondaryModelArgs[3],
+  parentSessionID?: SecondaryModelArgs[4],
+  helperAgent?: SecondaryModelArgs[5],
+) {
+  return runSecondaryModelWithFallbackImpl(
+    input,
+    models,
+    prompt,
+    content,
+    parentSessionID,
+    helperAgent ?? 'build',
+  );
+}
 
 type PromptStep = {
   text?: string;
@@ -75,6 +101,21 @@ describe('smartfetch/secondary-model', () => {
   ];
 
   const testInput = { directory: '/tmp/project' } as never;
+
+  test('allows v2 generation without a registered helper agent', () => {
+    const decision = decideSecondaryModelUse(
+      {
+        markdown: 'This is enough content for the secondary model to use.',
+        wordCount: 30,
+      } as CachedFetch,
+      'Summarize this',
+      models,
+      undefined,
+      true,
+    );
+
+    expect(decision).toEqual({ use: true, reason: 'prompt_present' });
+  });
 
   afterEach(() => {
     mock.restore();
@@ -170,6 +211,68 @@ describe('smartfetch/secondary-model', () => {
       console.warn = originalWarn;
       _testConfig.deleteRetryDelayMs = originalDelay;
     }
+  });
+
+  // The helper session must name an agent (probe A2 — an agent-less body
+  // durably re-homes the session to the default primary), but it must NOT be
+  // `orchestrator`, which would make the task-session-manager adopt this
+  // throwaway session as a managed orchestrator session.
+  test('names the build agent on the helper prompt, never the orchestrator', async () => {
+    mockV2Client = createV2ClientMock([{ text: 'Answer' }]);
+
+    await runSecondaryModelWithFallback(
+      testInput,
+      models,
+      'Summarize the page',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    const body = (
+      mockV2Session.prompt.mock.calls[0]?.[0] as {
+        body?: { agent?: string };
+      }
+    )?.body;
+    expect(body?.agent).toBe('build');
+    expect(body?.agent).not.toBe('orchestrator');
+    // Resolution must not probe: the session was just created and has no
+    // history, and the mock client deliberately exposes no get/messages.
+    expect(mockV2Session).not.toHaveProperty('get');
+    expect(mockV2Session).not.toHaveProperty('messages');
+  });
+
+  test('uses the selected available helper agent', async () => {
+    mockV2Client = createV2ClientMock([{ text: 'Answer' }]);
+
+    await runSecondaryModelWithFallback(
+      testInput,
+      [models[0]],
+      'Summarize the page',
+      'This is enough fetched content to clear the short-content guard.',
+      undefined,
+      'explorer',
+    );
+
+    const body = (
+      mockV2Session.prompt.mock.calls[0]?.[0] as {
+        body?: { agent?: string };
+      }
+    )?.body;
+    expect(body?.agent).toBe('explorer');
+  });
+
+  test('does not create a session when the helper agent is absent', async () => {
+    mockV2Client = createV2ClientMock([{ text: 'Should not run' }]);
+
+    const result = await runSecondaryModelWithFallbackImpl(
+      testInput,
+      [models[0]],
+      'Summarize the page',
+      'This is enough fetched content to clear the short-content guard.',
+    );
+
+    expect(result).toBeUndefined();
+    expect(mockV2Session.create).not.toHaveBeenCalled();
+    expect(mockV2Session.prompt).not.toHaveBeenCalled();
   });
 
   test('falls back to next model when prompt times out', async () => {
