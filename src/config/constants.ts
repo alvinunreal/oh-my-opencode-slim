@@ -11,6 +11,7 @@ export const SUBAGENT_NAMES = [
   'designer',
   'fixer',
   'observer',
+  'reviewer',
   'council',
   'councillor',
 ] as const;
@@ -46,6 +47,7 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
   designer: undefined,
   fixer: undefined,
   observer: undefined,
+  reviewer: undefined,
   council: undefined,
   councillor: undefined,
 };

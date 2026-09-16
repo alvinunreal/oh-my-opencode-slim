@@ -1,33 +1,34 @@
 import { createInternalAgentTextPart } from '../../utils';
-import { registerCommandHook } from '../command-hook-utils';
+import {
+  DELIVERY_HANDOFF_CONTRACT,
+  registerCommandHook,
+} from '../command-hook-utils';
 
 const COMMAND_NAME = 'loop';
 
-function historyDir(): string {
-  const shortID = Math.random().toString(36).slice(2, 8);
-  const timestamp = Date.now().toString(36);
-  return `.opencode/loop-history/loop-${timestamp}-${shortID}`;
-}
-
 function activationPrompt(text: string): string {
-  const dir = historyDir();
-
   return [
-    'The user ran `/loop`. From the text below, extract: goal, successCriteria, maxAttempts.',
+    'The user ran `/loop`. This slash command is a user-entry adapter;',
+    'the parent/orchestrator coordinates the loop-engineering protocol.',
+    'Load the loop-engineering skill as the bounded delivery protocol for',
+    'a prepared delivery unit.',
     '',
-    'If ANY are missing or unclear - push back and ask the user to clarify.',
-    'Do not assume or guess. All three must be explicit.',
+    '`/loop` requires a prepared unit/specification and a proof contract.',
+    'It must not redesign the initiative. Preserve the supplied user',
+    'context below and any stricter user attempt limit as a',
+    'non-resettable ceiling.',
     '',
-    'Once all three are clear, run the loop:',
+    'Prohibited:',
+    '- do not create `.opencode/loop-history/`;',
+    '- do not treat a pass as initiative completion (a pass completes the',
+    '  prepared unit, not the initiative);',
+    '- do not use a resettable attempt budget;',
+    '- do not invoke `/loop` as a callable subprocedure.',
     '',
+    DELIVERY_HANDOFF_CONTRACT,
+    '',
+    'User context:',
     text,
-    '',
-    'For each attempt:',
-    `1. Read \`${dir}/\` for prior results`,
-    '2. Dispatch @fixer with the goal',
-    '3. Verify per the successCriteria',
-    `4. Write result to \`${dir}/history-{NNN}.md\` (PASS/FAIL + reason)`,
-    '5. PASS -> stop. FAIL under maxAttempts -> retry. FAIL at max -> escalate.',
   ].join('\n');
 }
 
@@ -35,12 +36,18 @@ function helpPrompt(): string {
   return [
     'Usage: `/loop <description>`',
     '',
-    'Describe what to accomplish, what success looks like, and how many tries.',
+    '`/loop` is a user-entry adapter that directs the parent/orchestrator',
+    'to load the loop-engineering protocol for a prepared delivery unit.',
+    'Provide the unit description, success criteria, and proof contract.',
+    'A stricter attempt limit may be supplied and is honoured as a',
+    'non-resettable ceiling.',
+    '',
+    'It is not a callable subprocedure and does not redesign the',
+    'initiative.',
     '',
     'Examples:',
     '  `/loop fix typescript errors until typecheck passes, max 3 tries`',
-    '  `/loop improve api performance until response under 500ms, try 5 times`',
-    '  `/loop refactor auth module, tests must pass, 4 attempts max`',
+    '  `/loop improve api performance, response under 500ms, 5 attempts`',
   ].join('\n');
 }
 
@@ -56,8 +63,8 @@ export function createLoopCommandHook(): {
       registerCommandHook(
         opencodeConfig,
         COMMAND_NAME,
-        'Run an automated execute-verify loop',
-        'Dispatch fixer, verify, iterate with file-based history on disk.',
+        'Run bounded delivery via the loop-engineering protocol',
+        'User-entry adapter for the loop-engineering bounded delivery protocol.',
       );
     },
 

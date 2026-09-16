@@ -111,6 +111,16 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 - **Don't delegate when:** Plain text files that Read can handle directly • Files that need editing afterward (need literal content from Read)
 - **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer - it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for routing? → Read only the minimal context yourself.
 - **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png - describe the UI elements and error messages."`,
+
+  reviewer: `@reviewer
+- Lane: Read-only evidence-based review for bounded delivery protocols
+- Role: Review specialist that returns one structured verdict (APPROVED or REVISE) for a plan or an implementation
+- Permissions: Read files
+- Capabilities: Inspects the spec, diff, and executed evidence against a factual packet; supports review_mode=plan (pre-implementation) and review_mode=implementation (post-proof); cites specific files/lines/commands per finding
+- **Delegate when:** A bounded delivery protocol (deepwork, loop-engineering) requires an independent plan or implementation review • The caller can supply a factual packet (spec, diff, proof output, evidence brief) without author self-assessment
+- **Don't delegate when:** Routine verification you can do directly • No prepared evidence packet exists • The work needs implementation, not review
+- **Result handling:** Treat the verdict as fail-closed: an absent or malformed verdict is not approval. Arbitrate REVISE findings yourself; @reviewer never edits or re-runs for a different substantive verdict.
+- **Rule of thumb:** Need an independent read-only verdict on a plan or candidate diff? → @reviewer. Need strategy or open-ended architecture advice? → @oracle.`,
 };
 
 // Parallel delegation examples

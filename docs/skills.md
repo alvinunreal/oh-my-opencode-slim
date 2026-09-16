@@ -102,9 +102,15 @@ See **[Clonedeps](clonedeps.md)** for the full workflow and file layout.
 
 ## deepwork
 
-**Heavy/complex coding sessions and large modifications workflow.**
+**Tier-2 initiative planning and coordination protocol.**
 
-`deepwork` is an orchestrator-only workflow skill for managing deep architectural work, multi-phase implementations, and complex refactoring. It provides a structured approach with risk-based review gates while maintaining flexibility in planning.
+`deepwork` is an orchestrator-only skill for consequential, high-stakes, or
+long-horizon work. `/deepwork` is a user-entry adapter: the
+parent/orchestrator is the sole lifecycle controller and coordinates the
+protocol. Use it for every Tier-2 initiative (including single-unit work) and
+for long-horizon Tier-1 coordination without Tier-2 gates. Risk and horizon
+are separate axes; splitting a Tier-2 initiative into multiple delivery units
+must not downgrade risk.
 
 Start it directly with:
 
@@ -113,34 +119,94 @@ Start it directly with:
 ```
 
 **How it works:**
-1. Before planning, delegation, or state creation, inspect `.gitignore` and
-   `.ignore`; add only missing entries (without duplicates) for
-   `.slim/deepwork/` in `.gitignore` and `!.slim/deepwork/` plus
-   `!.slim/deepwork/**` in `.ignore`. This keeps state git-local while making it
-   readable to OpenCode.
-2. Orchestrator creates a session artifact at `.slim/deepwork/<task>.md`
-3. Draft a phased implementation plan with a small number of coherent phases
-   based on dependencies and natural delivery boundaries. Do not split work
-   merely to make an Oracle review smaller.
-4. Before execution, show a compact overview of phase order, specialist
-   ownership/scope, the Oracle review total, the review after each phase, and a
-   short reason for each gate.
-5. Execute phase by phase: validate, update session state, then get an Oracle
-   review before advancing.
-6. Batch material findings into one bounded remediation pass with focused
-   validation. Re-review only when needed to assess a changed decision/risk or
-   an otherwise unverifiable concern.
+1. `/deepwork` directs the parent/orchestrator to load and follow the deepwork
+   skill and coordinate it for the initiative. Slash commands are adapters;
+   the parent coordinates the protocol. `/deepwork` is never a callable
+   procedure.
+2. Canonical records live in `.slim/plans/<initiative>/PLAN.md` and
+   `REVIEW-LOG.md`. Do not create or use `.slim/deepwork/`.
+3. **Tier-2 protocol:** surface assumptions and an implementation plan;
+   `verification-planning` produces the evidence/proof specification; a
+   bounded `@reviewer` `review_mode=plan` review evaluates the proposal,
+   assumptions, and evidence path; explicit user authorisation gates
+   implementation; delivery units run through `loop-engineering`; the
+   integrated proof runs; exactly one final `@oracle` judgment gate completes
+   the initiative. Reviews are prompt-level protocols enforced by the
+   parent/orchestrator, not runtime enforcement. Plan review is
+   pre-implementation; implementation review (in `loop-engineering`)
+   evaluates the candidate spec, diff, and executed evidence after proof.
+   There are no per-phase gates.
+4. A delivery unit packet carries ID/plan version, scope/exclusions/
+   dependencies, proof commands/prerequisites, Tier-2 authority if
+   applicable, attempt count/prior failure, and factual
+   local/external/uncertainty context.
+5. Delivery order: Fixer delivery -> planned proof -> one implementation
+   `@reviewer` review -> at most two repairs with affected proof -> parent
+   acceptance.
+6. **Long-horizon Tier-1 coordination:** tracks dependencies, milestones, and
+   progress/resumption in `PLAN.md` and `REVIEW-LOG.md` without Tier-2 plan
+   review, user authorisation, Oracle gate, or a second retry controller.
 
 **Key features:**
-- Persistent session state in markdown files
-- Predictable Oracle reviews after each planned phase, declared before execution
-- V2 scheduler integration (dispatch specialists, wait for hook-driven completion, reconcile)
-- OpenCode todo lists for progress tracking
-- Flexible structure - orchestrator adapts format to task needs
+- Canonical `.slim/plans/<initiative>/` records with `PLAN.md` and
+  `REVIEW-LOG.md`
+- Bounded `@reviewer` plan review (five rounds max) and implementation review
+  (two repairs max) with fail-closed verdict handling
+- Delivery unit packets with scope, proof, and Tier-2 authority
+- Exactly one final `@oracle` judgment gate for Tier-2 initiatives
+- Scheduler discipline and designer handoff guardrails preserved
 
-**When to use:** Large-scale refactoring, multi-file architectural changes, complex feature development spanning modules.
+**When to use:** Large-scale refactoring, multi-file architectural changes,
+complex feature development spanning modules, consequential or irreversible
+work.
 
-**When NOT to use:** Simple single-file edits, trivial bug fixes, quick one-off changes.
+**When NOT to use:** Simple single-file edits, trivial bug fixes, quick
+one-off changes.
+
+---
+
+## loop-engineering
+
+**Bounded delivery protocol for a prepared unit.**
+
+`loop-engineering` is an orchestrator-only skill that executes a single
+prepared delivery unit under the parent/orchestrator. The parent owns the
+lifecycle and final acceptance. `/loop` is only a user-entry adapter that
+directs the parent to load this protocol; it is never a callable procedure or
+an independent controller. The implementation review is a prompt-level
+protocol enforced by the parent, not runtime enforcement.
+
+**How it works:**
+1. The protocol accepts a prepared delivery unit packet: initiative/unit ID,
+   plan version, tier classification/authority, goal/scope/exclusions/
+   interfaces/dependencies, acceptance claims/proof commands/prerequisites,
+   evidence brief (Local Code Facts, External Doc Facts, Unresolved
+   Uncertainties), and budget/attempts/prior failure.
+2. Pre-dispatch checks block on missing proof, unmet dependencies, or Tier-2
+   missing/stale plan approval or user authorisation.
+3. Delivery order: Fixer implements within scope -> parent runs planned proof
+   against the candidate -> exactly one `@reviewer` `review_mode=implementation`
+   evaluates the candidate spec, diff, and executed evidence after proof, plus
+   the evidence brief -> parent arbitrates findings -> up to two repairs with
+   affected validation -> parent acceptance.
+4. A pass completes the prepared unit; it does not complete the initiative.
+5. Replan on material scope/architecture/proof changes or repair exhaustion.
+   Resumption preserves attempts and reads durable initiative records.
+
+**Key features:**
+- Prepared unit packet with identity, authority, scope, proof, evidence brief,
+  and budget
+- Pre-dispatch blocking checks for proof, dependencies, and Tier-2 authority
+- Exactly one implementation `@reviewer` review with fail-closed verdict
+- Up to two repairs with affected validation, then replan
+- Delivery result recorded for the coordinator: candidate/diff identity, proof
+  results, review verdict/findings/dispositions, repairs, blockers, parent
+  acceptance, next action
+
+**Prohibited:** optional/manual verification, callback API, separate history
+directories, random paths, pass-means-initiative-complete, resettable budget,
+substitute proof, architecture redesign, plan approval, final initiative
+completion, and invoking `/loop` as a callable subprocedure.
 
 ---
 
