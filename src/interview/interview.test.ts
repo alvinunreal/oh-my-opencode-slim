@@ -34,6 +34,9 @@ function createMockContext(overrides?: {
   const messagesData = overrides?.messagesData ?? [];
 
   const sessionMock = {
+    get: mock(async (args: { path: { id: string } }) => ({
+      data: { id: args.path.id },
+    })),
     messages: mock(async () => ({ data: messagesData })),
     prompt: mock(async (args: any) => {
       if (overrides?.promptImpl) {

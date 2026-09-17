@@ -56,6 +56,9 @@ function createMockContext(overrides?: {
 }) {
   const messagesData = overrides?.messagesData ?? [];
   const sessionMock = {
+    get: mock(async (args: { path: { id: string } }) => ({
+      data: { id: args.path.id },
+    })),
     messages: mock(async () => ({ data: messagesData })),
     prompt: mock(async (args: any) => {
       if (overrides?.promptImpl) {
@@ -525,8 +528,6 @@ describe('interview manager - session registration', () => {
       dashboard: true,
     });
 
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
     const intervalHandles: Array<{ unref: ReturnType<typeof mock> }> = [];
     const setIntervalSpy = mock(() => {
       const handle = { unref: mock(() => {}) };
@@ -536,15 +537,17 @@ describe('interview manager - session registration', () => {
     const clearIntervalSpy = mock(() => {});
 
     try {
-      (globalThis as any).setInterval = setIntervalSpy;
-      (globalThis as any).clearInterval = clearIntervalSpy;
-
       createInterviewManager(dashboardCtx, config, { server });
 
       // Wait for dashboard init
       await new Promise((r) => setTimeout(r, 100));
 
-      const clientManager = createInterviewManager(clientCtx, config);
+      const clientManager = createInterviewManager(clientCtx, config, {
+        timers: {
+          setInterval: setIntervalSpy as never,
+          clearInterval: clearIntervalSpy as never,
+        },
+      });
 
       // Wait for client init to connect to the dashboard
       await new Promise((r) => setTimeout(r, 100));
@@ -574,8 +577,6 @@ describe('interview manager - session registration', () => {
       expect(clearIntervalSpy).toHaveBeenCalledWith(fallbackTimerHandle);
       expect(fallbackTimerHandle?.unref).toHaveBeenCalledTimes(1);
     } finally {
-      (globalThis as any).setInterval = originalSetInterval;
-      (globalThis as any).clearInterval = originalClearInterval;
       await fs.rm(dashboardDir, { recursive: true, force: true });
       await fs.rm(clientDir, { recursive: true, force: true });
     }

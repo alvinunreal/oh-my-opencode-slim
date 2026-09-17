@@ -122,7 +122,7 @@ async function triggerFailover(
         providerID: 'anthropic',
         modelID: 'claude-a',
         agent: 'orchestrator',
-        role: 'assistant',
+        role: 'user',
       },
     },
   });

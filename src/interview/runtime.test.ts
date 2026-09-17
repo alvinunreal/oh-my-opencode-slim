@@ -4,6 +4,7 @@ import { createV1InterviewSessionRuntime } from './runtime';
 describe('v1 interview session runtime', () => {
   test('keeps SDK calls nested under client.session', async () => {
     const session = {
+      get: mock(async () => ({ data: { id: 'ses_1' } })),
       messages: mock(async () => ({ data: [{ info: { role: 'user' } }] })),
       prompt: mock(async () => ({})),
       promptAsync: mock(async () => ({})),
@@ -25,9 +26,16 @@ describe('v1 interview session runtime', () => {
     await runtime.rename('ses_1', 'Interview: app');
 
     expect(session.messages).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+    // A usable parentless session record permits the explicit orchestrator
+    // fallback; the field is never omitted (probe A2: an agent-less body
+    // permanently re-homes the session to `build`).
     expect(session.prompt).toHaveBeenCalledWith({
       path: { id: 'ses_1' },
-      body: { noReply: true, parts: [{ type: 'text', text: 'ready' }] },
+      body: {
+        noReply: true,
+        parts: [{ type: 'text', text: 'ready' }],
+        agent: 'orchestrator',
+      },
     });
     expect(session.promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -42,5 +50,125 @@ describe('v1 interview session runtime', () => {
       path: { id: 'ses_1' },
       body: { title: 'Interview: app' },
     });
+  });
+
+  test('notify preserves the agent the session is already running under', async () => {
+    const session = {
+      get: mock(async () => ({ data: { id: 'ses_1', agent: 'plan' } })),
+      messages: mock(async () => ({ data: [] })),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_1', 'ready');
+
+    expect(session.prompt).toHaveBeenCalledWith({
+      path: { id: 'ses_1' },
+      body: {
+        noReply: true,
+        parts: [{ type: 'text', text: 'ready' }],
+        agent: 'plan',
+      },
+    });
+  });
+
+  test('notify derives the agent from the newest user message, not a compaction turn', async () => {
+    const session = {
+      get: mock(async () => ({ data: { id: 'ses_1' } })),
+      messages: mock(async () => ({
+        data: [
+          { info: { role: 'user', agent: 'orchestrator' } },
+          { info: { role: 'assistant', agent: 'compaction' } },
+        ],
+      })),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_1', 'ready');
+
+    // The compaction assistant turn must not become the resolved agent.
+    expect(session.prompt).toHaveBeenCalledWith({
+      path: { id: 'ses_1' },
+      body: {
+        noReply: true,
+        parts: [{ type: 'text', text: 'ready' }],
+        agent: 'orchestrator',
+      },
+    });
+  });
+
+  test('notify skips a child session when its agent cannot be resolved', async () => {
+    const session = {
+      get: mock(async () => ({ data: { id: 'ses_2', parentID: 'ses_1' } })),
+      messages: mock(async () => ({ data: [] })),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_2', 'ready');
+
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  test('notify suppresses the prompt when agent probes fail', async () => {
+    const session = {
+      get: mock(async () => {
+        throw new Error('session probe failed');
+      }),
+      messages: mock(async () => {
+        throw new Error('message probe failed');
+      }),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_1', 'ready');
+
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  test('notify suppresses failed SDK envelopes instead of treating them as raw sessions', async () => {
+    const session = {
+      get: mock(async () => ({
+        data: undefined,
+        error: { message: 'session lookup failed' },
+      })),
+      messages: mock(async () => ({
+        data: undefined,
+        error: { message: 'message lookup failed' },
+      })),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_child_like', 'ready');
+
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  test('notify suppresses an unverified child-like target', async () => {
+    const session = {
+      get: mock(async () => ({ data: { parentID: undefined } })),
+      messages: mock(async () => ({ data: [] })),
+      prompt: mock(async () => ({})),
+    };
+    const runtime = createV1InterviewSessionRuntime({
+      client: { session },
+    } as never);
+
+    await runtime.notify('ses_child_like', 'ready');
+
+    expect(session.prompt).not.toHaveBeenCalled();
   });
 });

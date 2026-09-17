@@ -166,10 +166,11 @@ function readTuiSnapshotStrict(statePath: string): TuiSnapshot | null {
 }
 
 // Stat-based read cache for the polling TUI refresh (1/s per window).
-// Writers publish via tmp+rename, so a changed write always has a new
-// dev/ino — mtimeMs+size alone would also be sufficient, but inode
-// identity rules out same-mtime rewrites. Cache misses fall through to
-// a normal read; any stat/read failure bypasses the cache entirely.
+// Writers publish via tmp+rename, so a changed write normally has a new
+// dev/ino. Include ctimeMs as well because an external in-place rewrite can
+// preserve the inode, size, and mtime while still changing the contents.
+// Cache misses fall through to a normal read; any stat/read failure bypasses
+// the cache entirely.
 // Bounded LRU: a long-lived daemon polling many projects must not
 // retain a snapshot per visited path.
 const ASYNC_SNAPSHOT_CACHE_MAX = 8;
@@ -179,7 +180,7 @@ const asyncSnapshotCache = new Map<
 >();
 
 function snapshotStatKey(stat: fs.Stats): string {
-  return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+  return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
 }
 
 function rememberAsyncSnapshot(

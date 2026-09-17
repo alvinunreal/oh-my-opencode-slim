@@ -24,6 +24,10 @@ import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
 import { getClient } from '../../utils/opencode-client';
 import {
+  normalizeAgentHint,
+  resolveSessionAgent,
+} from '../../utils/prompt-agent';
+import {
   abortSessionWithTimeout,
   parseModelReference,
 } from '../../utils/session';
@@ -406,7 +410,7 @@ export class ForegroundFallbackManager {
   }
 
   registerSessionAgent(sessionID: string, agentName: string): void {
-    const normalizedAgentName = agentName.trim();
+    const normalizedAgentName = normalizeAgentHint(agentName);
     if (
       !sessionID ||
       !normalizedAgentName ||
@@ -415,6 +419,25 @@ export class ForegroundFallbackManager {
       return;
     }
     this.sessionAgent.set(sessionID, normalizedAgentName);
+  }
+
+  /**
+   * Resolve only the identity needed by the task-session manager before it
+   * records a session error. Recovery itself must happen afterwards: running
+   * the replay first lets its synchronous busy event re-enter the plugin while
+   * the original error is still waiting to be terminalized.
+   */
+  async preflightEvent(rawEvent: unknown): Promise<void> {
+    if (!this.enabled) return;
+    const event = rawEvent as { type?: string; properties?: unknown };
+    if (event.type !== 'session.error') return;
+    const props = event.properties as
+      | { sessionID?: string; info?: { id?: string }; error?: unknown }
+      | undefined;
+    const sessionID = props ? eventSessionID(props) : undefined;
+    if (sessionID && props?.error && isFailoverError(props.error)) {
+      await this.ensureSessionAgent(sessionID);
+    }
   }
 
   constructor(
@@ -510,8 +533,11 @@ export class ForegroundFallbackManager {
         if (!info) break;
         const sessionID = info.sessionID as string | undefined;
         if (!sessionID) break;
-        // Capture agent name when available (OpenCode includes it on subagent messages)
-        if (typeof info.agent === 'string') {
+        // User messages identify the agent addressed by the turn. Assistant,
+        // internal, and system messages identify whichever core agent served
+        // the turn (compaction/summary/title can poison a child), so they are
+        // never accepted as first-write identity hints.
+        if (info.role === 'user' && typeof info.agent === 'string') {
           this.registerSessionAgent(sessionID, info.agent);
         }
         // Track the model currently serving this session
@@ -726,6 +752,7 @@ export class ForegroundFallbackManager {
   private async tryFallback(sessionID: string, error?: unknown): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    if (!(await this.ensureSessionAgent(sessionID))) return;
     // No chain -> no fallback. Skip before dedup so we don't stamp lastTrigger
     // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
     if (!this.hasFallbackChain(sessionID)) return;
@@ -778,6 +805,7 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     if (!sessionID) return;
     if (this.inProgress.has(sessionID)) return;
+    if (!(await this.ensureSessionAgent(sessionID))) return;
     if (!this.hasFallbackChain(sessionID)) return;
     if (this.isDeduped(sessionID)) return;
 
@@ -817,7 +845,16 @@ export class ForegroundFallbackManager {
       const observedModel = this.sessionModel.get(sessionID);
       let currentModel = observedModel;
       const agentName = this.sessionAgent.get(sessionID);
-      const chain = this.resolveChain(agentName, currentModel);
+      if (!agentName) {
+        log(
+          '[foreground-fallback] agent identity unavailable, skipping fallback',
+          {
+            sessionID,
+          },
+        );
+        return;
+      }
+      const chain = this.resolveChain(agentName);
       // Callers pre-check via hasFallbackChain; keep as defensive guard only.
       if (!chain.length) return;
 
@@ -961,6 +998,9 @@ export class ForegroundFallbackManager {
 
       const result = await session.messages({
         path: { id: sessionID },
+        ...(this.input.directory
+          ? { query: { directory: this.input.directory } }
+          : {}),
       });
       // result.data may contain partial/streaming messages whose `info` is
       // undefined at runtime (OpenCode violates its own declared type), and
@@ -1008,6 +1048,9 @@ export class ForegroundFallbackManager {
         'v2';
       const promptBody = {
         path: { id: sessionID },
+        ...(this.input.directory
+          ? { query: { directory: this.input.directory } }
+          : {}),
         body: {
           parts: [
             ...replayParts,
@@ -1016,7 +1059,7 @@ export class ForegroundFallbackManager {
             ),
           ],
           model: ref,
-          ...(agentName ? { agent: agentName } : {}),
+          agent: agentName,
         },
         ...(isV2Host ? { modelSwitch: 'required' as const } : {}),
       };
@@ -1188,14 +1231,30 @@ export class ForegroundFallbackManager {
   // Chain resolution
   // ---------------------------------------------------------------------------
 
-  /** True when resolveChain yields at least one model for this session. */
-  private hasFallbackChain(sessionID: string): boolean {
-    return (
-      this.resolveChain(
-        this.sessionAgent.get(sessionID),
-        this.sessionModel.get(sessionID),
-      ).length > 0
+  private async ensureSessionAgent(sessionID: string): Promise<boolean> {
+    const agentName = this.sessionAgent.get(sessionID);
+    if (agentName) return true;
+
+    const resolvedAgent = await resolveSessionAgent(
+      getClient(this.input),
+      sessionID,
+      { directory: this.input.directory },
     );
+    if (resolvedAgent) {
+      this.registerSessionAgent(sessionID, resolvedAgent);
+      return true;
+    }
+
+    log('[foreground-fallback] agent identity unavailable, skipping fallback', {
+      sessionID,
+    });
+    return false;
+  }
+
+  /** True when the resolved agent has at least one configured model. */
+  private hasFallbackChain(sessionID: string): boolean {
+    const agentName = this.sessionAgent.get(sessionID);
+    return agentName !== undefined && this.resolveChain(agentName).length > 0;
   }
 
   /**
@@ -1205,44 +1264,13 @@ export class ForegroundFallbackManager {
    * 1. Agent name known AND has a configured chain → return it directly
    * 2. Agent name known but NO chain → return [] (no fallback; never
    *    bleed into other agents' chains)
-   * 3. Agent name unknown, current model known → search all chains for
-   *    the model to infer which chain to use
-   * 4. Nothing matches → flatten all chains as a last resort (only
-   *    reached when both agent name and current model are unavailable)
+   * 3. Agent name unknown → return [] rather than guessing the owning agent
    */
-  private resolveChain(
-    agentName: string | undefined,
-    currentModel: string | undefined,
-  ): string[] {
-    if (agentName) {
-      const chain = this.chains[agentName];
-      if (chain) return chain;
-      // Any known agent without a configured chain: no fallback.
-      // Don't bleed into other agents' chains via model-matching —
-      // that switches the session to the wrong agent (e.g. Build
-      // inherits Orchestrator's chain and becomes Orchestrator).
-      return [];
-    }
-
-    // Agent unknown: try to infer from the current model.
-    if (currentModel) {
-      for (const chain of Object.values(this.chains)) {
-        if (chain.includes(currentModel)) return chain;
-      }
-    }
-
-    // Last resort: merged list across all agents preserving insertion order.
-    // Only reached when both agent name and current model are unavailable.
-    const all: string[] = [];
-    const seen = new Set<string>();
-    for (const chain of Object.values(this.chains)) {
-      for (const m of chain) {
-        if (!seen.has(m)) {
-          seen.add(m);
-          all.push(m);
-        }
-      }
-    }
-    return all;
+  private resolveChain(agentName: string | undefined): string[] {
+    if (!agentName) return [];
+    // Any known agent without a configured chain: no fallback.
+    // Don't bleed into other agents' chains — that switches the session to
+    // the wrong agent (e.g. Build inherits Orchestrator's chain).
+    return this.chains[agentName] ?? [];
   }
 }

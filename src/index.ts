@@ -71,6 +71,7 @@ import {
   createWebfetchTool,
 } from './tools';
 import { pickAgentModelRef } from './tools/smartfetch/secondary-model';
+import type { SmartfetchOptions } from './tools/smartfetch/types';
 import {
   applyActivityEvent,
   resolveEventSessionID,
@@ -100,6 +101,7 @@ import { isPluginDisabledByEnv } from './utils/env';
 import { isInternalInitiatorPart } from './utils/internal-initiator';
 import { probeJSDOM } from './utils/jsdom';
 import { initLogger, log } from './utils/logger';
+import { resolveHelperSessionAgent } from './utils/prompt-agent';
 import { SessionMetadataStore } from './utils/session-metadata';
 import {
   createSessionSelectionReader,
@@ -410,6 +412,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
   >;
+  let smartfetchOptions: SmartfetchOptions;
 
   // Counters for post-init health check (set inside try, checked outside)
   let toolCount = 0;
@@ -514,13 +517,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       return models.length > 0 ? models : undefined;
     })();
-    webfetch = createWebfetchTool(ctx, {
+    smartfetchOptions = {
       binaryDir: undefined,
       webfetchModels,
       explorerModel: pickAgentModelRef(runtime.agent('explorer')?.model),
       librarianModel: pickAgentModelRef(runtime.agent('librarian')?.model),
       smallModelRef: () => runtime.smallModel(),
-    });
+      helperAgent: resolveHelperSessionAgent(
+        agentDefs.map((agent) => agent.name),
+      ),
+    };
+    webfetch = createWebfetchTool(ctx, smartfetchOptions);
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
       maxContextLines: runtime.backgroundJobs.maxContextLines,
@@ -1248,6 +1255,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // captured only after every host/plugin merge and the final model
       // inheritance, array-primary, preset, and orchestrator-model passes.
       finalHostAgentConfig = configAgent;
+      // SmartFetch is constructed before the host config hook runs. Refresh
+      // its shared options from the final in-memory registrations so a host
+      // `disable: true` entry cannot leave a disabled helper selected.
+      smartfetchOptions.helperAgent = resolveHelperSessionAgent(
+        agentDefs.map((agent) => agent.name),
+        finalHostAgentConfig,
+      );
 
       // Merge MCP configs
       const configMcp = opencodeConfig.mcp as
@@ -1474,6 +1488,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
+      // Resolve only the identity needed by task-session error bookkeeping.
+      // The actual replay runs after the task manager: promptAsync can emit a
+      // synchronous busy event, and running it first would re-enter the hook
+      // while the original error's terminal/deferred decision is unsettled.
+      await foregroundFallback.preflightEvent(input.event);
+
       await handleTaskSessionEvent(
         input as {
           event: {
@@ -1497,6 +1517,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           await multiplexerSessionManager.cleanupOnInstanceDisposed();
         },
       );
+      await foregroundFallback.handleEvent(input.event);
       if (event.type === 'server.instance.disposed') {
         clearTuiActivities();
       }
@@ -1513,9 +1534,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           };
         },
       );
-
-      // Runtime model fallback for foreground agents (rate-limit detection)
-      await foregroundFallback.handleEvent(input.event);
 
       // Handle auto-update checking
       await autoUpdateChecker.event(input);
@@ -1826,10 +1844,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // Dedup by the EFFECTIVE prompt, not by default-prompt markers:
         // a custom replacement without `<Role>` previously slipped past
         // the marker check and was appended twice (P + host + P).
-        const alreadyInjected =
-          !!orchestratorPrompt &&
-          output.system.some(
-            (s) => typeof s === 'string' && s.includes(orchestratorPrompt),
+        const configuredPrompt = runtime.agent('orchestrator')?.prompt;
+        const alreadyInjected = [orchestratorPrompt, configuredPrompt]
+          .filter((prompt): prompt is string => Boolean(prompt))
+          .some((prompt) =>
+            output.system.some(
+              (s) => typeof s === 'string' && s.includes(prompt),
+            ),
           );
         if (!alreadyInjected && orchestratorPrompt) {
           // Place the orchestrator prompt after AGENTS.md so the user's

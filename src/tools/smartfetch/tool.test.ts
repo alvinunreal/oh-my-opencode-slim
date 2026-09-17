@@ -151,6 +151,7 @@ describe('smartfetch/tool', () => {
 
     const webfetch = createWebfetchTool({ client: mockV2Client } as any, {
       webfetchModels: [{ id: 'provider/small-model' }],
+      helperAgent: 'explorer',
     });
     const ctx = createExecutionContext();
     ctx.sessionID = 'main-session-id';

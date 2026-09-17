@@ -29,6 +29,11 @@ export function createDashboardManager(
     sessionClient?: DashboardConfig['sessionClient'];
     /** Already-listening server for the dashboard role to adopt. */
     server?: Server;
+    /** Timer seams for isolating the session fallback poller. */
+    timers?: {
+      setInterval: typeof setInterval;
+      clearInterval: typeof clearInterval;
+    };
   } = {},
 ): {
   service: ReturnType<typeof createInterviewService>;
@@ -216,14 +221,16 @@ export function createDashboardManager(
   // ── Timer-based fallback for nudge/answer polling ─────────────
   const FALLBACK_POLL_INTERVAL = 10_000;
   let fallbackTimer: ReturnType<typeof setInterval> | null = null;
+  const setFallbackInterval = options.timers?.setInterval ?? setInterval;
+  const clearFallbackInterval = options.timers?.clearInterval ?? clearInterval;
   const stopFallbackTimer = () => {
     if (!fallbackTimer) return;
-    clearInterval(fallbackTimer);
+    clearFallbackInterval(fallbackTimer);
     fallbackTimer = null;
   };
   const startFallbackTimer = () => {
     if (fallbackTimer) return;
-    fallbackTimer = setInterval(() => {
+    fallbackTimer = setFallbackInterval(() => {
       if (disposed || isDashboard || !dashboardBaseUrl) return;
       for (const sessionID of registeredSessions) {
         const interviewId = service.getActiveInterviewId(sessionID);
