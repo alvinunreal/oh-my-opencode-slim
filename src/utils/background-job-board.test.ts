@@ -2173,6 +2173,35 @@ describe('BackgroundJobBoard', () => {
       });
     });
 
+    test('excludes unattributed placeholders even after acknowledgement', () => {
+      const board = new BackgroundJobBoard({ maxReusablePerAgent: 4 });
+      board.registerLaunch({
+        taskID: 'ses_placeholder',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+        provisional: true,
+        now: 100,
+      });
+      board.updateStatus({
+        taskID: 'ses_placeholder',
+        state: 'completed',
+        now: 200,
+      });
+      board.markReconciled('ses_placeholder', 300);
+
+      // Same exclusion as the prompt's reusable section: the sidebar dot
+      // must not advertise a placeholder nobody attributed.
+      expect(board.latestReconciledByAgent('parent-1').has('oracle')).toBe(
+        false,
+      );
+
+      // An attributed sibling still selects normally.
+      seedReconciled(board, 'ses_attributed', { launchAt: 400 });
+      expect(
+        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
+      ).toBe('ses_attributed');
+    });
+
     test('includes a finished session before the parent acknowledges it', () => {
       const board = new BackgroundJobBoard();
       board.registerLaunch({
