@@ -493,6 +493,16 @@ export async function handleToolExecuteAfter(
 
   try {
     if (typeof output.output !== 'string') return;
+    const backgroundMeta = output.metadata as
+      | { background?: unknown }
+      | undefined;
+    if (backgroundMeta?.background === true && !pending.background) {
+      // Foreground-fallback promoted this waiter to background before its
+      // fallback abort: the tool resolved via backgroundResult, so the
+      // pending (registered as a foreground call) must follow suit or the
+      // board record and the background handoff would miss the child.
+      pending.background = true;
+    }
     if (pending.earlyRegistrationRejected) {
       log(
         '[task-session-manager] task output previously fenced; re-evaluating registration against board state',

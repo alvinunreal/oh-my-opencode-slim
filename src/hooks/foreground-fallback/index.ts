@@ -273,6 +273,10 @@ export function isInlineFailoverError(error: unknown): boolean {
 /** Prevent re-triggering within this window for the same session. */
 const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
+/** Ceiling on the waiter-promotion round-trip: a hung transport must not
+ *  stall the fallback abort below, or the broken session stays busy and
+ *  the fallback never arrives — a variant of the bug being fixed. */
+const PROMOTE_WAITER_TIMEOUT_MS = 2_000;
 const FALLBACK_IN_PROGRESS_KEY = Symbol.for(
   'oh-my-opencode-slim.foreground-fallback.in-progress',
 );
@@ -310,6 +314,11 @@ export class ForegroundFallbackManager {
   private readonly sessionModel = new Map<string, string>();
   /** sessionID → agent name (populated from message.updated info.agent field) */
   private readonly sessionAgent = new Map<string, string>();
+  /** child sessionID → parent sessionID (from session.created info).
+   *  Lets the fallback abort path promote a foreground task() waiter to
+   *  background first, so the waiting tool resolves via backgroundResult
+   *  instead of "Task cancelled" while the child continues on fallback. */
+  private readonly sessionParent = new Map<string, string>();
   /** sessionID → set of models already attempted this session */
   private readonly sessionTried = new Map<string, Set<string>>();
   /** Process-local sessions with an active fallback switch in flight. */
@@ -672,6 +681,18 @@ export class ForegroundFallbackManager {
         break;
       }
 
+      case 'session.created': {
+        const info = (
+          event.properties as
+            | { info?: { id?: string; parentID?: string } }
+            | undefined
+        )?.info;
+        if (info?.id && info.parentID) {
+          this.sessionParent.set(info.id, info.parentID);
+        }
+        break;
+      }
+
       case 'subagent.session.created': {
         // Some builds of OpenCode include the agent name here.
         const props = event.properties as
@@ -692,6 +713,7 @@ export class ForegroundFallbackManager {
           log('[foreground-fallback] session.deleted observed', {
             sessionID: id,
           });
+          this.sessionParent.delete(id);
         }
         break;
       }
@@ -824,6 +846,58 @@ export class ForegroundFallbackManager {
    * without a replacement model only races owners that manage their own
    * lifecycle (e.g. CouncilManager for councillor) and produces noise.
    */
+  /** Promote a foreground task() waiter to background BEFORE the abort
+   *  below settles the child's job as "cancelled": the host resolves the
+   *  parent's wait via backgroundResult, so the waiting tool returns
+   *  "Background task started", its after-hook attributes the child, and
+   *  the fallback replay runs on a tracked session instead of orphaning
+   *  a headless run. Fail-soft by design: unknown host endpoint, missing
+   *  experimental flag, or transport failure degrade to the previous
+   *  behavior ("Task cancelled" + untracked replay). Order-critical:
+   *  must precede the abort. */
+  private async promoteForegroundWaiter(sessionID: string): Promise<void> {
+    const parentSessionID = this.sessionParent.get(sessionID);
+    if (!parentSessionID) return;
+    try {
+      const client = getClient(this.input) as unknown as {
+        _client?: {
+          post?: (args: {
+            url: string;
+            path: Record<string, string>;
+          }) => Promise<unknown>;
+        };
+      };
+      const post = client._client?.post;
+      if (typeof post !== 'function') return;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          post.call(client._client, {
+            url: '/experimental/session/{sessionID}/background',
+            path: { sessionID: parentSessionID },
+          }),
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error('foreground waiter promotion timed out')),
+              PROMOTE_WAITER_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+      log(
+        '[foreground-fallback] promoted foreground task waiter to background',
+        { sessionID, parentSessionID },
+      );
+    } catch {
+      log(
+        '[foreground-fallback] foreground waiter promotion failed; continuing fallback',
+        { sessionID },
+      );
+    }
+  }
+
   private async tryFallbackWithAbort(
     sessionID: string,
     error?: unknown,
@@ -837,6 +911,7 @@ export class ForegroundFallbackManager {
 
     this.inProgress.add(sessionID);
     try {
+      await this.promoteForegroundWaiter(sessionID);
       await abortSessionWithTimeout(getClient(this.input), sessionID);
       // The abort suspended across a dispose(): its outcome no longer
       // matters to the reloaded generation — do not continue into
@@ -1148,6 +1223,7 @@ export class ForegroundFallbackManager {
         log('[foreground-fallback] promptAsync on busy session, aborting', {
           sessionID,
         });
+        await this.promoteForegroundWaiter(sessionID);
         try {
           await abortSessionWithTimeout(getClient(this.input), sessionID);
         } catch (abortErr) {
