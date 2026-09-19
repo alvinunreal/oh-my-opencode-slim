@@ -8,12 +8,13 @@
  * newline-delimited JSON; `pane split` returns a `pane_info` result whose
  * `pane.pane_id` field is the new pane's ID.
  *
- * Environment detection: Herdr injects `HERDR_ENV=1` and `HERDR_PANE_ID`
- * into every pane it manages.
+ * Environment detection: Herdr injects `HERDR_PANE_ID` into every pane it
+ * manages; it is the client's anchor and is required for any pane command.
  */
 
 import type { MultiplexerLayout } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
+import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import {
   buildOpencodeAttachCommand,
@@ -38,7 +39,6 @@ export class HerdrMultiplexer implements Multiplexer {
 
   private binaryPath: string | null = null;
   private hasChecked = false;
-  private readonly parentPaneId = process.env.HERDR_PANE_ID;
   private layout: MultiplexerLayout;
   private paneDirection: HerdrPaneDirection;
   private agentAreaPaneId: string | null = null;
@@ -68,7 +68,7 @@ export class HerdrMultiplexer implements Multiplexer {
   }
 
   isInsideSession(): boolean {
-    return !!(process.env.HERDR_ENV || process.env.HERDR_PANE_ID);
+    return !!process.env.HERDR_PANE_ID;
   }
 
   async spawnPane(
@@ -96,10 +96,18 @@ export class HerdrMultiplexer implements Multiplexer {
     serverUrl: string,
     directory: string,
   ): Promise<PaneResult> {
+    // The parent pane is required: without HERDR_PANE_ID the anchor is
+    // unknowable, so no herdr command may be issued (no `--current` fallback).
+    const parentPaneId = process.env.HERDR_PANE_ID?.trim();
+    if (!parentPaneId) {
+      log('[herdr] spawnPane: HERDR_PANE_ID is not set; cannot resolve target');
+      return { success: false, error: 'not_found' };
+    }
+
     const herdr = await this.getBinary();
     if (!herdr) {
       log('[herdr] spawnPane: herdr binary not found');
-      return { success: false };
+      return { success: false, error: 'unavailable' };
     }
 
     try {
@@ -112,7 +120,7 @@ export class HerdrMultiplexer implements Multiplexer {
 
       if (this.layout === 'main-vertical' && this.agentAreaPaneId) {
         const result = await this.runSplit(
-          [this.agentAreaPaneId],
+          this.agentAreaPaneId,
           'down',
           attachDir,
         );
@@ -127,7 +135,7 @@ export class HerdrMultiplexer implements Multiplexer {
 
       if (!this.agentAreaPaneId) {
         const result = await this.runSplit(
-          this.targetPaneArg(),
+          parentPaneId,
           this.paneDirection,
           attachDir,
         );
@@ -139,14 +147,16 @@ export class HerdrMultiplexer implements Multiplexer {
         log('[herdr] spawnPane: could not parse pane_id from output', {
           stdout: lastRawOutput,
         });
-        return { success: false };
+        return { success: false, error: 'hard' };
       }
 
-      // 2. Rename the pane for visibility
-      await crossSpawn(
-        [herdr, 'pane', 'rename', paneId, description.slice(0, 30)],
-        { stdout: 'ignore', stderr: 'ignore' },
-      ).exited;
+      // 2. Rename the pane for visibility. `pane rename` writes the `label`
+      // field (evidence 1.4); the description is the FR-8 metadata and must
+      // survive intact, so it is never truncated.
+      await crossSpawn([herdr, 'pane', 'rename', paneId, description], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+      }).exited;
 
       // 3. Run opencode attach in the new pane
       const opencodeCmd = buildOpencodeAttachCommand(
@@ -178,7 +188,7 @@ export class HerdrMultiplexer implements Multiplexer {
             error: String(closeErr),
           });
         }
-        return { success: false };
+        return { success: false, error: 'hard' };
       }
 
       // 4. Track agent area pane ID only after successful attach
@@ -190,7 +200,58 @@ export class HerdrMultiplexer implements Multiplexer {
       return { success: true, paneId };
     } catch (err) {
       log('[herdr] spawnPane: exception', { error: String(err) });
-      return { success: false };
+      return { success: false, error: 'hard' };
+    }
+  }
+
+  /**
+   * FR-8 sweep capability: every pane herdr knows about, with its `label`
+   * (the field `pane rename` writes). Titles that are not plugin metadata are
+   * ignored by the sweep.
+   */
+  async listPanesWithTitles(): Promise<
+    Array<{ paneId: string; title: string }>
+  > {
+    const herdr = await this.getBinary();
+    if (!herdr) return [];
+
+    try {
+      const proc = crossSpawn([herdr, 'pane', 'list'], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [exitCode, stdout] = await Promise.all([
+        proc.exited,
+        proc.stdout(),
+      ]);
+      if (exitCode !== 0) return [];
+
+      const panes: Array<{ paneId: string; title: string }> = [];
+      for (const line of stdout.split('\n')) {
+        const candidate = line.trim();
+        if (!candidate) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(candidate);
+        } catch {
+          continue; // progress/diagnostic line
+        }
+        const result = isRecord(parsed) ? parsed.result : undefined;
+        const entries =
+          isRecord(result) && Array.isArray(result.panes) ? result.panes : [];
+        for (const entry of entries) {
+          if (!isRecord(entry)) continue;
+          const paneId = entry.pane_id;
+          if (typeof paneId !== 'string' || paneId.length === 0) continue;
+          panes.push({
+            paneId,
+            title: typeof entry.label === 'string' ? entry.label : '',
+          });
+        }
+      }
+      return panes;
+    } catch {
+      return [];
     }
   }
 
@@ -220,7 +281,7 @@ export class HerdrMultiplexer implements Multiplexer {
   }
 
   private async runSplit(
-    target: string[],
+    target: string,
     direction: HerdrPaneDirection,
     directory: string,
   ): Promise<{ paneId: string | null; rawOutput: string }> {
@@ -231,7 +292,7 @@ export class HerdrMultiplexer implements Multiplexer {
       herdr,
       'pane',
       'split',
-      ...target,
+      target,
       '--direction',
       direction,
       '--cwd',
@@ -259,10 +320,6 @@ export class HerdrMultiplexer implements Multiplexer {
     }
 
     return { paneId: parsePaneId(splitStdout), rawOutput: splitStdout.trim() };
-  }
-
-  private targetPaneArg(): string[] {
-    return this.parentPaneId ? [this.parentPaneId] : ['--current'];
   }
 
   private async getBinary(): Promise<string | null> {

@@ -37,15 +37,16 @@ import {
   resolvePreset,
 } from './loader';
 import { discoverProjectLocalSkillNames } from './project-skills';
-import type {
-  AcpAgentsConfig,
-  AgentOverrideConfig,
-  BackgroundJobsConfig,
-  CompanionConfig,
-  FailoverConfig,
-  MultiplexerConfig,
-  ResolvedPluginConfig,
-  WebfetchConfig,
+import {
+  type AcpAgentsConfig,
+  type AgentOverrideConfig,
+  type BackgroundJobsConfig,
+  type CompanionConfig,
+  type FailoverConfig,
+  MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT,
+  type MultiplexerConfig,
+  type ResolvedPluginConfig,
+  type WebfetchConfig,
 } from './schema';
 import { getCustomAgentNames, normalizeAgentSkillDirectives } from './utils';
 
@@ -74,8 +75,7 @@ const registry = new Map<string, RuntimeConfig>();
 const DEFAULT_MULTIPLEXER: MultiplexerConfig = {
   type: 'none',
   layout: 'main-vertical',
-  main_pane_size: 60,
-  zellij_pane_mode: 'agent-tab',
+  main_pane_size: MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT,
 };
 
 const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {

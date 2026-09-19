@@ -1,48 +1,50 @@
 /**
  * Zellij multiplexer implementation
  *
- * Creates panes for sub-agent sessions in Zellij.
+ * Creates panes for sub-agent sessions in Zellij, from inside the client
+ * process that displays the parent OpenCode session.
  *
- * Requires Zellij >= 0.44.1: `isAvailable()` parses `zellij --version` and
- * rejects older releases whose CLI lacks the stable pane-id targeting used
- * here (`rename-pane <name> -p <paneId>`, `write-chars <chars> -p <paneId>`,
- * `list-panes --json --tab --all` with stable `tab_id`, and
- * `new-pane --tab-id` for cross-tab targeting; `--tab-id` only exists in
- * 0.44.1+). No `focus-pane` or `current-tab-info` calls are made — the former
- * is invalid CLI syntax and the latter is client-bound and fails from pane
- * child processes.
+ * Anchoring (same tab, single behavior):
+ * - Detection is `ZELLIJ_PANE_ID` (the parent pane the client runs in).
+ * - The parent tab is resolved from that pane id via `list-panes --json`
+ *   (`current-tab-info` is deliberately not used: it is client-bound and
+ *   fails from pane child processes).
+ * - The child pane is created with `new-pane --tab-id <parentTab>
+ *   --direction <dir>`, so it always splits the parent pane's tab. The
+ *   adapter never creates a dedicated tab, never switches tabs, and never
+ *   saves/restores focus: child panes live in the same tab as the parent
+ *   pane, unconditionally.
  *
- * The default mode creates a dedicated "opencode-agents" tab:
- * - First sub-agent uses the default pane from new-tab
- * - Subsequent sub-agents create new panes
- * - User stays in their original tab (resolved from the parent pane's
- *   ZELLIJ_PANE_ID via list-panes)
+ * Multi-instance hardening: every zellij invocation is explicitly addressed
+ * with `--session <ZELLIJ_SESSION_NAME>` (placed before `action`), so a
+ * machine running several zellij sessions cannot route commands to the wrong
+ * one. When the client environment cannot resolve the anchor
+ * (`ZELLIJ_PANE_ID` or `ZELLIJ_SESSION_NAME` missing, or the parent tab
+ * lookup failing), no zellij command is issued and the spawn fails with
+ * `not_found`.
  *
- * The optional "current-tab" mode creates panes in the tab containing the
- * parent OpenCode pane instead.
+ * Version gate: `isAvailable()` parses `zellij --version` and rejects
+ * releases older than 0.44.1, whose CLI lacks `new-pane --tab-id` — still
+ * required to anchor the create to the parent pane's tab — and whose
+ * `list-panes --json --tab --all` output does not carry the stable `tab_id`
+ * the anchor lookup depends on.
  */
 
-import type { MultiplexerLayout, ZellijPaneMode } from '../../config/schema';
+import type { MultiplexerLayout } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
 import {
   buildOpencodeAttachCommand,
   findBinary,
   gracefulClosePane,
-  quoteShellArg,
 } from '../shared';
 import type { Multiplexer, PaneResult } from '../types';
-
-interface ZellijTabInfo {
-  position: number;
-  name: string;
-  active: boolean;
-  tab_id: number;
-}
 
 interface ZellijPaneInfo {
   id: number;
   is_plugin: boolean;
   tab_id?: number;
+  /** Pane title (`--all` field); carries the FR-8 metadata when ours. */
+  title?: string;
 }
 
 type ZellijPaneDirection = 'right' | 'down';
@@ -52,26 +54,13 @@ export class ZellijMultiplexer implements Multiplexer {
 
   private binaryPath: string | null = null;
   private availabilityPromise: Promise<boolean> | null = null;
-  private agentTabId: string | null = null;
-  private firstPaneId: string | null = null;
-  private firstPaneUsed = false;
   private parentTabId: string | null = null;
   private parentTabResolved = false;
   private readonly parentPaneId = process.env.ZELLIJ_PANE_ID;
+  private readonly sessionName = process.env.ZELLIJ_SESSION_NAME;
   private readonly paneDirection: ZellijPaneDirection | null;
-  /**
-   * Serializes pane-creation sequences that may switch Zellij tabs or move
-   * client focus (new-tab, go-to-tab-by-id, new-pane). Concurrent spawns are
-   * chained so a cross-tab create cannot race another create's focus restore.
-   * Read-only queries (list-panes/list-tabs) never go through this queue.
-   */
-  private paneOpsChain: Promise<void> = Promise.resolve();
 
-  constructor(
-    layout: MultiplexerLayout = 'main-vertical',
-    mainPaneSize = 60,
-    private readonly paneMode: ZellijPaneMode = 'agent-tab',
-  ) {
+  constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
     // Note: Zellij does not support exact main pane sizing like tmux.
     // Layout config is mapped to pane creation directions where possible.
     void mainPaneSize;
@@ -107,8 +96,10 @@ export class ZellijMultiplexer implements Multiplexer {
 
   /**
    * Parse and gate on the installed Zellij version. The adapter relies on
-   * stable pane-id targeting that only exists in Zellij >= 0.44.1; older
-   * releases (or unparsable version output) make the backend unavailable.
+   * `new-pane --tab-id` for same-tab anchoring and on the stable `tab_id`
+   * field of `list-panes --json --tab --all`; both only exist in Zellij
+   * >= 0.44.1. Older releases (or unparsable version output) make the backend
+   * unavailable.
    */
   private async hasSupportedVersion(path: string): Promise<boolean> {
     const version = await this.readVersion(path);
@@ -129,7 +120,7 @@ export class ZellijMultiplexer implements Multiplexer {
   }
 
   isInsideSession(): boolean {
-    return !!process.env.ZELLIJ;
+    return !!process.env.ZELLIJ_PANE_ID;
   }
 
   async spawnPane(
@@ -138,70 +129,18 @@ export class ZellijMultiplexer implements Multiplexer {
     serverUrl: string,
     directory: string,
   ): Promise<PaneResult> {
-    // The tab/focus-mutating creation sequence is queued so concurrent
-    // spawnPane calls cannot interleave (e.g. a cross-tab new-pane racing
-    // another create's focus restore). Binary discovery and availability
-    // probing happen inside the unlocked body too, which is fine: they are
-    // cached after the first call.
-    const run = this.paneOpsChain.then(() =>
-      this.spawnPaneUnlocked(sessionId, description, serverUrl, directory),
-    );
-    this.paneOpsChain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
+    // Fail closed without issuing any zellij command when the client
+    // environment cannot resolve the anchor: the session to address or the
+    // parent pane whose tab the child pane must split.
+    if (!this.sessionName || !this.parentPaneId) {
+      return { success: false, error: 'not_found' };
+    }
 
-  private async spawnPaneUnlocked(
-    sessionId: string,
-    description: string,
-    serverUrl: string,
-    directory: string,
-  ): Promise<PaneResult> {
     const zellij = await this.getBinary();
-    if (!zellij) return { success: false };
+    if (!zellij) return { success: false, error: 'unavailable' };
 
     try {
-      if (this.paneMode === 'current-tab') {
-        return await this.createPaneInCurrentTab(
-          zellij,
-          sessionId,
-          serverUrl,
-          directory,
-          description,
-        );
-      }
-
-      // Ensure agent tab exists on first call
-      if (!this.agentTabId) {
-        const result = await this.ensureAgentTab(zellij);
-        if (!result) return { success: false };
-        this.agentTabId = result.tabId;
-        this.firstPaneId = result.firstPaneId;
-      }
-
-      // Use the default pane from new-tab for the first sub-agent
-      if (!this.firstPaneUsed && this.firstPaneId) {
-        const success = await this.runInPane(
-          zellij,
-          this.firstPaneId,
-          sessionId,
-          serverUrl,
-          directory,
-          description,
-        );
-        if (success) {
-          this.firstPaneUsed = true;
-          return { success: true, paneId: this.firstPaneId };
-        }
-        // Reuse failed — don't keep retrying a known-bad pane
-        this.firstPaneUsed = true;
-        // fall through to createPaneInAgentTab on failure
-      }
-
-      // Create additional pane
-      return await this.createPaneInAgentTab(
+      return await this.createPaneInParentTab(
         zellij,
         sessionId,
         serverUrl,
@@ -209,11 +148,11 @@ export class ZellijMultiplexer implements Multiplexer {
         description,
       );
     } catch {
-      return { success: false };
+      return { success: false, error: 'hard' };
     }
   }
 
-  private async createPaneInCurrentTab(
+  private async createPaneInParentTab(
     zellij: string,
     sessionId: string,
     serverUrl: string,
@@ -225,36 +164,49 @@ export class ZellijMultiplexer implements Multiplexer {
       serverUrl,
       directory,
     );
-    const paneName = description.slice(0, 30).replace(/"/g, '\\"');
+    // The name doubles as the pane title; the description is the FR-8
+    // metadata (owner pid + child session id) and must survive intact.
+    const paneName = description.replace(/"/g, '\\"');
     const targetTabId = await this.getParentTabId(zellij);
 
-    return this.runNewPaneWithFallback(zellij, paneName, opencodeCmd, {
-      tabIdArgs: this.tabIdArgs(targetTabId),
-    });
+    // The parent tab is the anchor: without it there is no same-tab target,
+    // so no pane is created rather than falling back to the focused tab.
+    if (!targetTabId) return { success: false, error: 'not_found' };
+
+    return this.runNewPaneWithFallback(
+      zellij,
+      paneName,
+      opencodeCmd,
+      targetTabId,
+    );
   }
 
   /**
-   * Run `new-pane`, retrying once without the direction hint on failure.
+   * Run `new-pane` in the parent tab, retrying once without the direction
+   * hint on failure.
    *
    * Zellij silently drops a `--direction` split once a tab is crowded (exit
    * code 0 but no `terminal_*` id on stdout), so a failed directed create is
    * retried without `--direction`, which lets Zellij place the pane in the
-   * largest free space. The retry keeps `--name`, `--close-on-exit`, and the
-   * command part — only the direction hint is dropped. Two failures (or one
-   * failure with no direction configured) report `{ success: false }`.
+   * largest free space of the target tab. The retry keeps `--session`,
+   * `--tab-id`, `--name`, `--close-on-exit`, and the command part — only the
+   * direction hint is dropped. Two failures (or one failure with no direction
+   * configured) report `{ success: false, error: 'hard' }`.
    */
   private async runNewPaneWithFallback(
     zellij: string,
     paneName: string,
     opencodeCmd: string,
-    opts: { tabIdArgs: string[] },
+    targetTabId: string,
   ): Promise<PaneResult> {
     const direction = this.directionArgs();
     const runOnce = async (directionArgs: string[]): Promise<PaneResult> => {
       const args = [
+        ...this.sessionArgs(),
         'action',
         'new-pane',
-        ...opts.tabIdArgs,
+        '--tab-id',
+        targetTabId,
         ...directionArgs,
         '--name',
         paneName,
@@ -278,7 +230,7 @@ export class ZellijMultiplexer implements Multiplexer {
       if (exitCode === 0 && paneId?.startsWith('terminal_')) {
         return { success: true, paneId };
       }
-      return { success: false };
+      return { success: false, error: 'hard' };
     };
 
     const first = await runOnce(direction);
@@ -289,180 +241,24 @@ export class ZellijMultiplexer implements Multiplexer {
     return runOnce([]);
   }
 
-  private async createPaneInAgentTab(
-    zellij: string,
-    sessionId: string,
-    serverUrl: string,
-    directory: string,
-    description: string,
-  ): Promise<PaneResult> {
-    const opencodeCmd = buildOpencodeAttachCommand(
-      sessionId,
-      serverUrl,
-      directory,
-    );
-    const paneName = description.slice(0, 30).replace(/"/g, '\\"');
-
-    const parentTabId = await this.getParentTabId(zellij);
-    const inAgentTab = parentTabId === this.agentTabId;
-
-    if (inAgentTab) {
-      // Already in agent tab, create pane directly
-      return this.runNewPaneWithFallback(zellij, paneName, opencodeCmd, {
-        tabIdArgs: [],
-      });
-    }
-
-    if (!this.agentTabId) {
-      return { success: false };
-    }
-
-    // Switch to agent tab
-    await crossSpawn([zellij, 'action', 'go-to-tab-by-id', this.agentTabId], {
-      stdout: 'ignore',
-      stderr: 'ignore',
-    }).exited;
-
-    // Create pane
-    const result = await this.runNewPaneWithFallback(
-      zellij,
-      paneName,
-      opencodeCmd,
-      { tabIdArgs: [] },
-    );
-
-    // Switch back to the parent tab (the tab containing the OpenCode pane
-    // that spawned the sub-agent, resolved via ZELLIJ_PANE_ID). If the parent
-    // tab could not be located, leave focus in the agent tab rather than
-    // guessing.
-    if (parentTabId) {
-      await crossSpawn(
-        [zellij, 'action', 'go-to-tab-by-id', String(parentTabId)],
-        {
-          stdout: 'ignore',
-          stderr: 'ignore',
-        },
-      ).exited;
-    }
-
-    return result;
-  }
-
-  private async runInPane(
-    zellij: string,
-    paneId: string,
-    sessionId: string,
-    serverUrl: string,
-    directory: string,
-    description: string,
-  ): Promise<boolean> {
-    try {
-      const opencodeCmd = buildOpencodeAttachCommand(
-        sessionId,
-        serverUrl,
-        directory,
-      );
-
-      // Rename is best-effort cosmetics: a rename failure must not mask a
-      // failing attach write, so its exit code is intentionally ignored.
-      const renameProc = crossSpawn(
-        [
-          zellij,
-          'action',
-          'rename-pane',
-          description.slice(0, 30),
-          '-p',
-          paneId,
-        ],
-        { stdout: 'ignore', stderr: 'ignore' },
-      );
-      await renameProc.exited;
-
-      const writeCmdProc = crossSpawn(
-        [
-          zellij,
-          'action',
-          'write-chars',
-          buildShellLaunchCommand(opencodeCmd),
-          '-p',
-          paneId,
-        ],
-        { stdout: 'ignore', stderr: 'ignore' },
-      );
-      if ((await writeCmdProc.exited) !== 0) return false;
-
-      const writeNewlineProc = crossSpawn(
-        [zellij, 'action', 'write-chars', '\n', '-p', paneId],
-        { stdout: 'ignore', stderr: 'ignore' },
-      );
-      if ((await writeNewlineProc.exited) !== 0) return false;
-
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private async ensureAgentTab(
-    zellij: string,
-  ): Promise<{ tabId: string; firstPaneId: string | null } | null> {
-    try {
-      // Try to find existing tab
-      const existingTab = await this.findTabByName(zellij, 'opencode-agents');
-      if (existingTab) {
-        const firstPane = await this.getFirstPaneInTab(
-          zellij,
-          existingTab.tabId,
-        );
-        return {
-          tabId: existingTab.tabId,
-          firstPaneId: firstPane,
-        };
-      }
-
-      // Create new tab
-      const createProc = crossSpawn(
-        [zellij, 'action', 'new-tab', '--name', 'opencode-agents'],
-        { stdout: 'pipe', stderr: 'pipe' },
-      );
-      const createExit = await createProc.exited;
-      if (createExit !== 0) return null;
-
-      // Get the new tab info
-      const newTab = await this.findTabByName(zellij, 'opencode-agents');
-      if (!newTab) return null;
-
-      // Get the default pane in the new tab
-      const firstPane = await this.getFirstPaneInTab(zellij, newTab.tabId);
-
-      // `new-tab` moves the attached client's focus to the new tab. Restore
-      // the parent tab (resolved via ZELLIJ_PANE_ID) so the user stays where
-      // they were, mirroring the restore done after pane creation. If the
-      // parent tab cannot be located, leave focus in the agent tab rather
-      // than guessing.
-      const parentTabId = await this.getParentTabId(zellij);
-      if (parentTabId) {
-        await crossSpawn(
-          [zellij, 'action', 'go-to-tab-by-id', String(parentTabId)],
-          {
-            stdout: 'ignore',
-            stderr: 'ignore',
-          },
-        ).exited;
-      }
-
-      return { tabId: newTab.tabId, firstPaneId: firstPane };
-    } catch {
-      return null;
-    }
-  }
-
   private async listPanesJson(
     zellij: string,
   ): Promise<ZellijPaneInfo[] | null> {
+    const sessionArgs = this.sessionArgs();
+    // Never address zellij without an explicit session.
+    if (sessionArgs.length === 0) return null;
+
     try {
       const proc = crossSpawn(
-        [zellij, 'action', 'list-panes', '--json', '--tab', '--all'],
+        [
+          zellij,
+          ...sessionArgs,
+          'action',
+          'list-panes',
+          '--json',
+          '--tab',
+          '--all',
+        ],
         { stdout: 'pipe', stderr: 'pipe' },
       );
       if ((await proc.exited) !== 0) return null;
@@ -473,87 +269,54 @@ export class ZellijMultiplexer implements Multiplexer {
     }
   }
 
-  private async getFirstPaneInTab(
-    zellij: string,
-    tabId: string,
-  ): Promise<string | null> {
-    try {
-      const panes = await this.listPanesJson(zellij);
-      if (!panes) return null;
-      const pane = panes.find(
-        (candidate) =>
-          !candidate.is_plugin && candidate.tab_id === Number(tabId),
-      );
-      return pane ? `terminal_${pane.id}` : null;
-    } catch {
-      return null;
-    }
-  }
+  /**
+   * FR-8 sweep capability: terminal panes of this client's zellij session
+   * with their titles. Plugin panes are skipped; titles that are not plugin
+   * metadata are ignored by the sweep. Returns an empty list when no session
+   * can be addressed (no command is issued).
+   */
+  async listPanesWithTitles(): Promise<
+    Array<{ paneId: string; title: string }>
+  > {
+    const zellij = await this.getBinary();
+    if (!zellij) return [];
 
-  private async findTabByName(
-    zellij: string,
-    name: string,
-  ): Promise<{ tabId: string; name: string } | null> {
-    try {
-      const proc = crossSpawn([zellij, 'action', 'list-tabs', '--json'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
+    const panes = await this.listPanesJson(zellij);
+    if (!panes) return [];
+
+    const result: Array<{ paneId: string; title: string }> = [];
+    for (const pane of panes) {
+      if (pane.is_plugin) continue;
+      result.push({
+        paneId: `terminal_${pane.id}`,
+        title: typeof pane.title === 'string' ? pane.title : '',
       });
-
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) return this.findTabByNameText(zellij, name);
-
-      const stdout = await proc.stdout();
-
-      try {
-        const tabs: ZellijTabInfo[] = JSON.parse(stdout);
-        for (const tab of tabs) {
-          if (tab.name === name) {
-            return { tabId: String(tab.tab_id), name: tab.name };
-          }
-        }
-      } catch {
-        return this.findTabByNameText(zellij, name);
-      }
-      return null;
-    } catch {
-      return null;
     }
-  }
-
-  private async findTabByNameText(
-    zellij: string,
-    name: string,
-  ): Promise<{ tabId: string; name: string } | null> {
-    try {
-      const proc = crossSpawn([zellij, 'action', 'list-tabs'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) return null;
-
-      const stdout = await proc.stdout();
-      const lines = stdout.split('\n');
-
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 3 && parts[2] === name) {
-          return { tabId: parts[0], name: parts[2] };
-        }
-      }
-      return null;
-    } catch {
-      return null;
-    }
+    return result;
   }
 
   async closePane(paneId: string): Promise<boolean> {
+    // Fail closed without a session to address: a session-less zellij call
+    // would hit whichever session happens to be default.
+    if (!this.sessionName) return false;
+
     const zellij = await this.getBinary();
     return gracefulClosePane(zellij, paneId, {
-      ctrlC: ['action', 'write', '--pane-id', paneId, '\u0003'],
-      close: ['action', 'close-pane', '--pane-id', paneId],
+      ctrlC: [
+        ...this.sessionArgs(),
+        'action',
+        'write',
+        '--pane-id',
+        paneId,
+        '\u0003',
+      ],
+      close: [
+        ...this.sessionArgs(),
+        'action',
+        'close-pane',
+        '--pane-id',
+        paneId,
+      ],
       acceptExitCode1: true,
       emptyPaneReturnsTrue: true,
     });
@@ -572,8 +335,12 @@ export class ZellijMultiplexer implements Multiplexer {
     return this.paneDirection ? ['--direction', this.paneDirection] : [];
   }
 
-  private tabIdArgs(tabId: string | null): string[] {
-    return tabId ? ['--tab-id', tabId] : [];
+  /**
+   * `--session <name>` prefix for every zellij invocation. Empty only in
+   * paths that already fail closed before running a command.
+   */
+  private sessionArgs(): string[] {
+    return this.sessionName ? ['--session', this.sessionName] : [];
   }
 
   private async getParentTabId(zellij: string): Promise<string | null> {
@@ -628,10 +395,10 @@ interface ZellijVersion {
 }
 
 /**
- * Oldest Zellij release with the stable pane-id targeting this adapter relies
- * on (`rename-pane <name> -p <paneId>`, `write-chars <chars> -p <paneId>`,
- * `list-panes --json --tab --all` with stable `tab_id`, and
- * `new-pane --tab-id` for cross-tab creation, which only exists in 0.44.1+).
+ * Oldest Zellij release the adapter accepts. `new-pane --tab-id` — still used
+ * to anchor the child pane to the parent pane's tab — only exists in 0.44.1+;
+ * the gate also covers the stable `list-panes --json --tab --all` shape
+ * (`tab_id`) the anchor lookup depends on.
  */
 const MIN_ZELLIJ_VERSION: ZellijVersion = { major: 0, minor: 44, patch: 1 };
 
@@ -665,8 +432,4 @@ function getPaneDirection(
     case 'tiled':
       return null;
   }
-}
-
-function buildShellLaunchCommand(command: string): string {
-  return ['sh', '-lc', quoteShellArg(command)].join(' ');
 }

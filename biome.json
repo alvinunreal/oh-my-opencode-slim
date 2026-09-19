@@ -1,7 +1,11 @@
 {
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "files": {
-    "includes": ["**", "!oh-my-opencode-slim.schema.json"]
+    "includes": [
+      "**",
+      "!oh-my-opencode-slim.schema.json",
+      "!openspec/changes/**/evidence"
+    ]
   },
   "vcs": {
     "enabled": true,

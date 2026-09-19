@@ -14,7 +14,7 @@ import {
 import { buildOrchestratorPrompt } from './agents/orchestrator';
 import { CompanionManager } from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
-import { deepMerge, loadPluginConfig, type MultiplexerConfig } from './config';
+import { deepMerge, loadPluginConfig } from './config';
 import { parseList } from './config/agent-mcps';
 import {
   AGENT_ALIASES,
@@ -53,14 +53,8 @@ import { createBackgroundFallbackHandoff } from './hooks/task-session-manager/fa
 import { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
 import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
 import { isMessageWithParts, type MessageWithParts } from './hooks/types';
-import { handleTaskSessionEvent } from './index-event';
 import { createInterviewManager } from './interview';
 import { createBuiltinMcps } from './mcp';
-import {
-  getMultiplexer,
-  MultiplexerSessionManager,
-  startAvailabilityCheck,
-} from './multiplexer';
 import {
   ast_grep_replace,
   ast_grep_search,
@@ -156,46 +150,6 @@ const IMAGE_SKIPPED_DEBOUNCE_MS = 60_000;
 // re-runs, it checks this variable and applies the runtime preset instead
 // of the config file's preset. State lives in RuntimeConfig.
 
-/**
- * Decide whether multiplexer pane management initializes for a plugin
- * input. v1 hosts (hostFlavor absent) keep the exact env-based
- * conditions — configured type, resolvable multiplexer, inside-session
- * env marker; v2 hosts, marked `hostFlavor: 'v2'` by the v2 client shim,
- * are gated off before any multiplexer initialization runs.
- */
-export function shouldEnableMultiplexer(input: {
-  hostFlavor?: string;
-  multiplexerConfig: MultiplexerConfig;
-}): boolean {
-  if ((input as { hostFlavor?: string }).hostFlavor === 'v2') {
-    log('[v2] multiplexer disabled on v2 host');
-    return false;
-  }
-  // Get multiplexer instance for capability checks (v1 path, unchanged)
-  const multiplexer = getMultiplexer(input.multiplexerConfig);
-  return (
-    input.multiplexerConfig.type !== 'none' &&
-    multiplexer !== null &&
-    multiplexer.isInsideSession()
-  );
-}
-
-/**
- * Config handed to MultiplexerSessionManager. The manager is created
- * unconditionally (its lifecycle hooks are wired into the job coordinator),
- * but it self-gates only on env (inside tmux/zellij) — which would
- * incorrectly self-enable on a v2 host running inside tmux. v2 hosts are
- * therefore forced to type 'none', which disables every manager path (all
- * its public methods no-op when `enabled` is false). v1 hosts receive the
- * real config object unchanged.
- */
-export function sessionManagerMultiplexerConfig(
-  hostFlavor: string | undefined,
-  config: MultiplexerConfig,
-): MultiplexerConfig {
-  return hostFlavor === 'v2' ? { ...config, type: 'none' } : config;
-}
-
 export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   initLogger(sessionId);
@@ -217,12 +171,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let agentDefs: ReturnType<typeof createAgents>;
   let agents: ReturnType<typeof getAgentConfigs>;
   let mcps: ReturnType<typeof createBuiltinMcps>;
-  let multiplexerConfig: MultiplexerConfig;
-  let multiplexerEnabled: boolean;
   // Host flavor ('v2' on OpenCode v2 hosts via the client shim, undefined on
   // v1). Survives the try block so prompt-assembly hooks can use it.
   let hostFlavor: string | undefined;
-  let multiplexerSessionManager: MultiplexerSessionManager;
   let autoUpdateChecker: ReturnType<typeof createAutoUpdateCheckerHook>;
   const sessionMetadata = new SessionMetadataStore({
     maxEntries: DEFAULT_MAX_SESSION_METADATA_ENTRIES,
@@ -482,25 +433,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       hostFlavor,
     });
 
-    // Parse multiplexer config with defaults
-    multiplexerConfig = runtime.multiplexer;
-
-    multiplexerEnabled = shouldEnableMultiplexer({
-      hostFlavor,
-      multiplexerConfig,
-    });
-
-    log('[plugin] initialized with multiplexer config', {
-      multiplexerConfig,
-      enabled: multiplexerEnabled,
-      directory: ctx.directory,
-    });
-
-    // Start background availability check if enabled
-    if (multiplexerEnabled) {
-      startAvailabilityCheck(multiplexerConfig);
-    }
-
     mcps = createBuiltinMcps(runtime.disabledMcps);
     acpRunTools =
       Object.keys(runtime.acpAgents ?? {}).length > 0
@@ -666,26 +598,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       revivedRunTracker.onTerminal(record);
       markTuiAgentInactive(record.taskID);
     });
-
-    // Initialize MultiplexerSessionManager to handle OpenCode's built-in
-    // Task tool sessions. On v2 hosts the multiplexer is host-gated off
-    // (shouldEnableMultiplexer), so the manager's config is forced to
-    // 'none' — otherwise its env-based self-gate could re-enable pane
-    // management inside tmux/zellij on a v2 host.
-    multiplexerSessionManager = new MultiplexerSessionManager(
-      ctx,
-      sessionManagerMultiplexerConfig(hostFlavor, multiplexerConfig),
-      backgroundJobCoordinator,
-    );
+    // Pane lifecycle runs in the client (TUI) process, never here: the server
+    // entry only keeps its own sidebar activity bookkeeping.
     backgroundJobCoordinator.addTerminalStateListener((taskID) => {
-      void multiplexerSessionManager.closeSessionFromCoordinator(taskID);
       markTuiAgentInactive(taskID);
-    });
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
-      if (record.deadlineExceededAt === undefined) return;
-      void multiplexerSessionManager.closeSessionPermanentlyFromCoordinator(
-        record.taskID,
-      );
     });
 
     sessionLifecycle = new SessionLifecycle(log);
@@ -1519,10 +1435,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     event: async (input) => {
       if (input.event.type === 'server.instance.disposed')
         terminalGate?.dispose();
-      // Token-stream deltas fire on every reasoning/text chunk. Slim
-      // has no work for them except the multiplexer activity heartbeat
-      // that keeps a child pane from looking idle mid-stream. Skip the
-      // rest of the fan-out. v2 names: session.next.{text,reasoning}.delta.
+      // Token-stream deltas fire on every reasoning/text chunk. Slim has no
+      // work for them; skip the rest of the fan-out. v2 names:
+      // session.next.{text,reasoning}.delta.
       const streamEventType = (input.event as { type?: string } | undefined)
         ?.type;
       if (
@@ -1530,7 +1445,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         streamEventType === 'session.next.text.delta' ||
         streamEventType === 'session.next.reasoning.delta'
       ) {
-        await multiplexerSessionManager.onSessionStatus(input.event as never);
         return;
       }
 
@@ -1698,27 +1612,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      await handleTaskSessionEvent(
+      // Invalidate task continuations before the instance-disposed cleanup
+      // (the former multiplexer event handling moved to the client process
+      // with the pane lifecycle; the server never touches panes).
+      await taskSessionManagerHook.event(
         input as {
           event: {
             type: string;
             properties?: { info?: { id?: string }; sessionID?: string };
           };
-        },
-        taskSessionManagerHook.event,
-        async () => {
-          // Handle multiplexer pane spawning for OpenCode's Task tool sessions
-          await multiplexerSessionManager.onSessionCreated(event);
-
-          // Handle session status/idle events for pane cleanup early so child panes
-          // close promptly even if later hooks do additional work on idle.
-          await multiplexerSessionManager.onSessionStatus(event);
-
-          // Handle session.deleted events for pane cleanup
-          await multiplexerSessionManager.onSessionDeleted(event);
-        },
-        async () => {
-          await multiplexerSessionManager.cleanupOnInstanceDisposed();
         },
       );
       if (event.type === 'server.instance.disposed') {
@@ -1822,7 +1724,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // two-wake no-progress caps and never wake those sessions again.
       clearAllWakeSessions();
       await interviewManager.dispose();
-      await multiplexerSessionManager.cleanupOnInstanceDisposed();
       clearTuiActivities();
       // Explicitly release this generation's companion ownership: a
       // reloaded generation only replaces the active manager at its own

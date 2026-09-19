@@ -1,10 +1,22 @@
-import { describe, expect, it } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  spyOn,
+} from 'bun:test';
 import { z } from 'zod';
 import {
   InterviewConfigSchema,
+  MultiplexerConfigSchema,
+  MultiplexerConfigStrictSchema,
   PluginConfigSchema,
   PresetSchema,
   ProviderModelIdSchema,
+  resetMultiplexerDiagnostics,
+  sanitizeMultiplexerConfig,
 } from './schema';
 
 describe('ProviderModelIdSchema', () => {
@@ -149,6 +161,212 @@ describe('PluginConfigSchema webfetch', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe('MultiplexerConfigSchema', () => {
+  let warnSpy: Mock<typeof console.warn>;
+
+  beforeEach(() => {
+    resetMultiplexerDiagnostics();
+    warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    // Spies on console.warn can be shared across test files in one process;
+    // clear call history so each test counts only its own warnings.
+    warnSpy.mockClear();
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('applies the documented defaults when the block is empty', () => {
+    expect(MultiplexerConfigSchema.parse({})).toEqual({
+      type: 'none',
+      layout: 'main-vertical',
+      main_pane_size: 60,
+    });
+  });
+
+  it('exports an unsanitized schema that keeps invalid values visible', () => {
+    const strict = MultiplexerConfigStrictSchema.safeParse({ type: 'screen' });
+
+    expect(strict.success).toBe(false);
+    if (!strict.success) {
+      expect(strict.error.issues.map((i) => i.path.join('.'))).toContain(
+        'type',
+      );
+    }
+
+    // Runtime behavior is unchanged: the sanitizing entry point still
+    // accepts the value, disables panes, and warns once.
+    const runtime = MultiplexerConfigSchema.safeParse({ type: 'screen' });
+    expect(runtime.success).toBe(true);
+    if (runtime.success) {
+      expect(runtime.data.type).toBe('none');
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts every supported type and layout', () => {
+    for (const type of [
+      'auto',
+      'tmux',
+      'zellij',
+      'herdr',
+      'kitty',
+      'cmux',
+      'none',
+    ] as const) {
+      expect(MultiplexerConfigSchema.parse({ type }).type).toBe(type);
+    }
+    for (const layout of [
+      'main-horizontal',
+      'main-vertical',
+      'tiled',
+      'even-horizontal',
+      'even-vertical',
+    ] as const) {
+      expect(MultiplexerConfigSchema.parse({ layout }).layout).toBe(layout);
+    }
+  });
+
+  it('accepts the main_pane_size bounds', () => {
+    for (const size of [20, 60, 80]) {
+      expect(
+        MultiplexerConfigSchema.parse({ main_pane_size: size }).main_pane_size,
+      ).toBe(size);
+    }
+  });
+
+  it('does not warn for a valid multiplexer config', () => {
+    MultiplexerConfigSchema.parse({
+      type: 'tmux',
+      layout: 'tiled',
+      main_pane_size: 40,
+    });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('strips the removed zellij_pane_mode key with exactly one deprecation warning', () => {
+    // Two parses stand in for the user + project config layers: the rest of
+    // the config must load and the warning must fire only once per process.
+    const first = PluginConfigSchema.safeParse({
+      multiplexer: {
+        type: 'tmux',
+        layout: 'tiled',
+        main_pane_size: 40,
+        zellij_pane_mode: 'current-tab',
+      },
+      agents: { oracle: { model: 'valid/model' } },
+    });
+    const second = PluginConfigSchema.safeParse({
+      multiplexer: { type: 'zellij', zellij_pane_mode: 'agent-tab' },
+    });
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    if (first.success) {
+      expect(first.data.multiplexer).toEqual({
+        type: 'tmux',
+        layout: 'tiled',
+        main_pane_size: 40,
+      });
+      expect(first.data.agents?.oracle?.model).toBe('valid/model');
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain('Deprecated');
+    expect(message).toContain('zellij_pane_mode');
+  });
+
+  it('does not mutate the raw config while stripping the deprecated key', () => {
+    const raw = { type: 'tmux', zellij_pane_mode: 'agent-tab' };
+    const sanitized = sanitizeMultiplexerConfig(raw);
+
+    expect(sanitized).not.toHaveProperty('zellij_pane_mode');
+    expect(raw).toHaveProperty('zellij_pane_mode');
+  });
+
+  it('disables pane management for an invalid type and keeps the rest of the config', () => {
+    const result = PluginConfigSchema.safeParse({
+      multiplexer: { type: 'screen', main_pane_size: 40 },
+      agents: { oracle: { model: 'valid/model' } },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.multiplexer?.type).toBe('none');
+      expect(result.data.multiplexer?.main_pane_size).toBe(40);
+      expect(result.data.agents?.oracle?.model).toBe('valid/model');
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain('Invalid multiplexer config value');
+    expect(message).toContain('type');
+  });
+
+  it('disables pane management for an invalid layout', () => {
+    const result = PluginConfigSchema.safeParse({
+      multiplexer: { type: 'tmux', layout: 'grid' },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.multiplexer?.type).toBe('none');
+      expect(result.data.multiplexer?.layout).toBe('main-vertical');
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables pane management for an out-of-range main_pane_size', () => {
+    const result = PluginConfigSchema.safeParse({
+      multiplexer: { type: 'tmux', main_pane_size: 10 },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.multiplexer?.type).toBe('none');
+      expect(result.data.multiplexer?.main_pane_size).toBe(60);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain('main_pane_size');
+  });
+
+  it('emits the invalid-value diagnostic at most once per process', () => {
+    expect(MultiplexerConfigSchema.safeParse({ type: 'bogus' }).success).toBe(
+      true,
+    );
+    expect(MultiplexerConfigSchema.safeParse({ layout: 'bogus' }).success).toBe(
+      true,
+    );
+    expect(
+      MultiplexerConfigSchema.safeParse({ main_pane_size: 0 }).success,
+    ).toBe(true);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a non-object multiplexer value as invalid and disables panes', () => {
+    for (const value of ['tmux', [], null]) {
+      const result = PluginConfigSchema.safeParse({ multiplexer: value });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.multiplexer?.type).toBe('none');
+      }
+    }
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves multiplexer undefined when the block is omitted', () => {
+    const result = PluginConfigSchema.safeParse({});
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.multiplexer).toBeUndefined();
+    }
   });
 });
 

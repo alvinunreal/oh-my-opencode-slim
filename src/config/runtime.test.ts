@@ -150,7 +150,6 @@ describe('RuntimeConfig', () => {
       type: 'none',
       layout: 'main-vertical',
       main_pane_size: 60,
-      zellij_pane_mode: 'agent-tab',
     });
     expect(runtime.backgroundJobs.maxSessionsPerAgent).toBe(2);
     expect(runtime.backgroundJobs.strategy).toBe('latest');

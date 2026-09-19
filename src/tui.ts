@@ -14,10 +14,7 @@ import {
   SUBAGENT_NAMES,
 } from './config/constants';
 import { loadPluginConfig } from './config/loader';
-import {
-  recordTmuxPane,
-  removeTmuxPane,
-} from './multiplexer/tmux-pane-registry';
+import { createTuiPaneWiring } from './multiplexer/client/tui-wiring';
 import {
   KILL_ALL_KEYBIND,
   killAllRunningSubagents,
@@ -43,7 +40,6 @@ const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
     !DEFAULT_DISABLED_AGENTS.includes(agent),
 );
 const BORDER = { type: 'single' };
-const TMUX_PANE_HEARTBEAT_MS = 10_000;
 const ACTIVITY_FRAME_MS = 100;
 const ACTIVITY_FRAMES = [
   '⠋',
@@ -120,14 +116,7 @@ function getTuiDirectory(api: {
   return api.state?.path?.directory ?? process.cwd();
 }
 
-export interface ActiveTmuxPaneRegistration {
-  sessionId?: string;
-  paneId?: string;
-  ownerPid: number;
-  lastRecordedAt: number;
-}
-
-/** Route shapes accepted by `syncTmuxPaneRegistration`: v1 `{ name, params }` and v2 `{ type, sessionID }`. */
+/** Route shapes accepted by the sidebar: v1 `{ name, params }` and v2 `{ type, sessionID }`. */
 export type TuiRouteView =
   | {
       name?: string;
@@ -152,47 +141,6 @@ export function resolveRouteSessionId(route: TuiRouteView): string | undefined {
     return view.sessionID;
   }
   return undefined;
-}
-
-function clearTmuxPaneRegistration(
-  registration: ActiveTmuxPaneRegistration,
-): void {
-  if (registration.sessionId && registration.paneId) {
-    removeTmuxPane(
-      registration.sessionId,
-      registration.paneId,
-      registration.ownerPid,
-    );
-  }
-  registration.sessionId = undefined;
-  registration.paneId = undefined;
-  registration.lastRecordedAt = 0;
-}
-
-export function syncTmuxPaneRegistration(
-  route: TuiRouteView,
-  registration: ActiveTmuxPaneRegistration,
-  now = Date.now(),
-): void {
-  const paneId = process.env.TMUX_PANE;
-  const sessionId = resolveRouteSessionId(route);
-  const unchanged =
-    registration.sessionId === sessionId && registration.paneId === paneId;
-
-  if (!paneId || !sessionId) {
-    clearTmuxPaneRegistration(registration);
-    return;
-  }
-  if (unchanged && now - registration.lastRecordedAt < TMUX_PANE_HEARTBEAT_MS) {
-    return;
-  }
-  if (!unchanged) clearTmuxPaneRegistration(registration);
-
-  if (recordTmuxPane(sessionId, paneId, registration.ownerPid)) {
-    registration.sessionId = sessionId;
-    registration.paneId = paneId;
-    registration.lastRecordedAt = now;
-  }
 }
 
 export function splitSidebarModelId(model: string): {
@@ -1465,17 +1413,11 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     readTuiSnapshot(configDirectory),
   );
   const [animationNow, setAnimationNow] = createSignal(Date.now());
-  const tmuxRegistration: ActiveTmuxPaneRegistration = {
-    ownerPid: process.pid,
-    lastRecordedAt: 0,
-  };
-  syncTmuxPaneRegistration(ctx.ui.router.current(), tmuxRegistration);
   let disposed = false;
   const remoteCache: RemoteModelCache = {};
   const refreshSidebar = async () => {
     if (disposed) return;
     const currentDirectory = ctx.location?.directory ?? process.cwd();
-    syncTmuxPaneRegistration(ctx.ui.router.current(), tmuxRegistration);
     let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
     if (disposed) return;
     const directoryChanged = currentDirectory !== configDirectory;
@@ -1557,7 +1499,6 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     disposeSlot();
     clearInterval(renderTimer);
     clearInterval(animationTimer);
-    clearTmuxPaneRegistration(tmuxRegistration);
   };
 }
 
@@ -1649,15 +1590,9 @@ const plugin: TuiDualContractModule = {
       readTuiSnapshot(configDirectory),
     );
     const [animationNow, setAnimationNow] = createSignal(Date.now());
-    const tmuxRegistration: ActiveTmuxPaneRegistration = {
-      ownerPid: process.pid,
-      lastRecordedAt: 0,
-    };
-    syncTmuxPaneRegistration(api.route.current, tmuxRegistration);
     const remoteCache: RemoteModelCache = {};
     const refreshSidebar = async () => {
       const currentDirectory = getTuiDirectory(api);
-      syncTmuxPaneRegistration(api.route.current, tmuxRegistration);
       let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
       const directoryChanged = currentDirectory !== configDirectory;
       if (directoryChanged) {
@@ -1699,7 +1634,6 @@ const plugin: TuiDualContractModule = {
     api.lifecycle.onDispose(() => {
       clearInterval(renderTimer);
       clearInterval(animationTimer);
-      clearTmuxPaneRegistration(tmuxRegistration);
     });
 
     // Clickable sidebar: v1 hosts always expose api.route.navigate.
@@ -1763,6 +1697,20 @@ const plugin: TuiDualContractModule = {
       ]);
       api.lifecycle.onDispose(disposeCommands);
     }
+
+    // Client-side pane lifecycle (v1 only; v2 `setup()` stays unwired). The
+    // wiring owns admission, config, log init, serverUrl reflection and the
+    // event projection; disposal closes this client's panes best-effort.
+    const paneWiring = await createTuiPaneWiring({
+      directory: configDirectory,
+      getDisplayedSessionId: () => resolveRouteSessionId(api.route.current),
+      eventBus: api.event,
+      client: (api as { client?: unknown }).client,
+      env: process.env,
+    });
+    api.lifecycle.onDispose(() => {
+      void paneWiring.dispose();
+    });
   },
   setup,
 };

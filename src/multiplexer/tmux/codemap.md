@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Provides a concrete Tmux-based implementation of the Multiplexer interface for managing child session panes within a Tmux session. Handles pane spawning, graceful shutdown, and layout management for OpenCode's multiplexer system.
+Provides a concrete Tmux-based implementation of the Multiplexer interface for managing child session panes within a Tmux session, running entirely in the TUI client process that displays the parent session. Handles pane spawning, graceful shutdown, and layout management for OpenCode's multiplexer system.
 
 ## Design
 
@@ -13,12 +13,14 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 - **Layout strategy**: Implements debounced layout application to prevent rapid successive layout changes during bursts of pane operations
 - **Graceful shutdown protocol**: Sends Ctrl+C signal before pane termination to allow child processes to exit cleanly
 - **Pane lifecycle hooks**: Triggers layout rebalancing after pane creation and destruction events
-- **Attached-session targeting**: Resolves the parent OpenCode session through
-  the session-scoped tmux pane registry, with startup-pane fallback
+- **Attached-session targeting**: Re-resolves the anchor pane from
+  `process.env.TMUX_PANE` at spawn time and explicitly addresses the tmux
+  server with `-S <socket>` taken from the first segment of `process.env.TMUX`;
+  there is no pane registry and no startup-pane fallback
 
 ### Core Abstractions
 
-- `Multiplexer` interface: Defines the contract for pane management across multiplexer backends (tmux, zellij)
+- `Multiplexer` interface: Defines the contract for pane management across multiplexer backends (tmux, zellij, herdr, kitty, cmux)
 - `MultiplexerLayout`: Type representing Tmux layout types ('main-vertical', 'main-horizontal', 'tiled', 'even-horizontal', 'even-vertical')
 - `PaneResult`: Return type for pane operations indicating success/failure and pane identifiers
 
@@ -35,16 +37,16 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 2. spawnPane(sessionId, description, serverUrl, directory)
    ├─ Validates tmux binary availability
    ├─ Constructs opencode attach command with quoted arguments
-   ├─ Resolves parent session registration (or startup pane fallback)
-   ├─ Executes: tmux split-window -h -d -P -F '#{pane_id}' -t <target> <opencode-cmd>
-   ├─ Retries against the startup pane if a registered target is rejected
+   ├─ Re-resolves socket (TMUX) and anchor (TMUX_PANE); either missing → fail closed
+   ├─ Executes: tmux -S <socket> split-window -h -d -P -F '#{pane_id}' -t <anchor> <opencode-cmd>
    ├─ Captures stdout to extract pane_id
-   ├─ Renames pane with description (truncated to 30 chars)
-   └─ Schedules layout rebalance via scheduleLayout()
+   ├─ Renames pane with description via select-pane -T (FR-8 metadata kept intact)
+   └─ Schedules layout rebalance via scheduleLayout(anchor)
 
-3. scheduleLayout(targetPane) → applyLayout() (debounced 150ms per target)
-   ├─ Increments layoutGeneration counter
-   ├─ Applies stored layout via tmux select-layout
+3. scheduleLayout(anchor) → applyLayoutNow() (debounced 150ms per anchor pane)
+   ├─ Replaces any pending timer for the anchor
+   ├─ Re-resolves the socket at fire time (missing → skip)
+   ├─ Applies stored layout via tmux -S <socket> select-layout -t <anchor>
    ├─ For main-* layouts: sets main-pane-width/height percentage
    └─ Reapplies layout to use new size
 ```
@@ -53,23 +55,24 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 
 ```
 1. closePane(paneId)
-   ├─ Sends Ctrl+C to pane: tmux send-keys -t <paneId> 'C-c'
+   ├─ Requires TMUX; missing socket → returns false without issuing a command
+   ├─ Sends Ctrl+C to pane: tmux -S <socket> send-keys -t <paneId> 'C-c'
    ├─ Waits 250ms for graceful shutdown
-   ├─ Executes: tmux kill-pane -t <paneId>
-   └─ Schedules layout rebalance via scheduleLayout()
+   ├─ Executes: tmux -S <socket> kill-pane -t <paneId>
+   └─ Schedules layout rebalance for the anchor this instance split from
 ```
 
 ### Layout Application Flow
 
 ```
 1. applyLayout(layout, mainPaneSize)
-   ├─ Cancels pending debounced layout if exists
-   ├─ Increments layoutGeneration
+   ├─ Cancels all pending debounced layout timers
+   ├─ Stores layout and size preferences
+   ├─ Resolves socket (TMUX) and anchor (TMUX_PANE); either missing → skip
    └─ Calls applyLayoutNow() immediately
 
-2. applyLayoutNow(layout, mainPaneSize)
-   ├─ Stores layout and size preferences
-   ├─ Executes: tmux select-layout <layout>
+2. applyLayoutNow(layout, mainPaneSize, socket, targetPane)
+   ├─ Executes: tmux -S <socket> select-layout -t <targetPane> <layout>
    ├─ For main-* layouts:
    │  ├─ Sets main-pane-width/main-pane-height option
    │  └─ Reapplies layout to use new size
@@ -80,15 +83,15 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 
 ### Consumer Dependencies
 
-- **Primary consumer**: `src/multiplexer/multiplexer-manager.ts` - Orchestrates multiplexer sessions and delegates pane operations
-- **Lifecycle integration**: `src/index.ts` - Plugin initialization wires up multiplexer session handlers
-- **Configuration**: `src/multiplexer/config/schema.ts` - Provides `MultiplexerLayout` type and default values
+- **Primary consumer**: `src/multiplexer/client/lifecycle.ts` (through `src/multiplexer/factory.ts`) - creates the adapter per pane operation
+- **TUI wiring**: `src/tui.ts` → `src/multiplexer/client/tui-wiring.ts` - the only production wiring point; the server entry (`src/index.ts`) must not import multiplexer modules (invariant I1)
+- **Configuration**: `src/config/schema.ts` - Provides the `MultiplexerLayout` type and the `MultiplexerConfig` values
 
 ### Provided Services
 
 - **Pane management**: Spawn and close child session panes within Tmux sessions
 - **Layout management**: Apply and maintain pane layouts (main-vertical, main-horizontal, tiled, etc.)
-- **Session awareness**: Detects Tmux session environment via `process.env.TMUX`
+- **Session awareness**: Detection is pane-scoped via `process.env.TMUX_PANE`; the tmux server socket comes from `process.env.TMUX`
 - **Error handling**: Graceful degradation when tmux is unavailable (returns success: false)
 
 ### Environment Requirements
@@ -100,7 +103,7 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 ### Error Handling & Recovery
 
 - **Binary not found**: Returns `success: false` from all operations, logs warning
-- **Pane already closed**: Treated as success (idempotent operation)
+- **Pane already closed**: `kill-pane` failure returns `false`; the lifecycle keeps the record and retries on a later event
 - **Layout failures**: Silently ignored with debug logging; maintains last known good state
 - **Ctrl+C failure**: Proceeds to kill-pane after timeout regardless of send-keys result
 
@@ -123,8 +126,8 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 
 - **Layout type**: Default 'main-vertical' via constructor parameter
 - **Main pane size**: Default 60% via constructor parameter
-- **Target pane**: Fresh parent-session registration when available; optional
-  startup `TMUX_PANE` fallback for direct/local TUI usage
+- **Target pane**: The client's own `TMUX_PANE`, re-resolved at spawn time;
+  missing `TMUX`/`TMUX_PANE` fails closed without issuing a command
 
 ### User Configuration
 
@@ -136,15 +139,15 @@ No user-facing configuration required. Tmux binary location and session environm
 |----------|----------|-----------|
 | tmux binary not found | Returns success: false, logs warning | Fallback to other multiplexer or graceful degradation |
 | Pane spawn fails | Returns success: false, logs error | Session continues without pane |
-| Registered parent pane is stale | Retries the split against startup pane | Direct/local behavior remains available |
+| Registered parent pane is stale | n/a (no registry) | Anchor is re-resolved from `TMUX_PANE` on every spawn |
 | Layout application fails | Silently ignored, logs debug | Maintains previous layout |
-| Pane already closed | Returns false, logs info | Idempotent operation |
+| Pane already closed | Returns false | Lifecycle keeps tracking the pane and retries on a later event |
 | Ctrl+C send fails | Proceeds to kill-pane | Ensures pane termination |
 
 ## See Also
 
 - `src/multiplexer/types.ts` - Multiplexer interface definition
-- `src/multiplexer/config/schema.ts` - Layout type definitions
-- `src/multiplexer/multiplexer-manager.ts` - Session management integration
+- `src/config/schema.ts` - Layout type definitions
+- `src/multiplexer/client/lifecycle.ts` - Client lifecycle integration
 - `src/utils/compat.ts` - Cross-platform process execution
 - `src/utils/logger.ts` - Logging infrastructure

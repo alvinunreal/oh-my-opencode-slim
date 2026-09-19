@@ -14,9 +14,10 @@ import { ZellijMultiplexer } from './zellij';
 /**
  * Create a multiplexer instance based on config.
  *
- * Do not cache instances: tmux/zellij/herdr integrations may depend on
- * per-process environment like TMUX_PANE/ZELLIJ/HERDR_PANE_ID, which should
- * be captured fresh for each plugin context.
+ * Do not cache instances: the adapters depend on pane-scoped per-process
+ * environment (TMUX_PANE, ZELLIJ_PANE_ID, HERDR_PANE_ID, KITTY_WINDOW_ID,
+ * CMUX_TUI_SOCKET/CMUX_MUX_SOCKET), which should be captured fresh for each
+ * plugin context.
  */
 export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
   const { type } = config;
@@ -35,11 +36,7 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       actualType = 'tmux';
       break;
     case 'zellij':
-      multiplexer = new ZellijMultiplexer(
-        config.layout,
-        config.main_pane_size,
-        config.zellij_pane_mode,
-      );
+      multiplexer = new ZellijMultiplexer(config.layout, config.main_pane_size);
       actualType = 'zellij';
       break;
     case 'herdr':
@@ -47,7 +44,7 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       actualType = 'herdr';
       break;
     case 'cmux':
-      multiplexer = new CmuxMultiplexer();
+      multiplexer = new CmuxMultiplexer(config.layout, config.main_pane_size);
       actualType = 'cmux';
       break;
     case 'kitty':
@@ -55,37 +52,29 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       actualType = 'kitty';
       break;
     case 'auto': {
-      // Auto-detect based on environment variables only
-      // Note: Does NOT fall back to binary availability checks
-      if (
-        process.env.CMUX_SOCKET_PATH &&
-        process.env.CMUX_WORKSPACE_ID &&
-        process.env.CMUX_SURFACE_ID
-      ) {
-        multiplexer = new CmuxMultiplexer();
+      // Auto-detect from pane-scoped client environment signals only.
+      // Note: Does NOT fall back to binary availability checks.
+      if (process.env.CMUX_TUI_SOCKET || process.env.CMUX_MUX_SOCKET) {
+        // New-generation cmux TUI; CMUX_TUI_SOCKET takes precedence over the
+        // legacy CMUX_MUX_SOCKET alias.
+        multiplexer = new CmuxMultiplexer(config.layout, config.main_pane_size);
         actualType = 'cmux';
-      } else if (process.env.TMUX) {
+      } else if (process.env.TMUX_PANE) {
         multiplexer = new TmuxMultiplexer(config.layout, config.main_pane_size);
         actualType = 'tmux';
-      } else if (process.env.ZELLIJ) {
+      } else if (process.env.ZELLIJ_PANE_ID) {
         multiplexer = new ZellijMultiplexer(
           config.layout,
           config.main_pane_size,
-          config.zellij_pane_mode,
         );
         actualType = 'zellij';
-      } else if (process.env.HERDR_ENV || process.env.HERDR_PANE_ID) {
-        // Check Herdr before kitty: kitty exports KITTY_PID to every child
-        // process, so a user running OpenCode inside kitty with Herdr active
-        // would otherwise silently resolve to kitty and fail every spawn
-        // (no KITTY_LISTEN_ON). Herdr's env vars are only set when Herdr is
-        // actually active, so this is safe to prefer.
+      } else if (process.env.HERDR_PANE_ID) {
         multiplexer = new HerdrMultiplexer(
           config.layout,
           config.main_pane_size,
         );
         actualType = 'herdr';
-      } else if (process.env.KITTY_PID || process.env.KITTY_WINDOW_ID) {
+      } else if (process.env.KITTY_WINDOW_ID) {
         multiplexer = new KittyMultiplexer(
           config.layout,
           config.main_pane_size,

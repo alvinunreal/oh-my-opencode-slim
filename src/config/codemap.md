@@ -187,10 +187,10 @@ This allows consumers to import directly from `src/config` rather than individua
 - `default_preset`: Default preset name to use
 
 ### MultiplexerConfig
-- `type`: "auto", "tmux", "zellij", or "none"
+- `type`: "auto", "tmux", "zellij", "herdr", "cmux", "kitty", or "none" (client-local admission)
 - `layout`: Pane layout (main-horizontal, main-vertical, tiled, even-horizontal, even-vertical)
-- `main_pane_size`: Percentage for main pane (20-80)
-- `zellij_pane_mode`: "agent-tab" or "current-tab"
+- `main_pane_size`: Percentage for main pane (20-80), tmux main-* layouts only
+- `zellij_pane_mode`: **removed/deprecated** — stripped by `sanitizeMultiplexerConfig` with a once-per-process warning; zellij panes always open in the parent pane's tab
 
 ## Environment Variable Support
 
@@ -199,7 +199,8 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ## Backward Compatibility
 
-- Legacy `tmux.enabled` is automatically migrated to `multiplexer.type = 'tmux'`
+- Legacy top-level `tmux` config key is **deprecated and ignored** (warning); use `multiplexer.*`
+- Deprecated `multiplexer.zellij_pane_mode` is stripped with a once-per-process warning; invalid `multiplexer` values disable pane management (`type: "none"`) with one diagnostic
 - Legacy nested `councillors` format in presets is automatically unwrapped
 - Legacy `master` field in council config is accepted but ignored (council agent synthesizes directly)
 

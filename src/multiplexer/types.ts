@@ -66,38 +66,3 @@ export interface Multiplexer {
    */
   applyLayout(layout: MultiplexerLayout, mainPaneSize: number): Promise<void>;
 }
-
-/**
- * Server health check utility (shared across implementations)
- */
-export async function isServerRunning(
-  serverUrl: string,
-  timeoutMs = 3000,
-  maxAttempts = 2,
-): Promise<boolean> {
-  const healthUrl = new URL('/health', serverUrl).toString();
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-    let response: Response | null = null;
-    try {
-      response = await fetch(healthUrl, { signal: controller.signal }).catch(
-        () => null,
-      );
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (response?.ok) {
-      return true;
-    }
-
-    if (attempt < maxAttempts) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-  }
-
-  return false;
-}

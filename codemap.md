@@ -18,7 +18,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | Path | Role |
 |---|---|
 | `package.json` | Package manifest, dependency graph, release scripts, published file list. |
-| `src/index.ts` | Main plugin bootstrap: wires agents (incl. dynamic councillors), tools, MCPs, hooks, shared background job board + supervisor, multiplexer session mirroring, interview support, cache monitor, orchestrator-wake scheduler, TUI preset switching, and health checks. Exports the dual `default.server`/`default.setup` so v1 and v2 hosts share one build. |
+| `src/index.ts` | Main plugin bootstrap: wires agents (incl. dynamic councillors), tools, MCPs, hooks, shared background job board + supervisor, interview support, cache monitor, orchestrator-wake scheduler, TUI preset switching, and health checks. Does not touch multiplexer pane lifecycle (client-only). Exports the dual `default.server`/`default.setup` so v1 and v2 hosts share one build. |
 | `src/cli/index.ts` | CLI entrypoint for installation/bootstrap workflows. |
 | `src/config/schema.ts` | Source-of-truth runtime config schema used by validation and schema generation. |
 | `src/config/runtime.ts` | Per-directory `RuntimeConfig` singleton: derived getters over the frozen plugin config, pre-mutation host-config snapshot, and preset/model overrides. |
@@ -47,11 +47,11 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/hooks/loop-command/` | `/loop` runtime command: extracts goal/successCriteria/maxAttempts and drives an iterative retry loop with a per-run history directory. | [View Map](src/hooks/loop-command/codemap.md) |
 | `src/interview/` | `/interview` feature: per-session and dashboard prompt/state orchestration, persistence, local UI, and cross-process coordination. | [View Map](src/interview/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and per-provider MCP definitions. | [View Map](src/mcp/codemap.md) |
-| `src/multiplexer/` | Terminal multiplexer abstraction layer with backend selection, session mirroring, polling fallback, and shutdown lifecycle orchestration. | [View Map](src/multiplexer/codemap.md) |
+| `src/multiplexer/` | Terminal multiplexer abstraction layer: backend selection plus tmux/zellij/herdr/kitty/cmux adapters. Pane lifecycle (admission, spawn, stable-idle close, rebuild, leftover sweep) runs in the TUI client process under `client/`; the server does not participate. | [View Map](src/multiplexer/codemap.md) |
 | `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
 | `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
 | `src/multiplexer/herdr/` | herdr backend implementation for pane lifecycle. | [View Map](src/multiplexer/herdr/codemap.md) |
-| `src/multiplexer/cmux/` | cmux adapter plus dedicated lifecycle, global state registry, and close policy. | [View Map](src/multiplexer/codemap.md) |
+| `src/multiplexer/cmux/` | cmux new-generation TUI adapter only; no dedicated lifecycle, global state registry, or close policy. | [View Map](src/multiplexer/codemap.md) |
 | `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
 | `src/skills/codemap/` | Repository-mapping skill package and codemap state-management script. | [View Map](src/skills/codemap/codemap.md) |
 | `src/skills/clonedeps/` | Workflow-only dependency source mirroring skill that routes discovery/ref resolution through librarian and direct orchestrator git operations. | [View Map](src/skills/clonedeps/codemap.md) |
@@ -71,7 +71,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
    - Agent definitions (incl. dynamic councillors) are produced by `src/agents/`.
    - Tool factories from `src/tools/` and MCP definitions from `src/mcp/` are registered.
    - Hooks from `src/hooks/` are attached; the observation-only cache monitor is created before config loads and sees every event.
-   - Delegation orchestration, multiplexer session mirroring, interview support, task-session aliasing, orchestrator-wake scheduling, TUI preset switching, and the init health check are initialized.
+   - Delegation orchestration, interview support, task-session aliasing, orchestrator-wake scheduling, TUI preset switching, and the init health check are initialized. (Multiplexer pane lifecycle is initialized by the TUI client in `src/tui.ts`, never by the server entry.)
 
 2. **Interactive request handling**
    - The orchestrator prompt drives routing decisions.
@@ -83,7 +83,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
    - Native OpenCode background tasks are parsed from `task` output and tracked in the shared background job board (board + store + coordinator + supervisor in `src/utils/`).
    - `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and injects background/reusable job context; a delayed runtime-status reconciliation and stop-confirmation grace keep board state honest against live session status.
    - `src/hooks/orchestrator-wake/` periodically nudges an idle parent orchestrator when incomplete TODOs remain and reacts to jobs that stop without a terminal result.
-   - `src/multiplexer/` optionally mirrors those sessions into tmux, Zellij, Herdr, cmux, or kitty panes/surfaces (tmux routing resolves the attached parent-session pane registration).
+   - The TUI client (`src/tui.ts` → `src/multiplexer/client/`) optionally mirrors those sessions into tmux, Zellij, Herdr, cmux, or kitty panes/surfaces; each client anchors new panes to its own pane resolved from the client environment at spawn time (never a shared registry).
    - Results flow back into the parent session through notifications/output polling.
 
 4. **Install/release path**
@@ -96,10 +96,8 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/index.ts` is the central composition root for nearly every runtime subsystem.
 - `src/config/` feeds `src/agents/`, session/delegation utilities, and MCP registration.
 - `src/cli/skills.ts` and `src/cli/custom-skills.ts` bridge install-time skill packaging with runtime permission policy.
-- Session/delegation utilities depend on `src/multiplexer/` and cooperate with helpers in `src/utils/` for result extraction, task output parsing, and alias state.
-- cmux-specific readiness, retry, orphan, and cleanup state lives under
-  `src/multiplexer/cmux/`; the generic manager delegates cmux events so other
-  multiplexer behavior remains on the upstream path.
+- `src/multiplexer/` is client-only: `src/tui.ts` wires the per-client pane lifecycle, while the server entry must not reach `src/multiplexer/client/*` or the adapters (enforced by `src/dependency-contract.test.ts`, invariant I1).
+- `src/multiplexer/cmux/` is a plain adapter: readiness polling, retry/mutation queues, orphan cooldowns, close budgets, and global pane registries no longer exist in the module.
 - Council mode is implemented in `src/agents/`; `council-agents.ts` builds dynamic `councillor-<name>` subagents from council presets, the orchestrator dispatches them, and the council agent synthesizes responses.
 - `src/tools/preset-switch.ts` + `src/tui-preset.ts` implement `/preset` switching: the preset name (or preset edits) is persisted to the user config file and takes effect on the next reload; the agent registry is never hot-swapped mid-session.
 - `src/hooks/task-session-manager/` depends on `src/utils/background-job-board.ts`, `background-job-store.ts`, `background-job-coordinator.ts`, `background-job-supervisor.ts`, `session-runtime-status.ts`, and `task.ts`, and injects prompt content only through `src/hooks/cache-safe-injection.ts`.

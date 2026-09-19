@@ -648,9 +648,10 @@ Late completion, busy, retry, or error events cannot replace a published hard
 timeout, and a hard wall-clock timeout is not recoverable through the existing
 external task-wait timeout path. The timeout outcome remains visible to the
 parent through the normal terminal-unreconciled Background Job Board flow; no
-prompt or raw task-result rewrite is used. Timeout terminals also issue a
-permanent logical pane-close intent so generic and cmux multiplexer paths do not
-respawn a pane on late busy events.
+prompt or raw task-result rewrite is used. The timeout path has no multiplexer
+coupling: pane lifecycle runs entirely in the TUI client and reacts only to
+session events, so the former permanent logical pane-close intent was removed
+together with the server-side pane lifecycle.
 
 `wallClockTimeoutMs` accepts `0` or integers from `60000` through `2147483647`;
 `abortGraceMs` accepts integers from `1000` through `60000`. This feature is

@@ -179,25 +179,21 @@ describe('HerdrMultiplexer', () => {
     ]);
   });
 
-  test('uses --current when HERDR_PANE_ID is not set', async () => {
+  test('returns not_found and issues no command when HERDR_PANE_ID is not set', async () => {
     delete process.env.HERDR_PANE_ID;
 
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
-    await herdr.spawnPane(
+    const result = await herdr.spawnPane(
       'session-1',
       'Herdr worker',
       'http://localhost:4096',
       '/repo',
     );
 
-    const splitCommand = commands().find((command) =>
-      command.includes('split'),
-    );
-
-    expect(splitCommand).toContain('--current');
-    expect(splitCommand).not.toContain('w1:p1');
+    expect(result).toEqual({ success: false, error: 'not_found' });
+    expect(commands()).toHaveLength(0);
   });
 
   test('closes herdr panes gracefully', async () => {
@@ -314,7 +310,7 @@ describe('HerdrMultiplexer', () => {
       '/repo',
     );
 
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, error: 'hard' });
   });
 
   test('reports failure when split returns non-zero exit code', async () => {
@@ -338,7 +334,7 @@ describe('HerdrMultiplexer', () => {
       '/repo',
     );
 
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, error: 'hard' });
   });
 
   test('reports failure when split output has no pane_id', async () => {
@@ -362,7 +358,7 @@ describe('HerdrMultiplexer', () => {
       '/repo',
     );
 
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, error: 'hard' });
   });
 
   test('reports failure when pane run returns non-zero exit code', async () => {
@@ -389,7 +385,7 @@ describe('HerdrMultiplexer', () => {
       '/repo',
     );
 
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, error: 'hard' });
   });
 
   test('closes orphaned pane when pane run fails (non-zero exit)', async () => {
@@ -417,7 +413,7 @@ describe('HerdrMultiplexer', () => {
       '/repo',
     );
 
-    expect(result).toEqual({ success: false });
+    expect(result).toEqual({ success: false, error: 'hard' });
 
     const closeCommands = commands().filter(
       (c) => c[1] === 'pane' && c[2] === 'close',
@@ -551,11 +547,13 @@ describe('HerdrMultiplexer', () => {
     ]);
   });
 
-  test('isInsideSession returns true when HERDR_ENV is set', async () => {
+  test('isInsideSession returns false when only HERDR_ENV is set', async () => {
+    delete process.env.HERDR_PANE_ID;
+
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
-    expect(herdr.isInsideSession()).toBe(true);
+    expect(herdr.isInsideSession()).toBe(false);
   });
 
   test('isInsideSession returns true when HERDR_PANE_ID is set', async () => {
@@ -846,5 +844,93 @@ describe('HerdrMultiplexer', () => {
     // Second split: agent area (w1:p2) → down
     expect(splitCommands[1][3]).toBe('w1:p2');
     expect(splitCommands[1]).toContain('down');
+  });
+
+  test('keeps the full encoded FR-8 label when renaming a pane', async () => {
+    const encoded = 'omosc:4242:ses_f41e46f05ffeoEESP7f24NJ9d6';
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    await herdr.spawnPane('child', encoded, 'http://localhost:4096', '/repo');
+
+    const rename = commands().find((command) => command.includes('rename'));
+    expect(rename).toEqual([
+      '/usr/bin/herdr',
+      'pane',
+      'rename',
+      'w1:p2',
+      encoded,
+    ]);
+  });
+
+  test('listPanesWithTitles reads the label field from pane list', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('list')) {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            id: 'cli:pane:list',
+            result: {
+              type: 'pane_list',
+              panes: [
+                { pane_id: 'w1:p1', terminal_title: 'shell' },
+                { pane_id: 'w1:p2', label: 'omosc:123:ses_abc' },
+              ],
+            },
+          }) + '\n',
+        );
+      }
+      return createSpawnResult();
+    });
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    expect(await herdr.listPanesWithTitles()).toEqual([
+      { paneId: 'w1:p1', title: '' },
+      { paneId: 'w1:p2', title: 'omosc:123:ses_abc' },
+    ]);
+  });
+
+  test('sweep closes only the dead-owner terminal pane (FR-8)', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('list')) {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            id: 'cli:pane:list',
+            result: {
+              type: 'pane_list',
+              panes: [
+                { pane_id: 'w1:p1', terminal_title: 'shell' },
+                { pane_id: 'w1:p2', label: 'omosc:999:ses_gone' },
+                { pane_id: 'w1:p3', label: 'omosc:4242:ses_gone' },
+                { pane_id: 'w1:p4', label: 'omosc:999:ses_alive' },
+              ],
+            },
+          }) + '\n',
+        );
+      }
+      return createSpawnResult();
+    });
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const { sweepLeftoverPanes } = await import('../client/sweep');
+    const herdr = new HerdrMultiplexer('main-vertical', 60);
+
+    const stats = await sweepLeftoverPanes({
+      adapter: herdr,
+      isProcessAlive: (pid) => pid !== 999,
+      isSessionTerminal: async (child) => child === 'ses_gone',
+    });
+
+    expect(stats.closed).toBe(1);
+    const closes = commands().filter((command) => command.includes('close'));
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toEqual(['/usr/bin/herdr', 'pane', 'close', 'w1:p2']);
   });
 });

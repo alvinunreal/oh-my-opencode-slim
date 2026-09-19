@@ -5,7 +5,11 @@ import {
   mergePluginConfigs,
   normalizeDisabledArrayKeys,
 } from '../config/loader';
-import { type PluginConfig, PluginConfigSchema } from '../config/schema';
+import {
+  MultiplexerConfigStrictSchema,
+  type PluginConfig,
+  PluginConfigSchema,
+} from '../config/schema';
 import { stripJsonComments } from './config-io';
 
 export type DoctorArgs = {
@@ -56,6 +60,47 @@ export type DoctorResult = {
   presetCheck?: PresetCheckResult;
 };
 
+/**
+ * Diagnostic-only re-validation of the raw `multiplexer` block.
+ *
+ * Runtime parsing runs `sanitizeMultiplexerConfig` before zod validation, so
+ * invalid `multiplexer.*` values are rewritten to `type: "none"` and never
+ * surface in the main parse. Doctor is a diagnostic surface: validate the raw
+ * object with the unsanitized schema and merge those issues (path-prefixed
+ * with `multiplexer.`) so the user still sees the mistake.
+ */
+function collectMultiplexerIssues(rawConfig: unknown): z.ZodIssue[] {
+  if (
+    typeof rawConfig !== 'object' ||
+    rawConfig === null ||
+    Array.isArray(rawConfig)
+  ) {
+    return [];
+  }
+
+  const multiplexer = (rawConfig as Record<string, unknown>).multiplexer;
+  // Only a present, object-shaped block is re-validated: non-object values
+  // (and absence) are handled by the runtime sanitizer and are out of scope
+  // for the `multiplexer.*` path diagnostics doctor restores.
+  if (
+    typeof multiplexer !== 'object' ||
+    multiplexer === null ||
+    Array.isArray(multiplexer)
+  ) {
+    return [];
+  }
+
+  const result = MultiplexerConfigStrictSchema.safeParse(multiplexer);
+  if (result.success) {
+    return [];
+  }
+
+  return result.error.issues.map((issue) => ({
+    ...issue,
+    path: ['multiplexer', ...issue.path],
+  }));
+}
+
 function checkConfigFile(
   scope: 'user' | 'project',
   configPath: string | null,
@@ -91,8 +136,18 @@ function checkConfigFile(
       console.warn(`[oh-my-opencode-slim] ${message}`);
     });
     const parseResult = PluginConfigSchema.safeParse(rawConfig);
+    // The runtime schema sanitizes invalid multiplexer values into
+    // `type: "none"`, hiding them from the main parse. Merge what the
+    // unsanitized schema finds so doctor still reports invalid-schema. The
+    // sanitizer guarantees the main parse never reports these itself, so no
+    // issue can appear twice.
+    const multiplexerIssues = collectMultiplexerIssues(rawConfig);
 
-    if (!parseResult.success) {
+    if (!parseResult.success || multiplexerIssues.length > 0) {
+      const error = new z.ZodError([
+        ...(parseResult.success ? [] : parseResult.error.issues),
+        ...multiplexerIssues,
+      ]);
       return {
         scope,
         path: configPath,
@@ -100,8 +155,8 @@ function checkConfigFile(
         ok: false,
         error: {
           kind: 'invalid-schema',
-          message: z.prettifyError(parseResult.error),
-          issues: parseResult.error.issues,
+          message: z.prettifyError(error),
+          issues: error.issues,
         },
       };
     }

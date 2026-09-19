@@ -1,22 +1,32 @@
 # Multiplexer Integration Guide
 
 Use tmux, Zellij, Herdr, cmux, or kitty to watch subagents work in live panes
-while OpenCode keeps running in your main session.
+next to the TUI client that displays their parent session.
+
+> **Execution model:** panes are opened by the **TUI client** (`opencode attach`,
+> or the TUI process of `opencode --port`), never by the OpenCode server. Each
+> client manages only its own panes. See
+> [Per-client view semantics](#per-client-view-semantics).
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Deployment Modes](#deployment-modes)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Layouts](#layouts)
+- [Per-client view semantics](#per-client-view-semantics)
+- [Diagnostics and Logs](#diagnostics-and-logs)
+- [Known Limitations](#known-limitations)
+- [Behavior Changes and Removals](#behavior-changes-and-removals-行为变更与移除清单)
 - [Troubleshooting](#troubleshooting)
-- [Advanced Usage](#advanced-usage)
 
 ---
 
 ## Overview
 
-When OpenCode launches child agent sessions, oh-my-opencode-slim can open panes for those sessions automatically.
+When OpenCode launches child agent sessions, oh-my-opencode-slim can open panes
+for those sessions automatically.
 
 - **Real-time visibility** into agent activity
 - **Automatic pane management** while tasks run
@@ -27,59 +37,58 @@ When OpenCode launches child agent sessions, oh-my-opencode-slim can open panes 
 
 *OpenCode running in tmux with live subagent panes.*
 
-OpenCode 1.17.18's normal default (`port 0`) does not expose a TCP listener that
-another `opencode attach` process can use from a multiplexer pane. Start
-OpenCode with an explicit `--port`, but do not hard-code `4096` when running
-multiple instances. The plugin now reads `ctx.serverUrl` only when checking,
-spawning, or polling, which avoids snapshotting the temporary startup URL; it
-cannot create a listener that OpenCode did not start.
+How it works:
 
-For cmux, a session status that remains missing for more than the 30-second
-grace period is treated as an idle candidate. Closing still requires the pane
-to have been attached for at least 10 seconds, three stable idle-candidate
-checks, and a final status recheck.
+1. The **server** runs sessions and dispatches subagents. It never creates,
+   closes, or positions a pane, and never reads multiplexer environment
+   variables.
+2. Every **TUI client** that displays the parent session subscribes to the
+   host session events and, for each eligible child session, splits **the pane
+   it is itself running in**.
+3. The pane runs a pure view command:
 
-If all bounded close attempts and both cooldown retries are exhausted, the pane
-remains tracked as an orphan without a running timer. A later lifecycle for the
-same directory claims it with a fresh, bounded close-attempt budget.
+   ```text
+   opencode attach <serverUrl> --session <childSessionId> --dir <directory>
+   ```
 
-This zsh helper preserves an explicit `--port` and exports the matching
-`OPENCODE_PORT`. Otherwise, it asks Python to select an available loopback port
-and starts OpenCode with that port explicitly:
+   No prompt or instruction is ever passed to the pane; the plugin pane flow
+   never creates a session and never sends a prompt. A pane is a view of a
+   child that already exists.
+4. When the child is deleted, or goes stable-idle, the client closes its pane.
+   If the child turns busy again while its parent is still displayed, the pane
+   is rebuilt at the then-current display position (never a remembered one).
 
-```zsh
-omos() {
-  local port arg
+Because dispatch happens only on the server, opening panes from several clients
+does not multiply subagent dispatch: the number of dispatches always equals the
+number of tasks the parent session started, regardless of how many panes exist.
 
-  for arg in "$@"; do
-    if [[ "$arg" == --port=* ]]; then
-      port="${arg#--port=}"
-      break
-    fi
-  done
+Panes are opened only when the client can determine everything it needs. Any
+uncertainty (admission mismatch, embedded host with no listener, missing
+anchor, readiness timeout, adapter failure) is **fail-closed**: no pane is
+created and a structured reason is logged.
 
-  if [[ -z "$port" ]]; then
-    local -a args=("$@")
-    local -i index
-    for ((index = 1; index <= ${#args}; index++)); do
-      if [[ "${args[index]}" == --port ]]; then
-        port="${args[index + 1]}"
-        break
-      fi
-    done
-  fi
+## Deployment Modes
 
-  if [[ -n "$port" ]]; then
-    OPENCODE_PORT="$port" command opencode "$@"
-    return
-  fi
+Pane behavior is fixed per host mode:
 
-  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()') || return
-  OPENCODE_PORT="$port" command opencode --port "$port" "$@"
-}
-```
+| Host start | Process shape | Server URL | Pane behavior |
+|---|---|---|---|
+| bare `opencode` | single process, TUI thread + embedded server, no TCP listener | sentinel, not attachable | **Not supported**: fail-closed + exactly one diagnostic |
+| `opencode --port N` (or `--hostname` / `--mdns`) | single process, embedded server + listener | real | Supported (recommended single-machine path) |
+| `opencode serve` + N × `opencode attach <url>` | multiple processes | real | Supported (target deployment) |
+| `opencode run` | no TUI host | — | No pane (child runs in the host's native background mode) |
+| `opencode --mini` | TUI host does not load plugins | — | No pane |
+| v2 host | — | — | Feature off (v2 `setup()` is not wired) |
 
----
+**Why embedded mode is not supported yet** (verbatim from the requirements,
+§2.2):
+
+> 裸 `opencode` 以单进程双线程运行（TUI 主线程 + 内嵌 server），不建立 TCP 监听，子 pane 中的 `opencode attach` 无 URL 可连；插件也不能替宿主创建监听。因此 pane 功能要求 server 可经 URL 访问——请使用 `opencode --port <端口>` 或 `opencode serve` + `opencode attach <url>`。检测到此模式时，功能关闭并记录一条诊断。
+
+The diagnostic for this case is the `host-unreachable` reason (see
+[Diagnostics and Logs](#diagnostics-and-logs)); it is emitted **exactly once per
+process**. `opencode run` and `opencode --mini` never initialize the pane
+wiring at all, so they produce no panes and no diagnostic noise.
 
 ## Quick Start
 
@@ -99,142 +108,87 @@ Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`):
 }
 ```
 
-**Tmux only:**
+**A specific adapter:**
 
 ```jsonc
 {
   "multiplexer": {
-    "type": "tmux",
-    "layout": "main-vertical",
-    "main_pane_size": 60
+    "type": "tmux"
   }
 }
 ```
 
-**Zellij only:**
+`type` is resolved **per client**: the client checks its own environment and
+only enables panes when the configured adapter matches what it detects.
 
-```jsonc
-{
-  "multiplexer": {
-    "type": "zellij"
-  }
-}
+### 2. Start OpenCode with a reachable server
+
+**Single machine (embedded TUI with a listener):**
+
+```bash
+tmux            # or zellij / herdr / kitty / cmux
+opencode --port 4096
 ```
 
-**Herdr only:**
+Do not hard-code a fixed port when running several instances — pick a free one.
 
-```jsonc
-{
-  "multiplexer": {
-    "type": "herdr"
-  }
-}
+**Multiple clients / remote server (target deployment):**
+
+```bash
+opencode serve --port 4096
 ```
 
-The Herdr adapter works with Herdr **0.8.0+**. Install Herdr's official
-OpenCode lifecycle integration separately:
+then, inside each multiplexer pane that should display the session:
+
+```bash
+opencode attach http://127.0.0.1:4096
+```
+
+### 3. Adapter-specific setup
+
+**Tmux** — no setup. The client is detected via `TMUX_PANE` and addresses its
+own tmux server with `-S <socket>` taken from `TMUX`.
+
+**Zellij** — requires Zellij **0.44.1 or newer**. Detected via
+`ZELLIJ_PANE_ID`; every command is addressed with `--session <name>` from
+`ZELLIJ_SESSION_NAME`. Child panes always open in the tab containing the parent
+pane — there is no dedicated agents tab and no tab switching.
+
+**Herdr** — detected via `HERDR_PANE_ID`. Herdr's own OpenCode lifecycle
+integration can be installed separately:
 
 ```bash
 herdr integration install opencode
 ```
 
-For Marketplace discoverability, publish this repository with the required
-`herdr-plugin` repository topic, then install it with:
+**cmux** — requires the **new-generation TUI** (the cross-platform Rust
+`cmux.protocol/2` build; `cmux-tui-v0.13.3+` is the practical floor). Detected
+via `CMUX_TUI_SOCKET` (preferred) or legacy `CMUX_MUX_SOCKET`; the anchor is
+resolved from `CMUX_TUI_TERMINAL_ID`. The old-generation macOS app (0.64.x,
+surface model) is **not supported**. Availability is a protocol read
+self-check, not `--version` (the binary reports a crate version unrelated to
+the npm distribution), so never assume that a `cmux` on `PATH` is the TUI — an
+explicit binary path wins when the two coexist.
 
-```bash
-herdr plugin install alvinunreal/oh-my-opencode-slim
-```
-
-The Marketplace entry describes this OpenCode plugin's Herdr adapter. It does
-not install a standalone native Herdr runtime plugin or lifecycle reporter.
-
-**cmux only:**
-
-```jsonc
-{
-  "multiplexer": {
-    "type": "cmux"
-  }
-}
-```
-
-cmux 0.64.14 or newer is required; 0.64.17 or newer is recommended.
-
-**Kitty only:**
-
-```jsonc
-{
-  "multiplexer": {
-    "type": "kitty"
-  }
-}
-```
-
-Kitty requires `allow_remote_control` **and** `listen_on` in `kitty.conf`.
-`listen_on` opens a UNIX socket and kitty exports `KITTY_LISTEN_ON` to its
-child processes (including OpenCode). The plugin passes that env through to
-every `kitten @` invocation automatically — no extra plugin config is needed.
-This is required because OpenCode spawns subagent commands in a process
-detached from the kitty window's controlling terminal, where the tty-based
-remote-control path does not work.
+**Kitty** — requires `allow_remote_control` **and** `listen_on` in
+`kitty.conf`:
 
 ```conf
 allow_remote_control yes
 listen_on unix:/tmp/kitty-rc-$(USER)
 ```
 
-After editing `kitty.conf`, **restart kitty** (quit and relaunch) so the socket
-is created. Verify with `kitten @ ls` from a normal shell — it should print JSON
-instead of timing out.
+`listen_on` makes kitty export `KITTY_LISTEN_ON` to its child processes
+(including OpenCode); the plugin passes it through to every `kitten @`
+invocation. After editing `kitty.conf`, **restart kitty** so the socket is
+created, and verify with `kitten @ ls` from a normal shell.
 
-### 2. Start OpenCode inside tmux, Zellij, Herdr, cmux, or kitty
+### 4. Trigger delegated work
 
-**Tmux:**
-
-```bash
-tmux
-opencode --port 4096
-```
-
-**Zellij:**
-
-```bash
-zellij
-opencode --port 4096
-```
-
-**Herdr:**
-
-```bash
-herdr
-opencode --port 4096
-```
-
-**cmux:** Start OpenCode in a cmux surface. Auto-detection requires cmux to
-provide `CMUX_SOCKET_PATH`, `CMUX_WORKSPACE_ID`, and `CMUX_SURFACE_ID`.
-
-**Kitty:**
-
-```bash
-kitty
-opencode --port 4096
-```
-
-### 3. Trigger delegated work
-
-Ask OpenCode to do something that launches subagents. New panes should appear automatically.
-
-Example:
-
-```text
-Please analyze this codebase and create a documentation structure.
-```
-
----
+Ask OpenCode to do something that launches subagents. New panes appear next to
+the pane that displays the parent session.
 
 ## Configuration
-
-### Multiplexer Settings
 
 ```jsonc
 {
@@ -249,225 +203,227 @@ Please analyze this codebase and create a documentation structure.
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"cmux"`, `"kitty"`, or `"none"` |
-| `layout` | string | `"main-vertical"` | Layout preset for tmux; mapped to Zellij/Herdr pane directions where possible; ignored by cmux |
-| `main_pane_size` | number | `60` | Main pane size percentage for tmux only (`20`-`80`); ignored by Zellij, Herdr, and cmux |
-| `zellij_pane_mode` | string | `"agent-tab"` | Zellij pane placement: `"agent-tab"` creates/reuses a dedicated tab; `"current-tab"` opens panes in the tab containing the parent OpenCode pane |
+| `layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (see [Layouts](#layouts)) |
+| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts; ignored by Zellij, Herdr, kitty, and cmux |
 
-### Supported Multiplexers
+All `multiplexer.*` values are read by the client only. An invalid value
+disables pane management (fail-closed) with a once-per-process diagnostic.
 
-| Multiplexer | Status | Notes |
-|-------------|--------|-------|
-| **Tmux** | ✅ Supported | Full layout control with `main-vertical`, `main-horizontal`, `tiled`, and more |
-| **Zellij** | ✅ Supported | Requires Zellij **0.44.1 or newer** (the adapter gates on `zellij --version` and skips itself on older releases; 0.44.0 lacks `new-pane --tab-id`). Creates a dedicated `opencode-agents` tab by default; can open panes in the parent OpenCode tab with `zellij_pane_mode: "current-tab"`; maps `main-*` layouts to pane directions |
-| **Herdr** | ✅ Supported | Splits panes in the current Herdr workspace; maps `main-vertical`/`even-horizontal`/`tiled` layouts to right splits and `main-horizontal`/`even-vertical` to down splits; no layout rebalancing (like Zellij) |
-| **cmux** | ✅ Supported | Requires cmux 0.64.14+ (0.64.17+ recommended); creates the agent column to the right and stacks subsequent agents downward without moving focus |
-| **Kitty** | ✅ Supported | Uses `kitten @ launch` to open new windows; requires `allow_remote_control` **and** `listen_on` in kitty.conf (OpenCode must run inside a kitty window; kitty exports `KITTY_LISTEN_ON` which the plugin passes through to reach kitty from detached subagent processes). No layout rebalancing (like Zellij/Herdr) |
+### Deprecated key: `zellij_pane_mode`
 
-The cmux adapter equalizes vertical splits after each successful add and close.
-It always creates the first agent to the right and subsequent agents downward;
-both `layout` and `main_pane_size` are ignored by cmux.
-cmux's workspace-level vertical equalization can affect other vertical
-subtrees, so the adapter assumes its managed right-hand agent column is the
-only vertical subtree in the workspace that should be automatically
-equalized. `layout` and `main_pane_size` do not alter cmux's left/right width.
+`multiplexer.zellij_pane_mode` is **no longer supported**. It is ignored, pane
+management keeps working under the remaining configuration, and a one-time
+deprecation warning is logged:
 
-cmux follows the OpenCode/OMO lifecycle rather than using a placeholder pane.
-Attach commands require an existing absolute OpenCode executable, resolved in
-the order explicit setting, `OPENCODE_BIN`, `process.execPath`, and
-`process.argv[0]`. If none is valid, no surface is created and a bare
-`opencode` command is never emitted.
-
-Activity cancels an idle close, while deletion upgrades it and retries
-immediately. Failed closes and failed startup cleanup retain the encoded pane
-handle and enter a 30-second then 60-second orphan cooldown. Tracking is only
-removed after cmux reports `closed` or `not_found`; bounded disposal cleanup
-retains unresolved orphan records.
-
-Recovery is bounded per lifecycle instance: after its finite close-attempt
-budget is exhausted, the orphan remains in the process-global registry without
-an infinite retry timer. A later cmux lifecycle for the same directory takes
-ownership and receives a fresh finite budget. This registry survives plugin
-hot reloads in the same process, but is not persistent storage and cannot
-recover state after a hard process crash.
-cmux also pins pane attachment to the host OpenCode executable (or a valid
-absolute `OPENCODE_BIN` override) instead of resolving `opencode` from the new
-pane's `PATH`. This prevents a different installed OpenCode version from
-starting and immediately exiting during attach.
-It polls the configured server's `/session/status` endpoint and creates the
-pane only after the child is reported as `idle`, `running`, `busy`, or `retry`.
-Transient network errors, missing statuses, and server startup races are
-bounded waits and therefore do not flash an empty pane. A readiness timeout or
-a recoverable cmux split-capacity/layout error is retried about two seconds
-later, deduplicated by session, for up to five minutes. Deleting the session or
-shutting down the plugin cancels that deferred work.
-
-To avoid closing a pane during transient idle notifications, cmux keeps it for
-at least ten seconds after attachment and requires three consecutive idle
-polls plus a final idle recheck with no intervening activity. Missing status is
-treated as a grace condition. This stability policy is cmux-specific; existing
-tmux, Zellij, and Herdr close behavior is unchanged. Native cmux support does
-not create placeholder panes while waiting and does not currently expose a
-configurable cmux column width.
-
-**Example: open Zellij subagents in the parent OpenCode tab**
-
-```jsonc
-{
-  "multiplexer": {
-    "type": "zellij",
-    "zellij_pane_mode": "current-tab"
-  }
-}
+```text
+[oh-my-opencode-slim] Deprecated multiplexer.zellij_pane_mode config key found and ignored.
+Zellij panes always open in the tab containing the parent pane.
 ```
 
-In `current-tab` mode, panes are targeted to the tab that contains the parent
-OpenCode pane (resolved from the parent pane's `ZELLIJ_PANE_ID` via
-`list-panes`), even if another Zellij tab is focused when a subagent starts.
-If the parent pane cannot be resolved, the tab target is omitted and Zellij
-places the pane in whatever tab it has focused — no tab id is guessed.
+Remove the key from your config to silence the warning. There is no replacement
+key: same-tab placement is the only Zellij behavior (see
+[Behavior Changes and Removals](#behavior-changes-and-removals-行为变更与移除清单)).
 
-### Tmux attached-session targeting
+### Legacy `tmux` config
 
-When multiple local TUI clients attach to one OpenCode server from different
-tmux sessions, each TUI records its active OpenCode session and `TMUX_PANE`.
-Child panes and layout updates target the tmux pane registered by their parent
-session, so each attached root session keeps its subagents beside itself.
-
-Registrations are session-scoped, refreshed while the TUI is active, and expire
-after 30 seconds without a heartbeat. If no fresh registration exists,
-or tmux rejects a registered target, pane creation falls back to the server
-process's original `TMUX_PANE`. This preserves direct/local TUI behavior and
-avoids losing subagent visibility after an attached pane closes unexpectedly.
-
-### Zellij details
-
-The Zellij adapter requires **Zellij 0.44.1 or newer**. Older releases are
-rejected at availability check time: `isAvailable()` parses `zellij
---version` and returns `false` for anything below 0.44.1, so the Zellij
-backend is silently skipped rather than failing at pane-creation time.
-Version 0.44.0 in particular lacks `new-pane --tab-id`, which the
-`current-tab` mode needs to target the parent OpenCode tab directly.
-
-All pane mutations use **direct pane-id targeting** (no `focus-pane`, which is
-not a valid Zellij CLI action, and no `current-tab-info`, which is
-client-bound and fails from pane child processes):
-
-- `rename-pane <name> -p <paneId>` — best-effort pane title; a rename failure
-  never masks a failing attach write
-- `write-chars <chars> -p <paneId>` — writes the `opencode attach` command and
-  a trailing newline directly into the target pane; if either write fails the
-  pane reuse is reported as a failure
-- `list-panes --json --tab --all` — stable `tab_id` per pane, used to map the
-  parent `ZELLIJ_PANE_ID` to its tab
-- `new-pane --tab-id <id> --direction <dir>` — creates a pane in a specific
-  tab; if Zellij silently drops a `--direction` split (a crowded tab — up to
-  ~4 stacked panes — returns exit 0 but no pane id), the create is retried
-  once without the direction hint, letting Zellij place the pane in the
-  largest free space
-
-In `agent-tab` mode the parent tab (from `ZELLIJ_PANE_ID`) is restored after a
-pane is created in the `opencode-agents` tab, and also immediately after the
-tab is first created (`new-tab` moves client focus to the new tab). If the
-parent tab cannot be located, focus stays in the agent tab rather than
-guessing a tab id.
-
-Pane creation sequences are serialized per session: concurrent sub-agent
-starts are queued so tab/focus-mutating actions (new-tab, go-to-tab-by-id,
-new-pane) never interleave — a cross-tab create cannot race another create's
-focus restore.
-
-### Legacy tmux config
-
-Older configs still work:
+The old top-level `tmux` block (`tmux.enabled` / `tmux.layout` /
+`tmux.main_pane_size`) is deprecated and **ignored** (a warning is logged). It
+is no longer converted automatically. Replace it with `multiplexer.*`:
 
 ```jsonc
-{
-  "tmux": {
-    "enabled": true,
-    "layout": "main-vertical",
-    "main_pane_size": 60
-  }
-}
+// Before (ignored)
+{ "tmux": { "enabled": true, "layout": "main-vertical" } }
+
+// After
+{ "multiplexer": { "type": "tmux", "layout": "main-vertical" } }
 ```
-
-This is converted automatically to `multiplexer.type: "tmux"`.
-
----
 
 ## Layouts
 
-Tmux supports full layout control and main pane sizing. Zellij and Herdr map
-only the `main-*` layout settings to pane creation directions; exact
-`main_pane_size` rebalancing is tmux-only.
+The five standard layouts and their fixed mapping per adapter. Where an adapter
+has no exact equivalent, it uses the nearest native expression (marked
+*approximate*); `main_pane_size` is tmux-only.
 
-| Layout | Description |
-|--------|-------------|
-| `main-vertical` | Your session on the left, agents stacked on the right |
-| `main-horizontal` | Your session on top, agents stacked below |
-| `tiled` | All panes in an equal-sized grid |
-| `even-horizontal` | All panes side by side |
-| `even-vertical` | All panes stacked vertically |
+| Layout | tmux | Zellij | Herdr | kitty | cmux |
+|--------|------|--------|-------|-------|------|
+| `main-vertical` | `-h` split, then `select-layout main-vertical` (+ `main-pane-width`) | `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | `pane split --right` |
+| `main-horizontal` | `-v` split, then `select-layout main-horizontal` (+ `main-pane-height`) | `new-pane --direction down` | `pane split --direction down` | `fat` layout | `pane split --down` |
+| `even-horizontal` | `-h` split, then `select-layout even-horizontal` | no direction (Zellij's native placement) | `pane split --direction right` | `horizontal` layout | `pane split --right` |
+| `even-vertical` | `-v` split, then `select-layout even-vertical` | no direction (native placement) | `pane split --direction down` | `vertical` layout | `pane split --down` |
+| `tiled` | `-h` split, then `select-layout tiled` | no direction (native placement) | `pane split --direction right` | `grid` layout | `pane split --right` |
 
-For Zellij:
+Adapter notes:
 
-| Layout | Zellij behavior |
-|--------|-----------------|
-| `main-vertical` | Opens new subagent panes to the right |
-| `main-horizontal` | Opens new subagent panes down |
-| `even-horizontal` | Uses Zellij's native pane placement |
-| `even-vertical` | Uses Zellij's native pane placement |
-| `tiled` | Uses Zellij's native pane placement |
+- **tmux** — `select-layout` is applied only to anchor panes this client itself
+  split into (panes it created are tracked per anchor), debounced by 150 ms so
+  concurrent child starts do not thrash the window. `main-*` layouts also set
+  `main-pane-width` / `main-pane-height` from `main_pane_size`.
+- **Zellij** — direction is only a hint: when a tab is crowded (Zellij silently
+  drops a directed split around ~4 stacked panes), the create is retried once
+  without a direction and Zellij places the pane in the largest free space of
+  the same tab. There is no layout rebalancing.
+- **Herdr** — `main-vertical` is approximated: the first child opens in a
+  right-side pane, and later children stack vertically inside that agent-area
+  pane; if it is closed, the next spawn recreates it from the parent. There is
+  no layout rebalancing.
+- **kitty** — kitty has no per-window layout API. The mapped built-in layout
+  (`tall` / `fat` / `grid` / `horizontal` / `vertical`) is applied to the tab
+  containing the parent window via `goto-layout --match=window_id:<id>`, and
+  the new window is placed next to the parent with `--next-to=id:<id>` (`id:`
+  is the window search field; `window_id:` is tab-level and must not be used
+  there). A layout that is already applied is not re-applied.
+- **cmux** — only right/down splits exist, so each layout picks the nearest
+  direction and there is no rebalancing.
 
-For kitty:
+## Per-client view semantics
 
-| Layout | Kitty behavior |
-|--------|----------------|
-| `main-vertical` | Uses `tall` layout (full-height main pane on left, side panes stacked on right) |
-| `main-horizontal` | Uses `fat` layout (full-width main pane on top, side panes tiled below) |
-| `even-horizontal` | Uses `horizontal` layout (all panes side-by-side, equal width) |
-| `even-vertical` | Uses `vertical` layout (all panes stacked, equal height) |
-| `tiled` | Uses `grid` layout (all panes in equal-sized grid) |
+A pane is a **view**, and views belong to the viewer:
 
-> **Note:** kitty has no layout rebalancing API like tmux's `select-layout`, and no per-window layout — so the multiplexer applies the mapped kitty layout (`tall`, `fat`, `grid`, `horizontal`, or `vertical`) as a **global change to the active tab**, overriding whatever layout you had there. The `main_pane_size` config is ignored. The layout is only re-applied when it differs from the currently applied one (e.g., via `applyLayout`).
+- Every TUI client that displays the parent session manages **its own** panes.
+  Two clients displaying the same parent session and the same child each get
+  their own pane, anchored next to their own parent pane. This is expected, not
+  a leak: anchors, control planes, and pane ids are all client-local.
+- There are **no cross-process files and no coordination** between clients. A
+  client never writes where it is, and never touches another client's panes.
+- A single client maintains **at most one pane per child session** (in-process
+  state); duplicate/replayed events and reconnect compensation cannot create a
+  second pane in the same client.
+- Dispatch count is independent of pane count: multiple views of one child do
+  not cause additional subagent dispatches.
+- Switching the displayed session does not leak panes: status/idle/deleted
+  events for children this client already holds keep being processed, so their
+  panes still close under the normal rules. A rebuild, however, requires the
+  parent to be the displayed session again at that moment.
 
-For Herdr:
+If you do not want a pane on a particular client, disable panes for that
+project there (`"type": "none"`), or simply close the pane; the child session
+keeps running on the server.
 
-| Layout | Herdr behavior |
-|--------|-----------------|
-| `main-vertical` | Parent OpenCode pane stays on the left. First subagent opens in a right-side pane; subsequent subagents stack vertically in that right column. Parent pane remains dominant. |
-| `main-horizontal` | Each subagent splits below the parent (down). |
-| `even-horizontal` | Each subagent splits to the right of the parent. |
-| `even-vertical` | Each subagent splits below the parent. |
-| `tiled` | Each subagent splits to the right of the parent. |
+## Diagnostics and Logs
 
-**Note:** Herdr has no layout rebalancing API like tmux's `select-layout`.
-The `main_pane_size` config is ignored. The `main-vertical` layout approximates
-tmux's behavior by tracking the first right-side pane and stacking later agents
-vertically within it. If the agent-area pane is closed, the next spawn
-re-creates it from the parent.
+The client initializes plugin logging and records every "no pane" outcome with
+a structured, distinguishable reason:
 
-> **Note:** `main_pane_size` is ignored by herdr. All layouts split from the parent pane.
+| Reason | Meaning |
+|--------|---------|
+| `admission-none` | `multiplexer.type` is `"none"` |
+| `admission-mismatch` | An explicit adapter is configured but the client is inside a different one |
+| `admission-unavailable` | `auto` detected no supported multiplexer, or the config was invalid |
+| `not-our-child` | The child's `parentID` is not the session this client currently displays |
+| `host-unreachable` | Embedded host (no listener / sentinel URL) or the server probe failed |
+| `readiness-timeout` | The child did not appear in `/session/status` within the bounded retry budget |
+| `adapter-unavailable` | The adapter cannot run here (binary missing, old version, protocol self-check failed, no control plane) |
+| `adapter-not-found` | The adapter could not resolve its anchor target; **no multiplexer command is issued** |
+| `adapter-hard` | The multiplexer command failed for another reason |
+| `backfill-skipped` | Reconnect compensation found this client already holds that child's pane |
 
-**Example: wide-screen layout**
+Every successful creation logs the full identity: child session, parent
+session, adapter, pane id, and the anchored target that was split. Admission
+and host diagnostics are emitted at most once per cause per process.
 
-```jsonc
-{
-  "multiplexer": {
-    "type": "tmux",
-    "layout": "main-horizontal",
-    "main_pane_size": 50
-  }
-}
-```
+**Log paths:**
 
-**Example: maximum parallel visibility**
+- Client (TUI): `$HOME/.local/share/opencode/log/oh-my-opencode-slim.tui-<stamp>.log`
+  (honors `OPENCODE_LOG_DIR`; does not follow `XDG_DATA_HOME`)
+- Server: `$HOME/.local/share/opencode/log/oh-my-opencode-slim.<stamp>.log`
 
-```jsonc
-{
-  "multiplexer": {
-    "type": "tmux",
-    "layout": "tiled",
-    "main_pane_size": 50
-  }
-}
-```
+## Known Limitations
+
+- **Crash-leftover panes are best-effort.** Created panes are titled
+  `omosc:<owner pid>:<child session id>`, and on startup/reconnect the client
+  scans its own multiplexer for panes whose owner process is dead **and** whose
+  child session is gone, closing them. However, once `opencode attach` starts
+  inside the pane, the host may rewrite the pane title (for example to
+  `OC | <title>`), so the sweep often cannot recognize a crashed client's
+  leftover pane — it is then left for you to close manually. Cross-multiplexer
+  leftovers are always manual.
+- **Stable idle is a debounce, not task-level completion.** A pane closes when
+  the child stays idle past the debounce window (default 5 s) and a final
+  re-check finds it not busy: an absent `/session/status` entry counts as
+  quiescent (opencode removes the entry when a turn ends), while `busy`/`retry`
+  or an unreadable status keeps the pane. A child that goes briefly idle
+  between model turns can therefore close and be rebuilt when it turns busy
+  again (a visible flap). Session deletion always closes immediately.
+- **Same-window layout interleaving is decorative.** tmux `select-layout`
+  rebalances the whole window; two clients sharing one tmux window can
+  interleave layout updates. Scope is limited to anchors this client created,
+  but visual interleaving is possible and harmless.
+- **Readiness requires the child to be live.** Before creating a pane the
+  client polls `/session/status` (with the project `directory` parameter) with
+  bounded retries. A child that was created but never ran never appears in the
+  live status table and gets no pane (`readiness-timeout`). Real `task`
+  dispatches make the child busy immediately, so this only affects synthetic
+  sessions created through the REST API.
+- **v2 hosts and embedded hosts have no pane feature** (see
+  [Deployment Modes](#deployment-modes)).
+- **Nested multiplexer detection priority is unchanged** (for example, kitty
+  inside herdr), and a client only opens panes for children of the session it
+  currently displays.
+
+## Behavior Changes and Removals (行为变更与移除清单)
+
+This release moves pane execution from the server to the TUI client. Every
+removed or changed behavior, with migration guidance:
+
+| # | Item | Old behavior | New behavior | Migration |
+|---|------|--------------|--------------|-----------|
+| 1 | `multiplexer.zellij_pane_mode` + agent-tab | Default `agent-tab` opened panes in a dedicated `opencode-agents` tab (with focus save/restore, first-pane reuse, `new-tab` / `go-to-tab-by-id`); `current-tab` opted into the parent tab | Key is unsupported and ignored; Zellij panes **always** open in the tab containing the parent pane (no tab creation, no tab switching, no focus save/restore) | Delete `zellij_pane_mode` from config. Leaving it is harmless: panes keep working and one deprecation warning is logged |
+| 2 | tmux pane location registry | The TUI wrote `…/opencode/storage/oh-my-opencode-slim/tmux-panes/<hash>.json` (session → `TMUX_PANE`, owner pid, 30 s TTL); the server read it and otherwise fell back to the **server's own** `TMUX_PANE` | No cross-process files at runtime. Each client anchors on its own `TMUX_PANE`, re-resolved at spawn time, and addresses its own tmux server via `-S <socket>` from `TMUX` | None. Stale `tmux-panes/*.json` files can be deleted; nothing reads them |
+| 3 | Deferred close for background jobs | On idle, the server checked the in-memory background job board; if a job was running the close was skipped and retried when the job finished (no debounce) | Client-side **stable-idle debounce** (default 5 s) plus a final idle re-check; busy within the window cancels the close; deletion closes immediately | None. If a child idles between turns, expect a close/rebuild flap (accepted; see [Known Limitations](#known-limitations)) |
+| 4 | cmux adapter | Old-generation macOS app (0.64.x, surface model): `CMUX_SOCKET_PATH` / workspace / surface ids, readiness polling, deferred spawn retries, orphan cooldowns, finite close budgets, hot-reload takeover, and vertical `equalize` rebalancing | Rewritten for the new-generation TUI (`cmux.protocol/2`): `CMUX_TUI_SOCKET` (or legacy `CMUX_MUX_SOCKET`), two-hop anchor (`CMUX_TUI_TERMINAL_ID` → terminal → tab → pane), `pane split --right/--down`, `pane run --on-exit keep -- <argv>`, `pane close`; availability by protocol read self-check, never `--version`; no cooldowns, budgets, deferred spawns, registries, or `equalize` | Install the new-generation cmux TUI (`cmux-tui-v0.13.3+`). The old macOS app is out of scope; macOS and Linux use the same binary and interface |
+| 5 | Layout scope | Layouts/rebalancing could act broadly (server-side scope, kitty's global active-tab change, cmux `equalize` affecting unrelated vertical subtrees) | Layout and close only ever touch panes this client created: tmux rebalances only anchors it split into, kitty applies its layout to the parent window's tab, cmux performs no rebalancing at all | None. Layout behavior is now strictly per-client and per-created-pane |
+| 6 | kitty active-window behavior | `kitten @ launch` opened windows relative to the active window, and the layout change hit the **active tab** | Anchoring is `KITTY_WINDOW_ID`: the new window is placed `--next-to=id:<parent>` and the mapped layout is applied to the **parent window's tab** (`--match=window_id:<id>`); the active tab is never modified | None. `main_pane_size` remains ignored by kitty |
+| 7 | Embedded-mode restriction | Best-effort behavior with the server's environment; no listener required by design | Bare `opencode` (no TCP listener) is **fail-closed**: no pane and exactly one `host-unreachable` diagnostic; the plugin cannot create a listener for the host | Start with `opencode --port <port>`, or use `opencode serve` + `opencode attach <url>` |
+| 8 | Per-client view semantics | One global manager decided pane placement, with a single view per child | Every client that displays the parent opens **its own** pane; the same child can have several panes, one per viewing client, with no coordination | Expect one pane per displaying client. Close extras manually if undesired; dispatch is still once per task |
+| 9 | Server-side pane execution | `src/index.ts` built a multiplexer session manager and routed `session.created/status/idle/deleted` on the server; pane code read multiplexer env from the server process | Pane code lives only in the TUI entry's dependency graph. The server never creates, closes, or positions a pane and never reads multiplexer environment variables (invariant I1) | None. Headless and v2 hosts are unaffected (feature off) |
+
+## Troubleshooting
+
+**No panes at all**
+
+1. Check the client log
+   (`$HOME/.local/share/opencode/log/oh-my-opencode-slim.tui-*.log`) for the
+   `no pane` reason.
+2. `admission-none` → set `multiplexer.type` to `auto` or the right adapter.
+3. `admission-mismatch` → the configured adapter is not the one the client is
+   inside (for example `type: "zellij"` while running in tmux).
+4. `host-unreachable` → the host has no reachable listener; restart with
+   `--port` or use `serve` + `attach`.
+5. `readiness-timeout` → the child never became visible in `/session/status`
+   (see [Known Limitations](#known-limitations)).
+
+**Panes open in the wrong place**
+
+- The pane is always split from the pane that displays the parent session at
+  spawn time. Move the parent session to another pane/multiplexer first; a
+  rebuild after the child turns busy follows the new position.
+- Missing anchor (`adapter-not-found`) means no multiplexer command was issued
+  at all — the client could not resolve its own anchor from the environment.
+
+**Zellij**
+
+- Older than 0.44.1 → the adapter reports unavailable and is skipped.
+- In a crowded tab, the directed split is retried without a direction; the pane
+  still lands in the same tab.
+
+**Kitty**
+
+- `KITTY_LISTEN_ON` missing → add `listen_on` to `kitty.conf` and restart
+  kitty; verify with `kitten @ ls`.
+
+**cmux**
+
+- `adapter-unavailable` with an old-generation diagnostic → the binary is the
+  0.64.x macOS app, not the TUI. Install the new-generation TUI and/or point
+  the plugin at its binary explicitly.
+
+**Panes close and reopen**
+
+- The child idled past the debounce window and then turned busy again. This is
+  the accepted stable-idle semantics; see
+  [Known Limitations](#known-limitations).
+
+**Leftover panes after a client crash**
+
+- The sweep is best-effort and often cannot match a pane whose title was
+  rewritten by `opencode attach`. Close such panes manually.

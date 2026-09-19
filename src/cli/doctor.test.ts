@@ -267,6 +267,58 @@ describe('runDoctorCheck', () => {
     );
     expect(issuePaths).toContain('agents.oracle.temperature');
     expect(issuePaths).toContain('multiplexer.type');
+    // The sanitizer keeps the invalid value out of the main parse, so the
+    // diagnostic must appear exactly once.
+    expect(issuePaths?.filter((p) => p === 'multiplexer.type')).toHaveLength(1);
+  });
+
+  test('multiplexer-only schema error is reported instead of being sanitized away', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        agents: { oracle: { model: 'test/model' } },
+        multiplexer: { type: 'unknown' },
+      }),
+    );
+
+    const result = runDoctorCheck(projectDir);
+
+    // The main parse succeeds thanks to runtime sanitization, but doctor
+    // must still fail the config and name the offending path.
+    expect(result.ok).toBe(false);
+    expect(result.configs[1].ok).toBe(false);
+    expect(result.configs[1].error?.kind).toBe('invalid-schema');
+    const issuePaths = result.configs[1].error?.issues?.map((i) =>
+      i.path.join('.'),
+    );
+    expect(issuePaths).toContain('multiplexer.type');
+    expect(issuePaths?.filter((p) => p === 'multiplexer.type')).toHaveLength(1);
+  });
+
+  test('valid multiplexer config returns ok', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        multiplexer: { type: 'tmux', layout: 'tiled', main_pane_size: 40 },
+      }),
+    );
+
+    const result = runDoctorCheck(projectDir);
+
+    expect(result.ok).toBe(true);
+    expect(result.configs[1].ok).toBe(true);
+    expect(result.configs[1].error).toBeUndefined();
+    expect(result.configs[1].config?.multiplexer).toEqual({
+      type: 'tmux',
+      layout: 'tiled',
+      main_pane_size: 40,
+    });
   });
 
   test('empty config file returns invalid-json error', () => {

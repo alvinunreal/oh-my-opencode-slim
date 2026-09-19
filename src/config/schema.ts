@@ -134,17 +134,162 @@ export const MultiplexerLayoutSchema = z.enum([
 
 export type MultiplexerLayout = z.infer<typeof MultiplexerLayoutSchema>;
 
-// Zellij pane placement options
-export const ZellijPaneModeSchema = z.enum(['agent-tab', 'current-tab']);
-export type ZellijPaneMode = z.infer<typeof ZellijPaneModeSchema>;
+export const MULTIPLEXER_MAIN_PANE_SIZE_MIN = 20;
+export const MULTIPLEXER_MAIN_PANE_SIZE_MAX = 80;
+export const MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT = 60;
 
-// Multiplexer integration configuration (new unified config)
-export const MultiplexerConfigSchema = z.object({
+const MultiplexerMainPaneSizeSchema = z
+  .number()
+  .min(MULTIPLEXER_MAIN_PANE_SIZE_MIN)
+  .max(MULTIPLEXER_MAIN_PANE_SIZE_MAX);
+
+/**
+ * Multiplexer keys accepted by versions before 2.4.x but no longer
+ * supported. `zellij_pane_mode` selected the removed agent-tab placement;
+ * zellij panes now always open in the tab containing the parent pane.
+ *
+ * The schema strips unknown keys silently, so the raw input must be
+ * inspected before validation to warn instead of dropping the key quietly.
+ */
+export const DEPRECATED_MULTIPLEXER_KEYS = ['zellij_pane_mode'] as const;
+
+export const MULTIPLEXER_DEPRECATED_KEY_MESSAGE =
+  'Deprecated multiplexer.zellij_pane_mode config key found and ignored. ' +
+  'Zellij panes always open in the tab containing the parent pane.';
+
+export const MULTIPLEXER_INVALID_VALUE_MESSAGE =
+  'Invalid multiplexer config value; pane management is disabled. Expected ' +
+  'type (auto|tmux|zellij|herdr|kitty|cmux|none), layout ' +
+  '(main-horizontal|main-vertical|tiled|even-horizontal|even-vertical), ' +
+  'main_pane_size (20-80).';
+
+/** Multiplexer diagnostics are emitted at most once per process. */
+export type MultiplexerDiagnosticKind = 'deprecated-key' | 'invalid-value';
+
+const emittedMultiplexerDiagnostics = new Set<MultiplexerDiagnosticKind>();
+
+/**
+ * Test seam: clears the once-per-process multiplexer diagnostic gate.
+ * Production code never calls this.
+ */
+export function resetMultiplexerDiagnostics(): void {
+  emittedMultiplexerDiagnostics.clear();
+}
+
+function emitMultiplexerDiagnostic(
+  kind: MultiplexerDiagnosticKind,
+  message: string,
+): void {
+  if (emittedMultiplexerDiagnostics.has(kind)) {
+    return;
+  }
+  emittedMultiplexerDiagnostics.add(kind);
+  console.warn(`[oh-my-opencode-slim] ${message}`);
+}
+
+function isPlainConfigObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidMultiplexerKeys(config: Record<string, unknown>): string[] {
+  const invalid: string[] = [];
+  if (
+    'type' in config &&
+    !MultiplexerTypeSchema.safeParse(config.type).success
+  ) {
+    invalid.push('type');
+  }
+  if (
+    'layout' in config &&
+    !MultiplexerLayoutSchema.safeParse(config.layout).success
+  ) {
+    invalid.push('layout');
+  }
+  if (
+    'main_pane_size' in config &&
+    !MultiplexerMainPaneSizeSchema.safeParse(config.main_pane_size).success
+  ) {
+    invalid.push('main_pane_size');
+  }
+  return invalid;
+}
+
+/**
+ * Pre-parse normalization for the raw `multiplexer` block.
+ *
+ * Semantics (spec "配置面"):
+ * - a present `zellij_pane_mode` key is dropped with a once-per-process
+ *   deprecation warning; the remaining multiplexer config and the rest of the
+ *   plugin config keep working;
+ * - an invalid `type` / `layout` / `main_pane_size` value (or a non-object
+ *   `multiplexer` value) disables pane management (`type: "none"`) with a
+ *   once-per-process diagnostic instead of failing the whole plugin config.
+ */
+export function sanitizeMultiplexerConfig(value: unknown): unknown {
+  if (value === undefined) {
+    return value;
+  }
+  if (!isPlainConfigObject(value)) {
+    emitMultiplexerDiagnostic(
+      'invalid-value',
+      `${MULTIPLEXER_INVALID_VALUE_MESSAGE} (multiplexer)`,
+    );
+    return { type: 'none' };
+  }
+
+  let sanitized: Record<string, unknown> = value;
+  const deprecated = DEPRECATED_MULTIPLEXER_KEYS.filter(
+    (key) => key in sanitized,
+  );
+  if (deprecated.length > 0) {
+    emitMultiplexerDiagnostic(
+      'deprecated-key',
+      MULTIPLEXER_DEPRECATED_KEY_MESSAGE,
+    );
+    sanitized = { ...sanitized };
+    for (const key of deprecated) {
+      delete sanitized[key];
+    }
+  }
+
+  const invalid = invalidMultiplexerKeys(sanitized);
+  if (invalid.length > 0) {
+    emitMultiplexerDiagnostic(
+      'invalid-value',
+      `${MULTIPLEXER_INVALID_VALUE_MESSAGE} (invalid: ${invalid.join(', ')})`,
+    );
+    sanitized = { ...sanitized };
+    for (const key of invalid) {
+      delete sanitized[key];
+    }
+    sanitized.type = 'none';
+  }
+
+  return sanitized;
+}
+
+/**
+ * Unsanitized multiplexer object schema. `MultiplexerConfigSchema` is the
+ * runtime entry point and wraps this with `sanitizeMultiplexerConfig`, which
+ * rewrites invalid values to `type: "none"` before validation. Diagnostic
+ * surfaces (doctor) validate with this schema instead, so invalid
+ * `multiplexer.*` values stay visible rather than being silently sanitized
+ * away. "Strict" here means "not sanitized" — unknown keys are still
+ * stripped, so the deprecated-key path is unaffected.
+ */
+export const MultiplexerConfigStrictSchema = z.object({
   type: MultiplexerTypeSchema.default('none'),
   layout: MultiplexerLayoutSchema.default('main-vertical'),
-  main_pane_size: z.number().min(20).max(80).default(60), // percentage
-  zellij_pane_mode: ZellijPaneModeSchema.default('agent-tab'),
+  main_pane_size: MultiplexerMainPaneSizeSchema.default(
+    MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT,
+  ), // percentage
 });
+
+// Multiplexer integration configuration (new unified config)
+export const MultiplexerConfigSchema = z.preprocess(
+  sanitizeMultiplexerConfig,
+  MultiplexerConfigStrictSchema,
+);
 
 export type MultiplexerConfig = z.infer<typeof MultiplexerConfigSchema>;
 

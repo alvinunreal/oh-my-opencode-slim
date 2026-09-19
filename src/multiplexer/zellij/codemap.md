@@ -1,36 +1,43 @@
 # src/multiplexer/zellij/
 
 ## Responsibility
-Implements a Zellij-based multiplexer adapter that creates and manages terminal panes for sub-agent sessions within Zellij workspaces. Provides pane lifecycle management, session isolation, and graceful shutdown for OpenCode's multiplexer interface.
+Implements a Zellij-based multiplexer adapter that creates and manages terminal panes for sub-agent sessions. Runs inside the client process that displays the parent OpenCode session and anchors every child pane to that client's parent pane.
 
 ## Design
 
 ### Architecture Pattern
 - **Adapter Pattern**: Wraps Zellij's CLI actions to implement the Multiplexer interface
-- **State Machine**: Tracks pane/tab state (agentTabId, firstPaneId, firstPaneUsed, parentTabId)
+- **Stateless placement, cached anchor**: The parent tab is resolved once from the parent pane id and cached after a successful lookup; there is no tab/focus state machine anymore
 
 ### Core Components
 
 #### ZellijMultiplexer Class
 - Implements `Multiplexer` interface with `type = 'zellij'`
 - Manages Zellij binary discovery, availability checks, and version gating
-- Handles two operational modes via `paneMode`:
-  - `'agent-tab'` (default): Creates dedicated "opencode-agents" tab
-  - `'current-tab'`: Creates panes in user's current tab
+- Single pane-placement behavior: child panes are always created in the tab
+  containing the parent pane (no dedicated agents tab, no tab switching, no
+  focus save/restore, no first-pane reuse)
 
 #### Version Gating
 - `isAvailable()` runs `zellij --version` and requires Zellij >= 0.44.1
 - Older releases (or unparsable version output) make `isAvailable()` return
-  `false`, so the backend is silently skipped
-- Required because the adapter relies on stable pane-id targeting that only
-  exists in 0.44.1+: `rename-pane <name> -p <paneId>`,
-  `write-chars <chars> -p <paneId>`, `list-panes --json --tab --all` with
-  stable `tab_id`, and `new-pane --tab-id` for cross-tab creation
+  `false`, so the backend is skipped with an `unavailable` failure
+- Required because the same-tab path still uses `new-pane --tab-id` and the
+  stable `tab_id` field of `list-panes --json --tab --all`; both only exist
+  in 0.44.1+ (`rename-pane -p` / `write-chars -p` are no longer used — they
+  retired with the agent tab)
 
 #### Session Management
-- **Pane Creation**: Uses `spawnPane()` to create new panes with OpenCode attach commands
-- **Tab Management**: Ensures "opencode-agents" tab exists, tracks tab/pane IDs
-- **Lifecycle**: Implements `closePane()` with graceful Ctrl+C shutdown before pane termination
+- **Pane Creation**: `spawnPane()` creates a pane in the parent tab with
+  `new-pane --tab-id <parentTab> --direction <dir>`
+- **Multi-instance hardening**: every invocation is prefixed with
+  `--session <ZELLIJ_SESSION_NAME>` (before `action`) so commands cannot hit
+  another zellij session on the same machine
+- **Fail-closed anchoring**: missing `ZELLIJ_PANE_ID`, missing
+  `ZELLIJ_SESSION_NAME`, or an unresolvable parent tab issues no zellij
+  command and returns `{ success: false, error: 'not_found' }`
+- **Lifecycle**: implements `closePane()` with graceful Ctrl+C shutdown before
+  pane termination, also session-addressed
 
 #### Layout Handling
 - Maps `MultiplexerLayout` to Zellij pane directions:
@@ -41,58 +48,26 @@ Implements a Zellij-based multiplexer adapter that creates and manages terminal 
 ### Shell Integration
 - **Command Construction**: Builds `opencode attach` commands with session, server URL, and directory
 - **Pane Naming**: Truncates description to 30 chars for pane titles
-- **Shell Safety**: Uses `quoteShellArg()` to properly escape shell arguments
+- **Shell Safety**: Runs the attach command through `sh -lc`
 
 ## Flow
 
-### Agent-Tab Mode (Default)
+### Spawn (single behavior)
 ```
 1. Plugin loads → ZellijMultiplexer instantiated with layout='main-vertical'
-2. First sub-agent session:
-   - ensureAgentTab() creates "opencode-agents" tab if not exists; `new-tab`
-     moves client focus to the new tab, so a freshly created agent tab is
-     immediately followed by go-to-tab-by-id back to the parent tab
-   - runInPane() renames the default pane and writes the OpenCode attach
-     command via direct pane-id targeting (rename-pane/write-chars with
-     `-p <paneId>`; no focus-pane, which is invalid CLI syntax)
-   - firstPaneUsed flag set to true
-3. Subsequent sub-agent sessions:
-   - createPaneInAgentTab() creates new pane in agent tab
-   - Switches to agent tab, creates pane, switches back to the parent tab
-     (resolved from the parent pane's ZELLIJ_PANE_ID)
-   - If `--direction` new-pane is silently dropped (crowded tab), the create
-     is retried once without the direction hint
-4. All spawnPane creation sequences are serialized through a promise chain
-   (`paneOpsChain`): concurrent sub-agent starts cannot interleave
-   tab/focus-mutating actions (new-tab, go-to-tab-by-id, new-pane), so a
-   cross-tab create cannot race another create's focus restore
-5. Session completion:
-   - closePane() sends Ctrl+C → delay → kill-pane
-   - Pane removed from Zellij workspace
-```
-
-### Current-Tab Mode
-```
-1. Plugin loads → ZellijMultiplexer instantiated with paneMode='current-tab'
-2. spawnPane() calls createPaneInCurrentTab()
-3. Creates pane directly in user's current tab using parentTabId
-4. No tab switching overhead; user remains in their original tab
-```
-
-### Tab/Pane Discovery
-```
-1. findTabByName() uses Zellij's list-tabs action
-   - Tries JSON output first (--json flag)
-   - Falls back to text parsing if JSON unavailable
-2. isAvailable() gates on `zellij --version` >= 0.44.1
-3. getParentTabId() resolves the parent tab from ZELLIJ_PANE_ID via
-   findTabIdForPane(); only successful lookups are cached — a failed query is
-   re-tried on the next spawn so a transient list-panes failure is not
-   permanently treated as "no parent tab". current-tab-info is NOT used: it is
-   client-bound and fails from pane child processes
-4. getFirstPaneInTab() / findTabIdForPane() use listPanesJson()
-   (list-panes --json --tab --all) filtered by tab_id
-5. findTabIdForPane() correlates pane IDs with tab IDs for parent tab tracking
+2. spawnPane() guards the client environment:
+   - ZELLIJ_SESSION_NAME missing → no command, { success: false, error: 'not_found' }
+   - ZELLIJ_PANE_ID missing      → no command, { success: false, error: 'not_found' }
+3. isAvailable() resolves the binary and gates on zellij >= 0.44.1
+4. getParentTabId() resolves the parent pane's tab from ZELLIJ_PANE_ID via
+   list-panes --json --tab --all (cached after the first success)
+   - lookup failure → no command, { success: false, error: 'not_found' }
+5. new-pane --tab-id <parentTab> [--direction <dir>] --name <title>
+   --close-on-exit -- sh -lc '<opencode attach ...>'
+   - if the directed split is silently dropped (exit 0, no terminal_* id),
+     retry once without --direction (keeps --session/--tab-id)
+6. Session completion:
+   - closePane() sends Ctrl+C → delay → close-pane, both --session addressed
 ```
 
 ## Integration Points
@@ -100,31 +75,28 @@ Implements a Zellij-based multiplexer adapter that creates and manages terminal 
 ### Dependencies
 - **Zellij**: External terminal multiplexer (binary must be in PATH)
 - **Multiplexer Interface**: Implements `src/multiplexer/types.ts::Multiplexer`
-- **Config Schema**: Uses `src/config/schema.ts::MultiplexerLayout` and `ZellijPaneMode`
+- **Config Schema**: Uses `src/config/schema.ts::MultiplexerLayout`
 - **Utils**: Uses `src/utils/compat.ts::crossSpawn` for cross-platform process spawning
 
 ### Consumers
-- **Main Plugin**: `src/index.ts` instantiates ZellijMultiplexer via multiplexer factory
-- **Council Agents**: `src/agents/council.ts` and `src/agents/council-agents.ts` use multiplexer for session pane management
-- **Session Lifecycle**: MultiplexerSessionManager coordinates pane creation/cleanup with session events
+- **Multiplexer factory**: instantiates ZellijMultiplexer (client process)
+- **Client lifecycle**: `src/multiplexer/client/lifecycle.ts` calls `spawnPane`/`closePane`
 
 ### Environment
-- **ZELLIJ_PANE_ID**: Used to locate the parent OpenCode pane's tab; drives
-  `current-tab` targeting and the `agent-tab` restore step
-- **Zellij Actions**: All communication via Zellij's CLI action system
-  (new-tab, new-pane, rename-pane, write-chars, close-pane, etc.); pane
-  mutations use direct pane-id targeting (`-p <paneId>`) instead of focus
-  switching
+- **ZELLIJ_PANE_ID**: parent pane; detection signal and the anchor used to
+  resolve the parent tab
+- **ZELLIJ_SESSION_NAME**: explicit `--session` address for every invocation
+- **Zellij Actions**: `new-pane`, `list-panes`, `write`, `close-pane` — all
+  routed with `--session <name>`; no `new-tab`, `go-to-tab-by-id`,
+  `rename-pane`, `write-chars`, `list-tabs`, or `focus-pane`
 
 ### Error Handling
-- Graceful degradation: Returns `{ success: false }` on failures
+- Distinguishable failure reasons: `unavailable` (no binary / old version),
+  `not_found` (unresolvable anchor: missing env or failed parent tab lookup),
+  `hard` (new-pane failures / exceptions)
 - Crowded-split fallback: a `--direction` new-pane that is silently dropped
   (exit 0, no `terminal_*` id) is retried once without the direction hint,
-  letting Zellij place the pane in the largest free space
-- Write failures in runInPane() return `false` — never a silent success
-- Rename failures are best-effort and do not mask attach write failures
-- Tab/pane discovery falls back to text parsing if JSON unavailable
-- Unresolvable parent tab → safe degradation, never a guessed tab id
+  letting Zellij place the pane in the largest free space of the same tab
 - Layout changes are no-op after pane creation (Zellij doesn't support dynamic layout rebalancing)
 
 ## Key Implementation Details
@@ -134,44 +106,32 @@ Implements a Zellij-based multiplexer adapter that creates and manages terminal 
 - `normalizePaneId()` strips "terminal_" prefix for numeric comparisons
 - Tab IDs are numeric strings (e.g., "1", "2")
 
-### Shell Command Safety
-- `buildOpencodeAttachCommand()` constructs safe shell commands with quoted arguments
-- `buildShellLaunchCommand()` wraps commands in `sh -lc` for proper execution
-- Prevents shell injection via `quoteShellArg()` with proper escaping
-
 ### State Tracking
-- `agentTabId`: Caches the "opencode-agents" tab ID after creation
-- `firstPaneId`: Stores the initial pane ID for first sub-agent reuse
-- `firstPaneUsed`: Boolean flag prevents duplicate first pane usage
-- `parentTabId` / `parentTabResolved`: Caches the parent tab ID after a
+- `parentTabId` / `parentTabResolved`: caches the parent tab ID after a
   successful lookup only; failed lookups are retried on the next spawn
-- `paneOpsChain`: Promise chain serializing spawnPane creation sequences
-  (tab/focus-mutating actions) so concurrent spawns cannot race
+- `parentPaneId` / `sessionName`: captured from the client environment at
+  construction; spawn/close fail closed when either is absent
 
 ### Graceful Shutdown Sequence
 ```typescript
-1. send-keys C-c to pane (graceful interrupt)
+1. write Ctrl+C to the pane (`action write --pane-id <id>`, --session addressed)
 2. 250ms delay for process cleanup
-3. kill-pane with pane ID
+3. close-pane with pane ID (--session addressed)
 ```
 
 ## Testing
 - Test file: `src/multiplexer/zellij/index.test.ts`
-- Tests cover: availability checks, pane creation in both modes, tab management, and cleanup
+- Tests cover: detection via `ZELLIJ_PANE_ID`, version gating, same-tab
+  placement with no tab commands, explicit `--session` on every argv,
+  fail-closed behavior without an anchor, crowded-split fallback, layout
+  mapping, and closePane addressing
 - Uses mocking for Zellij binary interactions via crossSpawn
-
-## Performance Considerations
-- Binary availability cached after first check (`hasChecked` flag)
-- Tab discovery optimized with JSON output when available
-- Minimal state maintained; most operations are Zellij CLI calls
-- No polling; relies on Zellij's event-driven pane/tab management
 
 ## Limitations
 - Requires Zellij >= 0.44.1 (older versions make `isAvailable()` return false;
   0.44.0 lacks `new-pane --tab-id`)
 - Zellij silently drops `--direction` splits beyond ~4 stacked panes; the
-  adapter falls back to an undirected create, which still succeeds but uses
-  Zellij's own largest-free-space placement
+  adapter falls back to an undirected create in the same tab
 - Zellij doesn't support exact main pane sizing like tmux
 - Layout configuration only affects future pane creation directions
 - Requires Zellij to be installed and in PATH

@@ -11,17 +11,12 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { stateFilePath } from './companion/manager';
-import type { MultiplexerConfig } from './config';
 import * as wakeHooks from './hooks';
 import {
   getWakeProgress,
   resetOrchestratorWakeGateForTests,
 } from './hooks/orchestrator-wake/wake-gate';
-import pluginModuleDefault, {
-  OhMyOpenCodeLite as plugin,
-  sessionManagerMultiplexerConfig,
-  shouldEnableMultiplexer,
-} from './index';
+import pluginModuleDefault, { OhMyOpenCodeLite as plugin } from './index';
 import { readTuiSnapshot, snapshotSectionsEqual } from './tui-state';
 import { BackgroundJobCoordinator } from './utils/background-job-coordinator';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
@@ -2011,56 +2006,6 @@ describe('system.transform orchestrator injection', () => {
     } finally {
       await hooks.dispose?.();
     }
-  });
-});
-
-describe('multiplexer host gating', () => {
-  let originalEnv: typeof process.env;
-
-  beforeEach(() => {
-    originalEnv = { ...process.env };
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-  });
-
-  test('multiplexer is host-gated off on v2', () => {
-    // Minimal base input satisfying every v1 condition: a configured
-    // multiplexer type plus a live inside-session env marker (TMUX).
-    process.env.TMUX = '/tmp/tmux-1000/default,1,0';
-    const baseInput = {
-      multiplexerConfig: {
-        type: 'tmux',
-        layout: 'main-vertical',
-        main_pane_size: 60,
-        zellij_pane_mode: 'agent-tab',
-      } satisfies MultiplexerConfig,
-    };
-
-    expect(shouldEnableMultiplexer(baseInput)).toBe(true); // v1 unchanged
-    expect(shouldEnableMultiplexer({ hostFlavor: 'v2', ...baseInput })).toBe(
-      false,
-    );
-  });
-
-  test('multiplexer session manager config is forced off on v2 hosts', () => {
-    const multiplexerConfig = {
-      type: 'tmux',
-      layout: 'main-vertical',
-      main_pane_size: 60,
-      zellij_pane_mode: 'agent-tab',
-    } satisfies MultiplexerConfig;
-
-    // v2: type forced to 'none' so the manager's env-based self-gate
-    // (which would fire inside tmux) cannot re-enable pane management.
-    expect(sessionManagerMultiplexerConfig('v2', multiplexerConfig).type).toBe(
-      'none',
-    );
-    // v1: the exact same config object is passed through untouched.
-    expect(sessionManagerMultiplexerConfig(undefined, multiplexerConfig)).toBe(
-      multiplexerConfig,
-    );
   });
 });
 
