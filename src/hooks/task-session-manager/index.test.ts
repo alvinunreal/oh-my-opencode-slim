@@ -392,6 +392,49 @@ describe('task-session-manager hook', () => {
     );
   });
 
+  test('a promoted foreground launch output marks the board record background', async () => {
+    const board = new BackgroundJobBoard();
+    const onLaunch = mock(() => {});
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      backgroundJobSupervisor: { onLaunch } as never,
+    });
+    board.registerLaunch({
+      taskID: 'ses_promoted',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+      provisional: true,
+      now: 100,
+    });
+
+    // Foreground call (no background arg): the child was awaited by a
+    // synchronous task() that foreground-fallback promoted mid-flight.
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        args: {
+          subagent_type: 'oracle',
+          description: 'foreground promoted call',
+        },
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      {
+        output: taskLaunchOutput('ses_promoted'),
+        metadata: { background: true },
+      },
+    );
+
+    const record = board.get('ses_promoted');
+    expect(record?.provisional).toBe(false);
+    expect(record?.state).toBe('running');
+    expect(record?.background).toBe(true);
+    expect(onLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ taskID: 'ses_promoted' }),
+    );
+  });
+
   test('finishes a queued call after its manager generation is replaced', async () => {
     const concurrency = new BackgroundTaskConcurrency({
       defaultConcurrency: 1,

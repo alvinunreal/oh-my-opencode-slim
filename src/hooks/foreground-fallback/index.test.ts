@@ -9,6 +9,8 @@ import { ForegroundFallbackManager, isFailoverError } from './index';
 // current test's mock session without relying on this.input (which is
 // undefined in tests — always set in production).
 let currentMockSession: Record<string, unknown> | null = null;
+// Same idea for the raw transport used by foreground-waiter promotion.
+let currentMockPost: ((args: unknown) => Promise<unknown>) | null = null;
 
 // Override manager.test.ts's global mock.module for getClient. Called
 // at module load AND from createMockClient so it takes effect regardless of
@@ -21,6 +23,7 @@ function installGetClientMock(): void {
         messages: mock(() => Promise.resolve({ data: [] })),
         promptAsync: mock(() => Promise.resolve()),
       },
+      _client: currentMockPost ? { post: currentMockPost } : undefined,
     }),
   }));
 }
@@ -35,6 +38,7 @@ function createMockClient(overrides?: {
   abortImpl?: () => Promise<unknown>;
   includePromptAsync?: boolean;
   messagesData?: unknown[];
+  postImpl?: (args: unknown) => Promise<unknown>;
 }) {
   const promptAsync = mock(async (args: unknown) => {
     if (overrides?.promptAsyncImpl) return overrides.promptAsyncImpl(args);
@@ -49,6 +53,10 @@ function createMockClient(overrides?: {
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
     ],
   }));
+  const post = mock(async (args: unknown) => {
+    if (overrides?.postImpl) return overrides.postImpl(args);
+    return true;
+  });
   const session: Record<string, unknown> = {
     abort,
     messages,
@@ -59,6 +67,7 @@ function createMockClient(overrides?: {
 
   // Store for getClient mock
   currentMockSession = session;
+  currentMockPost = post;
   // Re-register the mock.module at test time so it survives any
   // overwrite from other test files loaded in the same process.
   installGetClientMock();
@@ -66,8 +75,9 @@ function createMockClient(overrides?: {
   return {
     client: {
       session,
+      _client: { post },
     } as never,
-    mocks: { promptAsync, abort, messages },
+    mocks: { promptAsync, abort, messages, post },
   };
 }
 
@@ -1570,6 +1580,222 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(['abort', 'promptAsync']);
+  });
+
+  test('promotes foreground task waiter to background before abort when child has known parent', async () => {
+    const calls: string[] = [];
+    const postArgs: unknown[] = [];
+    createMockClient({
+      abortImpl: async () => {
+        calls.push('abort');
+      },
+      promptAsyncImpl: async () => {
+        calls.push('promptAsync');
+        return {};
+      },
+      postImpl: async (args) => {
+        postArgs.push(args);
+        calls.push('promote');
+        return true;
+      },
+    });
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
+
+    await mgr.handleEvent({
+      type: 'session.created',
+      properties: {
+        info: { id: 'sess-promoted-child', parentID: 'sess-promoted-parent' },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-promoted-child',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-promoted-child',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'rate limit, retrying...',
+        },
+      },
+    });
+
+    // Order-critical: the promotion must land before the abort settles
+    // the job as "cancelled", or the foreground parent sees
+    // "Task cancelled" instead of backgroundResult.
+    expect(calls).toEqual(['promote', 'abort', 'promptAsync']);
+    expect(postArgs[0]).toMatchObject({
+      url: '/experimental/session/{sessionID}/background',
+      path: { sessionID: 'sess-promoted-parent' },
+    });
+  });
+
+  test('skips waiter promotion when the failing session has no known parent', async () => {
+    const calls: string[] = [];
+    createMockClient({
+      abortImpl: async () => {
+        calls.push('abort');
+      },
+      promptAsyncImpl: async () => {
+        calls.push('promptAsync');
+        return {};
+      },
+      postImpl: async () => {
+        calls.push('promote');
+        return true;
+      },
+    });
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-no-parent',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-no-parent',
+        status: { type: 'retry', attempt: 1, message: 'rate limit' },
+      },
+    });
+
+    expect(calls).toEqual(['abort', 'promptAsync']);
+  });
+
+  test('waiter promotion failure is fail-soft: abort and fallback still proceed', async () => {
+    const calls: string[] = [];
+    createMockClient({
+      abortImpl: async () => {
+        calls.push('abort');
+      },
+      promptAsyncImpl: async () => {
+        calls.push('promptAsync');
+        return {};
+      },
+      postImpl: async () => {
+        throw new Error('no experimental endpoint on this host');
+      },
+    });
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
+
+    await mgr.handleEvent({
+      type: 'session.created',
+      properties: {
+        info: {
+          id: 'sess-promote-fails',
+          parentID: 'sess-promote-fails-parent',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-promote-fails',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-promote-fails',
+        status: { type: 'retry', attempt: 1, message: 'rate limit' },
+      },
+    });
+
+    expect(calls).toEqual(['abort', 'promptAsync']);
+  });
+
+  test('promotes the waiter before the busy-session abort in execFallback too', async () => {
+    const calls: string[] = [];
+    const postArgs: unknown[] = [];
+    const { mocks } = createMockClient({
+      promptAsyncImpl: async () => {
+        calls.push('promptAsync');
+        throw new Error('session busy');
+      },
+      abortImpl: async () => {
+        calls.push('abort');
+      },
+      postImpl: async (args) => {
+        postArgs.push(args);
+        calls.push('promote');
+        return true;
+      },
+    });
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
+
+    await mgr.handleEvent({
+      type: 'session.created',
+      properties: {
+        info: {
+          id: 'sess-busy-promoted',
+          parentID: 'sess-busy-promoted-parent',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-busy-promoted',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+
+    // Same ordering contract as tryFallbackWithAbort, exercised through
+    // the promptAsync-busy abort inside execFallback: the promotion must
+    // land between the first (busy) attempt and the abort.
+    expect(calls[0]).toBe('promptAsync');
+    expect(calls[1]).toBe('promote');
+    expect(calls[2]).toBe('abort');
+    expect(postArgs[0]).toMatchObject({
+      url: '/experimental/session/{sessionID}/background',
+      path: { sessionID: 'sess-busy-promoted-parent' },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
   test('keeps registered child agent identity sticky for retry fallback chain', async () => {
