@@ -192,6 +192,11 @@ npm version patch
 
 That creates the version commit and `v<version>` tag automatically.
 
+The committed placeholder in `src/generated/build-info.ts` must be regenerated
+with the version commit; the `postversion` hook in `package.json` automates
+this. If you bumped the version manually, run `bun run gen:build-info` and
+include the file in the version commit.
+
 ## 6. Verify before tagging or publishing
 
 Run the standard checks:

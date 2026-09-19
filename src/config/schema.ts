@@ -265,8 +265,29 @@ export const BackgroundJobsConfigSchema = z.object({
         .describe(
           'Wake-condition source. "auto" uses todo-gating on v1 hosts and children-driven degraded mode on v2 hosts (no todo surface there); "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. Default "auto".',
         ),
+      wakeOnTerminalPublication: z
+        .boolean()
+        .default(true)
+        .describe(
+          'When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. Busy parents are skipped: the native steer already delivered the completion. Default enabled.',
+        ),
+      publicationWakeMinIntervalMs: z
+        .number()
+        .int()
+        .min(1_000)
+        .max(2_147_483_647)
+        .default(30_000)
+        .describe(
+          'Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake.',
+        ),
     })
-    .default({ enabled: true, intervalMs: 300_000, mode: 'auto' })
+    .default({
+      enabled: true,
+      intervalMs: 300_000,
+      mode: 'auto',
+      wakeOnTerminalPublication: true,
+      publicationWakeMinIntervalMs: 30_000,
+    })
     .describe(
       'Periodic orchestrator wake scheduler for idle sessions. v1: requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. v2: runs in children-driven degraded mode (requires session.list + promptAsync) and wakes while un-finished child sessions remain. Default enabled at a 5-minute interval.',
     ),
@@ -284,6 +305,15 @@ export const BackgroundJobsConfigSchema = z.object({
     .default(10_000)
     .describe(
       'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
+    ),
+  stopConfirmationMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .default(5_000)
+    .describe(
+      'Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). Default 5,000 (5 seconds).',
     ),
   concurrency: BackgroundTaskConcurrencyConfigSchema,
   sameProviderPolicy: z

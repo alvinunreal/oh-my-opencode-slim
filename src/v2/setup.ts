@@ -16,6 +16,7 @@
 
 import { loadPluginConfig } from '../config/loader';
 import { InterviewConfigSchema } from '../config/schema';
+import { getBuildInfo } from '../generated/build-info';
 import {
   runWithSyntheticPartCacheHintScope,
   type SyntheticPartCacheHint,
@@ -679,17 +680,35 @@ function exactActionsForV1Key(key: string): string[] {
  * (the child agent's task-policy — the same map `adaptPermissions`
  * consumes for static agent registration).
  *
- * Only entries that can be expressed WITHOUT wildcards survive:
- * - the string shorthand and whole-tool string effects (e.g.
- *   `edit: 'deny'`) apply to every resource, so emitting them would
- *   require a `'*'` resource — skipped;
- * - the `'*'` catch-all key is skipped by the action gate;
+ * Entries that can be expressed WITHOUT wildcards survive:
+ * - the string shorthand applies to every action and would require a
+ *   `'*'` resource on both axes — skipped;
+ * - the `'*'` catch-all key and wildcard-suffixed keys (e.g. MCP-derived
+ *   `github_*`) are skipped by the action gate;
  * - nested `{tool: {pattern: effect}}` entries emit
- *   `{action, resource: pattern, effect}` only when `pattern` is
+ *   `{action, resource: pattern, effect}` when `pattern` is
  *   wildcard-free (e.g. `skill: {codemap: 'allow'}`,
- *   `bash: {'git push': 'ask'}`).
+ *   `bash: {'git push': 'ask'}`);
+ * - whole-tool string effects (e.g. `read: 'allow'`, `edit: 'deny'`)
+ *   emit an action-scoped rule whose resource IS the declared v1 tool
+ *   key. A whole-tool effect semantically covers every resource, which
+ *   only a `'*'` resource could express — the tool key is the one exact
+ *   resource the declaration itself names, so the emitted rule's scope
+ *   is a strict subset of the declaration (never a widening).
  *
- * The result is defense-in-depth: the child's static agent-level
+ * Why whole-tool derivation matters: v2 children inherit their parent's
+ * session-scoped rules, and the host merges session rules AFTER the
+ * agent's static permissions (last-match-wins) — so inherited rules
+ * override what the child's agent registration allows, and an unmatched
+ * call falls back to `ask` (a permission form, poison for background
+ * children: the input-wait suppresses orchestrator wakes). A non-empty
+ * derived ruleset makes the bridge REPLACE the inherited list, after
+ * which the child's static agent permissions govern every resource the
+ * exact rules do not match. Without this, read-only agents whose maps
+ * carry only whole-tool effects (the read class: read/glob/grep/…)
+ * derived zero rules and kept the parent's inherited list verbatim.
+ *
+ * The result remains defense-in-depth: the child's static agent-level
  * permissions (from `applyAgentToDraft`) keep governing everything the
  * exact-match ruleset cannot express.
  */
@@ -697,8 +716,20 @@ export function deriveExactPermissionRules(perm: unknown): V2PermissionRule[] {
   const rules: V2PermissionRule[] = [];
   if (!perm || typeof perm !== 'object' || Array.isArray(perm)) return rules;
   for (const [tool, value] of Object.entries(perm as Record<string, unknown>)) {
-    // Only nested pattern maps carry an exact resource; string values
-    // are whole-tool effects (see the doc note above).
+    const actions = exactActionsForV1Key(tool);
+    if (actions.length === 0) continue;
+    if (typeof value === 'string') {
+      // Whole-tool effect: emit one action-scoped rule per v2 action,
+      // with the declared tool key as the exact resource (subset of the
+      // declared scope — see the doc note above).
+      if (value !== 'allow' && value !== 'deny' && value !== 'ask') continue;
+      for (const action of actions) {
+        rules.push({ action, resource: tool, effect: value });
+      }
+      continue;
+    }
+    // Nested pattern maps carry an explicit resource; only wildcard-free
+    // patterns may survive.
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     for (const [pattern, effect] of Object.entries(
       value as Record<string, unknown>,
@@ -707,7 +738,7 @@ export function deriveExactPermissionRules(perm: unknown): V2PermissionRule[] {
         continue;
       }
       if (containsWildcard(pattern)) continue;
-      for (const action of exactActionsForV1Key(tool)) {
+      for (const action of actions) {
         if (containsWildcard(action)) continue; // structural invariant
         rules.push({ action, resource: pattern, effect });
       }
@@ -815,9 +846,10 @@ export function createPermissionRulesBridge(
     const rules = deriveExactPermissionRules(options.permissionForAgent(agent));
     if (rules.length === 0) {
       // Nothing in the task-policy is expressible as an exact match
-      // (e.g. a whole-tool read-only policy): an empty replace would add
-      // nothing over the static agent permissions, so skip the host
-      // call. Marked handled here — an empty derivation is a final
+      // (wildcard-only shapes: the `'*'` catch-all key alone, or
+      // wildcard-suffixed MCP keys): an empty replace would add nothing
+      // over the static agent permissions, so skip the host call.
+      // Marked handled here — an empty derivation is a final
       // answer that cannot change between duplicate events.
       applied.set(sessionID, true);
       pruneSessionMap(applied);
@@ -1329,6 +1361,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       .replace(/[-:]/g, '')
       .slice(0, 15);
     initLogger(sessionId);
+    // First logged line: identify the build that produced every following
+    // log entry (logging-only — build info never enters prompt payloads).
+    log('[v2] build info', getBuildInfo());
     // Capability guard: some hosts load this same `setup` with a reduced or
     // TUI-side context where agent/tool/session/event domains are missing.
     // Skip registration instead of crashing the host (and retry-storming).

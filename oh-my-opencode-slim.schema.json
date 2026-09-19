@@ -1152,7 +1152,9 @@
           "default": {
             "enabled": true,
             "intervalMs": 300000,
-            "mode": "auto"
+            "mode": "auto",
+            "wakeOnTerminalPublication": true,
+            "publicationWakeMinIntervalMs": 30000
           },
           "description": "Periodic orchestrator wake scheduler for idle sessions. v1: requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. v2: runs in children-driven degraded mode (requires session.list + promptAsync) and wakes while un-finished child sessions remain. Default enabled at a 5-minute interval.",
           "type": "object",
@@ -1178,6 +1180,18 @@
                 "todo",
                 "children"
               ]
+            },
+            "wakeOnTerminalPublication": {
+              "default": true,
+              "description": "When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. Busy parents are skipped: the native steer already delivered the completion. Default enabled.",
+              "type": "boolean"
+            },
+            "publicationWakeMinIntervalMs": {
+              "default": 30000,
+              "description": "Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake.",
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 2147483647
             }
           }
         },
@@ -1199,6 +1213,13 @@
         "abortGraceMs": {
           "default": 10000,
           "description": "Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "stopConfirmationMs": {
+          "default": 5000,
+          "description": "Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). Default 5,000 (5 seconds).",
           "type": "integer",
           "minimum": 1000,
           "maximum": 60000

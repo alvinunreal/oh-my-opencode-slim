@@ -35,7 +35,9 @@ The main idea is simple: instead of forcing one model to do everything, the plug
   the agent best suited for it - mix any models across any providers.
 - **[Background orchestration](docs/background-orchestration.md)** - the
   Orchestrator dispatches specialists as background tasks, tracks them, and
-  reconciles results before continuing - parallel work by default.
+  reconciles results before continuing - parallel work by default, with
+  terminal-result wake-ups and reopen corrections keeping idle parents
+  current.
 - **[Bundled skills](#skills)** - prompt-based workflows like `deepwork`,
   `codemap`, `verification-planning`, and `reflect`, assigned per agent.
 - **[Council](docs/council.md)** - run multiple models in parallel on the same

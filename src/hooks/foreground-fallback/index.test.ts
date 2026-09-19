@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, jest, mock, test } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
 import { SessionLifecycle } from '../session-lifecycle';
 import { ForegroundFallbackManager, isFailoverError } from './index';
@@ -3459,11 +3459,15 @@ describe('ForegroundFallbackManager dispose', () => {
   });
 
   test('dispose during retry backoff abandons the attempt with zero further client calls', async () => {
-    const { mocks } = createMockClient();
-    const realNow = Date.now;
-    let fakeNow = realNow();
-    Date.now = () => fakeNow;
+    // Fake timers (bun:test's jest-compat layer) drive the whole backoff
+    // window so no real wall-clock is awaited. The former real ~500ms
+    // backoff sleep held the event loop open, and concurrently scheduled
+    // test files could poll the shared getClient mock during that window,
+    // polluting the call-count assertions below (the full-suite flake;
+    // the test always passed in isolation).
+    jest.useFakeTimers();
     try {
+      const { mocks } = createMockClient();
       const mgr = new ForegroundFallbackManager(
         { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
         true,
@@ -3476,6 +3480,7 @@ describe('ForegroundFallbackManager dispose', () => {
       );
 
       // First fallback completes normally: one transcript read + replay.
+      // (Pure microtasks — this path arms no timer.)
       await mgr.handleEvent({
         type: 'session.error',
         properties: {
@@ -3487,8 +3492,10 @@ describe('ForegroundFallbackManager dispose', () => {
 
       // Second trigger: beyond the 5s dedup window but inside the
       // retryDelayMs backoff, so tryFallback sleeps before
-      // execFallback. Runs synchronously into that sleep.
-      fakeNow += 6_000;
+      // execFallback. Advance the faked clock (moves the mocked
+      // Date.now() past the dedup window without firing any timer),
+      // then run the trigger synchronously into the faked backoff sleep.
+      jest.setSystemTime(Date.now() + 6_000);
       const pending = mgr.handleEvent({
         type: 'session.error',
         properties: {
@@ -3497,8 +3504,11 @@ describe('ForegroundFallbackManager dispose', () => {
         },
       });
 
-      // Reload during the backoff sleep.
+      // Reload during the backoff sleep, then fire the faked timer:
+      // the computed delay is retryDelayMs 6_500 − 6_000 elapsed =
+      // 500ms; advance past it so the sleep settles synchronously.
       mgr.dispose();
+      jest.advanceTimersByTime(1_000);
       await pending;
 
       expect(mocks.messages).toHaveBeenCalledTimes(1); // no second read
@@ -3506,7 +3516,7 @@ describe('ForegroundFallbackManager dispose', () => {
       expect(mocks.abort).not.toHaveBeenCalled();
       expect(mgr.isFallbackInProgress('sess-backoff-dispose')).toBe(false);
     } finally {
-      Date.now = realNow;
+      jest.useRealTimers();
     }
   });
 });

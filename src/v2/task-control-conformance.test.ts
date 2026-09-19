@@ -233,7 +233,12 @@ describe('task controls through the real v2 client shim', () => {
       await h.tracker.probe('ses_child', 2);
       expect(h.onTerminal).toHaveBeenCalledTimes(1);
       expect(h.board.get('ses_child')).toMatchObject({
-        state: freshOutcome === 'succeeded' ? 'completed' : 'error',
+        state:
+          freshOutcome === 'succeeded'
+            ? 'completed'
+            : freshOutcome === 'failed'
+              ? 'error'
+              : 'stopped',
         terminalRevision: (revision ?? 0) + 1,
         resultSummary:
           freshOutcome === 'succeeded'

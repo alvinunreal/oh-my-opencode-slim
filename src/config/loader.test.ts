@@ -675,6 +675,8 @@ describe('onWarning callback', () => {
       enabled: false,
       intervalMs: 120_000,
       mode: 'auto',
+      wakeOnTerminalPublication: true,
+      publicationWakeMinIntervalMs: 30_000,
     });
     expect(config.backgroundJobs).not.toHaveProperty('continueOnIdle');
     expect(config.autoUpdate).toBe(false);
@@ -683,6 +685,35 @@ describe('onWarning callback', () => {
     expect(warnings[0]?.message).toContain(
       'Deprecated backgroundJobs.continueOnIdle',
     );
+  });
+
+  test('passes explicit terminal-publication wake and stop-confirmation knobs through', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: {
+          orchestratorWake: {
+            wakeOnTerminalPublication: false,
+            publicationWakeMinIntervalMs: 120_000,
+          },
+          stopConfirmationMs: 15_000,
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.backgroundJobs?.orchestratorWake).toEqual({
+      enabled: true,
+      intervalMs: 300_000,
+      mode: 'auto',
+      wakeOnTerminalPublication: false,
+      publicationWakeMinIntervalMs: 120_000,
+    });
+    expect(config.backgroundJobs?.stopConfirmationMs).toBe(15_000);
   });
 
   test('prefers explicit orchestratorWake.enabled over deprecated continueOnIdle', () => {

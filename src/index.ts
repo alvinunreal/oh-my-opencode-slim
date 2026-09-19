@@ -23,6 +23,7 @@ import {
 } from './config/constants';
 import { RuntimeConfig } from './config/runtime';
 import { applyOrchestratorModelConfig } from './config/strip-orchestrator-model';
+import { getBuildInfo } from './generated/build-info';
 import { HEALTH_CHECK, minimumExpectedToolCount } from './health-check';
 import {
   createAbsolutePathRescueHook,
@@ -44,6 +45,7 @@ import {
   ForegroundFallbackManager,
   formatStoppedJobDelta,
   SessionLifecycle,
+  stoppedJobRecoveryReason,
 } from './hooks';
 import { processImageAttachments } from './hooks/image-hook';
 import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
@@ -195,6 +197,7 @@ export function sessionManagerMultiplexerConfig(
 export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   initLogger(sessionId);
+  log('[plugin] build info', getBuildInfo());
 
   if (isPluginDisabledByEnv()) {
     log('[plugin] disabled by OH_MY_OPENCODE_SLIM_DISABLE');
@@ -569,6 +572,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     terminalGate = createBackgroundJobTerminalGate({
       backgroundJobBoard: backgroundJobCoordinator,
       input: ctx,
+      // Configurable stop-confirmation grace (backgroundJobs.
+      // stopConfirmationMs); the default equals
+      // STOP_CONFIRMATION_GRACE_MS, so unset config keeps v1 behavior.
+      graceMs: runtime.backgroundJobs.stopConfirmationMs,
       baselineFor: (taskID, generation) =>
         revivedRunTracker?.baselineFor(taskID, generation),
       // Local in-process integration: host and plugin timestamps share Unix ms.
@@ -627,6 +634,21 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       onSettled: (taskID) => markRevivedRunSettled(taskID),
       contextFilesForPrompt: (taskID) => getRevivedContextFiles(taskID),
       pruneContext: () => pruneRevivedContext(),
+      // Degraded-fallback wiring (revived-lineage strand): when every
+      // tracker notification attempt has failed, the publication this
+      // tracker suppressed in the terminal-outcome listener would
+      // otherwise never reach the idle parent. Re-emit it DIRECTLY
+      // through the wake scheduler — never through the listener's
+      // suppression chain: a revived lineage has no native notifier, so
+      // the first-publication-native-owned (and tracker-owned) skips
+      // must not apply to this fallback. The scheduler's own guards
+      // (canSchedule, one-flight wake gate, publication throttle) still
+      // apply, correctly.
+      onOwnershipReleased: (parentSessionID, taskID, generation) => {
+        void orchestratorWakeScheduler
+          .triggerTerminalPublicationWake(parentSessionID, taskID, generation)
+          .catch(() => undefined);
+      },
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       revivedRunTracker.onTerminal(record);
@@ -773,6 +795,28 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
+      // Symmetric tracker suppression (M4): when the revived-run tracker
+      // owns this generation's delivery — it already delivered the run's
+      // terminal <task> notification — a recovery wake beside it would
+      // queue a second admission for a lineage the parent already heard
+      // from. Scoped like the publication listener's check: a stop that
+      // is the generation's FIRST publication has no tracker delivery
+      // beside it (the tracker only delivers completed/error), so the
+      // recovery wake stays that stop's one and only notification.
+      if (
+        record.terminalRevision > 1 &&
+        revivedRunTracker.willNotifyParent(record.taskID, record.generation)
+      ) {
+        log('[orchestrator-wake] stopped-job recovery wake skipped', {
+          sessionID: record.parentSessionID,
+          taskID: record.taskID,
+          generation: record.generation,
+          trigger: 'stopped-job-recovery',
+          verdict: 'skipped',
+          reason: 'revived-tracker-owns-delivery',
+        });
+        return;
+      }
       orchestratorWakeScheduler.triggerStoppedJobRecovery(
         record.parentSessionID,
         // Self-contained stop facts: the recovery wake is an
@@ -784,14 +828,72 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           taskID: record.taskID,
           generation: record.generation,
           state: record.state,
-          reason: record.timedOut
-            ? 'wall-clock deadline exceeded'
-            : record.statusUncertain
-              ? 'runtime status uncertain'
-              : 'stopped without a terminal result',
+          reason: stoppedJobRecoveryReason(record),
         }),
         `${record.taskID}:${record.generation}`,
       );
+    });
+    // Terminal-publication wake: completed/error publications reaching an
+    // IDLE parent (state-disjoint from the stopped recovery listener
+    // above — stopped+terminalUnreconciled vs completed|error). A busy
+    // parent is skipped inside the trigger: the native steer already
+    // delivered the first completion, so a queued wake would
+    // double-notify.
+    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+      if (record.state !== 'completed' && record.state !== 'error') return;
+      // Revived-run ownership: when the tracker will deliver this run's
+      // <task> result itself (notifyParent), a publication wake beside
+      // it would queue a SECOND admission to the idle parent — the
+      // double-notify the exactly-once notification contract forbids.
+      // Scoped to the exact (taskID, generation) the tracker owns;
+      // non-revived publications are unaffected.
+      if (
+        revivedRunTracker.willNotifyParent(record.taskID, record.generation)
+      ) {
+        log('[orchestrator-wake] terminal publication wake skipped', {
+          sessionID: record.parentSessionID,
+          taskID: record.taskID,
+          generation: record.generation,
+          trigger: 'terminal-publication',
+          verdict: 'skipped',
+          reason: 'revived-tracker-owns-delivery',
+        });
+        return;
+      }
+      // First-publication ownership (live-verified on a 2.0.8 host): the
+      // native notifier delivers a run's FIRST terminal publication to
+      // the parent even while it sits idle, so a plugin wake beside it
+      // would double-notify. On v2 EVERY plugin task launch AND relaunch
+      // is a host `subagent` tool call that arms the host's native
+      // background notifier — a relaunch re-arms it with a fresh
+      // `started_at`, defeating the notify dedupe — so the native
+      // contract covers the FIRST publication (terminalRevision 1) of
+      // EVERY generation, not just the original launch. Only later
+      // revisions of the same generation (rev>1: a child
+      // self-continuation, a direct prompt to the child session) have no
+      // native notifier and remain the plugin's to deliver (v1 behaves
+      // the same: the native task tool arms notifyBackgroundResult per
+      // background call). Edge: if a native delivery is ever lost
+      // host-side, the job falls back to board injection on the parent's
+      // next activity (pre-branch parity).
+      if (record.terminalRevision === 1) {
+        log('[orchestrator-wake] terminal publication wake skipped', {
+          sessionID: record.parentSessionID,
+          taskID: record.taskID,
+          generation: record.generation,
+          trigger: 'terminal-publication',
+          verdict: 'skipped',
+          reason: 'first-publication-native-owned',
+        });
+        return;
+      }
+      void orchestratorWakeScheduler
+        .triggerTerminalPublicationWake(
+          record.parentSessionID,
+          record.taskID,
+          record.generation,
+        )
+        .catch(() => undefined);
     });
 
     // Initialize hooks and wrapPostToolHook helper for error isolation

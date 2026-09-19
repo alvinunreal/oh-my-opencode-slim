@@ -32,6 +32,7 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   observeSyntheticTerminalPart,
+  pruneReopenCorrectionState,
   reconcileInjectedTerminalJobs,
   stabilizeRunningTaskParts,
   updateFromInjectedCompletion,
@@ -459,6 +460,9 @@ export function createTaskSessionManagerHook(
       pendingInjectedTerminalJobsByParent.delete(sessionId);
       injectionState.retainedBoardSnapshots.delete(sessionId);
       injectionState.retainedTailBoards.delete(sessionId);
+      // Orphaned reopen corrections must never surface in a recreated
+      // session; the board entries they referenced are being dropped too.
+      pruneReopenCorrectionState(injectionState, sessionId);
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);
       pendingCallTracker.clearSession(sessionId);
