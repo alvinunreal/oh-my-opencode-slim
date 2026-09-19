@@ -38,6 +38,7 @@ const packagedRequiredFiles = [
   'src/skills/codemap/SKILL.md',
   'src/skills/clonedeps/SKILL.md',
   'src/skills/deepwork/SKILL.md',
+  'src/skills/loop-engineering/SKILL.md',
   'src/skills/verification-planning/SKILL.md',
   'src/skills/reflect/SKILL.md',
   'src/skills/oh-my-opencode-slim/SKILL.md',

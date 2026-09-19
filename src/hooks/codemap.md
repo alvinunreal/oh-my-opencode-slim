@@ -31,7 +31,8 @@ from `index.ts`) that returns the hook points OpenCode invokes.
   Never mutates/reorders earlier messages and never injects unmarked parts —
   enforced by the cache-safety property/snapshot/tripwire tests.
 - **Command hook helper** (`command-hook-utils.ts`): `registerCommandHook`
-  shared by command-style hooks (deepwork, reflect, loop).
+  shared by command-style hooks (deepwork, reflect, loop), plus the shared
+  `DELIVERY_HANDOFF_CONTRACT` text embedded by the deepwork and loop adapters.
 - **Message types** (`types.ts`): `MessageInfo`, `MessagePart`,
   `MessageWithParts`, plus replay helpers used by foreground-fallback.
 
@@ -109,11 +110,11 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | `apply-patch/` | Structured `apply_patch` parsing, matching, recovery, rewrite pipeline |
 | `auto-update-checker/` | Startup update detection, cache handling, optional install prompt |
 | `cache-monitor/` | Observation-only prompt-cache telemetry watchdog |
-| `deepwork/` | `/deepwork` runtime command |
+| `deepwork/` | `/deepwork` user-entry adapter for the deepwork protocol |
 | `filter-available-skills/` | Skill-visibility filtering by agent permission policy |
 | `foreground-fallback/` | Interactive-session model fallback on rate-limit/errors |
 | `json-error-recovery/` | Malformed JSON/tool-output recovery helpers |
-| `loop-command/` | `/loop` iterative retry command |
+| `loop-command/` | `/loop` user-entry adapter for the loop-engineering protocol |
 | `orchestrator-wake/` | Periodic orchestrator wake scheduler + process-global gate |
 | `phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases |
 | `post-file-tool-nudge/` | Post-read/write reminder nudging delegation-aware next steps |

@@ -15,9 +15,9 @@ describe('custom-agent creation', () => {
     const config: PluginConfig = {
       agents: {
         explorer: { model: 'openai/gpt-5.6-luna' },
-        reviewer: {
+        auditor: {
           model: 'openai/gpt-5.6',
-          prompt: 'You are the custom reviewer agent.',
+          prompt: 'You are the custom auditor agent.',
         },
       },
     };
@@ -25,13 +25,13 @@ describe('custom-agent creation', () => {
     const agents = createAgents(runtimeFor(config));
     const names = agents.map((agent) => agent.name);
 
-    expect(names).toContain('reviewer');
+    expect(names).toContain('auditor');
 
-    const customAgent = agents.find((agent) => agent.name === 'reviewer');
+    const customAgent = agents.find((agent) => agent.name === 'auditor');
     expect(customAgent).toBeDefined();
     expect(customAgent?.config.model).toBe('openai/gpt-5.6');
     expect(customAgent?.config.prompt).toBe(
-      'You are the custom reviewer agent.',
+      'You are the custom auditor agent.',
     );
   });
 
@@ -441,22 +441,22 @@ describe('custom-agent permission passthrough', () => {
   test('no permission field means no regression', () => {
     const config: PluginConfig = {
       agents: {
-        reviewer: {
+        auditor: {
           model: 'openai/gpt-5.5',
-          prompt: 'You are a reviewer.',
+          prompt: 'You are an auditor.',
         },
       },
     };
 
     const agents = createAgents(runtimeFor(config));
-    const reviewer = agents.find((a) => a.name === 'reviewer');
+    const auditor = agents.find((a) => a.name === 'auditor');
 
-    expect(reviewer).toBeDefined();
+    expect(auditor).toBeDefined();
     // Plugin still generates its own permission keys (question, etc.)
-    expect(reviewer?.config.permission).toBeDefined();
+    expect(auditor?.config.permission).toBeDefined();
     // But no edit/bash keys since user didn't set them
     expect(
-      (reviewer?.config.permission as Record<string, unknown>)?.edit,
+      (auditor?.config.permission as Record<string, unknown>)?.edit,
     ).toBeUndefined();
   });
 });

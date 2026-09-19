@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CUSTOM_SKILLS } from './custom-skills';
 import { getSkillPermissionsForAgent } from './skills';
 
 describe('skills permissions', () => {
@@ -24,6 +28,7 @@ describe('skills permissions', () => {
     const orchestratorPerms = getSkillPermissionsForAgent('orchestrator');
     expect(orchestratorPerms.clonedeps).toBe('allow');
     expect(orchestratorPerms.deepwork).toBe('allow');
+    expect(orchestratorPerms['loop-engineering']).toBe('allow');
     expect(orchestratorPerms['verification-planning']).toBe('allow');
     expect(orchestratorPerms.reflect).toBe('allow');
     expect(orchestratorPerms.worktrees).toBe('allow');
@@ -87,3 +92,94 @@ describe('getSkillPermissionsForAgent with malformed disabledSkillNames', () => 
     expect(perms['*']).toBe('allow');
   });
 });
+
+describe('bundled SKILL.md JSON-embeddability regression', () => {
+  // `opencode debug skill` serialises each skill's frontmatter description
+  // and body content as fields in a JSON array. A SKILL.md containing raw
+  // control characters (other than \n, \r, \t) or malformed UTF-8 produces
+  // invalid JSON that breaks `opencode debug skill | jq`.
+  const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+
+  it('every registered bundled skill has a SKILL.md that is valid for JSON embedding', () => {
+    const failures: string[] = [];
+
+    for (const skill of CUSTOM_SKILLS) {
+      const skillPath = join(packageRoot, skill.sourcePath, 'SKILL.md');
+      let content: string;
+      try {
+        content = readFileSync(skillPath, 'utf8');
+      } catch {
+        failures.push(`${skill.name}: SKILL.md not found at ${skillPath}`);
+        continue;
+      }
+
+      // Check for control characters that would break JSON embedding.
+      for (let i = 0; i < content.length; i++) {
+        const code = content.charCodeAt(i);
+        if (code < 32 && code !== 10 && code !== 13 && code !== 9) {
+          failures.push(
+            `${skill.name}: control char (U+${code.toString(16).padStart(4, '0')}) at offset ${i}`,
+          );
+          break;
+        }
+      }
+
+      // Simulate what `opencode debug skill` does: embed the description
+      // and content as JSON string values.
+      const description = parseFrontmatterDescription(content);
+      const body = stripFrontmatter(content);
+      const probe = JSON.stringify({
+        name: skill.name,
+        description,
+        content: body,
+      });
+      try {
+        JSON.parse(probe);
+      } catch {
+        failures.push(
+          `${skill.name}: JSON parse failed for embedded skill object`,
+        );
+      }
+    }
+
+    expect(failures).toEqual([]);
+  });
+
+  it('loop-engineering is registered and its SKILL.md is present', () => {
+    const skill = CUSTOM_SKILLS.find((s) => s.name === 'loop-engineering');
+    expect(skill).toBeDefined();
+    if (!skill) return;
+    const skillPath = join(packageRoot, skill.sourcePath, 'SKILL.md');
+    const content = readFileSync(skillPath, 'utf8');
+    expect(content.length).toBeGreaterThan(0);
+    expect(content).toContain('name: loop-engineering');
+  });
+});
+
+/**
+ * Extract the `description` value from a YAML frontmatter block.
+ * Returns an empty string if the frontmatter or description is absent.
+ */
+function parseFrontmatterDescription(content: string): string {
+  if (!content.startsWith('---')) return '';
+  const end = content.indexOf('---', 3);
+  if (end < 0) return '';
+  const fm = content.slice(3, end);
+  for (const line of fm.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('description:')) {
+      return trimmed.slice('description:'.length).trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * Strip the YAML frontmatter block and return the body content.
+ */
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith('---')) return content;
+  const end = content.indexOf('---', 3);
+  if (end < 0) return content;
+  return content.slice(end + 3);
+}

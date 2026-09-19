@@ -21,3 +21,28 @@ export function registerCommandHook(
   )[commandName] = { template, description };
   return true;
 }
+
+/**
+ * Canonical delivery handoff contract shared by the `/deepwork` and `/loop`
+ * user-entry adapters. The parent/orchestrator owns protocol coordination;
+ * slash commands only hand off user context and point at the protocol.
+ */
+export const DELIVERY_HANDOFF_CONTRACT = [
+  'Delivery unit packet (factual, for the parent):',
+  '- delivery unit ID and plan version;',
+  '- scope, exclusions, and dependencies;',
+  '- proof commands and prerequisites;',
+  '- Tier-2 authority, if applicable;',
+  '- attempt count and any prior failure;',
+  '- factual context: local evidence, external sources (URL + ref +',
+  '  retrieval time), and stated uncertainty.',
+  '',
+  'Delivery order:',
+  'Fixer delivery -> planned proof -> one implementation Reviewer',
+  'review -> at most two repairs with affected proof ->',
+  'parent acceptance.',
+  '',
+  'Slash commands are user-entry adapters. They do not',
+  'programmatically dispatch tasks or receive typed return objects.',
+  'The parent/orchestrator coordinates the protocol.',
+].join('\n');

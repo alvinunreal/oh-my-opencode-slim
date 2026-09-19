@@ -47,10 +47,6 @@ const ALLOWLIST = new Map<string, string>([
     'Update scheduling and install bookkeeping; produces no prompt content.',
   ],
   [
-    'hooks/loop-command/index.ts',
-    'Timestamps/randomness name per-run loop-history directories; the path only appears inside a newly appended user turn (payload tail), never in earlier prefix bytes.',
-  ],
-  [
     'hooks/foreground-fallback/index.ts',
     'Date.now() gates retry/dedup windows for model failover; no prompt content is derived from it.',
   ],

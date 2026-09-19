@@ -19,6 +19,7 @@ Each agent is a **prompt-driven specialist** with a factory function that create
 | **designer** | `createDesignerAgent()` | UI/UX design, review, and implementation | Read/write (read, glob, grep, write, edit) | DEFAULT_MODELS.designer |
 | **fixer** | `createFixerAgent()` | Fast implementation specialist for bounded tasks | Read/write (read, glob, grep, write, edit) | DEFAULT_MODELS.fixer |
 | **observer** | `createObserverAgent()` | Visual analysis specialist (images, PDFs, diagrams) | Read-only (read, glob, grep, ast_grep_search) | DEFAULT_MODELS.observer |
+| **reviewer** | `createReviewerAgent()` | Read-only evidence-based review specialist; plan or implementation review returning a structured APPROVED/REVISE verdict | Read-only (read, glob, grep, ast_grep_search) via `createReadOnlyAgentPermission()` | DEFAULT_MODELS.reviewer |
 | **council** | `createCouncilAgent()` | Multi-LLM consensus synthesis from councillor responses | Read-only | DEFAULT_MODELS.council |
 | **councillor** | `createCouncillorAgent()` | Read-only council advisor; registered dynamically per preset seat as `councillor-<name>` by `buildCouncillorAgents()` (`council-agents.ts`) | Read-only (read, glob, grep, ast_grep_search) | Inherited from council preset |
 
@@ -167,6 +168,7 @@ The orchestrator's system prompt contains dynamic routing rules that reference a
 - **@designer**: UI/UX design and polish
 - **@fixer**: Bounded implementation tasks
 - **@observer**: Visual/media analysis
+- **@reviewer**: Read-only plan/implementation review with a structured APPROVED/REVISE verdict
 - **@council**: Multi-model consensus synthesis (orchestrator dispatches councillors directly in flatten mode)
 
 These rules are filtered based on disabled agents and injected into the orchestrator's prompt at startup.
@@ -181,6 +183,7 @@ These rules are filtered based on disabled agents and injected into the orchestr
 - `designer.ts` - UI/UX design specialist
 - `fixer.ts` - Implementation execution specialist
 - `observer.ts` - Visual analysis specialist
+- `reviewer.ts` - Read-only evidence-based review specialist (plan/implementation review)
 - `council.ts` - Multi-LLM council agent
 - `councillor.ts` - Read-only council advisor (internal)
 - `council-agents.ts` - Dynamic `councillor-<name>` agent builders from council presets

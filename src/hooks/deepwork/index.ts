@@ -1,24 +1,37 @@
 import { createInternalAgentTextPart } from '../../utils';
-import { registerCommandHook } from '../command-hook-utils';
+import {
+  DELIVERY_HANDOFF_CONTRACT,
+  registerCommandHook,
+} from '../command-hook-utils';
 
 const COMMAND_NAME = 'deepwork';
 
 function activationPrompt(task: string): string {
   return [
-    'Use the deepwork skill for this task. Treat it as a heavy coding session.',
+    'The user ran `/deepwork`. This slash command is a user-entry adapter;',
+    'the parent/orchestrator is the sole lifecycle controller and',
+    'coordinates the deepwork protocol. Load the deepwork skill and follow',
+    'it as the initiative planning and coordination protocol for this',
+    'initiative. `/deepwork` is never a callable procedure.',
     '',
-    'Deepwork requirements:',
-    '- before planning, delegation, or creating state, inspect existing `.gitignore` and `.ignore`; add only missing entries without duplicates: `.gitignore` must contain `.slim/deepwork/`, and `.ignore` must contain `!.slim/deepwork/` and `!.slim/deepwork/**`; this keeps state git-local yet OpenCode-readable;',
-    '- create/update a `.slim/deepwork/` progress file;',
-    '- save code/doc deliverables to project paths (e.g. `src/`, `docs/`); reserve `.slim/deepwork/` strictly for progress files;',
-    '- keep OpenCode todos synced with the current phase;',
-    '- draft a phased implementation/delegation plan with a small number of coherent phases based on dependencies and natural delivery boundaries; do not split work merely to reduce review scope;',
-    '- before execution, show the user a compact overview with phase titles/order, delegated specialists and ownership/scope, plus the Oracle review total, gate after each phase, and a short reason for each;',
-    '- execute phase by phase with background specialists where useful;',
-    '- wait for hook-driven background completion, reconcile results, validate and update state, then ask `@oracle` to review every planned phase before continuing;',
-    '- batch material actionable Oracle findings, including simplify/readability feedback, into one bounded remediation pass and validate it with focused evidence; only re-review when the remediation changes the reviewed decision/risk or the original concern cannot otherwise be verified.',
+    'Use `/deepwork` for every Tier-2 initiative (including single-unit',
+    'work) and for long-horizon Tier-1 coordination without Tier-2 gates.',
+    'Risk and horizon are separate axes; splitting a Tier-2 initiative',
+    'into multiple delivery units must not downgrade risk.',
     '',
-    'Task:',
+    'Canonical records: use `.slim/plans/<initiative>/PLAN.md` and',
+    '`REVIEW-LOG.md`. Do not create or use `.slim/deepwork/`.',
+    '',
+    'Prohibited:',
+    '- do not run per-phase Oracle gates (the single Oracle gate runs',
+    '  once at Tier-2 initiative completion; plan review and',
+    '  implementation review assess distinct objects, not phases);',
+    '- do not spin up a second retry controller;',
+    '- do not treat `/deepwork` as a callable subprocedure.',
+    '',
+    DELIVERY_HANDOFF_CONTRACT,
+    '',
+    'User context:',
     task,
   ].join('\n');
 }
@@ -35,8 +48,8 @@ export function createDeepworkCommandHook(): {
       registerCommandHook(
         opencodeConfig,
         COMMAND_NAME,
-        'Start a deepwork session for a complex coding task',
-        'Use the deepwork workflow for heavy multi-phase coding work',
+        'Coordinate a deepwork initiative for consequential or long-horizon work',
+        'User-entry adapter for the canonical deepwork Tier-2 coordination protocol.',
       );
     },
 
@@ -48,7 +61,7 @@ export function createDeepworkCommandHook(): {
       if (!task) {
         output.parts.push(
           createInternalAgentTextPart(
-            'What task should deepwork manage? Run `/deepwork <task>`.',
+            'What initiative should deepwork coordinate? Run `/deepwork <initiative>`.',
           ),
         );
         return;

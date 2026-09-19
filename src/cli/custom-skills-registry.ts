@@ -43,6 +43,13 @@ export const CUSTOM_SKILLS: CustomSkill[] = [
     sourcePath: 'src/skills/deepwork',
   },
   {
+    name: 'loop-engineering',
+    description:
+      'Bounded delivery protocol: Fixer implements, planned proof runs, one implementation Reviewer review, parent arbitrates with up to two repairs',
+    allowedAgents: ['orchestrator'],
+    sourcePath: 'src/skills/loop-engineering',
+  },
+  {
     name: 'verification-planning',
     description:
       'Plan credible, proportionate evidence before non-trivial implementation',
