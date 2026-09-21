@@ -54,6 +54,10 @@ type RevivedRun = {
     sent: boolean;
     pending: boolean;
     retryTimer?: ReturnType<typeof setTimeout>;
+    /** Give-up marker: the organic retry-exhaustion release fires at
+     * most once per notification lifecycle (a newer terminalRevision
+     * replaces the whole object and starts a fresh lifecycle). */
+    ownershipReleased?: boolean;
   };
   terminalState?: 'completed' | 'error';
   terminalRevision?: number;
@@ -77,6 +81,13 @@ export interface RevivedRunTracker {
   attemptStartedAtFor(taskID: string, generation: number): number | undefined;
   probe(taskID: string, generation: number): Promise<boolean>;
   onTerminal(record: BackgroundJobRecord): void;
+  /** Delivery ownership for a tracked run's terminal outcome: true when
+   * THIS tracker has delivered, is delivering, or still owes a delivery
+   * attempt for the exact (taskID, generation) — the ownership state
+   * `notifyParent` consults. The terminal-publication wake listener
+   * (src/index.ts) consults it so a revived run's completion produces
+   * ONE queued admission (the tracker's notifyParent), never two. */
+  willNotifyParent(taskID: string, generation: number): boolean;
   /** Fallback observation handoff: prepare before the admission await
    * so the stop gate defers terminal publication until a delivery owner
    * exists. Admit converts the preparation into a tracked run
@@ -129,6 +140,17 @@ export function createRevivedRunTracker(options: {
    * Resolved on EVERY attempt (retries re-enter the send path). When
    * absent or unresolved, behavior falls back to `orchestrator`. */
   resolveSelection?: (sessionID: string) => Promise<SessionSelection>;
+  /** Organic retry-exhaustion release: fired EXACTLY ONCE when a run's
+   * notification give-up point is reached (retry budget spent, nothing
+   * sent, no retry timer armed) — the tracker will never deliver that
+   * run's terminal outcome, so the terminal-publication wake it
+   * suppressed must be re-emitted as the degraded fallback. Never fired
+   * on successful delivery or on plain dispose. */
+  onOwnershipReleased?: (
+    parentSessionID: string,
+    taskID: string,
+    generation: number,
+  ) => void;
 }): RevivedRunTracker {
   const runs = new Map<string, RevivedRun>();
   // Monotonic observation identity across registrations (fence for the
@@ -253,6 +275,29 @@ export function createRevivedRunTracker(options: {
     );
   }
 
+  /** Publication-wake suppression predicate: does this tracker own the
+   * delivery of a terminal outcome for the exact (taskID, generation)?
+   * Mirrors the ownership state notifyParent consults, extended to the
+   * states a listener can observe after onTerminal has armed the
+   * notification: delivered (sent), in flight (pending), or the retry
+   * ladder still owing an attempt (timer armed or budget remaining).
+   * Once the retry budget is exhausted without a send the tracker has
+   * given up and the publication wake is a legitimate degraded
+   * fallback, so ownership is released (and `onOwnershipReleased` fires
+   * at exactly that give-up point). */
+  function willNotifyParent(taskID: string, generation: number): boolean {
+    if (disposed) return false;
+    const run = runs.get(taskID);
+    if (run?.generation !== generation) return false;
+    const { attempts, pending, retryTimer, sent } = run.notification;
+    return (
+      sent ||
+      pending ||
+      retryTimer !== undefined ||
+      attempts < maxNotificationRetries
+    );
+  }
+
   async function notifyParent(
     run: RevivedRun,
     record: BackgroundJobRecord,
@@ -261,7 +306,12 @@ export function createRevivedRunTracker(options: {
     if (
       !isCurrentNotification(run, record, notification) ||
       notification.sent ||
-      notification.pending
+      notification.pending ||
+      // Released lifecycle: ownership passed to the fallback publication
+      // wake at give-up — this tracker must never deliver for it again,
+      // or a duplicate terminal observation could queue a second prompt
+      // beside the fallback wake (two turns for one result).
+      notification.ownershipReleased
     )
       return;
     notification.pending = true;
@@ -387,9 +437,24 @@ export function createRevivedRunTracker(options: {
     if (
       !isCurrentNotification(run, record, notification) ||
       notification.sent ||
-      notification.attempts >= maxNotificationRetries ||
       notification.retryTimer
     ) {
+      return;
+    }
+    if (notification.attempts >= maxNotificationRetries) {
+      // Organic give-up: the retry budget is spent, nothing was sent, and
+      // no timer is armed — this tracker will never deliver the run's
+      // terminal outcome. Release ownership exactly once so the caller
+      // can re-emit the publication this tracker had suppressed as the
+      // degraded fallback (delivery success and plain dispose never
+      // reach this branch).
+      if (notification.ownershipReleased) return;
+      notification.ownershipReleased = true;
+      options.onOwnershipReleased?.(
+        run.parentSessionID,
+        run.taskID,
+        run.generation,
+      );
       return;
     }
     notification.retryTimer = setTimeout(() => {
@@ -695,6 +760,7 @@ export function createRevivedRunTracker(options: {
     attemptStartedAtFor,
     probe,
     onTerminal,
+    willNotifyParent,
     prepareObservation,
     admitObservation,
     rejectObservation,

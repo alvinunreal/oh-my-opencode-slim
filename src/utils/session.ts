@@ -43,11 +43,33 @@ export async function abortSessionWithTimeout(
   sessionId: string,
   timeoutMs = SESSION_ABORT_TIMEOUT_MS,
 ): Promise<void> {
-  await withTimeout(
+  const result = await withTimeout(
     client.session.abort({ path: { id: sessionId } }),
     timeoutMs,
     `Session abort timed out after ${timeoutMs}ms`,
   );
+  const failure = sessionAbortFailure(result);
+  if (failure) throw new Error(failure);
+}
+
+/**
+ * Error message when an SDK abort result reports a rejected request
+ * (error envelope or explicit false), or null when the abort was
+ * accepted. Both SDK generations resolve rather than throw on HTTP
+ * errors, so the envelope must be inspected before counting an abort
+ * as done.
+ */
+export function sessionAbortFailure(result: unknown): string | null {
+  if (result === false) return 'session abort returned false';
+  if (result && typeof result === 'object') {
+    const error = (result as { error?: unknown }).error;
+    if (error != null) {
+      return `session abort rejected: ${
+        typeof error === 'string' ? error : JSON.stringify(error)
+      }`;
+    }
+  }
+  return null;
 }
 
 /**

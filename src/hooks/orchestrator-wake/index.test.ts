@@ -1,5 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import { createInternalAgentTextPart } from '../../utils';
+import * as loggerModule from '../../utils/logger';
 import { SessionLifecycle } from '../session-lifecycle';
 import { resetUserWaitGateForTests } from '../task-session-manager/user-wait-gate';
 import {
@@ -2872,5 +2881,95 @@ describe('children-mode helpers', () => {
     expect(fp).toContain('c1::busy:42');
     expect(fp).toContain('c2:succeeded::');
     expect(buildChildrenWakeFingerprint([], tracked)).toBe('');
+  });
+});
+
+describe('evaluate verdict observability (INFO logs)', () => {
+  function captureVerdictLogs() {
+    const entries: Array<{ message: string; data: unknown }> = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string, data?: unknown) => {
+        entries.push({ message, data });
+      },
+    );
+    return {
+      verdicts: () =>
+        entries.filter(
+          (entry) => entry.message === '[orchestrator-wake] evaluate verdict',
+        ),
+      restore: () => spy.mockRestore(),
+    };
+  }
+
+  test('logs the wake verdict at both checkpoints in children mode', async () => {
+    const capture = captureVerdictLogs();
+    try {
+      const promptAsync = mock(async () => ({}));
+      const { scheduler } = createScheduler({
+        hostFlavor: 'v2',
+        intervalMs: 60_000,
+        sessionClient: makeV2Client({
+          promptAsync,
+          listChildren: [
+            {
+              id: 'child-1',
+              directory: '/project',
+              time: { updated: Date.now() },
+            },
+          ],
+        }),
+      });
+      await scheduler.event({
+        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+      });
+      await clock.advance(60_000);
+      const verdicts = capture.verdicts();
+      expect(verdicts.length).toBeGreaterThanOrEqual(2);
+      expect(verdicts[0]?.data).toMatchObject({
+        sessionID: 'p1',
+        verdict: 'wake',
+        mode: 'children',
+        checkpoint: 'initial',
+        recoveryWake: false,
+        childCount: 1,
+      });
+      expect(verdicts[1]?.data).toMatchObject({
+        sessionID: 'p1',
+        verdict: 'wake',
+        checkpoint: 'recheck',
+      });
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  test('logs the no-work verdict when every child has a terminal outcome', async () => {
+    const capture = captureVerdictLogs();
+    try {
+      const { scheduler } = createScheduler({
+        hostFlavor: 'v2',
+        intervalMs: 60_000,
+        sessionClient: makeV2Client({
+          listChildren: [{ id: 'child-1', outcome: 'succeeded' }],
+        }),
+      });
+      await scheduler.event({
+        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+      });
+      await clock.advance(60_000);
+      const verdicts = capture.verdicts();
+      expect(verdicts).toHaveLength(1);
+      expect(verdicts[0]?.data).toMatchObject({
+        sessionID: 'p1',
+        verdict: 'no-work',
+        mode: 'children',
+        checkpoint: 'initial',
+        recoveryWake: false,
+        childCount: 1,
+      });
+    } finally {
+      capture.restore();
+    }
   });
 });

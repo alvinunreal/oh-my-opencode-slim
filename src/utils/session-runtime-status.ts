@@ -28,6 +28,13 @@ export async function getRuntimeSessionStatusSnapshot(
       typeof input.client?.session?.status === 'function'
         ? input.client
         : getClient(input);
+    if (typeof client?.session?.status !== 'function') {
+      return {
+        statuses: new Map(),
+        malformedSessionIDs: new Set(),
+        error: 'session-status capability unavailable on this host',
+      };
+    }
     const openRead = openStatusReads.get(client.session);
     if (openRead)
       return {

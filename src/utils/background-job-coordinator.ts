@@ -101,7 +101,8 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     if (state === undefined) return; // Job was already cleaned up
 
     // Check if this session should now close
-    if (this.retryDeferredClose(taskID)) {
+    const closeNow = this.retryDeferredClose(taskID);
+    if (closeNow) {
       // Notify listeners that session should close
       for (const listener of this.terminalStateListeners) {
         try {
@@ -117,6 +118,15 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
 
     const record = this.board.get?.(taskID);
     if (record) {
+      // Observation only: every canonical terminal publication that
+      // reaches listener dispatch is logged with its record identity.
+      log('[job-coordinator] terminal state dispatch', {
+        taskID,
+        generation: record.generation,
+        state,
+        parentSessionID: record.parentSessionID,
+        deferredClose: closeNow,
+      });
       for (const listener of this.terminalOutcomeListeners) {
         try {
           listener(record);

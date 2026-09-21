@@ -31,6 +31,12 @@ import {
   default as tuiPlugin,
 } from './tui';
 import {
+  getKillAllTargets,
+  KILL_ALL_KEYBIND,
+  killAllRunningSubagents,
+  killAllSummaryMessage,
+} from './tui-kill';
+import {
   recordTuiAgentActivity,
   recordTuiAgentModels,
   recordTuiSessionParent,
@@ -1762,6 +1768,308 @@ describe('resolveSidebarSlotOrder', () => {
 
       expect(captured[0]?.order).toBe(900);
     } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('kill-all running subagents', () => {
+  function killSnapshot() {
+    return createSnapshot({
+      activeSessions: {
+        'ora-busy': 'oracle',
+        'ora-retry': 'oracle',
+        'fix-idle': 'fixer',
+        'root-ses': 'oracle',
+      },
+      sessionParents: {
+        'ora-busy': 'conv-1',
+        'ora-retry': 'conv-1',
+        'fix-idle': 'conv-1',
+        // root-ses: no parent — a root session running an agent directly.
+      },
+      sessionDetails: {
+        'ora-busy': { alias: 'ora-1', status: 'busy' },
+        'ora-retry': { alias: 'ora-2', status: 'retry' },
+        // fix-idle: active in the sidebar but not running (no status) —
+        // tui-state only persists busy/retry, absent status means idle.
+      },
+    });
+  }
+
+  test('targets only busy/retry subagents of the visible conversation', () => {
+    expect(getKillAllTargets(killSnapshot(), 'conv-1').sort()).toEqual([
+      'ora-busy',
+      'ora-retry',
+    ]);
+    // Other conversation / home route: nothing to kill.
+    expect(getKillAllTargets(killSnapshot(), 'conv-2')).toEqual([]);
+    expect(getKillAllTargets(killSnapshot(), undefined)).toEqual([]);
+  });
+
+  test('never targets the visible conversation root, even with a self-parent entry', () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        'conv-1': 'orchestrator', // the root itself, busy right now
+        'ora-busy': 'oracle',
+      },
+      sessionParents: {
+        'ora-busy': 'conv-1',
+        // Defensive: real tui-state data has carried self-referencing
+        // parent entries; the root must stay excluded even then.
+        'conv-1': 'conv-1',
+      },
+      sessionDetails: {
+        'conv-1': { status: 'busy' },
+        'ora-busy': { alias: 'ora-1', status: 'busy' },
+      },
+    });
+
+    expect(getKillAllTargets(snapshot, 'conv-1')).toEqual(['ora-busy']);
+  });
+
+  test('empty targets issue no aborts', async () => {
+    const aborts: unknown[][] = [];
+    const client = {
+      session: {
+        abort: async (args: unknown) => {
+          aborts.push([args]);
+        },
+      },
+    };
+    const result = await killAllRunningSubagents(
+      client,
+      killSnapshot(),
+      'conv-2',
+    );
+
+    expect(aborts).toHaveLength(0);
+    expect(result).toEqual({ killed: 0, failed: 0, total: 0 });
+    expect(killAllSummaryMessage(result)).toBe(
+      'No running subagents in this conversation.',
+    );
+  });
+
+  test('one failing abort does not stop the others (fail-soft aggregation)', async () => {
+    const aborts: string[] = [];
+    const client = {
+      // v1 marker: app.agents is the exclusive discriminator used by
+      // fetchRemoteAgentModels.
+      app: { agents: async () => ({}) },
+      session: {
+        abort: async (args: { path: { id: string } }) => {
+          aborts.push(args.path.id);
+          if (args.path.id === 'ora-busy') throw new Error('host down');
+        },
+      },
+    };
+
+    const result = await killAllRunningSubagents(
+      client,
+      killSnapshot(),
+      'conv-1',
+    );
+
+    expect(aborts.sort()).toEqual(['ora-busy', 'ora-retry']);
+    expect(result).toEqual({ killed: 1, failed: 1, total: 2 });
+    expect(killAllSummaryMessage(result)).toContain('2 running subagents');
+    expect(killAllSummaryMessage(result)).toContain('1 failed');
+    expect(killAllSummaryMessage({ killed: 2, failed: 0, total: 2 })).toBe(
+      'Kill-all sent to 2 running subagents.',
+    );
+    expect(killAllSummaryMessage({ killed: 1, failed: 0, total: 1 })).toBe(
+      'Kill-all sent to 1 running subagent.',
+    );
+  });
+
+  test('resolved error envelopes and false results count as failures', async () => {
+    // The SDKs resolve (rather than reject) rejected aborts, so a resolved
+    // error envelope must not be counted as a killed session.
+    const v1Client = {
+      app: { agents: async () => ({}) },
+      session: {
+        abort: async (args: { path: { id: string } }) => ({
+          error: `reject ${args.path.id}`,
+        }),
+      },
+    };
+    const v1Result = await killAllRunningSubagents(
+      v1Client,
+      killSnapshot(),
+      'conv-1',
+    );
+    expect(v1Result).toEqual({ killed: 0, failed: 2, total: 2 });
+
+    const v2Client = {
+      app: { agents: async () => ({}) },
+      v2: {},
+      session: {
+        abort: async () => ({ error: 'busy' }),
+      },
+    };
+    const v2Result = await killAllRunningSubagents(
+      v2Client,
+      killSnapshot(),
+      'conv-1',
+    );
+    expect(v2Result).toEqual({ killed: 0, failed: 2, total: 2 });
+
+    const falseClient = {
+      app: { agents: async () => ({}) },
+      session: {
+        abort: async () => false,
+      },
+    };
+    const falseResult = await killAllRunningSubagents(
+      falseClient,
+      killSnapshot(),
+      'conv-1',
+    );
+    expect(falseResult).toEqual({ killed: 0, failed: 2, total: 2 });
+  });
+
+  test('v2 SDK-shaped client aborts with flat sessionID + directory', async () => {
+    const calls: Record<string, unknown>[] = [];
+    // Real v2 clients carry app.agents AND the v2 accessor — this fixture
+    // reproduces both, so the old app.agents-first routing would misroute
+    // it to the v1 branch and this test would fail.
+    const client = {
+      app: { agents: async () => ({}) },
+      v2: {},
+      session: {
+        abort: async (args: Record<string, unknown>) => {
+          calls.push(args);
+        },
+      },
+    };
+
+    const result = await killAllRunningSubagents(
+      client,
+      killSnapshot(),
+      'conv-1',
+      '/proj',
+    );
+
+    expect(result).toEqual({ killed: 2, failed: 0, total: 2 });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ directory: '/proj' });
+    expect(calls.every((c) => !('path' in c))).toBe(true);
+    expect(calls.map((c) => c.sessionID).sort()).toEqual([
+      'ora-busy',
+      'ora-retry',
+    ]);
+  });
+
+  test('absent client fails soft with every target counted as failed', async () => {
+    const result = await killAllRunningSubagents(
+      undefined,
+      killSnapshot(),
+      'conv-1',
+    );
+
+    expect(result).toEqual({ killed: 0, failed: 2, total: 2 });
+    expect(killAllSummaryMessage(result)).toContain('2 failed');
+  });
+
+  test('v1 registers the /killall command with alt+w alongside /preset', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-kill-v1-'));
+    try {
+      const registered: Array<Record<string, unknown>> = [];
+      await tuiPlugin.tui(
+        {
+          state: { path: { directory: projectDir } },
+          route: { current: { name: 'home' } },
+          lifecycle: { onDispose: () => () => {} },
+          renderer: { requestRender: () => {} },
+          slots: { register: () => 'test-slot' },
+          theme: { current: {} },
+          command: {
+            register: (cb: () => Array<Record<string, unknown>>) => {
+              registered.push(...cb());
+              return () => {};
+            },
+          },
+        } as unknown as Parameters<typeof tuiPlugin.tui>[0],
+        {},
+        { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
+      );
+
+      const kill = registered.find((c) => c.value === 'omo.kill_all');
+      expect(kill).toBeDefined();
+      expect(kill?.slash).toEqual({ name: 'killall' });
+      expect(kill?.keybind).toBe(KILL_ALL_KEYBIND);
+      expect(registered.some((c) => c.value === 'preset')).toBe(true);
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test('command onSelect kills visible-conversation targets and toasts', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-kill-v1b-'));
+    const originalDataHome = process.env.XDG_DATA_HOME;
+    try {
+      process.env.XDG_DATA_HOME = path.join(projectDir, 'data');
+      recordTuiSessionParent('ora-live', 'conv-1', projectDir);
+      recordTuiAgentActivity(
+        {
+          sessionID: 'ora-live',
+          agentName: 'oracle',
+          active: true,
+          details: { status: 'busy' },
+        },
+        projectDir,
+      );
+
+      const aborts: string[] = [];
+      const toasts: Record<string, unknown>[] = [];
+      let killCommand: (() => void) | undefined;
+      await tuiPlugin.tui(
+        {
+          state: { path: { directory: projectDir } },
+          route: {
+            current: { name: 'session', params: { sessionID: 'conv-1' } },
+          },
+          lifecycle: { onDispose: () => () => {} },
+          renderer: { requestRender: () => {} },
+          slots: { register: () => 'test-slot' },
+          theme: { current: {} },
+          client: {
+            app: { agents: async () => ({}) },
+            session: {
+              abort: async (args: { path: { id: string } }) => {
+                aborts.push(args.path.id);
+              },
+            },
+          },
+          ui: { toast: (t: Record<string, unknown>) => toasts.push(t) },
+          command: {
+            register: (cb: () => Array<Record<string, unknown>>) => {
+              for (const cmd of cb()) {
+                if (cmd.value === 'omo.kill_all') {
+                  killCommand = cmd.onSelect as () => void;
+                }
+              }
+              return () => {};
+            },
+          },
+        } as unknown as Parameters<typeof tuiPlugin.tui>[0],
+        {},
+        { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
+      );
+
+      killCommand?.();
+      // The kill flow is async (abort round-trips); the refresh timer
+      // starts at setup, so give the microtasks a tick.
+      await Bun.sleep(50);
+
+      expect(aborts).toEqual(['ora-live']);
+      expect(toasts).toHaveLength(1);
+      expect(String(toasts[0]?.message)).toContain(
+        'Kill-all sent to 1 running subagent',
+      );
+    } finally {
+      if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = originalDataHome;
       fs.rmSync(projectDir, { recursive: true, force: true });
     }
   });

@@ -192,6 +192,14 @@ npm version patch
 
 That creates the version commit and `v<version>` tag automatically.
 
+The committed stamp in `src/generated/build-info.ts` must be regenerated
+with the version commit; the `postversion` hook in `package.json` automates
+this (it runs the generator with `--force` to take a fresh timestamp). If you
+bumped the version manually, run `bun run gen:build-info` (the version change
+triggers the rewrite) and include the file in the version commit. Ordinary
+`bun run build` runs leave the committed stamp untouched, so building never
+dirties the git tree.
+
 ## 6. Verify before tagging or publishing
 
 Run the standard checks:

@@ -1883,6 +1883,7 @@ describe('system.transform orchestrator injection', () => {
     process.env = {
       ...originalEnv,
       OPENCODE_CONFIG_DIR: configDir,
+      XDG_CONFIG_HOME: configDir,
       XDG_DATA_HOME: `${configDir}/data`,
       XDG_CACHE_HOME: `${configDir}/cache`,
       OPENCODE_LOG_DIR: `${configDir}/logs`,

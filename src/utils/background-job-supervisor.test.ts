@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { buildPluginInput } from '../v2/client-shim';
 import { BackgroundJobBoard } from './background-job-board';
 import { BackgroundJobCoordinator } from './background-job-coordinator';
 import { boardFixture } from './background-job-fixture';
@@ -275,6 +276,75 @@ describe('BackgroundJobSupervisor', () => {
     expect(
       coordinator.resolveRecoverable('parent', wall.taskID),
     ).toBeUndefined();
+  });
+
+  // ── v2-sim pin: shim abort mapping + deadline error semantics ──
+  //
+  // On a v2 host the plugin's abort seam is `ctx.client.session.abort`
+  // (src/index.ts), which the REAL v2 client shim maps to the host's
+  // `session.interrupt({sessionID, resume: false})`. When the deadline
+  // fires, that interrupt must be invoked (exactly once), and the
+  // terminal outcome must be the wall-clock `error` — the interrupted
+  // execution event the host publishes afterwards maps to the stop
+  // family (Task 5), but a stop-family report can never outrank the
+  // deadline claim: 'stopped' is not an acceptable terminal state for a
+  // wall-clock timeout.
+  test('v2-sim: deadline aborts via the shim interrupt mapping and finalizes error, never stopped', async () => {
+    const interrupt = mock(
+      async (_input: { sessionID: string; resume?: boolean }) => undefined,
+    );
+    const shim = buildPluginInput({
+      session: { interrupt },
+    } as unknown as Parameters<typeof buildPluginInput>[0]);
+    const sessionAbort = (
+      shim.client as {
+        session: { abort: (args: Record<string, unknown>) => Promise<unknown> };
+      }
+    ).session.abort;
+    const { board, coordinator, supervisor, timers } = createSupervisor({
+      // The exact production wiring (src/index.ts): the supervisor's
+      // abort delegates to client.session.abort({path:{id}}), which the
+      // shim translates to interrupt({sessionID, resume:false}).
+      abort: (taskID) => sessionAbort({ path: { id: taskID } }),
+    });
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    await timers.advanceTo(100);
+
+    // The shim mapping fired the host interrupt exactly once.
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(interrupt).toHaveBeenCalledWith({
+      sessionID: 'ses_1',
+      resume: false,
+    });
+    expect(board.get(job.taskID)).toMatchObject({
+      state: 'running',
+      timedOut: true,
+      deadlineExceededAt: 100,
+    });
+
+    // The v2 host then reports the interrupted execution; the evidence
+    // chain maps it to the stop family — but the deadline claim is a
+    // hard, non-recoverable terminal authority.
+    const stopFamily = boardFixture.updateStatus(coordinator, {
+      taskID: job.taskID,
+      state: 'stopped',
+      resultSummary: 'host reported the interrupted execution',
+      now: 101,
+    });
+    expect(stopFamily).toMatchObject({
+      state: 'error',
+      terminalState: 'error',
+      timedOut: true,
+      terminalUnreconciled: true,
+      deadlineExceededAt: 100,
+    });
+    expect(stopFamily?.state).not.toBe('stopped');
+
+    // The interrupt stays exactly-once after the terminal settles.
+    await timers.advanceTo(200);
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(timers.pending()).toBe(0);
   });
 
   test('drop, parent cleanup, dispose, and relaunch clear or replace timers', async () => {

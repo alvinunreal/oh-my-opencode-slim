@@ -1102,7 +1102,13 @@ describe('task_revive tool', () => {
         });
         expect(promptAsync).toHaveBeenCalledTimes(2);
         expect(abort).toHaveBeenCalledTimes(1);
-        expect(log).not.toHaveBeenCalled();
+        // Terminal-gate observability INFO logs (publication, attribution,
+        // evidence verdicts) are expected on this path; nothing else — in
+        // particular no error-path log — may fire.
+        const logged = (log.mock.calls as Array<[string]>)
+          .map(([message]) => message)
+          .filter((message) => !message.startsWith('[terminal-gate]'));
+        expect(logged).toEqual([]);
         return;
       }
       observation.reject(new Error('probe failed'));

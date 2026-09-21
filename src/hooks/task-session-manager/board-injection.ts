@@ -8,6 +8,7 @@
  * ../cache-safe-injection.ts to ensure prompt cache safety.
  */
 import { createHash } from 'node:crypto';
+import { formatSystemReminder } from '../../config/constants';
 import type {
   BackgroundJobExecution,
   BackgroundJobInjectedCompletionFence,
@@ -118,6 +119,161 @@ type SyntheticTerminalOccurrenceLookup =
 
 type SyntheticTerminalProvenanceKind = 'explicit' | 'host-message' | 'legacy';
 
+/** A terminal run the parent consumed (reconciled): reused to detect a
+ * reopen-to-running of the same run, which needs a corrective notice. */
+type ReportedTerminalRun = {
+  taskID: string;
+  generation: number;
+  /** Terminal state the parent saw (completed | error | cancelled). */
+  terminalState?: string;
+};
+
+/** A corrective notice queued for the parent's next eligible request. */
+type ReopenCorrection = {
+  taskID: string;
+  generation: number;
+  alias: string;
+  priorTerminalState: string;
+};
+
+function reportedRunKey(taskID: string, generation: number): string {
+  return `${taskID}:${generation}`;
+}
+
+/** Corrective notice text for a reconciled job that reopened to running.
+ * Matches the board's system-reminder tone; carries the job identity and
+ * the supersession verdict inline. */
+export function formatReopenCorrectionText(
+  correction: ReopenCorrection,
+): string {
+  return formatSystemReminder(
+    [
+      '### Background Job Board — Reopened Job',
+      'A background job that previously reported a terminal result is running again; the earlier report is superseded.',
+      `- ${correction.alias} / ${correction.taskID} / run ${correction.generation} / previously ${correction.priorTerminalState}, now running`,
+      'Consult the Background Job Board for the current state before acting on the earlier result.',
+    ].join('\n'),
+  );
+}
+
+/** Record that the parent consumed (reconciled) a terminal run, so a later
+ * reopen-to-running of the same run can be corrected. */
+function rememberReportedTerminalRun(
+  state: InjectionState,
+  parentSessionID: string,
+  run: ReportedTerminalRun,
+): void {
+  const reported = state.reportedTerminalRunsByParent?.get(parentSessionID);
+  if (reported) {
+    reported.set(reportedRunKey(run.taskID, run.generation), run);
+    return;
+  }
+  const map = new Map<string, ReportedTerminalRun>([
+    [reportedRunKey(run.taskID, run.generation), run],
+  ]);
+  if (state.reportedTerminalRunsByParent) {
+    state.reportedTerminalRunsByParent.set(parentSessionID, map);
+  } else {
+    state.reportedTerminalRunsByParent = new Map([[parentSessionID, map]]);
+  }
+}
+
+/**
+ * Move reported runs whose job reopened to running into the pending
+ * correction queue. A job that left the board prunes its entry. Called at
+ * injection time so the queue reflects the board the parent is about to
+ * see, without a separate event seam on the board store.
+ */
+function queueReopenCorrections(
+  state: InjectionState,
+  parentSessionID: string,
+): void {
+  const reported = state.reportedTerminalRunsByParent?.get(parentSessionID);
+  if (!reported || reported.size === 0) return;
+  for (const [key, run] of [...reported.entries()]) {
+    const record = state.backgroundJobBoard.get(run.taskID);
+    if (!record) {
+      reported.delete(key);
+      continue;
+    }
+    if (record.state !== 'running' || record.generation !== run.generation) {
+      continue;
+    }
+    reported.delete(key);
+    const correction: ReopenCorrection = {
+      taskID: run.taskID,
+      generation: run.generation,
+      alias: record.alias,
+      priorTerminalState: run.terminalState ?? 'completed',
+    };
+    let pending = state.pendingReopenCorrections?.get(parentSessionID);
+    if (!pending) {
+      pending = new Map<string, ReopenCorrection>();
+      if (state.pendingReopenCorrections) {
+        state.pendingReopenCorrections.set(parentSessionID, pending);
+      } else {
+        state.pendingReopenCorrections = new Map([[parentSessionID, pending]]);
+      }
+    }
+    pending.set(key, correction);
+    log('[task-session-manager] queued reopen corrective notice', {
+      parentSessionID,
+      taskID: run.taskID,
+      generation: run.generation,
+      priorTerminalState: correction.priorTerminalState,
+    });
+  }
+  if (reported.size === 0) {
+    state.reportedTerminalRunsByParent?.delete(parentSessionID);
+  }
+}
+
+/**
+ * Append the pending corrective notices as trailing volatile messages
+ * (cache-safe tail zone via `appendTrailingVolatileMessage`, tagged with
+ * the board metadata key). Each notice is delivered exactly once: delivery
+ * retires its queue entry, and injected messages are transform-time only,
+ * so nothing persists into later requests.
+ */
+function deliverPendingReopenCorrections(
+  state: InjectionState,
+  parentSessionID: string,
+  messages: unknown[],
+  baseInfo: MessageWithParts['info'],
+): void {
+  queueReopenCorrections(state, parentSessionID);
+  const pending = state.pendingReopenCorrections?.get(parentSessionID);
+  if (!pending || pending.size === 0) return;
+  for (const [key, correction] of [...pending.entries()]) {
+    pending.delete(key);
+    appendTrailingVolatileMessage(
+      messages,
+      {
+        ...baseInfo,
+        id: `${baseInfo.id ?? 'board'}-reopen-correction:${key}`,
+      },
+      {
+        text: formatReopenCorrectionText(correction),
+        metadataKey: state.metadataKey,
+        extraMetadata: { reopenCorrection: true },
+      },
+    );
+  }
+  state.pendingReopenCorrections?.delete(parentSessionID);
+}
+
+/**
+ * Prune reopen-correction bookkeeping for a parent session (session end).
+ * Orphaned pending corrections must never surface in a recreated session.
+ */
+export function pruneReopenCorrectionState(
+  state: InjectionState,
+  parentSessionID: string,
+): void {
+  state.reportedTerminalRunsByParent?.delete(parentSessionID);
+  state.pendingReopenCorrections?.delete(parentSessionID);
+}
+
 const HOST_MESSAGE_OCCURRENCE_PREFIX = 'host-message:';
 
 export interface InjectionState {
@@ -147,6 +303,23 @@ export interface InjectionState {
     string,
     Map<string, BackgroundJobExecution>
   >;
+  /**
+   * Terminal runs this parent has already consumed (reconciled through
+   * `reconcileExecutionBatch`), keyed `${taskID}:${generation}`. Used to
+   * detect a reconciled job REOPENING to running (typically a child session
+   * resumed by its own background-shell notification): the parent's
+   * conversation still carries the earlier terminal report, so the reopen
+   * needs a corrective trailing notice. Optional for states built before
+   * the field existed.
+   */
+  reportedTerminalRunsByParent?: Map<string, Map<string, ReportedTerminalRun>>;
+  /**
+   * Corrective reopen notices queued for the parent's next eligible
+   * request, keyed `${taskID}:${generation}`. Each is delivered at most
+   * once (delivery retires the entry); orphaned entries are pruned when
+   * the parent session ends (`pruneReopenCorrectionState`).
+   */
+  pendingReopenCorrections?: Map<string, Map<string, ReopenCorrection>>;
   metadataKey: string;
   shouldManageSession: (sessionID: string) => boolean;
   taskContextTracker: {
@@ -1042,12 +1215,22 @@ function reconcileExecutionBatch(
       });
       continue;
     }
-    state.backgroundJobBoard.markReconciled(
+    const reconciled = state.backgroundJobBoard.markReconciled(
       execution.taskID,
       undefined,
       execution.generation,
       execution.terminalRevision,
     );
+    // The parent has now consumed this terminal report. Remember the run
+    // so a later reopen-to-running (child session busy again) can be
+    // corrected with exactly one trailing notice.
+    if (reconciled) {
+      rememberReportedTerminalRun(state, parentSessionID, {
+        taskID: execution.taskID,
+        generation: execution.generation,
+        terminalState: reconciled.terminalState ?? reconciled.state,
+      });
+    }
   }
 }
 
@@ -1216,6 +1399,12 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
   if (!trigger) return;
   if (trigger.info.agent && trigger.info.agent !== 'orchestrator') return;
   if (!sessionID || !state.shouldManageSession(sessionID)) return;
+
+  // Corrective notices for reconciled jobs that reopened to running ride
+  // at the very end of the payload regardless of the board placement
+  // below (cache-safe trailing volatile zone).
+  deliverPendingReopenCorrections(state, sessionID, messages, trigger.info);
+
   if (!anchor) return;
 
   // Hash the real history only when a prior terminal delivery needs
@@ -1632,6 +1821,18 @@ function injectCheckpointBoard(
   if (replayedIDs.length > 0) {
     rememberInjectedTerminalJobs(state, sessionID, replayedIDs, shapeKey);
   }
+
+  // Corrective notices for reconciled jobs that reopened to running ride
+  // at the very end of the payload (cache-safe trailing volatile zone).
+  // Delivered on internal-initiator turns too — a publication wake makes
+  // the parent run on an internal trigger, and the correction is exactly
+  // what that turn needs (the fresh snapshot is what internal turns lack).
+  deliverPendingReopenCorrections(
+    state,
+    sessionID,
+    messages,
+    replayBaseMessage.info,
+  );
 }
 
 function findLastMessageAnchorKey(

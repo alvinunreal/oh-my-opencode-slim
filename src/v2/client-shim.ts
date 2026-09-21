@@ -113,10 +113,33 @@ function filesFromBody(
 }
 
 /** v2 transcript message (content parts) → v1 SDK message view
- * (`{info: {id, role}, parts}`) expected by the v1 pipeline. */
+ * (`{info: {id, role}, parts}`) expected by the v1 pipeline.
+ *
+ * Terminal metadata is preserved, not reduced: `session.context` returns
+ * full `SessionMessage.Info` entries (schema-verified upstream), where
+ * assistant entries carry `time.completed` (set when the turn
+ * finalizes), `finish`, and `error`, and tool parts carry `state.status`
+ * in the v1 vocabulary. The old `{id, role}`-only reduction degraded
+ * every downstream classification — completion times were unreadable
+ * (eternal "pending") and finish/error states were invisible — which
+ * starved the terminal gate's transcript publish path on v2 hosts
+ * (live-verified 2.0.8 incident).
+ *
+ * The 2.0.8 `idle` marker (`{type: 'idle', time, outcome}`) trails every
+ * finished session. It is a lifecycle boundary, never content, and has
+ * no v1 transcript equivalent, so it maps to the v1 `system` role — the
+ * role transcript consumers already skip when scanning for the trailing
+ * turn. Every other entry keeps its v2 role name. */
 function toV1Message(m: Record<string, unknown>) {
+  const role = m.role ?? m.type;
   return {
-    info: { id: m.id, role: m.role ?? m.type },
+    info: {
+      id: m.id,
+      role: role === 'idle' ? 'system' : role,
+      ...(isRecord(m.time) ? { time: m.time } : {}),
+      ...(m.finish !== undefined ? { finish: m.finish } : {}),
+      ...(m.error !== undefined ? { error: m.error } : {}),
+    },
     parts: Array.isArray(m.content)
       ? (m.content as Array<Record<string, unknown>>).map((p) => ({ ...p }))
       : [],
@@ -320,18 +343,23 @@ export function buildPluginInput(
               id: sessionIDOf(args),
             });
           },
-      messages: s.context
-        ? async (args: Record<string, unknown>) => ({
-            data: (
-              (await s.context?.({ sessionID: sessionIDOf(args) })) ?? []
-            ).map(toV1Message),
-          })
-        : async (args: Record<string, unknown>) => {
-            log('[v2][shim] session.context unavailable', {
-              id: sessionIDOf(args),
-            });
-            return { data: [] };
-          },
+      // `messages` is exposed only when the host provides
+      // session.context — the terminal gate's transcriptSourceAbsent
+      // predicate methods-presence as the capability signal, and a
+      // fake-empty `{data: []}` stub here would read as "source present
+      // but empty" (classifier verdict `absent` → a baseline-less child
+      // STOPPED_WITHOUT_TERMINAL_RESULT) instead of honest capability
+      // absence (same no-fake-success doctrine as the `get` omission
+      // above).
+      ...(s.context
+        ? {
+            messages: async (args: Record<string, unknown>) => ({
+              data: (
+                (await s.context?.({ sessionID: sessionIDOf(args) })) ?? []
+              ).map(toV1Message),
+            }),
+          }
+        : {}),
       // `status` is intentionally OMITTED: v2 has no equivalent of the v1
       // live session-status map, and a stub returning `{data: {}}` would be
       // an empty-but-valid map. getRuntimeSessionStatusSnapshot treats

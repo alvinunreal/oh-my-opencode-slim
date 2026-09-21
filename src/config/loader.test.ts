@@ -675,6 +675,8 @@ describe('onWarning callback', () => {
       enabled: false,
       intervalMs: 120_000,
       mode: 'auto',
+      wakeOnTerminalPublication: true,
+      publicationWakeMinIntervalMs: 30_000,
     });
     expect(config.backgroundJobs).not.toHaveProperty('continueOnIdle');
     expect(config.autoUpdate).toBe(false);
@@ -683,6 +685,35 @@ describe('onWarning callback', () => {
     expect(warnings[0]?.message).toContain(
       'Deprecated backgroundJobs.continueOnIdle',
     );
+  });
+
+  test('passes explicit terminal-publication wake and stop-confirmation knobs through', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: {
+          orchestratorWake: {
+            wakeOnTerminalPublication: false,
+            publicationWakeMinIntervalMs: 120_000,
+          },
+          stopConfirmationMs: 15_000,
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.backgroundJobs?.orchestratorWake).toEqual({
+      enabled: true,
+      intervalMs: 300_000,
+      mode: 'auto',
+      wakeOnTerminalPublication: false,
+      publicationWakeMinIntervalMs: 120_000,
+    });
+    expect(config.backgroundJobs?.stopConfirmationMs).toBe(15_000);
   });
 
   test('prefers explicit orchestratorWake.enabled over deprecated continueOnIdle', () => {
@@ -1294,6 +1325,91 @@ describe('preset resolution', () => {
     expect(config.agents?.explorer?.model).toBe('explorer-model');
   });
 
+  test('normalizes legacy user and structured project preset layers independently', () => {
+    const userConfigDir = path.join(tempDir, 'user-config', 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigDir, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        presets: {
+          mixed: {
+            oracle: { model: 'user/oracle' },
+            explore: { model: 'user/explorer' },
+            options: { model: 'user/options' },
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'mixed',
+        presets: {
+          mixed: {
+            agents: {
+              oracle: { temperature: 0.7 },
+              explorer: { inheritModelFrom: 'session' },
+            },
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.agents).toEqual({
+      oracle: { model: 'user/oracle', temperature: 0.7 },
+      explorer: { inheritModelFrom: 'session' },
+      options: { model: 'user/options' },
+    });
+  });
+
+  test('normalizes structured user and legacy project preset layers independently', () => {
+    const userConfigDir = path.join(tempDir, 'user-config', 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigDir, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        presets: {
+          base: {
+            oracle: { model: 'base/oracle' },
+            librarian: { model: 'base/librarian' },
+          },
+          mixed: {
+            extends: 'base',
+            agents: { oracle: { model: 'user/oracle' } },
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'mixed',
+        presets: {
+          mixed: {
+            oracle: { temperature: 0.8 },
+            options: { model: 'project/options' },
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.agents).toEqual({
+      oracle: { model: 'user/oracle', temperature: 0.8 },
+      librarian: { model: 'base/librarian' },
+      options: { model: 'project/options' },
+    });
+  });
+
   test('missing preset: preset set but not in presets -> returns empty/root agents', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -1329,6 +1445,70 @@ describe('preset resolution', () => {
 
     const config = loadPluginConfig(projectDir);
     expect(config.agents?.oracle?.model).toBe('dev-model');
+  });
+
+  test('an invalid unused inheritance chain does not block a valid preset', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'valid',
+        presets: {
+          broken: { extends: 'missing', agents: { oracle: { model: 'bad' } } },
+          valid: { oracle: { model: 'good' } },
+        },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      silent: true,
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.agents?.oracle?.model).toBe('good');
+    expect(config.presets?.valid).toEqual({ oracle: { model: 'good' } });
+    expect(config.presets?.broken).toBeUndefined();
+    expect(warnings.some((warning) => warning.message.includes('broken'))).toBe(
+      true,
+    );
+  });
+
+  test('a selected malformed chain warns without applying a partial ancestor', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'child',
+        presets: {
+          base: { oracle: { model: 'ancestor-only' } },
+          child: {
+            extends: 'missing',
+            agents: { explorer: { model: 'partial' } },
+          },
+        },
+        agents: { fixer: { model: 'root' } },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      silent: true,
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.agents).toEqual({ fixer: { model: 'root' } });
+    expect(
+      warnings.some(
+        (warning) =>
+          warning.message.includes('child') &&
+          warning.message.includes('missing'),
+      ),
+    ).toBe(true);
   });
 
   test('invalid preset shape: bad agent config in preset fails schema validation', () => {

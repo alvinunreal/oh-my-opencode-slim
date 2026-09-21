@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createAgents } from '../agents';
 import { loadAgentPrompt, mergePluginConfigs } from './loader';
+import { resolvePreset } from './presets';
 import { RuntimeConfig } from './runtime';
 import { type PluginConfig, PluginConfigSchema } from './schema';
 
@@ -302,6 +303,51 @@ describe('Project-local customization - 15 core cases', () => {
       tokenLimit: 1000,
       debug: false,
       maxSearch: 5,
+    });
+  });
+
+  test('same-name project inheritance clears user preset models', () => {
+    const merged = mergePluginConfigs(
+      {
+        presets: {
+          session: {
+            explore: {
+              model: 'user/explorer',
+              options: { fromUser: true, shared: { user: true } },
+            },
+          },
+          orchestrator: {
+            librarian: { model: 'user/librarian' },
+          },
+        },
+      },
+      {
+        presets: {
+          session: {
+            explorer: {
+              inheritModelFrom: 'session',
+              options: { fromProject: true, shared: { project: true } },
+            },
+          },
+          orchestrator: {
+            librarian: { inheritModelFrom: 'orchestrator' },
+          },
+        },
+      },
+    );
+
+    expect(resolvePreset('session', merged.presets ?? {})).toEqual({
+      explorer: {
+        inheritModelFrom: 'session',
+        options: {
+          fromUser: true,
+          fromProject: true,
+          shared: { user: true, project: true },
+        },
+      },
+    });
+    expect(resolvePreset('orchestrator', merged.presets ?? {})).toEqual({
+      librarian: { inheritModelFrom: 'orchestrator' },
     });
   });
 

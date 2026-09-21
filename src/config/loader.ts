@@ -3,14 +3,34 @@ import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
 import { getConfigSearchDirs } from '../cli/paths';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
+import type { ResolvedPresetMap } from './presets';
+import {
+  deepMerge,
+  mergeAgentOverrides,
+  mergePresetMaps,
+  normalizePreset,
+  PresetResolutionError,
+  resolvePreset,
+} from './presets';
 import {
   BackgroundJobsConfigSchema,
   InterviewConfigSchema,
   LEGACY_FALLBACK_KEYS,
-  type PluginConfig,
   PluginConfigSchema,
+  type RawPluginConfig,
+  type ResolvedPluginConfig,
   WebfetchConfigSchema,
 } from './schema';
+
+export {
+  deepMerge,
+  mergeAgentOverrides,
+  mergePresetMaps,
+  normalizePreset,
+  PresetResolutionError,
+  resolvePreset,
+  resolvePresets,
+} from './presets';
 
 /**
  * Warning kinds produced during config loading.
@@ -159,9 +179,9 @@ function migrateLegacyBackgroundJobsConfig(rawConfig: unknown): unknown {
 }
 
 function retainExplicitInterviewFields(
-  parsedConfig: PluginConfig,
+  parsedConfig: RawPluginConfig,
   rawConfig: unknown,
-): PluginConfig {
+): RawPluginConfig {
   if (!parsedConfig.interview) {
     return parsedConfig;
   }
@@ -192,14 +212,14 @@ function retainExplicitInterviewFields(
 
   return {
     ...parsedConfig,
-    interview: interview as PluginConfig['interview'],
+    interview: interview as RawPluginConfig['interview'],
   };
 }
 
 function retainExplicitBackgroundJobsFields(
-  parsedConfig: PluginConfig,
+  parsedConfig: RawPluginConfig,
   rawConfig: unknown,
-): PluginConfig {
+): RawPluginConfig {
   if (!parsedConfig.backgroundJobs) {
     return parsedConfig;
   }
@@ -255,7 +275,24 @@ function retainExplicitBackgroundJobsFields(
 
   return {
     ...parsedConfig,
-    backgroundJobs: backgroundJobs as PluginConfig['backgroundJobs'],
+    backgroundJobs: backgroundJobs as RawPluginConfig['backgroundJobs'],
+  };
+}
+
+/** Normalize preset syntax before layered config objects are merged. */
+function normalizePresetDeclarations(config: RawPluginConfig): RawPluginConfig {
+  if (!config.presets) {
+    return config;
+  }
+
+  return {
+    ...config,
+    presets: Object.fromEntries(
+      Object.entries(config.presets).map(([name, preset]) => [
+        name,
+        normalizePreset(preset),
+      ]),
+    ),
   };
 }
 
@@ -272,7 +309,7 @@ function retainExplicitBackgroundJobsFields(
 function loadConfigFromPath(
   configPath: string,
   options?: LoadPluginConfigOptions,
-): PluginConfig | null {
+): RawPluginConfig | null {
   try {
     // Strip a UTF-8 BOM (RFC 8259 permits one); JSON.parse would otherwise
     // fail with "Unrecognized token" and silently drop the whole config.
@@ -452,13 +489,13 @@ function loadConfigFromPath(
       !Object.hasOwn(rawConfig.webfetch, 'enabled')
     ) {
       const { enabled: _enabled, ...webfetch } = layerConfig.webfetch;
-      return {
+      layerConfig = {
         ...layerConfig,
-        webfetch: webfetch as PluginConfig['webfetch'],
+        webfetch: webfetch as RawPluginConfig['webfetch'],
       };
     }
 
-    return layerConfig;
+    return normalizePresetDeclarations(layerConfig);
   } catch (error) {
     // File doesn't exist or isn't readable - this is expected and fine
     if (
@@ -529,7 +566,7 @@ function findConfigPathInDirs(
  * @returns `true` if the routing configuration is valid, `false` otherwise
  */
 function validateFinalImageRouting(
-  config: PluginConfig,
+  config: RawPluginConfig,
   configPath: string,
   options?: LoadPluginConfigOptions,
 ): boolean {
@@ -587,14 +624,17 @@ export function findPluginConfigPaths(directory: string): {
  * Project/override takes precedence over base.
  */
 export function mergePluginConfigs(
-  base: PluginConfig,
-  override: PluginConfig,
-): PluginConfig {
+  base: RawPluginConfig,
+  override: RawPluginConfig,
+): RawPluginConfig {
   return {
     ...base,
     ...override,
-    agents: deepMerge(base.agents, override.agents),
-    presets: deepMerge(base.presets, override.presets),
+    agents:
+      base.agents || override.agents
+        ? mergeAgentOverrides(base.agents ?? {}, override.agents ?? {})
+        : undefined,
+    presets: mergePresetMaps(base.presets, override.presets),
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
@@ -603,52 +643,13 @@ export function mergePluginConfigs(
     webfetch: deepMerge(
       base.webfetch as Record<string, unknown> | undefined,
       override.webfetch as Record<string, unknown> | undefined,
-    ) as PluginConfig['webfetch'],
+    ) as RawPluginConfig['webfetch'],
     acpAgents: deepMerge(base.acpAgents, override.acpAgents),
     companion: deepMerge(
       base.companion as Record<string, unknown> | undefined,
       override.companion as Record<string, unknown> | undefined,
-    ) as PluginConfig['companion'],
+    ) as RawPluginConfig['companion'],
   };
-}
-
-/**
- * Recursively merge two objects, with override values taking precedence.
- * For nested objects, merges recursively. For arrays and primitives, override replaces base.
- *
- * @param base - Base object to merge into
- * @param override - Override object whose values take precedence
- * @returns Merged object, or undefined if both inputs are undefined
- */
-export function deepMerge<T extends Record<string, unknown>>(
-  base?: T,
-  override?: T,
-): T | undefined {
-  if (!base) return override;
-  if (!override) return base;
-
-  const result = { ...base } as T;
-  for (const key of Object.keys(override) as (keyof T)[]) {
-    const baseVal = base[key];
-    const overrideVal = override[key];
-
-    if (
-      typeof baseVal === 'object' &&
-      baseVal !== null &&
-      typeof overrideVal === 'object' &&
-      overrideVal !== null &&
-      !Array.isArray(baseVal) &&
-      !Array.isArray(overrideVal)
-    ) {
-      result[key] = deepMerge(
-        baseVal as Record<string, unknown>,
-        overrideVal as Record<string, unknown>,
-      ) as T[keyof T];
-    } else {
-      result[key] = overrideVal;
-    }
-  }
-  return result;
 }
 
 /**
@@ -670,11 +671,11 @@ export function deepMerge<T extends Record<string, unknown>>(
 export function loadPluginConfig(
   directory: string,
   options?: LoadPluginConfigOptions,
-): PluginConfig {
+): ResolvedPluginConfig {
   const { userConfigPath, projectConfigPath } =
     findPluginConfigPaths(directory);
 
-  let config: PluginConfig = userConfigPath
+  let config: RawPluginConfig = userConfigPath
     ? (loadConfigFromPath(userConfigPath, options) ?? {})
     : {};
 
@@ -703,20 +704,61 @@ export function loadPluginConfig(
     config.preset = envPreset;
   }
 
+  // Resolve presets independently. An invalid, unused preset must not prevent
+  // valid presets from being selected. A failed chain is omitted completely,
+  // so the selected preset can never receive a partially resolved ancestor.
+  let resolvedPresets: ResolvedPresetMap | undefined;
+  const presetInheritanceFailures = new Set<string>();
+  if (config.presets) {
+    resolvedPresets = {};
+    for (const name of Object.keys(config.presets)) {
+      try {
+        resolvedPresets[name] = resolvePreset(name, config.presets);
+      } catch (error) {
+        presetInheritanceFailures.add(name);
+        const message =
+          error instanceof PresetResolutionError
+            ? error.message
+            : `Unable to resolve preset inheritance: ${String(error)}`;
+        options?.onWarning?.({
+          path: projectConfigPath ?? userConfigPath ?? '',
+          kind: 'invalid-schema',
+          message,
+        });
+        if (!options?.silent) {
+          console.warn(`[oh-my-opencode-slim] ${message}`);
+        }
+      }
+    }
+  }
+
+  const { presets: _rawPresets, ...configWithoutPresets } = config;
+  const runtimeConfig: ResolvedPluginConfig = resolvedPresets
+    ? { ...configWithoutPresets, presets: resolvedPresets }
+    : configWithoutPresets;
+
   // Resolve preset and merge with root agents
-  if (config.preset) {
-    const preset = config.presets?.[config.preset];
+  if (runtimeConfig.preset) {
+    const preset = resolvedPresets?.[runtimeConfig.preset];
     if (preset) {
       // Merge preset agents with root agents (root overrides)
-      config.agents = deepMerge(preset, config.agents);
+      runtimeConfig.agents = mergeAgentOverrides(
+        preset,
+        runtimeConfig.agents ?? {},
+      );
+    } else if (presetInheritanceFailures.has(runtimeConfig.preset)) {
+      // The inheritance warning above already identifies the exact broken
+      // chain. In particular, never apply only the ancestor portion here.
     } else {
       // Preset name specified but doesn't exist - warn user
       const presetSource =
-        envPreset === config.preset ? 'environment variable' : 'config file';
-      const availablePresets = config.presets
-        ? Object.keys(config.presets).join(', ')
+        envPreset === runtimeConfig.preset
+          ? 'environment variable'
+          : 'config file';
+      const availablePresets = runtimeConfig.presets
+        ? Object.keys(runtimeConfig.presets).join(', ')
         : 'none';
-      const message = `Preset "${config.preset}" not found (from ${presetSource}). Available presets: ${availablePresets}`;
+      const message = `Preset "${runtimeConfig.preset}" not found (from ${presetSource}). Available presets: ${availablePresets}`;
       options?.onWarning?.({
         path: projectConfigPath ?? userConfigPath ?? '',
         kind: 'missing-preset',
@@ -728,6 +770,13 @@ export function loadPluginConfig(
     }
   }
 
+  // Canonicalize root declarations even when no preset is selected. This
+  // keeps alias and canonical keys from competing in the runtime surface and
+  // preserves canonical values field-by-field across user/project layers.
+  if (runtimeConfig.agents) {
+    runtimeConfig.agents = mergeAgentOverrides({}, runtimeConfig.agents);
+  }
+
   // Note: per-agent skill directives (skills_add/skills_remove) are left
   // raw in the returned config. They are folded into the effective skills
   // list by RuntimeConfig.agents(), the single resolution point, so runtime
@@ -735,21 +784,21 @@ export function loadPluginConfig(
   // of operating on an already-baked skills array.
 
   // Normalize companion config defaults
-  if (config.companion) {
-    config.companion = {
-      enabled: config.companion.enabled ?? false,
-      binaryPath: config.companion.binaryPath,
-      position: config.companion.position ?? 'bottom-right',
-      size: config.companion.size ?? 'medium',
-      gifPack: config.companion.gifPack ?? 'default',
-      loopStyle: config.companion.loopStyle ?? 'classic',
-      speed: config.companion.speed ?? 1,
-      debug: config.companion.debug ?? false,
+  if (runtimeConfig.companion) {
+    runtimeConfig.companion = {
+      enabled: runtimeConfig.companion.enabled ?? false,
+      binaryPath: runtimeConfig.companion.binaryPath,
+      position: runtimeConfig.companion.position ?? 'bottom-right',
+      size: runtimeConfig.companion.size ?? 'medium',
+      gifPack: runtimeConfig.companion.gifPack ?? 'default',
+      loopStyle: runtimeConfig.companion.loopStyle ?? 'classic',
+      speed: runtimeConfig.companion.speed ?? 1,
+      debug: runtimeConfig.companion.debug ?? false,
     };
   }
 
   validateFinalImageRouting(
-    config,
+    runtimeConfig,
     projectConfigPath ?? userConfigPath ?? '',
     options,
   );
@@ -759,7 +808,7 @@ export function loadPluginConfig(
   // debounced toast in index.ts. Overriding to 'direct' here would prevent
   // processImageAttachments from returning true and suppress the toast.
 
-  return config;
+  return runtimeConfig;
 }
 
 /**

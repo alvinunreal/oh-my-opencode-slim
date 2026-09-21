@@ -32,6 +32,7 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   observeSyntheticTerminalPart,
+  pruneReopenCorrectionState,
   reconcileInjectedTerminalJobs,
   stabilizeRunningTaskParts,
   updateFromInjectedCompletion,
@@ -182,6 +183,8 @@ export function createTaskSessionManagerHook(
     hostOutcomeClock?: 'shared-unix-ms';
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+    /** Host-truth probe: refuse unknown-alias drops when a child may still be running. */
+    hasUntrackedRunningChild?: (parentSessionID?: string) => Promise<boolean>;
     /** Shared by plugin generations for one admission runtime. */
     pendingCallTracker?: PendingCallTracker;
     getModelForAgent?: (
@@ -459,6 +462,9 @@ export function createTaskSessionManagerHook(
       pendingInjectedTerminalJobsByParent.delete(sessionId);
       injectionState.retainedBoardSnapshots.delete(sessionId);
       injectionState.retainedTailBoards.delete(sessionId);
+      // Orphaned reopen corrections must never surface in a recreated
+      // session; the board entries they referenced are being dropped too.
+      pruneReopenCorrectionState(injectionState, sessionId);
       taskContextTracker.clearSession(sessionId);
       taskContextTracker.prune(backgroundJobBoard);
       pendingCallTracker.clearSession(sessionId);
@@ -592,6 +598,7 @@ export function createTaskSessionManagerHook(
         pendingCallTracker,
         taskContextTracker,
         getLifecycleEpoch: () => rehydrateState.nextEpoch,
+        hasUntrackedRunningChild: options.hasUntrackedRunningChild,
       }),
 
     'tool.execute.after': async (

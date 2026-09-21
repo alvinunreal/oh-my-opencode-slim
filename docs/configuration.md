@@ -112,10 +112,13 @@ All config files support **JSONC** (JSON with Comments):
 
 ### Runtime Preset Switching
 
-Presets can also be switched at runtime without restarting using the `/preset` command. See [Preset Switching](preset-switching.md) for details.
+Presets can also be selected from the TUI with `/preset`. The selection is
+written to the user config file; reload OpenCode for it to take effect. See
+[Preset Switching](preset-switching.md) for details.
 
 | `presets` | object | - | Named preset configurations |
 |-----------|--------|---|-----------------------------|
+| `presets.<name>.extends` | string | - | Optional single parent preset. The parent is resolved before the child; multiple parents are not supported |
 | `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
 | `presets.<name>.<agent>.temperature` | number | - | Optional temperature (0–2); when omitted, OpenCode chooses its default |
 | `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
@@ -162,8 +165,11 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `backgroundJobs.orchestratorWake.enabled` | boolean | `true` | When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts (default every 5 minutes of continuous parent idle). Requires host session APIs. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.intervalMs` | integer | `300000` | Continuous parent-idle interval between wake evaluations (`60000`–`2147483647` ms). `0` is invalid. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.mode` | string | `"auto"` | Wake-condition source: `"auto"` uses todo-gating on OpenCode v1 and children-driven degraded mode on v2 hosts; `"todo"`/`"children"` pin one mode (explicit `"todo"` degrades to children where no todo API exists). See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
+| `backgroundJobs.orchestratorWake.wakeOnTerminalPublication` | boolean | `true` | When true, a terminal completed/error publication that reaches an idle parent wakes it immediately instead of waiting for the next periodic evaluation. The first terminal publication of any generation (terminalRevision 1) is skipped (the native notifier armed by that generation's `subagent` tool call already delivers it); busy parents are skipped the same way See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
+| `backgroundJobs.orchestratorWake.publicationWakeMinIntervalMs` | integer | `30000` | Per-parent minimum spacing between terminal-publication wakes (`1000`–`2147483647` ms; `0` is invalid — the schema floor is 1,000ms). A burst of publications collapses into one wake; the window is consumed only when a wake is actually delivered See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native `task(..., background: true)` child sessions are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
+| `backgroundJobs.stopConfirmationMs` | integer | `5000` | Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job. Accepted values are `1000`–`60000` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
@@ -189,6 +195,45 @@ Presets can also be switched at runtime without restarting using the `/preset` c
 | `companion.binaryPath` | string | - | Optional path to a custom companion binary to launch instead of the default install path See [Desktop Companion App](#desktop-companion-app). |
 | `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` See [Desktop Companion App](#desktop-companion-app). |
 | `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) See [Desktop Companion App](#desktop-companion-app). |
+
+### Preset inheritance
+
+Use `extends` to make a preset inherit from one base preset. The child can
+override only the agents it needs to change:
+
+```jsonc
+{
+  "presets": {
+    "base": {
+      "agents": {
+        "orchestrator": { "model": "openai/gpt-5.6-terra" },
+        "designer": { "model": "openai/gpt-5.6-luna" }
+      }
+    },
+    "design": {
+      "extends": "base",
+      "agents": {
+        "designer": { "model": "anthropic/claude-sonnet-4-6" }
+      }
+    }
+  }
+}
+```
+
+`design` keeps the base orchestrator model and replaces only the base
+designer model. Presets support a single parent only; multi-parent
+inheritance is not supported. For overlapping agent fields, precedence is:
+
+**ancestor < child < root `agents` < host config**
+
+Here, root `agents` means the plugin's top-level `agents` object, while host
+config means the agent entry in OpenCode's `opencode.json`. A root `agents`
+entry is global: it overrides the active preset, so do not put an agent there
+if its value should vary by preset. Host config remains the final override.
+
+The `/preset` TUI persists the selected preset name and does not create an
+in-memory agent override or hot-swap the current agent registry. Reload
+OpenCode after changing the active preset.
 
 > **niri note:** `companion-v0.1.3` includes the fixed native companion release.
 > To make it open as a bottom-right overlay, add a niri rule matching its stable
@@ -540,21 +585,19 @@ the agent override inside each preset block, not in root `agents`.
 }
 ```
 
-#### Root `agents` wins the merge (config-file presets)
+#### Agent precedence
 
-At startup, config-file presets merge into `config.agents` via
-`deepMerge(preset, config.agents)` at `src/config/loader.ts:365`. The
-second argument wins for conflicting scalars, so root `agents` overrides
-the preset. A root entry for an agent makes the config-file preset value
-for that agent ignored — the agent becomes global instead of per-preset.
-Root `agents` is the escape hatch for values that should never vary by
-preset.
+For overlapping agent fields, the effective precedence is:
 
-**Runtime presets reverse this.** When a preset is activated at runtime
-via the `/preset` command, the merge at `src/index.ts:227` is
-`deepMerge(config.agents, presetAgents)` — the runtime preset is the
-override and wins. Root `agents` only guarantees precedence for
-config-file presets resolved at startup.
+**ancestor < child < root `agents` < host config**
+
+An ancestor supplies defaults, the child preset overrides them, the plugin's
+top-level `agents` object overrides the active preset, and the agent entry in
+OpenCode's `opencode.json` is the final override. A root `agents` entry is
+global rather than per-preset, so put an agent inside each preset when its
+value should vary by preset. This precedence also applies after `/preset`
+selects a preset; `/preset` persists the selection and does not create an
+in-memory override.
 
 #### Sharing a prompt across presets (custom agents)
 

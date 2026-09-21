@@ -18,6 +18,11 @@ import {
   recordTmuxPane,
   removeTmuxPane,
 } from './multiplexer/tmux-pane-registry';
+import {
+  KILL_ALL_KEYBIND,
+  killAllRunningSubagents,
+  killAllSummaryMessage,
+} from './tui-kill';
 import { openPresetManager } from './tui-preset';
 import {
   readTuiSnapshot,
@@ -27,6 +32,7 @@ import {
   type TuiSnapshot,
 } from './tui-state';
 import { isPluginDisabledByEnv } from './utils/env';
+import { log } from './utils/logger';
 
 const PLUGIN_NAME = 'oh-my-opencode-slim';
 const CONFIG_WARNING_COLOR = 'orange';
@@ -132,7 +138,7 @@ export type TuiRouteView =
       sessionID?: string;
     };
 
-function resolveRouteSessionId(route: TuiRouteView): string | undefined {
+export function resolveRouteSessionId(route: TuiRouteView): string | undefined {
   const view = route as {
     name?: string;
     params?: { sessionID?: unknown };
@@ -1582,6 +1588,46 @@ function buildPresetCommand(
 }
 
 /**
+ * Build the TUI slash command for `/killall`. Same legacy `api.command`
+ * registration as `/preset`: pure TUI entry point, no picker and no
+ * confirmation — it is an emergency escape hatch. The actual work is the
+ * shared helper in `src/tui-kill.ts`; post-kill reconciliation rides the
+ * existing idle pipeline.
+ */
+function buildKillAllCommand(
+  api: TuiPluginApi,
+  directoryGetter: () => string,
+  snapshotGetter: () => TuiSnapshot,
+): TuiCommand {
+  return {
+    title: 'OMO: kill all running subagents',
+    value: 'omo.kill_all',
+    description: 'Abort every running subagent of this conversation',
+    slash: { name: 'killall' },
+    keybind: KILL_ALL_KEYBIND,
+    onSelect: () => {
+      void killAllRunningSubagents(
+        (api as { client?: unknown }).client,
+        snapshotGetter(),
+        resolveRouteSessionId(api.route.current),
+        directoryGetter(),
+      )
+        .then((result) => {
+          api.ui.toast({
+            variant: result.failed > 0 ? 'warning' : 'info',
+            message: killAllSummaryMessage(result),
+          });
+        })
+        .catch((error) => {
+          log('[tui-kill] kill-all flow failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+    },
+  };
+}
+
+/**
  * Dual contract: v1 hosts validate `{ id, tui }`, opencode2 validates
  * `{ id, setup }`; both ignore extra keys. Fixes #1002.
  */
@@ -1695,6 +1741,9 @@ const plugin: TuiDualContractModule = {
     // sends a message to the server or triggers an LLM turn. The legacy
     // `api.command` API is still populated in OpenCode 1.18; if it is absent
     // (e.g. a future v2-only build), registration is skipped gracefully.
+    // `/killall` (+ alt+w) rides the same registration: it only
+    // resolves visible-conversation targets from the snapshot and aborts
+    // them via the shared helper.
     if (api.command) {
       const snapshotRef: { snapshot: TuiSnapshot } = {
         get snapshot() {
@@ -1706,6 +1755,11 @@ const plugin: TuiDualContractModule = {
       };
       const disposeCommands = api.command.register(() => [
         buildPresetCommand(api, () => configDirectory, snapshotRef),
+        buildKillAllCommand(
+          api,
+          () => configDirectory,
+          () => snapshot(),
+        ),
       ]);
       api.lifecycle.onDispose(disposeCommands);
     }

@@ -1,5 +1,6 @@
 import { resolveEffectiveSkills } from '../cli/skills';
 import { AGENT_ALIASES, ALL_AGENT_NAMES } from './constants';
+import { mergeAgentOverrides } from './presets';
 import type { AgentOverrideConfig, PluginConfig } from './schema';
 
 /**
@@ -15,12 +16,15 @@ export function getAgentOverride(
   name: string,
 ): AgentOverrideConfig | undefined {
   const overrides = config?.agents ?? {};
-  return (
-    overrides[name] ??
-    overrides[
-      Object.keys(AGENT_ALIASES).find((k) => AGENT_ALIASES[k] === name) ?? ''
-    ]
+  const alias = Object.keys(AGENT_ALIASES).find(
+    (key) => AGENT_ALIASES[key] === name,
   );
+  const canonical = overrides[name];
+  const legacy = alias ? overrides[alias] : undefined;
+  if (canonical && legacy) {
+    return mergeAgentOverrides({ [name]: legacy }, { [name]: canonical })[name];
+  }
+  return canonical ?? legacy;
 }
 
 /**

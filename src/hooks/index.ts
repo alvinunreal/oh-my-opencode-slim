@@ -15,6 +15,7 @@ export {
   ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT,
   ORCHESTRATOR_WAKE_TEXT,
   ORCHESTRATOR_WAKE_UNCHANGED_CAP,
+  stoppedJobRecoveryReason,
 } from './orchestrator-wake';
 export { createPhaseReminderHook } from './phase-reminder';
 export { createPostFileToolNudgeHook } from './post-file-tool-nudge';

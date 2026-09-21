@@ -62,6 +62,34 @@ describe('RuntimeConfig', () => {
     expect(runtime.agent('explorer')?.model).toBe('plugin-file-model');
   });
 
+  test('inheritance prevents host models from leaking into agent views', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      agents: {
+        explorer: { inheritModelFrom: 'session' },
+        librarian: { inheritModelFrom: 'orchestrator' },
+      },
+    });
+    runtime.captureHostConfig({
+      agent: {
+        explorer: { model: 'host/explorer', temperature: 0.3 },
+        librarian: {
+          model: 'host/librarian',
+          options: { reasoningEffort: 'high' },
+        },
+      },
+    });
+
+    expect(runtime.agent('explorer')).toEqual({
+      inheritModelFrom: 'session',
+      temperature: 0.3,
+    });
+    expect(runtime.agent('librarian')).toEqual({
+      inheritModelFrom: 'orchestrator',
+      options: { reasoningEffort: 'high' },
+    });
+  });
+
   test('host snapshot is captured before mutation', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {});

@@ -35,7 +35,9 @@ The main idea is simple: instead of forcing one model to do everything, the plug
   the agent best suited for it - mix any models across any providers.
 - **[Background orchestration](docs/background-orchestration.md)** - the
   Orchestrator dispatches specialists as background tasks, tracks them, and
-  reconciles results before continuing - parallel work by default.
+  reconciles results before continuing - parallel work by default, with
+  terminal-result wake-ups and reopen corrections keeping idle parents
+  current.
 - **[Bundled skills](#skills)** - prompt-based workflows like `deepwork`,
   `codemap`, `verification-planning`, and `reflect`, assigned per agent.
 - **[Council](docs/council.md)** - run multiple models in parallel on the same
@@ -45,7 +47,7 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 - **[Multiplexer integration](docs/multiplexer-integration.md)** - watch agents
   work live in Tmux, Zellij, Herdr, cmux, or kitty panes.
 - **[Preset switching](docs/preset-switching.md)** - swap the whole team's
-  models at runtime with `/preset`.
+  models at runtime with `/preset`, with single-parent preset inheritance.
 - **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
   across 25 languages, and built-in MCPs for docs and GitHub code
   search.
@@ -173,6 +175,12 @@ The default generated configuration includes both `openai` and `opencode-go` pre
   }
 }
 ```
+
+Presets can inherit from one base preset with `extends`: a `design` preset can
+extend `base` and override only its designer model. Changes are persisted by
+`/preset` and take effect after an OpenCode reload. See
+[Configuration](docs/configuration.md#preset-inheritance) for the inheritance
+example and precedence rules.
 
 ### Preset Docs
 
@@ -663,7 +671,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-115-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-116-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -828,6 +836,7 @@ Use this section as a map: start with installation, then jump to features, confi
     </tr>
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/kumar-shivang"><img src="https://avatars.githubusercontent.com/u/89011717?v=4?s=100" width="100px;" alt="Shivang Kumar"/><br /><sub><b>Shivang Kumar</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=kumar-shivang" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/ScoFan-official"><img src="https://avatars.githubusercontent.com/u/137064417?v=4?s=100" width="100px;" alt="ScoFan-official"/><br /><sub><b>ScoFan-official</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=ScoFan-official" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

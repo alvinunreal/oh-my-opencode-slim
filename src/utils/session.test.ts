@@ -3,6 +3,7 @@ import {
   abortSessionWithTimeout,
   OperationTimeoutError,
   promptWithTimeout,
+  sessionAbortFailure,
   withTimeout,
 } from './session';
 
@@ -114,6 +115,31 @@ describe('session utilities', () => {
     await expect(abortSessionWithTimeout(client, 's1', 5)).rejects.toThrow(
       'Session abort timed out after 5ms',
     );
+  });
+
+  test('abortSessionWithTimeout rejects resolved error envelopes', async () => {
+    const client = {
+      session: {
+        abort: mock(() => Promise.resolve({ error: 'session busy' })),
+      },
+    } as any;
+
+    await expect(abortSessionWithTimeout(client, 's1')).rejects.toThrow(
+      'session abort rejected: session busy',
+    );
+  });
+
+  test('sessionAbortFailure reads both SDK envelopes', () => {
+    expect(sessionAbortFailure({ error: 'boom' })).toBe(
+      'session abort rejected: boom',
+    );
+    expect(sessionAbortFailure({ error: { message: 'nope' } })).toBe(
+      'session abort rejected: {"message":"nope"}',
+    );
+    expect(sessionAbortFailure(false)).toBe('session abort returned false');
+    expect(sessionAbortFailure(undefined)).toBeNull();
+    expect(sessionAbortFailure({ data: { ok: true } })).toBeNull();
+    expect(sessionAbortFailure(null)).toBeNull();
   });
 
   test('promptWithTimeout handles late prompt rejection without unhandled rejection', async () => {

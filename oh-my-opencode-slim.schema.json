@@ -26,472 +26,953 @@
         "type": "string"
       },
       "additionalProperties": {
-        "type": "object",
-        "propertyNames": {
-          "type": "string"
-        },
-        "additionalProperties": {
-          "type": "object",
-          "properties": {
-            "model": {
-              "anyOf": [
-                {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "extends": {
+                "type": "string",
+                "minLength": 1
+              },
+              "agents": {
+                "type": "object",
+                "propertyNames": {
                   "type": "string"
                 },
-                {
-                  "minItems": 1,
-                  "type": "array",
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "variant": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "id"
-                        ]
-                      }
-                    ]
-                  }
-                }
-              ]
-            },
-            "inheritModelFrom": {
-              "type": "string",
-              "enum": [
-                "session",
-                "orchestrator"
-              ]
-            },
-            "temperature": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 2
-            },
-            "variant": {
-              "type": "string"
-            },
-            "skills": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "skills_add": {
-              "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "skills_remove": {
-              "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "skills_include_local": {
-              "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
-              "type": "boolean"
-            },
-            "mcps": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "prompt": {
-              "type": "string",
-              "minLength": 1
-            },
-            "orchestratorPrompt": {
-              "type": "string",
-              "minLength": 1
-            },
-            "options": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {}
-            },
-            "displayName": {
-              "type": "string",
-              "minLength": 1
-            },
-            "color": {
-              "description": "Agent display color as #RRGGBB or an OpenCode theme color",
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^#[0-9a-fA-F]{6}$"
-                },
-                {
-                  "type": "string",
-                  "enum": [
-                    "primary",
-                    "secondary",
-                    "accent",
-                    "success",
-                    "warning",
-                    "error",
-                    "info"
-                  ]
-                }
-              ]
-            },
-            "description": {
-              "type": "string",
-              "minLength": 1
-            },
-            "permission": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "enum": [
-                    "ask",
-                    "allow",
-                    "deny"
-                  ]
-                },
-                {
+                "additionalProperties": {
                   "type": "object",
                   "properties": {
-                    "read": {
+                    "model": {
                       "anyOf": [
                         {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
+                          "type": "string"
                         },
                         {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "variant": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id"
+                                ]
+                              }
                             ]
                           }
                         }
                       ]
                     },
-                    "edit": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "glob": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "grep": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "list": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "bash": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "task": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "external_directory": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "lsp": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "skill": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "ask",
-                            "allow",
-                            "deny"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "string",
-                            "enum": [
-                              "ask",
-                              "allow",
-                              "deny"
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    "todowrite": {
+                    "inheritModelFrom": {
                       "type": "string",
                       "enum": [
-                        "ask",
-                        "allow",
-                        "deny"
+                        "session",
+                        "orchestrator"
                       ]
                     },
-                    "question": {
+                    "temperature": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 2
+                    },
+                    "variant": {
+                      "type": "string"
+                    },
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "skills_add": {
+                      "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "skills_remove": {
+                      "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "skills_include_local": {
+                      "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                      "type": "boolean"
+                    },
+                    "mcps": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "prompt": {
                       "type": "string",
-                      "enum": [
-                        "ask",
-                        "allow",
-                        "deny"
+                      "minLength": 1
+                    },
+                    "orchestratorPrompt": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "options": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    "displayName": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "color": {
+                      "description": "Agent display color as #RRGGBB or an OpenCode theme color",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^#[0-9a-fA-F]{6}$"
+                        },
+                        {
+                          "type": "string",
+                          "enum": [
+                            "primary",
+                            "secondary",
+                            "accent",
+                            "success",
+                            "warning",
+                            "error",
+                            "info"
+                          ]
+                        }
                       ]
                     },
-                    "webfetch": {
+                    "description": {
                       "type": "string",
-                      "enum": [
-                        "ask",
-                        "allow",
-                        "deny"
-                      ]
+                      "minLength": 1
                     },
-                    "websearch": {
-                      "type": "string",
-                      "enum": [
-                        "ask",
-                        "allow",
-                        "deny"
-                      ]
-                    },
-                    "codesearch": {
-                      "type": "string",
-                      "enum": [
-                        "ask",
-                        "allow",
-                        "deny"
-                      ]
-                    },
-                    "doom_loop": {
-                      "type": "string",
-                      "enum": [
-                        "ask",
-                        "allow",
-                        "deny"
+                    "permission": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "read": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "edit": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "glob": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "grep": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "list": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "bash": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "task": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "external_directory": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "lsp": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "skill": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ask",
+                                      "allow",
+                                      "deny"
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "todowrite": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            "question": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            "webfetch": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            "websearch": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            "codesearch": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            "doom_loop": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            }
+                          },
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "enum": [
+                                    "ask",
+                                    "allow",
+                                    "deny"
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
                       ]
                     }
                   },
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "enum": [
-                          "ask",
-                          "allow",
-                          "deny"
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "agents"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "extends": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "extends"
+            ],
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "variant": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          }
                         ]
-                      },
-                      {
-                        "type": "object",
-                        "propertyNames": {
-                          "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "inheritModelFrom": {
+                  "type": "string",
+                  "enum": [
+                    "session",
+                    "orchestrator"
+                  ]
+                },
+                "temperature": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                "variant": {
+                  "type": "string"
+                },
+                "skills": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skills_add": {
+                  "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skills_remove": {
+                  "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skills_include_local": {
+                  "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                  "type": "boolean"
+                },
+                "mcps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "orchestratorPrompt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "options": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "color": {
+                  "description": "Agent display color as #RRGGBB or an OpenCode theme color",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "primary",
+                        "secondary",
+                        "accent",
+                        "success",
+                        "warning",
+                        "error",
+                        "info"
+                      ]
+                    }
+                  ]
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "permission": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "ask",
+                        "allow",
+                        "deny"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "read": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
                         },
-                        "additionalProperties": {
+                        "edit": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "glob": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "grep": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "list": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "bash": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "task": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "external_directory": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "lsp": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "skill": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "todowrite": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "question": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "webfetch": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "websearch": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "codesearch": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "doom_loop": {
                           "type": "string",
                           "enum": [
                             "ask",
@@ -499,15 +980,525 @@
                             "deny"
                           ]
                         }
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "ask",
+                              "allow",
+                              "deny"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            }
+                          }
+                        ]
                       }
-                    ]
-                  }
+                    }
+                  ]
                 }
-              ]
+              },
+              "additionalProperties": false
             }
           },
-          "additionalProperties": false
-        }
+          {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "variant": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "inheritModelFrom": {
+                  "type": "string",
+                  "enum": [
+                    "session",
+                    "orchestrator"
+                  ]
+                },
+                "temperature": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                "variant": {
+                  "type": "string"
+                },
+                "skills": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skills_add": {
+                  "description": "Skill names to add to this agent's effective skills list. Applied after the resolved `skills` list during config resolution; removal via `skills_remove` wins. Folded into `skills` at resolution time.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skills_remove": {
+                  "description": "Skill names to remove from this agent's effective skills list. Applied after `skills_add` during config resolution, so removal wins over addition. Folded into `skills` at resolution time.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skills_include_local": {
+                  "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                  "type": "boolean"
+                },
+                "mcps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "orchestratorPrompt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "options": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "color": {
+                  "description": "Agent display color as #RRGGBB or an OpenCode theme color",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "primary",
+                        "secondary",
+                        "accent",
+                        "success",
+                        "warning",
+                        "error",
+                        "info"
+                      ]
+                    }
+                  ]
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "permission": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "ask",
+                        "allow",
+                        "deny"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "read": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "edit": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "glob": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "grep": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "list": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "bash": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "task": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "external_directory": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "lsp": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "skill": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string",
+                                "enum": [
+                                  "ask",
+                                  "allow",
+                                  "deny"
+                                ]
+                              }
+                            }
+                          ]
+                        },
+                        "todowrite": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "question": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "webfetch": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "websearch": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "codesearch": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        },
+                        "doom_loop": {
+                          "type": "string",
+                          "enum": [
+                            "ask",
+                            "allow",
+                            "deny"
+                          ]
+                        }
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "ask",
+                              "allow",
+                              "deny"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "enum": [
+                                "ask",
+                                "allow",
+                                "deny"
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        ]
       }
     },
     "agents": {
@@ -1152,7 +2143,9 @@
           "default": {
             "enabled": true,
             "intervalMs": 300000,
-            "mode": "auto"
+            "mode": "auto",
+            "wakeOnTerminalPublication": true,
+            "publicationWakeMinIntervalMs": 30000
           },
           "description": "Periodic orchestrator wake scheduler for idle sessions. v1: requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. v2: runs in children-driven degraded mode (requires session.list + promptAsync) and wakes while un-finished child sessions remain. Default enabled at a 5-minute interval.",
           "type": "object",
@@ -1178,6 +2171,18 @@
                 "todo",
                 "children"
               ]
+            },
+            "wakeOnTerminalPublication": {
+              "default": true,
+              "description": "When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. Busy parents are skipped: the native steer already delivered the completion. Default enabled.",
+              "type": "boolean"
+            },
+            "publicationWakeMinIntervalMs": {
+              "default": 30000,
+              "description": "Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake.",
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 2147483647
             }
           }
         },
@@ -1199,6 +2204,13 @@
         "abortGraceMs": {
           "default": 10000,
           "description": "Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "stopConfirmationMs": {
+          "default": 5000,
+          "description": "Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). Default 5,000 (5 seconds).",
           "type": "integer",
           "minimum": 1000,
           "maximum": 60000

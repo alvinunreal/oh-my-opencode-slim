@@ -123,6 +123,7 @@ type HookOptions = {
   sessionClient?: Record<string, unknown>;
   idleReconcileDelayMs?: number;
   runtimeStatusReconcileDelayMs?: number;
+  hasUntrackedRunningChild?: (parentSessionID?: string) => Promise<boolean>;
   isFallbackInProgress?: (sessionID: string) => boolean;
   willAttemptFallback?: (sessionID: string) => boolean;
   coordinator?: SessionLifecycle;
@@ -211,6 +212,7 @@ function createHook(options?: HookOptions) {
       coordinator: options?.coordinator,
       idleReconcileDelayMs: options?.idleReconcileDelayMs,
       runtimeStatusReconcileDelayMs: options?.runtimeStatusReconcileDelayMs,
+      hasUntrackedRunningChild: options?.hasUntrackedRunningChild,
     },
   );
 
@@ -5246,10 +5248,26 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('exp-1');
   });
 
-  test('custom subagent unknown native task_id is rejected before host execution', async () => {
+  test('custom subagent unknown native task_id drops the id and spawns fresh', async () => {
     const { hook } = createHook();
     const resume = {
       args: { subagent_type: 'repro-helper', task_id: 'ses_custom123' },
+    };
+
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+      resume,
+    );
+
+    expect(resume.args.task_id).toBeUndefined();
+  });
+
+  test('unknown alias refuses when an untracked child may still be running', async () => {
+    const { hook } = createHook({
+      hasUntrackedRunningChild: async () => true,
+    });
+    const resume = {
+      args: { subagent_type: 'fixer', task_id: 'fix-99' },
     };
 
     await expect(
@@ -5257,9 +5275,27 @@ describe('task-session-manager hook', () => {
         { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
         resume,
       ),
-    ).rejects.toThrow(/Unknown task ID or alias/);
+    ).rejects.toThrow(/may have lost its mapping/);
+    expect(resume.args.task_id).toBe('fix-99');
+  });
 
-    expect(resume.args.task_id).toBe('ses_custom123');
+  test('unknown alias refuses when the host probe fails (fail closed)', async () => {
+    const { hook } = createHook({
+      hasUntrackedRunningChild: async () => {
+        throw new Error('probe down');
+      },
+    });
+    const resume = {
+      args: { subagent_type: 'fixer', task_id: 'fix-99' },
+    };
+
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+        resume,
+      ),
+    ).rejects.toThrow(/may have lost its mapping/);
+    expect(resume.args.task_id).toBe('fix-99');
   });
 
   test('custom subagent aliases resolve for the same custom agent', async () => {
@@ -5460,17 +5496,15 @@ describe('task-session-manager hook', () => {
     expect(spawn.args.task_id).toBeUndefined();
   });
 
-  test('refuses unknown reusable aliases without dropping task_id', async () => {
+  test('drops unknown reusable aliases and continues as a new spawn', async () => {
     const { hook } = createHook();
     const resume = { args: { subagent_type: 'fixer', task_id: 'fix-99' } };
 
-    await expect(
-      hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
-        resume,
-      ),
-    ).rejects.toThrow(/Unknown task ID or alias: fix-99/);
-    expect(resume.args.task_id).toBe('fix-99');
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+      resume,
+    );
+    expect(resume.args.task_id).toBeUndefined();
   });
 
   test('reads before and after launch attach with unique-line counts and caps', async () => {

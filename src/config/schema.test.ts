@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test';
+import { z } from 'zod';
 import {
   InterviewConfigSchema,
   PluginConfigSchema,
+  PresetSchema,
   ProviderModelIdSchema,
 } from './schema';
 
@@ -52,6 +54,38 @@ describe('PluginConfigSchema ACP wrapper models', () => {
     if (result.success) {
       expect(result.data.acpAgents?.helper?.wrapperModel).toBe(wrapperModel);
     }
+  });
+});
+
+describe('PluginConfigSchema preset syntax', () => {
+  it('accepts legacy custom names that resemble metadata fields', () => {
+    const result = PluginConfigSchema.safeParse({
+      presets: {
+        legacy: {
+          extends: { model: 'provider/extends' },
+          agents: { model: 'provider/agents' },
+          model: { model: 'provider/model' },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an ambiguous agents wrapper with an actionable error', () => {
+    const result = PluginConfigSchema.safeParse({
+      presets: {
+        ambiguous: { agents: { options: { model: 'provider/model' } } },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('emits oneOf for preset alternatives so public schema matches xor', () => {
+    const generated = z.toJSONSchema(PresetSchema) as { oneOf?: unknown[] };
+
+    expect(generated.oneOf).toHaveLength(3);
   });
 });
 
@@ -207,6 +241,8 @@ describe('PluginConfigSchema backgroundJobs', () => {
         enabled: true,
         intervalMs: 300_000,
         mode: 'auto',
+        wakeOnTerminalPublication: true,
+        publicationWakeMinIntervalMs: 30_000,
       });
     }
   });
@@ -214,7 +250,12 @@ describe('PluginConfigSchema backgroundJobs', () => {
   it('accepts explicit orchestratorWake overrides', () => {
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: {
-        orchestratorWake: { enabled: false, intervalMs: 120_000 },
+        orchestratorWake: {
+          enabled: false,
+          intervalMs: 120_000,
+          wakeOnTerminalPublication: false,
+          publicationWakeMinIntervalMs: 120_000,
+        },
       },
     });
 
@@ -224,7 +265,47 @@ describe('PluginConfigSchema backgroundJobs', () => {
         enabled: false,
         intervalMs: 120_000,
         mode: 'auto',
+        wakeOnTerminalPublication: false,
+        publicationWakeMinIntervalMs: 120_000,
       });
+    }
+  });
+
+  it('rejects out-of-bounds publicationWakeMinIntervalMs values', () => {
+    for (const publicationWakeMinIntervalMs of [0, 999, -1, 2_147_483_648]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: {
+            orchestratorWake: { publicationWakeMinIntervalMs },
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('defaults backgroundJobs.stopConfirmationMs to 5 seconds', () => {
+    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.backgroundJobs?.stopConfirmationMs).toBe(5_000);
+    }
+  });
+
+  it('accepts explicit stopConfirmationMs within bounds and rejects outside', () => {
+    for (const stopConfirmationMs of [1_000, 5_000, 60_000]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: { stopConfirmationMs },
+        }).success,
+      ).toBe(true);
+    }
+    for (const stopConfirmationMs of [999, 60_001, 0, -1]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          backgroundJobs: { stopConfirmationMs },
+        }).success,
+      ).toBe(false);
     }
   });
 

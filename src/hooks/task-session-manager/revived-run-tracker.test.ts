@@ -18,6 +18,11 @@ function createHarness(
     maxNotificationRetries?: number;
     stabilizationProbeDelayMs?: number;
     handoffExpiryMs?: number;
+    onOwnershipReleased?: (
+      parentSessionID: string,
+      taskID: string,
+      generation: number,
+    ) => void;
     resolveSelection?: (sessionID: string) => Promise<{
       agent?: string;
       model?: { providerID: string; modelID: string };
@@ -207,6 +212,78 @@ describe('revived run tracker', () => {
       (harness.prompt.mock.calls[0]?.[0] as { delivery?: string } | undefined)
         ?.delivery,
     ).toBe('queue');
+  });
+
+  // ── v2-sim pin: queue delivery + exactly-once across the double-idle ──
+  //
+  // On a v2 host the event adapter synthesizes BOTH a `session.status`
+  // idle and a `session.idle` for one terminal execution event (the
+  // documented double-idle invariant), so the terminal observation is
+  // redelivered to every publication listener and the tracker's probe
+  // can be re-driven. The parent notification must still be delivered
+  // EXACTLY ONCE, via promptAsync with `delivery: 'queue'` (v1
+  // prompt_async parity — 'steer' would hijack an in-flight parent,
+  // #1192) and `modelSelection: 'inherit'` (lifecycle continuation,
+  // #1079): the exact argument pair the v2 client shim translates.
+  test('v2-sim: double-delivered terminal observation notifies the parent exactly once with queue delivery', async () => {
+    let probe = false;
+    const harness = createHarness(
+      completedTranscript(() => probe),
+      undefined,
+      false,
+    );
+    const baseline = await harness.tracker.captureBaseline('ses_child');
+    harness.tracker.register({
+      taskID: harness.run.taskID,
+      generation: harness.run.generation,
+      parentSessionID: 'parent',
+      baselineMessageID: baseline,
+      description: 'inspect the change',
+    });
+    probe = true;
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+
+    // The second half of the double-idle pair: the coordinator's
+    // terminal-outcome listener redelivers the SAME publication, and a
+    // re-driven probe reconciles to the already-terminal record.
+    const published = harness.board.get('ses_child');
+    if (!published) throw new Error('missing publication');
+    harness.tracker.onTerminal(published);
+    await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+    await flushNotify();
+
+    expect(harness.prompt).toHaveBeenCalledTimes(1);
+    expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      delivery: 'queue',
+      modelSelection: 'inherit',
+    });
+    const body = (
+      harness.prompt.mock.calls[0]?.[0] as
+        | {
+            body?: {
+              agent?: string;
+              parts?: Array<{
+                text?: string;
+                metadata?: Record<string, unknown>;
+              }>;
+            };
+          }
+        | undefined
+    )?.body;
+    expect(body?.agent).toBe('orchestrator');
+    expect(body?.parts?.[0]?.text).toContain('<task ');
+    expect(body?.parts?.[0]?.text).toContain('state="completed"');
+    expect(body?.parts?.[0]?.text).toContain(SLIM_INTERNAL_INITIATOR_MARKER);
+    expect(
+      body?.parts?.[0]?.metadata?.['oh-my-opencode-slim.internalInitiator'],
+    ).toBe(true);
+    // The board stays settled after the redelivery — no second terminal.
+    expect(harness.board.get('ses_child')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'new result',
+    });
   });
 
   test('notifies the parent in its current selection instead of hardcoded orchestrator', async () => {
@@ -1378,5 +1455,170 @@ describe('revived run tracker', () => {
 
     // Stale generations never resolve a revision.
     expect(harness.tracker.revisionFor('ses_child', gen + 1)).toBeUndefined();
+  });
+
+  // ── willNotifyParent: publication-wake suppression predicate ──
+  //
+  // The terminal-publication wake listener (src/index.ts) consults this
+  // predicate to skip the wake when the tracker owns delivery for the
+  // exact (taskID, generation): a revived run's completion must produce
+  // ONE queued admission (the tracker's notifyParent), never two.
+  describe('willNotifyParent', () => {
+    test('claims delivery for a tracked run before, during, and after its notification', async () => {
+      let resultReady = false;
+      const harness = createHarness(completedTranscript(() => resultReady));
+      const gen = harness.run.generation;
+
+      // Untracked / stale: the wake is the deliverer.
+      expect(harness.tracker.willNotifyParent('ses_child', gen)).toBe(false);
+      expect(harness.tracker.willNotifyParent('unknown', gen)).toBe(false);
+
+      harness.tracker.register({
+        taskID: 'ses_child',
+        generation: gen,
+        parentSessionID: 'parent',
+        baselineMessageID: 'baseline',
+        description: 'inspect the change',
+      });
+      expect(harness.tracker.willNotifyParent('ses_child', gen)).toBe(true);
+      expect(harness.tracker.willNotifyParent('ses_child', gen + 1)).toBe(
+        false,
+      );
+
+      resultReady = true;
+      await harness.tracker.probe('ses_child', gen);
+      await flushNotify();
+      expect(harness.prompt).toHaveBeenCalledTimes(1);
+      // Delivered (sent): the tracker still owns this run's delivery —
+      // a wake beside it would double-notify.
+      expect(harness.tracker.willNotifyParent('ses_child', gen)).toBe(true);
+    });
+
+    test('releases ownership once the retry budget is exhausted', async () => {
+      const harness = createHarness(
+        () => ({ data: [] }),
+        mock(async () => {
+          throw new Error('parent unavailable');
+        }),
+        false,
+        { maxNotificationRetries: 1 },
+      );
+      publish(harness);
+      await flushNotify();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      // Attempt 1 of 1 failed; no retry is scheduled, so the tracker
+      // will never deliver — the publication wake is the legitimate
+      // degraded fallback and must not be suppressed.
+      expect(harness.prompt).toHaveBeenCalledTimes(1);
+      expect(
+        harness.tracker.willNotifyParent(
+          harness.run.taskID,
+          harness.run.generation,
+        ),
+      ).toBe(false);
+
+      // Contrast: with budget remaining (a retry scheduled), the
+      // tracker still owns delivery.
+      const retrying = createHarness(
+        () => ({ data: [] }),
+        mock(async () => {
+          throw new Error('parent unavailable');
+        }),
+      );
+      publish(retrying);
+      await flushNotify();
+      expect(retrying.prompt).toHaveBeenCalledTimes(1);
+      expect(
+        retrying.tracker.willNotifyParent(
+          retrying.run.taskID,
+          retrying.run.generation,
+        ),
+      ).toBe(true);
+      retrying.tracker.dispose();
+    });
+  });
+
+  describe('onOwnershipReleased', () => {
+    test('fires exactly once with the run ids when every retry fails', async () => {
+      const released: Array<{
+        parentSessionID: string;
+        taskID: string;
+        generation: number;
+      }> = [];
+      const harness = createHarness(
+        () => ({ data: [] }),
+        mock(async () => {
+          throw new Error('parent unavailable');
+        }),
+        false,
+        {
+          maxNotificationRetries: 2,
+          onOwnershipReleased: (parentSessionID, taskID, generation) => {
+            released.push({ parentSessionID, taskID, generation });
+          },
+        },
+      );
+      const terminal = publish(harness);
+      await flushNotify();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Attempt 1 failed, one retry fired and failed: the budget is
+      // spent with nothing sent and no timer armed — the organic
+      // give-up point.
+      expect(harness.prompt).toHaveBeenCalledTimes(2);
+      expect(released).toEqual([
+        {
+          parentSessionID: 'parent',
+          taskID: harness.run.taskID,
+          generation: harness.run.generation,
+        },
+      ]);
+
+      // A duplicate terminal observation of the SAME revision must NOT
+      // make a third transport attempt: the released lifecycle passed
+      // delivery ownership to the fallback publication wake, so a fresh
+      // attempt here could queue a second prompt beside it (two parent
+      // turns for one result). The release stays exactly-once and the
+      // tracker stays silent.
+      harness.tracker.onTerminal(terminal);
+      await flushNotify();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(harness.prompt).toHaveBeenCalledTimes(2);
+      expect(released).toHaveLength(1);
+
+      // Plain dispose never fires the release either.
+      harness.tracker.dispose();
+      expect(released).toHaveLength(1);
+    });
+
+    test('never fires on successful delivery', async () => {
+      const released: string[] = [];
+      let resultReady = false;
+      const harness = createHarness(
+        completedTranscript(() => resultReady),
+        mock(async () => ({})),
+        false,
+        {
+          onOwnershipReleased: (parentSessionID) =>
+            released.push(parentSessionID),
+        },
+      );
+      harness.tracker.register({
+        taskID: harness.run.taskID,
+        generation: harness.run.generation,
+        parentSessionID: 'parent',
+        baselineMessageID: 'baseline',
+        description: 'inspect the change',
+      });
+      resultReady = true;
+      await harness.tracker.probe(harness.run.taskID, harness.run.generation);
+      await flushNotify();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(harness.prompt).toHaveBeenCalledTimes(1);
+      expect(released).toEqual([]);
+      harness.tracker.dispose();
+    });
   });
 });

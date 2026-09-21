@@ -118,9 +118,13 @@ its probe only ever matters on non-stable host builds.
    (`src/v2/client-shim.ts`): the project directory from `ctx.location`,
    and a shim `client` that **really delegates** the v1 SDK call shapes to
    v2 flat session calls — `session.get`, `session.abort`→`interrupt`
-   (`resume: false` aborts the active run), `session.messages`→`context`,
-   `session.prompt` (default `delivery: "steer"`; `noReply: true` maps to
-   `delivery: "queue", resume: false`), `session.update`→
+   (`resume: false` aborts the active run), `session.messages`→`context`
+   (mapped entries preserve the v2 terminal metadata — `time.completed`,
+   `finish`, `error` — and the 2.0.8 trailing `idle` lifecycle marker maps
+   to the skippable v1 `system` role, so transcript classification works
+   natively on v2), `session.prompt` (default `delivery: "steer"`;
+   `noReply: true` maps to `delivery: "queue", resume: false`),
+   `session.update`→
    `session.update` (`{sessionID, title}`), `session.delete`→`remove` (same
    `DELETE /api/session/:id`; stops the smartfetch secondary-model temp
    sessions leaking), and `session.list` (v2 `Session.Info` page → the v1
@@ -299,7 +303,24 @@ latest live activity) < time.idle <= read completion`; equality is ambiguous.
 Attempt boundaries survive handoff promotion and late ACKs. An unattributable
 outcome cannot establish or preserve host-outcome quiescence; it leaves the run
 uncertain, not stopped. Fresh `succeeded` still requires valid post-baseline result
-evidence. Independent runtime maps, native returns and cancellation keep their fences.
+evidence — except on hosts that expose no transcript source at all (no callable
+`session.messages`), where a window-attributed `succeeded` publishes `completed`
+from the host outcome alone (attribution `host-outcome`): capability absence is a
+dead end, never a pending transcript, and a host whose transcript is present but
+unfinalized keeps waiting exactly as on v1. Independent runtime maps, native
+returns and cancellation keep their fences.
+
+Known limitation (documented dead end): a host outcome that becomes
+attributable only after the gate's evidence retry budget is exhausted (initial
+read plus 3 retries at `stopConfirmationMs` cadence, with no further events
+arriving) strands the board entry at `running` until the parent's next
+activity rehydrate reconciles it. The parked probe test in
+`src/terminal-gate.integration.test.ts` (`probe: late-attributable outcome
+after exhaustion terminalizes the stranded board`, `test.skip`) records the
+mechanism: neither a later idle pair nor a busy→idle contrast cycle re-arms
+an outcome read. Note `stopConfirmationMs` doubles as the retry cadence —
+raising it stretches the stranding window proportionally (~4× its value at
+the default budget).
 
 ## Feature matrix
 
@@ -402,7 +423,12 @@ currently break this plugin:
   once at creation via `ctx.session.update({sessionID, permissions})`
   (`createPermissionRulesBridge` in `src/v2/setup.ts`; exact-match
   strings only, no wildcards, while upstream matching semantics settle —
-  PRs #48194/#46495/#46871; triggered on plugin-managed child
+  PRs #48194/#46495/#46871; whole-tool declarations (the read-class
+  `read`/`glob`/`grep` allows read-only agents declare) derive
+  action-scoped rules with the declared tool key as the exact resource,
+  so every agent with any declaration gets a non-empty replacing
+  ruleset instead of keeping the parent's inherited session rules;
+  triggered on plugin-managed child
   `session.created` and fail-soft with a one-time warning on reduced
   hosts without the method); the `generate` session hook (not the
   `ctx.generate` text channel the webfetch summaries use), the `title`
@@ -629,7 +655,9 @@ taskID:
   `updateStatus` semantics as the idle-reconciliation host-outcome path:
   `succeeded` requires usable final assistant text (otherwise the
   textless-completion diagnostics apply, per the #1115 precedent);
-  `failed`/`interrupted` settle as error with the host outcome recorded.
+  `failed` settles as error with the host outcome recorded; `interrupted`
+  is a host stop, not a failure, and settles as `stopped` (the stop
+  family — no plugin-verified cancel lease), never a false error.
 
 Related injection hardening: a remembered (possibly stale) processed
 completion skips *cleanly* — the fence check runs before the
@@ -826,6 +854,64 @@ parent natively — that covers the happy path. What the port adds is a
 periodic watchdog: an idle parent with a stuck or unreconciled child (or a
 job that stopped without a terminal result) gets woken to assess, cancel, or
 respawn, bounded by the same no-progress cap as v1.
+
+### Terminal-publication wake（终态后唤醒）
+
+The native notifier fires on the FIRST terminal publication of every
+generation — on v2 every plugin task launch AND relaunch is a host
+`subagent` tool call that arms the native background notifier (a relaunch
+re-arms it with a fresh `started_at`, defeating the notify dedupe). Only a
+terminal publication that lands while the parent sits idle on a LATER
+revision of the same generation (a child that self-continues via its own
+background-shell notification and finishes again, or a completion after a
+direct prompt to the child session) would otherwise wait for the periodic
+idle evaluation (up to `orchestratorWake.intervalMs`, default 5 minutes).
+The **terminal-publication wake** closes that gap on both host flavors:
+
+- **Trigger:** the terminal gate publishes a `completed` or `error` host
+  outcome (state-disjoint from the stopped-job recovery listener, which
+  keys on `stopped` + terminal-unreconciled) AND the parent is idle AND
+  no input wait is open AND at least `publicationWakeMinIntervalMs` has
+  passed since this parent's last *delivered* publication wake (the
+  per-parent throttle is consumed only on delivery — and only after the
+  evaluation actually queues the wake admission; a suppressed OR vetoed
+  attempt, including an in-evaluation no-delivery exit such as the
+  unchanged-fingerprint no-progress stop or an SDK error, burns
+  nothing). The FIRST terminal publication of ANY generation
+  (`terminalRevision` 1) is suppressed with `reason:
+  "first-publication-native-owned"` — the native notifier armed by that
+  generation's `subagent` tool call already delivers it to an idle
+  parent; if that native delivery is ever lost host-side, the job falls
+  back to board injection on the parent's next activity. Exception: a
+  revived run whose tracker-owned `<task>` notification exhausts its
+  whole retry budget releases ownership and re-emits the publication
+  wake directly through the scheduler (a revived lineage has no native
+  notifier, so the first-publication suppression must not apply to that
+  degraded fallback) — the idle parent always ends up with exactly one
+  delivery: the notification or the fallback wake.
+- **Busy parent → skip entirely:** the native steer already delivered the
+  first completion; a queued wake would double-notify.
+- **Delivery:** the same `promptAsync` machinery as the periodic wake —
+  `delivery: "queue"`, `modelSelection: "inherit"`, the session's current
+  model variant — reusing the existing wake text (no new prompt surface).
+- **Shared gate:** one-flight, the two-wake no-progress cap, and
+  `expectingWakeBusy` are the periodic scheduler's, not a parallel gate.
+  A publication wake enters evaluation past the cap's pre-check and lets
+  the in-evaluation fingerprint comparison decide: a publication that
+  changed the children fingerprint un-stops the session; an unchanged
+  fingerprint keeps the cap tripped.
+
+Config knobs (see the `backgroundJobs.orchestratorWake` rows in the
+[configuration reference](configuration.md#background-job-management)):
+`wakeOnTerminalPublication` (boolean, default `true` — the feature flag)
+and `publicationWakeMinIntervalMs` (integer ms, default `30_000` — the
+per-parent throttle window; a burst of publications collapses into one
+wake).
+
+Related: when a job whose terminal report the parent already consumed
+(reconciled) reopens to running, the board injection appends exactly one
+corrective trailing notice ("previously reported terminal, now running
+again; the earlier report is superseded") in the cache-safe tail zone.
 
 ### Environment caveats
 

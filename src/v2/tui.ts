@@ -12,7 +12,8 @@
  * server-side default export (src/index.ts) plays no role in that — in
  * fact it must stay free of any `tui` key (see the note there).
  */
-import type { PluginConfig } from '../config';
+import type { PluginConfig, Preset, PresetInput } from '../config';
+import { normalizePreset, resolvePreset } from '../config';
 import { loadPluginConfig } from '../config/loader';
 import {
   buildAgentUpdates,
@@ -20,7 +21,15 @@ import {
   type PresetSwitchResult,
   switchPresetOnDisk,
 } from '../tools/preset-switch';
-import omoTui from '../tui';
+import type { TuiRouteView } from '../tui';
+import omoTui, { resolveRouteSessionId } from '../tui';
+import {
+  KILL_ALL_COMMAND_ID,
+  KILL_ALL_KEYBIND,
+  killAllRunningSubagents,
+  killAllSummaryMessage,
+} from '../tui-kill';
+import { readTuiSnapshot } from '../tui-state';
 import { isPluginDisabledByEnv } from '../utils/env';
 import { log } from '../utils/logger';
 
@@ -99,9 +108,16 @@ const NO_PRESETS_MESSAGE =
  * matching the v1 picker's tooltip.
  */
 export function buildPresetOptions(config: PluginConfig): PresetOption[] {
-  const presets = config.presets ?? {};
-  return Object.entries(presets).map(([name, preset]) => {
-    const summary = buildPresetSummary(buildAgentUpdates(preset));
+  const presets = (config.presets ?? {}) as Record<string, PresetInput>;
+  return Object.entries(presets).map(([name, rawPreset]) => {
+    let effectivePreset: Preset;
+    try {
+      effectivePreset = resolvePreset(name, presets);
+    } catch {
+      const normalized = normalizePreset(rawPreset);
+      effectivePreset = normalized.agents;
+    }
+    const summary = buildPresetSummary(buildAgentUpdates(effectivePreset));
     return {
       title: name,
       value: name,
@@ -194,8 +210,67 @@ function buildPresetLayer(
         slash: { name: 'preset', arguments: true },
         run: (input?: string) => void runPresetFlow(ctx, input),
       },
+      buildKillAllCommand(ctx),
     ],
   });
+}
+
+/**
+ * Emergency `omo.kill_all` keymap command: abort every running subagent
+ * of the conversation the current route shows (alt+w, also
+ * palette + `/killall`). No picker, no confirmation — instant, fail-soft.
+ * Targets come from the shared tui-state snapshot projection; the aborts
+ * go through the shared `src/tui-kill.ts` helper; the existing idle
+ * pipeline does all reconciliation.
+ */
+function buildKillAllCommand(
+  ctx: V2PresetTuiContext & {
+    client?: unknown;
+    ui?: {
+      router?: { current?: () => unknown };
+      toast?: { show?: (toast: { message: string }) => void };
+    };
+  },
+): V2KeymapCommand {
+  return {
+    id: KILL_ALL_COMMAND_ID,
+    title: 'OMO: kill all running subagents',
+    group: 'System',
+    palette: true,
+    slash: { name: 'killall' },
+    bind: KILL_ALL_KEYBIND,
+    run: () => {
+      void runKillAllFlow(ctx);
+    },
+  };
+}
+
+/** Resolve the visible session, kill, and toast the summary. Never throws. */
+async function runKillAllFlow(ctx: {
+  client?: unknown;
+  location?: { directory: string };
+  ui?: {
+    router?: { current?: () => unknown };
+    toast?: { show?: (toast: { message: string }) => void };
+  };
+}): Promise<void> {
+  try {
+    const directory = ctx.location?.directory ?? process.cwd();
+    const route = ctx.ui?.router?.current?.() as TuiRouteView | undefined;
+    const visible = route ? resolveRouteSessionId(route) : undefined;
+    const result = await killAllRunningSubagents(
+      ctx.client,
+      readTuiSnapshot(directory),
+      visible,
+      directory,
+    );
+    ctx.ui?.toast?.show?.({
+      message: killAllSummaryMessage(result),
+    });
+  } catch (err) {
+    log('[v2][tui] kill-all flow failed', String(err));
+    ctx.ui?.toast?.show?.({ message: 'Kill-all failed.' });
+  }
 }
 
 /**

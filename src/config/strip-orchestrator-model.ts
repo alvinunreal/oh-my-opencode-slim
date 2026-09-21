@@ -1,3 +1,4 @@
+import { resolvePreset } from './presets';
 import type { PluginConfig, Preset } from './schema';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -26,9 +27,14 @@ export function applyOrchestratorModelConfig(input: {
   runtimePreset: string | null;
 }): void {
   const presetName = input.runtimePreset ?? input.configPreset;
-  stripOrchestratorModel(
-    input.agents,
-    input.enabled,
-    presetName ? input.presets?.[presetName] : undefined,
-  );
+  let preset: Preset | undefined;
+  if (presetName && input.presets) {
+    try {
+      preset = resolvePreset(presetName, input.presets);
+    } catch {
+      // An invalid inheritance chain must not make an ancestor look selected.
+      preset = undefined;
+    }
+  }
+  stripOrchestratorModel(input.agents, input.enabled, preset);
 }

@@ -1046,6 +1046,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "ScoFan-official",
+      "name": "ScoFan-official",
+      "avatar_url": "https://avatars.githubusercontent.com/u/137064417?v=4",
+      "profile": "https://github.com/ScoFan-official",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

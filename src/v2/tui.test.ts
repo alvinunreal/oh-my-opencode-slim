@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PluginConfig } from '../config';
 import baseTui from '../tui';
+import { recordTuiAgentActivity, recordTuiSessionParent } from '../tui-state';
 import tui2Plugin, {
   applyPresetByName,
   buildPresetOptions,
@@ -80,6 +81,76 @@ describe('v2 tui preset plugin', () => {
       );
     });
 
+    test('shows effective resolved summaries for inheritance-only child presets', () => {
+      const config = {
+        presets: {
+          base: {
+            orchestrator: { model: 'anthropic/claude-sonnet-4-5' },
+          },
+          child: {
+            extends: 'base',
+            agents: {},
+          },
+        },
+      } as unknown as PluginConfig;
+
+      const options = buildPresetOptions(config);
+
+      const childOption = options.find((o) => o.value === 'child');
+      expect(childOption).toBeDefined();
+      expect(childOption?.description).toContain(
+        'orchestrator → model: anthropic/claude-sonnet-4-5',
+      );
+    });
+
+    test('shows effective resolved summaries combining base and child overrides', () => {
+      const config = {
+        presets: {
+          base: {
+            orchestrator: { model: 'anthropic/claude-sonnet-4-5' },
+            oracle: { model: 'openai/gpt-5-mini' },
+          },
+          child: {
+            extends: 'base',
+            agents: {
+              orchestrator: { model: 'openai/o3' },
+            },
+          },
+        },
+      } as unknown as PluginConfig;
+
+      const options = buildPresetOptions(config);
+
+      const childOption = options.find((o) => o.value === 'child');
+      expect(childOption).toBeDefined();
+      expect(childOption?.description).toContain(
+        'orchestrator → model: openai/o3',
+      );
+      expect(childOption?.description).toContain(
+        'oracle → model: openai/gpt-5-mini',
+      );
+    });
+
+    test('shows summaries for presets with only non-model fields', () => {
+      const config = {
+        presets: {
+          skillsOnly: {
+            orchestrator: {
+              inheritModelFrom: 'oracle',
+              skills: ['test-skill'],
+            },
+          },
+        },
+      } as unknown as PluginConfig;
+
+      const options = buildPresetOptions(config);
+
+      expect(options).toHaveLength(1);
+      expect(options[0]?.value).toBe('skillsOnly');
+      expect(options[0]?.description).toContain('inherit: oracle');
+      expect(options[0]?.description).toContain('skills: test-skill');
+    });
+
     test('returns an empty list when no presets are configured', () => {
       expect(buildPresetOptions({} as PluginConfig)).toEqual([]);
     });
@@ -111,6 +182,30 @@ describe('v2 tui preset plugin', () => {
       expect(result.message).toContain('not found');
       expect(result.message).toContain('balanced');
       expect(readUserConfig()).toEqual({ preset: 'balanced' });
+    });
+
+    test('fails cleanly when project config explicitly sets a different preset', () => {
+      const projectConfigDir = path.join(projectDir, '.opencode');
+      fs.mkdirSync(projectConfigDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+        JSON.stringify({ preset: 'project-preset' }),
+      );
+
+      writeUserConfig({
+        presets: {
+          balanced: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
+          'project-preset': { orchestrator: { model: 'openai/gpt-5' } },
+        },
+      });
+
+      const result = applyPresetByName(projectDir, makeConfig(), 'balanced');
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain(
+        'project config (.opencode) explicitly sets preset "project-preset"',
+      );
+      expect(readUserConfig().preset).toBeUndefined();
     });
   });
 
@@ -237,6 +332,34 @@ describe('v2 tui preset plugin', () => {
       await runPresetFlow(stub.ctx, 'cheap');
 
       expect(readUserConfig().preset).toBe('cheap');
+    });
+
+    test('toasts warning and does not persist when project config preset conflicts', async () => {
+      const projectConfigDir = path.join(projectDir, '.opencode');
+      fs.mkdirSync(projectConfigDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+        JSON.stringify({ preset: 'locked-by-project' }),
+      );
+
+      writeUserConfig({
+        preset: 'old',
+        presets: {
+          cheap: { orchestrator: { model: 'openai/gpt-5-mini' } },
+          'locked-by-project': {
+            orchestrator: { model: 'anthropic/claude-sonnet-4-5' },
+          },
+        },
+      });
+
+      const stub = makeStubCtx('cheap');
+      await runPresetFlow(stub.ctx);
+
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toContain(
+        'project config (.opencode) explicitly sets preset "locked-by-project"',
+      );
+      expect(readUserConfig().preset).toBe('old');
     });
   });
 
@@ -411,6 +534,90 @@ describe('v2 tui preset plugin', () => {
       expect(stub.slotClaims).toHaveLength(0);
       expect(stub.layers).toHaveLength(0);
       expect(cleanup).toBeUndefined();
+    });
+
+    test('layer includes omo.kill_all with alt+w bind', async () => {
+      const stub = makeSetupCtx();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+
+        stub.renderAppSlot();
+
+        const command = stub.layers[0]?.commands.find(
+          (c) => c.id === 'omo.kill_all',
+        );
+        expect(command?.title).toBe('OMO: kill all running subagents');
+        expect(command?.group).toBe('System');
+        expect(command?.palette).toBe(true);
+        expect(command?.slash).toEqual({ name: 'killall' });
+        expect((command as { bind?: string } | undefined)?.bind).toBe('alt+w');
+      } finally {
+        cleanup?.();
+      }
+    });
+
+    test('omo.kill_all run aborts visible-conversation running subagents and toasts', async () => {
+      const originalDataHome = process.env.XDG_DATA_HOME;
+      const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-kill2-'));
+      const aborts: string[] = [];
+      const toasts: string[] = [];
+      let cleanup: (() => void) | undefined;
+      try {
+        process.env.XDG_DATA_HOME = dataHome;
+        recordTuiSessionParent('ora-live', 'conv-1', projectDir);
+        recordTuiAgentActivity(
+          {
+            sessionID: 'ora-live',
+            agentName: 'oracle',
+            active: true,
+            details: { status: 'busy' },
+          },
+          projectDir,
+        );
+
+        const stub = makeSetupCtx();
+        (stub.ctx as { client?: unknown }).client = {
+          v2: {},
+          session: {
+            abort: async (args: { sessionID: string }) => {
+              aborts.push(args.sessionID);
+            },
+          },
+        };
+        (stub.ctx.ui as { router?: unknown }).router = {
+          current: () => ({ type: 'session', sessionID: 'conv-1' }),
+        };
+        (stub.ctx.ui as { toast?: unknown }).toast = {
+          show: (toast: { message: string }) => {
+            toasts.push(toast.message);
+          },
+        };
+
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        stub.renderAppSlot();
+
+        const command = stub.layers[0]?.commands.find(
+          (c) => c.id === 'omo.kill_all',
+        );
+        await command?.run();
+        // run() is fire-and-forget (void runKillAllFlow): the abort call
+        // starts synchronously, the toast lands a microtask later.
+        await Bun.sleep(50);
+
+        expect(aborts).toEqual(['ora-live']);
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0]).toContain('Kill-all sent to 1 running subagent');
+      } finally {
+        cleanup?.();
+        fs.rmSync(dataHome, { recursive: true, force: true });
+        if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
+        else process.env.XDG_DATA_HOME = originalDataHome;
+      }
     });
   });
 });

@@ -153,9 +153,43 @@ export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema>;
 /** Normalized model entry with optional per-model variant. */
 export type ModelEntry = { id: string; variant?: string };
 
-export const PresetSchema = z.record(z.string(), AgentOverrideConfigSchema);
+/** The agent entries in a preset after inheritance has been resolved. */
+export const PresetAgentsSchema = z.record(
+  z.string(),
+  AgentOverrideConfigSchema,
+);
 
-export type Preset = z.infer<typeof PresetSchema>;
+export type Preset = z.infer<typeof PresetAgentsSchema>;
+
+/**
+ * Structured preset syntax. The `agents` wrapper is the preferred syntax for
+ * new presets; the loader also accepts the inline form below so adding an
+ * `extends` key does not require moving existing agent entries.
+ */
+export const PresetDefinitionSchema = z
+  .object({
+    extends: z.string().min(1).optional(),
+    agents: PresetAgentsSchema,
+  })
+  .strict();
+
+const InlinePresetDefinitionSchema = z
+  .object({
+    extends: z.string().min(1),
+  })
+  .catchall(AgentOverrideConfigSchema);
+
+/** Raw preset syntax accepted in configuration files. */
+export const PresetSchema = z.xor(
+  [PresetDefinitionSchema, InlinePresetDefinitionSchema, PresetAgentsSchema],
+  {
+    error:
+      'Preset syntax is ambiguous: use a non-colliding custom agent name instead of an agents wrapper collision.',
+  },
+);
+
+export type PresetDefinition = z.infer<typeof PresetDefinitionSchema>;
+export type PresetInput = z.infer<typeof PresetSchema>;
 
 // MCP names
 export const McpNameSchema = z.enum(['context7', 'gh_grep']);
@@ -265,8 +299,29 @@ export const BackgroundJobsConfigSchema = z.object({
         .describe(
           'Wake-condition source. "auto" uses todo-gating on v1 hosts and children-driven degraded mode on v2 hosts (no todo surface there); "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. Default "auto".',
         ),
+      wakeOnTerminalPublication: z
+        .boolean()
+        .default(true)
+        .describe(
+          'When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. Busy parents are skipped: the native steer already delivered the completion. Default enabled.',
+        ),
+      publicationWakeMinIntervalMs: z
+        .number()
+        .int()
+        .min(1_000)
+        .max(2_147_483_647)
+        .default(30_000)
+        .describe(
+          'Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake.',
+        ),
     })
-    .default({ enabled: true, intervalMs: 300_000, mode: 'auto' })
+    .default({
+      enabled: true,
+      intervalMs: 300_000,
+      mode: 'auto',
+      wakeOnTerminalPublication: true,
+      publicationWakeMinIntervalMs: 30_000,
+    })
     .describe(
       'Periodic orchestrator wake scheduler for idle sessions. v1: requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. v2: runs in children-driven degraded mode (requires session.list + promptAsync) and wakes while un-finished child sessions remain. Default enabled at a 5-minute interval.',
     ),
@@ -284,6 +339,15 @@ export const BackgroundJobsConfigSchema = z.object({
     .default(10_000)
     .describe(
       'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
+    ),
+  stopConfirmationMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .default(5_000)
+    .describe(
+      'Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). Default 5,000 (5 seconds).',
     ),
   concurrency: BackgroundTaskConcurrencyConfigSchema,
   sameProviderPolicy: z
@@ -475,7 +539,7 @@ function rejectOrchestratorPromptOnOrchestrator(
   }
 }
 
-export const PluginConfigSchema = z
+export const RawPluginConfigSchema = z
   .object({
     preset: z.string().optional(),
     setDefaultAgent: z.boolean().optional(),
@@ -555,15 +619,46 @@ export const PluginConfigSchema = z
 
     if (value.presets) {
       for (const [presetName, preset] of Object.entries(value.presets)) {
-        rejectOrchestratorPromptOnOrchestrator(preset, ctx, [
-          'presets',
-          presetName,
-        ]);
+        const presetRecord = preset as Record<string, unknown>;
+        const overrides =
+          typeof presetRecord.agents === 'object' &&
+          presetRecord.agents !== null &&
+          !Array.isArray(presetRecord.agents)
+            ? presetRecord.agents
+            : Object.fromEntries(
+                Object.entries(presetRecord).filter(
+                  ([name]) => name !== 'extends',
+                ),
+              );
+        rejectOrchestratorPromptOnOrchestrator(
+          overrides as Record<
+            string,
+            z.infer<typeof AgentOverrideConfigSchema>
+          >,
+          ctx,
+          ['presets', presetName],
+        );
       }
     }
   });
 
-export type PluginConfig = z.infer<typeof PluginConfigSchema>;
+/** Configuration shape returned by the schema before preset resolution. */
+export type RawPluginConfig = z.infer<typeof RawPluginConfigSchema>;
+
+/**
+ * Public parsed-file type. Presets intentionally remain raw here: the schema
+ * validates file syntax, while the loader resolves inheritance separately.
+ */
+export type PluginConfig = RawPluginConfig;
+
+/** Configuration shape consumed by RuntimeConfig after preset resolution. */
+export type ResolvedPluginConfig = Omit<RawPluginConfig, 'presets'> & {
+  presets?: Record<string, Preset>;
+};
+
+// PluginConfigSchema describes the parsed file shape. It must not claim to
+// return resolved presets: doing so would make the schema output unsound.
+export const PluginConfigSchema = RawPluginConfigSchema;
 
 // Agent names - re-exported from constants for convenience
 export type { AgentName } from './constants';

@@ -377,9 +377,8 @@ describe('createV2Setup e2e', () => {
       });
 
       // (2) Write-back rewrite: a v2 `sessionID` that is not a
-      // resolvable/valid task id maps to v1 `task_id`, the v1 guard
-      // refuses it explicitly (no silent drop, no duplicate spawn), and
-      // the rejection propagates through the v2 before-bridge.
+      // resolvable/valid task id maps to v1 `task_id`. Unknown aliases are
+      // dropped so task() can spawn a new session instead of refusing.
       const resumeEvent = {
         tool: 'subagent',
         sessionID: 'ses_parent',
@@ -396,9 +395,8 @@ describe('createV2Setup e2e', () => {
       };
       const resumeHook = calls.toolBeforeCb;
       if (!resumeHook) throw new Error('tool:execute.before not captured');
-      await expect(resumeHook(resumeEvent)).rejects.toThrow(
-        /did not drop the id and did not create another session/,
-      );
+      await resumeHook(resumeEvent);
+      expect(resumeEvent.input.sessionID).toBeUndefined();
 
       // (3) v2 subagent result: plain-text background output. The
       // after-bridge maps content → v1 `output` under tool 'task'; the
