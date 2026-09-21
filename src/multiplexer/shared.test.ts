@@ -142,6 +142,26 @@ describe('buildOpencodeAttachCommand', () => {
     ).toBeNull();
   });
 
+  test('defaults to the resolved absolute host executable (#514)', async () => {
+    const { buildOpencodeAttachCommand } = await importShared();
+    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'omos-514-'));
+    const bin = join(dir, 'opencode');
+    writeFileSync(bin, '');
+    const original = process.env.OPENCODE_BIN;
+    process.env.OPENCODE_BIN = bin;
+    try {
+      const cmd = buildOpencodeAttachCommand('sess', 'url', '/repo');
+      expect(cmd).toStartWith(`'${bin}' attach`);
+    } finally {
+      if (original === undefined) delete process.env.OPENCODE_BIN;
+      else process.env.OPENCODE_BIN = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('normalizes Windows backslash paths to forward slashes', async () => {
     const original = process.platform;
     Object.defineProperty(process, 'platform', {

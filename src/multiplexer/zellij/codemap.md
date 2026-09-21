@@ -39,7 +39,7 @@ Implements a Zellij-based multiplexer adapter that creates and manages terminal 
   - `'even-horizontal'`, `'even-vertical'`, `'tiled'` → `null` (no direction, Zellij handles tiling)
 
 ### Shell Integration
-- **Command Construction**: Builds `opencode attach` commands with session, server URL, and directory
+- **Command Construction**: Builds `opencode attach` commands with session, server URL, directory, and the resolved absolute host executable (falls back to bare `opencode`; `OPENCODE_BIN` override honored) — pane shells may lack `opencode` on `PATH` (#514)
 - **Pane Naming**: Truncates description to 30 chars for pane titles
 - **Shell Safety**: Uses `quoteShellArg()` to properly escape shell arguments
 

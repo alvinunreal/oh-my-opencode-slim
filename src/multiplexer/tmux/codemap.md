@@ -34,7 +34,7 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 
 2. spawnPane(sessionId, description, serverUrl, directory)
    ├─ Validates tmux binary availability
-   ├─ Constructs opencode attach command with quoted arguments
+   ├─ Constructs opencode attach command with quoted arguments and the resolved absolute host executable (#514)
    ├─ Resolves parent session registration (or startup pane fallback)
    ├─ Executes: tmux split-window -h -d -P -F '#{pane_id}' -t <target> <opencode-cmd>
    ├─ Retries against the startup pane if a registered target is rejected

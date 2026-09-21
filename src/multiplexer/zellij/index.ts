@@ -24,6 +24,8 @@
 
 import type { MultiplexerLayout, ZellijPaneMode } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
+import { log } from '../../utils/logger';
+import { redactSecretsForLog } from '../../utils/redact';
 import {
   buildOpencodeAttachCommand,
   findBinary,
@@ -278,6 +280,12 @@ export class ZellijMultiplexer implements Multiplexer {
       if (exitCode === 0 && paneId?.startsWith('terminal_')) {
         return { success: true, paneId };
       }
+      log('[zellij] new-pane failed', {
+        command: redactSecretsForLog(opencodeCmd),
+        exitCode,
+        stdout: stdout.trim(),
+        stderr: (await proc.stderr()).trim(),
+      });
       return { success: false };
     };
 

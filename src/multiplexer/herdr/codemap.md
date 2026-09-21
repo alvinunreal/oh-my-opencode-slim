@@ -26,7 +26,7 @@
   - split parent pane via `herdr pane split <parent> --direction <dir>`
   - parse JSON output to extract new pane ID (`new_pane_id`)
   - rename the pane via `herdr pane send_text <pane> \x1b]0;<desc>\x07`
-  - run `opencode attach <url> --session <sessionId> --dir <directory>` via `herdr pane run <pane>`
+  - run `opencode attach <url> --session <sessionId> --dir <directory>` via `herdr pane run <pane>`; the executable is the resolved absolute host binary (falls back to bare `opencode`; `OPENCODE_BIN` override honored, #514)
   - return `{ success, paneId }`
 - `closePane(paneId)`:
   - `herdr pane send_keys <pane> ctrl+c`

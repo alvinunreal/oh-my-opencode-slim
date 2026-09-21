@@ -79,6 +79,21 @@ const REDACTION_RULES: RedactionRule[] = [
         ? maskWhole(match)
         : `${match.slice(0, match.length - groups[0].length - 1)}${maskToken(groups[0])}@`,
   },
+  // Query-string values (?param=value&other=…): mask EVERY value, keep
+  // names. Sensitivity-by-name is a losing guessing game (unknown secret
+  // names leak, benign names get butchered); query values in a logged
+  // URL are never worth the risk. Name run excludes only delimiters, so
+  // percent-encoded names (%74oken) match too; the value run excludes
+  // only & and whitespace — quotes/backslashes stay inside the masked
+  // run so shell-escaped values (quoteShellArg's '\'' form) redact
+  // fully. Empty values pass through unchanged.
+  {
+    pattern: /([?&][^=&\s]+=)([^&\s]+)/g,
+    replace: (match, groups) =>
+      groups.length < 2
+        ? maskWhole(match)
+        : `${groups[0]}${maskToken(groups[1])}`,
+  },
   // Generic long opaque run (unknown vendor scheme, high-entropy blob).
   { pattern: /\b[A-Za-z0-9_\-/.+=]{32,}\b/g, replace: maskWhole },
 ];

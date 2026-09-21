@@ -291,7 +291,9 @@ hot reloads in the same process, but is not persistent storage and cannot
 recover state after a hard process crash.
 cmux also pins pane attachment to the host OpenCode executable (or a valid
 absolute `OPENCODE_BIN` override) instead of resolving `opencode` from the new
-pane's `PATH`. This prevents a different installed OpenCode version from
+pane's `PATH`. All pane backends (tmux, zellij, herdr, kitty, cmux) share this
+behavior, so a `PATH`-less pane shell can no longer fail to find `opencode`
+(#514). This prevents a different installed OpenCode version from
 starting and immediately exiting during attach.
 It polls the configured server's `/session/status` endpoint and creates the
 pane only after the child is reported as `idle`, `running`, `busy`, or `retry`.

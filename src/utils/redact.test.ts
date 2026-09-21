@@ -92,8 +92,51 @@ describe('redactSecretsForLog', () => {
     const plain = 'postgres://deploy@db.internal.io:5432/app';
     expect(redactSecretsForLog(`dsn: ${plain}`)).toBe(`dsn: ${plain}`);
   });
+  test('masks every query-string value, keeps names and empty values', () => {
+    const url =
+      'https://host/attach?token=abc123&api_key=short-secret&page=2&x=';
+    const out = redactSecretsForLog(`cmd ${url} end`);
+    expect(out).not.toContain('abc123');
+    expect(out).not.toContain('short-secret');
+    expect(out).toContain('?token=');
+    expect(out).toContain('&api_key=');
+    expect(out).toContain('&x=');
+    expect(out).toContain('cmd ');
+  });
 
-  test('masks generic long opaque runs (32+ chars)', () => {
+  test('masks values behind percent-encoded parameter names', () => {
+    for (const url of [
+      'https://host/attach?api%5Fkey=short-secret',
+      'https://host/attach?%74oken=abc123',
+      'https://host/x?token=ab%20cd',
+    ]) {
+      const out = redactSecretsForLog(`cmd ${url} end`);
+      expect(out).not.toContain('short-secret');
+      expect(out).not.toContain('abc123');
+      expect(out).not.toContain('ab%20cd');
+    }
+  });
+
+  test('masks values containing apostrophes and shell-escaped quotes', () => {
+    // Raw apostrophe in the value.
+    const raw = "cmd 'https://host/?token=abc'def' end";
+    expect(redactSecretsForLog(raw)).not.toContain('abcdef');
+    // quoteShellArg form: '\'' breaks the visible run; nothing may leak.
+    const shellEscaped = [
+      'cmd https://host/?token=abc',
+      "'",
+      '\\',
+      "''",
+      'def end',
+    ].join('');
+    expect(redactSecretsForLog(shellEscaped)).not.toContain('abcdef');
+    // Double quotes inside a value are masked too.
+    expect(redactSecretsForLog('https://host/?t=a"b&ok=1')).not.toContain(
+      'a"b',
+    );
+  });
+
+  test('generic long opaque runs (32+ chars)', () => {
     const token = 'Z9xQ1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7';
     const out = redactSecretsForLog(`api returned ${token} please check`);
     expect(out.startsWith('api returned Z9xQ')).toBe(true);
