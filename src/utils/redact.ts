@@ -86,7 +86,9 @@ const REDACTION_RULES: RedactionRule[] = [
   {
     pattern: /([?&][A-Za-z0-9_.-]+=)([^&\s'"]+)/g,
     replace: (match, groups) =>
-      groups.length < 2 ? maskWhole(match) : `${groups[0]}${maskToken(groups[1])}`,
+      groups.length < 2
+        ? maskWhole(match)
+        : `${groups[0]}${maskToken(groups[1])}`,
   },
   // Generic long opaque run (unknown vendor scheme, high-entropy blob).
   { pattern: /\b[A-Za-z0-9_\-/.+=]{32,}\b/g, replace: maskWhole },
