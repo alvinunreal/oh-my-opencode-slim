@@ -26,7 +26,7 @@
         "type": "string"
       },
       "additionalProperties": {
-        "anyOf": [
+        "oneOf": [
           {
             "type": "object",
             "properties": {

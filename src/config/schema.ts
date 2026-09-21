@@ -180,26 +180,13 @@ const InlinePresetDefinitionSchema = z
   .catchall(AgentOverrideConfigSchema);
 
 /** Raw preset syntax accepted in configuration files. */
-export const PresetSchema = z
-  .union([
-    PresetDefinitionSchema,
-    InlinePresetDefinitionSchema,
-    PresetAgentsSchema,
-  ])
-  .refine(
-    (val) => {
-      const matches = [
-        PresetDefinitionSchema.safeParse(val),
-        InlinePresetDefinitionSchema.safeParse(val),
-        PresetAgentsSchema.safeParse(val),
-      ].filter((r) => r.success);
-      return matches.length === 1;
-    },
-    {
-      message:
-        'Preset syntax is ambiguous: use a non-colliding custom agent name instead of an agents wrapper collision.',
-    },
-  );
+export const PresetSchema = z.xor(
+  [PresetDefinitionSchema, InlinePresetDefinitionSchema, PresetAgentsSchema],
+  {
+    error:
+      'Preset syntax is ambiguous: use a non-colliding custom agent name instead of an agents wrapper collision.',
+  },
+);
 
 export type PresetDefinition = z.infer<typeof PresetDefinitionSchema>;
 export type PresetInput = z.infer<typeof PresetSchema>;

@@ -82,10 +82,10 @@ describe('PluginConfigSchema preset syntax', () => {
     expect(result.success).toBe(false);
   });
 
-  it('emits anyOf for preset alternatives', () => {
-    const generated = z.toJSONSchema(PresetSchema) as { anyOf?: unknown[] };
+  it('emits oneOf for preset alternatives so public schema matches xor', () => {
+    const generated = z.toJSONSchema(PresetSchema) as { oneOf?: unknown[] };
 
-    expect(generated.anyOf).toHaveLength(3);
+    expect(generated.oneOf).toHaveLength(3);
   });
 });
 
