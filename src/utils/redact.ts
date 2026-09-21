@@ -83,9 +83,12 @@ const REDACTION_RULES: RedactionRule[] = [
   // names. Sensitivity-by-name is a losing guessing game (unknown secret
   // names leak, benign names get butchered); query values in a logged
   // URL are never worth the risk. Name run excludes only delimiters, so
-  // percent-encoded names (%74oken) match too; empty values pass through.
+  // percent-encoded names (%74oken) match too; the value run excludes
+  // only & and whitespace — quotes/backslashes stay inside the masked
+  // run so shell-escaped values (quoteShellArg's '\'' form) redact
+  // fully. Empty values pass through unchanged.
   {
-    pattern: /([?&][^=&\s]+=)([^&\s'"]+)/g,
+    pattern: /([?&][^=&\s]+=)([^&\s]+)/g,
     replace: (match, groups) =>
       groups.length < 2
         ? maskWhole(match)

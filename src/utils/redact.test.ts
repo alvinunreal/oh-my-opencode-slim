@@ -117,6 +117,25 @@ describe('redactSecretsForLog', () => {
     }
   });
 
+  test('masks values containing apostrophes and shell-escaped quotes', () => {
+    // Raw apostrophe in the value.
+    const raw = "cmd 'https://host/?token=abc'def' end";
+    expect(redactSecretsForLog(raw)).not.toContain('abcdef');
+    // quoteShellArg form: '\'' breaks the visible run; nothing may leak.
+    const shellEscaped = [
+      'cmd https://host/?token=abc',
+      "'",
+      '\\',
+      "''",
+      'def end',
+    ].join('');
+    expect(redactSecretsForLog(shellEscaped)).not.toContain('abcdef');
+    // Double quotes inside a value are masked too.
+    expect(redactSecretsForLog('https://host/?t=a"b&ok=1')).not.toContain(
+      'a"b',
+    );
+  });
+
   test('generic long opaque runs (32+ chars)', () => {
     const token = 'Z9xQ1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7';
     const out = redactSecretsForLog(`api returned ${token} please check`);
