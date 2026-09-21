@@ -104,6 +104,19 @@ describe('redactSecretsForLog', () => {
     expect(out).toContain('cmd ');
   });
 
+  test('masks values behind percent-encoded parameter names', () => {
+    for (const url of [
+      'https://host/attach?api%5Fkey=short-secret',
+      'https://host/attach?%74oken=abc123',
+      'https://host/x?token=ab%20cd',
+    ]) {
+      const out = redactSecretsForLog(`cmd ${url} end`);
+      expect(out).not.toContain('short-secret');
+      expect(out).not.toContain('abc123');
+      expect(out).not.toContain('ab%20cd');
+    }
+  });
+
   test('generic long opaque runs (32+ chars)', () => {
     const token = 'Z9xQ1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7';
     const out = redactSecretsForLog(`api returned ${token} please check`);
