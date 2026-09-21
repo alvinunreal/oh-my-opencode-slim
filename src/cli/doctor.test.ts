@@ -321,6 +321,28 @@ describe('runDoctorCheck', () => {
     });
   });
 
+  test('non-object multiplexer block is surfaced instead of being skipped', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ multiplexer: 'tmux' }),
+    );
+
+    const result = runDoctorCheck(projectDir);
+
+    // Runtime sanitization rewrites this to `type: "none"`; doctor must still
+    // fail the config and name the block so disabled panes are explainable.
+    expect(result.ok).toBe(false);
+    expect(result.configs[1].ok).toBe(false);
+    expect(result.configs[1].error?.kind).toBe('invalid-schema');
+    const issuePaths = result.configs[1].error?.issues?.map((i) =>
+      i.path.join('.'),
+    );
+    expect(issuePaths).toContain('multiplexer');
+  });
+
   test('empty config file returns invalid-json error', () => {
     const projectDir = path.join(tempDir, 'project');
     const configDir = path.join(projectDir, '.opencode');

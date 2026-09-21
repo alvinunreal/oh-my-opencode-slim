@@ -77,6 +77,13 @@ export class PaneLifecycle {
    * so a later busy event can rebuild them (FR-11).
    */
   private readonly closedWatch = new Map<string, { parentSessionId: string }>();
+  /**
+   * Activity epoch per child, bumped by every held-pane event. A close
+   * decision captures the epoch before its final status read and aborts when
+   * the epoch moved while the read was in flight, so a stale idle snapshot
+   * can never close a pane whose child just woke up.
+   */
+  private readonly activityEpoch = new Map<string, number>();
   private displayedSessionId: string | null;
 
   constructor(
@@ -90,6 +97,14 @@ export class PaneLifecycle {
   /** Updates FR-3 condition ② when the client switches displayed sessions. */
   setDisplayedSession(sessionId: string | null): void {
     this.displayedSessionId = sessionId;
+  }
+
+  /** Marks activity for a held child, invalidating in-flight close checks. */
+  private bumpActivity(childSessionId: string): void {
+    this.activityEpoch.set(
+      childSessionId,
+      (this.activityEpoch.get(childSessionId) ?? 0) + 1,
+    );
   }
 
   /** The client-local pane for a child session, if one is tracked. */
@@ -236,20 +251,24 @@ export class PaneLifecycle {
     if (!this.isOurDirectory(event)) return;
 
     if (event.kind === 'deleted') {
+      this.bumpActivity(event.sessionId);
       await this.closePane(event.sessionId, record, 'deleted');
       return;
     }
     if (event.kind === 'idle') {
+      this.bumpActivity(event.sessionId);
       this.scheduleStableIdleClose(event.sessionId, record);
       return;
     }
     if (event.kind !== 'status') return;
 
     if (event.status === 'idle') {
+      this.bumpActivity(event.sessionId);
       this.scheduleStableIdleClose(event.sessionId, record);
       return;
     }
     if (event.status === 'busy' || event.status === 'retry') {
+      this.bumpActivity(event.sessionId);
       this.cancelIdleClose(event.sessionId);
     }
   }
@@ -505,8 +524,14 @@ export class PaneLifecycle {
     // response is quiescent, not terminal"). So absence allows the close,
     // while `busy`/`retry` keeps the pane. An unverifiable read keeps the
     // pane (fail-closed, I3).
+    const epoch = this.activityEpoch.get(childSessionId) ?? 0;
     const read = await this.readStatus(this.config.directory);
     if (read.error) return;
+    // Any held-pane event while the read was in flight (a busy/retry edge, a
+    // fresh idle, a deletion) invalidates the decision: the snapshot may
+    // predate it, and that event has already been consumed.
+    if ((this.activityEpoch.get(childSessionId) ?? 0) !== epoch) return;
+    if (this.panes.get(childSessionId)?.status !== 'active') return;
     const status = read.statuses.get(childSessionId);
     if (status === 'busy' || status === 'retry') return;
 
@@ -537,6 +562,7 @@ export class PaneLifecycle {
 
     if (closed) {
       this.panes.delete(childSessionId);
+      this.activityEpoch.delete(childSessionId);
       // Only idle closes are rebuildable; deleted/gone children are terminal.
       if (reason === 'idle') {
         this.rememberClosed(childSessionId, record.parentSessionId);
