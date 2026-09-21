@@ -25,7 +25,9 @@ export function buildOpencodeAttachCommand(
   sessionId: string,
   serverUrl: string,
   directory: string,
-  executable = 'opencode',
+  // Absolute path: pane shells (zellij `sh -lc`, tmux server PATH) may not
+  // have `opencode` on PATH (e.g. linuxbrew installs), #514.
+  executable = resolveOpencodeExecutable(),
 ): string {
   const attachDir = normalizePathForShell(directory);
   return [

@@ -32,7 +32,6 @@ import {
   findBinary,
   gracefulClosePane,
   normalizePathForShell,
-  resolveOpencodeExecutable,
 } from '../shared';
 import type { Multiplexer, PaneResult } from '../types';
 
@@ -123,7 +122,6 @@ export class KittyMultiplexer implements Multiplexer {
         sessionId,
         serverUrl,
         directory,
-        resolveOpencodeExecutable(),
       );
 
       // Normalize for Windows/MSYS2/Git Bash (backslashes would be treated as

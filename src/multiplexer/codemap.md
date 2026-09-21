@@ -76,7 +76,7 @@ The session manager reacts to OpenCode session events:
    ├─ Spawns pane via multiplexer.spawnPane(), forwarding the parent session
    │  ├─ Validates server is running
    │  ├─ Creates new pane with:
-   │  │  ├─ Command: opencode attach --session-id <sessionId>
+   │  │  ├─ Command: opencode attach --session-id <sessionId> (executable resolved to the absolute host binary by `buildOpencodeAttachCommand`, #514)
    │  │  ├─ Working directory: project directory
    │  │  └─ Title: session description
    │  └─ Returns paneId

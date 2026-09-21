@@ -164,6 +164,7 @@ export class HerdrMultiplexer implements Multiplexer {
       if (runExitCode !== 0) {
         const runStderr = await runProc.stderr();
         log('[herdr] spawnPane: run failed', {
+          command: opencodeCmd,
           exitCode: runExitCode,
           stderr: runStderr.trim(),
         });
