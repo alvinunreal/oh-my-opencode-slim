@@ -92,15 +92,16 @@ describe('redactSecretsForLog', () => {
     const plain = 'postgres://deploy@db.internal.io:5432/app';
     expect(redactSecretsForLog(`dsn: ${plain}`)).toBe(`dsn: ${plain}`);
   });
-
-  test('masks sensitive query-string values, keeps other params', () => {
-    const url = 'https://host/attach?token=abc123&api_key=short-secret&page=2';
+  test('masks every query-string value, keeps names and empty values', () => {
+    const url =
+      'https://host/attach?token=abc123&api_key=short-secret&page=2&x=';
     const out = redactSecretsForLog(`cmd ${url} end`);
     expect(out).not.toContain('abc123');
     expect(out).not.toContain('short-secret');
     expect(out).toContain('?token=');
     expect(out).toContain('&api_key=');
-    expect(out).toContain('page=2');
+    expect(out).toContain('&x=');
+    expect(out).toContain('cmd ');
   });
 
   test('generic long opaque runs (32+ chars)', () => {

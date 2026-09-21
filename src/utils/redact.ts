@@ -79,21 +79,14 @@ const REDACTION_RULES: RedactionRule[] = [
         ? maskWhole(match)
         : `${match.slice(0, match.length - groups[0].length - 1)}${maskToken(groups[0])}@`,
   },
-  // Sensitive query-string values (?token= / ?api_key= / &secret= …).
-  // Short secrets (api keys, session tokens) never trip the generic
-  // 32-char run rule, so names carry the sensitivity: match a
-  // credential-style parameter name, keep it, mask the value.
-  // The value pattern mirrors KEY_VALUE_PATTERN's value run below.
-  // ponytail: name-based match — benign ?monkey=1 gets masked, unknown
-  // short-secret names still leak; upgrade to a parsed-URL parameter
-  // allowlist if either corner bites.
+  // Query-string values (?param=value&other=…): mask EVERY value, keep
+  // names. Sensitivity-by-name is a losing guessing game (unknown secret
+  // names leak, benign names get butchered); query values in a logged
+  // URL are never worth the risk. Empty values pass through unchanged.
   {
-    pattern:
-      /([?&])([A-Za-z0-9_-]*(?:token|key|secret|password|passwd|pwd|auth|credential|sessionid|access[-_]?id)[A-Za-z0-9_-]*)=([^&\s'"]*)/gi,
+    pattern: /([?&][A-Za-z0-9_.-]+=)([^&\s'"]+)/g,
     replace: (match, groups) =>
-      groups.length < 3
-        ? maskWhole(match)
-        : `${groups[0]}${groups[1]}=${maskToken(groups[2])}`,
+      groups.length < 2 ? maskWhole(match) : `${groups[0]}${maskToken(groups[1])}`,
   },
   // Generic long opaque run (unknown vendor scheme, high-entropy blob).
   { pattern: /\b[A-Za-z0-9_\-/.+=]{32,}\b/g, replace: maskWhole },
