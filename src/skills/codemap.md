@@ -20,7 +20,8 @@
 | `codemap/` | General-purpose | Repository mapping and codebase documentation skill |
 | `clonedeps/` | General-purpose | Workflow skill for dependency source mirroring and inspection |
 | `simplify/` | General-purpose | Readability and maintainability guidance skill |
-| `deepwork/` | Orchestrator-only | Heavy coding sessions, multi-phase implementation, and risky refactors |
+| `deepwork/` | Orchestrator-only | Tier-2 initiative planning and coordination protocol: assumptions, bounded plan review, delivery through loop-engineering, integrated proof, final Oracle gate |
+| `loop-engineering/` | Orchestrator-only | Bounded delivery protocol: prepared unit packet, pre-dispatch checks, Fixer delivery, planned proof, one implementation Reviewer review, parent arbitration with up to two repairs |
 | `verification-planning/` | Orchestrator-only | Project-specific evidence planning and verification affordances before non-trivial implementation |
 | `reflect/` | Orchestrator-only | Learning from repeated work and suggesting reusable improvements |
 | `worktrees/` | Orchestrator-only | Safe Git worktree lanes for parallel, risky, or isolated work |

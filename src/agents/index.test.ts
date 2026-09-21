@@ -289,7 +289,7 @@ describe('fixer agent fallback', () => {
     expect(fixer?.config.model).toBe('fixer-specific-model');
   });
 
-  test('custom agents can follow the session model', () => {
+  test('a reviewer config is honored as a built-in override and can follow the session model', () => {
     const config: PluginConfig = {
       agents: {
         reviewer: { inheritModelFrom: 'session' },
@@ -819,6 +819,7 @@ describe('isSubagent type guard', () => {
     expect(isSubagent('oracle')).toBe(true);
     expect(isSubagent('designer')).toBe(true);
     expect(isSubagent('fixer')).toBe(true);
+    expect(isSubagent('reviewer')).toBe(true);
   });
 
   test('returns false for orchestrator', () => {
@@ -837,6 +838,7 @@ describe('agent classification', () => {
     expect(SUBAGENT_NAMES).not.toContain('orchestrator');
     expect(SUBAGENT_NAMES).toContain('explorer');
     expect(SUBAGENT_NAMES).toContain('fixer');
+    expect(SUBAGENT_NAMES).toContain('reviewer');
   });
 
   test('getAgentConfigs applies correct classification visibility and mode', () => {
@@ -928,9 +930,10 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('creates exactly 6 agents by default (observer and council disabled)', () => {
+  test('creates exactly 7 agents by default (observer and council disabled)', () => {
     const agents = createAgents(runtimeFor());
-    expect(agents.length).toBe(6);
+    // orchestrator + explorer + librarian + oracle + designer + fixer + reviewer
+    expect(agents.length).toBe(7);
   });
 
   test('does not create or register council agents without council config', () => {
@@ -1417,30 +1420,30 @@ describe('AgentOverrideConfigSchema options validation', () => {
   test('description propagates through buildCustomAgentDefinition', () => {
     const config: PluginConfig = {
       agents: {
-        reviewer: {
+        auditor: {
           model: 'openai/gpt-5.6',
           description: 'Code review specialist',
         },
       },
     };
     const agents = createAgents(runtimeFor(config));
-    const reviewer = agents.find((a) => a.name === 'reviewer');
-    expect(reviewer).toBeDefined();
-    expect(reviewer?.description).toBe('Code review specialist');
+    const auditor = agents.find((a) => a.name === 'auditor');
+    expect(auditor).toBeDefined();
+    expect(auditor?.description).toBe('Code review specialist');
   });
 
   test('description defaults to generated string when not provided', () => {
     const config: PluginConfig = {
       agents: {
-        reviewer: {
+        auditor: {
           model: 'openai/gpt-5.6',
         },
       },
     };
     const agents = createAgents(runtimeFor(config));
-    const reviewer = agents.find((a) => a.name === 'reviewer');
-    expect(reviewer).toBeDefined();
-    expect(reviewer?.description).toBe("Custom subagent 'reviewer'");
+    const auditor = agents.find((a) => a.name === 'auditor');
+    expect(auditor).toBeDefined();
+    expect(auditor?.description).toBe("Custom subagent 'auditor'");
   });
 
   test('description propagates through getAgentConfigs to SDK output', () => {
@@ -1635,13 +1638,13 @@ describe('disabled_agents', () => {
 
   test('agent count decreases when agents are disabled', () => {
     const agents = createAgents(runtimeFor());
-    expect(agents.length).toBe(6); // observer and council disabled
+    expect(agents.length).toBe(7); // observer and council disabled, reviewer enabled
 
     const disabledConfig: PluginConfig = {
       disabled_agents: ['observer', 'designer'],
     };
     const disabledAgents = createAgents(runtimeFor(disabledConfig));
-    expect(disabledAgents.length).toBe(5);
+    expect(disabledAgents.length).toBe(6);
   });
 
   test('empty disabled_agents creates observer but not unconfigured council', () => {
@@ -1650,8 +1653,9 @@ describe('disabled_agents', () => {
     };
     const agents = createAgents(runtimeFor(config));
     const names = agents.map((a) => a.name);
-    expect(agents.length).toBe(7);
+    expect(agents.length).toBe(8);
     expect(names).toContain('observer');
+    expect(names).toContain('reviewer');
     expect(names).not.toContain('council');
     expect(names).not.toContain('councillor');
   });

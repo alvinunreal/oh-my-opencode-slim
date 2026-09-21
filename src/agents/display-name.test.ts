@@ -212,13 +212,13 @@ describe('displayName', () => {
         presets: { default: { alpha: { model: 'test/councillor' } } },
       }),
       agents: {
-        councillor: { displayName: 'reviewer' },
+        councillor: { displayName: 'auditor' },
       },
     };
 
     const sdkConfigs = getAgentConfigs(runtimeFor(config));
 
-    expect(sdkConfigs.reviewer).toBeUndefined();
+    expect(sdkConfigs.auditor).toBeUndefined();
     expect(sdkConfigs.councillor?.hidden).toBe(true);
   });
 

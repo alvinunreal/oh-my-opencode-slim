@@ -31,6 +31,7 @@ import {
   createOrchestratorAgent,
   resolvePrompt,
 } from './orchestrator';
+import { createReviewerAgent } from './reviewer';
 import { appendTaskRejectionInstruction } from './task-rejection';
 
 export { ensureCouncilCompactionException } from './council';
@@ -414,6 +415,7 @@ const SUBAGENT_FACTORIES: Record<SubagentName, AgentFactory> = {
   designer: createDesignerAgent,
   fixer: createFixerAgent,
   observer: createObserverAgent,
+  reviewer: createReviewerAgent,
   council: createCouncilAgent,
   councillor: createCouncillorAgent,
 };

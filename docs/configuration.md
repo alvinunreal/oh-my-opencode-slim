@@ -565,7 +565,7 @@ the configured `council` color unless `agents.councillor.color` overrides it.
 ### Per-preset agent configuration
 
 To get per-preset behavior for any agent, built-in (`council`, `oracle`,
-`explorer`, `librarian`, `fixer`, `designer`, `observer`) or custom, define
+`explorer`, `librarian`, `fixer`, `designer`, `observer`, `reviewer`) or custom, define
 the agent override inside each preset block, not in root `agents`.
 
 ```jsonc

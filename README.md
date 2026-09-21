@@ -30,9 +30,10 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 
 ### ✨ Highlights
 
-- **[Seven specialized agents](#meet-the-pantheon)** - Orchestrator, Explorer,
-  Oracle, Council, Librarian, Designer, and Fixer. Each part of the job goes to
-  the agent best suited for it - mix any models across any providers.
+- **[Eight specialized agents](#meet-the-pantheon)** - Orchestrator, Explorer,
+  Oracle, Council, Librarian, Designer, Fixer, and Reviewer. Each part of the
+  job goes to the agent best suited for it - mix any models across any
+  providers.
 - **[Background orchestration](docs/background-orchestration.md)** - the
   Orchestrator dispatches specialists as background tasks, tracks them, and
   reconciles results before continuing - parallel work by default, with
@@ -512,6 +513,41 @@ If any agent fails to respond, check your provider authentication and config fil
   <tr>
     <td colspan="2">
       <b>Model Guidance:</b> Choose a reliable coding model for scoped implementation work. Fixer receives a concrete plan or bounded instructions from Orchestrator, making it a good place for efficient execution tasks and straightforward code changes.
+    </td>
+  </tr>
+</table>
+
+---
+
+### 08. Reviewer: The Impartial Eye
+
+<table>
+  <tr>
+    <td width="30%" align="center" valign="top">
+      <br><sub><i>The eye that judges what others have built.</i></sub>
+    </td>
+    <td width="70%" valign="top">
+      The Reviewer is the impartial eye that turns a finished plan or a delivered diff over in the light and speaks only what the evidence supports. It does not build, it does not edit, and it does not argue for a preferred outcome. Given a factual packet, it returns one verdict - APPROVED or REVISE - with findings tied to specific files, lines, and commands. It is the read-only conscience of the bounded delivery protocol, and a malformed or missing verdict is never treated as approval.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Role:</b> <code>Read-only plan and implementation review</code>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Prompt:</b> <a href="src/agents/reviewer.ts"><code>reviewer.ts</code></a>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Default Model:</b> <i>follows the session/orchestrator model</i>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <b>Model Guidance:</b> Choose a model with strong instruction-following and evidence-based reasoning. Reviewer must produce a single structured verdict (APPROVED or REVISE) from a factual packet, so reliable adherence to the verdict format matters more than coding throughput.
     </td>
   </tr>
 </table>
