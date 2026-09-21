@@ -93,7 +93,17 @@ describe('redactSecretsForLog', () => {
     expect(redactSecretsForLog(`dsn: ${plain}`)).toBe(`dsn: ${plain}`);
   });
 
-  test('masks generic long opaque runs (32+ chars)', () => {
+  test('masks sensitive query-string values, keeps other params', () => {
+    const url = 'https://host/attach?token=abc123&api_key=short-secret&page=2';
+    const out = redactSecretsForLog(`cmd ${url} end`);
+    expect(out).not.toContain('abc123');
+    expect(out).not.toContain('short-secret');
+    expect(out).toContain('?token=');
+    expect(out).toContain('&api_key=');
+    expect(out).toContain('page=2');
+  });
+
+  test('generic long opaque runs (32+ chars)', () => {
     const token = 'Z9xQ1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7';
     const out = redactSecretsForLog(`api returned ${token} please check`);
     expect(out.startsWith('api returned Z9xQ')).toBe(true);
