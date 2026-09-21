@@ -15,6 +15,7 @@
 import type { MultiplexerLayout } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
+import { redactSecretsForLog } from '../../utils/redact';
 import {
   buildOpencodeAttachCommand,
   findBinary,
@@ -161,11 +162,13 @@ export class HerdrMultiplexer implements Multiplexer {
       });
 
       const runExitCode = await runProc.exited;
+      const runStdout = await runProc.stdout();
       if (runExitCode !== 0) {
         const runStderr = await runProc.stderr();
         log('[herdr] spawnPane: run failed', {
-          command: opencodeCmd,
+          command: redactSecretsForLog(opencodeCmd),
           exitCode: runExitCode,
+          stdout: runStdout.trim(),
           stderr: runStderr.trim(),
         });
         // ponytail: split succeeded but attach failed; close the orphaned pane
