@@ -359,6 +359,16 @@ and host diagnostics are emitted at most once per cause per process.
 - **Nested multiplexer detection priority is unchanged** (for example, kitty
   inside herdr), and a client only opens panes for children of the session it
   currently displays.
+- **Pane scope is the project directory the TUI loaded with.** The pane
+  lifecycle is scoped to the directory the TUI plugin started with
+  (`api.state.path.directory` at load time). On a default install this never
+  changes (`/sessions` is scoped to the current directory and `/move` moves
+  the session, not the TUI). With the experimental workspaces feature
+  (`OPENCODE_EXPERIMENTAL_WORKSPACES`) the directory can change at runtime
+  (`/warp`, deleting the current workspace via `/workspaces`, or opening a
+  session that belongs to another workspace), and pane management does not
+  re-scope until the TUI is restarted. (Follow-up: re-scope the wiring and
+  re-run admission when the route directory changes.)
 
 ## Behavior Changes and Removals (行为变更与移除清单)
 

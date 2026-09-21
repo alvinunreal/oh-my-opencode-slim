@@ -92,9 +92,12 @@ class FakeStatusReader implements SessionStatusReader {
   readonly calls: string[] = [];
   readonly statuses = new Map<string, SessionRuntimeStatus>();
   error?: string;
+  /** When set, reads block on it (models a status read in flight). */
+  readBarrier: Promise<void> | null = null;
 
   async readStatus(directory: string): Promise<SessionStatusRead> {
     this.calls.push(directory);
+    if (this.readBarrier) await this.readBarrier;
     return { statuses: new Map(this.statuses), error: this.error };
   }
 }
@@ -614,6 +617,29 @@ describe('dedup and stable-idle close (2.3)', () => {
 
     h.reader.statuses.set(CHILD, 'retry');
     h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+
+    expect(h.adapter.closeCalls).toHaveLength(0);
+    expect(h.lifecycle.getPane(CHILD)).toBeDefined();
+  });
+
+  test('a busy event while the pre-close re-check is in flight keeps the pane', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+
+    // The final re-check hangs while the child turns busy: the snapshot it
+    // returns still says idle, and the busy event has already been consumed.
+    const deferred = createDeferred();
+    h.reader.readBarrier = deferred.promise;
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.reader.calls).toHaveLength(2);
+
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    deferred.resolve();
+    h.reader.readBarrier = null;
     await flushAsync();
 
     expect(h.adapter.closeCalls).toHaveLength(0);

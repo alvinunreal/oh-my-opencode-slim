@@ -128,7 +128,7 @@ export interface AdmissionDecision {
 /** Injected fetch surface for the reachability probe. */
 export type FetchLike = (
   input: string,
-  init?: { signal?: AbortSignal },
+  init?: { signal?: AbortSignal; headers?: Record<string, string> },
 ) => Promise<{ ok?: boolean }>;
 
 export interface TuiPaneWiringOptions {
@@ -299,6 +299,14 @@ export function isEmbeddedHostUrl(baseUrl: string): boolean {
 /**
  * Equivalence health probe: the serve surface has no JSON `/health` face, so
  * `/session/status` (with the project directory) stands in (stage A 1.2).
+ *
+ * The directory travels as the pre-encoded `x-opencode-directory` header: the
+ * server reads it raw and decodes it exactly once (instance-context
+ * middleware), and the header has been accepted since v1.0.74, so it works on
+ * every supported host. A `?directory=` query parameter is decoded twice
+ * (`URLSearchParams.get` plus the instance-context decode), which corrupts
+ * directories containing literal `%XX` sequences and would turn this gate
+ * into a permanent `host-unreachable` for the affected client.
  */
 export async function probeServerReachable(
   baseUrl: string,
@@ -319,9 +327,11 @@ export async function probeServerReachable(
   timer.unref?.();
   try {
     const url = new URL('/session/status', baseUrl);
-    url.searchParams.set('directory', options.directory);
     const response = await fetchFn(url.toString(), {
       signal: controller.signal,
+      headers: options.directory
+        ? { 'x-opencode-directory': encodeURIComponent(options.directory) }
+        : undefined,
     });
     return response.ok === true;
   } catch {
@@ -639,6 +649,9 @@ export async function createTuiPaneWiring(
   };
   const runReconcile = async (): Promise<void> => {
     if (disposed) return;
+    // The route can move while the event stream is quiet; reconcile against
+    // the session this client displays *now*, not the last one an event saw.
+    lifecycle.setDisplayedSession(options.getDisplayedSessionId?.() ?? null);
     await ensureReachable();
     if (disposed) return;
     if (hostState === 'reachable') {

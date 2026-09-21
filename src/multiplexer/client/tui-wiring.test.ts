@@ -323,6 +323,7 @@ async function createHarness(
     sweepAdapter?: SweepAdapter | null;
     isProcessAlive?: (pid: number) => boolean;
     isSessionTerminal?: (childSessionId: string) => Promise<boolean>;
+    getDisplayedSessionId?: () => string | null | undefined;
   } = {},
 ): Promise<Harness> {
   const state = options.state ?? createClientState();
@@ -352,7 +353,7 @@ async function createHarness(
 
   const wiring = await createTuiPaneWiring({
     directory: DIRECTORY,
-    getDisplayedSessionId: () => PARENT,
+    getDisplayedSessionId: options.getDisplayedSessionId ?? (() => PARENT),
     eventBus: bus,
     client: options.client ?? fakeHostClient(state),
     env: options.env ?? { TMUX_PANE: '%1' },
@@ -805,18 +806,46 @@ describe('serverUrl reflection and probe (D3)', () => {
     expect(isEmbeddedHostUrl(SERVER_URL)).toBe(false);
   });
 
-  test('probes /session/status with the project directory', async () => {
-    const urls: string[] = [];
+  test('probes /session/status with the encoded project directory header', async () => {
+    const requests: Array<{ url: string; headers?: Record<string, string> }> =
+      [];
     const reachable = await probeServerReachable(SERVER_URL, {
       directory: DIRECTORY,
-      fetchFn: async (url) => {
-        urls.push(url);
+      fetchFn: async (url, init) => {
+        requests.push({ url, headers: init?.headers });
         return { ok: true };
       },
     });
 
     expect(reachable).toBe(true);
-    expect(urls).toEqual([`${SERVER_URL}/session/status?directory=%2Fproject`]);
+    // The directory travels as the SDK's header contract: servers that
+    // understand it route the request to the project, older ones ignore an
+    // unknown header instead of rejecting a query parameter they do not know.
+    expect(requests).toEqual([
+      {
+        url: `${SERVER_URL}/session/status`,
+        headers: { 'x-opencode-directory': '%2Fproject' },
+      },
+    ]);
+  });
+
+  test('encodes percent-bearing directories exactly once for the probe', async () => {
+    const requests: Array<{ url: string; headers?: Record<string, string> }> =
+      [];
+    await probeServerReachable(SERVER_URL, {
+      directory: '/tmp/a%20b',
+      fetchFn: async (url, init) => {
+        requests.push({ url, headers: init?.headers });
+        return { ok: true };
+      },
+    });
+
+    expect(requests).toEqual([
+      {
+        url: `${SERVER_URL}/session/status`,
+        headers: { 'x-opencode-directory': '%2Ftmp%2Fa%2520b' },
+      },
+    ]);
   });
 
   test('probe failures and non-ok responses are unreachable', async () => {
@@ -876,6 +905,29 @@ describe('FR-7 reconcile trigger', () => {
     h.clock.advance(30_000);
     await flush();
     expect(h.state.listCalls).toHaveLength(3);
+  });
+
+  test('reconcile re-reads the displayed session before diffing children', async () => {
+    let displayed: string | null = PARENT;
+    const h = await createHarness({
+      reconcileIntervalMs: 30_000,
+      getDisplayedSessionId: () => displayed,
+    });
+    h.bus.emit('session.created', createdEvent());
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(1);
+
+    // The user moves to another conversation while the event stream is quiet;
+    // the server now reports the live child under the new parent.
+    h.state.sessions = [{ id: CHILD, parentID: 'parent-2' }];
+    displayed = 'parent-2';
+    h.clock.advance(30_000);
+    await flush();
+
+    // A stale displayed session would make the reconcile treat the live child
+    // as gone and close its pane.
+    expect(h.adapters.get('tmux')?.closes).toHaveLength(0);
+    expect(h.wiring.lifecycle.getPane(CHILD)).toBeDefined();
   });
 
   test('dispose stops the reconcile chain', async () => {

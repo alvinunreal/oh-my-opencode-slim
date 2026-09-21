@@ -79,16 +79,11 @@ function collectMultiplexerIssues(rawConfig: unknown): z.ZodIssue[] {
   }
 
   const multiplexer = (rawConfig as Record<string, unknown>).multiplexer;
-  // Only a present, object-shaped block is re-validated: non-object values
-  // (and absence) are handled by the runtime sanitizer and are out of scope
-  // for the `multiplexer.*` path diagnostics doctor restores.
-  if (
-    typeof multiplexer !== 'object' ||
-    multiplexer === null ||
-    Array.isArray(multiplexer)
-  ) {
-    return [];
-  }
+  // Any present block is re-validated, including non-object values: the
+  // runtime sanitizer disables pane management for those (`type: "none"`), so
+  // doctor must surface the shape instead of reporting a healthy config.
+  // Absence stays out of scope for these `multiplexer.*` path diagnostics.
+  if (multiplexer === undefined) return [];
 
   const result = MultiplexerConfigStrictSchema.safeParse(multiplexer);
   if (result.success) {
