@@ -1573,4 +1573,53 @@ describe('FR-8 leftover sweep', () => {
     await flush();
     expect(scans).toBe(2);
   });
+
+  test('an incomplete scan re-arms the owed sweep and still closes what it found', async () => {
+    let incomplete = true;
+    let scans = 0;
+    const closed: string[] = [];
+    const adapter: SweepAdapter = {
+      async listPanesWithTitles() {
+        scans += 1;
+        const panes =
+          closed.length > 0
+            ? []
+            : [
+                {
+                  paneId: 'term-leftover',
+                  title: encodePaneTitle(999, 'ses_gone'),
+                },
+              ];
+        return incomplete ? { panes, incomplete: true } : panes;
+      },
+      async closePane(paneId: string) {
+        closed.push(paneId);
+        return true;
+      },
+    };
+    const state = createClientState({ getResults: { ses_gone: 'notfound' } });
+    const h = await createHarness({
+      state,
+      sweepAdapter: adapter,
+      ownerPid: 1000,
+      isProcessAlive: (pid) => pid !== 999,
+      reconcileIntervalMs: 30_000,
+    });
+    await flush();
+    // The candidate discovered before the uninspectable terminal is closed,
+    // and the pass stays owed for a retry.
+    expect(scans).toBe(1);
+    expect(closed).toEqual(['term-leftover']);
+
+    incomplete = false;
+    h.clock.advance(30_000);
+    await flush();
+    expect(scans).toBe(2);
+    expect(closed).toEqual(['term-leftover']);
+
+    // The completed retry is never repeated.
+    h.clock.advance(30_000);
+    await flush();
+    expect(scans).toBe(2);
+  });
 });

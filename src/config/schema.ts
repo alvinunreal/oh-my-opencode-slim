@@ -170,7 +170,7 @@ export const MULTIPLEXER_INVALID_VALUE_MESSAGE =
   'Invalid multiplexer config value; pane management is disabled. Expected ' +
   'type (auto|tmux|zellij|herdr|kitty|cmux-tui|none), layout ' +
   '(main-horizontal|main-vertical|tiled|even-horizontal|even-vertical), ' +
-  'main_pane_size (20-80).';
+  'main_pane_size (20-80), cmux_tui_binary (non-empty string).';
 
 export const MULTIPLEXER_RENAMED_TYPE_MESSAGE =
   'multiplexer.type "cmux" was renamed to "cmux-tui"; update your config.';

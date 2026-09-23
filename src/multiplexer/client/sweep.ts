@@ -47,6 +47,18 @@ export interface SweepPane {
 }
 
 /**
+ * Discovery result for adapters that can inspect only part of the candidate
+ * set (cmux reads one launch argv per terminal): the panes that could be
+ * inspected are still processed, and `incomplete` tells the caller that the
+ * scan must be retried. A plain `SweepPane[]` (the four non-cmux adapters)
+ * means a complete scan.
+ */
+export interface SweepScanResult {
+  panes: SweepPane[];
+  incomplete?: boolean;
+}
+
+/**
  * Structural adapter capability the sweep needs. Adapters implement it as an
  * optional extension of `Multiplexer`; the wiring narrows instances at
  * runtime, so the shared `Multiplexer` interface stays untouched.
@@ -55,10 +67,13 @@ export interface SweepPane {
  * cmux returns terminal handles whose `title` was extracted from the launch
  * argv marker. Candidates without a strictly parseable token never reach a
  * close command. `listPanesWithTitles` must reject when the scan itself fails
- * (as opposed to a clean scan with zero candidates), so callers can retry.
+ * wholesale (as opposed to a clean scan with zero candidates or a partial
+ * scan), so callers can retry; a partial scan is reported as
+ * `{ panes, incomplete: true }` instead of rejecting, so the panes that were
+ * discovered are still processed.
  */
 export interface SweepAdapter {
-  listPanesWithTitles(): Promise<SweepPane[]>;
+  listPanesWithTitles(): Promise<SweepPane[] | SweepScanResult>;
   closePane(paneId: string): Promise<boolean>;
 }
 
@@ -91,6 +106,13 @@ export interface SweepStats {
    * tell a failed scan from a clean empty pass and retry later.
    */
   scanFailed: boolean;
+  /**
+   * True when discovery processed what it could, but some candidates could
+   * not be inspected, so the caller must retry. The discovered panes were
+   * still processed normally — unlike `scanFailed`, this is not an early
+   * return.
+   */
+  scanIncomplete: boolean;
 }
 
 export const SWEEP_EVENT = 'multiplexer.sweep';
@@ -112,11 +134,18 @@ export async function sweepLeftoverPanes(
     skippedUnparsable: 0,
     closeFailures: 0,
     scanFailed: false,
+    scanIncomplete: false,
   };
 
   let panes: SweepPane[];
   try {
-    panes = await ports.adapter.listPanesWithTitles();
+    const discovered = await ports.adapter.listPanesWithTitles();
+    if (Array.isArray(discovered)) {
+      panes = discovered;
+    } else {
+      panes = discovered.panes;
+      stats.scanIncomplete = discovered.incomplete === true;
+    }
   } catch {
     stats.scanFailed = true;
     logger.log('[multiplexer] sweep: pane scan failed', {

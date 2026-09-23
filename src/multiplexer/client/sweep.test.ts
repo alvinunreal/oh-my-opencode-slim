@@ -16,6 +16,7 @@ import {
   defaultIsProcessAlive,
   type SweepAdapter,
   type SweepPane,
+  type SweepScanResult,
   sweepLeftoverPanes,
 } from './sweep';
 
@@ -37,14 +38,17 @@ class CapturingLogger implements DiagnosticLogger {
 
 class FakeAdapter implements SweepAdapter {
   panes: SweepPane[] = [];
+  /** When true, discovery reports a partial (incomplete) scan. */
+  incomplete = false;
   readonly closed: string[] = [];
   closeResult = true;
   closeError: Error | null = null;
   listError: Error | null = null;
 
-  async listPanesWithTitles(): Promise<SweepPane[]> {
+  async listPanesWithTitles(): Promise<SweepPane[] | SweepScanResult> {
     if (this.listError) throw this.listError;
-    return [...this.panes];
+    const panes = [...this.panes];
+    return this.incomplete ? { panes, incomplete: true } : panes;
   }
 
   async closePane(paneId: string): Promise<boolean> {
@@ -263,8 +267,34 @@ describe('sweepLeftoverPanes (FR-8)', () => {
       skippedUnparsable: 0,
       closeFailures: 0,
       scanFailed: true,
+      scanIncomplete: false,
     });
     expect(logger.outcomes()).toEqual(['scan-failed']);
+  });
+
+  test('an incomplete scan still closes discovered candidates and stays retryable', async () => {
+    const adapter = new FakeAdapter();
+    adapter.incomplete = true;
+    adapter.panes = [
+      {
+        paneId: 'pane-leftover',
+        title: encodePaneTitle(DEAD_PID, TERMINAL_CHILD),
+      },
+    ];
+    const logger = new CapturingLogger();
+
+    const stats = await sweepLeftoverPanes(makePorts(adapter, { logger }));
+
+    // Progress is preserved: the candidate discovered before the
+    // uninspectable terminal is still closed...
+    expect(adapter.closed).toEqual(['pane-leftover']);
+    expect(stats).toMatchObject({
+      scanned: 1,
+      closed: 1,
+      scanFailed: false,
+      scanIncomplete: true,
+    });
+    expect(logger.outcomes()).toEqual(['closed']);
   });
 });
 

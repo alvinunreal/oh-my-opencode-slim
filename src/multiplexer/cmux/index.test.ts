@@ -806,9 +806,10 @@ describe('CmuxMultiplexer', () => {
     });
     const instance = mux({ runner });
 
-    expect(await instance.listPanesWithTitles()).toEqual([
-      { paneId: 'term_marked', title: DESCRIPTION },
-    ]);
+    expect(await instance.listPanesWithTitles()).toEqual({
+      panes: [{ paneId: 'term_marked', title: DESCRIPTION }],
+      incomplete: false,
+    });
     // `tab list` is never a scan source: it cannot see closed-view terminals.
     expect(
       calls.every((argv) => !(argv.includes('tab') && argv.includes('list'))),
@@ -832,7 +833,7 @@ describe('CmuxMultiplexer', () => {
     );
   });
 
-  test('rejects the candidate scan when a process show fails transiently', async () => {
+  test('reports an incomplete scan when a process show fails transiently', async () => {
     const { runner } = recorder((argv) => {
       if (argv.includes('list') && argv.includes('terminal')) {
         return json([{ id: 'term_marked' }, { id: 'term_flaky' }]);
@@ -848,27 +849,43 @@ describe('CmuxMultiplexer', () => {
     const instance = mux({ runner });
 
     // `unavailable` means the scan could not determine whether `term_flaky`
-    // is a leftover: the pass must stay retryable.
-    await expect(instance.listPanesWithTitles()).rejects.toThrow(
-      /process show failed for term_flaky \(command-failed\)/,
+    // is a leftover: the pass stays retryable, but the candidate found before
+    // it is preserved instead of being discarded by an abort.
+    await expect(instance.listPanesWithTitles()).resolves.toEqual({
+      panes: [{ paneId: 'term_marked', title: DESCRIPTION }],
+      incomplete: true,
+    });
+    const messages = logMock.mock.calls.map((call: unknown[]) =>
+      String(call[0]),
     );
+    expect(
+      messages.some(
+        (message) =>
+          message.startsWith('[cmux-tui]') &&
+          message.includes('terminal skipped'),
+      ),
+    ).toBe(true);
   });
 
-  test('rejects the candidate scan when a process show fails hard', async () => {
+  test('reports an incomplete scan when a process show fails hard', async () => {
     const { runner } = recorder((argv) => {
       if (argv.includes('list') && argv.includes('terminal')) {
-        return json([{ id: 'term_flaky' }]);
+        return json([{ id: 'term_marked' }, { id: 'term_flaky' }]);
       }
       if (argv.includes('process') && argv.includes('term_flaky')) {
         return { exitCode: 1, stdout: '', stderr: 'operation.failed' };
+      }
+      if (argv.includes('process') && argv.includes('term_marked')) {
+        return json({ argv: ['/bin/bash', '-l', '-c', `${MARKER}attach`] });
       }
       return json({});
     });
     const instance = mux({ runner });
 
-    await expect(instance.listPanesWithTitles()).rejects.toThrow(
-      /process show failed for term_flaky \(command-failed\)/,
-    );
+    await expect(instance.listPanesWithTitles()).resolves.toEqual({
+      panes: [{ paneId: 'term_marked', title: DESCRIPTION }],
+      incomplete: true,
+    });
   });
 
   test('skips a not_found terminal but keeps the other candidates', async () => {
@@ -896,9 +913,10 @@ describe('CmuxMultiplexer', () => {
     // `not_found` is a definitive answer, not a failed scan: skipping the
     // stale terminal completes the pass. A blanket throw here would make
     // every sweep fail once one stale terminal exists.
-    await expect(instance.listPanesWithTitles()).resolves.toEqual([
-      { paneId: 'term_marked', title: DESCRIPTION },
-    ]);
+    await expect(instance.listPanesWithTitles()).resolves.toEqual({
+      panes: [{ paneId: 'term_marked', title: DESCRIPTION }],
+      incomplete: false,
+    });
     const messages = logMock.mock.calls.map((call: unknown[]) =>
       String(call[0]),
     );
@@ -952,6 +970,7 @@ describe('CmuxMultiplexer', () => {
 
     expect(stats.closed).toBe(1);
     expect(stats.scanFailed).toBe(false);
+    expect(stats.scanIncomplete).toBe(false);
     const close = calls.find((argv) => argv.includes('close'));
     expect(close).toEqual(cmux(['terminal', 'term_2', 'close']));
     expect(calls.every((argv) => !argv.includes('project'))).toBe(true);

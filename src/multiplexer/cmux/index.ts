@@ -336,13 +336,15 @@ export class CmuxMultiplexer implements Multiplexer {
    * Per-terminal inspection failures are classified: `not_found` is a
    * definitive answer (nothing addressable to inspect, nothing to close) and
    * only skips that terminal, while `unavailable` / `hard` leave the scan
-   * incomplete and reject so the caller retries.
+   * incomplete — reported as `incomplete: true` so the caller retries
+   * without discarding the candidates that could be inspected.
    */
-  async listPanesWithTitles(): Promise<
-    Array<{ paneId: string; title: string }>
-  > {
+  async listPanesWithTitles(): Promise<{
+    panes: Array<{ paneId: string; title: string }>;
+    incomplete: boolean;
+  }> {
     const target = this.resolveTarget();
-    if (!target) return [];
+    if (!target) return { panes: [], incomplete: false };
 
     const listed = await this.client.listTerminals(target);
     if (!listed.ok) {
@@ -350,6 +352,7 @@ export class CmuxMultiplexer implements Multiplexer {
     }
 
     const candidates: Array<{ paneId: string; title: string }> = [];
+    let incomplete = false;
     for (const terminal of listed.value) {
       const shown = await this.client.processShow(target, terminal.terminalId);
       if (!shown.ok) {
@@ -363,16 +366,20 @@ export class CmuxMultiplexer implements Multiplexer {
           continue;
         }
         // Unknown state: the scan could not determine whether this terminal
-        // is a leftover, so it must stay retryable.
-        throw new Error(
-          `cmux process show failed for ${terminal.terminalId} (${shown.reason})`,
-        );
+        // is a leftover. Keep the candidates already collected and mark the
+        // scan incomplete so the caller retries.
+        incomplete = true;
+        log('[cmux-tui] listPanesWithTitles: terminal skipped', {
+          terminalId: terminal.terminalId,
+          reason: shown.reason,
+        });
+        continue;
       }
       const title = extractArgvMarker(shown.value.argv);
       if (!title) continue;
       candidates.push({ paneId: terminal.terminalId, title });
     }
-    return candidates;
+    return { panes: candidates, incomplete };
   }
 
   async closePane(paneId: string): Promise<boolean> {

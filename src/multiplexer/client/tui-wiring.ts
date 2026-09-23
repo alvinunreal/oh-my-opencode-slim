@@ -626,7 +626,9 @@ export async function createTuiPaneWiring(
         isSessionTerminal,
         logger,
       });
-      return !stats.scanFailed;
+      // A partial scan (some terminals could not be inspected) re-arms the
+      // owed sweep exactly like a wholesale failure.
+      return !(stats.scanFailed || stats.scanIncomplete);
     } catch {
       // Fail-soft: leftovers stay for the documented user fallback.
       return false;
@@ -638,9 +640,10 @@ export async function createTuiPaneWiring(
    * `unreachable → reachable` transition, on the reconcile tick rather than
    * in the event path. The cmux discovery reads one launch argv per terminal;
    * repeating it every 30s x N terminals is wasteful. Crashes and reconnects
-   * bound the number of runs instead. A failed scan re-arms the owed sweep so
-   * a later tick retries (a broken daemon costs at most one scan per tick); a
-   * completed scan — including a clean empty one — is never repeated.
+   * bound the number of runs instead. A failed or incomplete scan re-arms the
+   * owed sweep so a later tick retries (a broken daemon costs at most one
+   * scan per tick); a completed scan — including a clean empty one — is never
+   * repeated.
    */
   const drainDueSweep = async (): Promise<void> => {
     if (!sweepDue || hostState !== 'reachable') return;
