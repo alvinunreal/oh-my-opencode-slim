@@ -32,7 +32,8 @@ export type MarketplaceDiagnosticCode =
   | 'missing-required-dependency'
   | 'ambiguous-mcp-namespace'
   | 'invalid-alias'
-  | 'invalid-capability';
+  | 'invalid-capability'
+  | 'unsupported-permission-policy';
 
 export interface MarketplaceDiagnostic {
   packageId: string;

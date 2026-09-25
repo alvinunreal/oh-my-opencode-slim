@@ -85,6 +85,74 @@ function setup() {
 }
 
 describe('marketplace status', () => {
+  test('reports an unsupported permission policy as invalid rather than pending', () => {
+    const { root, project, service } = setup();
+    try {
+      service.install(
+        agentBundle('community/docs-researcher', '1.0.0', {
+          tools: ['read'],
+        }),
+      );
+      writeFileSync(
+        join(root, 'config', 'opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            work: {
+              marketplace: { agents: ['community/docs-researcher'] },
+              agents: {
+                docsresearcher: {
+                  permission: { read: { 'private/**': 'ask' } },
+                },
+              },
+            },
+          },
+        }),
+      );
+      const directory = `${project}\0unsupported-status`;
+      RuntimeConfig.reset(directory);
+      const runtime = RuntimeConfig.init(directory, loadPluginConfig(project));
+      const registry = buildResolvedAgentRegistry(runtime, {
+        projectDirectory: project,
+        marketplaceStore: service.store,
+        hostFlavor: 'v2',
+        nativePermissionsByAgent: {
+          docsresearcher: [
+            { action: 'read', resource: 'private/**', effect: 'deny' },
+          ],
+        },
+      });
+      const status = collectMarketplaceStatus({
+        service,
+        projectDir: project,
+        live: {
+          packages: registry.marketplaceLive,
+          diagnostics: registry.diagnostics,
+        },
+        desiredLive: resolveDesiredMarketplaceLiveFromDisk(
+          project,
+          service.store,
+          runtime.host(),
+          registry,
+        ),
+      });
+      expect(status.reloadStatus).toBe('applied');
+      expect(status.live?.packages).toEqual([]);
+      expect(status.diagnostics).toContainEqual({
+        packageId: 'community/docs-researcher',
+        code: 'unsupported-permission-policy',
+        message:
+          'community/docs-researcher is disabled: Unsupported marketplace permission composition for read: scoped ask private/** may reopen native deny read:private/**',
+        provenance: 'live',
+      });
+      expect(
+        status.diagnostics.some((entry) => entry.code === 'operational'),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('v2 configured MCP availability stays applied until disk configuration changes', () => {
     const { root, project, service } = setup();
     try {

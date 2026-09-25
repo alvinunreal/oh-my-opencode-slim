@@ -38,6 +38,7 @@ import {
   compilePermissionPolicy,
   type MarketplacePermissionCeilings,
   type PermissionPolicy,
+  UnsupportedMarketplacePermissionCompositionError,
   v1PermissionTargets,
 } from '../v2/permissions';
 import type { V2PermissionRule } from '../v2/types';
@@ -85,6 +86,7 @@ interface CreateAgentsOptions {
   projectDirectory?: string;
   hostFlavor?: string;
   marketplace?: MarketplaceActivationPlan;
+  excludedMarketplaceAgentNames?: readonly string[];
   marketplaceStore?: MarketplaceStore;
   availableMcpNames?: readonly string[];
   /** Ordered native v2 host rules keyed by host/runtime agent name. */
@@ -103,6 +105,9 @@ const TASK_CONTROL_DEFAULTS = [
 
 export interface ResolvedAgentRegistry {
   readonly hostFlavor?: string;
+  readonly nativePermissionsByAgent: Readonly<
+    Record<string, readonly V2PermissionRule[]>
+  >;
   /** Host-finalized MCP availability, captured before registry projection. */
   readonly availableMcpNames: readonly string[];
   readonly agents: readonly AgentDefinition[];
@@ -245,7 +250,10 @@ export function resolveDesiredMarketplaceLiveFromDisk(
   projectDirectory: string,
   store: MarketplaceStore,
   host?: HostConfigSnapshot,
-  liveContext?: Pick<ResolvedAgentRegistry, 'hostFlavor' | 'availableMcpNames'>,
+  liveContext?: Pick<
+    ResolvedAgentRegistry,
+    'hostFlavor' | 'availableMcpNames' | 'nativePermissionsByAgent'
+  >,
 ): MarketplaceLiveSnapshot {
   const config = loadPluginConfig(projectDirectory, { silent: true });
   const directory = `${projectDirectory}\0marketplace-desired`;
@@ -265,6 +273,7 @@ export function resolveDesiredMarketplaceLiveFromDisk(
       marketplaceStore: store,
       projectDirectory,
       hostFlavor: liveContext?.hostFlavor,
+      nativePermissionsByAgent: liveContext?.nativePermissionsByAgent,
       availableMcpNames: desiredV2Mcps ?? liveContext?.availableMcpNames,
       ...(desiredV2Mcps ? { preflightMcpNames: desiredV2Mcps } : {}),
     });
@@ -946,11 +955,30 @@ function marketplacePermissionCeilings(
 ): MarketplacePermissionCeilings {
   const permission = normalizePermission(resolvedPermission);
   const actions: Record<string, 'allow' | 'ask' | 'deny'> = {};
+  const resources: Record<
+    string,
+    Record<string, 'allow' | 'ask' | 'deny'>
+  > = {};
   for (const tool of capabilities.tools) {
-    const effect = permission[tool];
+    const configured = permission[tool];
+    const effect =
+      configured && typeof configured === 'object'
+        ? normalizePermission(configured)['*']
+        : configured;
     if (effect === 'allow' || effect === 'ask' || effect === 'deny') {
       for (const target of v1PermissionTargets(tool)) {
         actions[target.action] = effect;
+      }
+    }
+    if (configured && typeof configured === 'object') {
+      const patterns = Object.fromEntries(
+        Object.entries(normalizePermission(configured)).filter(
+          ([pattern, value]) =>
+            pattern !== '*' && (value === 'ask' || value === 'deny'),
+        ),
+      ) as Record<string, 'ask' | 'deny'>;
+      for (const target of v1PermissionTargets(tool)) {
+        resources[target.action] = patterns;
       }
     }
   }
@@ -980,6 +1008,7 @@ function marketplacePermissionCeilings(
   ) as Record<string, 'ask' | 'deny'>;
   return {
     actions,
+    resources,
     skills: [...capabilities.skills],
     skillEffects,
     mcpNamespaces,
@@ -1002,6 +1031,57 @@ function applyRestrictiveMarketplacePermission(
     if (target[key] !== 'deny' || value === 'deny') {
       target[key] = value;
     }
+  };
+  const applyToolRestriction = (tool: string, value: unknown): void => {
+    if (
+      value !== 'deny' &&
+      value !== 'ask' &&
+      (!value || typeof value !== 'object' || Array.isArray(value))
+    )
+      return;
+    const current = target[tool];
+    if (value === 'deny' || current === 'deny') {
+      target[tool] = 'deny';
+      return;
+    }
+    const patterns =
+      value === 'ask' ? { '*': 'ask' } : normalizePermission(value);
+    const existing = normalizePermission(current);
+    const base = existing['*'] ?? (current === 'ask' ? 'ask' : 'allow');
+    const incomingBase = patterns['*'];
+    const combinedBase =
+      base === 'deny' || incomingBase === 'deny'
+        ? 'deny'
+        : base === 'ask' || incomingBase === 'ask'
+          ? 'ask'
+          : 'allow';
+    if (combinedBase === 'deny') {
+      target[tool] = 'deny';
+      return;
+    }
+    const scoped = new Map<string, 'ask' | 'deny'>();
+    for (const entries of [existing, patterns]) {
+      for (const [pattern, effect] of Object.entries(entries)) {
+        if (pattern === '*' || (effect !== 'ask' && effect !== 'deny'))
+          continue;
+        const previous = scoped.get(pattern);
+        scoped.set(
+          pattern,
+          previous === 'deny' || effect === 'deny' ? 'deny' : 'ask',
+        );
+      }
+    }
+    if (scoped.size === 0) {
+      target[tool] = combinedBase;
+      return;
+    }
+    // Last-match-wins: a deny always follows every ask, even for equivalent
+    // or overlapping globs (e.g. private/* and private/**).
+    target[tool] = Object.fromEntries([
+      ['*', combinedBase],
+      ...[...scoped].filter(([, effect]) => effect === 'ask'),
+      ...[...scoped].filter(([, effect]) => effect === 'deny'),
+    ]);
   };
   const skillIsGloballyDenied = (): boolean => {
     if (target.skill === 'deny') return true;
@@ -1034,12 +1114,12 @@ function applyRestrictiveMarketplacePermission(
   // owner/host wildcard must therefore be projected onto every package
   // surface explicitly; changing only `*` would leave per-tool allows in
   // place and v2's last-match-wins evaluator would widen the package again.
-  for (const tool of tools) applyRestriction(tool, wildcard);
+  for (const tool of tools) applyToolRestriction(tool, wildcard);
   for (const mcp of mcps) applyRestriction(mcp, wildcard);
   applySkillRestriction(skills, wildcard);
 
   for (const tool of tools) {
-    applyRestriction(tool, record[tool]);
+    applyToolRestriction(tool, record[tool]);
   }
   const skillPermission = record.skill;
   applySkillRestriction(skills, skillPermission);
@@ -1432,9 +1512,10 @@ export function createAgents(
       return agent;
     });
 
-  const marketplaceAgentNames = new Set(
-    (marketplace?.agents ?? []).map((entry) => entry.manifest.agentName),
-  );
+  const marketplaceAgentNames = new Set([
+    ...(marketplace?.agents ?? []).map((entry) => entry.manifest.agentName),
+    ...(options?.excludedMarketplaceAgentNames ?? []),
+  ]);
 
   // 1b. Discover unknown keys in config.agents as custom subagents.
   const customAgentNames = uniqueNames([
@@ -2006,7 +2087,74 @@ export function buildResolvedAgentRegistry(
     availableMcpNames: options?.preflightMcpNames,
     extraSkillDirectories: options?.extraSkillDirectories,
   });
-  const agents = createAgents(runtime, { ...options, marketplace });
+  const unsupported = new Map<
+    string,
+    UnsupportedMarketplacePermissionCompositionError
+  >();
+  const initial = buildRegistryFromMarketplace(
+    runtime,
+    options,
+    marketplace,
+    unsupported,
+  );
+  if (initial) return initial;
+
+  const filtered: MarketplaceActivationPlan = {
+    agents: marketplace.agents.filter(
+      (entry) => !unsupported.has(entry.packageId),
+    ),
+    diagnostics: [
+      ...marketplace.diagnostics,
+      ...[...unsupported]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([packageId, error]) => ({
+          packageId,
+          code: 'unsupported-permission-policy' as const,
+          message: `${packageId} is disabled: ${error.message}`,
+        })),
+    ],
+  };
+  return buildRegistryFromMarketplace(
+    runtime,
+    options,
+    filtered,
+    undefined,
+    marketplace.agents
+      .filter((entry) => unsupported.has(entry.packageId))
+      .map((entry) => entry.manifest.agentName),
+  );
+}
+
+function buildRegistryFromMarketplace(
+  runtime: RuntimeConfig,
+  options: Parameters<typeof buildResolvedAgentRegistry>[1],
+  marketplace: MarketplaceActivationPlan,
+  unsupported: undefined,
+  excludedMarketplaceAgentNames: readonly string[],
+): ResolvedAgentRegistry;
+function buildRegistryFromMarketplace(
+  runtime: RuntimeConfig,
+  options: Parameters<typeof buildResolvedAgentRegistry>[1],
+  marketplace: MarketplaceActivationPlan,
+): ResolvedAgentRegistry;
+function buildRegistryFromMarketplace(
+  runtime: RuntimeConfig,
+  options: Parameters<typeof buildResolvedAgentRegistry>[1],
+  marketplace: MarketplaceActivationPlan,
+  unsupported: Map<string, UnsupportedMarketplacePermissionCompositionError>,
+): ResolvedAgentRegistry | undefined;
+function buildRegistryFromMarketplace(
+  runtime: RuntimeConfig,
+  options: Parameters<typeof buildResolvedAgentRegistry>[1],
+  marketplace: MarketplaceActivationPlan,
+  unsupported?: Map<string, UnsupportedMarketplacePermissionCompositionError>,
+  excludedMarketplaceAgentNames?: readonly string[],
+): ResolvedAgentRegistry | undefined {
+  const agents = createAgents(runtime, {
+    ...options,
+    marketplace,
+    excludedMarketplaceAgentNames,
+  });
   const routing = buildRoutingEntriesForResolvedAgents(
     runtime,
     agents.slice(1),
@@ -2144,33 +2292,47 @@ export function buildResolvedAgentRegistry(
       options?.nativePermissionsByAgent?.[runtimeName] ??
       options?.nativePermissionsByAgent?.[name] ??
       [];
-    v2PermissionPolicies[name] = compilePermissionPolicy({
-      baselineRules: adaptPermissions(
-        applyMcpPermissionRules(
-          rawConfig.permission,
-          (rawConfig as SDKAgentConfig & { mcps?: string[] }).mcps ?? [],
-          options?.availableMcpNames ?? [],
-        ),
-      ) as V2PermissionRule[],
-      hostRules,
-      ...(!marketplaceEntry && name !== 'orchestrator'
-        ? { finalDenials: ['marketplace', 'wait_for_user'] }
-        : {}),
-      ...(marketplaceEntry && resolvedMarketplaceCapabilities
-        ? {
-            marketplace: marketplacePermissionCeilings(
-              ownedConfig.permission,
-              resolvedMarketplaceCapabilities,
-              options?.availableMcpNames ?? [],
-            ),
-          }
-        : {}),
-    });
+    try {
+      v2PermissionPolicies[name] = compilePermissionPolicy({
+        baselineRules: adaptPermissions(
+          applyMcpPermissionRules(
+            rawConfig.permission,
+            (rawConfig as SDKAgentConfig & { mcps?: string[] }).mcps ?? [],
+            options?.availableMcpNames ?? [],
+          ),
+        ) as V2PermissionRule[],
+        hostRules,
+        ...(!marketplaceEntry && name !== 'orchestrator'
+          ? { finalDenials: ['marketplace', 'wait_for_user'] }
+          : {}),
+        ...(marketplaceEntry && resolvedMarketplaceCapabilities
+          ? {
+              marketplace: marketplacePermissionCeilings(
+                ownedConfig.permission,
+                resolvedMarketplaceCapabilities,
+                options?.availableMcpNames ?? [],
+              ),
+            }
+          : {}),
+      });
+    } catch (error) {
+      if (
+        !(error instanceof UnsupportedMarketplacePermissionCompositionError) ||
+        !marketplaceEntry ||
+        !unsupported
+      ) {
+        throw error;
+      }
+      unsupported.set(marketplaceEntry.packageId, error);
+      continue;
+    }
     if (runtimeName !== name) {
       v2PermissionPolicies[runtimeName] = v2PermissionPolicies[name];
     }
     sdkConfigs[name] = ownedConfig;
   }
+
+  if (unsupported?.size) return undefined;
 
   // Apply inheritance only while constructing the immutable registry. The
   // config hook must not repeat this resolution against its host projection.
@@ -2334,6 +2496,9 @@ export function buildResolvedAgentRegistry(
 
   return deepFreeze({
     hostFlavor: options?.hostFlavor,
+    nativePermissionsByAgent: cloneOwned(
+      options?.nativePermissionsByAgent ?? {},
+    ),
     availableMcpNames: Object.freeze([...(options?.availableMcpNames ?? [])]),
     agents: Object.freeze(agents),
     sdkConfigs: Object.freeze(sdkConfigs),

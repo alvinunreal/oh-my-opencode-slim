@@ -3,9 +3,25 @@ import type { V2PermissionRule } from './types';
 
 export type PermissionEffect = V2PermissionRule['effect'];
 
+export class UnsupportedMarketplacePermissionCompositionError extends Error {
+  constructor(
+    readonly action: string,
+    readonly details: string,
+  ) {
+    super(
+      `Unsupported marketplace permission composition for ${action}: ${details}`,
+    );
+    this.name = 'UnsupportedMarketplacePermissionCompositionError';
+  }
+}
+
 export interface MarketplacePermissionCeilings {
   /** Exact native v2 action names and their maximum admitted effect. */
   readonly actions: Readonly<Record<string, PermissionEffect>>;
+  /** Restrictive resource patterns for admitted native actions. */
+  readonly resources?: Readonly<
+    Record<string, Readonly<Record<string, PermissionEffect>>>
+  >;
   /** Exact skill names admitted to the package. */
   readonly skills: readonly string[];
   /** Owner-resolved ceiling for each admitted skill (absent means allow). */
@@ -46,6 +62,13 @@ export function compilePermissionPolicy(
   const marketplace = input.marketplace
     ? Object.freeze({
         actions: Object.freeze({ ...input.marketplace.actions }),
+        resources: Object.freeze(
+          Object.fromEntries(
+            Object.entries(input.marketplace.resources ?? {}).map(
+              ([action, patterns]) => [action, Object.freeze({ ...patterns })],
+            ),
+          ),
+        ),
         skills: Object.freeze([...input.marketplace.skills]),
         skillEffects: Object.freeze({ ...input.marketplace.skillEffects }),
         mcpNamespaces: Object.freeze([...input.marketplace.mcpNamespaces]),
@@ -87,7 +110,16 @@ export function compilePermissionPolicy(
               ),
             'allow',
           );
-    return moreRestrictive(moreRestrictive(evaluated, ceiling), scopedCeiling);
+    const resourceCeiling = Object.entries(marketplace.resources[action] ?? {})
+      .filter(([pattern]) => wildcardMatch(resource, pattern))
+      .reduce<PermissionEffect>(
+        (effect, [, restriction]) => moreRestrictive(effect, restriction),
+        'allow',
+      );
+    return moreRestrictive(
+      moreRestrictive(moreRestrictive(evaluated, ceiling), scopedCeiling),
+      resourceCeiling,
+    );
   };
 
   return Object.freeze({
@@ -112,6 +144,44 @@ function compileMarketplaceRules(
   host: readonly V2PermissionRule[],
   ceilings: MarketplacePermissionCeilings,
 ): V2PermissionRule[] {
+  // A trailing scoped ask could reopen an earlier native deny on a narrower
+  // resource. A fully superseded or provably disjoint deny is safe; otherwise
+  // the caller must handle the unsupported package rather than overgrant.
+  for (const [action, patterns] of Object.entries(ceilings.resources ?? {})) {
+    for (const [askPattern, effect] of Object.entries(patterns)) {
+      if (effect !== 'ask') continue;
+      for (const [index, rule] of host.entries()) {
+        if (rule.effect !== 'deny' || !wildcardMatch(action, rule.action))
+          continue;
+        if (
+          host
+            .slice(index + 1)
+            .some(
+              (later) =>
+                later.action === action &&
+                later.resource === '*' &&
+                later.effect !== 'deny',
+            )
+        )
+          continue;
+        const prefix = (pattern: string) =>
+          pattern.replaceAll('\\', '/').split(/[?*]/, 1)[0] ?? '';
+        const askPrefix = prefix(askPattern);
+        const denyPrefix = prefix(rule.resource);
+        if (
+          askPrefix &&
+          denyPrefix &&
+          !askPrefix.startsWith(denyPrefix) &&
+          !denyPrefix.startsWith(askPrefix)
+        )
+          continue;
+        throw new UnsupportedMarketplacePermissionCompositionError(
+          action,
+          `scoped ask ${askPattern} may reopen native deny ${rule.action}:${rule.resource}`,
+        );
+      }
+    }
+  }
   const admittedActions = Object.keys(ceilings.actions).filter(
     (action) => action !== 'skill',
   );
@@ -174,6 +244,24 @@ function compileMarketplaceRules(
       })),
   );
 
+  // Resource ceilings are immutable: a later native host allow cannot reopen
+  // a package deny. Emit them after ordered host rules for the host evaluator.
+  const resourceRules = Object.entries(ceilings.resources ?? {}).flatMap(
+    ([action, patterns]) =>
+      (['ask', 'deny'] as const).flatMap((effect) =>
+        Object.entries(patterns)
+          .filter(([resource, value]) => resource !== '*' && value === effect)
+          .map(([resource]) => ({
+            action,
+            resource,
+            effect: moreRestrictive(
+              effect,
+              ceilings.actions[action] ?? 'allow',
+            ),
+          })),
+      ),
+  );
+
   // Unknown actions/resources deny, while each admitted scope starts at ask
   // (clamped by its ceiling) before ordered adapter and host rules apply.
   return [
@@ -181,6 +269,7 @@ function compileMarketplaceRules(
     ...fallbacks,
     ...compiled,
     ...skillRules,
+    ...resourceRules,
   ];
 }
 

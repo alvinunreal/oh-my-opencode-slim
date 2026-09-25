@@ -33,6 +33,129 @@ function registryFor(config: PluginConfig = {}): ResolvedAgentRegistry {
 }
 
 describe('ResolvedAgentRegistry', () => {
+  test('excludes only marketplace packages with unsupported native permission composition', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-unsupported-'));
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      for (const [id, agentName] of [
+        ['community/blocked', 'blocked'],
+        ['community/healthy', 'healthy'],
+      ] as const) {
+        store.install({
+          manifest: {
+            schemaVersion: 2,
+            id,
+            version: '1.0.0',
+            displayName: agentName,
+            agentName,
+            description: `${agentName} agent`,
+            prompt: `${agentName} prompt`,
+            extends: { builtin: 'explorer', promptMode: 'append' },
+            skills: [],
+            mcps: [],
+            tools: ['read'],
+            author: { name: 'Community' },
+            tags: [],
+            license: 'MIT',
+            compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+            model: { source: 'explicit', candidates: ['provider/model'] },
+            routing: {
+              description: `${agentName} routing`,
+              when: 'Needed',
+              keywords: [agentName],
+            },
+          },
+        });
+      }
+      RuntimeConfig.reset(root);
+      const runtime = RuntimeConfig.init(root, {
+        preset: 'work',
+        presets: {
+          work: {
+            marketplace: {
+              agents: ['community/blocked', 'community/healthy'],
+            },
+          },
+        },
+        agents: {
+          blocked: {
+            displayName: 'blockedalias',
+            model: 'owner/model',
+            permission: { read: { 'private/**': 'ask' } },
+          },
+          healthy: { displayName: 'healthyalias' },
+        },
+      });
+      const options = {
+        marketplaceStore: store,
+        hostFlavor: 'v2',
+        nativePermissionsByAgent: {
+          blockedalias: [
+            { action: 'read', resource: 'private/**', effect: 'deny' },
+          ],
+        },
+      } as const;
+      const registry = buildResolvedAgentRegistry(runtime, options);
+      expect(registry.diagnostics).toEqual([
+        {
+          packageId: 'community/blocked',
+          code: 'unsupported-permission-policy',
+          message:
+            'community/blocked is disabled: Unsupported marketplace permission composition for read: scoped ask private/** may reopen native deny read:private/**',
+        },
+      ]);
+      expect(registry.agents.map((agent) => agent.name)).toContain('explorer');
+      expect(registry.agents.map((agent) => agent.name)).toContain('healthy');
+      expect(registry.marketplaceLive.map((entry) => entry.packageId)).toEqual([
+        'community/healthy',
+      ]);
+      expect(
+        registry.routing.some((entry) => entry.agentName === 'healthyalias'),
+      ).toBe(true);
+      for (const name of ['blocked', 'blockedalias']) {
+        expect(registry.agents.some((agent) => agent.name === name)).toBe(
+          false,
+        );
+        expect(registry.sdkConfigs[name]).toBeUndefined();
+        expect(registry.v2PermissionPolicies[name]).toBeUndefined();
+        expect(registry.modelArrays[name]).toBeUndefined();
+        expect(registry.modelChains[name]).toBeUndefined();
+        expect(registry.configuredModelChains[name]).toBeUndefined();
+        expect(registry.mcpLists[name]).toBeUndefined();
+        expect(registry.provenance[name]).toBeUndefined();
+        expect(registry.packageIdByRuntimeName[name]).toBeUndefined();
+        expect(registry.routing.some((entry) => entry.agentName === name)).toBe(
+          false,
+        );
+      }
+      expect(
+        registry.runtimeNameByPackageId['community/blocked'],
+      ).toBeUndefined();
+      expect(registry.sdkConfigs.healthyalias).toBeDefined();
+      expect(registry.v2PermissionPolicies.healthy).toBe(
+        registry.v2PermissionPolicies.healthyalias,
+      );
+      expect(Object.isFrozen(registry)).toBe(true);
+
+      const supported = buildResolvedAgentRegistry(runtime, {
+        ...options,
+        nativePermissionsByAgent: {
+          blockedalias: [
+            { action: '*', resource: '*', effect: 'deny' },
+            { action: 'read', resource: '*', effect: 'allow' },
+          ],
+        },
+      });
+      expect(supported.diagnostics).toEqual([]);
+      expect(supported.sdkConfigs.blockedalias).toBeDefined();
+      expect(
+        supported.v2PermissionPolicies.blocked.decide('read', 'private/x'),
+      ).toBe('ask');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('compiles ordered native host rules once and shares frozen policy with aliases', () => {
     RuntimeConfig.reset(DIRECTORY);
     const runtime = RuntimeConfig.init(DIRECTORY, {
@@ -173,7 +296,7 @@ describe('ResolvedAgentRegistry', () => {
           prompt: 'Analyze.',
           skills: ['simplify', 'clonedeps'],
           mcps: ['context7', 'github'],
-          tools: ['read'],
+          tools: ['read', 'bash'],
           author: { name: 'Community' },
           tags: ['analysis'],
           license: 'MIT',
@@ -258,6 +381,87 @@ describe('ResolvedAgentRegistry', () => {
       expect(registry.skillPermissions.audit.simplify).toBe('deny');
       expect(registry.skillPermissions.audit.clonedeps).toBe('ask');
       expect(policy.decide('other_server_tool', '*')).toBe('deny');
+
+      runtime.captureHostConfig({
+        agent: {
+          audit: {
+            permission: {
+              read: { 'private/**': 'deny' },
+              bash: { '*': 'deny' },
+            },
+          },
+        },
+      });
+      const scoped = buildResolvedAgentRegistry(runtime, registryOptions);
+      expect(scoped.sdkConfigs.analyst.permission).toMatchObject({
+        read: { '*': 'allow', 'private/**': 'deny' },
+        bash: 'deny',
+      });
+      const scopedPolicy = scoped.v2PermissionPolicies.analyst;
+      expect(scopedPolicy.decide('read', 'private/secret')).toBe('deny');
+      expect(scopedPolicy.decide('read', 'public/file')).toBe('allow');
+      expect(scopedPolicy.decide('execute', 'echo hello')).toBe('deny');
+      for (const [action, resource, effect] of [
+        ['read', 'private/secret', 'deny'],
+        ['read', 'public/file', 'allow'],
+        ['execute', 'echo hello', 'deny'],
+      ] as const) {
+        expect(
+          scopedPolicy.rules.findLast(
+            (rule) =>
+              (rule.action === action || rule.action === '*') &&
+              (rule.resource === '*' || rule.resource === 'private/**') &&
+              (rule.resource === '*' || resource.startsWith('private/')),
+          )?.effect,
+        ).toBe(effect);
+      }
+
+      RuntimeConfig.reset(root);
+      const narrowRuntime = RuntimeConfig.init(root, {
+        preset: 'work',
+        presets: {
+          work: { agents: {}, marketplace: { agents: ['community/analyst'] } },
+        },
+        agents: { analyst: { permission: { read: { 'private/**': 'deny' } } } },
+      });
+      narrowRuntime.captureHostConfig({
+        agent: {
+          analyst: {
+            permission: {
+              read: {
+                '*': 'ask',
+                'private/*': 'ask',
+                'public/**': 'ask',
+              },
+            },
+          },
+        },
+      });
+      const narrow = buildResolvedAgentRegistry(narrowRuntime, registryOptions);
+      expect(narrow.sdkConfigs.analyst.permission).toMatchObject({
+        read: {
+          '*': 'ask',
+          'private/*': 'ask',
+          'private/**': 'deny',
+          'public/**': 'ask',
+        },
+      });
+      const readMap = (
+        narrow.sdkConfigs.analyst.permission as Record<string, unknown>
+      ).read as Record<string, string>;
+      const v1Decision = (resource: string) =>
+        Object.entries(readMap).findLast(([pattern]) =>
+          new RegExp(`^${pattern.replaceAll('*', '.*')}$`).test(resource),
+        )?.[1];
+      expect(v1Decision('private/x')).toBe('deny');
+      expect(v1Decision('public/x')).toBe('ask');
+      expect(v1Decision('other/x')).toBe('ask');
+      expect(
+        narrow.v2PermissionPolicies.analyst.decide('read', 'private/x'),
+      ).toBe('deny');
+      expect(
+        narrow.v2PermissionPolicies.analyst.decide('read', 'public/x'),
+      ).toBe('ask');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

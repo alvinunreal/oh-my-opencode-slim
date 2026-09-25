@@ -197,3 +197,8 @@ permission action namespaces after non-alphanumeric characters are sanitized
 to `_`, activation is refused with an `ambiguous-mcp-namespace` diagnostic;
 rename/adjust the MCP configuration and reload rather than relying on an
 ambiguous permission grant.
+
+If a package's scoped permission request cannot be combined safely with
+ordered v2 host rules, that package is skipped with an
+`unsupported-permission-policy` diagnostic. Other agents remain available;
+adjust the conflicting permission patterns and reload.

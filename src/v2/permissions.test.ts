@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { compilePermissionPolicy, v1PermissionTargets } from './permissions';
+import {
+  compilePermissionPolicy,
+  UnsupportedMarketplacePermissionCompositionError,
+  v1PermissionTargets,
+} from './permissions';
 import type { V2PermissionRule } from './types';
 
 const allowAll: V2PermissionRule[] = [
@@ -58,6 +62,101 @@ describe('compilePermissionPolicy', () => {
       resource: '*',
       effect: 'deny',
     });
+  });
+
+  test('keeps projected resource denies immutable against broad native allows', () => {
+    const policy = compilePermissionPolicy({
+      baselineRules: allowAll,
+      hostRules: [{ action: 'read', resource: '*', effect: 'ask' }],
+      marketplace: {
+        actions: { read: 'allow', execute: 'deny' },
+        resources: { read: { 'private/**': 'deny' } },
+        skills: [],
+        mcpNamespaces: [],
+      },
+    });
+    for (const [action, resource, expected] of [
+      ['read', 'private/secret', 'deny'],
+      ['read', 'public/file', 'ask'],
+      ['execute', 'echo hello', 'deny'],
+    ] as const) {
+      expect(policy.decide(action, resource)).toBe(expected);
+      expect(emittedDecision(policy.rules, action, resource)).toBe(expected);
+    }
+  });
+
+  test('native host wildcard deny followed by a read exception retains order', () => {
+    const policy = compilePermissionPolicy({
+      baselineRules: allowAll,
+      hostRules: [
+        { action: '*', resource: '*', effect: 'deny' },
+        { action: 'read', resource: '*', effect: 'allow' },
+      ],
+      marketplace: {
+        actions: { read: 'allow' },
+        skills: [],
+        mcpNamespaces: [],
+      },
+    });
+    expect(policy.decide('read', 'public/file')).toBe('allow');
+    expect(emittedDecision(policy.rules, 'read', 'public/file')).toBe('allow');
+    expect(policy.decide('execute', 'echo')).toBe('deny');
+  });
+
+  test('does not emit a scoped ask that reopens a native resource deny', () => {
+    expect(() =>
+      compilePermissionPolicy({
+        baselineRules: allowAll,
+        hostRules: [{ action: 'read', resource: 'private/**', effect: 'deny' }],
+        marketplace: {
+          actions: { read: 'allow' },
+          resources: { read: { 'private/*': 'ask' } },
+          skills: [],
+          mcpNamespaces: [],
+        },
+      }),
+    ).toThrow(UnsupportedMarketplacePermissionCompositionError);
+  });
+
+  test('allows disjoint native denies and scoped asks while scoped deny still wins', () => {
+    const policy = compilePermissionPolicy({
+      baselineRules: allowAll,
+      hostRules: [{ action: 'read', resource: 'private/**', effect: 'deny' }],
+      marketplace: {
+        actions: { read: 'allow' },
+        resources: {
+          read: { 'public/*': 'deny', 'public/**': 'ask' },
+        },
+        skills: [],
+        mcpNamespaces: [],
+      },
+    });
+    for (const [resource, expected] of [
+      ['private/secret', 'deny'],
+      ['public/file', 'deny'],
+      ['other/file', 'allow'],
+    ] as const) {
+      expect(policy.decide('read', resource)).toBe(expected);
+      expect(emittedDecision(policy.rules, 'read', resource)).toBe(expected);
+    }
+  });
+
+  test('effective native allow supersedes a preceding deny before scoped ask', () => {
+    const policy = compilePermissionPolicy({
+      baselineRules: allowAll,
+      hostRules: [
+        { action: '*', resource: 'public/**', effect: 'deny' },
+        { action: 'read', resource: '*', effect: 'allow' },
+      ],
+      marketplace: {
+        actions: { read: 'allow' },
+        resources: { read: { 'public/**': 'ask' } },
+        skills: [],
+        mcpNamespaces: [],
+      },
+    });
+    expect(policy.decide('read', 'public/file')).toBe('ask');
+    expect(emittedDecision(policy.rules, 'read', 'public/file')).toBe('ask');
   });
 
   test('allows only exact admitted skill names and retains host denies', () => {
