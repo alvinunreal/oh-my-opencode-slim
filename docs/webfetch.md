@@ -146,6 +146,12 @@ For URLs entered as `http://`, `webfetch` first tries `https://` and falls
 back to `http://` if the HTTPS attempt fails (connection error, blocked
 redirect, or non-2xx status).
 
+If a page request returns HTTP 403 with `cf-mitigated: challenge`, `webfetch`
+closes the response and retries once from the original URL using OpenCode's
+`opencode` user agent (without pretending to be a browser). Other headers are
+preserved. A persistent challenge still reports HTTP 403; the llms.txt probe
+does not use this retry.
+
 ## Binary Detection
 
 Content type detection follows this flow:

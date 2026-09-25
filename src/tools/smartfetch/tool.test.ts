@@ -95,6 +95,26 @@ describe('smartfetch/tool', () => {
     expect(accepts[1]).toStartWith('text/html');
   });
 
+  test('a persistent Cloudflare challenge reports 403 and mentions the retry', async () => {
+    const fetchMock = mock(
+      async () =>
+        new Response('challenge', {
+          status: 403,
+          headers: { 'cf-mitigated': 'challenge' },
+        }),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+    await expect(
+      createWebfetchTool({ client: {} } as any).execute(
+        { url: 'https://example.com/page', prefer_llms_txt: 'never' },
+        createExecutionContext(),
+      ),
+    ).rejects.toThrow(
+      'Request failed with status code: 403 (Cloudflare challenge',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test('rejects a pre-aborted request after permission without network I/O', async () => {
     const controller = new AbortController();
     controller.abort(new Error('pre-aborted'));

@@ -2,11 +2,13 @@ import path from 'node:path';
 import { fitUtf8 } from './binary';
 import {
   BINARY_PREFIXES,
+  CHALLENGE_RETRY_USER_AGENT,
   DEFAULT_ACCEPT_LANGUAGE,
   DOCS_HOST_PREFIXES,
   DOCS_HOST_SUFFIXES,
   MAX_REDIRECTS,
   MAX_RESPONSE_BYTES,
+  USER_AGENT,
 } from './constants';
 import type {
   BinaryFetch,
@@ -199,7 +201,7 @@ export async function fetchWithRedirects(
       redirect: 'manual',
       signal,
       headers: {
-        'User-Agent': 'opencode-smartfetch/1.0',
+        'User-Agent': USER_AGENT,
         Accept: ACCEPT_HEADER,
         'Accept-Language': DEFAULT_ACCEPT_LANGUAGE,
         ...extraHeaders,
@@ -240,6 +242,29 @@ export async function fetchWithRedirects(
   throw new Error(`Too many redirects (exceeded ${MAX_REDIRECTS})`);
 }
 
+export function isCloudflareChallenge(response: Response) {
+  return (
+    response.status === 403 &&
+    response.headers.get('cf-mitigated') === 'challenge'
+  );
+}
+
+async function fetchWithChallengeRetry(
+  url: string,
+  signal: AbortSignal,
+  requestHeaders?: Record<string, string>,
+): Promise<FetchWithRedirectsResult> {
+  const first = await fetchWithRedirects(url, signal, requestHeaders);
+  if ('blockedRedirect' in first || !isCloudflareChallenge(first.response)) {
+    return first;
+  }
+  await discard(first.response);
+  return fetchWithRedirects(url, signal, {
+    ...requestHeaders,
+    'User-Agent': CHALLENGE_RETRY_USER_AGENT,
+  });
+}
+
 export async function fetchWithUpgradeFallback(
   normalized: ReturnType<typeof normalizeUrl>,
   signal: AbortSignal,
@@ -247,10 +272,14 @@ export async function fetchWithUpgradeFallback(
 ) {
   let primary: FetchWithRedirectsResult;
   try {
-    primary = await fetchWithRedirects(normalized.url, signal, requestHeaders);
+    primary = await fetchWithChallengeRetry(
+      normalized.url,
+      signal,
+      requestHeaders,
+    );
   } catch (error) {
     if (!normalized.fallbackUrl || signal.aborted) throw error;
-    const result = await fetchWithRedirects(
+    const result = await fetchWithChallengeRetry(
       normalized.fallbackUrl,
       signal,
       requestHeaders,
@@ -266,7 +295,7 @@ export async function fetchWithUpgradeFallback(
   }
   if (!('blockedRedirect' in primary)) await discard(primary.response);
   try {
-    const result = await fetchWithRedirects(
+    const result = await fetchWithChallengeRetry(
       normalized.fallbackUrl,
       signal,
       requestHeaders,

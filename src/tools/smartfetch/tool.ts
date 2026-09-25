@@ -24,6 +24,7 @@ import {
   fetchWithUpgradeFallback,
   getBinaryKind,
   isBinaryContentType,
+  isCloudflareChallenge,
   isDocsLikeUrl,
   isGenericBinaryMime,
   isHtmlLikeContentType,
@@ -278,7 +279,7 @@ export function createWebfetchTool(
             if (!response.ok) {
               await discard(response);
               throw new Error(
-                `Request failed with status code: ${response.status}`,
+                `Request failed with status code: ${response.status}${isCloudflareChallenge(response) ? ' (Cloudflare challenge persisted after retry)' : ''}`,
               );
             }
             const headerMetadata = extractHeaderMetadata(

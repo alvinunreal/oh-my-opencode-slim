@@ -16,6 +16,8 @@ export const MAX_TIMEOUT_SECONDS = 120;
 export const MAX_LLMS_PROBE_TIMEOUT_MS = 8000;
 export const MAX_MODEL_CONTENT_CHARS = 100_000;
 export const DEFAULT_ACCEPT_LANGUAGE = 'en;q=0.8,*;q=0.5';
+export const USER_AGENT = 'opencode-smartfetch/1.0';
+export const CHALLENGE_RETRY_USER_AGENT = 'opencode';
 export const BINARY_PREFIXES = [
   'image/',
   'audio/',

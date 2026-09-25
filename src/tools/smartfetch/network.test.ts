@@ -232,6 +232,81 @@ describe('smartfetch/network', () => {
     ]);
   });
 
+  test('retries a Cloudflare challenge from the original URL with opencode UA and closes its body', async () => {
+    const challenged = new Response('challenge', {
+      status: 403,
+      headers: { 'cf-mitigated': 'challenge' },
+    });
+    const calls: Array<{ url: string; headers: Headers }> = [];
+    globalThis.fetch = mock(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), headers: new Headers(init?.headers) });
+        return calls.length === 1 ? challenged : new Response('allowed');
+      },
+    ) as typeof fetch;
+    const { result } = await fetchWithUpgradeFallback(
+      normalizeUrl('https://example.com/page'),
+      new AbortController().signal,
+      { Accept: 'text/markdown', 'If-None-Match': '"old"' },
+    );
+    expect('blockedRedirect' in result).toBe(false);
+    if ('blockedRedirect' in result) throw new Error('unexpected redirect');
+    expect(result.response.status).toBe(200);
+    expect(challenged.bodyUsed).toBe(true);
+    expect(calls.map(({ url }) => url)).toEqual([
+      'https://example.com/page',
+      'https://example.com/page',
+    ]);
+    expect(calls.map(({ headers }) => headers.get('User-Agent'))).toEqual([
+      'opencode-smartfetch/1.0',
+      'opencode',
+    ]);
+    for (const { headers } of calls) {
+      expect(headers.get('Accept')).toBe('text/markdown');
+      expect(headers.get('If-None-Match')).toBe('"old"');
+    }
+  });
+
+  test('limits Cloudflare retry to two attempts per scheme and never retries an ordinary 403 or the llms probe', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response('challenge', {
+        status: 403,
+        headers: { 'cf-mitigated': 'challenge' },
+      });
+    }) as typeof fetch;
+    await fetchWithUpgradeFallback(
+      normalizeUrl('http://example.com/page'),
+      new AbortController().signal,
+    );
+    expect(calls).toEqual([
+      'https://example.com/page',
+      'https://example.com/page',
+      'http://example.com/page',
+      'http://example.com/page',
+    ]);
+    calls.length = 0;
+    await probeLlmsText(
+      new URL('https://example.com/page'),
+      new AbortController().signal,
+    );
+    expect(calls).toHaveLength(2);
+    calls.length = 0;
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response('forbidden', {
+        status: 403,
+        headers: { 'cf-mitigated': 'other' },
+      });
+    }) as typeof fetch;
+    await fetchWithUpgradeFallback(
+      normalizeUrl('https://example.com/page'),
+      new AbortController().signal,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
   test('reports the primary blocked redirect when HTTP fallback also blocks', async () => {
     globalThis.fetch = mock(
       async (url: string | URL | Request) =>
