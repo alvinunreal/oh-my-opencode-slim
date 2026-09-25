@@ -177,6 +177,44 @@ describe('loadPluginConfig', () => {
     });
   });
 
+  test('a project-layer backgroundJobs bad key sanitizes away without overriding a valid user value (#1291)', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: {
+          maxSessionsPerAgent: 8,
+          orchestratorWake: { intervalMs: 120_000 },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: {
+          // Above the schema max: dropped, and must not be resurrected as an
+          // explicit default that overrides the valid user value.
+          maxSessionsPerAgent: 16,
+          strategy: 'checkpoint-compatible',
+          // A bad nested key drops only itself; valid wake siblings still
+          // override the user layer.
+          orchestratorWake: { intervalMs: 1_000, enabled: false },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
+    expect(config.backgroundJobs?.strategy).toBe('checkpoint-compatible');
+    expect(config.backgroundJobs?.orchestratorWake?.intervalMs).toBe(120_000);
+    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
+  });
+
   test('validates auto image routing after project enables Observer', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');

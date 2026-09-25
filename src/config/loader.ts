@@ -19,6 +19,7 @@ import {
   PluginConfigSchema,
   type RawPluginConfig,
   type ResolvedPluginConfig,
+  sanitizeBackgroundJobsConfig,
   WebfetchConfigSchema,
 } from './schema';
 
@@ -216,6 +217,10 @@ function retainExplicitInterviewFields(
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function retainExplicitBackgroundJobsFields(
   parsedConfig: RawPluginConfig,
   rawConfig: unknown,
@@ -225,58 +230,53 @@ function retainExplicitBackgroundJobsFields(
   }
 
   const rawBackgroundJobs =
-    typeof rawConfig === 'object' &&
-    rawConfig !== null &&
-    !Array.isArray(rawConfig) &&
-    typeof (rawConfig as Record<string, unknown>).backgroundJobs === 'object' &&
-    (rawConfig as Record<string, unknown>).backgroundJobs !== null &&
-    !Array.isArray((rawConfig as Record<string, unknown>).backgroundJobs)
-      ? ((rawConfig as Record<string, unknown>).backgroundJobs as Record<
-          string,
-          unknown
-        >)
+    isPlainRecord(rawConfig) && isPlainRecord(rawConfig.backgroundJobs)
+      ? rawConfig.backgroundJobs
       : undefined;
-
   if (!rawBackgroundJobs) {
     return parsedConfig;
   }
 
-  const backgroundJobs: Record<string, unknown> = {};
-  const parsedBackgroundJobs = parsedConfig.backgroundJobs as unknown as Record<
-    string,
-    unknown
-  >;
-  for (const key of Object.keys(rawBackgroundJobs)) {
-    if (
-      key !== 'orchestratorWake' &&
-      Object.hasOwn(parsedBackgroundJobs, key)
-    ) {
-      backgroundJobs[key] = parsedBackgroundJobs[key];
-    }
-  }
-
-  const rawWake =
-    typeof rawBackgroundJobs.orchestratorWake === 'object' &&
-    rawBackgroundJobs.orchestratorWake !== null &&
-    !Array.isArray(rawBackgroundJobs.orchestratorWake)
-      ? (rawBackgroundJobs.orchestratorWake as Record<string, unknown>)
-      : undefined;
-  const orchestratorWake: Record<string, unknown> = {};
-  const parsedWake = parsedConfig.backgroundJobs
-    .orchestratorWake as unknown as Record<string, unknown>;
-  for (const key of Object.keys(rawWake ?? {})) {
-    if (Object.hasOwn(parsedWake, key)) {
-      orchestratorWake[key] = parsedWake[key];
-    }
-  }
-  if (Object.keys(orchestratorWake).length > 0) {
-    backgroundJobs.orchestratorWake = orchestratorWake;
-  }
+  // Keys the sanitizer dropped were invalid in this layer (#1291). Retaining
+  // their parsed defaults would resurrect them as explicit values, letting a
+  // broken upper layer override valid lower-layer settings during merge.
+  // The sanitizer's once-per-process diagnostic already fired inside
+  // safeParse, so this second pass stays silent.
+  const sanitizedBackgroundJobs = sanitizeBackgroundJobsConfig(
+    rawBackgroundJobs,
+  ) as Record<string, unknown>;
 
   return {
     ...parsedConfig,
-    backgroundJobs: backgroundJobs as RawPluginConfig['backgroundJobs'],
+    backgroundJobs: retainSanitizedValues(
+      parsedConfig.backgroundJobs as unknown as Record<string, unknown>,
+      sanitizedBackgroundJobs,
+    ) as RawPluginConfig['backgroundJobs'],
   };
+}
+
+/** Keep parsed leaf values only where the sanitized raw layer kept the key, recursing into plain objects. */
+function retainSanitizedValues(
+  parsed: Record<string, unknown>,
+  sanitized: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(sanitized)) {
+    if (!Object.hasOwn(parsed, key)) {
+      continue;
+    }
+    const parsedValue = parsed[key];
+    const sanitizedValue = sanitized[key];
+    if (isPlainRecord(parsedValue) && isPlainRecord(sanitizedValue)) {
+      const nested = retainSanitizedValues(parsedValue, sanitizedValue);
+      if (Object.keys(nested).length > 0) {
+        out[key] = nested;
+      }
+      continue;
+    }
+    out[key] = parsedValue;
+  }
+  return out;
 }
 
 /** Normalize preset syntax before layered config objects are merged. */

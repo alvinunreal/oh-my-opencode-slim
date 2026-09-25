@@ -21,7 +21,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { BackgroundJobsConfigSchema } from '../config';
+import { BackgroundJobsConfigStrictSchema } from '../config';
 import { isTaggedPart, isVolatileTaggedMessage } from './cache-safe-injection';
 import {
   assistantTurn,
@@ -82,7 +82,7 @@ const BOARD_STRATEGIES = Object.keys(
 describe('cache-safety: board strategy coverage drift guard', () => {
   test('every configurable board strategy has property coverage', () => {
     const schemaStrategies =
-      BackgroundJobsConfigSchema.shape.strategy.unwrap().options;
+      BackgroundJobsConfigStrictSchema.shape.strategy.unwrap().options;
     expect([...BOARD_STRATEGIES].sort()).toEqual([...schemaStrategies].sort());
   });
 });
