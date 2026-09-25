@@ -4,10 +4,13 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeMarketplaceConfigReferences } from './config-references';
 import { MarketplaceService } from './index';
 import type { MarketplacePackageBundle } from './schemas';
 
@@ -74,11 +77,20 @@ describe('marketplace activation cleanup', () => {
               agents: {},
               marketplace: {
                 agents: ['community/referenced', 'community/user-keep'],
+                agents_add: [' COMMUNITY/REFERENCED ', 'community/user-add'],
+                agents_remove: [
+                  'community/referenced',
+                  'community/user-remove',
+                ],
               },
             },
             unused: {
               agents: {},
-              marketplace: { agents: ['community/referenced'] },
+              marketplace: {
+                agents: ['community/referenced'],
+                agents_add: ['community/referenced'],
+                agents_remove: ['community/referenced'],
+              },
             },
           },
         }),
@@ -92,11 +104,19 @@ describe('marketplace activation cleanup', () => {
               agents: {},
               marketplace: {
                 agents: ['community/referenced', 'community/project-keep'],
+                agents_add: ['community/referenced', 'community/project-add'],
+                agents_remove: [
+                  'community/referenced',
+                  'community/project-remove',
+                ],
               },
             },
             unused: {
               agents: {},
-              marketplace: { agents: ['community/referenced'] },
+              marketplace: {
+                agents_add: ['community/referenced'],
+                agents_remove: ['community/referenced'],
+              },
             },
           },
         }),
@@ -116,13 +136,103 @@ describe('marketplace activation cleanup', () => {
       expect(userConfig.presets.work.marketplace.agents).toEqual([
         'community/user-keep',
       ]);
+      expect(userConfig.presets.work.marketplace.agents_add).toEqual([
+        'community/user-add',
+      ]);
+      expect(userConfig.presets.work.marketplace.agents_remove).toEqual([
+        'community/user-remove',
+      ]);
       expect(userConfig.presets.unused.marketplace.agents).toEqual([]);
+      expect(userConfig.presets.unused.marketplace.agents_add).toEqual([]);
+      expect(userConfig.presets.unused.marketplace.agents_remove).toEqual([]);
       expect(projectConfig.presets.work.marketplace.agents).toEqual([
         'community/project-keep',
       ]);
-      expect(projectConfig.presets.unused.marketplace.agents).toEqual([]);
+      expect(projectConfig.presets.work.marketplace.agents_add).toEqual([
+        'community/project-add',
+      ]);
+      expect(projectConfig.presets.work.marketplace.agents_remove).toEqual([
+        'community/project-remove',
+      ]);
+      expect(projectConfig.presets.unused.marketplace.agents_add).toEqual([]);
+      expect(projectConfig.presets.unused.marketplace.agents_remove).toEqual(
+        [],
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test.each([true, false])(
+    'leaves unrelated JSONC unchanged when another config has references: %s',
+    (projectHasReference) => {
+      const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+      const configHome = join(root, 'config');
+      const project = join(root, 'project');
+      const userConfigPath = join(
+        configHome,
+        'opencode',
+        'oh-my-opencode-slim.jsonc',
+      );
+      const projectConfigPath = join(
+        project,
+        '.opencode',
+        'oh-my-opencode-slim.json',
+      );
+      const userContent = `{
+  // Preserve this comment and spacing
+  "presets": {
+    "work": { "marketplace": { "agents": ["community/other",], "agents_add": ["community/other"], "agents_remove": ["community/other"], }, },
+    "malformed": { "marketplace": { "agents_add": "community/referenced", "agents_remove": null, }, },
+  },
+}\n`;
+      const projectContent = JSON.stringify({
+        presets: {
+          work: {
+            marketplace: {
+              agents: projectHasReference
+                ? ['community/referenced', 'community/other']
+                : ['community/other'],
+              agents_add: projectHasReference
+                ? ['community/referenced', 'community/other']
+                : ['community/other'],
+              agents_remove: projectHasReference
+                ? ['community/referenced', 'community/other']
+                : ['community/other'],
+            },
+          },
+        },
+      });
+      try {
+        process.env.XDG_CONFIG_HOME = configHome;
+        mkdirSync(join(configHome, 'opencode'), { recursive: true });
+        mkdirSync(join(project, '.opencode'), { recursive: true });
+        writeFileSync(userConfigPath, userContent);
+        writeFileSync(projectConfigPath, projectContent);
+        const oldTime = new Date('2020-01-01T00:00:00.000Z');
+        utimesSync(userConfigPath, oldTime, oldTime);
+        utimesSync(projectConfigPath, oldTime, oldTime);
+        const userMtime = statSync(userConfigPath).mtimeMs;
+        const projectMtime = statSync(projectConfigPath).mtimeMs;
+
+        removeMarketplaceConfigReferences(project, 'community/referenced');
+
+        expect(readFileSync(userConfigPath, 'utf8')).toBe(userContent);
+        expect(statSync(userConfigPath).mtimeMs).toBe(userMtime);
+        if (projectHasReference) {
+          const marketplace = JSON.parse(
+            readFileSync(projectConfigPath, 'utf8'),
+          ).presets.work.marketplace;
+          expect(marketplace.agents).toEqual(['community/other']);
+          expect(marketplace.agents_add).toEqual(['community/other']);
+          expect(marketplace.agents_remove).toEqual(['community/other']);
+        } else {
+          expect(readFileSync(projectConfigPath, 'utf8')).toBe(projectContent);
+          expect(statSync(projectConfigPath).mtimeMs).toBe(projectMtime);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -538,6 +538,22 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "agents_add": {
+                    "description": "Package IDs to add to the inherited marketplace agents list after optional agents replacement.",
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "agents_remove": {
+                    "description": "Package IDs to remove after additions; removal wins over addition.",
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -559,6 +575,22 @@
                 "type": "object",
                 "properties": {
                   "agents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "agents_add": {
+                    "description": "Package IDs to add to the inherited marketplace agents list after optional agents replacement.",
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "agents_remove": {
+                    "description": "Package IDs to remove after additions; removal wins over addition.",
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1069,6 +1101,22 @@
                 "type": "object",
                 "properties": {
                   "agents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "agents_add": {
+                    "description": "Package IDs to add to the inherited marketplace agents list after optional agents replacement.",
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "agents_remove": {
+                    "description": "Package IDs to remove after additions; removal wins over addition.",
                     "type": "array",
                     "items": {
                       "type": "string",

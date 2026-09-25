@@ -344,19 +344,22 @@ export const PresetAgentsSchema = z.record(
 export type Preset = z.infer<typeof PresetAgentsSchema>;
 
 const MarketplacePackageIdSchema = z.string().trim().min(1);
+const MarketplacePackageIdsSchema = z
+  .array(MarketplacePackageIdSchema)
+  .superRefine((ids, ctx) => {
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: 'custom', message: 'Package IDs must be unique' });
+    }
+  });
 export const MarketplaceActivationSchema = z
   .object({
-    agents: z
-      .array(MarketplacePackageIdSchema)
-      .superRefine((ids, ctx) => {
-        if (new Set(ids).size !== ids.length) {
-          ctx.addIssue({
-            code: 'custom',
-            message: 'Package IDs must be unique',
-          });
-        }
-      })
-      .optional(),
+    agents: MarketplacePackageIdsSchema.optional(),
+    agents_add: MarketplacePackageIdsSchema.optional().describe(
+      'Package IDs to add to the inherited marketplace agents list after optional agents replacement.',
+    ),
+    agents_remove: MarketplacePackageIdsSchema.optional().describe(
+      'Package IDs to remove after additions; removal wins over addition.',
+    ),
   })
   .strict();
 export type MarketplaceActivation = z.infer<typeof MarketplaceActivationSchema>;
@@ -835,7 +838,7 @@ export const RawPluginConfigSchema = z
             ? presetRecord.agents
             : Object.fromEntries(
                 Object.entries(presetRecord).filter(
-                  ([name]) => name !== 'extends',
+                  ([name]) => name !== 'extends' && name !== 'marketplace',
                 ),
               );
         rejectOrchestratorPromptOnOrchestrator(

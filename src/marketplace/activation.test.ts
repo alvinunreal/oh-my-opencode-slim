@@ -17,6 +17,7 @@ import {
 } from '../agents';
 import { ROLE_DEFINITIONS } from '../agents/role-definitions';
 import type { PluginConfig } from '../config';
+import { loadPluginConfig } from '../config/loader';
 import { RuntimeConfig } from '../config/runtime';
 import { resolveRuntimeAgentName } from '../utils/agent-variant';
 import {
@@ -1464,7 +1465,7 @@ describe('marketplace activation persistence', () => {
         presets: {
           work: {
             marketplace: {
-              agents: ['community/docs-researcher'],
+              agents_add: ['community/docs-researcher'],
             },
           },
         },
@@ -1472,7 +1473,7 @@ describe('marketplace activation persistence', () => {
       disableMarketplacePackage(project, 'community/docs-researcher');
       expect(
         JSON.parse(readFileSync(userConfig, 'utf8')).presets.work.marketplace
-          .agents,
+          .agents_add,
       ).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1526,13 +1527,229 @@ describe('marketplace activation persistence', () => {
       enableMarketplaceAgent(project, 'community/other', store);
       const merged = JSON.parse(readFileSync(projectConfig, 'utf8')) as {
         presets: {
-          work: { marketplace: { agents: string[] } };
+          work: { marketplace: { agents_add: string[] } };
         };
       };
-      expect(merged.presets.work.marketplace.agents).toEqual([
-        'community/docs-researcher',
-        'community/other',
-      ]);
+      expect(merged.presets.work.marketplace).toEqual({
+        agents_add: ['community/other'],
+      });
+      expect(
+        loadPluginConfig(project, { silent: true }).presets?.work,
+      ).toMatchObject({
+        marketplace: {
+          agents: ['community/docs-researcher', 'community/other'],
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('child toggles preserve future parent additions and flat preset fields', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+    const configHome = join(root, 'config');
+    const project = join(root, 'project');
+    const userConfig = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectConfig = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const a = 'community/docs-researcher';
+    const b = 'community/other';
+    const c = 'community/third';
+    const d = 'community/fourth';
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      const writeParent = (agents: string[]) =>
+        writeFileSync(
+          userConfig,
+          JSON.stringify({
+            presets: {
+              base: { marketplace: { agents } },
+            },
+          }),
+        );
+      const child = () =>
+        JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work;
+      const active = () =>
+        loadPluginConfig(project, { silent: true }).presets?.work?.marketplace
+          ?.agents;
+      writeParent([a, b]);
+      writeFileSync(
+        projectConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            work: { extends: 'base', oracle: { model: 'openai/gpt-5' } },
+          },
+        }),
+      );
+      const store = new MarketplaceStore({ rootDir: join(root, 'store') });
+      store.install(agentBundle());
+      store.install(agentBundle({ id: d, agentName: 'fourth' }));
+
+      disableMarketplacePackage(project, a);
+      expect(child().marketplace).toEqual({ agents_remove: [a] });
+      writeParent([a, b, c]);
+      expect(active()).toEqual([b, c]);
+      enableMarketplaceAgent(project, d, store);
+      expect(child().marketplace).toEqual({
+        agents_add: [d],
+        agents_remove: [a],
+      });
+      expect(active()).toEqual([b, c, d]);
+      enableMarketplaceAgent(project, a, store);
+      expect(child().marketplace).toEqual({
+        agents_add: [d],
+        agents_remove: [],
+      });
+      writeParent([a, c]);
+      expect(active()).toEqual([a, c, d]);
+      expect(child().oracle).toEqual({ model: 'openai/gpt-5' });
+      disableMarketplacePackage(project, d);
+      expect(child().marketplace).toEqual({
+        agents_add: [],
+        agents_remove: [],
+      });
+      expect(active()).toEqual([a, c]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('same-named user and project presets keep lower activation live', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+    const configHome = join(root, 'config');
+    const project = join(root, 'project');
+    const userConfig = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectConfig = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const a = 'community/docs-researcher';
+    const b = 'community/other';
+    const c = 'community/third';
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      const writeUser = (agents: string[]) =>
+        writeFileSync(
+          userConfig,
+          JSON.stringify({
+            preset: 'work',
+            presets: {
+              work: {
+                marketplace: { agents },
+              },
+            },
+          }),
+        );
+      writeUser([a, b]);
+      writeFileSync(
+        projectConfig,
+        JSON.stringify({
+          presets: {
+            work: { oracle: { model: 'openai/gpt-5' } },
+          },
+        }),
+      );
+      disableMarketplacePackage(project, a);
+      writeUser([a, b, c]);
+      expect(
+        loadPluginConfig(project, { silent: true }).presets?.work?.marketplace
+          ?.agents,
+      ).toEqual([b, c]);
+      const stored = JSON.parse(readFileSync(projectConfig, 'utf8'));
+      expect(stored.presets.work.marketplace).toEqual({ agents_remove: [a] });
+      const disabledContents = readFileSync(projectConfig, 'utf8');
+      disableMarketplacePackage(project, a);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(disabledContents);
+      const store = new MarketplaceStore({ rootDir: join(root, 'store') });
+      store.install(agentBundle());
+      enableMarketplaceAgent(project, a, store);
+      expect(
+        loadPluginConfig(project, { silent: true }).presets?.work?.marketplace
+          ?.agents,
+      ).toEqual([a, b, c]);
+      expect(
+        JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work
+          .marketplace,
+      ).toEqual({ agents_remove: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('project enable cancels only the matching user-layer removal', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+    const configHome = join(root, 'config');
+    const project = join(root, 'project');
+    const userConfig = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectConfig = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const a = 'community/docs-researcher';
+    const b = 'community/other';
+    const c = 'community/third';
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      const writeParent = (agents: string[]) =>
+        writeFileSync(
+          userConfig,
+          JSON.stringify({
+            preset: 'work',
+            presets: {
+              base: { marketplace: { agents } },
+              work: { extends: 'base', marketplace: { agents_remove: [a, b] } },
+            },
+          }),
+        );
+      writeParent([a, b]);
+      writeFileSync(
+        projectConfig,
+        JSON.stringify({
+          presets: {
+            work: { oracle: { model: 'openai/gpt-5' } },
+          },
+        }),
+      );
+      const local = () =>
+        JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work
+          .marketplace;
+      const active = () =>
+        loadPluginConfig(project, { silent: true }).presets?.work?.marketplace
+          ?.agents;
+      const store = new MarketplaceStore({ rootDir: join(root, 'store') });
+      store.install(agentBundle());
+
+      enableMarketplaceAgent(project, a, store);
+      expect(local()).toEqual({ agents_add: [a] });
+      expect(active()).toEqual([a]);
+      const enabledContents = readFileSync(projectConfig, 'utf8');
+      enableMarketplaceAgent(project, a, store);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(enabledContents);
+
+      writeParent([a, b, c]);
+      expect(active()).toEqual([a, c]);
+      expect(local()).toEqual({ agents_add: [a] });
+      disableMarketplacePackage(project, a);
+      expect(local()).toEqual({ agents_add: [] });
+      expect(active()).toEqual([c]);
+      const disabledContents = readFileSync(projectConfig, 'utf8');
+      disableMarketplacePackage(project, a);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(disabledContents);
+      enableMarketplaceAgent(project, a, store);
+      expect(local()).toEqual({ agents_add: [a] });
+      expect(active()).toEqual([a, c]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1625,8 +1842,8 @@ describe('marketplace activation persistence', () => {
       enableMarketplaceAgent(project, 'community/other', store);
       expect(
         JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work.marketplace
-          .agents,
-      ).toEqual(['community/docs-researcher', 'community/other']);
+          .agents_add,
+      ).toEqual(['community/other']);
     } finally {
       if (previousBasePreset === undefined)
         delete process.env.MARKETPLACE_BASE_PRESET;
@@ -1920,7 +2137,7 @@ enableMarketplaceAgent(directory, packageId, new MarketplaceStore({ rootDir: sto
       }
       expect(exitCodes).toEqual([0, 0]);
       const enabledPackages = JSON.parse(readFileSync(userConfig, 'utf8'))
-        .presets.work.marketplace.agents as string[];
+        .presets.work.marketplace.agents_add as string[];
       expect(enabledPackages).toHaveLength(2);
       expect(enabledPackages).toEqual(
         expect.arrayContaining([

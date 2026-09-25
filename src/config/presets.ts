@@ -256,7 +256,51 @@ function mergeMarketplaceActivation(
 ): MarketplaceActivation | undefined {
   if (!base) return override;
   if (!override) return base;
-  return { ...base, ...override };
+  // An explicit replacement starts a new declaration at this layer. Lower
+  // additions and removals belong to the replaced list, not the new one.
+  if (override.agents !== undefined) return override;
+  const mergeDirectives = (
+    previous?: string[],
+    next?: string[],
+    oppositeNext?: string[],
+  ): string[] | undefined =>
+    next === undefined
+      ? previous?.filter((id) => !oppositeNext?.includes(id))
+      : next.length === 0
+        ? []
+        : [
+            ...new Set([
+              ...(previous ?? []).filter((id) => !oppositeNext?.includes(id)),
+              ...next,
+            ]),
+          ];
+  return {
+    agents: override.agents ?? base.agents,
+    agents_add: mergeDirectives(
+      base.agents_add,
+      override.agents_add,
+      override.agents_remove,
+    ),
+    agents_remove: mergeDirectives(
+      base.agents_remove,
+      override.agents_remove,
+      override.agents_add,
+    ),
+  };
+}
+
+function resolveMarketplaceActivation(
+  parent?: MarketplaceActivation,
+  declaration?: MarketplaceActivation,
+): MarketplaceActivation | undefined {
+  if (!parent && !declaration) return undefined;
+  const ids = declaration?.agents ?? parent?.agents ?? [];
+  const removed = new Set(declaration?.agents_remove ?? []);
+  return {
+    agents: [...new Set([...ids, ...(declaration?.agents_add ?? [])])].filter(
+      (id) => !removed.has(id),
+    ),
+  };
 }
 
 function usesStructuredPresetSyntax(input: PresetInput): boolean {
@@ -313,7 +357,7 @@ export function resolvePresetDefinition(
     if (normalized.extends !== undefined) {
       resolved.extends = normalized.extends;
     }
-    const marketplace = mergeMarketplaceActivation(
+    const marketplace = resolveMarketplaceActivation(
       parent.marketplace,
       normalized.marketplace,
     );

@@ -12,6 +12,8 @@ import {
   isMarketplacePermissionDenied,
   resolveDesiredMarketplaceLiveFromDisk,
 } from '../agents';
+import { resolvePresetDefinition } from '../config/presets';
+import { PluginConfigSchema } from '../config/schema';
 import type { MarketplacePackageBundle } from '../marketplace/schemas';
 import { MarketplaceService } from '../marketplace/service';
 import {
@@ -208,23 +210,20 @@ describe('marketplace tool', () => {
         expect(statusAfterMutations).toContain('  (none)');
         expect(statusAfterMutations).toContain(MARKETPLACE_RELOAD_NOTICE);
 
-        const userConfig = JSON.parse(
-          readFileSync(
-            join(configHome, 'opencode', 'oh-my-opencode-slim.json'),
-            'utf8',
+        const userConfig = PluginConfigSchema.parse(
+          JSON.parse(
+            readFileSync(
+              join(configHome, 'opencode', 'oh-my-opencode-slim.json'),
+              'utf8',
+            ),
           ),
-        ) as {
-          presets: {
-            work: {
-              marketplace: {
-                agents: string[];
-              };
-            };
-          };
-        };
-        expect(userConfig.presets.work.marketplace.agents).toEqual([
-          'community/docs-researcher',
-        ]);
+        );
+        expect(userConfig.presets?.work.marketplace).toEqual({
+          agents_add: ['community/docs-researcher'],
+        });
+        expect(
+          resolvePresetDefinition('work', userConfig.presets ?? {}).marketplace,
+        ).toEqual({ agents: ['community/docs-researcher'] });
         const disabled = String(
           await marketplace.execute(
             {

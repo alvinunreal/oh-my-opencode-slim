@@ -5,8 +5,10 @@ import * as path from 'node:path';
 import { loadPluginConfig } from './loader';
 import {
   mergeAgentOverrides,
+  mergePresetMaps,
   PresetResolutionError,
   resolvePreset,
+  resolvePresetDefinition,
   resolvePresets,
 } from './presets';
 import { PluginConfigSchema } from './schema';
@@ -18,6 +20,261 @@ function parsePresets(input: unknown) {
 }
 
 describe('preset inheritance', () => {
+  test('marketplace directives resolve against the latest parent, not a pinned list', () => {
+    const presets = parsePresets({
+      presets: {
+        base: { marketplace: { agents: ['owner/a', 'owner/b', 'owner/c'] } },
+        child: {
+          extends: 'base',
+          marketplace: { agents_remove: ['owner/a'] },
+        },
+        added: {
+          extends: 'child',
+          marketplace: { agents_add: ['owner/d'] },
+        },
+        restored: {
+          extends: 'child',
+          marketplace: { agents_add: ['owner/a'], agents_remove: [] },
+        },
+      },
+    });
+    expect(resolvePresetDefinition('child', presets).marketplace).toEqual({
+      agents: ['owner/b', 'owner/c'],
+    });
+    expect(resolvePresetDefinition('added', presets).marketplace).toEqual({
+      agents: ['owner/b', 'owner/c', 'owner/d'],
+    });
+    expect(resolvePresetDefinition('restored', presets).marketplace).toEqual({
+      agents: ['owner/b', 'owner/c', 'owner/a'],
+    });
+    expect(resolvePreset('added', presets)).toEqual({});
+  });
+
+  test('marketplace replacement and explicit empty list clear inherited agents', () => {
+    const presets = parsePresets({
+      presets: {
+        base: { marketplace: { agents: ['owner/a', 'owner/b'] } },
+        replaced: {
+          extends: 'base',
+          marketplace: { agents: ['owner/d'], agents_add: ['owner/e'] },
+        },
+        cleared: { extends: 'base', marketplace: { agents: [] } },
+      },
+    });
+    expect(resolvePresetDefinition('replaced', presets).marketplace).toEqual({
+      agents: ['owner/d', 'owner/e'],
+    });
+    expect(resolvePresetDefinition('cleared', presets).marketplace).toEqual({
+      agents: [],
+    });
+  });
+
+  test('composes marketplace directives across config layers before inheritance', () => {
+    const base = parsePresets({
+      presets: {
+        root: { marketplace: { agents: ['owner/a', 'owner/b'] } },
+        child: {
+          extends: 'root',
+          marketplace: { agents_add: ['owner/c'], agents_remove: ['owner/a'] },
+        },
+      },
+    });
+    const project = parsePresets({
+      presets: {
+        child: {
+          marketplace: { agents_add: ['owner/d'], agents_remove: ['owner/c'] },
+        },
+      },
+    });
+    const merged = mergePresetMaps(base, project);
+    expect(merged).toBeDefined();
+    expect(resolvePresetDefinition('child', merged ?? {}).marketplace).toEqual({
+      agents: ['owner/b', 'owner/d'],
+    });
+    expect(merged?.child).toMatchObject({
+      marketplace: {
+        agents_add: ['owner/d'],
+        agents_remove: ['owner/a', 'owner/c'],
+      },
+    });
+  });
+
+  test('project addition cancels only the matching user removal', () => {
+    const user = parsePresets({
+      presets: {
+        base: { marketplace: { agents: ['owner/a', 'owner/b', 'owner/c'] } },
+        child: {
+          extends: 'base',
+          marketplace: { agents_remove: ['owner/a', 'owner/b'] },
+        },
+      },
+    });
+    const project = parsePresets({
+      presets: {
+        base: { marketplace: { agents_add: ['owner/d'] } },
+        child: { marketplace: { agents_add: ['owner/a'] } },
+      },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+    expect(merged.child).toMatchObject({
+      marketplace: { agents_add: ['owner/a'], agents_remove: ['owner/b'] },
+    });
+    expect(resolvePresetDefinition('child', merged).marketplace).toEqual({
+      agents: ['owner/a', 'owner/c', 'owner/d'],
+    });
+  });
+
+  test('project removal cancels the matching user addition', () => {
+    const user = parsePresets({
+      presets: {
+        child: { marketplace: { agents_add: ['owner/a', 'owner/b'] } },
+      },
+    });
+    const project = parsePresets({
+      presets: {
+        child: { marketplace: { agents_remove: ['owner/a'] } },
+      },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+    expect(merged.child).toMatchObject({
+      marketplace: { agents_add: ['owner/b'], agents_remove: ['owner/a'] },
+    });
+    expect(resolvePresetDefinition('child', merged).marketplace).toEqual({
+      agents: ['owner/b'],
+    });
+  });
+
+  test('project agents replacement discards both lower-layer directives', () => {
+    const user = parsePresets({
+      presets: {
+        added: { marketplace: { agents_add: ['owner/a'] } },
+        removed: { marketplace: { agents_remove: ['owner/a'] } },
+      },
+    });
+    const project = parsePresets({
+      presets: {
+        added: { marketplace: { agents: [] } },
+        removed: { marketplace: { agents: ['owner/a'] } },
+      },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+    expect(resolvePresetDefinition('added', merged).marketplace).toEqual({
+      agents: [],
+    });
+    expect(resolvePresetDefinition('removed', merged).marketplace).toEqual({
+      agents: ['owner/a'],
+    });
+    expect(merged.added).toMatchObject({ marketplace: { agents: [] } });
+    expect(merged.removed).toMatchObject({
+      marketplace: { agents: ['owner/a'] },
+    });
+  });
+
+  test('project replacement applies only its own additions and removals', () => {
+    const user = parsePresets({
+      presets: {
+        base: { marketplace: { agents: ['owner/a'] } },
+        child: {
+          extends: 'base',
+          marketplace: {
+            agents_add: ['owner/c'],
+            agents_remove: ['owner/b'],
+          },
+        },
+      },
+    });
+    const project = parsePresets({
+      presets: {
+        base: { marketplace: { agents_add: ['owner/d'] } },
+        child: {
+          marketplace: {
+            agents: [],
+            agents_add: ['owner/b', 'owner/e'],
+            agents_remove: ['owner/e'],
+          },
+        },
+      },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+    expect(merged.child).toMatchObject({
+      marketplace: {
+        agents: [],
+        agents_add: ['owner/b', 'owner/e'],
+        agents_remove: ['owner/e'],
+      },
+    });
+    expect(resolvePresetDefinition('base', merged).marketplace).toEqual({
+      agents: ['owner/a', 'owner/d'],
+    });
+    expect(resolvePresetDefinition('child', merged).marketplace).toEqual({
+      agents: ['owner/b'],
+    });
+  });
+
+  test('same-layer removal wins over addition, including a lower removal', () => {
+    const user = parsePresets({
+      presets: { child: { marketplace: { agents_remove: ['owner/a'] } } },
+    });
+    const project = parsePresets({
+      presets: {
+        child: {
+          marketplace: {
+            agents_add: ['owner/a'],
+            agents_remove: ['owner/a'],
+          },
+        },
+      },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+    expect(resolvePresetDefinition('child', merged).marketplace).toEqual({
+      agents: [],
+    });
+    expect(merged.child).toMatchObject({
+      marketplace: { agents_add: ['owner/a'], agents_remove: ['owner/a'] },
+    });
+  });
+
+  test('explicit empty directive clears its own lower list but not the opposite', () => {
+    const user = parsePresets({
+      presets: {
+        child: {
+          marketplace: {
+            agents: ['owner/a'],
+            agents_add: ['owner/b'],
+            agents_remove: ['owner/a'],
+          },
+        },
+      },
+    });
+    const project = parsePresets({
+      presets: { child: { marketplace: { agents_remove: [] } } },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+    expect(resolvePresetDefinition('child', merged).marketplace).toEqual({
+      agents: ['owner/a', 'owner/b'],
+    });
+    expect(merged.child).toMatchObject({
+      marketplace: { agents_add: ['owner/b'], agents_remove: [] },
+    });
+  });
+
+  test('validates canonical marketplace package ID lists', () => {
+    expect(() =>
+      parsePresets({
+        presets: {
+          invalid: { marketplace: { agents_add: ['owner/a', 'owner/a'] } },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      parsePresets({
+        presets: {
+          invalid: { marketplace: { agents_remove: [' ', 'owner/a'] } },
+        },
+      }),
+    ).toThrow();
+  });
+
   test('canonical agent aliases win field-by-field over legacy aliases', () => {
     expect(
       mergeAgentOverrides(

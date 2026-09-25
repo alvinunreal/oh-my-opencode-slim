@@ -122,7 +122,9 @@ written to the user config file; reload OpenCode for it to take effect. See
 | `presets` | object | - | Named preset configurations |
 |-----------|--------|---|-----------------------------|
 | `presets.<name>.extends` | string | - | Optional single parent preset. The parent is resolved before the child; multiple parents are not supported |
-| `presets.<name>.marketplace.agents` | string[] | `[]` | Canonical `publisher/package` IDs enabled in that preset (including activation-only presets). Inherited entries can be explicitly cleared with `[]`. See [Agent Marketplace](marketplace.md) |
+| `presets.<name>.marketplace.agents` | string[] | inherited, or `[]` without a parent | Canonical `publisher/package` IDs enabled in that preset (including activation-only presets). An explicit list replaces inherited entries; `[]` clears them. See [Agent Marketplace](marketplace.md) |
+| `presets.<name>.marketplace.agents_add` | string[] | `[]` | IDs added after inheritance or an explicit `agents` replacement. See [Agent Marketplace](marketplace.md#preset-activation-and-editing) |
+| `presets.<name>.marketplace.agents_remove` | string[] | `[]` | IDs removed after additions; removal wins for IDs in both lists. See [Agent Marketplace](marketplace.md#preset-activation-and-editing) |
 | `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
 | `presets.<name>.<agent>.temperature` | number | - | Optional temperature (0–2); when omitted, OpenCode chooses its default |
 | `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
@@ -212,11 +214,18 @@ override only the agents it needs to change:
     "base": {
       "orchestrator": { "model": "openai/gpt-6-sol" },
       "designer": { "model": "openai/gpt-6-luna" },
-      "marketplace": { "agents": ["publisher/package"] }
+      "marketplace": { "agents": ["publisher/a", "publisher/b"] }
     },
     "design": {
       "extends": "base",
       "designer": { "model": "anthropic/claude-sonnet-4-6" },
+      "marketplace": {
+        "agents_remove": ["publisher/a"],
+        "agents_add": ["publisher/d"]
+      }
+    },
+    "no-marketplace": {
+      "extends": "base",
       "marketplace": { "agents": [] }
     }
   }
@@ -224,8 +233,13 @@ override only the agents it needs to change:
 ```
 
 `design` keeps the base orchestrator model, replaces only the base designer
-model, and explicitly clears the inherited marketplace activation list. If
-`marketplace` were omitted, the base list would remain. Presets support one
+model, and activates B and D instead of A. If `base` later adds C, `design`
+automatically activates B, C, and D. Omitting `marketplace.agents` inherits
+the parent's list, while `no-marketplace` explicitly replaces it with `[]`.
+An explicit nonempty `agents` list likewise replaces the inherited list;
+`agents_add` is applied next, then `agents_remove` (removal wins). User and
+project config layers merge before inheritance resolution: an explicit
+project `agents` list replaces the user list for the same preset. Presets support one
 parent only; multi-parent inheritance is not supported. The flat format above
 remains the generated default; the optional structured form nests agent entries
 under `"agents": { ... }` alongside `extends` and `marketplace`. There is no
@@ -242,12 +256,15 @@ The `/preset` TUI persists the selected preset name and does not create an
 in-memory agent override or hot-swap the current agent registry. Reload
 OpenCode after changing the active preset.
 
-Marketplace enable/disable edits the active preset's `marketplace.agents` in
-the existing user or project config, preserving other preset entries. Config
-writes serialize the file as JSON: comments in a `.jsonc` file are **not**
-preserved (a `.bak` backup is written). A preset containing only `marketplace`
-is valid; it can inherit its
-regular agent settings from another preset or rely on the usual defaults. See
+Marketplace enable/disable edits the active preset in the existing user or
+project config, preserving other preset entries. For an inherited child it
+updates `marketplace.agents_add`/`agents_remove` rather than copying the
+parent's effective list, so later parent package changes remain inherited.
+Changed config files are serialized as JSON: comments in a changed `.jsonc`
+file are **not** preserved (a `.bak` backup is written); unrelated unmodified
+config files remain byte-identical. A preset containing only `marketplace` is
+valid; it can inherit its regular agent settings from another preset or rely
+on the usual defaults. See
 [Agent Marketplace](marketplace.md#preset-activation-and-editing) for examples.
 
 > **niri note:** `companion-v0.1.3` includes the fixed native companion release.

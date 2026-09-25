@@ -44,7 +44,7 @@ bunx oh-my-opencode-slim marketplace remove publisher/package
 | `list` / `show <id> [--json]` | Lists installed packages or displays one stored package (including its source). Only `show` accepts `--json`. |
 | `verify [id] [--json]` | Checks stored package integrity (all packages if ID omitted); returns a nonzero exit code if any check fails. |
 | `update <id>` | Fetches a registry version of an already installed ID and updates the stored package. Does not change activation. Local file updates use `import <file> --update` instead. |
-| `enable <id>` / `disable <id>` | Adds/removes an installed package ID from the active preset's activation list. Disabling does not uninstall the package. |
+| `enable <id>` / `disable <id>` | Enables/disables an installed package ID in the active preset. For an inherited preset, edits the child's add/remove lists rather than copying the parent's activation list. Disabling does not uninstall the package. |
 | `remove <id>` | Uninstalls the package and removes references from all presets in the user and current project plugin config files. |
 | `status [--json]` | Reports installed, configured and diagnostic state; CLI cannot compare with a live in-session registry, so its comparison is `unavailable`. |
 
@@ -104,7 +104,14 @@ single parent using `extends`:
   "presets": {
     "base": {
       "oracle": { "model": "openai/gpt-6-astra" },
-      "marketplace": { "agents": ["publisher/reviewer"] }
+      "marketplace": { "agents": ["publisher/a", "publisher/b"] }
+    },
+    "focused": {
+      "extends": "base",
+      "marketplace": {
+        "agents_remove": ["publisher/a"],
+        "agents_add": ["publisher/d"]
+      }
     },
     "no-marketplace": {
       "extends": "base",
@@ -114,21 +121,37 @@ single parent using `extends`:
 }
 ```
 
-Omitting `marketplace.agents` inherits the parent's list. An explicit `[]`
-clears it. A child's list **replaces**, rather than appends to, its parent's
-list. User and project preset layers merge in the same way: an explicit list
-in the project config replaces the user list, while unrelated agent entries
-remain. Root `agents` overrides and host config still take precedence over
-normal preset agent settings; see [Configuration](configuration.md#preset-inheritance).
+`focused` activates B and D, but not A. It still inherits the parent's list:
+if `base` later adds `publisher/c`, `focused` activates B, C, and D without
+editing the child. Omitting `marketplace.agents` inherits the parent's list;
+an explicit list **replaces** it, and `"agents": []` clears it. Additions are
+applied after that inheritance or replacement, then removals (so removal wins
+if an ID appears in both). `agents_add` and `agents_remove` are preset-level
+activation deltas, not agent definitions; effective presets still use the
+regular flat agent entries alongside `marketplace`.
+
+User and project preset layers merge before inheritance resolution: a project
+`marketplace.agents` list explicitly replaces the user list for the same
+preset, while unrelated agent entries remain. A project-layer addition can
+re-enable one user-layer removal without clearing other removals; a project
+removal likewise overrides a user addition. Within one layer, removal wins.
+Use add/remove lists in an inherited child when toggling a single package so
+it keeps following future parent changes. Root `agents` overrides and host
+config still take precedence
+over normal preset agent settings; see
+[Configuration](configuration.md#preset-inheritance).
 
 CLI `enable`/`disable` edits the active preset in the current project plugin
-config when present, otherwise in the user plugin config. It retains existing
-flat agent entries; activation-only and structured presets remain valid after
-editing. Reads accept `.json` and `.jsonc`, but mutations serialize the full
-file as JSON (comments and formatting in `.jsonc` are lost); the writer creates
-a `.bak` backup. `remove` cleans up references in both available config files
-for the current project. A package can remain installed but disabled in a
-preset, and a different preset can enable it independently.
+config when present, otherwise in the user plugin config. On an inherited
+child, these commands update its `agents_add`/`agents_remove` deltas without
+freezing the parent's full list. They retain existing flat agent entries;
+activation-only and structured presets remain valid after editing. Reads
+accept `.json` and `.jsonc`. A config file that is changed is serialized as
+JSON (comments and formatting in that `.jsonc` file are lost), with a `.bak`
+backup; unrelated config files that are not modified remain byte-identical.
+`remove` cleans up references in both available config files for the current
+project. A package can remain installed but disabled in a preset, and a
+different preset can enable it independently.
 
 ## In-session tool and status
 

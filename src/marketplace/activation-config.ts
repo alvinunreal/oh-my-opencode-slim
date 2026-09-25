@@ -1,12 +1,11 @@
 import { accessSync, constants } from 'node:fs';
+import { dirname } from 'node:path';
 import { mutateJsonFile } from '../cli/config-io';
 import { findPluginConfigPaths, loadPluginConfig } from '../config/loader';
-import { resolvePresetDefinition } from '../config/presets';
+import { normalizePreset, resolvePresetDefinition } from '../config/presets';
 import { MarketplaceActivationError } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
 import { MarketplaceStore } from './store';
-
-type MarketplaceActivation = { agents?: string[] };
 
 function writeConfigFile(
   filePath: string,
@@ -61,16 +60,6 @@ export function preflightMarketplaceAgentActivation(directory: string): void {
   }
 }
 
-function cloneActivation(
-  activation: MarketplaceActivation | undefined,
-): MarketplaceActivation {
-  return {
-    ...(activation?.agents
-      ? { agents: normalizePackageIds(activation.agents) }
-      : {}),
-  };
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -85,7 +74,8 @@ const NO_ACTIVATION_CHANGE = Symbol('no-marketplace-activation-change');
 
 function persistActivation(
   directory: string,
-  mutate: (activation: MarketplaceActivation) => MarketplaceActivation,
+  id: string,
+  enabled: boolean,
 ): void {
   const filePath = configWritePath(directory);
   try {
@@ -98,27 +88,78 @@ function persistActivation(
         string,
         Record<string, unknown>
       >;
-      const current = { ...(presets[presetName] ?? {}) };
+      const current = { ...asRecord(presets[presetName]) };
       const effectivePresets = effectiveConfig.presets ?? {};
-      const effective = resolvePresetDefinition(
-        presetName,
-        effectivePresets,
-      ).marketplace;
-      const desired = mutate(cloneActivation(effective));
-      const currentIds = normalizePackageIds(effective?.agents ?? []).sort();
-      const desiredIds = normalizePackageIds(desired.agents ?? []).sort();
-      if (
-        currentIds.length === desiredIds.length &&
-        currentIds.every((id, index) => id === desiredIds[index])
-      ) {
+      const effective = resolvePresetDefinition(presetName, effectivePresets);
+      const active = normalizePackageIds(
+        effective.marketplace?.agents ?? [],
+      ).includes(id);
+      const localMarketplace = asRecord(current.marketplace);
+      const ownsAgents = Array.isArray(localMarketplace.agents);
+      const replacement = ownsAgents
+        ? normalizePackageIds(localMarketplace.agents as string[])
+        : undefined;
+      const additions = Array.isArray(localMarketplace.agents_add)
+        ? normalizePackageIds(localMarketplace.agents_add as string[])
+        : [];
+      const removals = Array.isArray(localMarketplace.agents_remove)
+        ? normalizePackageIds(localMarketplace.agents_remove as string[])
+        : [];
+
+      // A local replacement is authoritative. Without one, only persist the
+      // delta: a parent (or a lower same-named config layer) remains live.
+      const paths = findPluginConfigPaths(directory);
+      const userPreset =
+        paths.projectConfigPath && paths.userConfigPath
+          ? loadPluginConfig(dirname(paths.userConfigPath), { silent: true })
+              .presets?.[presetName]
+          : undefined;
+      const userAgents = userPreset
+        ? (normalizePreset(userPreset).marketplace?.agents ?? [])
+        : [];
+      const parentName = effective.extends;
+      const parentAgents = parentName
+        ? (resolvePresetDefinition(parentName, effectivePresets).marketplace
+            ?.agents ?? [])
+        : [];
+      const inherited =
+        !ownsAgents &&
+        normalizePackageIds(
+          userPreset && normalizePreset(userPreset).marketplace
+            ? userAgents
+            : parentAgents,
+        ).includes(id);
+
+      const next = { ...localMarketplace };
+      if (enabled) {
+        if (active && !removals.includes(id)) throw NO_ACTIVATION_CHANGE;
+        if (ownsAgents && !replacement?.includes(id)) {
+          next.agents = [...(replacement ?? []), id];
+        } else if (!ownsAgents && !inherited && !additions.includes(id)) {
+          next.agents_add = [...additions, id];
+        }
+        if (removals.includes(id)) {
+          next.agents_remove = removals.filter((value) => value !== id);
+        }
+      } else {
+        if (!active && !additions.includes(id)) throw NO_ACTIVATION_CHANGE;
+        if (ownsAgents && replacement?.includes(id)) {
+          next.agents = replacement.filter((value) => value !== id);
+        }
+        if (additions.includes(id)) {
+          next.agents_add = additions.filter((value) => value !== id);
+        }
+        if (
+          (inherited || (ownsAgents && active && !replacement?.includes(id))) &&
+          !removals.includes(id)
+        ) {
+          next.agents_remove = [...removals, id];
+        }
+      }
+      if (JSON.stringify(next) === JSON.stringify(localMarketplace)) {
         throw NO_ACTIVATION_CHANGE;
       }
-
-      const localMarketplace = asRecord(current.marketplace);
-      current.marketplace = {
-        ...localMarketplace,
-        agents: normalizePackageIds(desired.agents ?? []),
-      };
+      current.marketplace = next;
       presets[presetName] = current;
       persisted.presets = presets;
       return persisted;
@@ -136,11 +177,7 @@ export function enableMarketplaceAgent(
   const id = normalizeMarketplacePackageId(packageId);
   preflightMarketplaceAgentActivation(directory);
   store.show(id);
-  persistActivation(directory, (activation) => {
-    const agents = [...(activation.agents ?? [])];
-    if (!agents.includes(id)) agents.push(id);
-    return { agents };
-  });
+  persistActivation(directory, id, true);
 }
 
 export function disableMarketplacePackage(
@@ -148,7 +185,5 @@ export function disableMarketplacePackage(
   packageId: string,
 ): void {
   const id = normalizeMarketplacePackageId(packageId);
-  persistActivation(directory, (activation) => ({
-    agents: (activation.agents ?? []).filter((value) => value !== id),
-  }));
+  persistActivation(directory, id, false);
 }

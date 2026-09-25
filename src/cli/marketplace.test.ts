@@ -9,6 +9,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolvePresetDefinition } from '../config/presets';
+import { PluginConfigSchema } from '../config/schema';
 import { MarketplaceStore } from '../marketplace/store';
 import {
   createMarketplaceRegistryEntry,
@@ -148,8 +150,14 @@ describe('marketplace CLI parsing', () => {
 
       expect(exitCode).toBe(0);
       expect(selectors).toEqual(['community/example']);
+      const config = PluginConfigSchema.parse(
+        JSON.parse(readFileSync(configPath, 'utf8')),
+      );
+      expect(config.presets?.work.marketplace).toEqual({
+        agents_add: ['community/example'],
+      });
       expect(
-        JSON.parse(readFileSync(configPath, 'utf8')).presets.work.marketplace,
+        resolvePresetDefinition('work', config.presets ?? {}).marketplace,
       ).toEqual({ agents: ['community/example'] });
       expect(output[0]).toContain(
         'Installed and enabled community/example@1.2.3 in the active preset',

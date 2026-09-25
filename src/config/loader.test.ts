@@ -1463,6 +1463,44 @@ describe('preset resolution', () => {
     expect(config.agents).not.toHaveProperty('marketplace');
   });
 
+  test('composes marketplace add/remove from user and project preset layers', () => {
+    const userConfigDir = path.join(tempDir, 'user-config', 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigDir, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        presets: {
+          base: { marketplace: { agents: ['owner/a', 'owner/b'] } },
+          child: {
+            extends: 'base',
+            marketplace: {
+              agents_add: ['owner/c'],
+              agents_remove: ['owner/a'],
+            },
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'child',
+        presets: {
+          base: { marketplace: { agents_add: ['owner/e'] } },
+          child: { marketplace: { agents_add: ['owner/d'] } },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+    expect(config.presets?.child).toMatchObject({
+      marketplace: { agents: ['owner/b', 'owner/e', 'owner/c', 'owner/d'] },
+    });
+  });
+
   test('missing preset: preset set but not in presets -> returns empty/root agents', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
