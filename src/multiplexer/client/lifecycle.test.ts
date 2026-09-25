@@ -852,6 +852,70 @@ describe('dedup and stable-idle close (2.3)', () => {
 });
 
 describe('rebuild and reconnect backfill (2.4)', () => {
+  test('a readiness timeout becomes a watch and a later busy edge creates the pane', async () => {
+    const h = createHarness();
+    const pending = h.lifecycle.handleEvent(createdEvent());
+    for (let i = 0; i < 2; i += 1) {
+      await flushAsync();
+      h.clock.advance(RETRY_DELAY_MS);
+    }
+    await pending;
+    expect(noPaneReasons(h.logger)).toContain('readiness-timeout');
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+  });
+
+  test('reconnect reads status once for N idle children without readiness probes', async () => {
+    const h = createHarness();
+    h.list.setSessionIds('idle-1', 'idle-2', 'idle-3');
+    await h.lifecycle.onReconnect();
+    expect(h.reader.calls).toEqual([DIRECTORY]);
+    expect(h.adapter.spawnCalls).toHaveLength(0);
+    expect(noPaneReasons(h.logger)).not.toContain('readiness-timeout');
+    expect(h.clock.pendingTimers).toBe(0);
+  });
+
+  test('an idle child found at reconnect spawns immediately on resume', async () => {
+    const tracked: Array<{ sessionId: string; directory: string }> = [];
+    const h = createHarness({
+      ports: {
+        onChildTracked: (sessionId, directory) =>
+          tracked.push({ sessionId, directory }),
+      },
+    });
+    h.list.setSessionIds(CHILD);
+    await h.lifecycle.onReconnect();
+    expect(tracked).toEqual([{ sessionId: CHILD, directory: DIRECTORY }]);
+    expect(h.adapter.spawnCalls).toHaveLength(0);
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+  });
+
+  test('busy backfill does not re-run readiness for each child', async () => {
+    const h = createHarness();
+    h.list.setSessionIds(CHILD, 'child-2');
+    h.reader.statuses.set(CHILD, 'busy');
+    h.reader.statuses.set('child-2', 'retry');
+    await h.lifecycle.onReconnect();
+    expect(h.reader.calls).toEqual([DIRECTORY]);
+    expect(h.adapter.spawnCalls).toHaveLength(2);
+  });
+
+  test('a stale reconnect snapshot cannot close a pane created during the read', async () => {
+    const h = createHarness();
+    const barrier = createDeferred();
+    h.list.listBarrier = barrier.promise;
+    const reconnect = h.lifecycle.onReconnect();
+    await flushAsync();
+    await activatePane(h);
+    barrier.resolve();
+    await reconnect;
+    expect(h.adapter.closeCalls).toHaveLength(0);
+    expect(h.lifecycle.getPane(CHILD)).toBeDefined();
+  });
+
   test('rebuilds with a freshly resolved anchor after the display position moves', async () => {
     const h = createHarness();
     await activatePane(h);

@@ -990,9 +990,15 @@ function createSessionListReader(
       }
       try {
         const response = await withTimeout(
-          fetchFn(new URL('/session', baseUrl).toString(), {
-            headers: directoryHeaders(directory),
-          }),
+          fetchFn(
+            new URL(
+              `/session/${encodeURIComponent(parentID)}/children`,
+              baseUrl,
+            ).toString(),
+            {
+              headers: directoryHeaders(directory),
+            },
+          ),
           timeoutMs,
         );
         if (response.ok !== true) {
@@ -1007,7 +1013,7 @@ function createSessionListReader(
         }
         const sessions: SessionListEntry[] = [];
         for (const entry of data) {
-          if (!isRecord(entry) || entry.parentID !== parentID) continue;
+          if (!isRecord(entry)) continue;
           if (typeof entry.id !== 'string') continue;
           const subagentType =
             typeof entry.agent === 'string' && entry.agent.length > 0

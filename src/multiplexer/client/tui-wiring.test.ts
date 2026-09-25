@@ -238,7 +238,7 @@ function decodeDirectoryHeader(
 }
 
 /**
- * Fake fetch surface for `/session/status` and `/session` reads. The wiring
+ * Fake fetch surface for `/session/status` and `/session/{id}/children` reads. The wiring
  * routes directory reads by the pre-encoded `x-opencode-directory` header, so
  * the fake records both the raw header and the decoded directory.
  */
@@ -250,10 +250,17 @@ function fakeFetch(state: FakeClientState): FetchLike {
       state.statusHeaders.push(init?.headers);
       return { ok: true, json: async () => state.statuses };
     }
-    if (path === '/session') {
+    if (path.startsWith('/session/') && path.endsWith('/children')) {
       state.listCalls.push(decodeDirectoryHeader(init?.headers));
       state.listHeaders.push(init?.headers);
-      return { ok: true, json: async () => state.sessions };
+      const parentID = decodeURIComponent(
+        path.slice('/session/'.length, -'/children'.length),
+      );
+      return {
+        ok: true,
+        json: async () =>
+          state.sessions.filter((session) => session.parentID === parentID),
+      };
     }
     return { ok: false };
   };
@@ -1085,6 +1092,43 @@ describe('default adapter factory', () => {
 });
 
 describe('FR-7 reconcile trigger', () => {
+  test('reconciles using the unpaged parent children route and directory header', async () => {
+    const state = createClientState({
+      sessions: [{ id: CHILD, parentID: PARENT }],
+    });
+    const requests: string[] = [];
+    const fetch = fakeFetch(state);
+    const h = await createHarness({
+      state,
+      fetchFn: (url, init) => {
+        requests.push(new URL(url).pathname);
+        return fetch(url, init);
+      },
+    });
+    await flush();
+    expect(requests).toContain(`/session/${PARENT}/children`);
+    expect(requests).not.toContain('/session');
+    expect(state.listHeaders.at(-1)).toEqual({
+      'x-opencode-directory': '%2Fproject',
+    });
+    await h.wiring.dispose();
+  });
+
+  test('a backfilled idle child receives a directory-less resume event', async () => {
+    const state = createClientState({
+      statuses: {},
+      sessions: [{ id: CHILD, parentID: PARENT }],
+    });
+    const h = await createHarness({ state });
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(0);
+    state.statuses[CHILD] = { type: 'busy' };
+    h.bus.emit('session.status', statusEvent());
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(1);
+    await h.wiring.dispose();
+  });
+
   test('reconciles once at startup and again on the periodic cadence', async () => {
     const h = await createHarness({ reconcileIntervalMs: 30_000 });
     await flush();

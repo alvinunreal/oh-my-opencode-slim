@@ -248,6 +248,7 @@ export class PaneLifecycle {
   async onReconnect(): Promise<void> {
     const parentSessionId = this.displayedSessionId;
     if (parentSessionId === null || this.config.adapter === null) return;
+    const heldAtStart = new Set(this.panes.keys());
 
     const list = await this.listSessions(
       this.config.directory,
@@ -257,6 +258,8 @@ export class PaneLifecycle {
     // The route can move while the read is in flight; acting on the previous
     // parent would backfill panes for a conversation the user already left.
     if (this.displayedSessionId !== parentSessionId) return;
+    const read = await this.readStatus(this.config.directory);
+    const statuses = read.error ? null : read.statuses;
     const serverChildIds = new Set<string>();
     const serverAgents = new Map<string, string>();
     for (const entry of list.sessions) {
@@ -272,6 +275,7 @@ export class PaneLifecycle {
     // not be closed just because this parent's child list does not name it.
     for (const [childSessionId, record] of [...this.panes]) {
       if (record.parentSessionId !== parentSessionId) continue;
+      if (!heldAtStart.has(childSessionId)) continue;
       if (!serverChildIds.has(childSessionId)) {
         await this.closePane(childSessionId, record, 'backfill-gone');
       }
@@ -292,8 +296,6 @@ export class PaneLifecycle {
     // stream was down (their event was lost, so it is recovered from the
     // live status map).
     if (this.closedWatch.size > 0) {
-      const read = await this.readStatus(this.config.directory);
-      const statuses = read.error ? null : read.statuses;
       for (const [childSessionId, watched] of [...this.closedWatch]) {
         // Foreign-parent watches are not judged here: their child cannot
         // appear in this parent's list, and deleting them would permanently
@@ -310,6 +312,7 @@ export class PaneLifecycle {
           childSessionId,
           watched.parentSessionId,
           watched.subagentType,
+          live,
         );
       }
     }
@@ -319,10 +322,21 @@ export class PaneLifecycle {
       if (this.panes.has(childSessionId)) continue;
       if (this.spawnsInFlight.has(childSessionId)) continue;
       if (this.closedWatch.has(childSessionId)) continue;
+      const live = statuses?.get(childSessionId);
+      if (live !== 'busy' && live !== 'retry') {
+        if (statuses)
+          this.rememberClosed(
+            childSessionId,
+            parentSessionId,
+            serverAgents.get(childSessionId),
+          );
+        continue;
+      }
       await this.createPane(
         childSessionId,
         parentSessionId,
         serverAgents.get(childSessionId),
+        live,
       );
     }
   }
@@ -406,6 +420,7 @@ export class PaneLifecycle {
     childSessionId: string,
     parentSessionId: string,
     subagentType?: string,
+    knownStatus?: SessionRuntimeStatus,
   ): Promise<void> {
     const adapterType = this.config.adapter;
     if (adapterType === null) return;
@@ -437,10 +452,9 @@ export class PaneLifecycle {
         return;
       }
 
-      const readyStatus = await this.waitForReady(
-        this.config.directory,
-        childSessionId,
-      );
+      const readyStatus =
+        knownStatus ??
+        (await this.waitForReady(this.config.directory, childSessionId));
       if (readyStatus === null) {
         logNoPane(this.logger, 'readiness-timeout', {
           childSessionId,
@@ -514,6 +528,13 @@ export class PaneLifecycle {
       await this.applyLayout(adapter);
     } finally {
       this.spawnsInFlight.delete(childSessionId);
+      if (
+        !this.disposed &&
+        !this.deletedWhileSpawning.has(childSessionId) &&
+        !this.panes.has(childSessionId)
+      ) {
+        this.rememberClosed(childSessionId, parentSessionId, subagentType);
+      }
       this.deletedWhileSpawning.delete(childSessionId);
       this.idleWhileSpawning.delete(childSessionId);
     }
@@ -773,6 +794,7 @@ export class PaneLifecycle {
         ? { parentSessionId }
         : { parentSessionId, subagentType },
     );
+    this.ports.onChildTracked?.(childSessionId, this.config.directory);
     if (this.closedWatch.size <= MAX_REMEMBERED_CLOSED) return;
     const oldest = this.closedWatch.keys().next().value;
     if (oldest !== undefined) this.closedWatch.delete(oldest);
