@@ -46,6 +46,32 @@ import {
 const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
 
 describe('TUI multiplexer directory scope', () => {
+  test('returns the pane teardown promise to the TUI host', async () => {
+    const disposers: Array<() => void | Promise<void>> = [];
+    await tuiPlugin.tui(
+      {
+        state: { path: { directory: process.cwd() } },
+        route: { current: { name: 'home' } },
+        lifecycle: {
+          onDispose: (callback: () => void | Promise<void>) => {
+            disposers.push(callback);
+            return () => {};
+          },
+        },
+        renderer: { requestRender: () => {} },
+        slots: { register: () => 'test-slot' },
+        theme: { current: {} },
+      } as Parameters<typeof tuiPlugin.tui>[0],
+      {},
+      { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
+    );
+    try {
+      expect(disposers.at(-1)?.()).toBeInstanceOf(Promise);
+    } finally {
+      for (const dispose of disposers) await dispose();
+    }
+  });
+
   test('uses the displayed session directory when launch scope differs', () => {
     expect(
       resolveTuiPaneDirectory({

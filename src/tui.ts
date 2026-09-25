@@ -1757,9 +1757,7 @@ const plugin: TuiDualContractModule = {
       client: (api as { client?: unknown }).client,
       env: process.env,
     });
-    api.lifecycle.onDispose(() => {
-      void paneWiring.dispose();
-    });
+    api.lifecycle.onDispose(() => paneWiring.dispose());
   },
   setup,
 };

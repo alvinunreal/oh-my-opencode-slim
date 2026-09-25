@@ -62,6 +62,8 @@ type PaneCloseReason = 'idle' | 'deleted' | 'backfill-gone';
 
 /** Upper bound on the closed-but-watched set, keeping memory flat. */
 const MAX_REMEMBERED_CLOSED = 64;
+const CLOSE_RETRY_MS = 1_000;
+const MAX_CLOSE_ATTEMPTS = 4;
 
 export class PaneLifecycle {
   /** The in-process uniqueness store (FR-6), keyed by child session id. */
@@ -78,6 +80,7 @@ export class PaneLifecycle {
   private readonly busyWhileClosing = new Set<string>();
   /** Pending stable-idle debounce timers, keyed by child session id. */
   private readonly idleTimers = new Map<string, ClockTimerHandle>();
+  private readonly closeAttempts = new Map<string, number>();
   /**
    * Children this client closed on stable idle (not terminal deletion), kept
    * so a later busy event can rebuild them (FR-11). The entry carries the
@@ -131,6 +134,7 @@ export class PaneLifecycle {
       this.ports.clock.clearTimeout(handle);
     }
     this.idleTimers.clear();
+    this.closeAttempts.clear();
     // Release readiness retry delays: the wiring clears its tracked clock on
     // dispose, so a suspended spawn would otherwise never settle.
     for (const settle of [...this.pendingDelays]) settle();
@@ -638,7 +642,8 @@ export class PaneLifecycle {
     this.idleTimers.set(childSessionId, handle);
   }
 
-  private cancelIdleClose(childSessionId: string): void {
+  private cancelIdleClose(childSessionId: string, resetAttempts = true): void {
+    if (resetAttempts) this.closeAttempts.delete(childSessionId);
     const handle = this.idleTimers.get(childSessionId);
     if (handle === undefined) return;
     this.idleTimers.delete(childSessionId);
@@ -658,14 +663,22 @@ export class PaneLifecycle {
     // pane (fail-closed, I3).
     const epoch = this.activityEpoch.get(childSessionId) ?? 0;
     const read = await this.readStatus(this.config.directory);
-    if (read.error) return;
+    if (read.error) {
+      if ((this.activityEpoch.get(childSessionId) ?? 0) === epoch) {
+        this.scheduleCloseRetry(childSessionId, record, 'idle');
+      }
+      return;
+    }
     // Any held-pane event while the read was in flight (a busy/retry edge, a
     // fresh idle, a deletion) invalidates the decision: the snapshot may
     // predate it, and that event has already been consumed.
     if ((this.activityEpoch.get(childSessionId) ?? 0) !== epoch) return;
     if (this.panes.get(childSessionId)?.status !== 'active') return;
     const status = read.statuses.get(childSessionId);
-    if (status === 'busy' || status === 'retry') return;
+    if (status === 'busy' || status === 'retry') {
+      this.closeAttempts.delete(childSessionId);
+      return;
+    }
 
     await this.closePane(childSessionId, record, 'idle');
   }
@@ -677,11 +690,14 @@ export class PaneLifecycle {
   ): Promise<void> {
     if (record.status === 'closing') return;
     record.status = 'closing';
-    this.cancelIdleClose(childSessionId);
+    this.cancelIdleClose(childSessionId, false);
 
     const adapter = this.ports.adapterFactory.create(record.adapter);
     if (!adapter) {
       record.status = 'active';
+      const wasBusy = this.busyWhileClosing.delete(childSessionId);
+      if (!wasBusy || reason !== 'idle')
+        this.scheduleCloseRetry(childSessionId, record, reason);
       return;
     }
 
@@ -695,6 +711,8 @@ export class PaneLifecycle {
     if (closed) {
       this.panes.delete(childSessionId);
       this.activityEpoch.delete(childSessionId);
+      this.closeAttempts.delete(childSessionId);
+      const wasBusy = this.busyWhileClosing.delete(childSessionId);
       // Only idle closes are rebuildable; deleted/gone children are terminal.
       if (reason === 'idle') {
         this.rememberClosed(
@@ -705,7 +723,7 @@ export class PaneLifecycle {
         // The child turned busy while this close was in flight; that edge was
         // consumed by the close, so rebuild right away instead of waiting for
         // the next event or the reconcile tick.
-        if (this.busyWhileClosing.delete(childSessionId)) {
+        if (wasBusy) {
           await this.rebuildWatched(
             childSessionId,
             record.parentSessionId,
@@ -718,6 +736,28 @@ export class PaneLifecycle {
     // Close failed: keep tracking so a later event can retry; dropping the
     // record while the pane may still exist would break FR-6 uniqueness.
     record.status = 'active';
+    const wasBusy = this.busyWhileClosing.delete(childSessionId);
+    if (!wasBusy || reason !== 'idle')
+      this.scheduleCloseRetry(childSessionId, record, reason);
+  }
+
+  private scheduleCloseRetry(
+    childSessionId: string,
+    record: PaneRecord,
+    reason: PaneCloseReason,
+  ): void {
+    if (this.disposed || this.panes.get(childSessionId) !== record) return;
+    const attempts = (this.closeAttempts.get(childSessionId) ?? 0) + 1;
+    this.closeAttempts.set(childSessionId, attempts);
+    if (attempts >= MAX_CLOSE_ATTEMPTS) return;
+    const handle = this.ports.clock.setTimeout(() => {
+      this.idleTimers.delete(childSessionId);
+      if (this.panes.get(childSessionId) !== record) return;
+      void (reason === 'idle'
+        ? this.closeIfStillIdle(childSessionId)
+        : this.closePane(childSessionId, record, reason));
+    }, CLOSE_RETRY_MS);
+    this.idleTimers.set(childSessionId, handle);
   }
 
   /** Remembers an idle-closed child for FR-11 rebuilds, bounded in size. */

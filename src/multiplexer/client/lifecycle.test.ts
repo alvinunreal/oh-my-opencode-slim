@@ -713,6 +713,114 @@ describe('dedup and stable-idle close (2.3)', () => {
     expect(h.lifecycle.getPane(CHILD)).toBeDefined();
   });
 
+  test('retries a failed idle close, then removes the pane', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    h.adapter.closeResult = false;
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(1);
+    expect(h.clock.pendingTimers).toBe(1);
+
+    h.adapter.closeResult = true;
+    h.clock.advance(1000);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(2);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
+  test('retries a failed terminal close after switching parents', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.adapter.closeResult = false;
+    await h.lifecycle.handleEvent(lifecycleEvent('deleted'));
+    h.lifecycle.setDisplayedSession('other-parent');
+    h.adapter.closeResult = true;
+    h.clock.advance(1000);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(2);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
+  test('retries an unavailable close adapter when it returns', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.factory.adapter = null;
+    await h.lifecycle.handleEvent(lifecycleEvent('deleted'));
+    h.factory.adapter = h.adapter;
+    h.clock.advance(1000);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toEqual(['pane-1']);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
+  test('retries the pre-close read error without closing on unverifiable state', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.reader.error = 'temporary failure';
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(0);
+    expect(h.clock.pendingTimers).toBe(1);
+    h.reader.error = undefined;
+    h.reader.statuses.set(CHILD, 'idle');
+    h.clock.advance(1000);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(1);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
+  test('a busy edge cancels a failed-close retry; repeated failures stop at four attempts', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    h.adapter.closeResult = false;
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    h.clock.advance(1000);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(1);
+    expect(h.clock.pendingTimers).toBe(0);
+
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    for (let i = 0; i < 3; i += 1) {
+      h.clock.advance(1000);
+      await flushAsync();
+    }
+    expect(h.adapter.closeCalls).toHaveLength(5); // one cancelled, four in the new sequence
+    expect(h.clock.pendingTimers).toBe(0);
+  });
+
+  test('a failed close after a busy edge does not spuriously rebuild', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    const barrier = createDeferred();
+    h.adapter.closeBarrier = barrier.promise;
+    h.adapter.closeResult = false;
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    barrier.resolve();
+    h.adapter.closeBarrier = null;
+    await flushAsync();
+    h.adapter.closeResult = true;
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
   test('closes immediately on a deleted event without waiting for the window', async () => {
     const h = createHarness();
     await activatePane(h);
