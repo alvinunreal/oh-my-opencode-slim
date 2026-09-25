@@ -137,8 +137,7 @@ re-enable one user-layer removal without clearing other removals; a project
 removal likewise overrides a user addition. Within one layer, removal wins.
 Use add/remove lists in an inherited child when toggling a single package so
 it keeps following future parent changes. Root `agents` overrides and host
-config still take precedence
-over normal preset agent settings; see
+config still take precedence over normal preset agent settings; see
 [Configuration](configuration.md#preset-inheritance).
 
 CLI `enable`/`disable` edits the active preset in the current project plugin
@@ -150,8 +149,11 @@ accept `.json` and `.jsonc`. A config file that is changed is serialized as
 JSON (comments and formatting in that `.jsonc` file are lost), with a `.bak`
 backup; unrelated config files that are not modified remain byte-identical.
 `remove` cleans up references in both available config files for the current
-project. A package can remain installed but disabled in a preset, and a
-different preset can enable it independently.
+project. A handled removal failure restores config references and leaves the
+package installed. An interrupted process cannot roll back changes already
+written to config; if removal stops before uninstalling, the package may
+remain installed but inactive until you enable it again. A package can remain
+installed but disabled in one preset and enabled in another.
 
 ## In-session tool and status
 

@@ -153,13 +153,19 @@ function compileMarketplaceRules(
       for (const [index, rule] of host.entries()) {
         if (rule.effect !== 'deny' || !wildcardMatch(action, rule.action))
           continue;
+        // The matcher treats consecutive stars identically. A later rule
+        // covering exactly the denied language (or every resource) fully
+        // supersedes this deny for the admitted action; partial overlaps do not.
+        const canonical = (pattern: string) =>
+          pattern.replaceAll('\\', '/').replace(/\*+/g, '*');
         if (
           host
             .slice(index + 1)
             .some(
               (later) =>
-                later.action === action &&
-                later.resource === '*' &&
+                wildcardMatch(action, later.action) &&
+                (canonical(later.resource) === '*' ||
+                  canonical(later.resource) === canonical(rule.resource)) &&
                 later.effect !== 'deny',
             )
         )

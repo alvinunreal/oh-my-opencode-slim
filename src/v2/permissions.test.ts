@@ -159,6 +159,53 @@ describe('compilePermissionPolicy', () => {
     expect(emittedDecision(policy.rules, 'read', 'public/file')).toBe('ask');
   });
 
+  test('equivalent repeated-star native exceptions supersede denies in either order', () => {
+    for (const [denied, allowed] of [
+      ['private/*', 'private/**'],
+      ['private/**', 'private/*'],
+    ] as const) {
+      const policy = compilePermissionPolicy({
+        baselineRules: allowAll,
+        hostRules: [
+          { action: 'read', resource: denied, effect: 'deny' },
+          { action: 'read', resource: allowed, effect: 'allow' },
+        ],
+        marketplace: {
+          actions: { read: 'allow' },
+          resources: { read: { 'private/**': 'ask' } },
+          skills: [],
+          mcpNamespaces: [],
+        },
+      });
+      for (const [resource, expected] of [
+        ['private/file', 'ask'],
+        ['private/nested/file', 'ask'],
+        ['public/file', 'allow'],
+      ] as const) {
+        expect(policy.decide('read', resource)).toBe(expected);
+        expect(emittedDecision(policy.rules, 'read', resource)).toBe(expected);
+      }
+    }
+  });
+
+  test('partial native exceptions do not erase an effective overlapping deny', () => {
+    expect(() =>
+      compilePermissionPolicy({
+        baselineRules: allowAll,
+        hostRules: [
+          { action: 'read', resource: 'private/*', effect: 'deny' },
+          { action: 'read', resource: 'private/public', effect: 'allow' },
+        ],
+        marketplace: {
+          actions: { read: 'allow' },
+          resources: { read: { 'private/**': 'ask' } },
+          skills: [],
+          mcpNamespaces: [],
+        },
+      }),
+    ).toThrow(UnsupportedMarketplacePermissionCompositionError);
+  });
+
   test('allows only exact admitted skill names and retains host denies', () => {
     const policy = compilePermissionPolicy({
       baselineRules: allowAll,
