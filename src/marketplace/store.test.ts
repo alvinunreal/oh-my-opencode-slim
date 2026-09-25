@@ -2,12 +2,14 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import * as fsModule from 'node:fs';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -331,6 +333,165 @@ describe('MarketplaceStore', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test('restores a selected version moved to repair staging before publication', () => {
+    const root = tempRoot();
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      const installed = store.install(bundle());
+      const backup = join(
+        store.paths.stagingDir,
+        'repair',
+        'community',
+        'example',
+        '1.0.0',
+      );
+      mkdirSync(join(backup, '..'), { recursive: true });
+      renameSync(installed.path, backup);
+      expect(store.show('community/example').digest).toBe(installed.digest);
+      expect(existsSync(installed.path)).toBe(true);
+      expect(existsSync(backup)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps restored damaged bytes available for exact locked repair', () => {
+    const root = tempRoot();
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      const original = bundle();
+      const installed = store.install(original);
+      const backup = join(
+        store.paths.stagingDir,
+        'repair',
+        'community',
+        'example',
+        '1.0.0',
+      );
+      writeFileSync(join(installed.path, 'package.json'), '{broken');
+      mkdirSync(join(backup, '..'), { recursive: true });
+      renameSync(installed.path, backup);
+      expect(() => store.show('community/example')).toThrow(
+        MarketplaceIntegrityError,
+      );
+      expect(existsSync(installed.path)).toBe(true);
+      expect(store.install(original).digest).toBe(installed.digest);
+      expect(store.verify('community/example').valid).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('cleans obsolete repair backups only after verifying the selected path', () => {
+    for (const committedUpdate of [false, true]) {
+      const root = tempRoot();
+      try {
+        const store = new MarketplaceStore({ rootDir: root });
+        const installed = store.install(bundle());
+        const backup = join(
+          store.paths.stagingDir,
+          'repair',
+          'community',
+          'example',
+          '1.0.0',
+        );
+        if (committedUpdate) store.update(bundle('2.0.0'));
+        else {
+          mkdirSync(join(backup, '..'), { recursive: true });
+          renameSync(installed.path, backup);
+          cpSync(backup, installed.path, { recursive: true });
+        }
+        if (committedUpdate) {
+          mkdirSync(backup, { recursive: true });
+          writeFileSync(join(backup, 'package.json'), '{old damaged bytes');
+        }
+        expect(store.show('community/example').manifest.version).toBe(
+          committedUpdate ? '2.0.0' : '1.0.0',
+        );
+        expect(existsSync(backup)).toBe(false);
+        expect(existsSync(installed.path)).toBe(!committedUpdate);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test('preserves both copies when a published repair fails lockfile verification', () => {
+    const root = tempRoot();
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      const installed = store.install(bundle());
+      const backup = join(
+        store.paths.stagingDir,
+        'repair',
+        'community',
+        'example',
+        '1.0.0',
+      );
+      mkdirSync(join(backup, '..'), { recursive: true });
+      renameSync(installed.path, backup);
+      mkdirSync(installed.path, { recursive: true });
+      writeFileSync(
+        join(installed.path, 'package.json'),
+        '{invalid replacement',
+      );
+      expect(() => store.list()).toThrow(MarketplaceIntegrityError);
+      expect(() => store.install(bundle())).toThrow(MarketplaceIntegrityError);
+      expect(existsSync(backup)).toBe(true);
+      expect(readFileSync(join(installed.path, 'package.json'), 'utf8')).toBe(
+        '{invalid replacement',
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each(['publication', 'lockfile'])(
+    'rolls back a damaged selected version on %s failure',
+    (failure) => {
+      const root = tempRoot();
+      try {
+        const store = new MarketplaceStore({ rootDir: root });
+        const original = bundle();
+        const installed = store.install(original);
+        writeFileSync(join(installed.path, 'package.json'), '{original damage');
+        const originalRename = fsModule.renameSync;
+        let failed = false;
+        const rename = spyOn(fsModule, 'renameSync').mockImplementation(
+          (source, destination) => {
+            if (
+              !failed &&
+              destination ===
+                (failure === 'publication'
+                  ? installed.path
+                  : store.paths.lockfilePath)
+            ) {
+              failed = true;
+              throw new Error(`injected ${failure} failure`);
+            }
+            return originalRename(source, destination);
+          },
+        );
+        try {
+          expect(() => store.install(original)).toThrow(
+            `injected ${failure} failure`,
+          );
+        } finally {
+          rename.mockRestore();
+        }
+        expect(readFileSync(join(installed.path, 'package.json'), 'utf8')).toBe(
+          '{original damage',
+        );
+        expect(
+          store.getLockfile().packages['community/example']?.digest.value,
+        ).toBe(installed.digest);
+        expect(store.install(original).digest).toBe(installed.digest);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test('does not overwrite a corrupt lockfile', () => {
     const root = tempRoot();

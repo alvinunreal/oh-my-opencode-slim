@@ -460,12 +460,16 @@ export class MarketplaceStore {
             const repairBackup = damagedCurrent
               ? path.join(
                   this.paths.stagingDir,
-                  `repair-${process.pid}-${randomUUID()}`,
+                  'repair',
+                  ...bundle.manifest.id.split('/'),
+                  bundle.manifest.version,
                 )
               : undefined;
             if (repairBackup && fs.existsSync(versionPath)) {
-              fs.mkdirSync(this.paths.stagingDir, { recursive: true });
+              fs.mkdirSync(path.dirname(repairBackup), { recursive: true });
               fs.renameSync(versionPath, repairBackup);
+              syncDirectory(path.dirname(repairBackup));
+              syncDirectory(path.dirname(versionPath));
             }
             try {
               this.publishBundle(versionPath, bundle, digest);
@@ -493,6 +497,7 @@ export class MarketplaceStore {
               fs.rmSync(versionPath, { recursive: true, force: true });
               if (repairBackup && fs.existsSync(repairBackup)) {
                 fs.renameSync(repairBackup, versionPath);
+                syncDirectory(path.dirname(versionPath));
               }
               throw error;
             }
@@ -577,6 +582,48 @@ export class MarketplaceStore {
   }
 
   private reconcileLockedStateUnlocked(lockfile: MarketplaceLockfile): void {
+    const repairRoot = path.join(this.paths.stagingDir, 'repair');
+    if (fs.existsSync(repairRoot)) {
+      for (const namespace of fs.readdirSync(repairRoot, {
+        withFileTypes: true,
+      })) {
+        if (!namespace.isDirectory()) continue;
+        const namespacePath = path.join(repairRoot, namespace.name);
+        for (const name of fs.readdirSync(namespacePath, {
+          withFileTypes: true,
+        })) {
+          if (!name.isDirectory()) continue;
+          const id = `${namespace.name}/${name.name}`;
+          const namePath = path.join(namespacePath, name.name);
+          for (const version of fs.readdirSync(namePath, {
+            withFileTypes: true,
+          })) {
+            if (!version.isDirectory()) continue;
+            const backupPath = path.join(namePath, version.name);
+            const selected = lockfile.packages[id];
+            if (selected?.manifestVersion === version.name) {
+              const versionPath = packageVersionPath(
+                this.paths,
+                id,
+                version.name,
+              );
+              if (!fs.existsSync(versionPath)) {
+                fs.mkdirSync(path.dirname(versionPath), { recursive: true });
+                fs.renameSync(backupPath, versionPath);
+                syncDirectory(path.dirname(versionPath));
+                continue;
+              }
+              // Do not discard either copy when the published path is corrupt.
+              this.loadLockedPackage(lockfile, id);
+            } else if (selected) {
+              // Only discard the old version after the newly selected one is valid.
+              this.loadLockedPackage(lockfile, id);
+            }
+            fs.rmSync(backupPath, { recursive: true, force: true });
+          }
+        }
+      }
+    }
     const removedRoot = path.join(this.paths.stagingDir, 'removed');
     if (fs.existsSync(removedRoot)) {
       for (const namespace of fs.readdirSync(removedRoot, {
@@ -608,6 +655,7 @@ export class MarketplaceStore {
     }
     if (fs.existsSync(this.paths.stagingDir)) {
       for (const entry of fs.readdirSync(this.paths.stagingDir)) {
+        if (entry === 'repair') continue;
         fs.rmSync(path.join(this.paths.stagingDir, entry), {
           recursive: true,
           force: true,
