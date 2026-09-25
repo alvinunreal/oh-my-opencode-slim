@@ -20,7 +20,7 @@ the tool is registered under the same `webfetch` name to override the default.
 | `extract_main` | boolean | `true` | Extract main content from HTML using Mozilla Readability for pages with at most 15,000 elements; larger pages skip Readability. When disabled, returns the unextracted page. |
 | `prefer_llms_txt` | `"auto"` \| `"always"` \| `"never"` | `"auto"` | Prefer `/llms.txt` or `/llms-full.txt` over the page itself. `"auto"` probes only for docs-like domains (readthedocs, gitbook, netlify, vercel, etc.). |
 | `include_metadata` | boolean | `true` | Include YAML frontmatter with fetch metadata (status code, content type, charset, redirect chain, cache info, etc.). |
-| `save_binary` | boolean | `false` | Save binary payloads (images, PDFs, audio, video) to disk under the system temp dir. When disabled, binary content reports metadata-only. |
+| `save_binary` | boolean | `false` | Save binary payloads (images, PDFs, audio, video) to disk under the system temp dir. When disabled, supported small images can be attached inline for direct-routed multimodal models; other binaries return metadata and a disk-save hint. |
 
 ## Output
 
@@ -66,13 +66,23 @@ Binary responses (images, PDFs, audio, video) return metadata about the file:
 - Filename (from `Content-Disposition` or URL path)
 - Binary kind (`image`, `audio`, `video`, `pdf`, `binary`)
 
-Two modes:
+Three modes:
 
 1. **Metadata-only** — content exceeds the download limit (2 MiB without
    `save_binary`, 10 MiB with it). Reports size and type without the body.
 2. **Saved to disk** — when `save_binary=true`, the binary is written to
    `<tmpdir>/opencode-smartfetch/<filename>` and the response includes the
    filesystem path.
+3. **Inline image** — when `save_binary=false`, image routing is `direct`, and
+   the current model explicitly supports image input, PNG/JPEG/GIF/WebP bytes
+   can be attached as a data URL. The actual image type is determined from the
+   file signature, not the server's MIME claim. The base64 payload (excluding
+   the data URL prefix) must fit in 1 MiB (at most 786,432 raw bytes).
+   The decision is made per call, even for cached bytes. If any condition fails,
+   no image is attached or saved automatically; frontmatter reports
+   `inline_image_skipped` (e.g. `model_capability_unknown` for older/v2-shaped
+   contexts or `exceeds_inline_limit`) and retains the retry-with-`save_binary=true`
+   hint. An explicit `save_binary=true` always keeps the existing disk behavior.
 
 ### Blocked redirects
 

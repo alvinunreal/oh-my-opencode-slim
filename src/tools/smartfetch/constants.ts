@@ -11,6 +11,7 @@ export const DOCS_HOST_PREFIXES = ['docs.', 'developer.', 'dev.', 'wiki.'];
 export const MAX_REDIRECTS = 10;
 export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 export const MAX_BINARY_DOWNLOAD_BYTES = 2 * 1024 * 1024;
+export const MAX_INLINE_IMAGE_BASE64_BYTES = 1024 * 1024;
 export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const MAX_TIMEOUT_SECONDS = 120;
 export const MAX_LLMS_PROBE_TIMEOUT_MS = 8000;

@@ -5,11 +5,17 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import { buildBinaryResultMessage, saveBinary } from './binary';
+import {
+  base64Size,
+  buildBinaryResultMessage,
+  detectInlineImageMime,
+  saveBinary,
+} from './binary';
 import { buildCacheKey, CACHE, conditionalHeaders, lookup } from './cache';
 import {
   DEFAULT_TIMEOUT_SECONDS,
   MAX_BINARY_DOWNLOAD_BYTES,
+  MAX_INLINE_IMAGE_BASE64_BYTES,
   MAX_LLMS_PROBE_TIMEOUT_MS,
   MAX_RESPONSE_BYTES,
   MAX_TIMEOUT_SECONDS,
@@ -489,6 +495,36 @@ export function createWebfetchTool(
           );
 
         if ('binary' in fetchResult) {
+          const data = fetchResult.data;
+          const inlineMime =
+            !args.save_binary && fetchResult.binaryKind === 'image' && data
+              ? detectInlineImageMime(data)
+              : undefined;
+          let inlineImageSkipped: string | undefined;
+          if (!args.save_binary && fetchResult.binaryKind === 'image') {
+            const capability = (
+              ctx as typeof ctx & {
+                extra?: {
+                  model?: { capabilities?: { input?: { image?: boolean } } };
+                };
+              }
+            ).extra?.model?.capabilities?.input?.image;
+            if (options.imageRouting?.() !== 'direct') {
+              inlineImageSkipped = 'image_routing_auto';
+            } else if (capability === undefined) {
+              inlineImageSkipped = 'model_capability_unknown';
+            } else if (!capability) {
+              inlineImageSkipped = 'model_not_multimodal';
+            } else if (!data) {
+              inlineImageSkipped = 'exceeds_inline_limit';
+            } else if (!inlineMime) {
+              inlineImageSkipped = 'unsupported_image_format';
+            } else if (
+              base64Size(data.byteLength) > MAX_INLINE_IMAGE_BASE64_BYTES
+            ) {
+              inlineImageSkipped = 'exceeds_inline_limit';
+            }
+          }
           const binaryMeta = {
             ...baseMeta,
             binary_kind: fetchResult.binaryKind,
@@ -497,20 +533,40 @@ export function createWebfetchTool(
             llms_probe_error: fetchResult.llmsProbeError,
             cache_hit: cacheHit,
             revalidated: revalidated || undefined,
+            inline_image_skipped: inlineImageSkipped,
             truncated: fetchResult.truncated,
             download_limit_bytes:
               fetchResult.downloadLimitBytes ?? MAX_BINARY_DOWNLOAD_BYTES,
           };
-          if (!fetchResult.data) {
+          if (!data) {
             return render(
               { ...binaryMeta, binary_metadata_only: true },
               renderMessageForFormat(
-                buildBinaryResultMessage(fetchResult),
+                `${buildBinaryResultMessage(fetchResult)}${!args.save_binary && fetchResult.binaryKind === 'image' ? ' Re-run with save_binary=true to persist it.' : ''}`,
                 args.format,
               ),
             );
           }
           if (!args.save_binary) {
+            if (!inlineImageSkipped && inlineMime) {
+              return {
+                output: render(
+                  { ...binaryMeta, inline_image: true },
+                  renderMessageForFormat(
+                    'IMAGE content attached inline.',
+                    args.format,
+                  ),
+                ),
+                attachments: [
+                  {
+                    type: 'file',
+                    mime: inlineMime,
+                    url: `data:${inlineMime};base64,${Buffer.from(data).toString('base64')}`,
+                    filename: fetchResult.filename,
+                  },
+                ],
+              };
+            }
             return render(
               { ...binaryMeta, save_binary: false },
               renderMessageForFormat(
@@ -521,7 +577,7 @@ export function createWebfetchTool(
           }
           const savedPath = await saveBinary(
             binaryDir,
-            fetchResult.data,
+            data,
             fetchResult.contentType,
             fetchResult.filename,
           );

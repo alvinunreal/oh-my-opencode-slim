@@ -2,6 +2,38 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { BinaryFetch } from './types';
 
+export function base64Size(byteLength: number) {
+  return 4 * Math.ceil(byteLength / 3);
+}
+
+export function detectInlineImageMime(data: Uint8Array) {
+  if (
+    data.length >= 8 &&
+    [137, 80, 78, 71, 13, 10, 26, 10].every(
+      (byte, index) => data[index] === byte,
+    )
+  )
+    return 'image/png';
+  if (
+    data.length >= 3 &&
+    data[0] === 0xff &&
+    data[1] === 0xd8 &&
+    data[2] === 0xff
+  )
+    return 'image/jpeg';
+  if (data.length >= 6) {
+    const signature = Buffer.from(data.subarray(0, 6)).toString('ascii');
+    if (signature === 'GIF87a' || signature === 'GIF89a') return 'image/gif';
+  }
+  if (
+    data.length >= 12 &&
+    Buffer.from(data.subarray(0, 4)).toString('ascii') === 'RIFF' &&
+    Buffer.from(data.subarray(8, 12)).toString('ascii') === 'WEBP'
+  )
+    return 'image/webp';
+  return undefined;
+}
+
 export function fitUtf8(text: string, maxBytes: number, maxUnits = Infinity) {
   let base = '';
   let bytes = 0;

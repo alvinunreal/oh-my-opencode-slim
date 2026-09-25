@@ -21,7 +21,7 @@
 
 3. When the tool falls back to the page itself, `fetchWithUpgradeFallback` handles HTTPS upgrade fallback and redirect enforcement; the tool then detects binaries and reads bodies within limits. Stale pages send stored validators; a `304` at the same final URL refreshes the cached body, while a changed redirect target requires an unconditional refetch. Stale llms.txt is probed again (`network.ts`, `cache.ts`, `tool.ts`).
 
-4. Text/HTML payloads are decoded and normalized through `extractFromHtml`, `cleanFetchedMarkdown`, `extractHeadingsFromMarkdown`, `frontmatter`, and `joinRenderedContent`; binary payloads optionally persist via `saveBinary` and return a metadata message (`utils.ts`, `binary.ts`, `tool.ts`).
+4. Text/HTML payloads are decoded and normalized through `extractFromHtml`, `cleanFetchedMarkdown`, `extractHeadingsFromMarkdown`, `frontmatter`, and `joinRenderedContent`; binary payloads optionally persist via `saveBinary`. Small signature-verified images attach inline only for direct-routed multimodal callers without an explicit disk request. Inline decisions use the current call context, not cached model state (`utils.ts`, `binary.ts`, `tool.ts`).
 
 5. If the caller supplied a prompt and configured secondary models, `runSecondaryModelWithFallback` truncates input to a bounded size, disables tool access for the helper session, retries across configured models, and the tool degrades back to base fetched content if that step fails (`secondary-model.ts`, `tool.ts`).
 

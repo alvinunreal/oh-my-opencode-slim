@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { buildCacheKey, CACHE } from './cache';
 import { createWebfetchTool } from './tool';
 
@@ -100,6 +103,30 @@ describe('smartfetch/tool', () => {
     expect(accepts).toHaveLength(2);
     expect(accepts[0]).toStartWith('text/markdown');
     expect(accepts[1]).toStartWith('text/html');
+  });
+
+  test('llms.txt retains its own Accept header under every requested format', async () => {
+    const accepts: string[] = [];
+    globalThis.fetch = mock(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        accepts.push(new Headers(init?.headers).get('Accept') || '');
+        return new Response('# Docs', {
+          headers: { 'content-type': 'text/plain' },
+        });
+      },
+    ) as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    for (const format of ['markdown', 'text', 'html'] as const) {
+      expect(
+        await webfetch.execute(
+          { url: 'https://docs.example.com/page', format },
+          createExecutionContext(),
+        ),
+      ).toContain('used_llms_txt: true');
+    }
+    expect(accepts).toEqual(
+      Array(3).fill('text/plain, text/markdown;q=0.9, */*;q=0.1'),
+    );
   });
 
   test('a persistent Cloudflare challenge reports 403 and mentions the retry', async () => {
@@ -387,6 +414,191 @@ describe('smartfetch/tool', () => {
     expect(result).toContain('download_limit_bytes: 2097152');
     expect(result).toContain('save_binary: false');
     expect(result).toContain('cache_hit: false');
+  });
+
+  test('a small PNG attaches only for a direct-routed multimodal v1 model, with per-call cached decisions', async () => {
+    const image = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 42]);
+    const fetchMock = mock(
+      async () =>
+        new Response(image, { headers: { 'content-type': 'image/png' } }),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    });
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const args = {
+      url: 'https://example.com/image',
+      prefer_llms_txt: 'never' as const,
+    };
+    const result = await webfetch.execute(args, ctx);
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected inline image');
+    expect(result.attachments).toEqual([
+      {
+        type: 'file',
+        mime: 'image/png',
+        url: `data:image/png;base64,${Buffer.from(image).toString('base64')}`,
+        filename: undefined,
+      },
+    ]);
+    expect(result.output).toContain('cache_hit: false');
+    const textCtx = createExecutionContext();
+    textCtx.extra = { model: { capabilities: { input: { image: false } } } };
+    const text = await webfetch.execute(args, textCtx);
+    expect(text).toContain('inline_image_skipped: "model_not_multimodal"');
+    expect(text).toContain('cache_hit: true');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('the inclusive base64 limit permits 786432 raw bytes but refuses 786433', async () => {
+    const payload = (size: number) => {
+      const data = new Uint8Array(size);
+      data.set([137, 80, 78, 71, 13, 10, 26, 10]);
+      return data;
+    };
+    globalThis.fetch = mock(
+      async (url: string | URL | Request) =>
+        new Response(payload(String(url).endsWith('/max') ? 786432 : 786433), {
+          headers: { 'content-type': 'image/png' },
+        }),
+    ) as typeof fetch;
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const webfetch = createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    });
+    const atLimit = await webfetch.execute(
+      { url: 'https://example.com/max', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(typeof atLimit).toBe('object');
+    if (typeof atLimit === 'string') throw new Error('expected inline image');
+    expect(atLimit.attachments?.[0]?.url.length).toBeGreaterThan(1048576);
+    expect(
+      atLimit.attachments?.[0]?.url.slice('data:image/png;base64,'.length)
+        .length,
+    ).toBe(1048576);
+    const overLimit = await webfetch.execute(
+      { url: 'https://example.com/over', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(overLimit).toContain('inline_image_skipped: "exceeds_inline_limit"');
+    expect(overLimit).toContain('Re-run with save_binary=true');
+  });
+
+  test('inline MIME comes from magic bytes even if the server claims PNG', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(Uint8Array.of(255, 216, 255, 224, 9), {
+          headers: { 'content-type': 'image/png' },
+        }),
+    ) as typeof fetch;
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/photo', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected inline image');
+    expect(result.attachments?.[0]?.mime).toBe('image/jpeg');
+    expect(result.attachments?.[0]?.url).toStartWith('data:image/jpeg;base64,');
+  });
+
+  test('v2-shaped or old contexts, auto routing and unsupported image bytes decline to inline', async () => {
+    globalThis.fetch = mock(
+      async (url: string | URL | Request) =>
+        new Response(
+          String(url).endsWith('/svg') ? '<svg></svg>' : Uint8Array.of(1, 2, 3),
+          {
+            headers: {
+              'content-type': String(url).endsWith('/svg')
+                ? 'image/svg+xml'
+                : 'image/png',
+            },
+          },
+        ),
+    ) as typeof fetch;
+    const direct = createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    });
+    const auto = createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'auto',
+    });
+    const ctx = createExecutionContext();
+    const args = {
+      url: 'https://example.com/invalid',
+      prefer_llms_txt: 'never' as const,
+    };
+    expect(await direct.execute(args, ctx)).toContain(
+      'inline_image_skipped: "model_capability_unknown"',
+    );
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    expect(await auto.execute(args, ctx)).toContain(
+      'inline_image_skipped: "image_routing_auto"',
+    );
+    expect(await direct.execute(args, ctx)).toContain(
+      'inline_image_skipped: "unsupported_image_format"',
+    );
+    expect(
+      await direct.execute({ ...args, url: 'https://example.com/svg' }, ctx),
+    ).toContain('inline_image_skipped: "unsupported_image_format"');
+  });
+
+  test('metadata-only oversized images explain the inline limit without writing to disk', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(Uint8Array.of(137, 80, 78, 71), {
+          headers: { 'content-type': 'image/png', 'content-length': '3000000' },
+        }),
+    ) as typeof fetch;
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/oversized.png', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(result).toContain('binary_metadata_only: true');
+    expect(result).toContain('inline_image_skipped: "exceeds_inline_limit"');
+    expect(result).toContain('Re-run with save_binary=true');
+  });
+
+  test('explicit save_binary takes precedence over inline images and keeps disk output', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'smartfetch-inline-'));
+    const image = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 42]);
+    try {
+      globalThis.fetch = mock(
+        async () =>
+          new Response(image, { headers: { 'content-type': 'image/png' } }),
+      ) as typeof fetch;
+      const ctx = createExecutionContext();
+      ctx.extra = { model: { capabilities: { input: { image: true } } } };
+      const result = await createWebfetchTool({ client: {} } as any, {
+        imageRouting: () => 'direct',
+        binaryDir: directory,
+      }).execute(
+        {
+          url: 'https://example.com/image.png',
+          prefer_llms_txt: 'never',
+          save_binary: true,
+        },
+        ctx,
+      );
+      expect(typeof result).toBe('string');
+      expect(result).toContain('saved_path:');
+      expect(result).not.toContain('inline_image_skipped');
+      expect(await readFile(path.join(directory, 'image.png'))).toEqual(
+        Buffer.from(image),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test('returns a required llms.txt message when prefer_llms_txt is always and no llms.txt is available', async () => {

@@ -7,6 +7,7 @@ export type ModelRef = {
 
 export type SmartfetchOptions = {
   binaryDir?: string;
+  imageRouting?: () => 'auto' | 'direct';
   /**
    * Dedicated model(s) for secondary-model summarization.
    * Each entry is tried in order; the first to return usable text is used.
