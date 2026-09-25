@@ -17,6 +17,7 @@
 | [Interview](interview.md) | `/interview` command, browser UI, dashboard mode, multi-session coordination |
 | [Multiplexer Integration](multiplexer-integration.md) | Real-time pane monitoring, layouts, troubleshooting |
 | [Preset Switching](preset-switching.md) | `/preset` command for runtime agent model switching |
+| [Agent Marketplace](marketplace.md) | Registry installation, local import, preset activation, status, reload behavior |
 | [Codemap Skill](codemap.md) | Hierarchical codemap generation |
 
 ## ⚙️ Config & Reference

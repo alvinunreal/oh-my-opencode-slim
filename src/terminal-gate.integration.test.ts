@@ -1486,6 +1486,9 @@ test('reopen-after-reconcile: child self-continuation republishes, wakes the idl
         orchestratorWake: { publicationWakeMinIntervalMs: 1_000 },
       },
     });
+    // The v2 host finalizes its agent registry from the host config before
+    // serving any prompt transforms. This fixture drives those hooks directly.
+    await h.hooks.config?.({ agent: {}, mcp: {} });
 
     // Run 1: launch → execution → terminal → publication #1.
     await h.requestTask('native', 'v2 reopen chain probe');

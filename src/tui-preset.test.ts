@@ -285,6 +285,35 @@ describe('openPresetManager', () => {
     });
   });
 
+  test('preserves local marketplace metadata when editing a preset', () => {
+    const marketplace = { agents: ['team/toolkit/reviewer'] };
+    writeUserConfigFile({
+      presets: {
+        base: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+        child: {
+          extends: 'base',
+          agents: { explorer: { model: 'openai/gpt-5-mini' } },
+          marketplace,
+        },
+      },
+    });
+
+    const mock = createMockApi();
+    openPresetManager(mock.api, tempDir, snapshotRef);
+    mock.selectOption(mock.getSelectProps(), { value: 'child' });
+    mock.selectOption(mock.getSelectProps(), { value: 'edit' });
+    mock.selectOption(mock.getSelectProps(), { value: '__omo_save__' });
+
+    const persisted = readUserConfigFile();
+    const child = (persisted.presets as Record<string, Record<string, unknown>>)
+      .child;
+    expect(child).toEqual({
+      extends: 'base',
+      agents: { explorer: { model: 'openai/gpt-5-mini' } },
+      marketplace,
+    });
+  });
+
   test('Base preset action lists valid candidates and prevents cyclic choices', () => {
     writeUserConfigFile({
       presets: {
@@ -484,6 +513,28 @@ describe('openPresetManager', () => {
     expect(toast.message).toContain(
       'already defined in project config (.opencode)',
     );
+  });
+
+  test('saves a newly created empty preset as a flat empty preset', () => {
+    writeUserConfigFile({});
+
+    const mock = createMockApi();
+    openPresetManager(mock.api, tempDir, snapshotRef);
+
+    const prompt = mock.getPromptProps();
+    expect(prompt).not.toBeNull();
+    if (!prompt) throw new Error('Expected preset name prompt');
+    (prompt.onConfirm as (value: string) => void)('blank');
+
+    const select = mock.getSelectProps();
+    expect(select?.title).toBe('Edit preset: blank');
+    mock.selectOption(select, { value: '__omo_save__' });
+
+    const persisted = readUserConfigFile();
+    expect(persisted.presets).toEqual({ blank: {} });
+    expect(
+      (persisted.presets as Record<string, unknown>).blank,
+    ).not.toHaveProperty('agents');
   });
 
   test('rejects deleting user base preset if a project preset extends it', () => {

@@ -1,6 +1,7 @@
 import { AGENT_ALIASES } from './constants';
 import type {
   AgentOverrideConfig,
+  MarketplaceActivation,
   Preset,
   PresetDefinition,
   PresetInput,
@@ -152,29 +153,34 @@ export function normalizePreset(input: PresetInput): PresetDefinition {
   if (isRecord(input) && isRecord(input.agents)) {
     const isPresetAgentMap = PresetAgentsSchema.safeParse(input.agents);
     if (isPresetAgentMap.success) {
-      const { agents, extends: parent, ...inlineEntries } = input;
+      const { agents, extends: parent, marketplace, ...inlineEntries } = input;
       const normalized: PresetDefinition = {
         agents: deepMerge(inlineEntries as Preset, agents as Preset) as Preset,
       };
       if (typeof parent === 'string') {
         normalized.extends = parent;
       }
+      if (marketplace !== undefined) normalized.marketplace = marketplace;
       return normalized;
     }
   }
 
   const record = input as Record<string, unknown>;
   const hasParent = typeof record.extends === 'string';
+  const { marketplace, ...flatEntries } = record;
   const agentEntries = hasParent
     ? Object.fromEntries(
-        Object.entries(record).filter(([name]) => name !== 'extends'),
+        Object.entries(flatEntries).filter(([name]) => name !== 'extends'),
       )
-    : record;
+    : flatEntries;
   const normalized: PresetDefinition = {
     agents: agentEntries as Preset,
   };
   if (hasParent) {
     normalized.extends = record.extends as string;
+  }
+  if (marketplace !== undefined) {
+    normalized.marketplace = marketplace as MarketplaceActivation;
   }
   return normalized;
 }
@@ -212,7 +218,14 @@ export function mergePresetMaps(
         normalizedBase.agents,
         normalizedOverride.agents,
       ),
+      marketplace: mergeMarketplaceActivation(
+        normalizedBase.marketplace,
+        normalizedOverride.marketplace,
+      ),
     };
+    if (mergedDefinition.marketplace === undefined) {
+      delete mergedDefinition.marketplace;
+    }
     const parent = normalizedOverride.extends ?? normalizedBase.extends;
     if (parent !== undefined) {
       mergedDefinition.extends = parent;
@@ -228,10 +241,22 @@ export function mergePresetMaps(
       if (mergedDefinition.extends !== undefined) {
         legacy.extends = mergedDefinition.extends;
       }
+      if (mergedDefinition.marketplace !== undefined) {
+        legacy.marketplace = mergedDefinition.marketplace;
+      }
       result[name] = legacy as PresetInput;
     }
   }
   return result;
+}
+
+function mergeMarketplaceActivation(
+  base?: MarketplaceActivation,
+  override?: MarketplaceActivation,
+): MarketplaceActivation | undefined {
+  if (!base) return override;
+  if (!override) return base;
+  return { ...base, ...override };
 }
 
 function usesStructuredPresetSyntax(input: PresetInput): boolean {
@@ -248,12 +273,20 @@ function usesStructuredPresetSyntax(input: PresetInput): boolean {
  * callers never receive a partially selected preset after an error.
  */
 export function resolvePreset(name: string, presets: PresetMap): Preset {
-  const cache = new Map<string, Preset>();
+  return resolvePresetDefinition(name, presets).agents;
+}
+
+/** Resolve agent and marketplace activation data through preset inheritance. */
+export function resolvePresetDefinition(
+  name: string,
+  presets: PresetMap,
+): PresetDefinition {
+  const definitions = new Map<string, PresetDefinition>();
   const visiting = new Set<string>();
   const stack: string[] = [];
 
-  const visit = (current: string): Preset => {
-    const cached = cache.get(current);
+  const visit = (current: string): PresetDefinition => {
+    const cached = definitions.get(current);
     if (cached) return cached;
 
     const definition = presets[current];
@@ -273,11 +306,21 @@ export function resolvePreset(name: string, presets: PresetMap): Preset {
     const normalized = normalizePreset(definition);
     const parent = normalized.extends
       ? visit(normalized.extends)
-      : ({} as Preset);
-    const resolved = mergeAgentOverrides(parent, normalized.agents);
+      : { agents: {} as Preset };
+    const resolved: PresetDefinition = {
+      agents: mergeAgentOverrides(parent.agents, normalized.agents),
+    };
+    if (normalized.extends !== undefined) {
+      resolved.extends = normalized.extends;
+    }
+    const marketplace = mergeMarketplaceActivation(
+      parent.marketplace,
+      normalized.marketplace,
+    );
+    if (marketplace !== undefined) resolved.marketplace = marketplace;
     stack.pop();
     visiting.delete(current);
-    cache.set(current, resolved);
+    definitions.set(current, resolved);
     return resolved;
   };
 

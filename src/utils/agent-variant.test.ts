@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import { RuntimeConfig } from '../config/runtime';
-import { normalizeAgentName, resolveRuntimeAgentName } from './agent-variant';
+import {
+  createDisplayNameMentionRewriter,
+  normalizeAgentName,
+  resolveRuntimeAgentName,
+} from './agent-variant';
 
 const TEST_DIRECTORY = 'runtime-test-agent-variant';
 
@@ -85,6 +89,37 @@ describe('resolveRuntimeAgentName', () => {
 
     expect(resolveRuntimeAgentName(runtimeFor(config), 'researcher')).toBe(
       'explorer',
+    );
+  });
+
+  test('resolves names from the finalized registry alias mappings', () => {
+    const registry = {
+      canonicalIdByRuntimeName: {
+        docsresearcher: 'docsresearcher',
+        docsalias: 'docsresearcher',
+        explore: 'explorer',
+        explorer: 'explorer',
+      },
+      runtimeNameByCanonicalId: {
+        docsresearcher: 'docsalias',
+        explorer: 'explorer',
+      },
+    };
+
+    expect(resolveRuntimeAgentName(registry, '@docsalias')).toBe(
+      'docsresearcher',
+    );
+    expect(resolveRuntimeAgentName(registry, 'explore')).toBe('explorer');
+  });
+
+  test('rewrites mentions using finalized runtime display names', () => {
+    const rewrite = createDisplayNameMentionRewriter({
+      canonicalIdByRuntimeName: { docsalias: 'docsresearcher' },
+      runtimeNameByCanonicalId: { docsresearcher: 'docsalias' },
+    });
+
+    expect(rewrite('Ask @docsalias, not @other.')).toBe(
+      'Ask @docsresearcher, not @other.',
     );
   });
 

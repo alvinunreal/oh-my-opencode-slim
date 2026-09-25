@@ -21,7 +21,7 @@ This document describes how to configure and customize oh-my-opencode-slim on a 
 | **Per-agent skills** | `agents.<agent>.skills` | Explicitly restrict or authorize specific local codebase skills/scripts that this agent is allowed to execute. |
 | **Automatic project-local skills** | `agents.<agent>.skills_include_local` | Add all valid skills discovered under this project's `.opencode/skills/**/SKILL.md` tree without listing every skill name. |
 | **Per-agent MCPs** | `agents.<agent>.mcps` | Assign, restrict, or authorize specific Model Context Protocol (MCP) servers (like `context7` or `gh_grep`) to specific agents. |
-| **Presets** | `presets` configuration block | Bundle named agent environments. User and project preset definitions deep-merge; the active preset then merges into `agents`. |
+| **Presets** | `presets` configuration block | Bundle named agent environments and optional `marketplace.agents` activation. User and project definitions merge; the active preset then merges into `agents`. |
 | **Precedence** | User config, project config, presets, prompt files | Project-local settings take precedence over user-global settings, while root `agents.*` entries beat active preset entries. |
 
 ---
@@ -46,6 +46,29 @@ When oh-my-opencode-slim loads, it resolves configuration properties and prompt 
 
 ### Note on Root Overrides vs Presets
 The root `agents.*` configuration (defined at the top level of user or project config) always takes precedence over the active preset configurations. To override a root agent choice globally, you must specify the override in the project-level root `agents.*` rather than inside a local preset configuration alone.
+
+Marketplace packages are installed in a user-level store, but activation is
+per preset. A project can activate one in its flat preset without moving its
+ordinary agent entries under `agents`:
+
+```jsonc
+{
+  "preset": "work",
+  "presets": {
+    "work": {
+      "oracle": { "model": "openai/gpt-6-astra" },
+      "marketplace": { "agents": ["publisher/package"] }
+    }
+  }
+}
+```
+
+Project overrides merge with user preset definitions. An explicit
+`"marketplace": { "agents": [] }` clears an inherited activation list;
+omitting `marketplace` leaves it inherited. `marketplace enable` and `disable`
+write to the project plugin config when one exists, otherwise to the user
+plugin config. `marketplace remove` deletes references from both scopes and
+all their presets. See [Agent Marketplace](marketplace.md).
 
 ---
 

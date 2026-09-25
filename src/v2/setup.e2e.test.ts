@@ -24,9 +24,15 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readdirSync as readDirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import * as path from 'node:path';
+import { MarketplaceStore } from '../marketplace/store';
 import { flushLoggerForTesting } from '../utils/logger';
-import { createV2Setup } from './setup';
-import type { V2Context } from './types';
+import { compilePermissionPolicy } from './permissions';
+import {
+  createV2Setup,
+  snapshotV2HostAgents,
+  V2AgentRegistryNotReadyError,
+} from './setup';
+import type { V2Context, V2PermissionRule } from './types';
 
 type CapturedTool = {
   name: string;
@@ -36,11 +42,13 @@ type CapturedTool = {
 
 interface MockCalls {
   agentUpdates: Array<{ id: string }>;
+  agentConfigs: Map<string, Record<string, unknown>>;
   agentDefault: string | undefined;
   agentTransformCount: number;
   toolAdds: CapturedTool[];
   commandAdds: Array<{ name: string; definition: Record<string, unknown> }>;
   mcpSets: Array<{ name: string; config: Record<string, unknown> }>;
+  mcpDraftSnapshots: string[][];
   hooks: string[];
   toolBeforeCb:
     | ((event: Record<string, unknown> & { input: unknown }) => Promise<void>)
@@ -51,6 +59,7 @@ interface MockCalls {
   contextHookCb:
     | ((event: Record<string, unknown>) => Promise<void>)
     | undefined;
+  pendingMcpCallback?: (draft: unknown) => void;
   disposed: string[];
 }
 
@@ -109,18 +118,31 @@ function createEventQueue() {
   };
 }
 
-function makeMockV2Context(projectDir: string): {
+function makeMockV2Context(
+  projectDir: string,
+  nativeAgents: Record<string, Record<string, unknown>> = {},
+  options: {
+    invokeAgentCallback?: boolean;
+    replayAgentCallback?: boolean;
+    nativeMcps?: Record<string, Record<string, unknown>>;
+    delayMcpRegistration?: boolean;
+    delayFirstMcpCallback?: boolean;
+    mcpTransform?: 'unavailable' | 'throws';
+  } = {},
+): {
   ctx: V2Context;
   calls: MockCalls;
   events: ReturnType<typeof createEventQueue>;
 } {
   const calls: MockCalls = {
     agentUpdates: [],
+    agentConfigs: new Map(),
     agentDefault: undefined,
     agentTransformCount: 0,
     toolAdds: [],
     commandAdds: [],
     mcpSets: [],
+    mcpDraftSnapshots: [],
     hooks: [],
     toolBeforeCb: undefined,
     toolAfterCb: undefined,
@@ -128,6 +150,7 @@ function makeMockV2Context(projectDir: string): {
     disposed: [],
   };
   const events = createEventQueue();
+  let mcpTransformCount = 0;
   const reg = (label: string) => ({
     dispose: () => {
       calls.disposed.push(label);
@@ -148,18 +171,42 @@ function makeMockV2Context(projectDir: string): {
     agent: {
       transform: async (cb: (draft: unknown) => void) => {
         calls.agentTransformCount += 1;
-        cb({
-          list: () => [],
-          get: () => undefined,
+        const draft = {
+          list: () =>
+            Object.entries(nativeAgents).map(([id, config]) => ({
+              id,
+              ...config,
+            })),
+          get: (id: string) => nativeAgents[id],
           default: (id: string | undefined) => {
             calls.agentDefault = id;
           },
           update: (id: string, fn: (agent: unknown) => void) => {
             calls.agentUpdates.push({ id });
-            fn({});
+            const config = calls.agentConfigs.get(id) ?? {
+              ...(nativeAgents[id] ?? {}),
+            };
+            fn(config);
+            calls.agentConfigs.set(id, config);
           },
           remove: () => {},
-        });
+        };
+        if (options.invokeAgentCallback !== false) cb(draft);
+        if (options.replayAgentCallback) {
+          const hostPermissions = nativeAgents.orchestrator?.permissions;
+          if (Array.isArray(hostPermissions)) {
+            hostPermissions.splice(0, hostPermissions.length, {
+              action: '*',
+              resource: '*',
+              effect: 'deny',
+            });
+          }
+          nativeAgents.orchestrator = {
+            ...(nativeAgents.orchestrator ?? {}),
+            model: { id: 'mutated-marketplace-model', providerID: 'changed' },
+          };
+          cb(draft);
+        }
         return reg(`agent:${calls.agentTransformCount}`);
       },
       reload: async () => ({}),
@@ -214,15 +261,31 @@ function makeMockV2Context(projectDir: string): {
     },
     mcp: {
       transform: async (cb: (draft: unknown) => void) => {
-        cb({
-          list: () => [],
-          get: () => undefined,
+        if (options.mcpTransform === 'throws') {
+          throw new Error('host MCP transform registration failed');
+        }
+        mcpTransformCount += 1;
+        const draft = {
+          list: () => {
+            const entries = Object.entries(options.nativeMcps ?? {});
+            calls.mcpDraftSnapshots.push(entries.map(([name]) => name));
+            return entries;
+          },
+          get: (name: string) => options.nativeMcps?.[name],
           set: (name: string, config: Record<string, unknown>) => {
             calls.mcpSets.push({ name, config });
           },
           update: () => {},
           remove: () => {},
-        });
+        };
+        if (
+          (options.delayFirstMcpCallback || options.delayMcpRegistration) &&
+          mcpTransformCount === 1
+        ) {
+          calls.pendingMcpCallback = cb;
+        } else {
+          cb(draft);
+        }
         return reg('mcp.transform');
       },
       reload: async () => {},
@@ -236,8 +299,33 @@ function makeMockV2Context(projectDir: string): {
       }),
     },
   } as unknown as V2Context;
+  if (options.mcpTransform === 'unavailable') {
+    delete (ctx as { mcp?: V2Context['mcp'] }).mcp;
+  }
 
   return { ctx, calls, events };
+}
+
+function effectiveRule(
+  rules: readonly V2PermissionRule[],
+  action: string,
+  resource: string,
+): V2PermissionRule['effect'] {
+  return (
+    rules.findLast(
+      (rule) =>
+        permissionPatternMatches(action, rule.action) &&
+        permissionPatternMatches(resource, rule.resource),
+    )?.effect ?? 'ask'
+  );
+}
+
+function permissionPatternMatches(value: string, pattern: string): boolean {
+  const expression = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replaceAll('*', '.*')
+    .replaceAll('?', '.');
+  return new RegExp(`^${expression}$`, 's').test(value);
 }
 
 /** v2 usage telemetry event (cache-monitor bust signature). */
@@ -336,6 +424,449 @@ describe('createV2Setup e2e', () => {
 
     await cleanup();
     expect(calls.disposed.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  test('finalizes native ordered permission policy before agent projection', async () => {
+    const nativePermissions = [
+      { action: 'read', resource: 'src/**', effect: 'deny' },
+      { action: 'read', resource: 'src/private.ts', effect: 'allow' },
+    ];
+    const { ctx, calls } = makeMockV2Context(projectDir, {
+      orchestrator: {
+        model: { id: 'host-model', providerID: 'host-provider' },
+        permissions: nativePermissions,
+      },
+    });
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(calls.agentConfigs.get('orchestrator')?.model).toEqual({
+        id: 'host-model',
+        providerID: 'host-provider',
+      });
+      const permissions = calls.agentConfigs.get('orchestrator')
+        ?.permissions as V2PermissionRule[];
+      expect(effectiveRule(permissions, 'read', 'src/private.ts')).toBe(
+        'allow',
+      );
+      expect(effectiveRule(permissions, 'read', 'src/secret.ts')).toBe('deny');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('resolves native permission snapshots for display-name aliases', async () => {
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        agents: { explorer: { displayName: 'Scout' } },
+      }),
+    );
+    const nativePermissions = [
+      { action: '*', resource: '*', effect: 'deny' },
+      { action: 'read', resource: 'docs/**', effect: 'allow' },
+    ];
+    const { ctx, calls } = makeMockV2Context(projectDir, {
+      Scout: { permissions: nativePermissions },
+    });
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const rules = calls.agentConfigs.get('explorer')
+        ?.permissions as V2PermissionRule[];
+      expect(effectiveRule(rules, 'read', 'docs/guide.md')).toBe('allow');
+      expect(effectiveRule(rules, 'edit', 'docs/guide.md')).toBe('deny');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('marketplace ceilings deny unknown actions and skills despite host allow', () => {
+    const policy = compilePermissionPolicy({
+      baselineRules: [{ action: '*', resource: '*', effect: 'allow' }],
+      hostRules: [{ action: '*', resource: '*', effect: 'allow' }],
+      marketplace: {
+        actions: { read: 'ask', skill: 'allow' },
+        skills: ['known-skill'],
+        mcpNamespaces: [],
+      },
+    });
+
+    expect(policy.decide('read', 'src/index.ts')).toBe('ask');
+    expect(policy.decide('edit', 'src/index.ts')).toBe('deny');
+    expect(policy.decideSkill('known-skill')).toBe('allow');
+    expect(policy.decideSkill('unknown-skill')).toBe('deny');
+    expect(effectiveRule(policy.rules, 'skill', 'known-skill')).toBe(
+      policy.decideSkill('known-skill'),
+    );
+    expect(effectiveRule(policy.rules, 'skill', 'unknown-skill')).toBe(
+      policy.decideSkill('unknown-skill'),
+    );
+  });
+
+  test('snapshots native model/config without flattening permission rules', () => {
+    const permissions = [
+      { action: 'read', resource: 'src/**', effect: 'deny' },
+      { action: 'read', resource: 'src/private.ts', effect: 'allow' },
+    ];
+    const snapshot = snapshotV2HostAgents({
+      list: () => [{ id: 'custom', model: { id: 'm', providerID: 'p' } }],
+      get: () => ({
+        config: { temperature: 0.2 },
+        model: { id: 'm', providerID: 'p' },
+        permissions,
+      }),
+    });
+
+    expect(snapshot.custom).toMatchObject({
+      model: 'p/m',
+      temperature: 0.2,
+      permissions,
+    });
+    expect(snapshot.custom.permissions).toBe(permissions);
+  });
+
+  test('replayed agent callbacks reuse the first finalized registry snapshot', async () => {
+    const nativePermissions = [
+      { action: 'read', resource: 'src/**', effect: 'deny' },
+      { action: 'read', resource: 'src/private.ts', effect: 'allow' },
+    ];
+    const { ctx, calls } = makeMockV2Context(
+      projectDir,
+      {
+        orchestrator: {
+          model: { id: 'initial-model', providerID: 'initial-provider' },
+          permissions: nativePermissions,
+        },
+      },
+      { replayAgentCallback: true },
+    );
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(calls.agentConfigs.get('orchestrator')?.model).toEqual({
+        id: 'initial-model',
+        providerID: 'initial-provider',
+      });
+      const rules = calls.agentConfigs.get('orchestrator')
+        ?.permissions as V2PermissionRule[];
+      expect(effectiveRule(rules, 'read', 'src/private.ts')).toBe('allow');
+      expect(effectiveRule(rules, 'read', 'src/secret.ts')).toBe('deny');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('registers commands without invoking agent finalization', async () => {
+    const { ctx, calls } = makeMockV2Context(
+      projectDir,
+      {},
+      { invokeAgentCallback: false },
+    );
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(calls.commandAdds.map((command) => command.name)).toContain(
+        'deepwork',
+      );
+      expect(calls.agentUpdates).toHaveLength(0);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('MCP registration does not change the configured capability snapshot', async () => {
+    const { ctx, calls } = makeMockV2Context(
+      projectDir,
+      {},
+      {
+        nativeMcps: {
+          custom_docs: { type: 'remote', url: 'https://docs.example.test/mcp' },
+        },
+        delayMcpRegistration: true,
+      },
+    );
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      // The registration callback never rediscovers or rewrites the frozen
+      // preflight snapshot.
+      expect(calls.mcpDraftSnapshots).toEqual([]);
+      expect(calls.agentUpdates.map(({ id }) => id)).toContain('orchestrator');
+      expect(calls.pendingMcpCallback).toBeFunction();
+      calls.pendingMcpCallback?.({
+        list: () => [['late_native', { type: 'remote' }]],
+        get: () => undefined,
+        set: (name: string, config: Record<string, unknown>) => {
+          calls.mcpSets.push({ name, config });
+        },
+        update: () => {},
+        remove: () => {},
+      });
+      expect(calls.mcpDraftSnapshots).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('unavailable or failing MCP transform excludes Slim built-ins but preserves host servers', async () => {
+    const store = new MarketplaceStore();
+    const manifest = {
+      schemaVersion: 2 as const,
+      id: 'community/host-docs',
+      version: '1.0.0',
+      displayName: 'Host docs',
+      description: 'Host docs agent',
+      agentName: 'hostdocs',
+      prompt: 'Read docs.',
+      author: { name: 'Community' },
+      tags: ['docs'],
+      license: 'MIT',
+      compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+      routing: {
+        description: 'Docs research',
+        keywords: ['docs'],
+        when: 'Docs needed',
+      },
+      skills: [],
+      mcps: ['host_docs'],
+      tools: [],
+      model: { source: 'explicit' as const, candidates: ['provider/model'] },
+      extends: { builtin: 'explorer' as const, promptMode: 'append' as const },
+    };
+    store.install({ manifest });
+    store.install({
+      manifest: {
+        ...manifest,
+        id: 'community/builtin-docs',
+        agentName: 'builtindocs',
+        displayName: 'Builtin docs',
+        mcps: ['context7'],
+      },
+    });
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'work',
+        presets: {
+          work: {
+            marketplace: {
+              agents: ['community/host-docs', 'community/builtin-docs'],
+            },
+          },
+        },
+      }),
+    );
+    await Bun.write(
+      path.join(configDir, 'opencode.json'),
+      JSON.stringify({
+        mcp: {
+          servers: {
+            host_docs: {
+              type: 'remote',
+              url: 'https://docs.test',
+              timeout: { startup: 1000, request: 2000 },
+            },
+          },
+        },
+      }),
+    );
+    for (const mcpTransform of ['unavailable', 'throws'] as const) {
+      const { ctx, calls } = makeMockV2Context(
+        projectDir,
+        {},
+        { mcpTransform },
+      );
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expect(calls.mcpSets).toEqual([]);
+        expect(calls.agentConfigs.has('hostdocs')).toBe(true);
+        expect(calls.agentConfigs.has('builtindocs')).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    }
+  }, 20_000);
+
+  test('deferred first MCP callback preserves activation and permission projection in both orders', async () => {
+    const store = new MarketplaceStore();
+    store.install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'community/docs-researcher',
+        version: '1.0.0',
+        displayName: 'Docs researcher',
+        description: 'Docs research agent',
+        agentName: 'docsresearcher',
+        prompt: 'Read docs.',
+        author: { name: 'Community' },
+        tags: ['docs'],
+        license: 'MIT',
+        compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+        routing: {
+          description: 'Docs research',
+          keywords: ['docs'],
+          when: 'Docs needed',
+        },
+        skills: [],
+        mcps: ['custom_docs'],
+        tools: [],
+        model: { source: 'explicit', candidates: ['provider/model'] },
+        extends: { builtin: 'explorer', promptMode: 'append' },
+      },
+    });
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'work',
+        presets: {
+          work: { marketplace: { agents: ['community/docs-researcher'] } },
+        },
+      }),
+    );
+    const hostConfig = path.join(configDir, 'opencode.json');
+    for (const [delayFirstMcpCallback, disabledCustom] of [
+      [false, false],
+      [true, false],
+      [false, true],
+      [true, true],
+    ] as const) {
+      await Bun.write(
+        hostConfig,
+        JSON.stringify({
+          mcp: {
+            servers: {
+              custom_docs: {
+                type: 'remote',
+                url: 'https://docs.test',
+                disabled: disabledCustom,
+              },
+              disabled_docs: {
+                type: 'remote',
+                url: 'https://disabled.test',
+                disabled: true,
+              },
+              malformed_docs: { type: 'remote' },
+            },
+          },
+        }),
+      );
+      const { ctx, calls } = makeMockV2Context(
+        projectDir,
+        {},
+        {
+          delayFirstMcpCallback,
+          nativeMcps: {
+            late_native: { type: 'remote', url: 'https://late.test' },
+          },
+        },
+      );
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expect(calls.agentConfigs.has('docsresearcher')).toBe(!disabledCustom);
+        const rules = calls.agentConfigs.get('docsresearcher')?.permissions as
+          | V2PermissionRule[]
+          | undefined;
+        if (rules) {
+          expect(effectiveRule(rules, 'custom_docs_*', '*')).toBe('allow');
+          expect(effectiveRule(rules, 'disabled_docs_*', '*')).not.toBe(
+            'allow',
+          );
+          expect(effectiveRule(rules, 'malformed_docs_*', '*')).not.toBe(
+            'allow',
+          );
+          expect(effectiveRule(rules, 'late_native_*', '*')).not.toBe('allow');
+        }
+        if (delayFirstMcpCallback) {
+          expect(calls.mcpDraftSnapshots).toEqual([]);
+          calls.pendingMcpCallback?.({
+            list: () => [],
+            get: () => undefined,
+            set: () => {},
+            update: () => {},
+            remove: () => {},
+          });
+          expect(calls.agentConfigs.get('docsresearcher')?.permissions).toEqual(
+            rules,
+          );
+        }
+      } finally {
+        await cleanup();
+      }
+    }
+  }, 20_000);
+
+  test('MCP callback timing does not change the finalized agent permissions', async () => {
+    const nativePermissions = [
+      { action: 'read', resource: 'src/**', effect: 'deny' },
+      { action: 'read', resource: 'src/private.ts', effect: 'allow' },
+    ];
+    const results: V2PermissionRule[][] = [];
+    for (const delayMcpRegistration of [false, true]) {
+      const { ctx, calls } = makeMockV2Context(
+        projectDir,
+        { orchestrator: { permissions: nativePermissions } },
+        {
+          nativeMcps: { custom_docs: { type: 'remote' } },
+          delayMcpRegistration,
+        },
+      );
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        results.push(
+          calls.agentConfigs.get('orchestrator')
+            ?.permissions as V2PermissionRule[],
+        );
+        calls.pendingMcpCallback?.({
+          list: () => [['late_native', { type: 'remote' }]],
+          get: () => undefined,
+          set: () => {},
+          update: () => {},
+          remove: () => {},
+        });
+        expect(calls.agentConfigs.get('orchestrator')?.permissions).toEqual(
+          results.at(-1),
+        );
+      } finally {
+        await cleanup();
+      }
+    }
+    expect(results[1]).toEqual(results[0]);
+  }, 20_000);
+
+  test('context hook rejects before mutation when agent registry is not ready', async () => {
+    const { ctx, calls } = makeMockV2Context(
+      projectDir,
+      {},
+      {
+        invokeAgentCallback: false,
+      },
+    );
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const event = {
+        sessionID: 'ses_not_ready',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'unchanged' }],
+          },
+        ],
+        system: [{ type: 'text', text: 'system' }],
+      } as never;
+      const original = structuredClone(event);
+
+      await expect(calls.contextHookCb?.(event)).rejects.toBeInstanceOf(
+        V2AgentRegistryNotReadyError,
+      );
+      expect(event).toEqual(original);
+    } finally {
+      await cleanup();
+    }
   }, 20_000);
 
   test('reduced ctx (no agent.transform) skips gracefully', async () => {

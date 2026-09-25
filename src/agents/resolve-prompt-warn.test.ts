@@ -34,6 +34,16 @@ describe('resolvePrompt precedence', () => {
       `${FALLBACK}\n\n${APPEND}`,
     );
   });
+
+  test('required suffixes are always last and deterministic', () => {
+    const result = resolvePrompt('a', INLINE, FILE, FALLBACK, APPEND, [
+      'mandatory policy',
+      'final gate',
+    ]);
+    expect(result).toBe(
+      `${INLINE}\n\n${APPEND}\n\nmandatory policy\n\nfinal gate`,
+    );
+  });
 });
 
 describe('resolvePrompt conflict warning', () => {

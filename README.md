@@ -48,6 +48,9 @@ The main idea is simple: instead of forcing one model to do everything, the plug
   work live in Tmux, Zellij, Herdr, cmux, or kitty panes.
 - **[Preset switching](docs/preset-switching.md)** - swap the whole team's
   models at runtime with `/preset`, with single-parent preset inheritance.
+- **[Agent marketplace](docs/marketplace.md)** - install a registry agent into
+  the active preset, or import a local package separately; inspect and manage
+  installed packages from the CLI or the Orchestrator's `marketplace` tool.
 - **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
   across 25 languages, and built-in MCPs for docs and GitHub code
   search.
@@ -181,6 +184,27 @@ extend `base` and override only its designer model. Changes are persisted by
 `/preset` and take effect after an OpenCode reload. See
 [Configuration](docs/configuration.md#preset-inheritance) for the inheritance
 example and precedence rules.
+
+Marketplace activation fits into the same flat preset format; you do not need
+to move existing agent entries under `agents`:
+
+```jsonc
+{
+  "preset": "work",
+  "presets": {
+    "work": {
+      "oracle": { "model": "openai/gpt-6-astra" },
+      "marketplace": { "agents": ["publisher/package"] }
+    }
+  }
+}
+```
+
+`bunx oh-my-opencode-slim marketplace install publisher/package` installs
+**and enables** it in the active preset; `bunx oh-my-opencode-slim marketplace
+import ./package.json` only installs a local file, so enable it separately.
+See [Agent Marketplace](docs/marketplace.md) for commands, status and reload
+behavior.
 
 ### Preset Docs
 
@@ -644,6 +668,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
 | **[Worktrees](docs/worktrees.md)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
+| **[Agent Marketplace](docs/marketplace.md)** | Install/import, enable, update, verify, and remove agent packages; understand reload status |
 | **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
 

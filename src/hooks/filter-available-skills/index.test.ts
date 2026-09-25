@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import assert from 'node:assert/strict';
 import type { PluginInput } from '@opencode-ai/plugin';
+import { buildResolvedAgentRegistry } from '../../agents';
 import type { PluginConfig } from '../../config';
 import { RuntimeConfig } from '../../config/runtime';
+import type { V2PermissionRule } from '../../v2/types';
 import {
   createFilterAvailableSkillsHook,
   filterAvailableSkillsText,
@@ -55,6 +58,45 @@ describe('filterAvailableSkillsText', () => {
 });
 
 describe('createFilterAvailableSkillsHook', () => {
+  test('uses the immutable v2 policy for native host wildcard and skill exceptions', async () => {
+    const runtime = runtimeFor({
+      agents: { explorer: { skills: ['codemap'] } },
+    });
+    const hostRules: V2PermissionRule[] = [
+      { action: 'skill', resource: '*', effect: 'deny' },
+      { action: 'skill', resource: 'codemap', effect: 'allow' },
+    ];
+    const registry = buildResolvedAgentRegistry(runtime, {
+      hostFlavor: 'v2',
+      nativePermissionsByAgent: { explorer: hostRules },
+    });
+    const hook = createFilterAvailableSkillsHook(mockCtx, registry);
+    assert(hostRules[1]);
+    hostRules[1].effect = 'deny';
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            {
+              type: 'text',
+              text: availableSkillsBlock('codemap', 'clonedeps'),
+            },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'explorer' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+    const text = output.messages[0].parts[0].text;
+    expect(text).toContain('<name>codemap</name>');
+    expect(text).not.toContain('<name>clonedeps</name>');
+  });
+
   test('ignores messages without OpenCode info or parts', async () => {
     const hook = createFilterAvailableSkillsHook(mockCtx, runtimeFor());
     const output = {
@@ -107,6 +149,39 @@ describe('createFilterAvailableSkillsHook', () => {
     expect(resultText).toContain('<name>skill1</name>');
     expect(resultText).not.toContain('<name>skill2</name>');
     expect(resultText).toContain('<name>skill3</name>');
+  });
+
+  test('projects skills from the resolved agent registry', async () => {
+    const registry = {
+      skillPermissions: {
+        researcher: { codemap: 'allow', '*': 'deny' },
+      },
+    } as never;
+    const hook = createFilterAvailableSkillsHook(mockCtx, registry);
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            {
+              type: 'text',
+              text: availableSkillsBlock('codemap', 'clonedeps'),
+            },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'researcher' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts[0].text).toContain('<name>codemap</name>');
+    expect(output.messages[0].parts[0].text).not.toContain(
+      '<name>clonedeps</name>',
+    );
   });
 
   test('shows no skills for agents configured with an empty skills list', async () => {
@@ -317,6 +392,47 @@ describe('createFilterAvailableSkillsHook', () => {
     );
     expect(secondOutput.messages[0].parts[0].text).toContain(
       '<name>skill3</name>',
+    );
+  });
+
+  test('keeps the registry snapshot when runtime config is reseeded', async () => {
+    const runtime = runtimeFor({
+      agents: {
+        fixer: {
+          skills: ['skill1'],
+        },
+      },
+    });
+    const hook = createFilterAvailableSkillsHook(mockCtx, runtime);
+
+    RuntimeConfig.init(TEST_DIRECTORY, {
+      agents: {
+        fixer: {
+          skills: ['skill2'],
+        },
+      },
+    });
+
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [
+            { type: 'text', text: availableSkillsBlock('skill1', 'skill2') },
+          ],
+        },
+        {
+          info: { role: 'user', agent: 'fixer' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+
+    await hook['experimental.chat.messages.transform']({}, output);
+
+    expect(output.messages[0].parts[0].text).toContain('<name>skill1</name>');
+    expect(output.messages[0].parts[0].text).not.toContain(
+      '<name>skill2</name>',
     );
   });
 });

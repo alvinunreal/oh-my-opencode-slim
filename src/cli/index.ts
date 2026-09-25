@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { doctor, parseDoctorArgs } from './doctor';
 import { install } from './install';
+import { marketplaceCommand } from './marketplace';
 import { getGeneratedPresetNames, isGeneratedPresetName } from './providers';
 import type {
   BackgroundSubagentsArg,
@@ -75,6 +76,16 @@ oh-my-opencode-slim installer
 Usage:
   bunx oh-my-opencode-slim install [OPTIONS]
   bunx oh-my-opencode-slim doctor [OPTIONS]
+  bunx oh-my-opencode-slim marketplace install <publisher/package[@version]>
+                           Install and enable the package in the active preset
+  bunx oh-my-opencode-slim marketplace import <package.json> [--update]
+  bunx oh-my-opencode-slim marketplace update <publisher/package>
+  bunx oh-my-opencode-slim marketplace list
+  bunx oh-my-opencode-slim marketplace show <package-id> [--json]
+  bunx oh-my-opencode-slim marketplace verify [package-id] [--json]
+  bunx oh-my-opencode-slim marketplace remove <package-id>
+  bunx oh-my-opencode-slim marketplace enable|disable <package-id>
+  bunx oh-my-opencode-slim marketplace status [--json]
 
 Options:
   --skills=yes|no|force  Install bundled skills; force replaces existing skill
@@ -118,24 +129,26 @@ async function main(): Promise<void> {
     const hasSubcommand = args[0] === 'install';
     const installArgs = parseArgs(args.slice(hasSubcommand ? 1 : 0));
     const exitCode = await install(installArgs);
-    process.exit(exitCode);
+    process.exitCode = exitCode;
   } else if (args[0] === 'doctor') {
     const doctorArgs = parseDoctorArgs(args.slice(1));
     const exitCode = await doctor(doctorArgs);
-    process.exit(exitCode);
+    process.exitCode = exitCode;
+  } else if (args[0] === 'marketplace') {
+    process.exitCode = await marketplaceCommand(args.slice(1));
   } else if (args[0] === '-h' || args[0] === '--help') {
     printHelp();
-    process.exit(0);
+    process.exitCode = 0;
   } else {
     console.error(`Unknown command: ${args[0]}`);
     console.error('Run with --help for usage information');
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
 if (import.meta.main) {
   main().catch((err) => {
     console.error('Fatal error:', err);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

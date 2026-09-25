@@ -3,13 +3,14 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { withMarketplaceLease, writeAtomic } from '../marketplace/lease';
+import type { MarketplacePaths } from '../marketplace/paths';
 import {
   INSTALLER_MANAGED_PLUGIN_OPTION,
   type PluginEntry,
@@ -404,6 +405,11 @@ export function stripJsonComments(json: string): string {
     );
 }
 
+function parseJsonConfigContent(content: string): OpenCodeConfig {
+  const withoutBom = content.replace(/^\uFEFF/, '');
+  return JSON.parse(stripJsonComments(withoutBom)) as OpenCodeConfig;
+}
+
 export function parseConfigFile(path: string): {
   config: OpenCodeConfig | null;
   error?: string;
@@ -412,10 +418,9 @@ export function parseConfigFile(path: string): {
     if (!existsSync(path)) return { config: null };
     const stat = statSync(path);
     if (stat.size === 0) return { config: null };
-    // Strip a UTF-8 BOM (RFC 8259 permits one) so JSON.parse does not choke.
-    const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
+    const content = readFileSync(path, 'utf-8');
     if (content.trim().length === 0) return { config: null };
-    return { config: JSON.parse(stripJsonComments(content)) as OpenCodeConfig };
+    return { config: parseJsonConfigContent(content) };
   } catch (err) {
     return { config: null, error: String(err) };
   }
@@ -435,6 +440,57 @@ export function parseConfig(path: string): {
   return { config: null };
 }
 
+function configMutationPaths(filePath: string): MarketplacePaths {
+  const root = join(dirname(filePath), `.${basename(filePath)}.write-lock`);
+  return {
+    rootDir: root,
+    packagesDir: join(root, 'packages'),
+    lockfilePath: join(root, 'lock.json'),
+    lockDir: join(root, 'lock'),
+    stagingDir: join(root, '.staging'),
+  };
+}
+
+function publishJsonFile(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  if (existsSync(filePath)) copyFileSync(filePath, `${filePath}.bak`);
+  writeAtomic(filePath, content);
+}
+
+function withSerializedConfigWrite<T>(filePath: string, operation: () => T): T {
+  return withMarketplaceLease(
+    configMutationPaths(filePath),
+    (lease) => lease.commit(operation),
+    {},
+  );
+}
+
+/** Serialize whole-file read-modify-write operations with other config writers. */
+export function mutateJsonFile(
+  filePath: string,
+  mutate: (current: unknown) => unknown,
+): void {
+  withSerializedConfigWrite(filePath, () => {
+    if (filePath.endsWith('.jsonc')) {
+      console.warn(
+        '[config-manager] Writing to .jsonc file - comments will not be preserved',
+      );
+    }
+    let current: unknown = null;
+    if (existsSync(filePath)) {
+      current = parseJsonConfigContent(readFileSync(filePath, 'utf-8'));
+    }
+    publishJsonFile(filePath, `${JSON.stringify(mutate(current), null, 2)}\n`);
+  });
+}
+
+/** Write JSON atomically under the same lease used by config mutations. */
+export function writeJsonAtomic(filePath: string, value: unknown): void {
+  withSerializedConfigWrite(filePath, () => {
+    publishJsonFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  });
+}
+
 /**
  * Write config to file atomically.
  */
@@ -445,18 +501,7 @@ export function writeConfig(configPath: string, config: OpenCodeConfig): void {
     );
   }
 
-  const tmpPath = `${configPath}.tmp`;
-  const bakPath = `${configPath}.bak`;
-  const content = `${JSON.stringify(config, null, 2)}\n`;
-
-  // Backup existing config if it exists
-  if (existsSync(configPath)) {
-    copyFileSync(configPath, bakPath);
-  }
-
-  // Atomic write pattern: write to tmp, then rename
-  writeFileSync(tmpPath, content);
-  renameSync(tmpPath, configPath);
+  writeJsonAtomic(configPath, config);
 }
 
 export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
@@ -538,7 +583,8 @@ export async function addPluginToOpenCodeTuiConfig(): Promise<ConfigMergeResult>
     );
 
     filteredPlugins.push(pluginEntry);
-    config.plugin = filteredPlugins;
+    if (Array.isArray(config.plugins)) config.plugins = filteredPlugins;
+    else config.plugin = filteredPlugins;
 
     writeConfig(configPath, config);
     return { success: true, configPath };
@@ -564,18 +610,7 @@ export function writeLiteConfig(
     ensureConfigDir();
     const config = generateLiteConfig(installConfig);
 
-    // Atomic write for lite config too
-    const tmpPath = `${configPath}.tmp`;
-    const bakPath = `${configPath}.bak`;
-    const content = `${JSON.stringify(config, null, 2)}\n`;
-
-    // Backup existing config if it exists
-    if (existsSync(configPath)) {
-      copyFileSync(configPath, bakPath);
-    }
-
-    writeFileSync(tmpPath, content);
-    renameSync(tmpPath, configPath);
+    writeJsonAtomic(configPath, config);
 
     return { success: true, configPath };
   } catch (err) {
@@ -695,9 +730,23 @@ export function detectCurrentConfig(): DetectedConfig {
     const configObj = liteConfig as Record<string, unknown>;
     const presetName = configObj.preset as string;
     const presets = configObj.presets as Record<string, unknown>;
-    const agents = presets?.[presetName] as
-      | Record<string, { model?: unknown }>
-      | undefined;
+    const preset = presets?.[presetName];
+    const presetRecord =
+      preset && typeof preset === 'object'
+        ? (preset as Record<string, unknown>)
+        : undefined;
+    const agents = presetRecord
+      ? presetRecord.agents && typeof presetRecord.agents === 'object'
+        ? (presetRecord.agents as Record<string, { model?: unknown }>)
+        : (Object.fromEntries(
+            Object.entries(presetRecord).filter(([name]) => {
+              if (name === 'marketplace') return false;
+              return (
+                name !== 'extends' || typeof presetRecord.extends !== 'string'
+              );
+            }),
+          ) as Record<string, { model?: unknown }>)
+      : undefined;
 
     if (agents && typeof agents === 'object') {
       const models = Object.values(agents)

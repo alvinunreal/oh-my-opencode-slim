@@ -8,9 +8,9 @@ import {
   deepMerge,
   mergeAgentOverrides,
   mergePresetMaps,
-  normalizePreset,
   PresetResolutionError,
   resolvePreset,
+  resolvePresetDefinition,
 } from './presets';
 import {
   BackgroundJobsConfigSchema,
@@ -279,23 +279,6 @@ function retainExplicitBackgroundJobsFields(
   };
 }
 
-/** Normalize preset syntax before layered config objects are merged. */
-function normalizePresetDeclarations(config: RawPluginConfig): RawPluginConfig {
-  if (!config.presets) {
-    return config;
-  }
-
-  return {
-    ...config,
-    presets: Object.fromEntries(
-      Object.entries(config.presets).map(([name, preset]) => [
-        name,
-        normalizePreset(preset),
-      ]),
-    ),
-  };
-}
-
 /**
  * Load and validate plugin configuration from a specific file path.
  * Supports both .json and .jsonc formats (JSON with comments).
@@ -495,7 +478,7 @@ function loadConfigFromPath(
       };
     }
 
-    return normalizePresetDeclarations(layerConfig);
+    return layerConfig;
   } catch (error) {
     // File doesn't exist or isn't readable - this is expected and fine
     if (
@@ -708,12 +691,20 @@ export function loadPluginConfig(
   // valid presets from being selected. A failed chain is omitted completely,
   // so the selected preset can never receive a partially resolved ancestor.
   let resolvedPresets: ResolvedPresetMap | undefined;
+  let validPresetInputs: RawPluginConfig['presets'];
   const presetInheritanceFailures = new Set<string>();
   if (config.presets) {
     resolvedPresets = {};
+    validPresetInputs = {};
     for (const name of Object.keys(config.presets)) {
       try {
         resolvedPresets[name] = resolvePreset(name, config.presets);
+        const definition = resolvePresetDefinition(name, config.presets);
+        validPresetInputs[name] = definition.marketplace
+          ? definition
+          : (definition.agents as NonNullable<
+              RawPluginConfig['presets']
+            >[string]);
       } catch (error) {
         presetInheritanceFailures.add(name);
         const message =
@@ -732,10 +723,10 @@ export function loadPluginConfig(
     }
   }
 
-  const { presets: _rawPresets, ...configWithoutPresets } = config;
-  const runtimeConfig: ResolvedPluginConfig = resolvedPresets
-    ? { ...configWithoutPresets, presets: resolvedPresets }
-    : configWithoutPresets;
+  const runtimeConfig: ResolvedPluginConfig = {
+    ...config,
+    ...(validPresetInputs ? { presets: validPresetInputs } : {}),
+  };
 
   // Resolve preset and merge with root agents
   if (runtimeConfig.preset) {

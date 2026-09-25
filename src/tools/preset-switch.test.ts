@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { PluginConfig } from '../config';
+import {
+  loadPluginConfig,
+  type PluginConfig,
+  PluginConfigSchema,
+} from '../config';
 import {
   buildPresetSummary,
   deletePreset,
@@ -165,6 +169,52 @@ describe('switchPresetOnDisk', () => {
     expect(persisted.agents).toEqual({
       orchestrator: { model: 'old-model' },
     });
+  });
+
+  test('preserves local preset marketplace activation when switching presets', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const marketplaceAgents = ['team/toolkit/reviewer'];
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          cheap: {
+            orchestrator: { model: 'anthropic/claude-3.5-haiku' },
+            marketplace: { agents: marketplaceAgents },
+          },
+        },
+      }),
+    );
+
+    const result = switchPresetOnDisk(tempDir, 'cheap', {
+      presets: {
+        cheap: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      preset?: string;
+      presets?: Record<string, { marketplace?: { agents?: string[] } }>;
+    };
+    expect(persisted.preset).toBe('cheap');
+    expect(persisted.presets?.cheap.marketplace?.agents).toEqual(
+      marketplaceAgents,
+    );
+  });
+
+  test('allows switching to a marketplace-only preset with explicit empty agents', () => {
+    const result = switchPresetOnDisk(tempDir, 'marketplace', {
+      presets: {
+        marketplace: { agents: {}, marketplace: { agents: [] } },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toEqual([]);
   });
 
   test('persists preset name when the user config has a UTF-8 BOM', () => {
@@ -813,8 +863,163 @@ describe('writePreset', () => {
 
     expect(persisted.presets?.child).toEqual({
       extends: 'base',
-      agents: {},
     });
+  });
+
+  test('round-trips marketplace-only and explicit-empty presets', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          base: { orchestrator: { model: 'openai/gpt-6' } },
+        },
+        existing: true,
+      }),
+    );
+
+    const activation = { agents: ['team/toolkit/reviewer'] };
+    expect(
+      writePreset(tempDir, 'marketplace', {
+        marketplace: activation,
+      }),
+    ).toBe(true);
+    expect(
+      writePreset(tempDir, 'cleared', {
+        extends: 'base',
+        agents: {},
+        marketplace: activation,
+      }),
+    ).toBe(true);
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, unknown>;
+      existing: boolean;
+    };
+    expect(persisted.presets.marketplace).toEqual({ marketplace: activation });
+    expect(persisted.presets.cleared).toEqual({
+      extends: 'base',
+      marketplace: activation,
+    });
+    expect(persisted.existing).toBe(true);
+
+    const parsed = PluginConfigSchema.parse(persisted);
+    expect(parsed.presets?.marketplace).toEqual({ marketplace: activation });
+    expect(parsed.presets?.cleared).toEqual({
+      extends: 'base',
+      marketplace: activation,
+    });
+
+    const loaded = loadPluginConfig(tempDir, { silent: true });
+    expect(loaded.presets?.marketplace).toMatchObject({
+      agents: {},
+      marketplace: activation,
+    });
+    expect(loaded.presets?.cleared).toMatchObject({
+      agents: { orchestrator: { model: 'openai/gpt-6' } },
+      marketplace: activation,
+    });
+  });
+
+  test('preserves valid structured presets and supports no-loss editing', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const original = {
+      extends: 'base',
+      agents: { explorer: { model: 'openai/gpt-6' } },
+      marketplace: { agents: ['team/toolkit/reviewer'] },
+    };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          base: { orchestrator: { model: 'anthropic/claude-3.5-haiku' } },
+          edited: original,
+        },
+      }),
+    );
+
+    const editable = getEditablePreset(tempDir, 'edited');
+    expect(writePreset(tempDir, 'edited', editable)).toBe(true);
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, unknown>;
+    };
+    expect(persisted.presets.edited).toEqual(original);
+    expect(PluginConfigSchema.parse(persisted).presets?.edited).toEqual(
+      original,
+    );
+    expect(
+      loadPluginConfig(tempDir, { silent: true }).presets?.edited,
+    ).toMatchObject({
+      agents: {
+        ...original.agents,
+        orchestrator: { model: 'anthropic/claude-3.5-haiku' },
+      },
+      marketplace: original.marketplace,
+    });
+  });
+
+  test('serializes preset writes with concurrent leased config mutations', async () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const readyPath = path.join(tempDir, 'lease-held');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          active: { marketplace: { agents: ['team/agent'] } },
+        },
+      }),
+    );
+
+    const configIoUrl = new URL('../cli/config-io.ts', import.meta.url).href;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { mutateJsonFile } = await import(${JSON.stringify(configIoUrl)});\n` +
+          `const fs = await import('node:fs');\n` +
+          `mutateJsonFile(process.argv[1], (current) => {\n` +
+          `  fs.writeFileSync(process.argv[2], 'ready');\n` +
+          `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);\n` +
+          `  return { ...current, concurrentWriter: true };\n` +
+          `});`,
+        configPath,
+        readyPath,
+      ],
+      { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(readyPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(fs.existsSync(readyPath)).toBe(true);
+    expect(
+      writePreset(tempDir, 'newPreset', {
+        agents: { orchestrator: { model: 'openai/gpt-6' } },
+        marketplace: { agents: [] },
+      }),
+    ).toBe(true);
+    expect(await child.exited).toBe(0);
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      concurrentWriter?: boolean;
+      presets?: Record<string, { marketplace?: { agents?: string[] } }>;
+    };
+    expect(persisted.concurrentWriter).toBe(true);
+    expect(persisted.presets?.active.marketplace?.agents).toEqual([
+      'team/agent',
+    ]);
+    expect(persisted.presets?.newPreset.marketplace?.agents).toEqual([]);
   });
 });
 

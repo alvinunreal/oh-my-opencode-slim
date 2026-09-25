@@ -22,14 +22,6 @@ describe('orchestrator prompt', () => {
     expect(prompt).toContain('Do not rely on ordinary text alone');
   });
 
-  test('shows the host-specific task continuation call without nested code spans', () => {
-    const prompt = buildOrchestratorPrompt();
-
-    expect(prompt).toContain(
-      '`task(subagent_type: "<agent>", task_id: "<task-id>", prompt: "...", background: true)`',
-    );
-  });
-
   test('falls back to question when wait_for_user is disabled', () => {
     const prompt = buildOrchestratorPrompt(undefined, undefined, false);
 
@@ -48,5 +40,30 @@ describe('orchestrator prompt', () => {
     expect(prompt).toContain('call `wait_for_user` as your final tool action');
     expect(prompt).not.toContain('End Turn After Background Tasks');
     expect(prompt).toContain('Do not immediately wait after spawning');
+  });
+
+  test('instructs the orchestrator to use the marketplace tool', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('Use the `marketplace` tool');
+    expect(prompt).toContain('list, show, verify, and status are read-only');
+    expect(prompt).toContain(
+      'Use install/update with a canonical package ID for the fixed HTTPS registry',
+    );
+  });
+
+  test('omits marketplace instructions when the tool is disabled', () => {
+    const prompt = buildOrchestratorPrompt(
+      undefined,
+      undefined,
+      true,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    expect(prompt).not.toContain('Use the `marketplace` tool');
   });
 });

@@ -15,7 +15,7 @@ export function ensureCouncilCompactionException(prompt: string): string {
   return `${prompt}\n\n${COUNCIL_COMPACTION_EXCEPTION}`;
 }
 
-const COUNCIL_SYNTHESIS_REINFORCEMENT = `\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually by name, then produce the required output with a synthesized Council Response, a Per-Councillor Details section using each councillor's exact seat name (e.g. "alpha", not the model label), and a Council Summary with Consensus Level (unanimous|majority|split), Agreed Points, Disagreements + resolution, Remaining Uncertainty, and Recommended Action. ${COUNCIL_COMPACTION_EXCEPTION}`;
+export const COUNCIL_SYNTHESIS_REINFORCEMENT = `\n\n---\n\nYou MUST follow the Synthesis Process steps before producing output: review each councillor response individually by name, then produce the required output with a synthesized Council Response, a Per-Councillor Details section using each councillor's exact seat name (e.g. "alpha", not the model label), and a Council Summary with Consensus Level (unanimous|majority|split), Agreed Points, Disagreements + resolution, Remaining Uncertainty, and Recommended Action. ${COUNCIL_COMPACTION_EXCEPTION}`;
 
 const COUNCIL_AGENT_PROMPT = `You are the Council agent - a \
 synthesizer for multi-model consensus.
@@ -75,14 +75,17 @@ export function createCouncilAgent(
   customPrompt?: string,
   customAppendPrompt?: string,
 ): AgentDefinition {
-  const prompt =
+  // A custom prompt replaces the base format rules, but the compaction
+  // exception must survive every override path (no-op when already present).
+  const prompt = ensureCouncilCompactionException(
     resolvePrompt(
       'council',
       customPrompt,
       undefined,
       COUNCIL_AGENT_PROMPT,
       customAppendPrompt,
-    ) + COUNCIL_SYNTHESIS_REINFORCEMENT;
+    ),
+  );
 
   return {
     name: 'council',

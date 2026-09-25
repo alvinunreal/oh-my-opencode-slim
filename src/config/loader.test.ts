@@ -1410,6 +1410,59 @@ describe('preset resolution', () => {
     });
   });
 
+  test('preserves flat presets, inherited marketplace activation, and empty overrides across layers', () => {
+    const userConfigDir = path.join(tempDir, 'user-config', 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigDir, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        presets: {
+          base: {
+            oracle: { model: 'base/oracle' },
+            marketplace: { agents: ['community/base-agent'] },
+          },
+          child: {
+            extends: 'base',
+            explorer: { model: 'base/explorer' },
+            marketplace: { agents: ['community/user-agent'] },
+          },
+          inherited: { extends: 'base' },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'child',
+        presets: {
+          child: {
+            marketplace: { agents: [] },
+            agents: { explorer: { temperature: 0.5 } },
+          },
+        },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.agents).toEqual({
+      oracle: { model: 'base/oracle' },
+      explorer: { model: 'base/explorer', temperature: 0.5 },
+    });
+    expect(config.presets?.child).toMatchObject({
+      extends: 'base',
+      marketplace: { agents: [] },
+    });
+    expect(config.presets?.inherited).toMatchObject({
+      extends: 'base',
+      marketplace: { agents: ['community/base-agent'] },
+    });
+    expect(config.agents).not.toHaveProperty('marketplace');
+  });
+
   test('missing preset: preset set but not in presets -> returns empty/root agents', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');

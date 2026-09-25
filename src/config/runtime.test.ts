@@ -291,6 +291,31 @@ describe('RuntimeConfig', () => {
     expect(runtime.getRuntimePreset()).toBeNull();
   });
 
+  test('resolves inherited preset layers before projecting agent overrides', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      preset: 'team',
+      presets: {
+        shared: {
+          agents: {
+            explorer: { model: 'provider/base', temperature: 0.4 },
+          },
+        },
+        team: {
+          extends: 'shared',
+          agents: { explorer: { model: 'provider/team' } },
+        },
+      },
+      agents: { explorer: { temperature: 0.2 } },
+    });
+
+    expect(runtime.agent('explorer')).toEqual({
+      model: 'provider/team',
+      temperature: 0.2,
+    });
+    expect(runtime.primaryModel).toBe('provider/team');
+  });
+
   test('everModelSwitched / hasModelSwitched round-trips', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {});

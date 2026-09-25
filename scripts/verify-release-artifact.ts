@@ -29,6 +29,8 @@ const packagedRequiredFiles = [
   'dist/index.js',
   'dist/index.d.ts',
   'dist/server/index.js',
+  'dist/marketplace-contract/index.js',
+  'dist/marketplace-contract/index.d.ts',
   'dist/tui.js',
   'dist/tui.d.ts',
   'dist/cli/index.js',
@@ -271,6 +273,22 @@ function verifyFreshInstall(tarballPath: string) {
     run('node', ['--input-type=module', '--eval', serverSmokeScript], {
       cwd: installDir,
     });
+
+    const marketplaceContractSmokeScript = [
+      "import { DEFAULT_MARKETPLACE_REGISTRY_URL, MarketplacePackageBundleSchema } from 'oh-my-opencode-slim/marketplace-contract';",
+      "if (typeof DEFAULT_MARKETPLACE_REGISTRY_URL !== 'string') throw new Error('marketplace contract is missing its registry URL');",
+      "if (typeof MarketplacePackageBundleSchema?.safeParse !== 'function') throw new Error('marketplace contract is missing its package bundle schema');",
+      "console.log('marketplace contract package loads');",
+      'process.exit(0);',
+    ].join('\n');
+    console.log('Importing installed marketplace contract subpath...');
+    run(
+      'node',
+      ['--input-type=module', '--eval', marketplaceContractSmokeScript],
+      {
+        cwd: installDir,
+      },
+    );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

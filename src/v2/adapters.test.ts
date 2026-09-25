@@ -6,7 +6,7 @@ import {
   parseModelRef,
   rewritePromptForV2,
 } from './adapters';
-import type { V2AgentDraft } from './types';
+import type { V2AgentDraft, V2PermissionRule } from './types';
 
 function globMatch(pattern: string, value: string): boolean {
   if (pattern === '*') return true;
@@ -244,5 +244,24 @@ describe('applyAgentToDraft', () => {
     );
     expect(toolsAllowIdx).toBeGreaterThanOrEqual(0);
     expect(denyIdx).toBeGreaterThan(toolsAllowIdx); // deny wins under findLast
+  });
+
+  test('uses frozen registry permissions without adapter defaults or sharing', () => {
+    const { draft, calls } = recorder();
+    const frozenRules: readonly V2PermissionRule[] = Object.freeze([
+      Object.freeze({ action: 'read', resource: 'src/**', effect: 'deny' }),
+    ]);
+
+    applyAgentToDraft(
+      draft,
+      'a',
+      { tools: ['read'], permission: { read: 'allow' } },
+      frozenRules,
+    );
+
+    const projected = calls[0].agent.permissions as V2PermissionRule[];
+    expect(projected).toEqual(frozenRules);
+    expect(projected).not.toBe(frozenRules);
+    expect(projected[0]).not.toBe(frozenRules[0]);
   });
 });

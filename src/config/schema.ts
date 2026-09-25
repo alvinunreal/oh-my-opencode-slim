@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SUPPORTED_SPECIALIST_ROLES } from './agent-roles';
 import {
   AGENT_THEME_COLORS,
   DEFAULT_MAX_RETAINED_SNAPSHOTS,
@@ -60,6 +61,7 @@ export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
 
 export const AgentOverrideConfigSchema = z
   .object({
+    baseRole: z.enum(SUPPORTED_SPECIALIST_ROLES).optional(),
     model: z
       .union([
         z.string(),
@@ -341,6 +343,24 @@ export const PresetAgentsSchema = z.record(
 
 export type Preset = z.infer<typeof PresetAgentsSchema>;
 
+const MarketplacePackageIdSchema = z.string().trim().min(1);
+export const MarketplaceActivationSchema = z
+  .object({
+    agents: z
+      .array(MarketplacePackageIdSchema)
+      .superRefine((ids, ctx) => {
+        if (new Set(ids).size !== ids.length) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Package IDs must be unique',
+          });
+        }
+      })
+      .optional(),
+  })
+  .strict();
+export type MarketplaceActivation = z.infer<typeof MarketplaceActivationSchema>;
+
 /**
  * Structured preset syntax. The `agents` wrapper is the preferred syntax for
  * new presets; the loader also accepts the inline form below so adding an
@@ -350,18 +370,26 @@ export const PresetDefinitionSchema = z
   .object({
     extends: z.string().min(1).optional(),
     agents: PresetAgentsSchema,
+    marketplace: MarketplaceActivationSchema.optional(),
   })
   .strict();
 
 const InlinePresetDefinitionSchema = z
   .object({
     extends: z.string().min(1),
+    marketplace: MarketplaceActivationSchema.optional(),
+  })
+  .catchall(AgentOverrideConfigSchema);
+
+const FlatPresetSchema = z
+  .object({
+    marketplace: MarketplaceActivationSchema.optional(),
   })
   .catchall(AgentOverrideConfigSchema);
 
 /** Raw preset syntax accepted in configuration files. */
 export const PresetSchema = z.xor(
-  [PresetDefinitionSchema, InlinePresetDefinitionSchema, PresetAgentsSchema],
+  [PresetDefinitionSchema, InlinePresetDefinitionSchema, FlatPresetSchema],
   {
     error:
       'Preset syntax is ambiguous: use a non-colliding custom agent name instead of an agents wrapper collision.',
@@ -833,7 +861,7 @@ export type PluginConfig = RawPluginConfig;
 
 /** Configuration shape consumed by RuntimeConfig after preset resolution. */
 export type ResolvedPluginConfig = Omit<RawPluginConfig, 'presets'> & {
-  presets?: Record<string, Preset>;
+  presets?: Record<string, PresetInput>;
 };
 
 // PluginConfigSchema describes the parsed file shape. It must not claim to

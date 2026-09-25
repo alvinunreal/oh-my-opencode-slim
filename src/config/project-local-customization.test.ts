@@ -119,7 +119,16 @@ describe('Project-local customization - 15 core cases', () => {
       projectDirectory: projectDir,
     });
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect(oracle?.config.prompt).toBe('replacement prompt\n\nappend prompt');
+    const prompt = oracle?.config.prompt ?? '';
+    expect(prompt.indexOf('replacement prompt')).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf('append prompt')).toBeGreaterThan(
+      prompt.indexOf('replacement prompt'),
+    );
+    expect(
+      prompt.indexOf(
+        'If a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
+      ),
+    ).toBeGreaterThan(prompt.indexOf('append prompt'));
   });
 
   // Test Case 5: Inline built-in prompt is accepted and used
@@ -135,8 +144,16 @@ describe('Project-local customization - 15 core cases', () => {
 
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect(oracle?.config.prompt).toBe(
-      'You are the inline oracle prompt override.',
+    const prompt = oracle?.config.prompt ?? '';
+    expect(
+      prompt.startsWith('You are the inline oracle prompt override.'),
+    ).toBe(true);
+    expect(
+      prompt.indexOf(
+        'If a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
+      ),
+    ).toBeGreaterThan(
+      prompt.indexOf('You are the inline oracle prompt override.'),
     );
   });
 
@@ -161,8 +178,17 @@ describe('Project-local customization - 15 core cases', () => {
 
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect(oracle?.config.prompt).toBe(
-      'You are the inline oracle prompt override.',
+    const prompt = oracle?.config.prompt ?? '';
+    expect(
+      prompt.startsWith('You are the inline oracle prompt override.'),
+    ).toBe(true);
+    expect(prompt).not.toContain('File prompt override content');
+    expect(
+      prompt.indexOf(
+        'If a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
+      ),
+    ).toBeGreaterThan(
+      prompt.indexOf('You are the inline oracle prompt override.'),
     );
   });
 
@@ -184,9 +210,18 @@ describe('Project-local customization - 15 core cases', () => {
 
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect(oracle?.config.prompt).toBe(
-      'You are the inline oracle prompt override.\n\nappend content',
+    const prompt = oracle?.config.prompt ?? '';
+    expect(prompt.indexOf('You are the inline oracle prompt override.')).toBe(
+      0,
     );
+    expect(prompt.indexOf('append content')).toBeGreaterThan(
+      prompt.indexOf('You are the inline oracle prompt override.'),
+    );
+    expect(
+      prompt.indexOf(
+        'If a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
+      ),
+    ).toBeGreaterThan(prompt.indexOf('append content'));
   });
 
   // Test Case 8: Built-in orchestratorPrompt is injected into orchestrator prompt

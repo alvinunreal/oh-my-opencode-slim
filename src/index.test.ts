@@ -164,12 +164,40 @@ describe('plugin tool registration', () => {
     expect(hooks.tool?.task_cancel).toBeDefined();
     expect(hooks.tool?.task_revive).toBeDefined();
     expect(hooks.tool?.wait_for_user).toBeDefined();
+    expect(hooks.tool?.marketplace).toBeDefined();
     await expect(
       hooks.tool?.wait_for_user?.execute(
         { reason: 'Complete the external approval.' },
         { sessionID: 'parent-after-reload', agent: 'orchestrator' } as never,
       ),
     ).resolves.toContain('state: waiting_for_user');
+  });
+
+  test('prompt transforms fail before host config finalizes the agent registry', async () => {
+    const noop = async () => ({});
+    const hooks = await plugin({
+      client: createPluginClient(noop),
+      directory: '/private/tmp/oh-my-opencode-slim-pre-finalize',
+      worktree: '/private/tmp/oh-my-opencode-slim-pre-finalize',
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+
+    try {
+      await expect(
+        hooks['experimental.chat.messages.transform']?.(
+          {} as never,
+          { messages: [] } as never,
+        ),
+      ).rejects.toThrow(/Agent registry must be finalized/);
+      await expect(
+        hooks['experimental.chat.system.transform']?.(
+          {} as never,
+          { system: [] } as never,
+        ),
+      ).rejects.toThrow(/Agent registry must be finalized/);
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 
   test('does not retain loop-guard state when search-path validation rejects', async () => {
@@ -364,14 +392,17 @@ describe('plugin reload generation cleanup', () => {
   let originalEnv: typeof process.env;
   let projectDir: string;
 
-  const createHooks = (pluginConfig: Record<string, unknown> = {}) =>
-    plugin({
+  const createHooks = async (pluginConfig: Record<string, unknown> = {}) => {
+    const hooks = await plugin({
       client: createPluginClient(async () => ({})),
       directory: projectDir,
       worktree: projectDir,
       serverUrl: new URL('http://127.0.0.1:4096'),
       ...pluginConfig,
     } as never);
+    await hooks.config?.({});
+    return hooks;
+  };
 
   const reminderFixture = (
     sessionID: string,
@@ -1888,6 +1919,119 @@ describe('plugin config model inheritance', () => {
     }
   }
 
+  test('finalization projects the captured host layer once and preserves unrelated entries', async () => {
+    const hooks = await loadConfiguredPlugin({
+      agents: { fixer: { model: 'plugin/fixer' } },
+    });
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        fixer: {
+          model: 'host/fixer',
+          permission: { read: 'deny' },
+        },
+        host_custom: { model: 'host/custom', temperature: 0.4 },
+      },
+      mcp: { host_server: { type: 'local', command: ['host-mcp'] } },
+    };
+
+    try {
+      const bridge = (
+        hooks as unknown as {
+          experimental_v2_agentBridge: {
+            finalize: (input: Record<string, unknown>) => void;
+            registerCommands: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).experimental_v2_agentBridge;
+      const commandConfig: Record<string, unknown> = {};
+      bridge.registerCommands(commandConfig);
+      expect(commandConfig.command).toBeDefined();
+
+      bridge.finalize(hostConfig);
+      await hooks.config?.(hostConfig);
+      const finalized = structuredClone(hostConfig);
+      await hooks.config?.(hostConfig);
+
+      expect(hostConfig).toEqual(finalized);
+      const agents = hostConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+      expect(agents.fixer?.model).toBe('host/fixer');
+      expect(agents.fixer?.permission).toMatchObject({ read: 'deny' });
+      expect(agents.host_custom).toEqual({
+        model: 'host/custom',
+        temperature: 0.4,
+      });
+      expect(hostConfig.mcp).toHaveProperty('host_server');
+      expect(hostConfig.mcp).toHaveProperty('context7');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('manually switched model chains stay disabled across plugin generations', async () => {
+    const configDir = await mkdtemp('/tmp/oh-my-opencode-manual-switch-');
+    configDirs.push(configDir);
+    const pluginConfig = {
+      agents: { fixer: { model: ['provider/a', 'provider/c'] } },
+    };
+    await Bun.write(
+      `${configDir}/oh-my-opencode-slim.json`,
+      JSON.stringify(pluginConfig),
+    );
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_DATA_HOME: `${configDir}/data`,
+      XDG_CACHE_HOME: `${configDir}/cache`,
+      OPENCODE_LOG_DIR: `${configDir}/logs`,
+    };
+
+    const createGeneration = () =>
+      plugin({
+        client: createPluginClient(async () => ({})),
+        directory: configDir,
+        worktree: configDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+    const generationOne = await createGeneration();
+    try {
+      await generationOne.config?.({
+        agent: { fixer: { model: 'provider/b' } },
+      });
+      expect(RuntimeConfig.get(configDir).hasModelSwitched('fixer')).toBe(true);
+      const bridge = (
+        generationOne as unknown as {
+          experimental_v2_agentBridge: {
+            getModelChains: () => Record<string, string[]>;
+          };
+        }
+      ).experimental_v2_agentBridge;
+      expect(bridge.getModelChains().fixer).toEqual([]);
+    } finally {
+      await generationOne.dispose?.();
+    }
+
+    const generationTwo = await createGeneration();
+    try {
+      await generationTwo.config?.({
+        agent: { fixer: { model: 'provider/a' } },
+      });
+      expect(RuntimeConfig.get(configDir).hasModelSwitched('fixer')).toBe(true);
+      const bridge = (
+        generationTwo as unknown as {
+          experimental_v2_agentBridge: {
+            getModelChains: () => Record<string, string[]>;
+          };
+        }
+      ).experimental_v2_agentBridge;
+      expect(bridge.getModelChains().fixer).toEqual([]);
+    } finally {
+      await generationTwo.dispose?.();
+    }
+  });
+
   test('session inheritance removes a stale host model in the final config', async () => {
     const hooks = await loadConfiguredPlugin({
       agents: {
@@ -2276,6 +2420,7 @@ describe('system.transform orchestrator injection', () => {
       worktree: configDir,
       serverUrl: new URL('http://127.0.0.1:4096'),
     } as never);
+    await hooks.config?.({});
     // Session tracked as orchestrator (how chat.message records it).
     await hooks['chat.message']?.(
       {

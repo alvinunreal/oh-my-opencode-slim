@@ -2,6 +2,31 @@
 
 Built-in tools available to agents beyond the standard file and shell operations.
 
+## Agent Marketplace
+
+The Orchestrator can call `marketplace` with an `action` and action-specific
+fields; specialist sessions cannot use it. `install` and `update` take a
+`packageId` such as `publisher/package`; `import` takes a local `path` and
+optional `update: true`. `enable`, `disable`, `remove`, and `show` also take
+`packageId`. `list` and `status` take only `action`; `verify` optionally takes
+`packageId`. Do not pass a filesystem path to `install` or a registry ID to
+`import`.
+
+```json
+{ "action": "install", "packageId": "publisher/package" }
+```
+
+`install` through the tool stores the package but **does not enable it**; call
+`enable` separately. In-session mutations do not restart the OpenCode service
+or hot-swap registered agents. `status` reports installed/configured/live
+state and `reload_status` (`applied`, `pending`, or `unavailable` when the
+comparison cannot be made). Reload or start a new session for changes to take
+effect. `list`, `show`, `verify`, and `status` do not fetch from the registry;
+only explicit `install`/`update` do. See [Agent Marketplace](marketplace.md)
+for the CLI's different install/restart behavior and complete lifecycle.
+
+---
+
 ## apply_patch rescue
 
 Slim only intercepts `apply_patch` before the native tool runs. It rewrites recoverable stale patches, canonizes safe tolerant matches against the real file when unicode/trim drift is the only mismatch, keeps the authored `new_lines` bytes intact, preserves the existing file EOL/final-newline state for updates, validates malformed patches strictly before helper execution, uses a conservative bounded LCS fallback, accumulates helper state when the same path appears in multiple `Update File` hunks, blocks `apply_patch` before native execution if any patch path falls outside the allowed root/worktree, and fails on ambiguity instead of guessing. It does not rewrite `edit` or `write` inputs.

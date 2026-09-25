@@ -42,6 +42,17 @@
                 "additionalProperties": {
                   "type": "object",
                   "properties": {
+                    "baseRole": {
+                      "type": "string",
+                      "enum": [
+                        "explorer",
+                        "librarian",
+                        "oracle",
+                        "designer",
+                        "fixer",
+                        "observer"
+                      ]
+                    },
                     "model": {
                       "anyOf": [
                         {
@@ -517,6 +528,19 @@
                   },
                   "additionalProperties": false
                 }
+              },
+              "marketplace": {
+                "type": "object",
+                "properties": {
+                  "agents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -530,6 +554,19 @@
               "extends": {
                 "type": "string",
                 "minLength": 1
+              },
+              "marketplace": {
+                "type": "object",
+                "properties": {
+                  "agents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -538,6 +575,17 @@
             "additionalProperties": {
               "type": "object",
               "properties": {
+                "baseRole": {
+                  "type": "string",
+                  "enum": [
+                    "explorer",
+                    "librarian",
+                    "oracle",
+                    "designer",
+                    "fixer",
+                    "observer"
+                  ]
+                },
                 "model": {
                   "anyOf": [
                     {
@@ -1016,12 +1064,35 @@
           },
           {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "marketplace": {
+                "type": "object",
+                "properties": {
+                  "agents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
             },
             "additionalProperties": {
               "type": "object",
               "properties": {
+                "baseRole": {
+                  "type": "string",
+                  "enum": [
+                    "explorer",
+                    "librarian",
+                    "oracle",
+                    "designer",
+                    "fixer",
+                    "observer"
+                  ]
+                },
                 "model": {
                   "anyOf": [
                     {
@@ -1509,6 +1580,17 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "baseRole": {
+            "type": "string",
+            "enum": [
+              "explorer",
+              "librarian",
+              "oracle",
+              "designer",
+              "fixer",
+              "observer"
+            ]
+          },
           "model": {
             "anyOf": [
               {

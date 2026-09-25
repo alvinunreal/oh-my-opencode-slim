@@ -17,6 +17,7 @@ import {
   detectCurrentConfig,
   disableDefaultAgents,
   enableLspByDefault,
+  mutateJsonFile,
   parseConfig,
   parseConfigFile,
   stripJsonComments,
@@ -128,6 +129,43 @@ describe('config-io', () => {
     });
   });
 
+  test('writeConfig preserves v2 plural plugin key and serializes config mutations', () => {
+    const path = join(tmpDir, 'opencode', 'opencode.json');
+    mkdirSync(join(tmpDir, 'opencode'), { recursive: true });
+    writeFileSync(path, JSON.stringify({ plugins: ['other'], retained: true }));
+
+    mutateJsonFile(path, (current) => ({
+      ...(current as Record<string, unknown>),
+      added: true,
+    }));
+
+    const saved = JSON.parse(readFileSync(path, 'utf-8'));
+    expect(saved).toEqual({ plugins: ['other'], retained: true, added: true });
+    expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8'))).toEqual({
+      plugins: ['other'],
+      retained: true,
+    });
+  });
+
+  test('mutateJsonFile parses BOM-prefixed JSONC without interpolating values', () => {
+    const path = join(tmpDir, 'opencode', 'opencode.jsonc');
+    mkdirSync(join(tmpDir, 'opencode'), { recursive: true });
+    writeFileSync(
+      path,
+      '\uFEFF{\n  // retained setting\n  "value": "{env:UNEXPANDED}",\n}',
+    );
+
+    mutateJsonFile(path, (current) => ({
+      ...(current as Record<string, unknown>),
+      added: true,
+    }));
+
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
+      value: '{env:UNEXPANDED}',
+      added: true,
+    });
+  });
+
   test('addPluginToOpenCodeConfig adds plugin and removes duplicates', async () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
@@ -144,6 +182,20 @@ describe('config-io', () => {
     expect(saved.plugin).toContain('oh-my-opencode-slim');
     expect(saved.plugin).not.toContain('oh-my-opencode-slim@1.0.0');
     expect(saved.plugin.length).toBe(2);
+  });
+
+  test('addPluginToOpenCodeConfig retains the v2 plugins key', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugins: ['other'] }));
+    process.argv[1] = '';
+
+    const result = await addPluginToOpenCodeConfig();
+
+    expect(result.success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugins).toContain('oh-my-opencode-slim');
+    expect(saved).not.toHaveProperty('plugin');
   });
 
   test('addPluginToOpenCodeConfig reads and preserves a plural-key config', async () => {
@@ -698,6 +750,58 @@ describe('config-io', () => {
     const detected = detectCurrentConfig();
     expect(detected.hasOpenAI).toBe(true);
     expect(detected.hasAnthropic).toBe(true);
+  });
+
+  test('detectCurrentConfig reads models from structured presets without treating metadata as agents', () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugin: [] }));
+    writeFileSync(
+      litePath,
+      JSON.stringify({
+        preset: 'structured',
+        presets: {
+          structured: {
+            agents: { oracle: { model: 'anthropic/claude-sonnet' } },
+            marketplace: { agents: ['openai/not-a-model'] },
+          },
+        },
+      }),
+    );
+
+    const detected = detectCurrentConfig();
+
+    expect(detected.hasAnthropic).toBe(true);
+    expect(detected.hasOpenAI).toBe(false);
+  });
+
+  test('detectCurrentConfig reads models from flat presets with extends metadata', () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
+    paths.ensureConfigDir();
+    writeFileSync(configPath, JSON.stringify({ plugins: [] }));
+    writeFileSync(
+      litePath,
+      JSON.stringify({
+        preset: 'flat',
+        presets: {
+          flat: {
+            extends: 'base',
+            orchestrator: { model: 'openai/gpt-6-luna' },
+            marketplace: { agents: ['anthropic/not-a-model'] },
+          },
+          base: {
+            oracle: { model: 'anthropic/not-selected' },
+          },
+        },
+      }),
+    );
+
+    const detected = detectCurrentConfig();
+
+    expect(detected.hasOpenAI).toBe(true);
+    expect(detected.hasAnthropic).toBe(false);
   });
 
   test('detectCurrentConfig treats local repo path entries as installed', () => {

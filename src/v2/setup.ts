@@ -32,6 +32,7 @@ import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
+import { discoverOnDiskOpenCodeMcps } from '../marketplace/preflight';
 import type { McpConfig } from '../mcp/types';
 import {
   configureBackgroundJobPersistence,
@@ -227,6 +228,9 @@ export type V1ChatMessageInput = {
 
 /** Deps injected into the single session context hook. */
 export interface V2SessionContextHandlerDeps {
+  /** Assert the session-stable agent registry was finalized before this
+   * context event can mutate host-owned messages. */
+  assertReady?: () => void;
   /** Interview bridge handleContext (transcript projection + /interview
    * marker dispatch). */
   interviewHandleContext: (event: V2SessionContextEvent) => Promise<void>;
@@ -267,6 +271,17 @@ export interface V2SessionContextHandlerDeps {
   syntheticPartCacheHint?: SyntheticPartCacheHint;
 }
 
+/** Context hooks cannot run until the host has produced the immutable agent
+ * registry snapshot used by prompt transforms. */
+export class V2AgentRegistryNotReadyError extends Error {
+  constructor() {
+    super(
+      'v2 agent registry is not finalized before session context transform',
+    );
+    this.name = 'V2AgentRegistryNotReadyError';
+  }
+}
+
 /** Build the single `ctx.session.hook("context")` handler: interview marker
  * bridge, generic command marker dispatch, chat.message agent tracking, and
  * the v1 system/messages transforms — each independently try/catch-guarded. */
@@ -274,6 +289,9 @@ export function createSessionContextHandler(
   deps: V2SessionContextHandlerDeps,
 ): (event: V2SessionContextEvent) => Promise<void> {
   return async (event) => {
+    // Registry readiness is a hard invariant, not a fail-soft transform.
+    // Check before any of the bridges below mutate the context payload.
+    deps.assertReady?.();
     // Interview marker bridge (transcript projection + /interview).
     try {
       await deps.interviewHandleContext(event);
@@ -1348,6 +1366,67 @@ export function adaptMcpServer(v1: McpConfig): Record<string, unknown> {
   return out;
 }
 
+type V2AgentBridge = {
+  finalize(hostInput: Record<string, unknown>): void;
+  registerCommands(hostInput: Record<string, unknown>): void;
+  getV2PermissionRules(name: string): readonly V2PermissionRule[] | undefined;
+};
+
+/** Convert the native v2 agent draft snapshot to the host-config shape used
+ * by the shared registry. Keep native permission rules as ordered v2 rules;
+ * they are intentionally not flattened into v1's permission-map format. */
+export function snapshotV2HostAgents(draft: {
+  list(): Array<Record<string, unknown>>;
+  get(id: string): Record<string, unknown> | undefined;
+}): Record<string, Record<string, unknown>> {
+  const agents: Record<string, Record<string, unknown>> = {};
+  for (const listed of draft.list()) {
+    const id = typeof listed.id === 'string' ? listed.id : undefined;
+    if (!id) continue;
+    const native = draft.get(id) ?? listed;
+    const config = isRecord(native.config) ? native.config : {};
+    const model = native.model ?? config.model;
+    const modelRef = isRecord(model)
+      ? [model.providerID, model.id].every((value) => typeof value === 'string')
+        ? `${model.providerID}/${model.id}`
+        : undefined
+      : model;
+    agents[id] = {
+      ...config,
+      ...native,
+      ...(modelRef === undefined ? {} : { model: modelRef }),
+      ...(native.variant === undefined && config.variant !== undefined
+        ? { variant: config.variant }
+        : {}),
+    };
+  }
+  return agents;
+}
+
+function freezeAgentConfigs(
+  configs: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> {
+  const freezeValue = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      return Object.freeze(value.map(freezeValue));
+    }
+    if (!isRecord(value)) return value;
+    return Object.freeze(
+      Object.fromEntries(
+        Object.entries(value).map(([key, nested]) => [
+          key,
+          freezeValue(nested),
+        ]),
+      ),
+    );
+  };
+  const frozen: Record<string, Record<string, unknown>> = {};
+  for (const [name, config] of Object.entries(configs)) {
+    frozen[name] = freezeValue(config) as Record<string, unknown>;
+  }
+  return Object.freeze(frozen);
+}
+
 export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
   return async (ctx: V2Context): Promise<V2Cleanup> => {
     const sessionId = new Date()
@@ -1473,46 +1552,132 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const interviewBridge = createV2InterviewBridge(ctx, interviewConfig);
       disposers.push(() => interviewBridge.dispose());
 
-      // Resolve agents/commands via the v1 config() hook (model resolution etc.).
+      // The private bridge separates command setup from agent-registry
+      // finalization. Never call config({}) here: that would freeze an empty
+      // host snapshot before the native v2 agent transform can inspect it.
+      const agentBridge = v1Hooks.experimental_v2_agentBridge as
+        | V2AgentBridge
+        | undefined;
       let resolvedAgents: Record<string, Record<string, unknown>> | undefined;
       let synthCommands:
         | Record<string, { template?: string; description?: string }>
         | undefined;
       try {
-        const synth: Record<string, unknown> = {};
-        const configFn = v1Hooks.config as
-          | ((c: Record<string, unknown>) => Promise<void>)
-          | undefined;
-        if (configFn) {
-          await configFn(synth);
-          if (synth.agent && typeof synth.agent === 'object') {
-            resolvedAgents = synth.agent as Record<
+        if (agentBridge) {
+          const commandHost: Record<string, unknown> = {};
+          agentBridge.registerCommands(commandHost);
+          const commands = commandHost.command;
+          if (isRecord(commands)) {
+            synthCommands = commands as Record<
               string,
-              Record<string, unknown>
+              { template?: string; description?: string }
             >;
           }
-          const cmd = synth.command as
-            | Record<string, { template?: string; description?: string }>
-            | undefined;
-          if (cmd) synthCommands = cmd;
         }
       } catch (err) {
-        log(
-          '[v2] config() hook failed (continuing with raw agents)',
-          String(err),
-        );
+        log('[v2] command registration bridge failed', String(err));
       }
-      if (!resolvedAgents) {
-        resolvedAgents =
-          (v1Hooks.agent as Record<string, Record<string, unknown>>) ?? {};
+
+      // Resolve MCP availability from configuration, not callback timing: a
+      // host is allowed to defer even the first mcp.transform callback.
+      const configuredMcps = (v1Hooks.mcp ?? {}) as Record<string, McpConfig>;
+      const disabledMcps = new Set(
+        loadPluginConfig(directory).disabled_mcps ?? [],
+      );
+      const hostConfiguredMcps = discoverOnDiskOpenCodeMcps(directory, 'v2');
+      const failedMcpRegistrations = new Set<string>();
+      let disposeMcpTransform: (() => void) | undefined;
+      try {
+        const entries = Object.entries(configuredMcps);
+        if (typeof ctx.mcp?.transform === 'function') {
+          const reg = await ctx.mcp.transform((draft) => {
+            for (const [name, cfg] of entries) {
+              try {
+                draft.set(name, adaptMcpServer(cfg));
+              } catch (err) {
+                failedMcpRegistrations.add(name);
+                log('[v2] mcp adapt failed', { name, err: String(err) });
+              }
+            }
+          });
+          disposeMcpTransform = () => reg.dispose();
+          if (entries.length > 0) {
+            log('[v2] mcp servers registered', { count: entries.length });
+          }
+        } else if (entries.length > 0) {
+          log('[v2] ctx.mcp.transform unavailable; MCPs stay config-only');
+        }
+      } catch (err) {
+        log('[v2] mcp.transform failed', String(err));
       }
+      // A successful transform registration is the only evidence that Slim
+      // built-ins can be projected. Host-configured servers are independent.
+      // A deferred callback failure after agent finalization cannot revoke a
+      // frozen registry; that host failure remains outside this snapshot.
+      const availableMcps = Object.freeze(
+        Object.fromEntries(
+          Object.entries({
+            ...hostConfiguredMcps,
+            ...(disposeMcpTransform
+              ? Object.fromEntries(
+                  Object.entries(configuredMcps).filter(
+                    ([name]) => !failedMcpRegistrations.has(name),
+                  ),
+                )
+              : {}),
+          })
+            .filter(([name]) => !disabledMcps.has(name))
+            .sort(([a], [b]) => a.localeCompare(b)),
+        ),
+      );
+      let agentRegistryReady = false;
 
       // ── Agents ──
       try {
         const reg = await ctx.agent.transform((draft) => {
+          if (!resolvedAgents) {
+            const hostAgents = snapshotV2HostAgents(draft);
+            if (agentBridge) {
+              const hostInput: Record<string, unknown> = {
+                agent: hostAgents,
+                // The bridge consumes this same frozen configured/enabled
+                // snapshot for activation preflight and permission mapping.
+                mcp: availableMcps,
+                // Snapshot ordered native permission rules before the shared
+                // registry compiles and freezes each effective policy.
+                nativePermissionsByAgent: Object.fromEntries(
+                  Object.entries(hostAgents).flatMap(([name, hostAgent]) =>
+                    Array.isArray(hostAgent.permissions)
+                      ? [
+                          [
+                            name,
+                            hostAgent.permissions.map((rule) =>
+                              isRecord(rule) ? { ...rule } : rule,
+                            ),
+                          ],
+                        ]
+                      : [],
+                  ),
+                ),
+              };
+              agentBridge.finalize(hostInput);
+              agentRegistryReady = true;
+              resolvedAgents = freezeAgentConfigs(
+                (v1Hooks?.agent as Record<string, Record<string, unknown>>) ??
+                  {},
+              );
+            } else {
+              agentRegistryReady = true;
+              resolvedAgents = freezeAgentConfigs(
+                (v1Hooks?.agent as Record<string, Record<string, unknown>>) ??
+                  {},
+              );
+            }
+          }
           for (const [name, cfg] of Object.entries(resolvedAgents ?? {})) {
             try {
-              applyAgentToDraft(draft, name, cfg);
+              const frozenPermissions = agentBridge?.getV2PermissionRules(name);
+              applyAgentToDraft(draft, name, cfg, frozenPermissions);
             } catch (err) {
               log('[v2] agent adapt failed', { name, err: String(err) });
             }
@@ -1581,28 +1746,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         log('[v2] tool.transform failed', String(err));
       }
 
-      // ── Built-in MCPs (ctx.mcp.transform, v2 ≥ #45408) ──
-      try {
-        const mcps = (v1Hooks.mcp ?? {}) as Record<string, McpConfig>;
-        const entries = Object.entries(mcps);
-        if (entries.length > 0 && typeof ctx.mcp?.transform === 'function') {
-          const reg = await ctx.mcp.transform((draft) => {
-            for (const [name, cfg] of entries) {
-              try {
-                draft.set(name, adaptMcpServer(cfg));
-              } catch (err) {
-                log('[v2] mcp adapt failed', { name, err: String(err) });
-              }
-            }
-          });
-          disposers.push(() => reg.dispose());
-          log('[v2] mcp servers registered', { count: entries.length });
-        } else if (entries.length > 0) {
-          log('[v2] ctx.mcp.transform unavailable; MCPs stay config-only');
-        }
-      } catch (err) {
-        log('[v2] mcp.transform failed', String(err));
-      }
+      // Keep successful teardown order aligned with the historical
+      // registration sequence (agent, tool, MCP), despite the earlier MCP
+      // preflight required by registry finalization.
+      if (disposeMcpTransform) disposers.push(disposeMcpTransform);
 
       // ── Commands (deepwork / reflect / loop slash commands) ──
       try {
@@ -1691,6 +1838,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       }
 
       const handler = createSessionContextHandler({
+        assertReady: () => {
+          if (!agentRegistryReady) {
+            throw new V2AgentRegistryNotReadyError();
+          }
+        },
         interviewHandleContext: (event) => interviewBridge.handleContext(event),
         commandBefore,
         chatMessage: undefined,

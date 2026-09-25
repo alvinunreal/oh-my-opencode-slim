@@ -4,16 +4,18 @@ import {
   AgentOverrideConfigSchema,
   ALL_AGENT_NAMES,
   CouncilConfigSchema,
-  DEFAULT_DISABLED_AGENTS,
   DEFAULT_MODELS,
   PluginConfigSchema,
   SUBAGENT_NAMES,
 } from '../config';
 import { RuntimeConfig } from '../config/runtime';
+import { COUNCIL_SYNTHESIS_REINFORCEMENT } from './council';
 import {
   applyModelInheritanceToConfig,
+  buildResolvedAgentRegistry,
   createAgents,
   getAgentConfigs,
+  isMarketplacePermissionDenied,
   isSubagent,
 } from './index';
 import { TASK_REJECTION_INSTRUCTION } from './task-rejection';
@@ -114,7 +116,9 @@ describe('built-in subagent preset fallback', () => {
       preset: 'opencode-go',
       presets: {
         'opencode-go': {
-          orchestrator: { model: 'opencode-go/glm-5.2' },
+          agents: {
+            orchestrator: { model: 'opencode-go/glm-5.2' },
+          },
         },
       },
       council: councilConfig(),
@@ -135,7 +139,9 @@ describe('built-in subagent preset fallback', () => {
       preset: 'minimal',
       presets: {
         minimal: {
-          oracle: { model: 'anthropic/claude-sonnet-4-6' },
+          agents: {
+            oracle: { model: 'anthropic/claude-sonnet-4-6' },
+          },
         },
       },
       agents: {
@@ -168,7 +174,9 @@ describe('fixer agent fallback', () => {
       preset: 'balanced',
       presets: {
         balanced: {
-          orchestrator: { model: 'orchestrator-model' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+          },
         },
       },
       agents: {
@@ -189,7 +197,9 @@ describe('fixer agent fallback', () => {
       preset: 'balanced',
       presets: {
         balanced: {
-          orchestrator: { model: 'orchestrator-model' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+          },
         },
       },
       agents: {
@@ -210,9 +220,11 @@ describe('fixer agent fallback', () => {
       preset: 'split',
       presets: {
         split: {
-          orchestrator: { model: 'orchestrator-model' },
-          librarian: { model: 'librarian-local-model' },
-          fixer: { inheritModelFrom: 'session' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+            librarian: { model: 'librarian-local-model' },
+            fixer: { inheritModelFrom: 'session' },
+          },
         },
       },
     };
@@ -229,8 +241,10 @@ describe('fixer agent fallback', () => {
       preset: 'split',
       presets: {
         split: {
-          orchestrator: { model: 'orchestrator-model' },
-          fixer: { model: 'preset-fixer-model' },
+          agents: {
+            orchestrator: { model: 'orchestrator-model' },
+            fixer: { model: 'preset-fixer-model' },
+          },
         },
       },
       agents: {
@@ -248,7 +262,9 @@ describe('fixer agent fallback', () => {
       preset: 'split',
       presets: {
         split: {
-          explorer: { model: 'preset/explorer' },
+          agents: {
+            explorer: { model: 'preset/explorer' },
+          },
         },
       },
       agents: {
@@ -589,6 +605,15 @@ describe('orchestrator agent', () => {
     ).toBe('allow');
   });
 
+  test('orchestrator is allowed to invoke marketplace', () => {
+    const agents = createAgents(runtimeFor());
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    expect(
+      (orchestrator as { config: { permission: Record<string, unknown> } })
+        .config.permission.marketplace,
+    ).toBe('allow');
+  });
+
   test('orchestrator accepts overrides', () => {
     const config: PluginConfig = {
       agents: {
@@ -735,18 +760,20 @@ describe('spaced model ID registrations', () => {
       preset: 'spaced',
       presets: {
         spaced: {
-          explorer: {
-            model: [
-              { id: primary, variant: 'fast' },
-              { id: secondary, variant: 'balanced' },
-            ],
-          },
-          librarian: { model: primary, variant: 'direct' },
-          reviewer: {
-            model: [
-              { id: secondary, variant: 'precise' },
-              { id: fallback, variant: 'economy' },
-            ],
+          agents: {
+            explorer: {
+              model: [
+                { id: primary, variant: 'fast' },
+                { id: secondary, variant: 'balanced' },
+              ],
+            },
+            librarian: { model: primary, variant: 'direct' },
+            reviewer: {
+              model: [
+                { id: secondary, variant: 'precise' },
+                { id: fallback, variant: 'economy' },
+              ],
+            },
           },
         },
       },
@@ -943,6 +970,122 @@ describe('tool permissions', () => {
     }
   });
 
+  test('subagents are denied access to marketplace', () => {
+    const agents = createAgents(runtimeFor());
+
+    for (const name of ['oracle', 'explorer', 'fixer']) {
+      const agent = agents.find((candidate) => candidate.name === name);
+      expect(
+        (agent as { config: { permission: Record<string, unknown> } }).config
+          .permission.marketplace,
+      ).toBe('deny');
+    }
+  });
+
+  test('hostile marketplace allow rules cannot open the tool on non-orchestrators', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            displayName: 'Scout',
+            permission: { marketplace: 'allow' },
+          },
+          oracle: { permission: { marketplace: 'allow' } },
+          researcher: {
+            baseRole: 'librarian',
+            model: 'test/researcher',
+            permission: { marketplace: 'allow' },
+          },
+        },
+        council: councilConfig(),
+      }),
+    );
+    for (const name of [
+      'explorer',
+      'oracle',
+      'researcher',
+      'council',
+      'councillor-alpha',
+    ]) {
+      const agent = agents.find((candidate) => candidate.name === name);
+      expect(
+        (agent as { config: { permission: Record<string, unknown> } }).config
+          .permission.marketplace,
+      ).toBe('deny');
+    }
+    expect(
+      (
+        agents.find((agent) => agent.name === 'explorer') as {
+          config: { permission: Record<string, unknown> };
+        }
+      ).config.permission.marketplace,
+    ).toBe('deny');
+  });
+
+  test('omits marketplace prompt guidance when orchestrator permission denies it', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          orchestrator: { permission: { marketplace: 'deny' } },
+        },
+      }),
+    );
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
+
+  test('omits marketplace prompt guidance when host permission denies it', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    runtime.captureHostConfig({
+      agent: { orchestrator: { permission: { marketplace: 'deny' } } },
+    });
+    const agents = createAgents(runtime);
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
+
+  test('omits marketplace prompt guidance for nested pattern-map deny', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          orchestrator: { permission: { marketplace: { '*': 'deny' } } },
+        },
+      }),
+    );
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+    expect(
+      isMarketplacePermissionDenied({ marketplace: { '*': 'deny' } }),
+    ).toBe(true);
+    expect(isMarketplacePermissionDenied({ marketplace: 'allow' })).toBe(false);
+  });
+
+  test('ACP wrappers are denied marketplace', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({
+        acpAgents: {
+          bridge: { command: 'bridge-acp' },
+        },
+      }),
+    );
+    expect(
+      (configs.bridge.permission as Record<string, unknown>).marketplace,
+    ).toBe('deny');
+  });
+
+  test('omits marketplace prompt guidance when the tool is disabled', () => {
+    const agents = createAgents(
+      runtimeFor({ disabled_tools: ['marketplace'] }),
+    );
+    const prompt = agents.find((agent) => agent.name === 'orchestrator')?.config
+      .prompt;
+    expect(prompt).not.toContain('Use the `marketplace` tool');
+  });
+
   test('council agent has synthesis-only (deny-all) permissions', () => {
     const agents = createAgents(
       runtimeFor({
@@ -998,11 +1141,41 @@ test('orchestrator prompt includes Council Mode block when councillors exist', (
   expect(prompt).toContain('proceed without it');
 });
 
+test('keeps built-in orchestratorPrompt in project routing guidance', () => {
+  const guidance = 'Route architecture questions to @oracle first.';
+  const registry = buildResolvedAgentRegistry(
+    runtimeFor({
+      agents: {
+        oracle: {
+          model: 'test/oracle',
+          orchestratorPrompt: guidance,
+        },
+      },
+    }),
+  );
+  const orchestratorPrompt = String(registry.sdkConfigs.orchestrator?.prompt);
+  const oracleRoute = registry.routing.find(
+    (entry) => entry.agentName === 'oracle',
+  );
+
+  expect(orchestratorPrompt).toContain('# Project-specific routing guidance');
+  expect(orchestratorPrompt).toContain(guidance);
+  expect(orchestratorPrompt.split(guidance)).toHaveLength(2);
+  expect(oracleRoute?.routingBlock).toContain(guidance);
+});
+
 test('orchestrator prompt excludes Council Mode when no councillors', () => {
   const agents = createAgents(runtimeFor());
   const orchestrator = agents.find((a) => a.name === 'orchestrator');
   const prompt = orchestrator?.config.prompt as string;
   expect(prompt).not.toContain('## Council Mode');
+});
+
+test('council synthesis reinforcement is appended exactly once', () => {
+  const agents = createAgents(runtimeFor({ council: councilConfig() }));
+  const council = agents.find((agent) => agent.name === 'council');
+  const prompt = council?.config.prompt as string;
+  expect(prompt.split(COUNCIL_SYNTHESIS_REINFORCEMENT).length - 1).toBe(1);
 });
 
 describe('isSubagent type guard', () => {
@@ -1082,7 +1255,9 @@ describe('createAgents', () => {
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
     const explorer = agents.find((agent) => agent.name === 'explorer');
 
-    expect(explorer?.config.prompt).toBe('Replacement explorer prompt.');
+    expect(explorer?.config.prompt).toBe(
+      `Replacement explorer prompt.\n\n${TASK_REJECTION_INSTRUCTION}`,
+    );
     expect(orchestrator?.config.prompt).not.toContain(
       TASK_REJECTION_INSTRUCTION,
     );
@@ -1254,7 +1429,7 @@ describe('getAgentConfigs', () => {
         agents: {
           oracle: { color: '#A1b2C3' },
           reviewer: {
-            model: 'openai/gpt-6',
+            model: 'openai/gpt-5.6',
             color: 'warning',
           },
         },
@@ -1360,7 +1535,7 @@ describe('council agent model resolution', () => {
       master: { model: 'anthropic/claude-opus-4-6' },
       presets: {
         default: {
-          alpha: { model: 'openai/gpt-6-luna' },
+          alpha: { model: 'openai/gpt-5.6-luna' },
         },
       },
     };
@@ -1386,7 +1561,7 @@ describe('options passthrough', () => {
     const config: PluginConfig = {
       agents: {
         oracle: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           options: { textVerbosity: 'low' },
         },
       },
@@ -1418,7 +1593,7 @@ describe('options passthrough', () => {
     const config: PluginConfig = {
       agents: {
         oracle: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           variant: 'high',
           temperature: 0.7,
           options: { textVerbosity: 'low', reasoningEffort: 'medium' },
@@ -1427,7 +1602,7 @@ describe('options passthrough', () => {
     };
     const agents = createAgents(runtimeFor(config));
     const oracle = agents.find((a) => a.name === 'oracle');
-    expect(oracle?.config.model).toBe('openai/gpt-6');
+    expect(oracle?.config.model).toBe('openai/gpt-5.6');
     expect(oracle?.config.variant).toBe('high');
     expect(oracle?.config.temperature).toBe(0.7);
     expect(oracle?.config.options).toEqual({
@@ -1439,7 +1614,7 @@ describe('options passthrough', () => {
   test('options are absent when not configured', () => {
     const config: PluginConfig = {
       agents: {
-        oracle: { model: 'openai/gpt-6' },
+        oracle: { model: 'openai/gpt-5.6' },
       },
     };
     const agents = createAgents(runtimeFor(config));
@@ -1451,7 +1626,7 @@ describe('options passthrough', () => {
     const config: PluginConfig = {
       agents: {
         oracle: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           options: { textVerbosity: 'low' },
         },
       },
@@ -1465,7 +1640,7 @@ describe('options passthrough', () => {
     const config: PluginConfig = {
       agents: {
         oracle: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           options: { reasoningEffort: 'medium' },
         },
       },
@@ -1522,7 +1697,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('accepts options alongside other fields', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
       variant: 'high',
       temperature: 0.7,
       options: { textVerbosity: 'low' },
@@ -1535,7 +1710,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('config without options is valid', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -1559,7 +1734,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('accepts prompt and orchestratorPrompt override fields', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
       prompt: 'You are a specialized reviewer.',
       orchestratorPrompt: '@reviewer\n- Role: Specialized reviewer',
     });
@@ -1574,7 +1749,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('rejects empty prompt fields', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
       prompt: '',
     });
     expect(result.success).toBe(false);
@@ -1582,7 +1757,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('rejects empty orchestratorPrompt fields', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
       orchestratorPrompt: '',
     });
     expect(result.success).toBe(false);
@@ -1590,7 +1765,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('accepts description field on overrides', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
       description: 'A custom reviewer agent',
     });
     expect(result.success).toBe(true);
@@ -1601,7 +1776,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
 
   test('rejects empty description field', () => {
     const result = AgentOverrideConfigSchema.safeParse({
-      model: 'openai/gpt-6',
+      model: 'openai/gpt-5.6',
       description: '',
     });
     expect(result.success).toBe(false);
@@ -1611,7 +1786,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
     const config: PluginConfig = {
       agents: {
         reviewer: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           description: 'Code review specialist',
         },
       },
@@ -1626,7 +1801,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
     const config: PluginConfig = {
       agents: {
         reviewer: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
         },
       },
     };
@@ -1640,7 +1815,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
     const config: PluginConfig = {
       agents: {
         reviewer: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           description: 'SDK reviewer agent',
         },
       },
@@ -1653,7 +1828,7 @@ describe('AgentOverrideConfigSchema options validation', () => {
     const config: PluginConfig = {
       agents: {
         oracle: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           description: 'Custom oracle description',
         },
       },
@@ -1668,7 +1843,7 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     const result = PluginConfigSchema.safeParse({
       agents: {
         oracle: {
-          model: 'openai/gpt-6',
+          model: 'openai/gpt-5.6',
           prompt: 'ignored built-in prompt override',
         },
       },
@@ -1681,7 +1856,7 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     const result = PluginConfigSchema.safeParse({
       agents: {
         explorer: {
-          model: 'openai/gpt-6-luna',
+          model: 'openai/gpt-5.6-luna',
           orchestratorPrompt: '@explorer\n- Role: should be invalid here',
         },
       },
@@ -1694,9 +1869,11 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     const result = PluginConfigSchema.safeParse({
       presets: {
         openai: {
-          oracle: {
-            model: 'openai/gpt-6',
-            prompt: 'ignored preset built-in prompt override',
+          agents: {
+            oracle: {
+              model: 'openai/gpt-5.6',
+              prompt: 'ignored preset built-in prompt override',
+            },
           },
         },
       },
@@ -1709,7 +1886,7 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     const result = PluginConfigSchema.safeParse({
       agents: {
         orchestrator: {
-          model: 'openai/gpt-6-luna',
+          model: 'openai/gpt-5.6-luna',
           orchestratorPrompt: '@orchestrator\n- Role: should be invalid here',
         },
       },
@@ -1722,7 +1899,7 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
     const result = PluginConfigSchema.safeParse({
       agents: {
         janitor: {
-          model: 'openai/gpt-6-luna',
+          model: 'openai/gpt-5.6-luna',
           prompt: 'You are Janitor.',
           orchestratorPrompt: '@janitor\n- Role: Cleanup specialist',
         },
@@ -1883,10 +2060,6 @@ describe('observer agent', () => {
     const names = agents.map((a) => a.name);
     expect(names).toContain('observer');
     expect(names).not.toContain('designer');
-  });
-
-  test('DEFAULT_DISABLED_AGENTS contains observer', () => {
-    expect(DEFAULT_DISABLED_AGENTS).toContain('observer');
   });
 });
 

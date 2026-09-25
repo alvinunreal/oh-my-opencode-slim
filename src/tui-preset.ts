@@ -109,7 +109,13 @@ function showPresetList(state: ManagerState): void {
     return {
       title,
       value: name,
-      description: describePreset(name, allPresets, config.presets?.[name]),
+      description: describePreset(
+        name,
+        allPresets,
+        config.presets?.[name]
+          ? resolvePreset(name, config.presets)
+          : undefined,
+      ),
     };
   });
   options.push({
@@ -348,6 +354,9 @@ function editPreset(state: ManagerState, presetName: string): void {
   editPresetWorkingCopy(state, presetName, {
     extends: editable.extends,
     agents: { ...editable.agents },
+    ...(editable.marketplace !== undefined
+      ? { marketplace: editable.marketplace }
+      : {}),
   });
 }
 
@@ -693,11 +702,13 @@ function savePreset(
       cleaned[agent] = override;
     }
   }
-  const ok = writePreset(
-    state.directory,
-    presetName,
-    working.extends ? { extends: working.extends, agents: cleaned } : cleaned,
-  );
+  const ok = writePreset(state.directory, presetName, {
+    ...(working.extends ? { extends: working.extends } : {}),
+    agents: cleaned,
+    ...(working.marketplace !== undefined
+      ? { marketplace: working.marketplace }
+      : {}),
+  });
   if (!silent) {
     state.api.ui.toast({
       variant: ok ? 'success' : 'warning',

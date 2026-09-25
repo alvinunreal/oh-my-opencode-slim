@@ -8,7 +8,9 @@ import {
   spyOn,
 } from 'bun:test';
 import { z } from 'zod';
+import { SUPPORTED_SPECIALIST_ROLES } from './agent-roles';
 import {
+  AgentOverrideConfigSchema,
   InterviewConfigSchema,
   MultiplexerConfigSchema,
   MultiplexerConfigStrictSchema,
@@ -18,6 +20,28 @@ import {
   resetMultiplexerDiagnostics,
   sanitizeMultiplexerConfig,
 } from './schema';
+
+describe('AgentOverrideConfigSchema baseRole', () => {
+  it('accepts supported specialist roles only', () => {
+    for (const baseRole of SUPPORTED_SPECIALIST_ROLES) {
+      expect(
+        AgentOverrideConfigSchema.safeParse({
+          baseRole,
+          model: 'provider/model',
+        }).success,
+      ).toBe(true);
+    }
+
+    for (const baseRole of ['orchestrator', 'council', 'councillor']) {
+      expect(
+        AgentOverrideConfigSchema.safeParse({
+          baseRole,
+          model: 'provider/model',
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
 
 describe('ProviderModelIdSchema', () => {
   it('accepts and preserves model remainders with spaces and nested segments', () => {

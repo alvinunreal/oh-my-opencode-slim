@@ -4,9 +4,12 @@
  * block before the prompt is sent.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
-import { getSkillPermissionsForAgent } from '../../cli/skills';
-import { AGENT_ALIASES, type AgentOverrideConfig } from '../../config';
+import {
+  buildResolvedAgentRegistry,
+  type ResolvedAgentRegistry,
+} from '../../agents';
 import type { RuntimeConfig } from '../../config/runtime';
+import type { PermissionPolicy } from '../../v2/permissions';
 import {
   isMessageWithParts,
   isUserMessageWithParts,
@@ -70,12 +73,16 @@ function isSkillAllowed(
 function filterAvailableSkillsText(
   text: string,
   permissionRules: Record<string, SkillRule>,
+  policy?: PermissionPolicy,
 ): string {
   return text.replace(
     AVAILABLE_SKILLS_BLOCK_REGEX,
     (_fullMatch, blockContent: string) => {
-      const allowedEntries = extractSkillEntries(blockContent).filter((entry) =>
-        isSkillAllowed(entry.name, permissionRules),
+      const allowedEntries = extractSkillEntries(blockContent).filter(
+        (entry) =>
+          policy
+            ? policy.decideSkill(entry.name) !== 'deny'
+            : isSkillAllowed(entry.name, permissionRules),
       );
 
       if (allowedEntries.length === 0) {
@@ -95,31 +102,19 @@ function filterAvailableSkillsText(
  */
 export function createFilterAvailableSkillsHook(
   _ctx: PluginInput,
-  runtime: RuntimeConfig,
+  source: ResolvedAgentRegistry | RuntimeConfig | (() => ResolvedAgentRegistry),
 ) {
-  const permissionRulesByAgent = new Map<string, Record<string, SkillRule>>();
+  const registry =
+    typeof source === 'function'
+      ? source()
+      : isResolvedAgentRegistry(source)
+        ? source
+        : buildResolvedAgentRegistry(source);
 
   const getPermissionRules = (agentName: string): Record<string, SkillRule> => {
-    const cached = permissionRulesByAgent.get(agentName);
-    if (cached) {
-      return cached;
-    }
-
-    const agents = runtime.agents();
-    const agentConfig: AgentOverrideConfig | undefined =
-      agents[agentName] ??
-      agents[
-        Object.keys(AGENT_ALIASES).find(
-          (key) => AGENT_ALIASES[key] === agentName,
-        ) ?? ''
-      ];
-    const permissionRules = getSkillPermissionsForAgent(
-      agentName,
-      agentConfig?.skills,
-      runtime.disabledSkills,
-    );
-    permissionRulesByAgent.set(agentName, permissionRules);
-    return permissionRules;
+    return (registry.skillPermissions[agentName] ?? {
+      '*': 'deny',
+    }) as Record<string, SkillRule>;
   };
 
   return {
@@ -136,6 +131,10 @@ export function createFilterAvailableSkillsHook(
 
       const agentName = getCurrentAgent(messages);
       const permissionRules = getPermissionRules(agentName);
+      const v2Policy =
+        registry.hostFlavor === 'v2'
+          ? registry.v2PermissionPolicies[agentName]
+          : undefined;
 
       for (const message of messages) {
         for (const part of message.parts) {
@@ -147,11 +146,21 @@ export function createFilterAvailableSkillsHook(
             continue;
           }
 
-          part.text = filterAvailableSkillsText(part.text, permissionRules);
+          part.text = filterAvailableSkillsText(
+            part.text,
+            permissionRules,
+            v2Policy,
+          );
         }
       }
     },
   };
+}
+
+function isResolvedAgentRegistry(
+  source: ResolvedAgentRegistry | RuntimeConfig,
+): source is ResolvedAgentRegistry {
+  return 'skillPermissions' in source;
 }
 
 export { filterAvailableSkillsText };

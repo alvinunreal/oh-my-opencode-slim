@@ -25,10 +25,10 @@ describe('createCouncilAgent', () => {
   test('excepts host checkpoint/compaction templates from the council format', () => {
     const prompt = councilPrompt('test/model');
     expect(prompt).toContain(COMPACTION_EXCEPTION);
-    // The exception is in both the base prompt and the post-override
-    // reinforcement, so a custom prompt cannot drop it.
+    // The synthesis reinforcement (which repeats the exception) is applied
+    // later by createAgents; the factory carries it exactly once in the base.
     const occurrences = prompt.split(COMPACTION_EXCEPTION).length - 1;
-    expect(occurrences).toBe(2);
+    expect(occurrences).toBe(1);
   });
 
   test('still excepts compaction when the base prompt is overridden', () => {

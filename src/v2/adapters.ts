@@ -12,7 +12,12 @@
  */
 
 import { log } from '../utils/logger';
-import type { ModelRef, V2AgentDraft, V2ToolDefinition } from './types';
+import type {
+  ModelRef,
+  V2AgentDraft,
+  V2PermissionRule,
+  V2ToolDefinition,
+} from './types';
 
 /** Parse a v1 "provider/model" string into a v2 Model.Ref. */
 export function parseModelRef(model: unknown): ModelRef | undefined {
@@ -209,6 +214,7 @@ export function applyAgentToDraft(
   draft: V2AgentDraft,
   name: string,
   v1: Record<string, unknown>,
+  frozenPermissions?: readonly V2PermissionRule[],
 ): void {
   const model = parseModelRef(v1.model);
   draft.update(name, (agent) => {
@@ -249,6 +255,8 @@ export function applyAgentToDraft(
         }
       }
     }
-    agent.permissions = [...toolsAllow, ...adaptPermissions(v1.permission)];
+    agent.permissions = frozenPermissions
+      ? frozenPermissions.map((rule) => ({ ...rule }))
+      : [...toolsAllow, ...adaptPermissions(v1.permission)];
   });
 }

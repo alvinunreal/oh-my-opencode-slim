@@ -1,3 +1,4 @@
+export * from './agent-roles';
 export * from './constants';
 export * from './council-schema';
 export {

@@ -1,6 +1,10 @@
 import { AGENT_ALIASES, type AgentName } from './constants';
 import type { RuntimeConfig } from './runtime';
 
+export interface ResolvedMcpSource {
+  readonly mcpLists: Readonly<Record<string, readonly string[]>>;
+}
+
 /** Default MCPs per agent - "*" means all MCPs, "!item" excludes specific MCPs */
 
 export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
@@ -45,8 +49,12 @@ export function parseList(items: string[], allAvailable: string[]): string[] {
  */
 export function getAgentMcpList(
   agentName: string,
-  runtime: RuntimeConfig,
+  source: RuntimeConfig | ResolvedMcpSource,
 ): string[] {
+  if ('mcpLists' in source) {
+    return [...(source.mcpLists[agentName] ?? [])];
+  }
+  const runtime = source;
   const agents = runtime.agents();
   const agentConfig =
     agents[agentName] ??
