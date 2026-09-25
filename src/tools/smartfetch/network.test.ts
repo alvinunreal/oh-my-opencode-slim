@@ -211,6 +211,27 @@ describe('smartfetch/network', () => {
     expect(primary.bodyUsed).toBe(true);
   });
 
+  test('forwards requested headers through HTTPS and HTTP fallback', async () => {
+    const calls: Array<[string, string | null]> = [];
+    globalThis.fetch = mock(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push([String(url), new Headers(init?.headers).get('Accept')]);
+        return new Response(String(url).startsWith('https:') ? 'error' : 'ok', {
+          status: String(url).startsWith('https:') ? 403 : 200,
+        });
+      },
+    ) as typeof fetch;
+    await fetchWithUpgradeFallback(
+      normalizeUrl('http://example.com/page'),
+      new AbortController().signal,
+      { Accept: 'text/markdown, text/html;q=0.9' },
+    );
+    expect(calls).toEqual([
+      ['https://example.com/page', 'text/markdown, text/html;q=0.9'],
+      ['http://example.com/page', 'text/markdown, text/html;q=0.9'],
+    ]);
+  });
+
   test('reports the primary blocked redirect when HTTP fallback also blocks', async () => {
     globalThis.fetch = mock(
       async (url: string | URL | Request) =>

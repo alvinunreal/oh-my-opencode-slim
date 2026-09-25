@@ -16,6 +16,7 @@ import {
   WEBFETCH_DESCRIPTION,
 } from './constants';
 import {
+  ACCEPT_BY_FORMAT,
   buildPermissionPatterns,
   decodeBody,
   discard,
@@ -126,6 +127,7 @@ export function createWebfetchTool(
       const normalized = normalizeUrl(args.url);
       const url = new URL(normalized.url);
       const cacheOptions = {
+        format: args.format,
         extract_main: args.extract_main,
         prefer_llms_txt: args.prefer_llms_txt,
         save_binary: args.save_binary,
@@ -243,6 +245,7 @@ export function createWebfetchTool(
             const { result, upgradedToHttps } = await fetchWithUpgradeFallback(
               normalized,
               signal,
+              { Accept: ACCEPT_BY_FORMAT[args.format] },
             );
             if ('blockedRedirect' in result) {
               const metadata = args.include_metadata

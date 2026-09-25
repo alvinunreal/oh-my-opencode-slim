@@ -3,6 +3,7 @@ import { buildCacheKey, CACHE, calculateCacheSize } from './cache';
 import type { BinaryFetch, CachedFetch } from './types';
 
 const cacheOptions = {
+  format: 'markdown' as const,
   extract_main: true,
   prefer_llms_txt: 'auto' as const,
   save_binary: false,
@@ -47,6 +48,7 @@ describe('smartfetch/cache', () => {
       { ...cacheOptions, extract_main: false },
       { ...cacheOptions, prefer_llms_txt: 'always' as const },
       { ...cacheOptions, save_binary: true },
+      { ...cacheOptions, format: 'html' as const },
     ]) {
       expect(buildCacheKey(url, variant)).not.toBe(base);
     }

@@ -99,6 +99,12 @@ export function getBinaryKind(contentType: string): BinaryFetch['binaryKind'] {
 
 const ACCEPT_HEADER =
   'text/html;q=1.0, application/xhtml+xml;q=0.9, text/markdown;q=0.8, text/plain;q=0.8, */*;q=0.1';
+export const ACCEPT_BY_FORMAT = {
+  markdown:
+    'text/markdown, text/html;q=0.9, application/xhtml+xml;q=0.8, text/plain;q=0.7, */*;q=0.1',
+  text: 'text/plain, text/markdown;q=0.9, text/html;q=0.8, application/xhtml+xml;q=0.7, */*;q=0.1',
+  html: ACCEPT_HEADER,
+} as const;
 
 function inferCharsetFromHtml(text: string) {
   const metaCharset = text.match(
@@ -237,13 +243,18 @@ export async function fetchWithRedirects(
 export async function fetchWithUpgradeFallback(
   normalized: ReturnType<typeof normalizeUrl>,
   signal: AbortSignal,
+  requestHeaders?: Record<string, string>,
 ) {
   let primary: FetchWithRedirectsResult;
   try {
-    primary = await fetchWithRedirects(normalized.url, signal);
+    primary = await fetchWithRedirects(normalized.url, signal, requestHeaders);
   } catch (error) {
     if (!normalized.fallbackUrl || signal.aborted) throw error;
-    const result = await fetchWithRedirects(normalized.fallbackUrl, signal);
+    const result = await fetchWithRedirects(
+      normalized.fallbackUrl,
+      signal,
+      requestHeaders,
+    );
     return { result, upgradedToHttps: false };
   }
   if (
@@ -255,7 +266,11 @@ export async function fetchWithUpgradeFallback(
   }
   if (!('blockedRedirect' in primary)) await discard(primary.response);
   try {
-    const result = await fetchWithRedirects(normalized.fallbackUrl, signal);
+    const result = await fetchWithRedirects(
+      normalized.fallbackUrl,
+      signal,
+      requestHeaders,
+    );
     if (
       'blockedRedirect' in primary &&
       ('blockedRedirect' in result || !result.response.ok)

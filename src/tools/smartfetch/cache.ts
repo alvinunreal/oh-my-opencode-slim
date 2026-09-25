@@ -2,6 +2,7 @@ import { LRUCache } from 'lru-cache';
 import type { FetchResult } from './types';
 
 type CacheOptions = {
+  format: 'text' | 'markdown' | 'html';
   extract_main: boolean;
   prefer_llms_txt: 'auto' | 'always' | 'never';
   save_binary: boolean;
@@ -35,6 +36,7 @@ export function buildCacheKey(url: string, options: CacheOptions) {
   parsed.hash = '';
   return JSON.stringify({
     url: parsed.toString(),
+    format: options.format,
     extractMain: options.extract_main,
     preferLlmsTxt: options.prefer_llms_txt,
     saveBinary: options.save_binary,

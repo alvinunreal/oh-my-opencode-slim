@@ -110,8 +110,10 @@ returns the raw fetched content as a graceful fallback.
 ## Caching
 
 Fetches are cached in memory with an LRU cache (50 MiB max, 15-minute TTL).
-The cache key includes the URL plus behavior-affecting options (`extract_main`,
-`prefer_llms_txt`, `save_binary`), so changing these re-fetches the URL.
+The cache key includes the URL plus request- and representation-affecting options
+(`format`, `extract_main`, `prefer_llms_txt`, `save_binary`), so changing these
+re-fetches the URL. The page's `Accept` header prefers the requested format
+(markdown, plain text, or HTML); the llms.txt probe retains its own text preference.
 
 Expired cache entries are fetched anew; conditional `ETag`/`Last-Modified`
 revalidation and `304` cache refresh are not used. The llms.txt probe validates

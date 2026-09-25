@@ -54,6 +54,47 @@ describe('smartfetch/tool', () => {
     ]);
   });
 
+  test('negotiates markdown separately from HTML and treats markdown as text', async () => {
+    const accepts: string[] = [];
+    globalThis.fetch = mock(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const accept = new Headers(init?.headers).get('Accept') || '';
+        accepts.push(accept);
+        return new Response(
+          accept.startsWith('text/markdown')
+            ? '# Markdown heading'
+            : '<h1>HTML heading</h1>',
+          {
+            headers: {
+              'content-type': accept.startsWith('text/markdown')
+                ? 'text/markdown'
+                : 'text/html',
+            },
+          },
+        );
+      },
+    ) as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    const args = {
+      url: 'https://example.com/article',
+      prefer_llms_txt: 'never' as const,
+    };
+    const markdown = await webfetch.execute(
+      { ...args, format: 'markdown' },
+      createExecutionContext(),
+    );
+    const html = await webfetch.execute(
+      { ...args, format: 'html' },
+      createExecutionContext(),
+    );
+    expect(markdown).toContain('# Markdown heading');
+    expect(markdown).toContain('source_kind: "text"');
+    expect(html).toContain('HTML heading');
+    expect(accepts).toHaveLength(2);
+    expect(accepts[0]).toStartWith('text/markdown');
+    expect(accepts[1]).toStartWith('text/html');
+  });
+
   test('rejects a pre-aborted request after permission without network I/O', async () => {
     const controller = new AbortController();
     controller.abort(new Error('pre-aborted'));
