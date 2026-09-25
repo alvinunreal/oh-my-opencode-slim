@@ -138,6 +138,8 @@ export type FetchLike = (
 export interface TuiPaneWiringOptions {
   /** Project directory this client serves. */
   directory: string;
+  /** Directory of the displayed session, resolved again after route changes. */
+  getDirectory?: () => string;
   /** Session currently displayed; read per event because routes change. */
   getDisplayedSessionId?: () => string | null | undefined;
   /** Host event bus (`api.event`); absent hosts subscribe to nothing. */
@@ -476,6 +478,7 @@ export async function createTuiPaneWiring(
   const onceGate = options.onceGate ?? processOnceGate;
   const env = options.env ?? process.env;
   const directory = options.directory;
+  const getDirectory = options.getDirectory ?? (() => directory);
 
   (options.initLogging ?? initClientLogging)();
 
@@ -520,7 +523,7 @@ export async function createTuiPaneWiring(
   const runProbe = async (): Promise<boolean> => {
     const wasReachable = hostState === 'reachable';
     const reachable = await probeServerReachable(baseUrl, {
-      directory,
+      directory: getDirectory(),
       fetchFn: options.fetchFn,
       timeoutMs: options.probeTimeoutMs,
     });
@@ -655,16 +658,13 @@ export async function createTuiPaneWiring(
     if (disposed) return;
     const projected = projectSessionEvent(type, raw);
     if (!projected) return;
-    const event = withDirectory(
-      projected,
-      knownDirectories,
-      lifecycle,
-      directory,
-    );
-    if (event.directory === directory) {
-      rememberDirectory(knownDirectories, event.sessionId, directory);
+    const displayedDirectory = getDirectory();
+    const event = withDirectory(projected, knownDirectories, lifecycle);
+    if (event.directory === displayedDirectory) {
+      rememberDirectory(knownDirectories, event.sessionId, displayedDirectory);
     }
     lifecycle.setDisplayedSession(options.getDisplayedSessionId?.() ?? null);
+    lifecycle.setDisplayedDirectory(displayedDirectory);
 
     await ensureReachable();
     if (disposed) return;
@@ -709,6 +709,7 @@ export async function createTuiPaneWiring(
     // The route can move while the event stream is quiet; reconcile against
     // the session this client displays *now*, not the last one an event saw.
     lifecycle.setDisplayedSession(options.getDisplayedSessionId?.() ?? null);
+    lifecycle.setDisplayedDirectory(getDirectory());
     await ensureReachable();
     if (disposed) return;
     if (hostState === 'reachable') {
@@ -772,15 +773,13 @@ function withDirectory(
   event: SessionLifecycleEvent,
   knownDirectories: ReadonlyMap<string, string>,
   lifecycle: PaneLifecycle,
-  directory: string,
 ): SessionLifecycleEvent {
   if (event.directory !== undefined) return event;
   if (knownDirectories.has(event.sessionId)) {
     return { ...event, directory: knownDirectories.get(event.sessionId) };
   }
-  if (lifecycle.getPane(event.sessionId) !== undefined) {
-    return { ...event, directory };
-  }
+  const pane = lifecycle.getPane(event.sessionId);
+  if (pane) return { ...event, directory: pane.directory };
   return event;
 }
 

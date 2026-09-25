@@ -101,6 +101,19 @@ describe('TUI multiplexer directory scope', () => {
       }),
     ).toBe('/home/user/project');
   });
+
+  test('resolves the directory again when the displayed route changes', () => {
+    const api = {
+      route: { current: { name: 'session', params: { sessionID: 'a' } } },
+      state: {
+        path: { directory: '/launch' },
+        session: { get: (id: string) => ({ directory: `/sessions/${id}` }) },
+      },
+    };
+    expect(resolveTuiPaneDirectory(api)).toBe('/sessions/a');
+    api.route.current.params.sessionID = 'b';
+    expect(resolveTuiPaneDirectory(api)).toBe('/sessions/b');
+  });
 });
 
 function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {

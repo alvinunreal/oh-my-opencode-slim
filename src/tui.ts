@@ -1750,9 +1750,11 @@ const plugin: TuiDualContractModule = {
     // Client-side pane lifecycle (v1 only; v2 `setup()` stays unwired). The
     // wiring owns admission, config, log init, serverUrl reflection and the
     // event projection; disposal closes this client's panes best-effort.
+    const getPaneDirectory = () => resolveTuiPaneDirectory(api);
     const paneWiring = await createTuiPaneWiring({
-      directory: resolveTuiPaneDirectory(api),
+      directory: getPaneDirectory(),
       getDisplayedSessionId: () => resolveRouteSessionId(api.route.current),
+      getDirectory: getPaneDirectory,
       eventBus: api.event,
       client: (api as { client?: unknown }).client,
       env: process.env,

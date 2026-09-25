@@ -89,7 +89,7 @@ export class PaneLifecycle {
    */
   private readonly closedWatch = new Map<
     string,
-    { parentSessionId: string; subagentType?: string }
+    { parentSessionId: string; directory: string; subagentType?: string }
   >();
   /**
    * Activity epoch per child, bumped by every held-pane event. A close
@@ -99,6 +99,7 @@ export class PaneLifecycle {
    */
   private readonly activityEpoch = new Map<string, number>();
   private displayedSessionId: string | null;
+  private displayedDirectory: string;
   /** Set by `dispose()`: no pane is registered after this point. */
   private disposed = false;
 
@@ -108,11 +109,16 @@ export class PaneLifecycle {
     private readonly logger: DiagnosticLogger = PLUGIN_LOG_SINK,
   ) {
     this.displayedSessionId = config.displayedSessionId;
+    this.displayedDirectory = config.directory;
   }
 
   /** Updates FR-3 condition ② when the client switches displayed sessions. */
   setDisplayedSession(sessionId: string | null): void {
     this.displayedSessionId = sessionId;
+  }
+
+  setDisplayedDirectory(directory: string): void {
+    this.displayedDirectory = directory;
   }
 
   /** Marks activity for a held child, invalidating in-flight close checks. */
@@ -183,7 +189,11 @@ export class PaneLifecycle {
 
     // Events outside this client's directory are not ours to act on; the
     // global event bus broadcasts every project's events (stage A evidence).
-    if (!this.isOurDirectory(event)) return;
+    const watched = this.closedWatch.get(event.sessionId);
+    if (
+      !this.isOurDirectory(event, watched?.directory ?? this.displayedDirectory)
+    )
+      return;
 
     // An idle edge observed while this child's spawn is in flight would be
     // consumed with no pane to act on; remember it so the pane still follows
@@ -236,6 +246,7 @@ export class PaneLifecycle {
       event.sessionId,
       event.parentSessionId,
       event.subagentType,
+      event.directory,
     );
   }
 
@@ -248,17 +259,24 @@ export class PaneLifecycle {
   async onReconnect(): Promise<void> {
     const parentSessionId = this.displayedSessionId;
     if (parentSessionId === null || this.config.adapter === null) return;
+    const directory = this.displayedDirectory;
     const heldAtStart = new Set(this.panes.keys());
 
-    const list = await this.listSessions(
-      this.config.directory,
-      parentSessionId,
-    );
+    const list = await this.listSessions(directory, parentSessionId);
     if (list.error) return; // unverifiable: keep local state (fail-closed)
     // The route can move while the read is in flight; acting on the previous
     // parent would backfill panes for a conversation the user already left.
-    if (this.displayedSessionId !== parentSessionId) return;
-    const read = await this.readStatus(this.config.directory);
+    if (
+      this.displayedSessionId !== parentSessionId ||
+      this.displayedDirectory !== directory
+    )
+      return;
+    const read = await this.readStatus(directory);
+    if (
+      this.displayedSessionId !== parentSessionId ||
+      this.displayedDirectory !== directory
+    )
+      return;
     const statuses = read.error ? null : read.statuses;
     const serverChildIds = new Set<string>();
     const serverAgents = new Map<string, string>();
@@ -312,6 +330,7 @@ export class PaneLifecycle {
           childSessionId,
           watched.parentSessionId,
           watched.subagentType,
+          watched.directory,
           live,
         );
       }
@@ -329,6 +348,7 @@ export class PaneLifecycle {
             childSessionId,
             parentSessionId,
             serverAgents.get(childSessionId),
+            directory,
           );
         continue;
       }
@@ -336,6 +356,7 @@ export class PaneLifecycle {
         childSessionId,
         parentSessionId,
         serverAgents.get(childSessionId),
+        directory,
         live,
       );
     }
@@ -350,7 +371,7 @@ export class PaneLifecycle {
     record: PaneRecord,
   ): Promise<void> {
     if (event.kind === 'created') return; // replay: the pane is already held
-    if (!this.isOurDirectory(event)) return;
+    if (!this.isOurDirectory(event, record.directory)) return;
 
     if (event.kind === 'deleted') {
       this.bumpActivity(event.sessionId);
@@ -397,6 +418,7 @@ export class PaneLifecycle {
       event.sessionId,
       watched.parentSessionId,
       watched.subagentType,
+      watched.directory,
     );
   }
 
@@ -404,22 +426,33 @@ export class PaneLifecycle {
     childSessionId: string,
     parentSessionId: string,
     subagentType?: string,
+    directory?: string,
   ): Promise<void> {
     if (parentSessionId !== this.displayedSessionId) return;
+    if (directory !== this.displayedDirectory) return;
     if (this.config.adapter === null) return;
     if (this.spawnsInFlight.has(childSessionId)) return;
 
-    await this.createPane(childSessionId, parentSessionId, subagentType);
+    await this.createPane(
+      childSessionId,
+      parentSessionId,
+      subagentType,
+      directory,
+    );
   }
 
-  private isOurDirectory(event: SessionLifecycleEvent): boolean {
-    return event.directory === this.config.directory;
+  private isOurDirectory(
+    event: SessionLifecycleEvent,
+    directory: string,
+  ): boolean {
+    return event.directory === directory;
   }
 
   private async createPane(
     childSessionId: string,
     parentSessionId: string,
     subagentType?: string,
+    directory = this.displayedDirectory,
     knownStatus?: SessionRuntimeStatus,
   ): Promise<void> {
     const adapterType = this.config.adapter;
@@ -453,8 +486,7 @@ export class PaneLifecycle {
       }
 
       const readyStatus =
-        knownStatus ??
-        (await this.waitForReady(this.config.directory, childSessionId));
+        knownStatus ?? (await this.waitForReady(directory, childSessionId));
       if (readyStatus === null) {
         logNoPane(this.logger, 'readiness-timeout', {
           childSessionId,
@@ -476,6 +508,7 @@ export class PaneLifecycle {
         parentSessionId,
         serverUrl.url,
         subagentType,
+        directory,
       );
       if (!result.success || !result.paneId) {
         logNoPane(this.logger, this.adapterFailureReason(result.error), {
@@ -500,6 +533,7 @@ export class PaneLifecycle {
       const record: PaneRecord = {
         childSessionId,
         parentSessionId,
+        directory,
         paneId: result.paneId,
         adapter: adapterType,
         anchoredTarget: this.resolveAnchoredTarget(),
@@ -508,7 +542,7 @@ export class PaneLifecycle {
       };
       this.panes.set(childSessionId, record);
       this.closedWatch.delete(childSessionId);
-      this.ports.onChildTracked?.(childSessionId, this.config.directory);
+      this.ports.onChildTracked?.(childSessionId, directory);
       logPaneCreated(this.logger, record);
 
       // Deleted during the spawn itself: register, then close right away.
@@ -533,7 +567,12 @@ export class PaneLifecycle {
         !this.deletedWhileSpawning.has(childSessionId) &&
         !this.panes.has(childSessionId)
       ) {
-        this.rememberClosed(childSessionId, parentSessionId, subagentType);
+        this.rememberClosed(
+          childSessionId,
+          parentSessionId,
+          subagentType,
+          directory,
+        );
       }
       this.deletedWhileSpawning.delete(childSessionId);
       this.idleWhileSpawning.delete(childSessionId);
@@ -546,6 +585,7 @@ export class PaneLifecycle {
     parentSessionId: string,
     serverUrl: string,
     subagentType?: string,
+    directory?: string,
   ): Promise<PaneResult> {
     try {
       // The description doubles as the initial pane title. The wiring injects
@@ -557,7 +597,7 @@ export class PaneLifecycle {
         childSessionId,
         description,
         serverUrl,
-        this.config.directory,
+        directory ?? this.displayedDirectory,
         { parentSessionId, subagentType },
       );
     } catch {
@@ -683,7 +723,7 @@ export class PaneLifecycle {
     // while `busy`/`retry` keeps the pane. An unverifiable read keeps the
     // pane (fail-closed, I3).
     const epoch = this.activityEpoch.get(childSessionId) ?? 0;
-    const read = await this.readStatus(this.config.directory);
+    const read = await this.readStatus(record.directory);
     if (read.error) {
       if ((this.activityEpoch.get(childSessionId) ?? 0) === epoch) {
         this.scheduleCloseRetry(childSessionId, record, 'idle');
@@ -740,6 +780,7 @@ export class PaneLifecycle {
           childSessionId,
           record.parentSessionId,
           record.subagentType,
+          record.directory,
         );
         // The child turned busy while this close was in flight; that edge was
         // consumed by the close, so rebuild right away instead of waiting for
@@ -749,6 +790,7 @@ export class PaneLifecycle {
             childSessionId,
             record.parentSessionId,
             record.subagentType,
+            record.directory,
           );
         }
       }
@@ -786,15 +828,16 @@ export class PaneLifecycle {
     childSessionId: string,
     parentSessionId: string,
     subagentType?: string,
+    directory = this.displayedDirectory,
   ): void {
     this.closedWatch.delete(childSessionId);
     this.closedWatch.set(
       childSessionId,
       subagentType === undefined
-        ? { parentSessionId }
-        : { parentSessionId, subagentType },
+        ? { parentSessionId, directory }
+        : { parentSessionId, directory, subagentType },
     );
-    this.ports.onChildTracked?.(childSessionId, this.config.directory);
+    this.ports.onChildTracked?.(childSessionId, directory);
     if (this.closedWatch.size <= MAX_REMEMBERED_CLOSED) return;
     const oldest = this.closedWatch.keys().next().value;
     if (oldest !== undefined) this.closedWatch.delete(oldest);

@@ -34,6 +34,8 @@ export interface PaneIdentity {
 
 /** One client-local pane, keyed by `childSessionId` in the in-process Map. */
 export interface PaneRecord extends PaneIdentity {
+  /** Project directory captured when this pane was created. */
+  directory: string;
   status: PaneStatus;
   /**
    * Subagent type of the child (`agent` on the host session), remembered so

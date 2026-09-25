@@ -328,6 +328,19 @@ async function activatePane(h: Harness): Promise<void> {
 }
 
 describe('event filtering and readiness (2.2)', () => {
+  test('a held pane still closes using its own directory after a route switch', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.lifecycle.setDisplayedSession('parent-in-b');
+    h.lifecycle.setDisplayedDirectory('/project-b');
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.reader.calls.at(-1)).toBe(DIRECTORY);
+    expect(h.adapter.closeCalls).toEqual(['pane-1']);
+  });
+
   test('ignores created events from another directory with no pane action', async () => {
     const h = createHarness();
     await h.lifecycle.handleEvent(
@@ -852,6 +865,22 @@ describe('dedup and stable-idle close (2.3)', () => {
 });
 
 describe('rebuild and reconnect backfill (2.4)', () => {
+  test('a watch retains its original directory after switching away and back', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    h.lifecycle.setDisplayedDirectory('/project-b');
+    h.lifecycle.setDisplayedSession('parent-b');
+    h.lifecycle.setDisplayedDirectory(DIRECTORY);
+    h.lifecycle.setDisplayedSession(PARENT);
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    expect(h.adapter.spawnCalls.at(-1)?.directory).toBe(DIRECTORY);
+  });
+
   test('a readiness timeout becomes a watch and a later busy edge creates the pane', async () => {
     const h = createHarness();
     const pending = h.lifecycle.handleEvent(createdEvent());
