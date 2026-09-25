@@ -929,6 +929,26 @@ describe('dedup and stable-idle close (2.3)', () => {
     expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
   });
 
+  test("a deletion during the child's own spawn survives tombstone eviction", async () => {
+    const h = createHarness();
+    h.reader.statuses.set(CHILD, 'busy');
+    const barrier = createDeferred();
+    h.adapter.spawnBarrier = barrier.promise;
+    const pending = h.lifecycle.handleEvent(createdEvent());
+    await flushAsync();
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+    await h.lifecycle.handleEvent(lifecycleEvent('deleted'));
+    for (let i = 0; i < 64; i += 1) {
+      await h.lifecycle.handleEvent(
+        lifecycleEvent('deleted', { sessionId: `other-${i}` }),
+      );
+    }
+    barrier.resolve();
+    await pending;
+    expect(h.adapter.closeCalls).toEqual(['pane-1']);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
   test('deletion during spawn is terminal even after the pane closes', async () => {
     const h = createHarness();
     h.reader.statuses.set(CHILD, 'busy');

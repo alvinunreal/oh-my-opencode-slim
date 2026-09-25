@@ -172,11 +172,14 @@ export class PaneLifecycle {
   }
 
   private rememberDeleted(childSessionId: string): void {
-    if (this.deletedSessions.has(childSessionId)) return;
     this.deletedSessions.add(childSessionId);
     if (this.deletedSessions.size <= MAX_REMEMBERED_CLOSED) return;
-    const oldest = this.deletedSessions.values().next().value;
-    if (oldest !== undefined) this.deletedSessions.delete(oldest);
+    // Keep a deletion pinned until its in-flight spawn has checked it.
+    for (const candidate of this.deletedSessions) {
+      if (this.spawnsInFlight.has(candidate)) continue;
+      this.deletedSessions.delete(candidate);
+      break;
+    }
   }
 
   /** Read-only view of every pane tracked by this client. */
