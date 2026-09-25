@@ -177,6 +177,20 @@ export function resolveTuiPaneDirectory(api: {
   }
 }
 
+/** Route-scoped pane context, shared by initial wiring and subsequent events. */
+export function paneWiringOptions(
+  api: Parameters<typeof resolveTuiPaneDirectory>[0] & {
+    route: { current: TuiRouteView };
+  },
+) {
+  const getDirectory = () => resolveTuiPaneDirectory(api);
+  return {
+    directory: getDirectory(),
+    getDirectory,
+    getDisplayedSessionId: () => resolveRouteSessionId(api.route.current),
+  };
+}
+
 export function splitSidebarModelId(model: string): {
   provider?: string;
   model: string;
@@ -1750,11 +1764,8 @@ const plugin: TuiDualContractModule = {
     // Client-side pane lifecycle (v1 only; v2 `setup()` stays unwired). The
     // wiring owns admission, config, log init, serverUrl reflection and the
     // event projection; disposal closes this client's panes best-effort.
-    const getPaneDirectory = () => resolveTuiPaneDirectory(api);
     const paneWiring = await createTuiPaneWiring({
-      directory: getPaneDirectory(),
-      getDisplayedSessionId: () => resolveRouteSessionId(api.route.current),
-      getDirectory: getPaneDirectory,
+      ...paneWiringOptions(api),
       eventBus: api.event,
       client: (api as { client?: unknown }).client,
       env: process.env,

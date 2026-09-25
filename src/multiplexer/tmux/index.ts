@@ -81,11 +81,11 @@ export class TmuxMultiplexer implements Multiplexer {
     }
 
     try {
-      const opencodeCmd = buildOpencodeAttachCommand(
+      const opencodeCmd = `env OPENCODE_DISABLE_TERMINAL_TITLE=1 ${buildOpencodeAttachCommand(
         sessionId,
         serverUrl,
         directory,
-      );
+      )}`;
 
       const result = await this.splitPane(
         tmux,
@@ -342,7 +342,7 @@ export class TmuxMultiplexer implements Multiplexer {
       socket,
       'split-window',
       getSplitDirection(layout),
-      ...['-e', 'OPENCODE_DISABLE_TERMINAL_TITLE=1', '-d'],
+      '-d',
       '-P',
       '-F',
       '#{pane_id}',

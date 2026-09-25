@@ -18,6 +18,7 @@ import {
   getSidebarReusableTargets,
   isRefreshCurrent,
   makeRouteNavigator,
+  paneWiringOptions,
   readCompactSidebar,
   readConfigInvalid,
   resolveHoverBackground,
@@ -102,7 +103,7 @@ describe('TUI multiplexer directory scope', () => {
     ).toBe('/home/user/project');
   });
 
-  test('resolves the directory again when the displayed route changes', () => {
+  test('passes route-derived directory and session getters to pane wiring', () => {
     const api = {
       route: { current: { name: 'session', params: { sessionID: 'a' } } },
       state: {
@@ -110,9 +111,13 @@ describe('TUI multiplexer directory scope', () => {
         session: { get: (id: string) => ({ directory: `/sessions/${id}` }) },
       },
     };
-    expect(resolveTuiPaneDirectory(api)).toBe('/sessions/a');
+    const options = paneWiringOptions(api);
+    expect(options.directory).toBe('/sessions/a');
+    expect(options.getDirectory()).toBe('/sessions/a');
+    expect(options.getDisplayedSessionId()).toBe('a');
     api.route.current.params.sessionID = 'b';
-    expect(resolveTuiPaneDirectory(api)).toBe('/sessions/b');
+    expect(options.getDirectory()).toBe('/sessions/b');
+    expect(options.getDisplayedSessionId()).toBe('b');
   });
 });
 

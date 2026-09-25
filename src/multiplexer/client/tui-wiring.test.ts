@@ -838,6 +838,22 @@ describe('embedded host fail-closed (D3)', () => {
 });
 
 describe('event handling and dispose', () => {
+  test('uses a new route directory for a created event before the reconcile tick', async () => {
+    let directory = DIRECTORY;
+    let parent = PARENT;
+    const h = await createHarness({
+      getDirectory: () => directory,
+      getDisplayedSessionId: () => parent,
+    });
+    directory = '/session-project-b';
+    parent = 'parent-b';
+    h.bus.emit('session.created', createdEvent('child-b', parent, directory));
+    h.state.statuses['child-b'] = { type: 'busy' };
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns.at(-1)?.directory).toBe(directory);
+    expect(h.adapters.get('tmux')?.spawns.at(-1)?.parentSessionId).toBe(parent);
+    await h.wiring.dispose();
+  });
   test('a TUI launched in A creates panes for the displayed session in B', async () => {
     const displayedDirectory = '/session-project-b';
     const state = createClientState({
