@@ -307,6 +307,23 @@ describe('smartfetch/network', () => {
     expect(calls).toHaveLength(1);
   });
 
+  test('an HTTPS 304 never falls back to HTTP', async () => {
+    const urls: string[] = [];
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return new Response(null, { status: 304 });
+    }) as typeof fetch;
+    const { result } = await fetchWithUpgradeFallback(
+      normalizeUrl('http://example.com/page'),
+      new AbortController().signal,
+      { 'If-None-Match': '"old"' },
+    );
+    expect(urls).toEqual(['https://example.com/page']);
+    expect('blockedRedirect' in result).toBe(false);
+    if (!('blockedRedirect' in result))
+      expect(result.response.status).toBe(304);
+  });
+
   test('reports the primary blocked redirect when HTTP fallback also blocks', async () => {
     globalThis.fetch = mock(
       async (url: string | URL | Request) =>

@@ -29,6 +29,23 @@ export const CACHE = new LRUCache<string, FetchResult>({
   sizeCalculation: calculateCacheSize,
 });
 
+export function lookup(key: string) {
+  const status: LRUCache.Status<string, FetchResult> = {};
+  const entry = CACHE.get(key, {
+    allowStale: true,
+    noDeleteOnStaleGet: true,
+    status,
+  });
+  return { entry, fresh: status.get === 'hit' };
+}
+
+export function conditionalHeaders(entry: FetchResult): Record<string, string> {
+  return {
+    ...(entry.etag ? { 'If-None-Match': entry.etag } : {}),
+    ...(entry.lastModified ? { 'If-Modified-Since': entry.lastModified } : {}),
+  };
+}
+
 export function buildCacheKey(url: string, options: CacheOptions) {
   const parsed = new URL(url);
   // Fragments never reach the server (RFC 3986 §3.5); #sec1 and #sec2 are

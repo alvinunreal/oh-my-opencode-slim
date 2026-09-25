@@ -19,7 +19,7 @@
 
 2. If `prefer_llms_txt` applies, `probeLlmsText` tries `/llms-full.txt` then `/llms.txt`, following only permitted redirects and rejecting HTML/login-wall responses (`network.ts`).
 
-3. When the tool falls back to the page itself, `fetchWithUpgradeFallback` handles HTTPS upgrade fallback and redirect enforcement; the tool then detects binaries and reads bodies within limits. Stale entries are refetched without conditional revalidation (`network.ts`, `tool.ts`).
+3. When the tool falls back to the page itself, `fetchWithUpgradeFallback` handles HTTPS upgrade fallback and redirect enforcement; the tool then detects binaries and reads bodies within limits. Stale pages send stored validators; a `304` at the same final URL refreshes the cached body, while a changed redirect target requires an unconditional refetch. Stale llms.txt is probed again (`network.ts`, `cache.ts`, `tool.ts`).
 
 4. Text/HTML payloads are decoded and normalized through `extractFromHtml`, `cleanFetchedMarkdown`, `extractHeadingsFromMarkdown`, `frontmatter`, and `joinRenderedContent`; binary payloads optionally persist via `saveBinary` and return a metadata message (`utils.ts`, `binary.ts`, `tool.ts`).
 

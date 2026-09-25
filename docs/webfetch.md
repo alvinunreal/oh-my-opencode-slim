@@ -115,9 +115,12 @@ The cache key includes the URL plus request- and representation-affecting option
 re-fetches the URL. The page's `Accept` header prefers the requested format
 (markdown, plain text, or HTML); the llms.txt probe retains its own text preference.
 
-Expired cache entries are fetched anew; conditional `ETag`/`Last-Modified`
-revalidation and `304` cache refresh are not used. The llms.txt probe validates
-the response before caching it; cached responses are not validated again.
+Expired entries are revalidated with `ETag`/`Last-Modified` when available.
+On `304` at the same final URL, the cached body is reused and its TTL refreshed;
+frontmatter reports `cache_hit: true` and `revalidated: true`. If a redirect
+changes the final URL, a fresh unconditional fetch retrieves the new resource.
+Network errors never serve stale content. Expired llms.txt content is probed
+again without conditionals; the probe validates responses before caching them.
 
 ## llms.txt Probing
 
@@ -281,7 +284,7 @@ these modules:
 | `tool.ts` | Entry point — permission prompts, cache lookup, llms.txt preference logic, binary-vs-text branching, metadata emission, secondary-model integration |
 | `network.ts` | URL normalization, redirect policy, charset/body decoding, header extraction, llms.txt probing, HTTP fetch with HTTPS upgrade fallback |
 | `utils.ts` | HTML extraction (Mozilla Readability + Turndown), heading cleanup, markdown/text cleaning, frontmatter generation, quality signal detection |
-| `cache.ts` | LRU cache keyed by URL + behavioral options; entries expire by TTL without conditional revalidation, canonical aliases or cache-time llms invalidation |
+| `cache.ts` | LRU cache keyed by URL + request options; stale entries retain validators for conditional page revalidation, while llms.txt is probed anew |
 | `binary.ts` | Binary content persistence to disk, MIME-to-extension mapping, safe filename allocation |
 | `secondary-model.ts` | Dedicated webfetch/`small_model` config resolution, temporary session creation, content truncation, model fallback chain |
 | `constants.ts` | Timeouts, size limits, docs domain heuristics, binary MIME prefixes, tool description |

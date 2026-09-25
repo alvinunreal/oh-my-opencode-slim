@@ -289,6 +289,7 @@ export async function fetchWithUpgradeFallback(
   if (
     !normalized.fallbackUrl ||
     (!('blockedRedirect' in primary) &&
+      // A 304 from HTTPS is authoritative; never fall back to HTTP for it.
       (primary.response.ok || primary.response.status === 304))
   ) {
     return { result: primary, upgradedToHttps: normalized.upgradedToHttps };

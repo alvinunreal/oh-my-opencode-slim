@@ -6,7 +6,7 @@ import {
   tool,
 } from '@opencode-ai/plugin';
 import { buildBinaryResultMessage, saveBinary } from './binary';
-import { buildCacheKey, CACHE } from './cache';
+import { buildCacheKey, CACHE, conditionalHeaders, lookup } from './cache';
 import {
   DEFAULT_TIMEOUT_SECONDS,
   MAX_BINARY_DOWNLOAD_BYTES,
@@ -162,9 +162,11 @@ export function createWebfetchTool(
       );
       return runWithScopedTimeout(ctx.abort, timeoutMs, async (signal) => {
         signal.throwIfAborted();
-        let fetchResult = CACHE.get(cacheKey);
-        const cacheHit = !!fetchResult;
-        if (!fetchResult) {
+        const cached = lookup(cacheKey);
+        let fetchResult = cached.fresh ? cached.entry : undefined;
+        let cacheHit = cached.fresh;
+        let revalidated = false;
+        if (!cached.fresh) {
           let llmsProbeError: string | undefined;
 
           if (shouldProbeLlmsTxt) {
@@ -243,175 +245,214 @@ export function createWebfetchTool(
           }
 
           if (!fetchResult) {
-            const { result, upgradedToHttps } = await fetchWithUpgradeFallback(
+            const validators =
+              cached.entry &&
+              !('usedLlmsTxt' in cached.entry && cached.entry.usedLlmsTxt)
+                ? conditionalHeaders(cached.entry)
+                : {};
+            let { result, upgradedToHttps } = await fetchWithUpgradeFallback(
               normalized,
               signal,
-              { Accept: ACCEPT_BY_FORMAT[args.format] },
+              { Accept: ACCEPT_BY_FORMAT[args.format], ...validators },
             );
-            if ('blockedRedirect' in result) {
-              const metadata = args.include_metadata
-                ? frontmatter({
-                    requested_url: args.url,
-                    redirect_url: result.redirectUrl,
-                    status_code: result.statusCode,
-                    redirect_chain: result.redirectChain.map(
-                      (step: RedirectStep) =>
-                        `${step.status} ${step.from} -> ${step.to}`,
+            if (
+              !('blockedRedirect' in result) &&
+              result.response.status === 304 &&
+              cached.entry &&
+              Object.keys(validators).length > 0
+            ) {
+              const notModified = result;
+              await discard(notModified.response);
+              if (notModified.finalUrl === cached.entry.finalUrl) {
+                fetchResult = {
+                  ...cached.entry,
+                  etag:
+                    notModified.response.headers.get('etag') ||
+                    cached.entry.etag,
+                  lastModified:
+                    notModified.response.headers.get('last-modified') ||
+                    cached.entry.lastModified,
+                  redirectChain: notModified.redirectChain,
+                  upgradedToHttps,
+                };
+                cacheHit = true;
+                revalidated = true;
+              } else {
+                // A redirect may now identify a different resource: fetch its body.
+                ({ result, upgradedToHttps } = await fetchWithUpgradeFallback(
+                  normalized,
+                  signal,
+                  { Accept: ACCEPT_BY_FORMAT[args.format] },
+                ));
+              }
+            }
+            if (!fetchResult) {
+              if ('blockedRedirect' in result) {
+                const metadata = args.include_metadata
+                  ? frontmatter({
+                      requested_url: args.url,
+                      redirect_url: result.redirectUrl,
+                      status_code: result.statusCode,
+                      redirect_chain: result.redirectChain.map(
+                        (step: RedirectStep) =>
+                          `${step.status} ${step.from} -> ${step.to}`,
+                      ),
+                      upgraded_to_https: upgradedToHttps,
+                    })
+                  : '';
+                return joinRenderedContent(
+                  metadata,
+                  renderMessageForFormat(
+                    buildRedirectResultMessage(
+                      args.url,
+                      result.redirectUrl,
+                      result.statusCode,
                     ),
-                    upgraded_to_https: upgradedToHttps,
-                  })
-                : '';
-              return joinRenderedContent(
-                metadata,
-                renderMessageForFormat(
-                  buildRedirectResultMessage(
-                    args.url,
-                    result.redirectUrl,
-                    result.statusCode,
+                    args.format,
                   ),
                   args.format,
-                ),
-                args.format,
-              );
-            }
+                );
+              }
 
-            const { response, finalUrl, redirectChain } = result;
-            if (!response.ok) {
-              await discard(response);
-              throw new Error(
-                `Request failed with status code: ${response.status}${isCloudflareChallenge(response) ? ' (Cloudflare challenge persisted after retry)' : ''}`,
+              const { response, finalUrl, redirectChain } = result;
+              if (!response.ok) {
+                await discard(response);
+                throw new Error(
+                  `Request failed with status code: ${response.status}${isCloudflareChallenge(response) ? ' (Cloudflare challenge persisted after retry)' : ''}`,
+                );
+              }
+              const headerMetadata = extractHeaderMetadata(
+                response.headers,
+                finalUrl,
               );
-            }
-            const headerMetadata = extractHeaderMetadata(
-              response.headers,
-              finalUrl,
-            );
-            const declaredType = headerMetadata.contentType || '';
-            const explicitBinary = isBinaryContentType(declaredType);
-            const genericBinaryMime = isGenericBinaryMime(declaredType);
-            const binaryDownloadLimit = args.save_binary
-              ? MAX_RESPONSE_BYTES
-              : MAX_BINARY_DOWNLOAD_BYTES;
-            const oversizedBinary =
-              explicitBinary &&
-              !genericBinaryMime &&
-              typeof headerMetadata.contentLength === 'number' &&
-              headerMetadata.contentLength > binaryDownloadLimit;
-            let body = { data: new Uint8Array(), truncated: false };
-            if (oversizedBinary) {
-              await discard(response);
-            } else {
-              const readLimit =
-                explicitBinary && !genericBinaryMime
-                  ? binaryDownloadLimit
-                  : MAX_RESPONSE_BYTES;
-              body = await readBodyLimited(response, readLimit);
-            }
-            const baseFetch = {
-              finalUrl,
-              statusCode: response.status,
-              ...headerMetadata,
-              redirectChain,
-              upgradedToHttps,
-              truncated: body.truncated,
-              llmsProbeError,
-            };
-            const provisionalDecoded =
-              !oversizedBinary &&
-              (!declaredType ||
-                genericBinaryMime ||
-                /^text\//i.test(declaredType))
-                ? decodeBody(body.data, headerMetadata.charset, declaredType)
-                : undefined;
-            const looksHtmlPayload = provisionalDecoded
-              ? looksLikeHtmlText(provisionalDecoded.text)
-              : false;
-            let contentType = declaredType;
-            if (!contentType) {
-              contentType = looksLikeTextBody(body.data)
-                ? looksHtmlPayload
-                  ? 'text/html'
-                  : 'text/plain'
-                : 'application/octet-stream';
-            } else if (
-              (genericBinaryMime && looksLikeTextBody(body.data)) ||
-              (/^text\/plain(?:;|$)/i.test(contentType) && looksHtmlPayload)
-            ) {
-              contentType = looksHtmlPayload ? 'text/html' : 'text/plain';
-            }
-            if (isBinaryContentType(contentType)) {
-              const binaryTooLarge =
-                oversizedBinary ||
-                body.truncated ||
-                (typeof headerMetadata.contentLength === 'number' &&
-                  headerMetadata.contentLength > binaryDownloadLimit);
-              fetchResult = {
-                ...baseFetch,
-                contentType,
-                canonicalUrl: finalUrl,
-                binary: true,
-                binaryKind: getBinaryKind(contentType),
-                downloadLimitBytes: binaryDownloadLimit,
-                data: binaryTooLarge ? undefined : body.data,
+              const declaredType = headerMetadata.contentType || '';
+              const explicitBinary = isBinaryContentType(declaredType);
+              const genericBinaryMime = isGenericBinaryMime(declaredType);
+              const binaryDownloadLimit = args.save_binary
+                ? MAX_RESPONSE_BYTES
+                : MAX_BINARY_DOWNLOAD_BYTES;
+              const oversizedBinary =
+                explicitBinary &&
+                !genericBinaryMime &&
+                typeof headerMetadata.contentLength === 'number' &&
+                headerMetadata.contentLength > binaryDownloadLimit;
+              let body = { data: new Uint8Array(), truncated: false };
+              if (oversizedBinary) {
+                await discard(response);
+              } else {
+                const readLimit =
+                  explicitBinary && !genericBinaryMime
+                    ? binaryDownloadLimit
+                    : MAX_RESPONSE_BYTES;
+                body = await readBodyLimited(response, readLimit);
+              }
+              const baseFetch = {
+                finalUrl,
+                statusCode: response.status,
+                ...headerMetadata,
+                redirectChain,
+                upgradedToHttps,
+                truncated: body.truncated,
+                llmsProbeError,
               };
-            } else {
-              const decoded =
-                provisionalDecoded ||
-                decodeBody(body.data, headerMetadata.charset, contentType);
-              const rawText = decoded.text;
-              const isHtml = isHtmlLikeContentType(contentType);
-              const extracted = isHtml
-                ? await extractFromHtml(rawText, finalUrl, args.extract_main)
-                : (() => {
-                    const cleaned = cleanFetchedText(rawText);
-                    return {
-                      title: undefined,
-                      rawContent: cleaned,
-                      html: cleaned,
-                      text: cleaned,
-                      markdown: cleaned,
-                      extractedMain: false,
-                      canonicalUrl: undefined,
-                      headings: [],
-                    };
-                  })();
-              const count = wordCount(extracted.text);
-              const sourceKind = isHtml ? 'html' : 'text';
-              fetchResult = {
-                ...baseFetch,
-                contentType,
-                canonicalUrl:
-                  extracted.canonicalUrl ||
-                  inferCanonicalUrlFromText(extracted.markdown, finalUrl) ||
-                  finalUrl,
-                headings: extracted.headings?.length
-                  ? extracted.headings
-                  : extractHeadingsFromMarkdown(extracted.markdown),
-                title: extracted.title,
-                rawContent: extracted.rawContent,
-                markdown: extracted.markdown,
-                text: extracted.text,
-                html: extracted.html,
-                extractedMain: extracted.extractedMain,
-                usedLlmsTxt: false,
-                sourceKind,
-                wordCount: count,
-                qualitySignals: detectQualitySignals({
-                  text: extracted.text,
-                  markdown: extracted.markdown,
+              const provisionalDecoded =
+                !oversizedBinary &&
+                (!declaredType ||
+                  genericBinaryMime ||
+                  /^text\//i.test(declaredType))
+                  ? decodeBody(body.data, headerMetadata.charset, declaredType)
+                  : undefined;
+              const looksHtmlPayload = provisionalDecoded
+                ? looksLikeHtmlText(provisionalDecoded.text)
+                : false;
+              let contentType = declaredType;
+              if (!contentType) {
+                contentType = looksLikeTextBody(body.data)
+                  ? looksHtmlPayload
+                    ? 'text/html'
+                    : 'text/plain'
+                  : 'application/octet-stream';
+              } else if (
+                (genericBinaryMime && looksLikeTextBody(body.data)) ||
+                (/^text\/plain(?:;|$)/i.test(contentType) && looksHtmlPayload)
+              ) {
+                contentType = looksHtmlPayload ? 'text/html' : 'text/plain';
+              }
+              if (isBinaryContentType(contentType)) {
+                const binaryTooLarge =
+                  oversizedBinary ||
+                  body.truncated ||
+                  (typeof headerMetadata.contentLength === 'number' &&
+                    headerMetadata.contentLength > binaryDownloadLimit);
+                fetchResult = {
+                  ...baseFetch,
+                  contentType,
+                  canonicalUrl: finalUrl,
+                  binary: true,
+                  binaryKind: getBinaryKind(contentType),
+                  downloadLimitBytes: binaryDownloadLimit,
+                  data: binaryTooLarge ? undefined : body.data,
+                };
+              } else {
+                const decoded =
+                  provisionalDecoded ||
+                  decodeBody(body.data, headerMetadata.charset, contentType);
+                const rawText = decoded.text;
+                const isHtml = isHtmlLikeContentType(contentType);
+                const extracted = isHtml
+                  ? await extractFromHtml(rawText, finalUrl, args.extract_main)
+                  : (() => {
+                      const cleaned = cleanFetchedText(rawText);
+                      return {
+                        title: undefined,
+                        rawContent: cleaned,
+                        html: cleaned,
+                        text: cleaned,
+                        markdown: cleaned,
+                        extractedMain: false,
+                        canonicalUrl: undefined,
+                        headings: [],
+                      };
+                    })();
+                const count = wordCount(extracted.text);
+                const sourceKind = isHtml ? 'html' : 'text';
+                fetchResult = {
+                  ...baseFetch,
+                  contentType,
+                  canonicalUrl:
+                    extracted.canonicalUrl ||
+                    inferCanonicalUrlFromText(extracted.markdown, finalUrl) ||
+                    finalUrl,
+                  headings: extracted.headings?.length
+                    ? extracted.headings
+                    : extractHeadingsFromMarkdown(extracted.markdown),
+                  title: extracted.title,
                   rawContent: extracted.rawContent,
-                  wordCount: count,
-                  sourceKind,
+                  markdown: extracted.markdown,
+                  text: extracted.text,
+                  html: extracted.html,
                   extractedMain: extracted.extractedMain,
-                }),
-                decodedCharset: decoded.decodedCharset,
-                decodeFallback: decoded.decodeFallback,
-                decodeWarning: decoded.decodeWarning,
-              };
+                  usedLlmsTxt: false,
+                  sourceKind,
+                  wordCount: count,
+                  qualitySignals: detectQualitySignals({
+                    text: extracted.text,
+                    markdown: extracted.markdown,
+                    rawContent: extracted.rawContent,
+                    wordCount: count,
+                    sourceKind,
+                    extractedMain: extracted.extractedMain,
+                  }),
+                  decodedCharset: decoded.decodedCharset,
+                  decodeFallback: decoded.decodeFallback,
+                  decodeWarning: decoded.decodeWarning,
+                };
+              }
             }
           }
         }
-        if (!cacheHit) CACHE.set(cacheKey, fetchResult);
+        if (!fetchResult) throw new Error('Fetch produced no result');
+        if (!cached.fresh) CACHE.set(cacheKey, fetchResult);
 
         ctx.metadata({
           title:
@@ -455,6 +496,7 @@ export function createWebfetchTool(
             upgraded_to_https: fetchResult.upgradedToHttps,
             llms_probe_error: fetchResult.llmsProbeError,
             cache_hit: cacheHit,
+            revalidated: revalidated || undefined,
             truncated: fetchResult.truncated,
             download_limit_bytes:
               fetchResult.downloadLimitBytes ?? MAX_BINARY_DOWNLOAD_BYTES,
@@ -511,6 +553,7 @@ export function createWebfetchTool(
           llms_probe_truncated:
             fetchResult.usedLlmsTxt && fetchResult.truncated,
           cache_hit: cacheHit,
+          revalidated: revalidated || undefined,
           truncated: fetchResult.truncated,
           word_count: fetchResult.wordCount,
           quality_signals: fetchResult.qualitySignals,

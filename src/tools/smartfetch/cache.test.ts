@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { buildCacheKey, CACHE, calculateCacheSize } from './cache';
+import {
+  buildCacheKey,
+  CACHE,
+  calculateCacheSize,
+  conditionalHeaders,
+  lookup,
+} from './cache';
 import type { BinaryFetch, CachedFetch } from './types';
 
 const cacheOptions = {
@@ -39,6 +45,32 @@ describe('smartfetch/cache', () => {
       cacheOptions,
     );
     expect(page1).not.toBe(page2);
+  });
+
+  test('a stale cache lookup retains the entry but reports it as not fresh', async () => {
+    CACHE.set(
+      'expired-entry',
+      makeCached({
+        text: 'body',
+        etag: '"abc"',
+        lastModified: 'Tue, 01 Jan 2030 00:00:00 GMT',
+      }),
+      { ttl: 1 },
+    );
+    try {
+      await Bun.sleep(12);
+      const { entry, fresh } = lookup('expired-entry');
+      expect(fresh).toBe(false);
+      expect(entry?.etag).toBe('"abc"');
+      if (!entry) throw new Error('stale entry missing');
+      expect(conditionalHeaders(entry)).toEqual({
+        'If-None-Match': '"abc"',
+        'If-Modified-Since': 'Tue, 01 Jan 2030 00:00:00 GMT',
+      });
+      expect(conditionalHeaders(makeCached({}))).toEqual({});
+    } finally {
+      CACHE.clear();
+    }
   });
 
   test('option changes still produce distinct cache keys', () => {
