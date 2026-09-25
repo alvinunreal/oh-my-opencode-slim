@@ -1,8 +1,16 @@
 import { accessSync, constants } from 'node:fs';
-import { dirname } from 'node:path';
 import { mutateJsonFile } from '../cli/config-io';
-import { findPluginConfigPaths, loadPluginConfig } from '../config/loader';
-import { normalizePreset, resolvePresetDefinition } from '../config/presets';
+import {
+  findPluginConfigPaths,
+  loadConfigFromPath,
+  loadPluginConfig,
+} from '../config/loader';
+import {
+  mergePresetMaps,
+  normalizePreset,
+  resolvePresetDefinition,
+} from '../config/presets';
+import type { PresetInput } from '../config/schema';
 import { MarketplaceActivationError } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
 import { MarketplaceStore } from './store';
@@ -106,28 +114,44 @@ function persistActivation(
         ? normalizePackageIds(localMarketplace.agents_remove as string[])
         : [];
 
-      // A local replacement is authoritative. Without one, only persist the
-      // delta: a parent (or a lower same-named config layer) remains live.
+      // Resolve the same layered preset without this file's local directives.
+      // Both the lower same-named preset and the effective parent can contribute
+      // activation; choosing either one alone loses the other contribution.
       const paths = findPluginConfigPaths(directory);
-      const userPreset =
+      const userPresets =
         paths.projectConfigPath && paths.userConfigPath
-          ? loadPluginConfig(dirname(paths.userConfigPath), { silent: true })
-              .presets?.[presetName]
-          : undefined;
-      const userAgents = userPreset
-        ? (normalizePreset(userPreset).marketplace?.agents ?? [])
-        : [];
-      const parentName = effective.extends;
-      const parentAgents = parentName
-        ? (resolvePresetDefinition(parentName, effectivePresets).marketplace
-            ?.agents ?? [])
-        : [];
+          ? asRecord(
+              loadConfigFromPath(paths.userConfigPath, { silent: true })
+                ?.presets,
+            )
+          : {};
+      const baseline = { ...current };
+      const baselineMarketplace = { ...localMarketplace };
+      delete baselineMarketplace.agents_add;
+      delete baselineMarketplace.agents_remove;
+      if (Object.keys(baselineMarketplace).length > 0) {
+        baseline.marketplace = baselineMarketplace;
+      } else {
+        delete baseline.marketplace;
+      }
+      const baselinePresets =
+        mergePresetMaps(userPresets as Record<string, PresetInput>, {
+          [presetName]: baseline as PresetInput,
+        }) ?? {};
+      const baselineDefinition = baselinePresets[presetName];
+      const inheritedPresets = {
+        ...effectivePresets,
+        [presetName]: {
+          ...asRecord(baselineDefinition),
+          // The loader already interpolated this parent name.
+          ...(effective.extends ? { extends: effective.extends } : {}),
+        } as PresetInput,
+      };
       const inherited =
         !ownsAgents &&
         normalizePackageIds(
-          userPreset && normalizePreset(userPreset).marketplace
-            ? userAgents
-            : parentAgents,
+          resolvePresetDefinition(presetName, inheritedPresets).marketplace
+            ?.agents ?? [],
         ).includes(id);
 
       const next = { ...localMarketplace };
@@ -147,7 +171,20 @@ function persistActivation(
           next.agents = replacement.filter((value) => value !== id);
         }
         if (additions.includes(id)) {
-          next.agents_add = additions.filter((value) => value !== id);
+          const remaining = additions.filter((value) => value !== id);
+          const lowerPreset = userPresets[presetName] as
+            | PresetInput
+            | undefined;
+          if (
+            remaining.length === 0 &&
+            lowerPreset &&
+            normalizePreset(lowerPreset).marketplace?.agents_add?.length
+          ) {
+            // [] would clear every user-layer addition, not just this ID.
+            delete next.agents_add;
+          } else {
+            next.agents_add = remaining;
+          }
         }
         if (
           (inherited || (ownsAgents && active && !replacement?.includes(id))) &&

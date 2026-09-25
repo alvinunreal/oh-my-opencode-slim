@@ -289,7 +289,7 @@ function retainExplicitBackgroundJobsFields(
  * @param onWarning - Optional callback for warnings
  * @returns Validated config object, or null if loading failed
  */
-function loadConfigFromPath(
+export function loadConfigFromPath(
   configPath: string,
   options?: LoadPluginConfigOptions,
 ): RawPluginConfig | null {

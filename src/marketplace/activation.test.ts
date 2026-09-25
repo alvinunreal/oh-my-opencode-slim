@@ -28,10 +28,13 @@ import type { MarketplacePackageBundle } from './schemas';
 import { acquireMarketplaceLeaseForPaths, MarketplaceStore } from './store';
 
 const previousConfigHome = process.env.XDG_CONFIG_HOME;
+const previousMarketplacePackage = process.env.PKG;
 
 afterEach(() => {
   if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
   else process.env.XDG_CONFIG_HOME = previousConfigHome;
+  if (previousMarketplacePackage === undefined) delete process.env.PKG;
+  else process.env.PKG = previousMarketplacePackage;
 });
 
 function agentBundle(
@@ -1680,6 +1683,174 @@ describe('marketplace activation persistence', () => {
         JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work
           .marketplace,
       ).toEqual({ agents_remove: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('same-named user additions and project parent both remain live through toggles', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+    const configHome = join(root, 'config');
+    const project = join(root, 'project');
+    const userConfig = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectConfig = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const user = 'community/user';
+    const parent = 'community/parent';
+    const shared = 'community/shared';
+    const future = 'community/future';
+    const parentFuture = 'community/parent-future';
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      const writeUser = (userAgents: string[]) =>
+        writeFileSync(
+          userConfig,
+          JSON.stringify({
+            preset: 'work',
+            presets: {
+              work: { marketplace: { agents_add: userAgents } },
+            },
+          }),
+        );
+      const writeProject = (parentAgents: string[]) =>
+        writeFileSync(
+          projectConfig,
+          JSON.stringify({
+            presets: {
+              base: { marketplace: { agents: parentAgents } },
+              work: { extends: 'base' },
+            },
+          }),
+        );
+      const local = () =>
+        JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work
+          .marketplace;
+      const active = () =>
+        loadPluginConfig(project, { silent: true }).presets?.work?.marketplace
+          ?.agents;
+      writeUser([user, shared]);
+      writeProject([parent, shared]);
+      const store = new MarketplaceStore({ rootDir: join(root, 'store') });
+      for (const id of [user, parent, shared]) {
+        store.install(agentBundle({ id, agentName: id.split('/')[1] }));
+      }
+
+      expect(active()).toEqual([parent, shared, user]);
+      disableMarketplacePackage(project, parent);
+      expect(local()).toEqual({ agents_remove: [parent] });
+      expect(active()).toEqual([shared, user]);
+      const disabled = readFileSync(projectConfig, 'utf8');
+      disableMarketplacePackage(project, parent);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(disabled);
+
+      // A package present in both sources must stay disabled until re-enabled.
+      disableMarketplacePackage(project, shared);
+      expect(local()).toEqual({ agents_remove: [parent, shared] });
+      expect(active()).toEqual([user]);
+      disableMarketplacePackage(project, user);
+      expect(local()).toEqual({ agents_remove: [parent, shared, user] });
+      expect(active()).toEqual([]);
+
+      // Growing either source must not pin the project preset to a snapshot.
+      writeUser([user, shared, future]);
+      expect(active()).toEqual([future]);
+      const expandedProject = JSON.parse(readFileSync(projectConfig, 'utf8'));
+      expandedProject.presets.base.marketplace.agents.push(parentFuture);
+      writeFileSync(projectConfig, JSON.stringify(expandedProject));
+      expect(active()).toEqual([parentFuture, future]);
+      enableMarketplaceAgent(project, parent, store);
+      expect(local()).toEqual({ agents_remove: [shared, user] });
+      expect(active()).toEqual([parent, parentFuture, future]);
+      for (const id of [shared, user]) {
+        enableMarketplaceAgent(project, id, store);
+      }
+      expect(local()).toEqual({ agents_remove: [] });
+      expect(active()).toEqual([parent, shared, parentFuture, user, future]);
+      const enabled = readFileSync(projectConfig, 'utf8');
+      enableMarketplaceAgent(project, shared, store);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(enabled);
+      const duplicateAddition = JSON.parse(enabled);
+      duplicateAddition.presets.work.marketplace.agents_add = [shared];
+      writeFileSync(projectConfig, JSON.stringify(duplicateAddition));
+      disableMarketplacePackage(project, shared);
+      expect(local()).toEqual({
+        agents_remove: [shared],
+      });
+      expect(active()).toEqual([parent, parentFuture, user, future]);
+      enableMarketplaceAgent(project, shared, store);
+      expect(local()).toEqual({ agents_remove: [] });
+      expect(active()).toEqual([parent, shared, parentFuture, user, future]);
+      expect(JSON.parse(readFileSync(userConfig, 'utf8')).presets.work).toEqual(
+        {
+          marketplace: { agents_add: [user, shared, future] },
+        },
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('interpolated user additions remain inherited beside a project parent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+    const configHome = join(root, 'config');
+    const project = join(root, 'project');
+    const userConfig = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectConfig = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const id = 'community/user';
+    const parent = 'community/parent';
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      process.env.PKG = id;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      const rawUser = JSON.stringify({
+        preset: 'work',
+        presets: {
+          work: { marketplace: { agents_add: ['{env:PKG}'] } },
+        },
+      });
+      writeFileSync(userConfig, rawUser);
+      writeFileSync(
+        projectConfig,
+        JSON.stringify({
+          presets: {
+            base: { marketplace: { agents: [parent] } },
+            work: { extends: 'base' },
+          },
+        }),
+      );
+      const local = () =>
+        JSON.parse(readFileSync(projectConfig, 'utf8')).presets.work
+          .marketplace;
+      const active = () =>
+        loadPluginConfig(project, { silent: true }).presets?.work?.marketplace
+          ?.agents;
+      const store = new MarketplaceStore({ rootDir: join(root, 'store') });
+      store.install(agentBundle({ id, agentName: 'user' }));
+
+      expect(active()).toEqual([parent, id]);
+      disableMarketplacePackage(project, id);
+      expect(local()).toEqual({ agents_remove: [id] });
+      expect(active()).toEqual([parent]);
+      const disabled = readFileSync(projectConfig, 'utf8');
+      disableMarketplacePackage(project, id);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(disabled);
+      enableMarketplaceAgent(project, id, store);
+      expect(local()).toEqual({ agents_remove: [] });
+      expect(active()).toEqual([parent, id]);
+      const enabled = readFileSync(projectConfig, 'utf8');
+      enableMarketplaceAgent(project, id, store);
+      expect(readFileSync(projectConfig, 'utf8')).toBe(enabled);
+      expect(readFileSync(userConfig, 'utf8')).toBe(rawUser);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
