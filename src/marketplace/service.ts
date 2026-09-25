@@ -4,6 +4,7 @@ import { readPluginPackageVersion } from '../utils/package-metadata';
 import type { MarketplaceCompatibilityOptions } from './compatibility';
 import { withMarketplaceConfigReferencesRemoved } from './config-references';
 import {
+  MarketplaceCompatibilityError,
   MarketplaceConflictError,
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryUnavailableError,
@@ -147,10 +148,12 @@ export class MarketplaceService {
       } catch (error) {
         if (
           !(error instanceof MarketplaceRegistryUnavailableError) &&
-          !(error instanceof MarketplaceRegistryNotFoundError)
+          !(error instanceof MarketplaceRegistryNotFoundError) &&
+          !(error instanceof MarketplaceCompatibilityError)
         ) {
           throw error;
         }
+        if (signal?.aborted) throw error;
       }
     }
     return this.registryClient.download(selector, minimumVersion, signal);
