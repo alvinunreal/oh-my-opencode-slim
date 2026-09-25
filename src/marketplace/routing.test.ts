@@ -297,15 +297,45 @@ describe('marketplace routing renderer', () => {
       const route = registry.routing.find(
         (entry) => entry.agentName === 'build-agent',
       );
-      const roleRouting = ROLE_DEFINITIONS.oracle.routingBlock.replaceAll(
-        '@oracle',
-        '@build-agent',
-      );
-
       expect(route?.routingBlock).toBe(
-        `${roleRouting}\n\nUse @build-agent for this task.`,
+        `${renderMarketplaceAutoDelegationBlock(manifest, 'build-agent')}\n\nUse @build-agent for this task.`,
       );
-      expect(route?.routingBlock).not.toContain('- Package:');
+      expect(route?.routingBlock).toContain('Package routing description.');
+      expect(route?.routingBlock).toContain('Delegate when:');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('standalone owner guidance retains package routing criteria', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-routing-owner-'));
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      store.install({ manifest: baseManifest });
+      RuntimeConfig.reset(root);
+      const runtime = RuntimeConfig.init(root, {
+        preset: 'work',
+        presets: {
+          work: {
+            agents: {
+              'routing-agent': {
+                orchestratorPrompt: 'Use @routing-agent for owner work.',
+              },
+            },
+            marketplace: { agents: ['community/routing-agent'] },
+          },
+        },
+      });
+      const registry = buildResolvedAgentRegistry(runtime, {
+        marketplaceStore: store,
+      });
+      const block = registry.routing.find(
+        (entry) => entry.agentName === 'routing-agent',
+      )?.routingBlock;
+      expect(block).toBe(
+        `${renderMarketplaceAutoDelegationBlock(baseManifest, 'routing-agent', baseManifest.description)}\n\nUse @routing-agent for owner work.`,
+      );
+      expect(block).toContain('Delegate when:');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

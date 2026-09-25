@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildResolvedAgentRegistry } from '../agents';
+import { ROLE_DEFINITIONS } from '../agents/role-definitions';
 import { RuntimeConfig } from '../config/runtime';
 import { PresetSchema } from '../config/schema';
 import { adaptPermissions } from '../v2/adapters';
@@ -129,7 +130,15 @@ describe('agents-only marketplace contract', () => {
       ]);
       expect(registry.sdkConfigs.derived.permission?.edit).toBe('deny');
       expect(registry.sdkConfigs.standalone.prompt).toBe(manifest.prompt);
-      expect(registry.sdkConfigs.derived.prompt).toBe(manifest.prompt);
+      expect(registry.sdkConfigs.derived.prompt).toBe(
+        `${ROLE_DEFINITIONS.explorer.basePrompt}\n\n${manifest.prompt}`,
+      );
+      expect(registry.sdkConfigs.derived.prompt).toContain(
+        'READ-ONLY: inspect and report; do not modify files.',
+      );
+      expect(
+        registry.agents.find((agent) => agent.name === 'derived')?.baseRole,
+      ).toBe('explorer');
       expect(
         registry.agents.find((agent) => agent.name === 'explorer'),
       ).toBeDefined();

@@ -1203,7 +1203,7 @@ function buildRoutingEntriesFromAgents(
           agentName: runtimeName,
           routingBlock: guidanceByAgent.has(agent.name)
             ? appendRoutingGuidance(
-                marketplaceManifest ? roleRoutingBlock : routingBlock,
+                routingBlock,
                 guidanceByAgent.get(agent.name),
               )
             : routingBlock,
@@ -1227,10 +1227,7 @@ function buildRoutingEntriesFromAgents(
       {
         agentName: runtimeName,
         routingBlock: guidanceByAgent.has(agent.name)
-          ? appendRoutingGuidance(
-              marketplaceManifest ? genericRoutingBlock : routingBlock,
-              guidanceByAgent.get(agent.name),
-            )
+          ? appendRoutingGuidance(routingBlock, guidanceByAgent.get(agent.name))
           : routingBlock,
       },
     ];
@@ -1541,7 +1538,10 @@ export function createAgents(
       if (activated.manifest.color !== undefined) {
         agent.config.color = activated.manifest.color;
       }
-      agent.config.prompt = activated.manifest.prompt;
+      agent.config.prompt =
+        role && activated.manifest.extends?.promptMode === 'append'
+          ? `${agent.config.prompt}\n\n${activated.manifest.prompt}`
+          : activated.manifest.prompt;
       return [agent];
     },
   );
@@ -1608,6 +1608,7 @@ export function createAgents(
     const override = getOverrideFromAgents(mergedAgents, agent.name);
     if (override) {
       applyOverrides(agent, override);
+      if (override.prompt !== undefined) agent.config.prompt = override.prompt;
     }
     if (agent.displayName) {
       const displayName = normalizeAgentName(agent.displayName);
@@ -2136,7 +2137,11 @@ export function buildResolvedAgentRegistry(
       [];
     v2PermissionPolicies[name] = compilePermissionPolicy({
       baselineRules: adaptPermissions(
-        rawConfig.permission,
+        applyMcpPermissionRules(
+          rawConfig.permission,
+          (rawConfig as SDKAgentConfig & { mcps?: string[] }).mcps ?? [],
+          options?.availableMcpNames ?? [],
+        ),
       ) as V2PermissionRule[],
       hostRules,
       ...(!marketplaceEntry && name !== 'orchestrator'

@@ -102,6 +102,57 @@ describe('ResolvedAgentRegistry', () => {
     expect(exception.decide('read', 'src/public.ts')).toBe('allow');
   });
 
+  test('includes MCP exclusions in ordered v2 rules while preserving v1 projection', () => {
+    RuntimeConfig.reset(DIRECTORY);
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      agents: { explorer: { mcps: ['docs', '!private'] } },
+    });
+    const options = {
+      availableMcpNames: ['docs', 'private', 'other'],
+    };
+    const registry = buildResolvedAgentRegistry(runtime, {
+      ...options,
+      hostFlavor: 'v2',
+    });
+    const policy = registry.v2PermissionPolicies.explorer;
+    expect(policy.decide('docs_search', '*')).toBe('allow');
+    expect(policy.decide('private_search', '*')).toBe('deny');
+    expect(policy.decide('other_search', '*')).toBe('deny');
+    expect(
+      policy.rules.findLast((rule) => rule.action === 'private_*')?.effect,
+    ).toBe('deny');
+    expect(
+      policy.rules.findLast((rule) => rule.action === 'docs_*')?.effect,
+    ).toBe('allow');
+    expect(registry.sdkConfigs.explorer.permission).toMatchObject({
+      'docs_*': 'allow',
+      'private_*': 'deny',
+      'other_*': 'deny',
+    });
+
+    const withNativeHost = buildResolvedAgentRegistry(runtime, {
+      ...options,
+      hostFlavor: 'v2',
+      nativePermissionsByAgent: {
+        explorer: [{ action: 'private_*', resource: '*', effect: 'allow' }],
+      },
+    });
+    expect(
+      withNativeHost.v2PermissionPolicies.explorer.decide(
+        'private_search',
+        '*',
+      ),
+    ).toBe('allow');
+    expect(
+      buildResolvedAgentRegistry(runtime, options).sdkConfigs.explorer
+        .permission,
+    ).toMatchObject({
+      'docs_*': 'allow',
+      'private_*': 'deny',
+      'other_*': 'deny',
+    });
+  });
+
   test('projects owner skill and namespace restrictions into marketplace native rules', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-policy-'));
     try {
@@ -429,6 +480,77 @@ describe('ResolvedAgentRegistry', () => {
       'provider/orchestrator',
     );
     expect(registry.sdkConfigs.inheritOrchestrator?.variant).toBeUndefined();
+  });
+
+  test('marketplace role append keeps baseline while replace and owner prompt take precedence', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-role-prompt-'));
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      for (const promptMode of ['append', 'replace'] as const) {
+        const name = `${promptMode}role`;
+        store.install({
+          manifest: {
+            schemaVersion: 2,
+            id: `community/${name}`,
+            version: '1.0.0',
+            displayName: name,
+            agentName: name,
+            description: 'Role extension.',
+            prompt: 'Package instruction.',
+            extends: { builtin: 'oracle', promptMode },
+            skills: [],
+            mcps: [],
+            tools: [],
+            author: { name: 'Community' },
+            tags: [],
+            license: 'MIT',
+            compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+            model: { source: 'builtin' },
+            routing: {
+              description: 'Role routing.',
+              when: 'Needed.',
+              keywords: ['role'],
+            },
+          },
+        });
+      }
+      const config: PluginConfig = {
+        preset: 'work',
+        presets: {
+          work: {
+            marketplace: {
+              agents: ['community/appendrole', 'community/replacerole'],
+            },
+          },
+        },
+      };
+      RuntimeConfig.reset(root);
+      const runtime = RuntimeConfig.init(root, config);
+      const registry = buildResolvedAgentRegistry(runtime, {
+        marketplaceStore: store,
+      });
+      const baselinePrompt = ROLE_DEFINITIONS.oracle.createBaseline(
+        ROLE_DEFINITIONS.oracle.defaultModel,
+      ).config.prompt;
+      expect(registry.sdkConfigs.appendrole?.prompt).toBe(
+        `${baselinePrompt}\n\nPackage instruction.`,
+      );
+      expect(registry.sdkConfigs.replacerole?.prompt).toBe(
+        'Package instruction.',
+      );
+
+      RuntimeConfig.reset(root);
+      const overridden = RuntimeConfig.init(root, {
+        ...config,
+        agents: { appendrole: { prompt: 'Owner instruction.' } },
+      });
+      expect(
+        buildResolvedAgentRegistry(overridden, { marketplaceStore: store })
+          .sdkConfigs.appendrole?.prompt,
+      ).toBe('Owner instruction.');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('resolves standalone marketplace orchestrator models before owner overrides', () => {
