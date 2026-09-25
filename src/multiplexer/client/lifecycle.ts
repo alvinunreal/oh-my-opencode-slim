@@ -70,8 +70,8 @@ export class PaneLifecycle {
   private readonly panes = new Map<string, PaneRecord>();
   /** Children whose spawn is in flight; the dedup marker for FR-6. */
   private readonly spawnsInFlight = new Set<string>();
-  /** Children deleted while their spawn was in flight. */
-  private readonly deletedWhileSpawning = new Set<string>();
+  /** Bounded tombstones: a deleted session must never spawn or rebuild. */
+  private readonly deletedSessions = new Set<string>();
   /** Children whose idle edge arrived while their spawn was in flight. */
   private readonly idleWhileSpawning = new Set<string>();
   /** Pending `delay()` resolvers, released early by `dispose()`. */
@@ -164,6 +164,21 @@ export class PaneLifecycle {
     return this.panes.get(childSessionId);
   }
 
+  directoryOf(childSessionId: string): string | undefined {
+    return (
+      this.panes.get(childSessionId)?.directory ??
+      this.closedWatch.get(childSessionId)?.directory
+    );
+  }
+
+  private rememberDeleted(childSessionId: string): void {
+    if (this.deletedSessions.has(childSessionId)) return;
+    this.deletedSessions.add(childSessionId);
+    if (this.deletedSessions.size <= MAX_REMEMBERED_CLOSED) return;
+    const oldest = this.deletedSessions.values().next().value;
+    if (oldest !== undefined) this.deletedSessions.delete(oldest);
+  }
+
   /** Read-only view of every pane tracked by this client. */
   getPanes(): ReadonlyMap<string, PaneRecord> {
     return this.panes;
@@ -207,14 +222,13 @@ export class PaneLifecycle {
     }
 
     if (event.kind === 'deleted') {
-      // A deletion racing the spawn is remembered and applied on completion.
-      if (this.spawnsInFlight.has(event.sessionId)) {
-        this.deletedWhileSpawning.add(event.sessionId);
-      }
+      this.rememberDeleted(event.sessionId);
       // Terminal: a deleted child is never rebuilt (FR-10/FR-11).
       this.closedWatch.delete(event.sessionId);
       return;
     }
+
+    if (this.deletedSessions.has(event.sessionId)) return;
 
     if (event.kind === 'status') {
       await this.handleClosedChildBusy(event);
@@ -360,11 +374,13 @@ export class PaneLifecycle {
     if (!this.isOurDirectory(event, record.directory)) return;
 
     if (event.kind === 'deleted') {
+      this.rememberDeleted(event.sessionId);
       this.bumpActivity(event.sessionId);
       this.closeAttempts.delete(event.sessionId);
       await this.closePane(event.sessionId, record, 'deleted');
       return;
     }
+    if (this.deletedSessions.has(event.sessionId)) return;
     if (event.kind === 'idle') {
       this.bumpActivity(event.sessionId);
       this.scheduleStableIdleClose(event.sessionId, record);
@@ -452,7 +468,8 @@ export class PaneLifecycle {
     // Every creation path shares this in-process FR-6 dedup gate.
     if (
       this.panes.has(childSessionId) ||
-      this.spawnsInFlight.has(childSessionId)
+      this.spawnsInFlight.has(childSessionId) ||
+      this.deletedSessions.has(childSessionId)
     )
       return;
 
@@ -498,7 +515,7 @@ export class PaneLifecycle {
       if (this.disposed) return;
 
       // Deleted while waiting for readiness: never create the pane (FR-10).
-      if (this.deletedWhileSpawning.has(childSessionId)) return;
+      if (this.deletedSessions.has(childSessionId)) return;
 
       const result = await this.spawn(
         adapter,
@@ -544,7 +561,7 @@ export class PaneLifecycle {
       logPaneCreated(this.logger, record);
 
       // Deleted during the spawn itself: register, then close right away.
-      if (this.deletedWhileSpawning.has(childSessionId)) {
+      if (this.deletedSessions.has(childSessionId)) {
         await this.closePane(childSessionId, record, 'deleted');
         return;
       }
@@ -566,7 +583,7 @@ export class PaneLifecycle {
       this.spawnsInFlight.delete(childSessionId);
       if (
         !this.disposed &&
-        !this.deletedWhileSpawning.has(childSessionId) &&
+        !this.deletedSessions.has(childSessionId) &&
         !this.panes.has(childSessionId)
       ) {
         this.rememberClosed(
@@ -576,7 +593,6 @@ export class PaneLifecycle {
           subagentType,
         );
       }
-      this.deletedWhileSpawning.delete(childSessionId);
       this.idleWhileSpawning.delete(childSessionId);
     }
   }

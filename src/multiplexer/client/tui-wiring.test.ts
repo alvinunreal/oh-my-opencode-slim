@@ -1271,6 +1271,24 @@ describe('FR-7 reconcile trigger', () => {
     expect(h.adapters.get('tmux')?.spawns).toHaveLength(2);
   });
 
+  test('backfilled idle watch survives directory-cache eviction', async () => {
+    const state = createClientState({
+      statuses: { [CHILD]: { type: 'idle' } },
+      sessions: [{ id: CHILD, parentID: PARENT }],
+    });
+    const h = await createHarness({ state });
+    await flush();
+    for (let i = 0; i < 256; i += 1) {
+      h.bus.emit('session.created', createdEvent(`other-${i}`, 'other-parent'));
+    }
+    await flush();
+    state.statuses[CHILD] = { type: 'busy' };
+    h.bus.emit('session.status', statusEvent(CHILD, 'busy'));
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(1);
+    await h.wiring.dispose();
+  });
+
   test('backfill keeps the agent field from the session list (3.4)', async () => {
     const state = createClientState({
       sessions: [{ id: CHILD, parentID: PARENT, agent: 'explorer' }],

@@ -766,6 +766,19 @@ describe('dedup and stable-idle close (2.3)', () => {
     expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
   });
 
+  test('a busy edge cannot cancel the retry of a failed deleted close', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.adapter.closeResult = false;
+    await h.lifecycle.handleEvent(lifecycleEvent('deleted'));
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    h.adapter.closeResult = true;
+    h.clock.advance(1000);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toHaveLength(2);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+  });
+
   test('retries an unavailable close adapter when it returns', async () => {
     const h = createHarness();
     await activatePane(h);
@@ -1061,6 +1074,45 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     await reconnect;
     expect(h.adapter.closeCalls).toHaveLength(0);
     expect(h.lifecycle.getPane(CHILD)).toBeDefined();
+  });
+
+  test('a queued backfill child deleted during another spawn never spawns', async () => {
+    const h = createHarness();
+    h.list.setSessionIds(CHILD, 'child-2');
+    h.reader.statuses.set(CHILD, 'busy');
+    h.reader.statuses.set('child-2', 'busy');
+    const barrier = createDeferred();
+    h.adapter.spawnBarrier = barrier.promise;
+    const reconnect = h.lifecycle.onReconnect();
+    await flushAsync();
+    await h.lifecycle.handleEvent(
+      lifecycleEvent('deleted', { sessionId: 'child-2' }),
+    );
+    barrier.resolve();
+    await reconnect;
+    expect(
+      h.adapter.spawnCalls.filter((call) => call.sessionId === 'child-2'),
+    ).toHaveLength(0);
+  });
+
+  test('a deleted held child is never backfilled after an in-flight status read', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    const barrier = createDeferred();
+    h.reader.readBarrier = barrier.promise;
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    await h.lifecycle.handleEvent(lifecycleEvent('deleted'));
+    barrier.resolve();
+    h.reader.readBarrier = null;
+    await flushAsync();
+    h.list.setSessionIds(CHILD);
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.onReconnect();
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
   });
 
   test('rebuilds with a freshly resolved anchor after the display position moves', async () => {

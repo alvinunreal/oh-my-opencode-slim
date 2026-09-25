@@ -773,8 +773,8 @@ function withDirectory(
   if (knownDirectories.has(event.sessionId)) {
     return { ...event, directory: knownDirectories.get(event.sessionId) };
   }
-  const pane = lifecycle.getPane(event.sessionId);
-  if (pane) return { ...event, directory: pane.directory };
+  const directory = lifecycle.directoryOf(event.sessionId);
+  if (directory !== undefined) return { ...event, directory };
   return event;
 }
 
