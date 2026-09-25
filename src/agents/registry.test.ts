@@ -380,6 +380,22 @@ describe('ResolvedAgentRegistry', () => {
       }
       expect(registry.skillPermissions.audit.simplify).toBe('deny');
       expect(registry.skillPermissions.audit.clonedeps).toBe('ask');
+      RuntimeConfig.reset(root);
+      const scalarRuntime = RuntimeConfig.init(root, {
+        preset: 'work',
+        presets: {
+          work: { agents: {}, marketplace: { agents: ['community/analyst'] } },
+        },
+        agents: { analyst: { permission: { skill: 'deny' } } },
+      });
+      const scalarRegistry = buildResolvedAgentRegistry(
+        scalarRuntime,
+        registryOptions,
+      );
+      expect(scalarRegistry.skillPermissions.analyst).toEqual({ '*': 'deny' });
+      expect(
+        scalarRegistry.v2PermissionPolicies.analyst.decideSkill('simplify'),
+      ).toBe('deny');
       expect(policy.decide('other_server_tool', '*')).toBe('deny');
 
       runtime.captureHostConfig({
@@ -602,6 +618,154 @@ describe('ResolvedAgentRegistry', () => {
     expect(v2EffectivePermission('task_cancel')).toBe('deny');
     expect(permission.wait_for_user).toBe('deny');
     expect(permission.marketplace).toBe('deny');
+  });
+
+  test('keeps wildcard ask effective for built-in and custom role defaults', () => {
+    const config: PluginConfig = {
+      agents: {
+        fixer: { permission: 'ask' },
+        audit: {
+          baseRole: 'oracle',
+          model: 'provider/audit',
+          permission: 'ask',
+        },
+      },
+    };
+    for (const hostFlavor of [undefined, 'v2']) {
+      RuntimeConfig.reset(DIRECTORY);
+      const registry = buildResolvedAgentRegistry(
+        RuntimeConfig.init(DIRECTORY, config),
+        { hostFlavor },
+      );
+      for (const name of ['fixer', 'audit']) {
+        const permission = registry.sdkConfigs[name]?.permission as Record<
+          string,
+          unknown
+        >;
+        expect(permission['*']).toBe('ask');
+        expect(permission.read ?? permission['*']).toBe('ask');
+        expect(permission.skill ?? permission['*']).toBe('ask');
+        expect(permission.question ?? permission['*']).toBe('ask');
+        expect(permission.task_cancel).toBe('deny');
+        expect(permission.wait_for_user).toBe('deny');
+        expect(permission.marketplace).toBe('deny');
+        if (name === 'fixer') {
+          expect(permission.edit ?? permission['*']).toBe('ask');
+        } else {
+          expect(permission.edit).toBe('deny');
+        }
+        if (hostFlavor === 'v2') {
+          const policy = registry.v2PermissionPolicies[name];
+          expect(policy.decide('read', 'src/index.ts')).toBe('ask');
+          expect(
+            policy.rules.findLast(
+              (rule) => rule.action === 'read' || rule.action === '*',
+            )?.effect,
+          ).toBe('ask');
+          expect(policy.decide('question', '*')).toBe('ask');
+          expect(policy.decideSkill('simplify')).toBe('ask');
+        }
+      }
+    }
+  });
+
+  test('preserves explicit skill restrictions and intentional read exceptions', () => {
+    const registry = registryFor({
+      agents: {
+        fixer: {
+          permission: { '*': 'ask', read: 'allow', skill: 'deny' },
+        },
+        audit: {
+          baseRole: 'fixer',
+          model: 'provider/audit',
+          permission: {
+            '*': 'ask',
+            read: { '*': 'ask', 'public/**': 'allow' },
+            skill: { '*': 'deny', simplify: 'allow' },
+          },
+        },
+      },
+    });
+    const fixer = registry.sdkConfigs.fixer.permission as Record<
+      string,
+      unknown
+    >;
+    expect(fixer.read).toBe('allow');
+    expect(fixer.skill).toBe('deny');
+    expect(registry.skillPermissions.fixer).toEqual({ '*': 'deny' });
+    expect(registry.v2PermissionPolicies.fixer.decideSkill('simplify')).toBe(
+      'deny',
+    );
+    const audit = registry.sdkConfigs.audit.permission as Record<
+      string,
+      unknown
+    >;
+    expect(audit.read).toEqual({ '*': 'ask', 'public/**': 'allow' });
+    expect(audit.skill).toMatchObject({ '*': 'deny', simplify: 'allow' });
+    expect(
+      registry.v2PermissionPolicies.audit.decide('read', 'private/x'),
+    ).toBe('ask');
+    expect(registry.v2PermissionPolicies.audit.decide('read', 'public/x')).toBe(
+      'allow',
+    );
+    expect(registry.v2PermissionPolicies.audit.decideSkill('other')).toBe(
+      'deny',
+    );
+    expect(registry.v2PermissionPolicies.audit.decideSkill('simplify')).toBe(
+      'allow',
+    );
+  });
+
+  test('captures scalar skill actions for aliases instead of role grants', () => {
+    const registry = registryFor({
+      agents: {
+        oracle: {
+          displayName: 'advisor',
+          permission: { skill: 'deny' },
+        },
+        audit: {
+          baseRole: 'oracle',
+          model: 'provider/audit',
+          permission: { skill: 'ask' },
+        },
+      },
+    });
+    expect(registry.sdkConfigs.oracle.permission?.skill).toBe('deny');
+    expect(registry.skillPermissions.oracle).toEqual({ '*': 'deny' });
+    expect(registry.skillPermissions.advisor).toEqual(
+      registry.skillPermissions.oracle,
+    );
+    expect(Object.isFrozen(registry.skillPermissions.oracle)).toBe(true);
+    expect(registry.v2PermissionPolicies.advisor.decideSkill('simplify')).toBe(
+      'deny',
+    );
+    expect(registry.skillPermissions.audit).toEqual({ '*': 'ask' });
+    expect(registry.v2PermissionPolicies.audit.decideSkill('simplify')).toBe(
+      'ask',
+    );
+  });
+
+  test('native v2 host rules retain their ordered ask and explicit exception', () => {
+    RuntimeConfig.reset(DIRECTORY);
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      agents: { fixer: { permission: 'ask' } },
+    });
+    const registry = buildResolvedAgentRegistry(runtime, {
+      hostFlavor: 'v2',
+      nativePermissionsByAgent: {
+        fixer: [
+          { action: '*', resource: '*', effect: 'ask' },
+          { action: 'read', resource: 'public/**', effect: 'allow' },
+        ],
+      },
+    });
+    const policy = registry.v2PermissionPolicies.fixer;
+    expect(policy.decide('read', 'private/x')).toBe('ask');
+    expect(policy.decide('read', 'public/x')).toBe('allow');
+    expect(
+      policy.rules.findLast((rule) => rule.action === 'read')?.effect,
+    ).toBe('allow');
+    expect(policy.decide('marketplace', '*')).toBe('deny');
   });
 
   test('keeps SDK, model, skill, MCP, and routing surfaces consistent', () => {

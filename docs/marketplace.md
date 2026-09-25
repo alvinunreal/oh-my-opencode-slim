@@ -59,9 +59,9 @@ bunx oh-my-opencode-slim marketplace enable publisher/reviewer
 `import` takes a filesystem path, not a registry ID. `install`/`update` take a
 registry package ID, not a path. Use `show` to inspect the stored manifest and
 source, `verify` to check the lockfile/package digest, and `status` to inspect
-activation. Downloads try the v3 registry first. Only if it is unavailable or
-the package is not found there do they try the v2 registry; validation,
-integrity, or compatibility errors do **not** silently fall back to v2. An
+activation. Downloads try the v3 registry first. If it is unavailable, the
+package is not found, or no compatible or newer release is eligible there,
+they try the v2 registry. Protocol and integrity errors do not fall back. An
 explicit version can be used on install when the registry offers it. Local
 import supports both v2 and v3 package manifests.
 

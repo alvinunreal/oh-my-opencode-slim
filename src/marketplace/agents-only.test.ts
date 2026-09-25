@@ -671,7 +671,7 @@ describe('agents-only marketplace contract', () => {
         expect(permission.skill).toEqual(current.expectedPermission);
         expect(registry.skillPermissions[current.agentName]).toEqual(
           current.expectedPermission === 'deny'
-            ? {}
+            ? { '*': 'deny' }
             : current.expectedPermission,
         );
       } finally {
@@ -720,7 +720,7 @@ describe('agents-only marketplace contract', () => {
         availableMcpNames: [],
       });
       expect(registry.sdkConfigs['skill-deny'].permission?.skill).toBe('deny');
-      expect(registry.skillPermissions['skill-deny']).toEqual({});
+      expect(registry.skillPermissions['skill-deny']).toEqual({ '*': 'deny' });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

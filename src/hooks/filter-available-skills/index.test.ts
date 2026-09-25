@@ -58,6 +58,37 @@ describe('filterAvailableSkillsText', () => {
 });
 
 describe('createFilterAvailableSkillsHook', () => {
+  test('v1 registry hides role skills denied by a scalar skill policy', async () => {
+    const runtime = runtimeFor({
+      agents: {
+        oracle: {
+          displayName: 'advisor',
+          permission: { skill: 'deny' },
+        },
+      },
+    });
+    const registry = buildResolvedAgentRegistry(runtime);
+    expect(registry.skillPermissions.advisor).toEqual({ '*': 'deny' });
+    const hook = createFilterAvailableSkillsHook(mockCtx, registry);
+    const output = {
+      messages: [
+        {
+          info: { role: 'system' },
+          parts: [{ type: 'text', text: availableSkillsBlock('simplify') }],
+        },
+        {
+          info: { role: 'user', agent: 'advisor' },
+          parts: [{ type: 'text', text: 'check skills' }],
+        },
+      ],
+    };
+    await hook['experimental.chat.messages.transform']({}, output);
+    expect(output.messages[0].parts[0].text).toContain('No skills available.');
+    expect(output.messages[0].parts[0].text).not.toContain(
+      '<name>simplify</name>',
+    );
+  });
+
   test('uses the immutable v2 policy for native host wildcard and skill exceptions', async () => {
     const runtime = runtimeFor({
       agents: { explorer: { skills: ['codemap'] } },

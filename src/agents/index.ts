@@ -209,6 +209,9 @@ function applyTaskControlDefaults(
   permission: PermissionRecord,
 ): void {
   const isOrchestrator = agentName === 'orchestrator';
+  // Defaults must not turn a wildcard approval rule into an unconditional
+  // allow. Explicit per-tool entries still take precedence over the wildcard.
+  if (permission['*'] === 'ask' && isOrchestrator) return;
   for (const toolName of TASK_CONTROL_DEFAULTS) {
     permission[toolName] ??= isOrchestrator ? 'allow' : 'deny';
   }
@@ -787,35 +790,56 @@ function applyDefaultPermissionPolicy(
     configuredSkills ?? role?.defaultSkills,
     disabledSkills,
   );
-  const filePermissions = role
-    ? {
-        read: existing.read ?? 'allow',
-        edit:
-          existing.edit ??
-          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
-        write:
-          existing.write ??
-          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
-        apply_patch:
-          existing.apply_patch ??
-          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
-        ast_grep_replace:
-          existing.ast_grep_replace ??
-          (role.permissionPolicy === 'read-write' ? 'allow' : 'deny'),
+  const wildcardAsk = existing['*'] === 'ask';
+  const filePermissions: PermissionRecord = {};
+  if (role) {
+    for (const tool of [
+      'read',
+      'edit',
+      'write',
+      'apply_patch',
+      'ast_grep_replace',
+    ]) {
+      const defaultAction =
+        tool === 'read' || role.permissionPolicy === 'read-write'
+          ? 'allow'
+          : 'deny';
+      if (
+        existing[tool] === undefined &&
+        (!wildcardAsk || defaultAction === 'deny')
+      ) {
+        filePermissions[tool] = defaultAction;
       }
-    : {};
+    }
+  }
 
-  // Respect explicit deny on question (councillor)
-  const questionPerm = existing.question === 'deny' ? 'deny' : 'allow';
+  const skill = existing.skill;
+  const skillRules =
+    skill !== null && typeof skill === 'object' && !Array.isArray(skill)
+      ? (skill as PermissionRecord)
+      : undefined;
+  const restrictiveSkillWildcard =
+    skillRules?.['*'] === 'ask' || skillRules?.['*'] === 'deny';
+  const defaultSkills = Object.fromEntries(
+    Object.entries(skillPermissions).filter(
+      ([name, effect]) =>
+        (name !== '*' || (!wildcardAsk && !restrictiveSkillWildcard)) &&
+        (effect !== 'allow' || (!wildcardAsk && !restrictiveSkillWildcard)),
+    ),
+  );
   agent.config.permission = {
     ...existing,
     ...filePermissions,
-    question: questionPerm,
-    // Apply skill permissions as nested object under 'skill' key
-    skill: {
-      ...(typeof existing.skill === 'object' ? existing.skill : {}),
-      ...skillPermissions,
-    },
+    ...(existing.question === undefined && !wildcardAsk
+      ? { question: 'allow' }
+      : {}),
+    // Scalar skill policies are authoritative; explicit scoped exceptions in
+    // a map override defaults without reopening a restrictive skill wildcard.
+    ...(typeof skill === 'string'
+      ? {}
+      : Object.keys(defaultSkills).length > 0 || skillRules
+        ? { skill: { ...defaultSkills, ...skillRules } }
+        : {}),
   } as unknown as SDKAgentConfig['permission'];
 }
 
@@ -2424,11 +2448,10 @@ function buildRegistryFromMarketplace(
     skillPermissions[agent.name] =
       typeof permission === 'object' &&
       permission !== null &&
-      typeof permission.skill === 'object' &&
-      permission.skill !== null
-        ? cloneOwned(
-            permission.skill as Record<string, 'allow' | 'ask' | 'deny'>,
-          )
+      permission.skill !== undefined
+        ? typeof permission.skill === 'string'
+          ? { '*': permission.skill as PermissionAction }
+          : cloneOwned(permission.skill as Record<string, PermissionAction>)
         : marketplaceAgent
           ? {}
           : getSkillPermissionsForAgent(
