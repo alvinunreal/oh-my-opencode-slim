@@ -908,6 +908,7 @@ function marketplaceCapabilityCeilings(
   agent: AgentDefinition,
   activated: ActivatedMarketplaceAgent,
   override: AgentOverrideConfig | undefined,
+  disabledSkills: readonly string[],
 ): {
   tools: readonly string[];
   skills: readonly string[];
@@ -922,12 +923,13 @@ function marketplaceCapabilityCeilings(
   const tools = role
     ? uniqueNames([...baselineTools, ...activated.manifest.tools])
     : [...activated.manifest.tools];
+  const disabledSkillNames = new Set(disabledSkills);
   const skills = restrictMarketplaceNames(
     role
       ? uniqueNames([...role.defaultSkills, ...activated.requiredSkills])
       : activated.requiredSkills,
     override?.skills,
-  );
+  ).filter((skill) => !disabledSkillNames.has(skill));
   const mcps = restrictMarketplaceNames(
     role
       ? uniqueNames([...role.defaultMcps, ...activated.requiredMcps])
@@ -1639,7 +1641,12 @@ export function createAgents(
     applyModelInheritance(agent, override, configuredOrchestratorModel);
     const marketplaceEntry = marketplacePackage(marketplace, agent.name);
     const marketplaceCeilings = marketplaceEntry
-      ? marketplaceCapabilityCeilings(agent, marketplaceEntry, override)
+      ? marketplaceCapabilityCeilings(
+          agent,
+          marketplaceEntry,
+          override,
+          runtime.disabledSkills,
+        )
       : undefined;
     if (marketplaceCeilings) {
       applyMarketplaceCapabilities(agent, marketplaceCeilings);
@@ -1870,6 +1877,7 @@ function buildCanonicalAgentConfigs(
           agent,
           marketplaceEntry,
           getOverrideFromAgents(runtime.agents(), agent.name),
+          runtime.disabledSkills,
         ).mcps,
       ];
     }
@@ -2101,6 +2109,7 @@ export function buildResolvedAgentRegistry(
         agent,
         marketplaceEntry,
         getOverrideFromAgents(runtime.agents(), name),
+        runtime.disabledSkills,
       );
       resolvedMarketplaceCapabilities = ceilings;
       ownedConfig.permission = projectMarketplacePermission(

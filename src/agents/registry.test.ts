@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { PluginInput } from '@opencode-ai/plugin';
 import type { PluginConfig } from '../config';
 import { CouncilConfigSchema } from '../config/council-schema';
 import { RuntimeConfig } from '../config/runtime';
+import { createFilterAvailableSkillsHook } from '../hooks/filter-available-skills';
 import { MarketplaceAgentManifestSchema } from '../marketplace/schemas';
 import { MarketplaceStore } from '../marketplace/store';
 import type { V2PermissionRule } from '../v2/types';
@@ -256,6 +258,116 @@ describe('ResolvedAgentRegistry', () => {
       expect(registry.skillPermissions.audit.simplify).toBe('deny');
       expect(registry.skillPermissions.audit.clonedeps).toBe('ask');
       expect(policy.decide('other_server_tool', '*')).toBe('deny');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps disabled role skills outside marketplace ceilings and skill visibility', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-disabled-skill-'));
+    try {
+      const store = new MarketplaceStore({ rootDir: root });
+      store.install({
+        manifest: {
+          schemaVersion: 2,
+          id: 'community/reviewer',
+          version: '1.0.0',
+          displayName: 'Reviewer',
+          agentName: 'reviewer',
+          description: 'Review.',
+          prompt: 'Review.',
+          extends: { builtin: 'oracle', promptMode: 'append' },
+          skills: ['clonedeps'],
+          mcps: [],
+          tools: [],
+          author: { name: 'Community' },
+          tags: [],
+          license: 'MIT',
+          compatibility: { plugin: '>=3.0.0-beta.3 <4.0.0' },
+          model: { source: 'builtin' },
+          routing: {
+            description: 'Reviews.',
+            when: 'Needed.',
+            keywords: ['review'],
+          },
+        },
+      });
+      RuntimeConfig.reset(root);
+      const runtime = RuntimeConfig.init(root, {
+        disabled_skills: ['simplify'],
+        preset: 'work',
+        presets: {
+          work: { marketplace: { agents: ['community/reviewer'] } },
+        },
+        agents: { reviewer: { skills: ['*'] } },
+      });
+      const registry = buildResolvedAgentRegistry(runtime, {
+        marketplaceStore: store,
+        preflightSkillNames: ['clonedeps'],
+        hostFlavor: 'v2',
+        nativePermissionsByAgent: {
+          reviewer: [{ action: '*', resource: '*', effect: 'allow' }],
+        },
+      });
+      const v1Registry = buildResolvedAgentRegistry(runtime, {
+        marketplaceStore: store,
+        preflightSkillNames: ['clonedeps'],
+        hostFlavor: 'v1',
+      });
+      const v1Skills = (
+        v1Registry.sdkConfigs.reviewer.permission as Record<string, unknown>
+      ).skill as Record<string, string>;
+      expect(v1Skills.simplify).not.toBe('allow');
+      expect(v1Skills.clonedeps).toBe('allow');
+      const permission = registry.sdkConfigs.reviewer.permission as Record<
+        string,
+        unknown
+      >;
+      const skills = permission.skill as Record<string, string>;
+      expect(skills.simplify).not.toBe('allow');
+      expect(skills['requesting-code-review']).toBe('allow');
+      expect(skills.clonedeps).toBe('allow');
+      expect(
+        registry.v2PermissionPolicies.reviewer.decide('skill', 'simplify'),
+      ).toBe('deny');
+      expect(
+        registry.v2PermissionPolicies.reviewer.decide(
+          'skill',
+          'requesting-code-review',
+        ),
+      ).toBe('allow');
+      expect(
+        registry.v2PermissionPolicies.reviewer.decide('skill', 'clonedeps'),
+      ).toBe('allow');
+      expect(Object.isFrozen(registry.skillPermissions.reviewer)).toBe(true);
+      expect(registry.skillPermissions.reviewer.simplify).not.toBe('allow');
+      expect(registry.skillPermissions.reviewer.clonedeps).toBe('allow');
+
+      const hook = createFilterAvailableSkillsHook({} as PluginInput, registry);
+      const output = {
+        messages: [
+          {
+            info: { role: 'system' },
+            parts: [
+              {
+                type: 'text',
+                text: '<available_skills><skill><name>simplify</name></skill><skill><name>clonedeps</name></skill><skill><name>requesting-code-review</name></skill></available_skills>',
+              },
+            ],
+          },
+          {
+            info: { role: 'user', agent: 'reviewer' },
+            parts: [{ type: 'text', text: 'review' }],
+          },
+        ],
+      };
+      await hook['experimental.chat.messages.transform']({}, output);
+      expect(output.messages[0].parts[0].text).not.toContain(
+        '<name>simplify</name>',
+      );
+      expect(output.messages[0].parts[0].text).toContain(
+        '<name>clonedeps</name>',
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
