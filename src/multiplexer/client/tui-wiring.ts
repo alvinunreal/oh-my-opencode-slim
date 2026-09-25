@@ -89,10 +89,9 @@ export const HOST_REPROBE_INTERVAL_MS = 5_000;
 /**
  * Low-frequency reconcile cadence (FR-7). The TUI event bus exposes no
  * reconnect signal (stage A 1.5), so a bounded periodic pass is the trigger
- * for the server-list difference compensation. The FR-8 leftover sweep is
- * deliberately NOT on this tick: it runs once at startup and once per
- * `unreachable → reachable` transition only, because its discovery path costs
- * one terminal read per candidate and should not repeat every 30s.
+ * for the server-list difference compensation. A sweep owed at startup or
+ * after `unreachable → reachable` drains on this tick, never inline with an
+ * event; completed sweeps do not repeat every 30s.
  */
 export const RECONCILE_INTERVAL_MS = 30_000;
 
@@ -636,9 +635,9 @@ export async function createTuiPaneWiring(
 
   /**
    * FR-8 trigger: the leftover sweep runs once at startup and once per
-   * `unreachable → reachable` transition — never on the periodic reconcile
-   * tick. The cmux discovery path reads back one launch argv per terminal, so
-   * repeating it every 30s x N terminals is wasteful; crashes and reconnects
+   * `unreachable → reachable` transition, on the reconcile tick rather than
+   * in the event path. The cmux discovery reads one launch argv per terminal;
+   * repeating it every 30s x N terminals is wasteful. Crashes and reconnects
    * bound the number of runs instead. A failed scan re-arms the owed sweep so
    * a later tick retries (a broken daemon costs at most one scan per tick); a
    * completed scan — including a clean empty one — is never repeated.
@@ -672,10 +671,6 @@ export async function createTuiPaneWiring(
       logHostUnreachable(logger, onceGate, admission.adapter, event.sessionId);
       return;
     }
-    // An event may be the first thing to observe the host coming back: the
-    // owed sweep runs here, before the event itself is handled.
-    await drainDueSweep();
-    if (disposed) return;
     await lifecycle.handleEvent(event);
   };
 
@@ -694,8 +689,8 @@ export async function createTuiPaneWiring(
   }
 
   // FR-7 trigger: the bus has no reconnect signal, so reconcile runs once at
-  // startup and then on a low-frequency cadence (bounded server-list diff
-  // only). Disposal clears the tracked clock, stopping the chain.
+  // startup and then on a low-frequency cadence. Disposal clears the tracked
+  // clock, stopping the chain.
   let reconcileHandle: ClockTimerHandle | null = null;
   const scheduleReconcile = (): void => {
     if (disposed) return;

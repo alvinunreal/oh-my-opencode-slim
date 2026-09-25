@@ -342,7 +342,7 @@ export class TmuxMultiplexer implements Multiplexer {
       socket,
       'split-window',
       getSplitDirection(layout),
-      '-d',
+      ...['-e', 'OPENCODE_DISABLE_TERMINAL_TITLE=1', '-d'],
       '-P',
       '-F',
       '#{pane_id}',

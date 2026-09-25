@@ -1304,6 +1304,43 @@ describe('FR-7 reconcile trigger', () => {
 });
 
 describe('FR-8 leftover sweep', () => {
+  test('a pending recovery sweep cannot reorder created then deleted into a ghost pane', async () => {
+    let reachable = false;
+    let releaseSweep: () => void = () => {};
+    const sweepAdapter: SweepAdapter = {
+      async listPanesWithTitles() {
+        await new Promise<void>((resolve) => {
+          releaseSweep = resolve;
+        });
+        return [];
+      },
+      async closePane() {
+        return true;
+      },
+    };
+    const state = createClientState();
+    const serve = fakeFetch(state);
+    const h = await createHarness({
+      state,
+      fetchFn: (url, init) =>
+        reachable ? serve(url, init) : Promise.resolve({ ok: false }),
+      sweepAdapter,
+    });
+    await flush();
+    reachable = true;
+    h.clock.advance(5_000);
+    h.bus.emit('session.created', createdEvent());
+    await flush();
+    h.bus.emit('session.deleted', deletedEvent());
+    await flush();
+    releaseSweep();
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(1);
+    expect(h.adapters.get('tmux')?.closes).toEqual([PANE_ID]);
+    expect(h.wiring.lifecycle?.getPane(CHILD)).toBeUndefined();
+    await h.wiring.dispose();
+  });
+
   test('startup sweep closes only dead-owner terminal leftovers', async () => {
     const state = createClientState({
       getResults: { ses_gone: 'notfound', ses_alive: 'found' },
@@ -1404,11 +1441,14 @@ describe('FR-8 leftover sweep', () => {
     await flush();
     expect(h.adapters.get('tmux')?.closes).toEqual([]);
 
-    // The host comes back; the next event observes the transition and the
-    // owed sweep runs once.
+    // The event observes recovery, but only the next reconcile tick drains
+    // the owed sweep; the event itself must not wait behind a terminal scan.
     reachable = true;
     h.clock.advance(5_000);
     h.bus.emit('session.created', createdEvent());
+    await flush();
+    expect(h.adapters.get('tmux')?.closes).toEqual([]);
+    h.clock.advance(30_000);
     await flush();
     expect(h.adapters.get('tmux')?.closes).toEqual(['pane-leftover']);
 
