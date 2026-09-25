@@ -405,7 +405,7 @@ export function stripJsonComments(json: string): string {
     );
 }
 
-function parseJsonConfigContent(content: string): OpenCodeConfig {
+export function parseJsonConfigContent(content: string): OpenCodeConfig {
   const withoutBom = content.replace(/^\uFEFF/, '');
   return JSON.parse(stripJsonComments(withoutBom)) as OpenCodeConfig;
 }
@@ -451,7 +451,8 @@ function configMutationPaths(filePath: string): MarketplacePaths {
   };
 }
 
-function publishJsonFile(filePath: string, content: string): void {
+/** Publish prepared bytes while holding the file's config write lease. */
+export function publishJsonFile(filePath: string, content: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   if (existsSync(filePath)) copyFileSync(filePath, `${filePath}.bak`);
   writeAtomic(filePath, content);
@@ -463,6 +464,21 @@ function withSerializedConfigWrite<T>(filePath: string, operation: () => T): T {
     (lease) => lease.commit(operation),
     {},
   );
+}
+
+/** Acquire all config leases in stable order before reading or publishing. */
+export function withSerializedConfigWrites<T>(
+  filePaths: string[],
+  operation: () => T,
+): T {
+  const sortedPaths = [...new Set(filePaths)].sort();
+  function acquire(index: number): T {
+    if (index === sortedPaths.length) return operation();
+    return withSerializedConfigWrite(sortedPaths[index], () =>
+      acquire(index + 1),
+    );
+  }
+  return acquire(0);
 }
 
 /** Serialize whole-file read-modify-write operations with other config writers. */

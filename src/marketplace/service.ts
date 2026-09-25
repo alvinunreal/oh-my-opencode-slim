@@ -2,7 +2,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { DEFAULT_MARKETPLACE_REGISTRY_URL } from '../marketplace-contract';
 import { readPluginPackageVersion } from '../utils/package-metadata';
 import type { MarketplaceCompatibilityOptions } from './compatibility';
-import { removeMarketplaceConfigReferences } from './config-references';
+import { withMarketplaceConfigReferencesRemoved } from './config-references';
 import {
   MarketplaceConflictError,
   MarketplaceRegistryNotFoundError,
@@ -37,19 +37,6 @@ export type MarketplaceRegistryDownloadClient = Pick<
   'download'
 > &
   Partial<Pick<MarketplaceRegistryClient, 'downloadV3'>>;
-
-export class MarketplaceRemovalCleanupError extends Error {
-  readonly removalCommitted = true;
-  readonly cause: unknown;
-
-  constructor(packageId: string, cause: unknown) {
-    super(
-      `${packageId} was removed from the marketplace store, but config references could not be cleaned up`,
-    );
-    this.name = 'MarketplaceRemovalCleanupError';
-    this.cause = cause;
-  }
-}
 
 function parseBundle(value: unknown): MarketplacePackageBundle {
   const candidate =
@@ -213,12 +200,12 @@ export class MarketplaceService {
 
   remove(id: string): void {
     const normalizedId = normalizeMarketplacePackageId(id);
-    this.store.remove(normalizedId);
-    try {
-      removeMarketplaceConfigReferences(this.projectDir, normalizedId);
-    } catch (error) {
-      throw new MarketplaceRemovalCleanupError(normalizedId, error);
-    }
+    withMarketplaceConfigReferencesRemoved(
+      this.projectDir,
+      normalizedId,
+      (markCommitted) =>
+        this.store.remove(normalizedId, undefined, markCommitted),
+    );
   }
 }
 

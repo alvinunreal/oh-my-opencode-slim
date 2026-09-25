@@ -317,7 +317,11 @@ export class MarketplaceStore {
     );
   }
 
-  remove(id: string, precondition?: () => void): void {
+  remove(
+    id: string,
+    precondition?: () => void,
+    onCommitted?: () => void,
+  ): void {
     withMarketplaceLease(
       this.paths,
       (lease) => {
@@ -325,7 +329,10 @@ export class MarketplaceStore {
         this.reconcileLockedState(lockfile, lease);
         precondition?.();
         const entry = lockfile.packages[id];
-        if (!entry) return;
+        if (!entry) {
+          onCommitted?.();
+          return;
+        }
         const packagePath = packageIdPath(this.paths, id);
         const [namespace, name] = id.split('/');
         const quarantinePath = path.join(
@@ -345,6 +352,7 @@ export class MarketplaceStore {
             if (packageExists) fs.renameSync(quarantinePath, packagePath);
             throw error;
           }
+          onCommitted?.();
           try {
             fs.rmSync(quarantinePath, { recursive: true, force: true });
           } catch {

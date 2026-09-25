@@ -20,7 +20,6 @@ import {
   MarketplaceIntegrityError,
   MarketplaceLockfileError,
   type MarketplacePackageBundle,
-  MarketplaceRemovalCleanupError,
   MarketplaceService,
   MarketplaceStore,
 } from './index';
@@ -753,66 +752,220 @@ describe('MarketplaceService', () => {
     }
   });
 
-  test('retries config cleanup after the package removal has committed', () => {
+  test.each(['malformed project config', 'config publication failure'])(
+    'keeps package and both config references on %s',
+    (failure) => {
+      const root = tempRoot();
+      const previousConfigHome = process.env.XDG_CONFIG_HOME;
+      const configHome = join(root, 'config');
+      const project = join(root, 'project');
+      const configPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
+      const userPath = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+      const configContent = JSON.stringify({
+        presets: {
+          work: {
+            marketplace: { agents: ['community/example'] },
+          },
+        },
+      });
+      try {
+        process.env.XDG_CONFIG_HOME = configHome;
+        mkdirSync(join(project, '.opencode'), { recursive: true });
+        mkdirSync(join(configHome, 'opencode'), { recursive: true });
+        writeFileSync(configPath, configContent);
+        writeFileSync(userPath, configContent);
+        const service = new MarketplaceService({
+          rootDir: join(root, 'store'),
+          projectDir: project,
+        });
+        service.install(bundle());
+
+        if (failure === 'malformed project config') {
+          writeFileSync(configPath, '{ invalid');
+        }
+        const originalRename = fsModule.renameSync;
+        let publicationFailed = false;
+        const rename =
+          failure === 'config publication failure'
+            ? spyOn(fsModule, 'renameSync').mockImplementation(
+                (source, destination) => {
+                  if (destination === configPath && !publicationFailed) {
+                    publicationFailed = true;
+                    throw new Error('injected config cleanup failure');
+                  }
+                  return originalRename(source, destination);
+                },
+              )
+            : undefined;
+        const projectBefore = readFileSync(configPath, 'utf8');
+        try {
+          expect(() => service.remove('community/example')).toThrow(
+            failure === 'malformed project config'
+              ? `Failed to parse config ${configPath}`
+              : 'injected config cleanup failure',
+          );
+        } finally {
+          rename?.mockRestore();
+        }
+        expect(service.store.show('community/example').manifest.id).toBe(
+          'community/example',
+        );
+        expect(
+          readFileSync(service.store.paths.lockfilePath, 'utf8'),
+        ).toContain('community/example');
+        expect(readFileSync(configPath, 'utf8')).toBe(projectBefore);
+        expect(readFileSync(userPath, 'utf8')).toBe(configContent);
+      } finally {
+        if (previousConfigHome === undefined)
+          delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test('restores both published configs when store removal fails', () => {
     const root = tempRoot();
     const previousConfigHome = process.env.XDG_CONFIG_HOME;
     const configHome = join(root, 'config');
     const project = join(root, 'project');
-    const configPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
-    const configContent = JSON.stringify({
-      presets: {
-        work: {
-          marketplace: { agents: ['community/example'] },
-        },
-      },
+    const userPath = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
+    const content = JSON.stringify({
+      presets: { work: { marketplace: { agents: ['community/example'] } } },
     });
     try {
       process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
       mkdirSync(join(project, '.opencode'), { recursive: true });
-      writeFileSync(configPath, configContent);
+      writeFileSync(userPath, content);
+      writeFileSync(projectPath, content);
       const service = new MarketplaceService({
         rootDir: join(root, 'store'),
         projectDir: project,
       });
       service.install(bundle());
-
+      const lockBefore = readFileSync(service.store.paths.lockfilePath, 'utf8');
       const originalRename = fsModule.renameSync;
       const rename = spyOn(fsModule, 'renameSync').mockImplementation(
         (source, destination) => {
-          if (destination === configPath) {
-            throw new Error('injected config cleanup failure');
+          if (destination === service.store.paths.lockfilePath) {
+            expect(JSON.parse(readFileSync(userPath, 'utf8'))).toEqual({
+              presets: { work: { marketplace: { agents: [] } } },
+            });
+            expect(JSON.parse(readFileSync(projectPath, 'utf8'))).toEqual({
+              presets: { work: { marketplace: { agents: [] } } },
+            });
+            throw new Error('injected lockfile publication failure');
           }
           return originalRename(source, destination);
         },
       );
-      let cleanupError: unknown;
       try {
-        service.remove('community/example');
-      } catch (error) {
-        cleanupError = error;
+        expect(() => service.remove('community/example')).toThrow(
+          'injected lockfile publication failure',
+        );
       } finally {
         rename.mockRestore();
       }
-      expect(cleanupError).toBeInstanceOf(MarketplaceRemovalCleanupError);
-      expect(
-        (cleanupError as MarketplaceRemovalCleanupError).removalCommitted,
-      ).toBe(true);
+      expect(readFileSync(userPath, 'utf8')).toBe(content);
+      expect(readFileSync(projectPath, 'utf8')).toBe(content);
+      expect(readFileSync(service.store.paths.lockfilePath, 'utf8')).toBe(
+        lockBefore,
+      );
+      expect(service.store.show('community/example').manifest.id).toBe(
+        'community/example',
+      );
+    } finally {
+      if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previousConfigHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
+  test('retains cleaned references after a committed removal lease release fails', () => {
+    const root = tempRoot();
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    const configHome = join(root, 'config');
+    const project = join(root, 'project');
+    const userPath = join(configHome, 'opencode', 'oh-my-opencode-slim.json');
+    const projectPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
+    const content = JSON.stringify({
+      presets: { work: { marketplace: { agents: ['community/example'] } } },
+    });
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      mkdirSync(join(configHome, 'opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      writeFileSync(userPath, content);
+      writeFileSync(projectPath, content);
+      const service = new MarketplaceService({
+        rootDir: join(root, 'store'),
+        projectDir: project,
+      });
+      service.install(bundle());
+      const originalUnlink = fsModule.unlinkSync;
+      const unlink = spyOn(fsModule, 'unlinkSync').mockImplementation(
+        (path) => {
+          if (
+            typeof path === 'string' &&
+            path.startsWith(`${service.store.paths.lockDir}/`) &&
+            path.endsWith('.lease')
+          ) {
+            throw new Error('injected store lease release failure');
+          }
+          return originalUnlink(path);
+        },
+      );
       try {
-        service.store.show('community/example');
-        throw new Error('expected package to be removed');
-      } catch (error) {
-        expect(error).toBeInstanceOf(MarketplaceIntegrityError);
+        expect(() => service.remove('community/example')).toThrow(
+          'finalization failed; config references remain removed',
+        );
+      } finally {
+        unlink.mockRestore();
       }
-      expect(readFileSync(configPath, 'utf8')).toBe(configContent);
+      expect(
+        JSON.parse(readFileSync(service.store.paths.lockfilePath, 'utf8'))
+          .packages['community/example'],
+      ).toBeUndefined();
+      expect(
+        existsSync(
+          join(service.store.paths.packagesDir, 'community', 'example'),
+        ),
+      ).toBe(false);
+      for (const configPath of [userPath, projectPath]) {
+        expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
+          presets: { work: { marketplace: { agents: [] } } },
+        });
+      }
+    } finally {
+      if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previousConfigHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
+  test('cleans references for an already absent package', () => {
+    const root = tempRoot();
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    const project = join(root, 'project');
+    const configPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
+    try {
+      process.env.XDG_CONFIG_HOME = join(root, 'config');
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          presets: { work: { marketplace: { agents: ['community/example'] } } },
+        }),
+      );
+      const service = new MarketplaceService({
+        rootDir: join(root, 'store'),
+        projectDir: project,
+      });
       expect(() => service.remove('community/example')).not.toThrow();
       expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
-        presets: {
-          work: {
-            marketplace: { agents: [] },
-          },
-        },
+        presets: { work: { marketplace: { agents: [] } } },
       });
     } finally {
       if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;

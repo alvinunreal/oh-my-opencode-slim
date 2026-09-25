@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeMarketplaceConfigReferences } from './config-references';
+import {
+  removeMarketplaceConfigReferences,
+  withMarketplaceConfigReferencesRemoved,
+} from './config-references';
 import { MarketplaceService } from './index';
 import type { MarketplacePackageBundle } from './schemas';
 
@@ -49,6 +53,108 @@ afterEach(() => {
 });
 
 describe('marketplace activation cleanup', () => {
+  function createConfigs() {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
+    const project = join(root, 'project');
+    const userPath = join(
+      root,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const projectPath = join(project, '.opencode', 'oh-my-opencode-slim.json');
+    process.env.XDG_CONFIG_HOME = join(root, 'config');
+    mkdirSync(join(root, 'config', 'opencode'), { recursive: true });
+    mkdirSync(join(project, '.opencode'), { recursive: true });
+    const content = JSON.stringify({
+      presets: {
+        work: { marketplace: { agents: ['community/referenced'] } },
+      },
+    });
+    writeFileSync(userPath, content);
+    writeFileSync(projectPath, content);
+    return { root, project, userPath, projectPath, content };
+  }
+
+  test.each(['user', 'project'])(
+    'parse failure in %s config does not publish either config',
+    (which) => {
+      const fixture = createConfigs();
+      try {
+        const brokenPath =
+          which === 'user' ? fixture.userPath : fixture.projectPath;
+        writeFileSync(brokenPath, '{ invalid');
+        const userBefore = readFileSync(fixture.userPath, 'utf8');
+        const projectBefore = readFileSync(fixture.projectPath, 'utf8');
+        const commit = () => {
+          throw new Error('must not commit');
+        };
+        expect(() =>
+          withMarketplaceConfigReferencesRemoved(
+            fixture.project,
+            'community/referenced',
+            commit,
+          ),
+        ).toThrow(`Failed to parse config ${brokenPath}`);
+        expect(readFileSync(fixture.userPath, 'utf8')).toBe(userBefore);
+        expect(readFileSync(fixture.projectPath, 'utf8')).toBe(projectBefore);
+        expect(existsSync(`${fixture.userPath}.bak`)).toBe(false);
+        expect(existsSync(`${fixture.projectPath}.bak`)).toBe(false);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test('failed second publication restores first config before commit', () => {
+    const fixture = createConfigs();
+    try {
+      // The existing atomic publisher backs up a config before rename.
+      // Blocking the second backup produces a deterministic filesystem fault.
+      mkdirSync(`${fixture.projectPath}.bak`);
+      let committed = false;
+      let failure: unknown;
+      try {
+        withMarketplaceConfigReferencesRemoved(
+          fixture.project,
+          'community/referenced',
+          () => {
+            committed = true;
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).message).toContain('in doubt');
+      expect((failure as AggregateError).errors).toHaveLength(2);
+      expect(committed).toBe(false);
+      expect(readFileSync(fixture.userPath, 'utf8')).toBe(fixture.content);
+      expect(readFileSync(fixture.projectPath, 'utf8')).toBe(fixture.content);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test('failed commit restores both original config byte strings', () => {
+    const fixture = createConfigs();
+    try {
+      expect(() =>
+        withMarketplaceConfigReferencesRemoved(
+          fixture.project,
+          'community/referenced',
+          () => {
+            throw new Error('store commit failed');
+          },
+        ),
+      ).toThrow('store commit failed');
+      expect(readFileSync(fixture.userPath, 'utf8')).toBe(fixture.content);
+      expect(readFileSync(fixture.projectPath, 'utf8')).toBe(fixture.content);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   test('removes every package activation across user and project presets', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-config-'));
     const configHome = join(root, 'config');
