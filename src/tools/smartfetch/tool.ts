@@ -56,6 +56,31 @@ import {
 } from './utils';
 
 const z = tool.schema;
+const ARGS = {
+  url: z.httpUrl(),
+  format: z.enum(['text', 'markdown', 'html']).default('markdown'),
+  timeout: z
+    .number()
+    .positive()
+    .max(MAX_TIMEOUT_SECONDS)
+    .optional()
+    .describe('Timeout in seconds, max 120.'),
+  prompt: z
+    .string()
+    .optional()
+    .describe(
+      'Optional extraction task to run on the fetched content using a cheap secondary model.',
+    ),
+  extract_main: z.boolean().default(true),
+  prefer_llms_txt: z.enum(['auto', 'always', 'never']).default('auto'),
+  include_metadata: z.boolean().default(true),
+  save_binary: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Save binary payload to disk when it fits within the active download limit.',
+    ),
+};
 
 function pickContent(
   fetchResult: CachedFetch,
@@ -89,32 +114,9 @@ export function createWebfetchTool(
 
   return tool({
     description: WEBFETCH_DESCRIPTION,
-    args: {
-      url: z.httpUrl(),
-      format: z.enum(['text', 'markdown', 'html']).default('markdown'),
-      timeout: z
-        .number()
-        .positive()
-        .max(MAX_TIMEOUT_SECONDS)
-        .optional()
-        .describe('Timeout in seconds, max 120.'),
-      prompt: z
-        .string()
-        .optional()
-        .describe(
-          'Optional extraction task to run on the fetched content using a cheap secondary model.',
-        ),
-      extract_main: z.boolean().default(true),
-      prefer_llms_txt: z.enum(['auto', 'always', 'never']).default('auto'),
-      include_metadata: z.boolean().default(true),
-      save_binary: z
-        .boolean()
-        .default(false)
-        .describe(
-          'Save binary payload to disk when it fits within the active download limit.',
-        ),
-    },
-    async execute(args, ctx) {
+    args: ARGS,
+    async execute(rawArgs, ctx) {
+      const args = z.object(ARGS).parse(rawArgs);
       const secondaryModels = resolveSecondaryModels({
         webfetchModels: options.webfetchModels,
         smallModel: options.smallModelRef?.() ?? undefined,

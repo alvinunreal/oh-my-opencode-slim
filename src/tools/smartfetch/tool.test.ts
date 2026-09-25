@@ -26,6 +26,34 @@ describe('smartfetch/tool', () => {
     mock.restore();
   });
 
+  test('normalizes omitted arguments before probing, extracting and rendering metadata', async () => {
+    const visited: string[] = [];
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input);
+      visited.push(url);
+      if (url.endsWith('/llms-full.txt') || url.endsWith('/llms.txt')) {
+        return new Response('missing', { status: 404 });
+      }
+      return new Response(
+        `<html><head><title>Docs</title></head><body><nav>Navigation only</nav><article><h1>Welcome</h1><p>${'Documentation content with useful details. '.repeat(30)}</p></article></body></html>`,
+        { headers: { 'content-type': 'text/html' } },
+      );
+    }) as typeof fetch;
+    const result = await createWebfetchTool({ client: {} } as any).execute(
+      { url: 'https://docs.example.com/page' },
+      createExecutionContext(),
+    );
+    expect(result).toContain('requested_url:');
+    expect(result).toContain('extracted_main: true');
+    expect(result).toContain('Welcome');
+    expect(result).not.toContain('Navigation only');
+    expect(visited).toEqual([
+      'https://docs.example.com/llms-full.txt',
+      'https://docs.example.com/llms.txt',
+      'https://docs.example.com/page',
+    ]);
+  });
+
   test('rejects a pre-aborted request after permission without network I/O', async () => {
     const controller = new AbortController();
     controller.abort(new Error('pre-aborted'));
