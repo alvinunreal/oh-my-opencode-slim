@@ -33,7 +33,7 @@ function createDeps(board: BackgroundJobBoard, now: () => number) {
       clearIdleTimers: mock(() => {}),
       clearAllTimers: mock(() => []),
     },
-    deferredInlineErrors: new Set<string>(),
+    deferredInlineErrors: new Map<string, string>(),
     backgroundJobBoard: board,
     terminalGate: createBackgroundJobTerminalGate({
       backgroundJobBoard: board,

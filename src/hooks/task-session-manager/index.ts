@@ -380,8 +380,11 @@ export function createTaskSessionManagerHook(
     string,
     Map<string, BackgroundJobExecution>
   >();
-  /** Managed sessions with a deferred inline 401/410 awaiting fallback outcome. */
-  const deferredInlineErrors = new Set<string>();
+  /** Sessions with a deferred failover error awaiting the fallback
+   *  outcome (managed inline 401/410, or a background child's
+   *  failover-worthy error with an armed fallback chain), mapped to the
+   *  summary the idle backstop publishes when no recovery happens. */
+  const deferredInlineErrors = new Map<string, string>();
 
   // Forward refs for circular deps — set after corresponding managers exist.
   // These are captured by closure in createIdleReconciler and only called
