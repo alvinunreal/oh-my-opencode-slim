@@ -1202,6 +1202,34 @@ describe('writePreset', () => {
     );
   });
 
+  test('rejects saving an edited preset that was deleted from disk', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: { active: { orchestrator: { model: 'old' } } },
+      }),
+    );
+    const base = getEditablePreset(tempDir, 'active');
+    const deletedOnDisk = { presets: {} };
+    fs.writeFileSync(configPath, JSON.stringify(deletedOnDisk));
+
+    expect(
+      writePreset(
+        tempDir,
+        'active',
+        { orchestrator: { model: 'new' } },
+        { mergeChangesFrom: base },
+      ),
+    ).toBe(false);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf-8'))).toEqual(
+      deletedOnDisk,
+    );
+  });
+
   test('serializes preset writes with concurrent config mutations', async () => {
     const configDir = path.join(tempDir, 'opencode-config');
     fs.mkdirSync(configDir, { recursive: true });

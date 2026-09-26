@@ -433,6 +433,8 @@ describe('openPresetManager', () => {
   test('retains same-preset marketplace and agent updates made while editing', async () => {
     writeUserConfigFile({
       presets: {
+        base: { oracle: { model: 'openai/base' } },
+        nextBase: { oracle: { model: 'openai/next' } },
         active: {
           orchestrator: { model: 'openai/old' },
           marketplace: { agents: ['team/a'] },
@@ -484,6 +486,41 @@ describe('openPresetManager', () => {
     const savedAgents = savedPresets.active.agents;
     expect(savedAgents.oracle).toEqual({ model: 'openai/concurrent' });
     expect(savedAgents.orchestrator.model).toBe('anthropic/claude-3.5-haiku');
+
+    // Keep using the same open editor after its successful save. A later
+    // writer changes the model, parent, and activation metadata on disk.
+    const concurrent = readUserConfigFile();
+    const concurrentPresets = concurrent.presets as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const active = concurrentPresets.active as Record<string, unknown>;
+    active.extends = 'nextBase';
+    active.marketplace = { agents: ['team/a', 'team/c'] };
+    const concurrentAgents = active.agents as Record<
+      string,
+      Record<string, unknown>
+    >;
+    concurrentAgents.orchestrator = {
+      ...concurrentAgents.orchestrator,
+      model: 'openai/concurrent-after-save',
+    };
+    writeUserConfigFile(concurrent);
+
+    mock.selectOption(mock.getSelectProps(), { value: '__omo_save__' });
+
+    const savedAgain = readUserConfigFile();
+    const activeAgain = (
+      savedAgain.presets as Record<string, Record<string, unknown>>
+    ).active;
+    expect(activeAgain.extends).toBe('nextBase');
+    expect(activeAgain.marketplace).toEqual({ agents: ['team/a', 'team/c'] });
+    const agentsAgain = activeAgain.agents as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(agentsAgain.orchestrator.model).toBe('openai/concurrent-after-save');
+    expect(agentsAgain.oracle).toEqual({ model: 'openai/concurrent' });
   });
 
   test('merges two same-preset editors in either save order', async () => {
@@ -834,6 +871,20 @@ describe('openPresetManager', () => {
     expect(toast.message).toContain(
       'already defined in project config (.opencode)',
     );
+  });
+
+  test('creates a new preset through the explicit create flow', () => {
+    writeUserConfigFile({});
+    const mock = createMockApi();
+    openPresetManager(mock.api, tempDir, snapshotRef);
+
+    const prompt = mock.getPromptProps();
+    if (!prompt) throw new Error('Expected new preset prompt');
+    (prompt.onConfirm as (value: string) => void)('newPreset');
+    expect(mock.getSelectProps()?.title).toBe('Edit preset: newPreset');
+    mock.selectOption(mock.getSelectProps(), { value: '__omo_save__' });
+
+    expect(readUserConfigFile().presets).toEqual({ newPreset: {} });
   });
 
   test('rejects deleting user base preset if a project preset extends it', () => {

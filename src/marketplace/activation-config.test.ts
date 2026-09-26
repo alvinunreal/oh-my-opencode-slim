@@ -603,6 +603,113 @@ describe('marketplace activation persistence', () => {
     }
   });
 
+  test('unmasks an inherited package when the project preset has empty additions', () => {
+    const fixture = setup();
+    try {
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({
+          presets: { work: { marketplace: { agents_add: [PACKAGE_A] } } },
+        }),
+      );
+      writeFileSync(
+        fixture.projectConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: { work: { marketplace: { agents_add: [] } } },
+        }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+
+      let saved = JSON.parse(readFileSync(fixture.projectConfig, 'utf8'));
+      expect(saved.presets.work.marketplace).toBeUndefined();
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .marketplace?.agents,
+      ).toEqual([PACKAGE_A]);
+
+      const afterEnable = readFileSync(fixture.projectConfig, 'utf8');
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      expect(readFileSync(fixture.projectConfig, 'utf8')).toBe(afterEnable);
+
+      disableMarketplacePackage(fixture.project, PACKAGE_A);
+      saved = JSON.parse(readFileSync(fixture.projectConfig, 'utf8'));
+      expect(saved.presets.work.marketplace).toEqual({
+        agents_remove: [PACKAGE_A],
+      });
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .marketplace?.agents,
+      ).toEqual([]);
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .marketplace?.agents,
+      ).toEqual([PACKAGE_A]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('unmasks a lower-layer removal when project preset has empty removals', () => {
+    const fixture = setup();
+    try {
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({
+          presets: {
+            work: {
+              marketplace: {
+                agents: [PACKAGE_A],
+                agents_remove: [PACKAGE_A],
+              },
+            },
+          },
+        }),
+      );
+      writeFileSync(
+        fixture.projectConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: { work: { marketplace: { agents_remove: [] } } },
+        }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      // The empty project list masks the user's removal, so the package is
+      // already active and enabling it again must be an idempotent no-op.
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      const afterEnable = readFileSync(fixture.projectConfig, 'utf8');
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      expect(readFileSync(fixture.projectConfig, 'utf8')).toBe(afterEnable);
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .marketplace?.agents,
+      ).toEqual([PACKAGE_A]);
+
+      disableMarketplacePackage(fixture.project, PACKAGE_A);
+      expect(
+        JSON.parse(readFileSync(fixture.projectConfig, 'utf8')).presets.work
+          .marketplace,
+      ).toBeUndefined();
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .marketplace?.agents,
+      ).toEqual([]);
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .marketplace?.agents,
+      ).toEqual([PACKAGE_A]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test('uses environment-selected preset without persisting the selection', () => {
     const fixture = setup();
     try {

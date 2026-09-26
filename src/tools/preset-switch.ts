@@ -601,7 +601,10 @@ export function writePreset(
     mutateJsonFile(userConfigPath, (config) => {
       const presets = isRecord(config.presets) ? config.presets : {};
       const normalized = normalizePreset(preset);
-      if (options.mergeChangesFrom && isRecord(presets[name])) {
+      if (options.mergeChangesFrom && !isRecord(presets[name])) {
+        throw new Error(`Preset "${name}" was deleted while being edited`);
+      }
+      if (options.mergeChangesFrom) {
         const current = normalizePreset(presets[name] as PresetInput);
         const base = options.mergeChangesFrom;
         const editorChangedExtends = normalized.extends !== base.extends;

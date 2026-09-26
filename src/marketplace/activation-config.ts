@@ -305,6 +305,16 @@ function persistActivation(
       const next = { ...localMarketplace };
       if (enabled) {
         if (active && !removals.includes(id)) throw NO_ACTIVATION_CHANGE;
+        if (
+          !active &&
+          inherited &&
+          Array.isArray(localMarketplace.agents_add) &&
+          additions.length === 0
+        ) {
+          // An explicit empty array masks lower-layer additions. Drop only
+          // that mask so the inherited package becomes active again.
+          delete next.agents_add;
+        }
         if (ownsAgents && !replacement?.includes(id)) {
           next.agents = [...rawReplacement, id];
         } else if (!ownsAgents && !inherited && !additions.includes(id)) {
@@ -338,12 +348,26 @@ function persistActivation(
           !removals.includes(id)
         ) {
           next.agents_remove = [...rawRemovals, id];
+        } else if (
+          active &&
+          !inherited &&
+          !ownsAgents &&
+          Array.isArray(localMarketplace.agents_remove) &&
+          removals.length === 0
+        ) {
+          // An explicit empty array can mask a lower-layer removal. Removing
+          // the mask restores that lower-layer state without a new directive.
+          delete next.agents_remove;
         }
       }
       if (JSON.stringify(next) === JSON.stringify(localMarketplace)) {
         throw NO_ACTIVATION_CHANGE;
       }
-      currentPreset.marketplace = next;
+      if (Object.keys(next).length > 0) {
+        currentPreset.marketplace = next;
+      } else {
+        delete currentPreset.marketplace;
+      }
       presets[presetName] = currentPreset;
       persisted.presets = presets;
       return persisted;

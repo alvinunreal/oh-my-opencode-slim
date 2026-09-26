@@ -715,7 +715,11 @@ function savePreset(
       : {},
   );
   if (ok) {
-    state.presetEditBases.delete(presetName);
+    const committed = getEditablePreset(state.directory, presetName);
+    state.presetEditBases.set(presetName, structuredClone(committed));
+    working.extends = committed.extends;
+    working.agents = structuredClone(committed.agents);
+    working.marketplace = structuredClone(committed.marketplace);
   }
   if (!silent) {
     state.api.ui.toast({
