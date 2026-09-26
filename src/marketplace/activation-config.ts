@@ -7,6 +7,7 @@ import {
   resolvePresetDefinition,
 } from '../config/presets';
 import type { PresetInput } from '../config/schema';
+import { PresetAgentsSchema } from '../config/schema';
 import { MarketplaceActivationError } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
 import type { MarketplaceStore } from './store';
@@ -116,7 +117,7 @@ function persistActivation(
         );
       }
       const presets = asRecord(persisted.presets);
-      const currentPreset = { ...asRecord(presets[presetName]) };
+      let currentPreset = { ...asRecord(presets[presetName]) };
       const paths = findPluginConfigPaths(directory);
       const writesProjectConfig =
         paths.projectConfigPath === filePath &&
@@ -136,7 +137,31 @@ function persistActivation(
       const active = normalizePackageIds(
         effective.marketplace?.agents ?? [],
       ).includes(id);
-      const localMarketplace = asRecord(currentPreset.marketplace);
+      const presetAgents = PresetAgentsSchema.safeParse(currentPreset.agents);
+      const localMarketplaceValue = currentPreset.marketplace;
+      const isExplicitActivation =
+        localMarketplaceValue !== null &&
+        typeof localMarketplaceValue === 'object' &&
+        !Array.isArray(localMarketplaceValue) &&
+        ['agents', 'agents_add', 'agents_remove'].some((key) =>
+          Object.hasOwn(asRecord(localMarketplaceValue), key),
+        );
+      const marketplaceAgentOverride =
+        !presetAgents.success &&
+        !isExplicitActivation &&
+        localMarketplaceValue !== null &&
+        typeof localMarketplaceValue === 'object' &&
+        !Array.isArray(localMarketplaceValue);
+      if (marketplaceAgentOverride) {
+        const { marketplace, extends: parent, ...flatAgents } = currentPreset;
+        currentPreset = {
+          ...(parent === undefined ? {} : { extends: parent }),
+          agents: { ...flatAgents, marketplace },
+        };
+      }
+      const localMarketplace = marketplaceAgentOverride
+        ? {}
+        : asRecord(currentPreset.marketplace);
       const ownsAgents = Array.isArray(localMarketplace.agents);
       const replacement = ownsAgents
         ? normalizePackageIds(localMarketplace.agents as string[])

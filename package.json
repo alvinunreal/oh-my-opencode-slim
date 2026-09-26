@@ -98,6 +98,7 @@
     "@opencode-ai/plugin": "1.18.32",
     "@opencode-ai/sdk": "1.18.32",
     "jsdom": "^30.0.0",
+    "jsonc-parser": "^3.3.1",
     "lru-cache": "^11.5.3",
     "semver": "^7.7.3",
     "turndown": "^7.2.4",

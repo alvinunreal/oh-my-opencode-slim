@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { applyEdits, modify, parse as parseJsonc } from 'jsonc-parser';
 import { MarketplaceLockOwnershipError } from '../marketplace/errors';
 import { acquireMarketplaceLease, writeAtomic } from '../marketplace/lease';
 import { getMarketplacePaths } from '../marketplace/paths';
@@ -417,7 +418,10 @@ export function parseConfigFile(path: string): {
     // Strip a UTF-8 BOM (RFC 8259 permits one) so JSON.parse does not choke.
     const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
     if (content.trim().length === 0) return { config: null };
-    return { config: JSON.parse(stripJsonComments(content)) as OpenCodeConfig };
+    const errors: Parameters<typeof parseJsonc>[1] = [];
+    const parsed = parseJsonc(content, errors, { allowTrailingComma: true });
+    if (errors.length > 0) throw new Error('Invalid JSONC config');
+    return { config: parsed as OpenCodeConfig };
   } catch (err) {
     return { config: null, error: String(err) };
   }
@@ -514,19 +518,12 @@ export function withSerializedConfigWrites<T>(
   return acquire(0);
 }
 
-function jsoncComments(source: string): string[] {
-  const comments: string[] = [];
-  const commentPattern = /\\"|"(?:\\"|[^"])*"|(\/\/[^\r\n]*|\/\*[\s\S]*?\*\/)/g;
-  for (const match of source.matchAll(commentPattern)) {
-    if (match[1]) comments.push(match[1]);
-  }
-  return comments;
-}
-
 function parseJsonConfigText(source: string): JsonConfig {
-  const parsed: unknown = JSON.parse(
-    stripJsonComments(source.replace(/^\uFEFF/, '')),
-  );
+  const errors: Parameters<typeof parseJsonc>[1] = [];
+  const parsed: unknown = parseJsonc(source.replace(/^\uFEFF/, ''), errors, {
+    allowTrailingComma: true,
+  });
+  if (errors.length > 0) throw new Error('Invalid JSONC config');
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Config file must contain a JSON object');
   }
@@ -541,14 +538,83 @@ function publishConfig(
   const bakPath = `${configPath}.bak`;
   if (currentText !== undefined) copyFileSync(configPath, bakPath);
 
-  const comments =
-    configPath.endsWith('.jsonc') && currentText
-      ? jsoncComments(currentText)
-      : [];
-  const commentPrefix = comments.length > 0 ? `${comments.join('\n')}\n` : '';
   const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
-  const content = `${bom}${commentPrefix}${JSON.stringify(config, null, 2)}\n`;
+  const content =
+    configPath.endsWith('.jsonc') && currentText
+      ? `${bom}${jsoncDiff(
+          currentText.replace(/^\uFEFF/, ''),
+          parseJsonConfigText(currentText),
+          config,
+        )}`
+      : `${bom}${JSON.stringify(config, null, 2)}\n`;
   writeAtomic(configPath, content);
+}
+
+function jsoncFormattingOptions(source: string) {
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const indentation = source.match(/(?:^|\r?\n)([ \t]+)"/);
+  const indent = indentation?.[1] ?? '  ';
+  return {
+    insertSpaces: !indent.includes('\t'),
+    tabSize: indent.length,
+    eol,
+  };
+}
+
+function jsoncDiff(
+  source: string,
+  original: unknown,
+  updated: unknown,
+  path: (string | number)[] = [],
+): string {
+  if (JSON.stringify(original) === JSON.stringify(updated)) return source;
+
+  if (
+    Array.isArray(original) &&
+    Array.isArray(updated) &&
+    original.length === updated.length
+  ) {
+    return updated.reduce(
+      (latest, value, index) =>
+        jsoncDiff(latest, original[index], value, [...path, index]),
+      source,
+    );
+  }
+
+  if (
+    original &&
+    updated &&
+    typeof original === 'object' &&
+    typeof updated === 'object' &&
+    !Array.isArray(original) &&
+    !Array.isArray(updated)
+  ) {
+    const before = original as Record<string, unknown>;
+    const after = updated as Record<string, unknown>;
+    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+    let latest = source;
+    for (const key of keys) {
+      const beforeHas = Object.hasOwn(before, key);
+      const afterHas = Object.hasOwn(after, key);
+      if (beforeHas && afterHas) {
+        latest = jsoncDiff(latest, before[key], after[key], [...path, key]);
+      } else {
+        const edits = modify(
+          latest,
+          [...path, key],
+          afterHas ? after[key] : undefined,
+          { formattingOptions: jsoncFormattingOptions(latest) },
+        );
+        latest = applyEdits(latest, edits);
+      }
+    }
+    return latest;
+  }
+
+  const edits = modify(source, path, updated, {
+    formattingOptions: jsoncFormattingOptions(source),
+  });
+  return applyEdits(source, edits);
 }
 
 /** Atomically publish a JSON value with a backup of the previous file. */
@@ -571,9 +637,13 @@ export function mutateJsonFile(
       ? readFileSync(configPath, 'utf-8')
       : undefined;
     const current = currentText ? parseJsonConfigText(currentText) : {};
-    const originalValue = JSON.stringify(current);
+    const originalSnapshot = JSON.parse(JSON.stringify(current)) as JsonConfig;
     const updated = mutate(current);
-    if (JSON.stringify(updated) === originalValue) return;
+    if (JSON.stringify(updated) === JSON.stringify(originalSnapshot)) return;
+    if (currentText && configPath.endsWith('.jsonc')) {
+      publishConfig(configPath, updated as OpenCodeConfig, currentText);
+      return;
+    }
     publishConfig(configPath, updated as OpenCodeConfig, currentText);
   });
 }

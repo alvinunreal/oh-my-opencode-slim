@@ -486,6 +486,87 @@ describe('openPresetManager', () => {
     expect(savedAgents.orchestrator.model).toBe('anthropic/claude-3.5-haiku');
   });
 
+  test('merges two same-preset editors in either save order', async () => {
+    for (const saveParentFirst of [true, false]) {
+      writeUserConfigFile({
+        presets: {
+          base: { oracle: { model: 'openai/base' } },
+          nextBase: { oracle: { model: 'openai/next' } },
+          active: {
+            extends: 'base',
+            agents: { orchestrator: { model: 'openai/old' } },
+          },
+        },
+      });
+
+      const parentEditor = createMockApi();
+      const modelEditor = createMockApi();
+      openPresetManager(parentEditor.api, tempDir, snapshotRef);
+      openPresetManager(modelEditor.api, tempDir, snapshotRef);
+
+      // Prepare one editor with a deliberate parent change.
+      parentEditor.selectOption(parentEditor.getSelectProps(), {
+        value: 'active',
+      });
+      parentEditor.selectOption(parentEditor.getSelectProps(), {
+        value: 'edit',
+      });
+      parentEditor.selectOption(parentEditor.getSelectProps(), {
+        value: '__omo_base_preset__',
+      });
+      parentEditor.selectOption(parentEditor.getSelectProps(), {
+        value: 'nextBase',
+      });
+
+      // Prepare the other editor with only a model change.
+      modelEditor.selectOption(modelEditor.getSelectProps(), {
+        value: 'active',
+      });
+      modelEditor.selectOption(modelEditor.getSelectProps(), { value: 'edit' });
+      modelEditor.selectOption(modelEditor.getSelectProps(), {
+        value: 'orchestrator',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const modelSelect = modelEditor.getSelectProps();
+      if (!modelSelect) throw new Error('Expected model picker');
+      const modelOption = (
+        modelSelect.options as Array<{ value: string }>
+      ).find((option) => option.value === 'anthropic/claude-3.5-haiku');
+      if (!modelOption) throw new Error('Expected model option');
+      modelEditor.selectOption(modelSelect, modelOption);
+      const temperature = modelEditor.getPromptProps();
+      if (!temperature) throw new Error('Expected temperature prompt');
+      (temperature.onConfirm as (value: string) => void)('0.7');
+      const optionsPrompt = modelEditor.getPromptProps();
+      if (!optionsPrompt) throw new Error('Expected options prompt');
+      (optionsPrompt.onConfirm as (value: string) => void)('');
+
+      const saveParent = () =>
+        parentEditor.selectOption(parentEditor.getSelectProps(), {
+          value: '__omo_save__',
+        });
+      const saveModel = () =>
+        modelEditor.selectOption(modelEditor.getSelectProps(), {
+          value: '__omo_save__',
+        });
+      if (saveParentFirst) {
+        saveParent();
+        saveModel();
+      } else {
+        saveModel();
+        saveParent();
+      }
+
+      const saved = readUserConfigFile();
+      const active = (saved.presets as Record<string, Record<string, unknown>>)
+        .active;
+      expect(active.extends).toBe('nextBase');
+      const agents = active.agents as Record<string, Record<string, unknown>>;
+      expect(agents.orchestrator.model).toBe('anthropic/claude-3.5-haiku');
+      expect(agents.orchestrator.temperature).toBe(0.7);
+    }
+  });
+
   test('marks project presets as [project - read-only] and limits actions', () => {
     writeUserConfigFile({
       presets: {

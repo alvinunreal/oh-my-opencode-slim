@@ -6,7 +6,10 @@ import type {
   PresetDefinition,
   PresetInput,
 } from './schema';
-import { PresetAgentsSchema } from './schema';
+import {
+  hasMarketplaceActivationDirectives,
+  PresetAgentsSchema,
+} from './schema';
 
 /** Recursively merge JSON objects; arrays and scalar values are replaced. */
 export function deepMerge<T extends Record<string, unknown>>(
@@ -160,26 +163,32 @@ export function normalizePreset(input: PresetInput): PresetDefinition {
       if (typeof parent === 'string') {
         normalized.extends = parent;
       }
-      if (marketplace !== undefined) normalized.marketplace = marketplace;
+      if (marketplace !== undefined) {
+        normalized.marketplace = marketplace as MarketplaceActivation;
+      }
       return normalized;
     }
   }
 
   const record = input as Record<string, unknown>;
   const hasParent = typeof record.extends === 'string';
-  const { marketplace, ...flatEntries } = record;
-  const agentEntries = hasParent
-    ? Object.fromEntries(
-        Object.entries(flatEntries).filter(([name]) => name !== 'extends'),
-      )
-    : flatEntries;
+  const marketplace = record.marketplace;
+  const isMarketplaceActivation =
+    hasMarketplaceActivationDirectives(marketplace);
+  const agentEntries = Object.fromEntries(
+    Object.entries(record).filter(
+      ([name]) =>
+        !(name === 'extends' && hasParent) &&
+        !(name === 'marketplace' && isMarketplaceActivation),
+    ),
+  );
   const normalized: PresetDefinition = {
     agents: agentEntries as Preset,
   };
   if (hasParent) {
     normalized.extends = record.extends as string;
   }
-  if (marketplace !== undefined) {
+  if (isMarketplaceActivation) {
     normalized.marketplace = marketplace as MarketplaceActivation;
   }
   return normalized;

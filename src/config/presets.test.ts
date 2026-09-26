@@ -245,6 +245,62 @@ describe('preset inheritance', () => {
         },
       }),
     ).toThrow();
+    expect(() =>
+      parsePresets({
+        presets: {
+          invalid: { marketplace: { agents_add: ['owner/a', ' owner/a '] } },
+        },
+      }),
+    ).toThrow();
+    for (const id of ['owner', 'owner/package/extra', 'Owner/package']) {
+      expect(() =>
+        parsePresets({
+          presets: { invalid: { marketplace: { agents_add: [id] } } },
+        }),
+      ).toThrow();
+    }
+  });
+
+  test('preserves a flat marketplace-named custom agent, including empty overrides', () => {
+    const presets = parsePresets({
+      presets: {
+        model: { marketplace: { model: 'provider/model' } },
+        empty: { marketplace: {} },
+        inherited: {
+          extends: 'model',
+          marketplace: { temperature: 0.5 },
+        },
+      },
+    });
+
+    expect(resolvePreset('model', presets)).toEqual({
+      marketplace: { model: 'provider/model' },
+    });
+    expect(resolvePreset('empty', presets)).toEqual({ marketplace: {} });
+    expect(resolvePreset('inherited', presets)).toEqual({
+      marketplace: { model: 'provider/model', temperature: 0.5 },
+    });
+    expect(resolvePresetDefinition('inherited', presets).marketplace).toBe(
+      undefined,
+    );
+  });
+
+  test('keeps structured marketplace agent overrides separate from activation', () => {
+    const presets = parsePresets({
+      presets: {
+        custom: {
+          agents: { marketplace: { model: 'provider/model' } },
+          marketplace: { agents_add: ['owner/package'] },
+        },
+      },
+    });
+
+    expect(resolvePreset('custom', presets)).toEqual({
+      marketplace: { model: 'provider/model' },
+    });
+    expect(resolvePresetDefinition('custom', presets).marketplace).toEqual({
+      agents: ['owner/package'],
+    });
   });
 
   test('canonical agent aliases win field-by-field over legacy aliases', () => {

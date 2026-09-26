@@ -604,6 +604,18 @@ export function writePreset(
       if (options.mergeChangesFrom && isRecord(presets[name])) {
         const current = normalizePreset(presets[name] as PresetInput);
         const base = options.mergeChangesFrom;
+        const editorChangedExtends = normalized.extends !== base.extends;
+        const diskChangedExtends = current.extends !== base.extends;
+        if (
+          editorChangedExtends &&
+          diskChangedExtends &&
+          normalized.extends !== current.extends
+        ) {
+          throw new Error(`Preset "${name}" inheritance changed concurrently`);
+        }
+        if (!editorChangedExtends) {
+          normalized.extends = current.extends;
+        }
         const agents = { ...current.agents };
         const agentNames = new Set([
           ...Object.keys(base.agents),

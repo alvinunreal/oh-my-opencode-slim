@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { parse } from 'jsonc-parser';
 import type { PluginConfig } from '../config';
 import {
   buildPresetSummary,
@@ -157,10 +158,9 @@ describe('switchPresetOnDisk', () => {
 
     switchPresetOnDisk(tempDir, 'cheap', config);
 
-    const jsonText = fs
-      .readFileSync(configPath, 'utf-8')
-      .replace(/^\/\/[^\r\n]*\r?\n/, '');
-    const persisted = JSON.parse(jsonText) as {
+    const jsonText = fs.readFileSync(configPath, 'utf-8');
+    expect(jsonText).toContain('// User-selected preset should be updated');
+    const persisted = parse(jsonText) as {
       preset?: string;
       agents?: Record<string, unknown>;
     };
@@ -971,6 +971,50 @@ describe('writePreset', () => {
     expect(savedAgents.orchestrator).toEqual({
       model: 'anthropic/new',
     });
+  });
+
+  test('rejects conflicting concurrent parent changes without writing', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          child: {
+            extends: 'base',
+            agents: { orchestrator: { model: 'openai/old' } },
+            marketplace: { agents: ['team/a'] },
+          },
+        },
+      }),
+    );
+
+    const base = getEditablePreset(tempDir, 'child');
+    const changedOnDisk = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, unknown>>;
+    };
+    changedOnDisk.presets.child.extends = 'disk-parent';
+    fs.writeFileSync(configPath, JSON.stringify(changedOnDisk));
+
+    expect(
+      writePreset(
+        tempDir,
+        'child',
+        {
+          ...base,
+          extends: 'editor-parent',
+          agents: {
+            orchestrator: { model: 'anthropic/new' },
+          },
+        },
+        { mergeChangesFrom: base },
+      ),
+    ).toBe(false);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf-8'))).toEqual(
+      changedOnDisk,
+    );
   });
 
   test('serializes preset writes with concurrent config mutations', async () => {

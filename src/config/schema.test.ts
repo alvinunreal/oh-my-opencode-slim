@@ -94,6 +94,46 @@ describe('PluginConfigSchema preset syntax', () => {
     ).toBe(false);
   });
 
+  it('accepts marketplace activation IDs only in canonical owner/package form', () => {
+    expect(
+      MarketplaceActivationSchema.parse({ agents: [' owner/package '] }),
+    ).toEqual({ agents: ['owner/package'] });
+
+    for (const id of [
+      'owner',
+      'owner/package/extra',
+      'Owner/package',
+      'owner/name with spaces',
+    ]) {
+      expect(
+        MarketplaceActivationSchema.safeParse({ agents: [id] }).success,
+      ).toBe(false);
+    }
+
+    expect(
+      MarketplaceActivationSchema.safeParse({
+        agents: ['owner/package', ' owner/package '],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('does not accept mixed marketplace activation and agent override fields', () => {
+    for (const preset of [
+      {
+        marketplace: { agents_add: ['owner/package'], model: 'provider/model' },
+      },
+      {
+        extends: 'base',
+        marketplace: {
+          agents_remove: ['owner/package'],
+          temperature: 0.5,
+        },
+      },
+    ]) {
+      expect(PresetSchema.safeParse(preset).success).toBe(false);
+    }
+  });
+
   it('accepts legacy custom names that resemble metadata fields', () => {
     const result = PluginConfigSchema.safeParse({
       presets: {

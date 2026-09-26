@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse } from 'jsonc-parser';
 import { mergePresetMaps, resolvePresetDefinition } from '../config/presets';
 import {
   disableMarketplacePackage,
@@ -100,6 +101,81 @@ function resolveStoredPreset(
 }
 
 describe('marketplace activation persistence', () => {
+  for (const layer of ['user', 'project'] as const) {
+    for (const [overrideName, override] of [
+      ['with model', { model: 'openai/gpt-5' }],
+      ['empty override', {}],
+    ] as const) {
+      test(`preserves flat marketplace agent ${overrideName} in ${layer} config`, () => {
+        const fixture = setup();
+        try {
+          const configPath =
+            layer === 'user' ? fixture.userConfig : fixture.projectConfig;
+          writeFileSync(
+            configPath,
+            JSON.stringify({
+              preset: 'work',
+              presets: { work: { marketplace: override } },
+            }),
+          );
+          fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+          enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+          disableMarketplacePackage(fixture.project, PACKAGE_A);
+
+          const saved = JSON.parse(readFileSync(configPath, 'utf8'));
+          expect(saved.presets.work.agents.marketplace).toEqual(override);
+          expect(saved.presets.work.marketplace).toEqual({ agents_add: [] });
+          expect(
+            resolvePresetDefinition('work', saved.presets).agents.marketplace,
+          ).toEqual(override);
+        } finally {
+          fixture.cleanup();
+        }
+      });
+    }
+  }
+
+  test('retains user-inherited agents when a project marketplace agent is wrapped', () => {
+    const fixture = setup();
+    try {
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({
+          presets: { base: { oracle: { model: 'openai/gpt-5' } } },
+        }),
+      );
+      writeFileSync(
+        fixture.projectConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            work: {
+              extends: 'base',
+              marketplace: { model: 'openai/gpt-4.1' },
+            },
+          },
+        }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+
+      const saved = JSON.parse(readFileSync(fixture.projectConfig, 'utf8'));
+      expect(saved.presets.work).toMatchObject({
+        extends: 'base',
+        agents: { marketplace: { model: 'openai/gpt-4.1' } },
+        marketplace: { agents_add: [PACKAGE_A] },
+      });
+      expect(
+        resolveStoredPreset(fixture.userConfig, fixture.projectConfig, 'work')
+          .agents.oracle,
+      ).toEqual({ model: 'openai/gpt-5' });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test('updates JSONC while preserving comments and unrelated config keys', () => {
     const fixture = setup();
     try {
@@ -116,9 +192,7 @@ describe('marketplace activation persistence', () => {
       const written = fixture.userConfig.replace(/\.json$/, '.jsonc');
       const contents = readFileSync(written, 'utf8');
       expect(contents).toContain('// Keep this note.');
-      expect(
-        JSON.parse(contents.replace('// Keep this note.\n', '')),
-      ).toMatchObject({
+      expect(parse(contents)).toMatchObject({
         preset: 'work',
         presets: {
           work: {

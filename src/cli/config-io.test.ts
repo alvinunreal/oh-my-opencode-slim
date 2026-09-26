@@ -158,6 +158,79 @@ describe('config-io', () => {
     expect(readFileSync(`${path}.bak`, 'utf-8')).toContain('"preset": "old"');
   });
 
+  test('mutateJsonFile keeps nested field comments beside edited fields', () => {
+    const path = join(tmpDir, 'localized.jsonc');
+    writeFileSync(
+      path,
+      '{\n  "nested": {\n    // Keep by first\n    "first": 1, // first trailing\n    /* Keep by second */ "second": 2\n  },\n  "url": "https://example.com/a//b",\n}\n',
+    );
+
+    mutateJsonFile(path, (current) => {
+      (current.nested as Record<string, unknown>).first = 3;
+      return current;
+    });
+
+    const savedText = readFileSync(path, 'utf-8');
+    expect(savedText).toContain(
+      '// Keep by first\n    "first": 3, // first trailing',
+    );
+    expect(savedText).toContain('/* Keep by second */ "second": 2');
+    expect(savedText).toContain('"url": "https://example.com/a//b"');
+  });
+
+  test('mutateJsonFile adds and removes properties without relocating neighbor comments', () => {
+    const path = join(tmpDir, 'properties.jsonc');
+    writeFileSync(
+      path,
+      '{\n  // Preserve this comment\n  "neighbor": 1,\n  "removeMe": 2\n}\n',
+    );
+
+    mutateJsonFile(path, (current) => {
+      delete current.removeMe;
+      current.added = true;
+      return current;
+    });
+
+    const savedText = readFileSync(path, 'utf-8');
+    expect(savedText).toContain('// Preserve this comment\n  "neighbor": 1');
+    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+      neighbor: 1,
+      added: true,
+    });
+  });
+
+  test('mutateJsonFile preserves BOM, CRLF, and untouched JSONC bytes', () => {
+    const path = join(tmpDir, 'crlf.jsonc');
+    const original =
+      '\uFEFF{\r\n  // Keep this CRLF comment\r\n  "untouched": [1, 2],\r\n  "value": 1\r\n}\r\n';
+    writeFileSync(path, original);
+
+    mutateJsonFile(path, (current) => ({ ...current, value: 2 }));
+
+    const savedText = readFileSync(path, 'utf-8');
+    expect(savedText.startsWith('\uFEFF')).toBe(true);
+    expect(savedText).toContain('\r\n  // Keep this CRLF comment\r\n');
+    expect(savedText).toContain('"untouched": [1, 2]');
+    expect(savedText.replaceAll('\r\n', '')).not.toContain('\n');
+    expect(
+      JSON.parse(stripJsonComments(savedText.replace(/^\uFEFF/, ''))),
+    ).toEqual({
+      untouched: [1, 2],
+      value: 2,
+    });
+  });
+
+  test('mutateJsonFile is byte-identical and creates no backup for a no-op', () => {
+    const path = join(tmpDir, 'noop.jsonc');
+    const original = '{\n  // Keep exactly\n  "value": 1,\n}\n';
+    writeFileSync(path, original);
+
+    mutateJsonFile(path, (current) => current);
+
+    expect(readFileSync(path, 'utf-8')).toBe(original);
+    expect(existsSync(`${path}.bak`)).toBe(false);
+  });
+
   test('mutateJsonFile accepts BOM-prefixed JSON and keeps the BOM and keys', () => {
     const path = join(tmpDir, 'bom.json');
     writeFileSync(path, '\uFEFF{\n  "unrelated": true,\n  "value": 1\n}\n');
