@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createMarketplaceRegistryEntry,
+  createMarketplaceRegistryEntryV3,
+  validateMarketplaceRegistryEntry,
+  validateMarketplaceRegistryEntryV3,
+} from '../marketplace-contract/index';
+import {
   canonicalizeMarketplaceBundle,
   canonicalizeMarketplaceValue,
   compareMarketplaceCodeUnits,
@@ -135,6 +141,51 @@ describe('marketplace canonicalization', () => {
     expect(digestMarketplaceBundle(roundTrippedV2)).toBe(
       digestMarketplaceBundle(v2),
     );
+  });
+
+  test('preserves prompt whitespace through parsing, digesting, and entry validation', () => {
+    const prompt = '  first line\r\n    indented line\r\n';
+    const changedPrompt = `${prompt} `;
+    const v2Bundle = MarketplacePackageBundleV2Schema.parse({
+      ...v2VectorInput,
+      manifest: { ...v2VectorInput.manifest, prompt },
+    });
+    const changedV2Bundle = MarketplacePackageBundleV2Schema.parse({
+      ...v2VectorInput,
+      manifest: { ...v2VectorInput.manifest, prompt: changedPrompt },
+    });
+    const v3Bundle = MarketplacePackageBundleV3Schema.parse({
+      ...v3VectorInput,
+      manifest: { ...v3VectorInput.manifest, prompt },
+    });
+    const changedV3Bundle = MarketplacePackageBundleV3Schema.parse({
+      ...v3VectorInput,
+      manifest: { ...v3VectorInput.manifest, prompt: changedPrompt },
+    });
+
+    expect(v2Bundle.manifest.prompt).toBe(prompt);
+    expect(v3Bundle.manifest.prompt).toBe(prompt);
+    expect(digestMarketplaceBundle(v2Bundle)).not.toBe(
+      digestMarketplaceBundle(changedV2Bundle),
+    );
+    expect(digestMarketplaceBundle(v3Bundle)).not.toBe(
+      digestMarketplaceBundle(changedV3Bundle),
+    );
+
+    const entryV2 = createMarketplaceRegistryEntry(v2Bundle);
+    const entryV3 = createMarketplaceRegistryEntryV3(v3Bundle);
+    expect(() =>
+      validateMarketplaceRegistryEntry(entryV2, v2Bundle),
+    ).not.toThrow();
+    expect(() =>
+      validateMarketplaceRegistryEntryV3(entryV3, v3Bundle),
+    ).not.toThrow();
+    expect(() =>
+      validateMarketplaceRegistryEntry(entryV2, changedV2Bundle),
+    ).toThrow();
+    expect(() =>
+      validateMarketplaceRegistryEntryV3(entryV3, changedV3Bundle),
+    ).toThrow();
   });
 
   test('omits undefined object fields and stays stable through JSON round trips', () => {

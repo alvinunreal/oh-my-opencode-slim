@@ -36,6 +36,12 @@ export const MarketplaceBuiltinSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
 export type MarketplaceBuiltin = z.infer<typeof MarketplaceBuiltinSchema>;
 
 const BoundedTextSchema = (max: number) => z.string().trim().min(1).max(max);
+const MarketplacePromptSchema = z
+  .string()
+  .max(100_000)
+  .refine((prompt) => prompt.trim().length > 0, {
+    message: 'Prompt must contain non-whitespace content',
+  });
 const SingleLineTextSchema = (max: number) =>
   z
     .string()
@@ -170,7 +176,7 @@ const ManifestFields = {
     .string()
     .trim()
     .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'Expected a valid agent name'),
-  prompt: BoundedTextSchema(100_000),
+  prompt: MarketplacePromptSchema,
   skills: UniqueSingleLineStringArraySchema,
   mcps: UniqueSingleLineStringArraySchema,
   tools: z

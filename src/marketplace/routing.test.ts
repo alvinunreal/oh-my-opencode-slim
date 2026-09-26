@@ -65,4 +65,51 @@ describe('marketplace routing renderer', () => {
       '@routing-agent\n- Lane: Focused routing.\n- Role: A standalone routing agent.\n- Capabilities: Tools: read\n- Stats: Fast\n- **Delegate when:** The task is bounded.\n- **Avoid:** Architecture decisions',
     );
   });
+
+  test('includes v3 extension capabilities after the unchanged role block', () => {
+    const v3Extension: MarketplacePackageManifestV3 = {
+      ...manifest,
+      schemaVersion: 3,
+      routing: {
+        lane: 'Focused routing.',
+        stats: ['Fast', 'Bounded'],
+        delegateWhen: ['The task is bounded.'],
+        avoid: ['Architecture decisions'],
+      },
+      tools: ['read', 'grep'],
+      skills: ['skill-a'],
+      mcps: ['server-a'],
+      extends: { builtin: 'explorer', promptMode: 'append' },
+    };
+    const roleBlock = ROLE_ROUTING_BLOCKS.explorer.replaceAll(
+      '@explorer',
+      '@routing-agent',
+    );
+
+    expect(renderMarketplaceAutoDelegationBlock(v3Extension)).toBe(
+      `${roleBlock}\n\n- Lane: Focused routing.\n- Capabilities: Tools: read, grep; Skills: skill-a; MCPs: server-a\n- Stats: Fast • Bounded\n- **Delegate when:** The task is bounded.\n- **Avoid:** Architecture decisions`,
+    );
+  });
+
+  test('omits the v3 extension capability line when all capability lists are empty', () => {
+    const v3Extension: MarketplacePackageManifestV3 = {
+      ...manifest,
+      schemaVersion: 3,
+      routing: {
+        lane: 'Focused routing.',
+        stats: ['Fast'],
+        delegateWhen: ['The task is bounded.'],
+        avoid: ['Architecture decisions'],
+      },
+      extends: { builtin: 'explorer', promptMode: 'append' },
+    };
+    const roleBlock = ROLE_ROUTING_BLOCKS.explorer.replaceAll(
+      '@explorer',
+      '@routing-agent',
+    );
+
+    expect(renderMarketplaceAutoDelegationBlock(v3Extension)).toBe(
+      `${roleBlock}\n\n- Lane: Focused routing.\n- Stats: Fast\n- **Delegate when:** The task is bounded.\n- **Avoid:** Architecture decisions`,
+    );
+  });
 });

@@ -97,14 +97,6 @@ describe('agents-only marketplace manifest schemas', () => {
         schema: MarketplacePackageManifestV3Schema,
         value: commonV3,
       },
-      {
-        schema: MarketplaceAgentManifestSummaryV2Schema,
-        value: withoutPrompt(common),
-      },
-      {
-        schema: MarketplaceAgentManifestSummaryV3Schema,
-        value: withoutPrompt(commonV3),
-      },
     ];
     const invalidChanges = [
       { description: 'first\r\nsecond' },
@@ -171,6 +163,35 @@ describe('agents-only marketplace manifest schemas', () => {
         withoutPrompt(manifestV3),
       ).success,
     ).toBe(true);
+  });
+
+  test('preserves prompt bytes in V2/V3 and rejects whitespace-only prompts', () => {
+    const prompts = [
+      '  first line\r\n    indented line\r\n',
+      '\tstart\nend  \n',
+    ];
+    const variants = [
+      {
+        schema: MarketplacePackageManifestSchema,
+        value: common,
+      },
+      {
+        schema: MarketplacePackageManifestV3Schema,
+        value: commonV3,
+      },
+    ];
+
+    for (const prompt of prompts) {
+      for (const { schema, value } of variants) {
+        const parsed = schema.parse({ ...value, prompt });
+        expect(parsed.prompt).toBe(prompt);
+      }
+    }
+    for (const { schema, value } of variants) {
+      expect(schema.safeParse({ ...value, prompt: ' \t\r\n ' }).success).toBe(
+        false,
+      );
+    }
   });
 
   test('accepts standalone and single-builtin extension agents', () => {

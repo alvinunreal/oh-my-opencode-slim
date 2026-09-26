@@ -129,7 +129,10 @@ export const MarketplaceRegistryEntrySchema = z
       .strict(),
     summary: MarketplaceManifestSummarySchema,
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    validateRegistryEntryIdentity(entry, ctx);
+  });
 
 export const MarketplaceRegistryEntryV3Schema = z
   .object({
@@ -150,7 +153,38 @@ export const MarketplaceRegistryEntryV3Schema = z
       .strict(),
     summary: MarketplaceManifestSummaryV3Schema,
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    validateRegistryEntryIdentity(entry, ctx);
+  });
+
+function validateRegistryEntryIdentity(
+  entry: {
+    id: string;
+    version: string;
+    artifactPath: string;
+    summary: { id: string; version: string };
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (entry.artifactPath !== registryArtifactPath(entry.id, entry.version)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['artifactPath'],
+      message: `Artifact path must be ${registryArtifactPath(entry.id, entry.version)}`,
+    });
+  }
+  if (
+    entry.summary.id !== entry.id ||
+    entry.summary.version !== entry.version
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['summary'],
+      message: 'Summary identity must match the registry entry',
+    });
+  }
+}
 
 function validateRegistryEntries(
   entries: readonly {
@@ -173,23 +207,6 @@ function validateRegistryEntries(
       });
     }
     seen.add(key);
-    if (entry.artifactPath !== registryArtifactPath(entry.id, entry.version)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['entries', position, 'artifactPath'],
-        message: `Artifact path must be ${registryArtifactPath(entry.id, entry.version)}`,
-      });
-    }
-    if (
-      entry.summary.id !== entry.id ||
-      entry.summary.version !== entry.version
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['entries', position, 'summary'],
-        message: 'Summary identity must match the registry entry',
-      });
-    }
     const previous = entries[position - 1];
     if (
       previous &&

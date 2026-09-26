@@ -54,8 +54,11 @@ function renderV3ExtensionSuffix(
 ): string {
   return [
     `- Lane: ${manifest.routing.lane}`,
+    renderV3Capabilities(manifest),
     renderV3RoutingDetails(manifest),
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**

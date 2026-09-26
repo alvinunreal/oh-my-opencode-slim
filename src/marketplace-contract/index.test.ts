@@ -8,7 +8,9 @@ import {
   createMarketplaceRegistryIndexV3,
   MARKETPLACE_REGISTRY_SCHEMA_VERSION,
   type MarketplaceRegistryEntry,
+  MarketplaceRegistryEntrySchema,
   type MarketplaceRegistryEntryV3,
+  MarketplaceRegistryEntryV3Schema,
   MarketplaceRegistryIndexSchema,
   MarketplaceRegistryIndexV3Schema,
   parseMarketplaceRegistryIndex,
@@ -205,6 +207,67 @@ describe('marketplace contract routing export', () => {
     expect(entry.summary).not.toHaveProperty('prompt');
     expect(entry.digest.value).toMatch(/^[0-9a-f]{64}$/);
     expect(createMarketplaceRegistryIndex([entry]).entries).toEqual([entry]);
+  });
+
+  test('entry schemas validate artifact identity standalone and in indexes', () => {
+    const v2Entry = createMarketplaceRegistryEntry({ manifest });
+    const v3Entry = createMarketplaceRegistryEntryV3({
+      manifest: {
+        ...manifest,
+        schemaVersion: 3,
+        routing: {
+          lane: 'Contract lane.',
+          stats: ['Fast'],
+          delegateWhen: ['The contract task matches.'],
+          avoid: ['Unbounded work.'],
+        },
+      },
+    });
+    const cases = [
+      {
+        entry: v2Entry,
+        entrySchema: MarketplaceRegistryEntrySchema,
+        indexSchema: MarketplaceRegistryIndexSchema,
+        schemaVersion: MARKETPLACE_REGISTRY_SCHEMA_VERSION,
+      },
+      {
+        entry: v3Entry,
+        entrySchema: MarketplaceRegistryEntryV3Schema,
+        indexSchema: MarketplaceRegistryIndexV3Schema,
+        schemaVersion: MARKETPLACE_REGISTRY_SCHEMA_VERSION,
+      },
+    ];
+
+    for (const { entry, entrySchema, indexSchema, schemaVersion } of cases) {
+      expect(entrySchema.safeParse(entry).success).toBe(true);
+      expect(
+        indexSchema.safeParse({ schemaVersion, entries: [entry] }).success,
+      ).toBe(true);
+
+      const invalidEntries = [
+        {
+          ...entry,
+          artifactPath: 'artifacts/community/other/1.0.0.json',
+        },
+        {
+          ...entry,
+          summary: { ...entry.summary, id: 'community/other' },
+        },
+        {
+          ...entry,
+          summary: { ...entry.summary, version: '1.1.0' },
+        },
+      ];
+      for (const invalidEntry of invalidEntries) {
+        expect(entrySchema.safeParse(invalidEntry).success).toBe(false);
+        expect(
+          indexSchema.safeParse({
+            schemaVersion,
+            entries: [invalidEntry],
+          }).success,
+        ).toBe(false);
+      }
+    }
   });
 
   test('rejects duplicate and unsorted registry entries', () => {

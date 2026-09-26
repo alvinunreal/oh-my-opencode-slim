@@ -32,6 +32,12 @@ order is preserved. Primitive and string encoding follows ECMAScript
 outside the JSON data model (including undefined array elements, non-finite
 numbers, non-plain objects, accessors, symbol keys, and cycles) are rejected.
 
+The parsed manifest prompt is preserved exactly as a JavaScript string:
+it must contain non-whitespace content and be at most 100,000 characters, but
+leading indentation, trailing newlines, CRLF sequences, and other whitespace
+are not trimmed or normalized. Prompt whitespace is part of the canonical
+bundle and therefore changes its digest.
+
 The SHA-256 digest is over the UTF-8 bytes of that exact canonical text, with no
 BOM and no trailing newline. Unicode is not normalized: canonically equivalent
 but differently encoded strings remain distinct. For example, the canonical
