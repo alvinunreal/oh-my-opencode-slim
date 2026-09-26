@@ -408,6 +408,20 @@ export function getActiveSidebarAgentNames(
       names.add(agentName);
     }
   }
+  for (const [parentID, byAgent] of Object.entries(snapshot.reusableByAgent)) {
+    if (
+      root !== undefined &&
+      resolveTuiSnapshotRoot(snapshot, parentID) !== root
+    ) {
+      continue;
+    }
+    for (const [agentName, entries] of Object.entries(byAgent)) {
+      // The projection prepends running jobs ahead of terminal history.
+      if (entries[0]?.running === true) {
+        names.add(agentName);
+      }
+    }
+  }
   return names;
 }
 
@@ -493,7 +507,8 @@ export interface SidebarReusableTarget {
   taskID: string;
   alias: string;
   completedAt?: number;
-  lastUsedAt: number;
+  lastUsedAt?: number;
+  running?: true;
 }
 
 /**
@@ -522,10 +537,13 @@ export function getSidebarReusableTargets(
         const candidate: SidebarReusableTarget = {
           taskID: entry.taskID,
           alias: entry.alias,
+          ...(entry.running === true ? { running: true as const } : {}),
           ...(entry.completedAt !== undefined
             ? { completedAt: entry.completedAt }
             : {}),
-          lastUsedAt: entry.lastUsedAt,
+          ...(entry.lastUsedAt !== undefined
+            ? { lastUsedAt: entry.lastUsedAt }
+            : {}),
         };
         const existing = byTaskID.get(entry.taskID);
         if (
@@ -540,17 +558,20 @@ export function getSidebarReusableTargets(
     }
   }
   for (const entries of targets.values()) {
-    entries.sort(
-      (a, b) =>
+    entries.sort((a, b) => {
+      if (a.running !== b.running) return a.running ? -1 : 1;
+      if (a.running) return 0;
+      return (
         reusableRecency(b) - reusableRecency(a) ||
-        b.taskID.localeCompare(a.taskID),
-    );
+        b.taskID.localeCompare(a.taskID)
+      );
+    });
   }
   return targets;
 }
 
 function reusableRecency(target: SidebarReusableTarget): number {
-  return Math.max(target.lastUsedAt, target.completedAt ?? 0);
+  return Math.max(target.lastUsedAt ?? 0, target.completedAt ?? 0);
 }
 
 function compareSidebarTargets(
@@ -1238,11 +1259,13 @@ function renderSidebar(
                   agentName,
                   alias: target.alias,
                   model,
-                  status: 'reusable',
+                  status: target.running === true ? 'busy' : 'reusable',
                 }),
               );
             const allTargets = [...sessions, ...reusableTargets];
-            const history = reusableTargets.length > 0;
+            const history = reusableTargets.some(
+              (target) => target.status === 'reusable',
+            );
             const clickable =
               interaction?.navigate !== undefined && allTargets.length > 0;
             const expanded =

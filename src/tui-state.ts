@@ -17,10 +17,18 @@ export interface TuiSessionDetails {
   status?: 'busy' | 'retry';
 }
 
-/** Accessible reusable sessions per agent of a parent session. Written only
- * by the host-side board projection; the TUI never writes this section.
- * Empty on hosts without a board. */
-export type TuiReusableSession = ReusableSessionSelection;
+/** Host-board sidebar sessions. Running entries carry only stable identity;
+ * terminal entries retain their reusable destination metadata. */
+export type TuiReusableSession =
+  | (ReusableSessionSelection & { running?: never })
+  | {
+      taskID: string;
+      alias: string;
+      running: true;
+      terminalState?: never;
+      completedAt?: never;
+      lastUsedAt?: never;
+    };
 
 export interface TuiSnapshot {
   version: 1;
@@ -45,9 +53,8 @@ export interface TuiSnapshot {
   /** Per-active-session details (alias/model/status) for the sidebar. */
   sessionDetails: Record<string, TuiSessionDetails>;
   /**
-   * All accessible reusable sessions per agent, keyed by parent
-   * sessionID. Host-board state is process-local by design, so this
-   * section is never restored from a stale file.
+   * Accessible terminal and running sessions per agent, keyed by parent
+   * sessionID. The board owns this process-local projection.
    */
   reusableByAgent: Record<string, Record<string, TuiReusableSession[]>>;
 }
@@ -160,13 +167,23 @@ function parseReusableByAgent(
         const rec = item as {
           taskID?: unknown;
           alias?: unknown;
+          running?: unknown;
           terminalState?: unknown;
           completedAt?: unknown;
           lastUsedAt?: unknown;
         };
+        if (typeof rec.taskID !== 'string' || typeof rec.alias !== 'string') {
+          continue;
+        }
+        if (rec.running === true) {
+          sessions.push({
+            taskID: rec.taskID,
+            alias: rec.alias,
+            running: true,
+          });
+          continue;
+        }
         if (
-          typeof rec.taskID !== 'string' ||
-          typeof rec.alias !== 'string' ||
           (rec.terminalState !== 'completed' &&
             rec.terminalState !== 'error' &&
             rec.terminalState !== 'cancelled') ||

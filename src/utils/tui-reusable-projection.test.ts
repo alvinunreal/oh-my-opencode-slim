@@ -81,6 +81,68 @@ describe('tui-reusable-projection', () => {
     }
   });
 
+  test('running projection uses stable fields; heartbeat writes nothing', async () => {
+    const board = new BackgroundJobBoard();
+    const projection = createTuiReusableProjection({ board, projectDir });
+    try {
+      board.registerLaunch({
+        taskID: 'ses_live',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+        now: 100,
+      });
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-1']?.oracle,
+      ).toEqual([{ taskID: 'ses_live', alias: 'ora-1', running: true }]);
+
+      const fsModule = await import('node:fs');
+      let writes = 0;
+      const stateDir = path.dirname(getTuiStatePath(projectDir));
+      const writeSpy = spyOn(fsModule, 'writeFileSync').mockImplementation(
+        (...args: Parameters<typeof fs.writeFileSync>) => {
+          if (String(args[0]).startsWith(stateDir)) writes++;
+          return fs.writeFileSync(...args);
+        },
+      );
+      try {
+        board.updateStatus({ taskID: 'ses_live', state: 'running', now: 200 });
+        expect(writes).toBe(0);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    } finally {
+      projection.dispose();
+    }
+  });
+
+  test('unattributed and uncertain running jobs are not advertised', () => {
+    const board = new BackgroundJobBoard();
+    const projection = createTuiReusableProjection({ board, projectDir });
+    try {
+      board.registerLaunch({
+        taskID: 'ses_placeholder',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+        provisional: true,
+      });
+      board.registerLaunch({
+        taskID: 'ses_uncertain',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      board.updateStatus({
+        taskID: 'ses_uncertain',
+        state: 'running',
+        statusUncertain: true,
+      });
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-1'],
+      ).toBeUndefined();
+    } finally {
+      projection.dispose();
+    }
+  });
+
   test('board mutation projects the latest reconciled session into the snapshot', () => {
     const board = new BackgroundJobBoard();
     const projection = createTuiReusableProjection({ board, projectDir });
@@ -154,21 +216,25 @@ describe('tui-reusable-projection', () => {
       seedReconciled(board, 'ses_1');
       const statePath = getTuiStatePath(projectDir);
 
-      // A mutation that does not change the derived section (a new
-      // running job, not yet reconciled) must not rewrite the file.
+      // Heartbeats change board timestamps, not the stable sidebar section.
+      board.registerLaunch({
+        taskID: 'ses_running_other',
+        parentSessionID: 'parent-2',
+        agent: 'fixer',
+        now: 500,
+      });
       let writes = 0;
       const writeSpy = spyOn(fsModule, 'writeFileSync').mockImplementation(
         (...args: Parameters<typeof fs.writeFileSync>) => {
-          if (String(args[0]) === statePath) writes += 1;
+          if (String(args[0]).startsWith(path.dirname(statePath))) writes += 1;
           return fs.writeFileSync(...args);
         },
       );
       try {
-        board.registerLaunch({
+        board.updateStatus({
           taskID: 'ses_running_other',
-          parentSessionID: 'parent-2',
-          agent: 'fixer',
-          now: 500,
+          state: 'running',
+          now: 600,
         });
         expect(writes).toBe(0);
       } finally {

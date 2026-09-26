@@ -494,6 +494,28 @@ describe('tui-state persistence', () => {
     ]);
   });
 
+  test('parseSnapshot accepts stable running entries without terminal fields', () => {
+    const filePath = getTuiStatePath(tempDir);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        reusableByAgent: {
+          'parent-1': {
+            oracle: [
+              { taskID: 'ses_live', alias: 'ora-1', running: true },
+              { taskID: 'ses_bad', alias: 'ora-2', running: false },
+            ],
+          },
+        },
+      }),
+    );
+    expect(
+      readTuiSnapshot(tempDir).reusableByAgent['parent-1']?.oracle,
+    ).toEqual([{ taskID: 'ses_live', alias: 'ora-1', running: true }]);
+  });
+
   test('parseSnapshot drops malformed reusableByAgent entries', () => {
     const filePath = getTuiStatePath(tempDir);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

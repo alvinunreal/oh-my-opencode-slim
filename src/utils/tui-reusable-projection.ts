@@ -1,8 +1,5 @@
-import { updateSnapshot } from '../tui-state';
-import type {
-  BackgroundJobBoard,
-  ReusableSessionSelection,
-} from './background-job-board';
+import { type TuiReusableSession, updateSnapshot } from '../tui-state';
+import type { BackgroundJobBoard } from './background-job-board';
 
 /**
  * Board → tui-state projection for the sidebar's reusable dot (#1197
@@ -38,12 +35,23 @@ export function createTuiReusableProjection(input: {
   const project = (): void => {
     if (disposed) return;
     updateSnapshot(projectDir, (snapshot) => {
-      const next: Record<
-        string,
-        Record<string, ReusableSessionSelection[]>
-      > = {};
+      const next: Record<string, Record<string, TuiReusableSession[]>> = {};
       for (const [parent, byAgent] of board.sidebarHistoryByParentAgent()) {
         next[parent] = Object.fromEntries(byAgent);
+      }
+      for (const job of board.list()) {
+        if (job.state !== 'running' || job.provisional || job.statusUncertain) {
+          continue;
+        }
+        const byAgent = next[job.parentSessionID] ?? {};
+        const sessions = byAgent[job.agent] ?? [];
+        sessions.unshift({
+          taskID: job.taskID,
+          alias: job.alias,
+          running: true,
+        });
+        byAgent[job.agent] = sessions;
+        next[job.parentSessionID] = byAgent;
       }
       snapshot.reusableByAgent = next;
     });
