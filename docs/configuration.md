@@ -136,9 +136,15 @@ written to the user config file; reload OpenCode for it to take effect. See
 | `agents.<customAgent>.prompt` | string | - | Full execution prompt for a custom agent |
 | `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
 | `agents.<agent>.permission` | object \| string | - | Tool-level permission rules enforced by the SDK. See [Agent Permissions](#agent-permissions) |
+| `agents.<agent>.mcps` | string[] | - | Plugin MCP allow-list (`"*"`, `"!item"`, explicit list); this is plugin configuration, not a host agent `mcps` field |
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
 | `agents.<agent>.color` | string | - | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `agents.<agent>.description` | string | generated | Description shown to OpenCode and the orchestrator; defaults to `Custom subagent '<name>'` for custom agents |
+
+The plugin's `agents.<agent>.mcps` setting controls which configured plugin MCP
+servers its policy allows. It is not a host-native `agent.mcps` property and
+does not replace host permission rules: an explicit host permission denial for
+an MCP tool remains authoritative.
 | `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.env` | object | `{}` | Extra environment variables for the ACP subprocess See [ACP-connected agents](#acp-connected-agents). |

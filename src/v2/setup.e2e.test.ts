@@ -549,7 +549,9 @@ describe('createV2Setup e2e', () => {
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({
         companion: { enabled: false },
-        agents: { explorer: { displayName: 'Scout' } },
+        agents: {
+          explorer: { displayName: 'Scout', mcps: ['context7'] },
+        },
       }),
     );
     const { ctx } = makeMockV2Context(projectDir);
@@ -557,13 +559,17 @@ describe('createV2Setup e2e', () => {
     const visibleRules = [
       { action: 'skill', resource: '*', effect: 'allow' },
       { action: 'skill', resource: 'review-tools', effect: 'deny' },
+      { action: 'context7_*', resource: '*', effect: 'deny' },
+    ];
+    const canonicalRules = [
+      { action: 'context7_*', resource: '*', effect: 'allow' },
     ];
     const nativeAgents: Record<string, Record<string, unknown>> = {
       explorer: {
         id: 'explorer',
         mode: 'subagent',
         model: { providerID: 'canonical', id: 'canonical-model' },
-        permissions: [],
+        permissions: canonicalRules,
       },
       Scout: {
         id: 'Scout',
@@ -613,6 +619,73 @@ describe('createV2Setup e2e', () => {
       expect(canonical?.permissions).not.toEqual(
         expect.arrayContaining(visibleRules),
       );
+      const visibleMcpRules = (
+        (visible?.permissions ?? []) as Array<Record<string, unknown>>
+      ).filter((rule) => rule.action === 'context7_*');
+      const canonicalMcpRules = (
+        (canonical?.permissions ?? []) as Array<Record<string, unknown>>
+      ).filter((rule) => rule.action === 'context7_*');
+      expect(visibleMcpRules.at(-1)?.effect).toBe('deny');
+      expect(canonicalMcpRules.at(-1)?.effect).toBe('allow');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('v2 defaults to the visible orchestrator and keeps canonical hidden', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        agents: { orchestrator: { displayName: 'Lead' } },
+      }),
+    );
+    const { ctx } = makeMockV2Context(projectDir);
+    const registered = new Map<string, Record<string, unknown>>();
+    let defaultAgent: string | undefined;
+    const nativeAgents: Record<string, Record<string, unknown>> = {
+      orchestrator: {
+        id: 'orchestrator',
+        mode: 'primary',
+        permissions: [],
+      },
+      Lead: {
+        id: 'Lead',
+        mode: 'primary',
+        permissions: [],
+      },
+    };
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+    };
+    agent.transform = async (callback) => {
+      callback({
+        list: () => Object.keys(nativeAgents).map((id) => ({ id })),
+        get: (id: string) => nativeAgents[id],
+        default: (id: string) => {
+          defaultAgent = id;
+        },
+        update: (
+          id: string,
+          project: (draft: Record<string, unknown>) => void,
+        ) => {
+          const draft = { ...nativeAgents[id] };
+          project(draft);
+          registered.set(id, draft);
+        },
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(defaultAgent).toBe('Lead');
+      expect(registered.get('orchestrator')?.hidden).toBe(true);
+      expect(registered.get('Lead')?.hidden).toBe(false);
     } finally {
       await cleanup();
     }

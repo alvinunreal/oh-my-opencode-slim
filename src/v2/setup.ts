@@ -1965,7 +1965,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             // Make orchestrator the default primary agent.
             if (resolvedAgents.orchestrator) {
               try {
-                draft.default('orchestrator');
+                draft.default(
+                  registry.identities.orchestrator ?? 'orchestrator',
+                );
               } catch {
                 /* default() optional */
               }

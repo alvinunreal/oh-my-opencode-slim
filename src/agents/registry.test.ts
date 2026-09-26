@@ -170,6 +170,42 @@ describe('finalized existing-agent registry', () => {
     ]);
   });
 
+  test('orchestrator inheritance follows the finalized visible model while canonical stays independently callable', () => {
+    const runtime = runtimeFor({
+      presets: {
+        runtime: {
+          agents: { orchestrator: { model: 'preset/canonical' } },
+        },
+      },
+      agents: {
+        orchestrator: { displayName: 'lead', model: 'plugin/canonical' },
+        explorer: { inheritModelFrom: 'orchestrator' },
+      },
+    });
+    runtime.setRuntimePreset('runtime');
+    const registry = build(runtime, {
+      agent: {
+        orchestrator: { model: 'host/canonical' },
+        lead: { model: 'host/visible' },
+      },
+    });
+
+    expect(registry.finalAgentConfig.orchestrator).toMatchObject({
+      model: 'preset/canonical',
+      hidden: true,
+    });
+    expect(registry.finalAgentConfig.lead).toMatchObject({
+      model: 'host/visible',
+    });
+    expect(registry.finalAgentConfig.explorer).toMatchObject({
+      model: 'host/visible',
+    });
+    expect(registry.effectiveStartupModels.orchestrator?.model).toBe(
+      'preset/canonical',
+    );
+    expect(registry.effectiveStartupModels.lead?.model).toBe('host/visible');
+  });
+
   test('keeps council host prompt exception and legacy/display aliases in parity', () => {
     const runtime = runtimeFor({
       council: CouncilConfigSchema.parse({

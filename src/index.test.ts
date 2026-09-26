@@ -2211,6 +2211,40 @@ describe('plugin config model inheritance', () => {
     }
   });
 
+  test('visible host MCP permission denial overrides canonical allow', async () => {
+    const hooks = await loadConfiguredPlugin({
+      agents: {
+        orchestrator: { displayName: 'EngineeringLead', mcps: ['context7'] },
+      },
+    });
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        orchestrator: { permission: { 'context7_*': 'allow' } },
+        EngineeringLead: { permission: { 'context7_*': 'deny' } },
+      },
+    };
+
+    try {
+      await hooks.config?.(hostConfig);
+      const agents = hostConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+      expect(
+        ((agents.orchestrator?.permission ?? {}) as Record<string, unknown>)[
+          'context7_*'
+        ],
+      ).toBe('allow');
+      expect(
+        ((agents.EngineeringLead?.permission ?? {}) as Record<string, unknown>)[
+          'context7_*'
+        ],
+      ).toBe('deny');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('repeated config hooks reproject the first owned registry snapshot', async () => {
     const hooks = await loadConfiguredPlugin({
       agents: { explorer: { model: ['plugin/first', 'plugin/next'] } },
