@@ -1,0 +1,36 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`specialist role definitions matches golden factory prompts and descriptions 1`] = `
+[
+  {
+    "description": "Fast codebase search and pattern matching. Use for finding files, locating code patterns, and answering 'where is X?' questions.",
+    "name": "explorer",
+    "promptSha256": "657724c5b0702192c525270046ea67fe6e7ba9627186a0f155661aba04820788",
+  },
+  {
+    "description": "External documentation and library research. Use for official docs lookup, GitHub examples, and understanding library internals.",
+    "name": "librarian",
+    "promptSha256": "3f91bd61566c33dcfac8bd3a60c8aa3d19badf8ad0815f2d49a072f97faecaa5",
+  },
+  {
+    "description": "Strategic technical advisor. Use for architecture decisions, complex debugging, code review, simplification, and engineering guidance.",
+    "name": "oracle",
+    "promptSha256": "1189ff70ac4fea4fe380ac68a93b5f0f3e8ea0d639737b34241b920be74cc119",
+  },
+  {
+    "description": "UI/UX design, review, and implementation. Use for styling, responsive design, component architecture and visual polish.",
+    "name": "designer",
+    "promptSha256": "e2667d9f6771ece1ff74ae697179e7824169baaf4065b43a9c065b8269309aa3",
+  },
+  {
+    "description": "Fast implementation specialist. Receives complete context and task spec, executes code changes efficiently.",
+    "name": "fixer",
+    "promptSha256": "03beea3b18b70d4ca86601b9850dd35a69fbe359d772d2baafe5c81851c10c22",
+  },
+  {
+    "description": "Visual analysis. Use for interpreting images, screenshots, PDFs, and diagrams - extracts structured observations without loading raw files into main context. Requires a vision-capable model.",
+    "name": "observer",
+    "promptSha256": "f227ecbf75d8a8ca5fdfcad94746bec754c6f3d639707bd0255e7277fe225788",
+  },
+]
+`;

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
@@ -19,6 +20,21 @@ const FACTORIES = {
 } as const;
 
 describe('specialist role definitions', () => {
+  test('matches golden factory prompts and descriptions', () => {
+    const outputs = SPECIALIST_ROLES.map((role) => {
+      const agent = FACTORIES[role]('test/model');
+      return {
+        name: agent.name,
+        description: agent.description,
+        promptSha256: createHash('sha256')
+          .update(agent.config.prompt)
+          .digest('hex'),
+      };
+    });
+
+    expect(outputs).toMatchSnapshot();
+  });
+
   test('preserve baseline factory definitions', () => {
     expect(Object.keys(ROLE_DEFINITIONS)).toEqual([...SPECIALIST_ROLES]);
 
