@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
+import sidebarFrameGolden from './sidebar-frame-golden.json';
 import {
   applyRemoteAgentModels,
   compareAliasNumeric,
@@ -435,11 +437,10 @@ describe('tui sidebar agents', () => {
     expect([...activeAgents]).toEqual(['fixer', 'oracle']);
   });
 
-  test('renders a stable blank column or deterministic braille frame', () => {
-    expect(getSidebarActivityIndicator(false, 0)).toBe(' ');
-    expect(getSidebarActivityIndicator(true, 0)).toBe('⠋');
-    expect(getSidebarActivityIndicator(true, 100)).toBe('⠙');
-    expect(getSidebarActivityIndicator(true, 1_000)).toBe('⠋');
+  test('renders a deterministic braille frame for active rows', () => {
+    expect(getSidebarActivityIndicator(0)).toBe('⠋');
+    expect(getSidebarActivityIndicator(100)).toBe('⠙');
+    expect(getSidebarActivityIndicator(1_000)).toBe('⠋');
   });
 
   test('keeps compact agent rows single-line with truncated right-aligned model IDs', async () => {
@@ -2409,6 +2410,101 @@ describe('clickable sidebar sessions', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+  }
+
+  for (const host of HOSTS) {
+    test(`sidebar frame text and colors remain byte-identical (${host})`, async () => {
+      const hashes: Record<string, string> = {};
+      for (const compactSidebar of [false, true]) {
+        for (const state of ['active', 'retry', 'history', 'idle'] as const) {
+          for (const disclosure of ['one', 'closed', 'open'] as const) {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-frame-'));
+            const projectDir = path.join(root, 'project');
+            fs.mkdirSync(path.join(projectDir, '.opencode'), {
+              recursive: true,
+            });
+            fs.writeFileSync(
+              path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+              JSON.stringify({ compactSidebar }),
+            );
+            const restoreDataHome = withIsolatedDataHome(root);
+            let setup: Awaited<ReturnType<typeof testRender>> | undefined;
+            let mounted:
+              | Awaited<ReturnType<typeof mountClickableSidebar>>
+              | undefined;
+            try {
+              updateSnapshot(projectDir, (snapshot) => {
+                snapshot.agentModels = { oracle: 'openai/gpt-6' };
+                const count = disclosure === 'one' ? 1 : 2;
+                if (state === 'history') {
+                  snapshot.reusableByAgent['conv-1'] = {
+                    oracle: Array.from({ length: count }, (_, index) => ({
+                      taskID: `ses_${index + 1}`,
+                      alias: `ora-${index + 1}`,
+                      terminalState: 'completed',
+                      lastUsedAt: 100 - index,
+                    })),
+                  };
+                } else if (state !== 'idle') {
+                  for (let index = 1; index <= count; index++) {
+                    const id = `ses_${index}`;
+                    snapshot.activeSessions[id] = 'oracle';
+                    snapshot.sessionParents[id] = 'conv-1';
+                    snapshot.sessionDetails[id] = {
+                      alias: `ora-${index}`,
+                      status: state === 'retry' ? 'retry' : 'busy',
+                    };
+                  }
+                }
+              });
+              mounted = await mountClickableSidebar({
+                host,
+                projectDir,
+                sessionID: 'conv-1',
+                navigate: () => {},
+              });
+              setup = await testRender(
+                () => mounted?.slotPlugin?.slots.sidebar_content() as never,
+                { width: 60, height: 18 },
+              );
+              await setup.renderOnce();
+              if (disclosure === 'open' && state !== 'idle') {
+                const lines = setup.captureCharFrame().split('\n');
+                const row = lines.findIndex((line) => line.includes('oracle'));
+                await setup.mockMouse.click(
+                  lines[row].indexOf('oracle') + 1,
+                  row,
+                );
+                await setup.renderOnce();
+              }
+              const normalize = (value: string) =>
+                value.replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g, '⠋');
+              const frame = normalize(setup.captureCharFrame());
+              const spans = setup
+                .captureSpans()
+                .lines.map((line) =>
+                  line.spans.map((span) => [
+                    normalize(span.text),
+                    span.fg.toInts(),
+                    span.bg.toInts(),
+                  ]),
+                );
+              const key = `${compactSidebar ? 'compact' : 'full'}/${state}/${disclosure}`;
+              hashes[key] = createHash('sha256')
+                .update(JSON.stringify({ frame, spans }))
+                .digest('hex');
+            } finally {
+              setup?.renderer.destroy();
+              for (const dispose of mounted?.disposers ?? []) dispose();
+              restoreDataHome();
+              fs.rmSync(root, { recursive: true, force: true });
+            }
+          }
+        }
+      }
+      // Baseline captured before F6 from both mounted host implementations.
+      expect(hashes).toEqual(sidebarFrameGolden[host]);
+    }, 20_000);
   }
 });
 

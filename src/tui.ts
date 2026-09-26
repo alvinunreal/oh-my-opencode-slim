@@ -682,11 +682,7 @@ export function makeRouteNavigator(
   };
 }
 
-export function getSidebarActivityIndicator(
-  active: boolean,
-  now = Date.now(),
-): string {
-  if (!active) return ' ';
+export function getSidebarActivityIndicator(now = Date.now()): string {
   const frame = Math.floor(now / ACTIVITY_FRAME_MS) % ACTIVITY_FRAMES.length;
   return ACTIVITY_FRAMES[frame];
 }
@@ -884,25 +880,59 @@ function statusDot(
       width: 2,
     },
     active
-      ? [() => `${getSidebarActivityIndicator(true, now())} `]
+      ? [() => `${getSidebarActivityIndicator(now())} `]
       : [hasHistory ? '✦ ' : `${STATUS_DOT_GLYPH} `],
   );
 }
 
-function agentRow(
-  label: string,
-  model: string,
-  variant: string | undefined,
-  active: boolean,
-  now: () => number,
-  theme: AgentRowTheme,
-  sessionCount?: number,
-  expanded = false,
-  onClick?: () => void,
-  hoverBackground?: unknown,
-  hasSelectedText?: () => boolean,
-  hasHistory?: boolean,
-): JSX.Element {
+interface AgentRowOptions {
+  label: string;
+  model: string;
+  variant?: string;
+  active: boolean;
+  now: () => number;
+  theme: AgentRowTheme;
+  sessionCount?: number;
+  expanded: boolean;
+  onClick?: () => void;
+  hoverBackground?: unknown;
+  hasSelectedText?: () => boolean;
+  hasHistory: boolean;
+}
+
+function agentHeaderCells({
+  label,
+  active,
+  now,
+  theme,
+  sessionCount,
+  expanded,
+  hasHistory,
+}: AgentRowOptions): JSX.Element[] {
+  return [
+    statusDot(active, hasHistory, now, theme),
+    text(
+      {
+        fg: theme.textMuted,
+        wrapMode: 'none',
+        truncate: true,
+        flexShrink: 1,
+      },
+      [label],
+    ),
+    ...(sessionCount !== undefined && sessionCount > 1
+      ? [
+          text({ fg: theme.textMuted, wrapMode: 'none', flexShrink: 0 }, [
+            ` ${expanded ? '▾' : '▸'}${sessionCount}`,
+          ]),
+        ]
+      : []),
+  ];
+}
+
+function agentRow(options: AgentRowOptions): JSX.Element {
+  const { model, variant, theme, onClick, hoverBackground, hasSelectedText } =
+    options;
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
 
@@ -935,25 +965,7 @@ function agentRow(
       flexDirection: 'row',
       shouldFill: true,
     },
-    [
-      statusDot(active, hasHistory ?? false, now, theme),
-      text(
-        {
-          fg: theme.textMuted,
-          wrapMode: 'none',
-          truncate: true,
-          flexShrink: 1,
-        },
-        [label],
-      ),
-      ...(sessionCount !== undefined && sessionCount > 1
-        ? [
-            text({ fg: theme.textMuted, wrapMode: 'none', flexShrink: 0 }, [
-              ` ${expanded ? '▾' : '▸'}${sessionCount}`,
-            ]),
-          ]
-        : []),
-    ],
+    agentHeaderCells(options),
   );
   decorateInteractiveRow(header, {
     hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
@@ -972,20 +984,8 @@ function agentRow(
   );
 }
 
-function compactAgentRow(
-  label: string,
-  model: string,
-  _variant: string | undefined,
-  active: boolean,
-  now: () => number,
-  theme: AgentRowTheme,
-  sessionCount?: number,
-  expanded = false,
-  onClick?: () => void,
-  hoverBackground?: unknown,
-  hasSelectedText?: () => boolean,
-  hasHistory?: boolean,
-): JSX.Element {
+function compactAgentRow(options: AgentRowOptions): JSX.Element {
+  const { model, theme, onClick, hoverBackground, hasSelectedText } = options;
   const modelName = splitSidebarModelId(model).model;
   const row = box(
     {
@@ -1002,31 +1002,7 @@ function compactAgentRow(
           flexDirection: 'row',
           shouldFill: false,
         },
-        [
-          statusDot(active, hasHistory ?? false, now, theme),
-          text(
-            {
-              fg: theme.textMuted,
-              wrapMode: 'none',
-              truncate: true,
-              flexShrink: 1,
-            },
-            [label],
-          ),
-          ...(sessionCount !== undefined && sessionCount > 1
-            ? [
-                text(
-                  {
-                    fg: theme.textMuted,
-                    wrapMode: 'none',
-                    flexShrink: 0,
-                  },
-                  [` ${expanded ? '▾' : '▸'}${sessionCount}`],
-                ),
-              ]
-            : []),
-          box({ flexGrow: 1, shouldFill: false }),
-        ],
+        [...agentHeaderCells(options), box({ flexGrow: 1, shouldFill: false })],
       ),
       box({ flexDirection: 'row', flexGrow: 1, shouldFill: false }),
       text(
@@ -1084,7 +1060,7 @@ function sessionTargetRow(
         [
           reusable
             ? `${STATUS_DOT_GLYPH} `
-            : () => `${getSidebarActivityIndicator(true, now())} `,
+            : () => `${getSidebarActivityIndicator(now())} `,
         ],
       ),
       text(
@@ -1281,35 +1257,23 @@ function renderSidebar(
                   }
                 }
               : undefined;
+            const rowOptions: AgentRowOptions = {
+              label: agentName,
+              model,
+              variant,
+              active,
+              now,
+              theme,
+              sessionCount: clickable ? allTargets.length : undefined,
+              expanded,
+              onClick: onAgentClick,
+              hoverBackground,
+              hasSelectedText: interaction?.hasSelectedText,
+              hasHistory: !active && history,
+            };
             const agentRowEl = compactSidebar
-              ? compactAgentRow(
-                  agentName,
-                  model,
-                  variant,
-                  active,
-                  now,
-                  theme,
-                  clickable ? allTargets.length : undefined,
-                  expanded,
-                  onAgentClick,
-                  hoverBackground,
-                  interaction?.hasSelectedText,
-                  !active && history,
-                )
-              : agentRow(
-                  agentName,
-                  model,
-                  variant,
-                  active,
-                  now,
-                  theme,
-                  clickable ? allTargets.length : undefined,
-                  expanded,
-                  onAgentClick,
-                  hoverBackground,
-                  interaction?.hasSelectedText,
-                  !active && history,
-                );
+              ? compactAgentRow(rowOptions)
+              : agentRow(rowOptions);
             if (!expanded) return [agentRowEl];
             return [
               agentRowEl,
