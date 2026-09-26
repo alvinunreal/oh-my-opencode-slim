@@ -827,7 +827,7 @@ export class MarketplaceStore {
               try {
                 if (verifySelectedPackage()) removeTree(backupPath);
               } catch (error) {
-                if (!(error instanceof MarketplaceIntegrityError)) throw error;
+                if (!isPackageReadFailure(error)) throw error;
               }
               continue;
             }
@@ -841,7 +841,7 @@ export class MarketplaceStore {
             try {
               this.loadLockedPackage(lockfile, id);
             } catch (error) {
-              if (error instanceof MarketplaceIntegrityError) continue;
+              if (isPackageReadFailure(error)) continue;
               throw error;
             }
             removeTree(backupPath);
@@ -878,7 +878,7 @@ export class MarketplaceStore {
           try {
             this.loadLockedPackage(lockfile, id);
           } catch (error) {
-            if (error instanceof MarketplaceIntegrityError) continue;
+            if (isPackageReadFailure(error)) continue;
             throw error;
           }
           removeTree(quarantinePath);

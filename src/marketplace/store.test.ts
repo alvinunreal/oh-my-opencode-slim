@@ -811,6 +811,85 @@ describe('MarketplaceStore', () => {
     },
   );
 
+  test.each(['older-repair', 'selected-repair', 'removal'] as const)(
+    'keeps %s recovery data while selected package is unreadable and permits recovery',
+    (quarantineKind) => {
+      const root = tempRoot();
+      const recoveryBytes = Buffer.from('preserved recovery package bytes');
+      try {
+        const store = createStore({ rootDir: root });
+        store.install(bundle('1.0.0'));
+        store.update(bundle('2.0.0'));
+        store.install(
+          bundle('1.0.0', {
+            id: 'community/other',
+            agentName: 'other',
+          }),
+        );
+        const selectedManifest = join(
+          store.paths.packagesDir,
+          'community',
+          'example',
+          '2.0.0',
+          'package.json',
+        );
+        rmSync(selectedManifest);
+        mkdirSync(selectedManifest);
+
+        let recoveryPath: string;
+        if (quarantineKind === 'removal') {
+          recoveryPath = join(
+            store.paths.stagingDir,
+            'removed',
+            'community',
+            'example',
+            'interrupted-remove',
+            'package-copy',
+          );
+        } else {
+          recoveryPath = join(
+            store.paths.stagingDir,
+            'repair',
+            'community',
+            'example',
+            quarantineKind === 'older-repair' ? '1.0.0' : '2.0.0',
+            'interrupted-repair',
+          );
+        }
+        mkdirSync(recoveryPath, { recursive: true });
+        writeFileSync(join(recoveryPath, 'package.json'), recoveryBytes);
+
+        expect(() => store.show('community/example')).toThrow(
+          expect.objectContaining({ code: 'EISDIR' }),
+        );
+        const unrelated = store.loadSelected(['community/other']);
+        expect(unrelated.errors.size).toBe(0);
+        expect(unrelated.packages.get('community/other')?.manifest.id).toBe(
+          'community/other',
+        );
+        expect(readFileSync(join(recoveryPath, 'package.json'))).toEqual(
+          recoveryBytes,
+        );
+
+        if (quarantineKind === 'removal') {
+          store.remove('community/example');
+          expect(
+            store.getLockfile().packages['community/example'],
+          ).toBeUndefined();
+          store.show('community/other');
+        } else {
+          store.install(bundle('2.0.0'));
+          expect(store.show('community/example').manifest.version).toBe(
+            '2.0.0',
+          );
+        }
+        expect(existsSync(recoveryPath)).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   test('preserves both copies when a published repair fails lockfile verification', () => {
     const root = tempRoot();
     try {
