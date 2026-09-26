@@ -628,6 +628,76 @@ describe('MarketplaceStore', () => {
     }
   });
 
+  test.each(['corrupt', 'missing', 'unreadable'] as const)(
+    'preserves older version bytes when committed selected version is %s',
+    (damage) => {
+      const root = tempRoot();
+      try {
+        const store = createStore({ rootDir: root });
+        const v1 = store.install(bundle('1.0.0'));
+        const oldPackageBytes = readFileSync(join(v1.path, 'package.json'));
+        const oldSidecarBytes = readFileSync(join(v1.path, 'sha256'));
+        const v2 = store.update(bundle('2.0.0'));
+
+        // Recreate the old version as an interrupted post-commit cleanup
+        // orphan, matching the state reconciliation must safely handle.
+        mkdirSync(v1.path, { recursive: true });
+        writeFileSync(join(v1.path, 'package.json'), oldPackageBytes);
+        writeFileSync(join(v1.path, 'sha256'), oldSidecarBytes);
+
+        if (damage === 'corrupt') {
+          writeFileSync(join(v2.path, 'package.json'), '{corrupt selected');
+        } else if (damage === 'missing') {
+          rmSync(v2.path, { recursive: true, force: true });
+        } else {
+          const selectedManifest = join(v2.path, 'package.json');
+          rmSync(selectedManifest);
+          mkdirSync(selectedManifest);
+        }
+
+        let loadError: unknown;
+        try {
+          store.show('community/example');
+        } catch (error) {
+          loadError = error;
+        }
+        expect(loadError).toBeDefined();
+        if (damage === 'unreadable') {
+          expect((loadError as NodeJS.ErrnoException).code).toBe('EISDIR');
+        } else {
+          expect(loadError).toBeInstanceOf(MarketplaceIntegrityError);
+        }
+        expect(existsSync(v1.path)).toBe(true);
+        expect(readFileSync(join(v1.path, 'package.json'))).toEqual(
+          oldPackageBytes,
+        );
+        expect(readFileSync(join(v1.path, 'sha256'))).toEqual(oldSidecarBytes);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test('cleans an older committed version after verifying the selected package', () => {
+    const root = tempRoot();
+    try {
+      const store = createStore({ rootDir: root });
+      const v1 = store.install(bundle('1.0.0'));
+      const oldPackageBytes = readFileSync(join(v1.path, 'package.json'));
+      const oldSidecarBytes = readFileSync(join(v1.path, 'sha256'));
+      const v2 = store.update(bundle('2.0.0'));
+      mkdirSync(v1.path, { recursive: true });
+      writeFileSync(join(v1.path, 'package.json'), oldPackageBytes);
+      writeFileSync(join(v1.path, 'sha256'), oldSidecarBytes);
+
+      expect(store.show('community/example').path).toBe(v2.path);
+      expect(existsSync(v1.path)).toBe(false);
+      expect(store.verify('community/example').valid).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test.each(['corrupt', 'unreadable'])(
     'preserves older repair backup when newer selected payload is %s',
     (damage) => {

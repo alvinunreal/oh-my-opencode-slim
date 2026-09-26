@@ -36,7 +36,7 @@ const MAX_SCAN_RETRIES = 8;
 
 class RestartDirectoryScan extends Error {}
 
-let pendingFailedLeaseCleanup: LockEntry | undefined;
+const pendingFailedLeaseCleanup = new Map<string, LockEntry>();
 
 interface LockEntry {
   kind: 'candidate' | 'lease';
@@ -319,8 +319,9 @@ function acquireOnce(
   } catch (error) {
     try {
       if (publishedLease) {
-        pendingFailedLeaseCleanup = publishedLease;
-        retryPendingLeaseCleanup();
+        const cleanupKey = path.resolve(lockDir);
+        pendingFailedLeaseCleanup.set(cleanupKey, publishedLease);
+        retryPendingLeaseCleanup(lockDir);
       } else if (fs.existsSync(candidate.path)) {
         unlinkExact(candidate.path);
       }
@@ -352,16 +353,17 @@ function inspectLeasePath(lease: LockEntry): LeasePathStatus {
   }
 }
 
-function retryPendingLeaseCleanup(): void {
-  const pending = pendingFailedLeaseCleanup;
+function retryPendingLeaseCleanup(lockDir: string): void {
+  const cleanupKey = path.resolve(lockDir);
+  const pending = pendingFailedLeaseCleanup.get(cleanupKey);
   if (!pending) return;
 
   try {
     if (inspectLeasePath(pending) === 'present') {
       unlinkExact(pending.path);
     }
-    if (pendingFailedLeaseCleanup === pending) {
-      pendingFailedLeaseCleanup = undefined;
+    if (pendingFailedLeaseCleanup.get(cleanupKey) === pending) {
+      pendingFailedLeaseCleanup.delete(cleanupKey);
     }
   } catch (error) {
     throw new MarketplaceLockfileError(
@@ -428,7 +430,7 @@ function acquireMarketplaceLeaseInternal(
   partialOptions: Partial<MarketplaceLockOptions> = {},
 ): MarketplaceLease {
   const options = normalizeLockOptions(partialOptions);
-  retryPendingLeaseCleanup();
+  retryPendingLeaseCleanup(paths.lockDir);
   fs.mkdirSync(paths.rootDir, { recursive: true });
   fs.mkdirSync(paths.lockDir, { recursive: true });
   const deadline = Date.now() + options.timeoutMs;

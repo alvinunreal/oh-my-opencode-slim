@@ -15,7 +15,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   MarketplaceBusyError,
@@ -172,6 +172,49 @@ describe('marketplace synchronous lease lifecycle', () => {
       lockDir: '/tmp/marketplace-layout/marketplace.lock',
       stagingDir: '/tmp/marketplace-layout/.staging',
     });
+  });
+
+  test('uses only a trimmed absolute XDG data home and restores environment', () => {
+    const originalXdgDataHome = process.env.XDG_DATA_HOME;
+    const fallback = join(homedir(), '.local', 'share');
+    const absoluteXdg = join(tmpdir(), 'marketplace-xdg');
+    const marketplaceSuffix = join(
+      'opencode',
+      'storage',
+      'oh-my-opencode-slim',
+      'marketplace',
+    );
+    try {
+      process.env.XDG_DATA_HOME = `  ${absoluteXdg}  `;
+      expect(getMarketplacePaths().rootDir).toBe(
+        join(absoluteXdg, marketplaceSuffix),
+      );
+
+      process.env.XDG_DATA_HOME = '   ';
+      expect(getMarketplacePaths().rootDir).toBe(
+        join(fallback, marketplaceSuffix),
+      );
+
+      process.env.XDG_DATA_HOME = 'relative/xdg';
+      expect(getMarketplacePaths().rootDir).toBe(
+        join(fallback, marketplaceSuffix),
+      );
+
+      const absoluteXdgWithoutWhitespace = join(tmpdir(), 'absolute-xdg');
+      process.env.XDG_DATA_HOME = absoluteXdgWithoutWhitespace;
+      expect(getMarketplacePaths().rootDir).toBe(
+        join(absoluteXdgWithoutWhitespace, marketplaceSuffix),
+      );
+      expect(getMarketplacePaths('explicit/root').rootDir).toBe(
+        'explicit/root',
+      );
+    } finally {
+      if (originalXdgDataHome === undefined) {
+        delete process.env.XDG_DATA_HOME;
+      } else {
+        process.env.XDG_DATA_HOME = originalXdgDataHome;
+      }
+    }
   });
 
   test('atomically replaces files and removes temporary files after failures', () => {
@@ -494,6 +537,8 @@ try {
   test('preserves the scan error when cleanup of its published lease fails', () => {
     const root = tempRoot();
     const paths = getMarketplacePaths(root);
+    const otherRoot = tempRoot();
+    const otherPaths = getMarketplacePaths(otherRoot);
     let publishedPath: string | undefined;
     let injectedScanFailure = false;
     const originalRename = fs.renameSync;
@@ -543,6 +588,11 @@ try {
       );
       expect(injectedScanFailure).toBe(true);
       expect(existsSync(publishedPath)).toBe(true);
+
+      const otherRootOwner = acquireMarketplaceLease(otherPaths, LOCK);
+      otherRootOwner.release();
+      expect(lockEntries(otherPaths.lockDir)).toEqual([]);
+
       const nextOwner = acquireMarketplaceLease(paths, LOCK);
       expect(lockEntries(paths.lockDir)).toHaveLength(1);
       expect(lockEntries(paths.lockDir)[0]).not.toBe(
@@ -551,6 +601,7 @@ try {
       nextOwner.release();
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(otherRoot, { recursive: true, force: true });
     }
   });
 

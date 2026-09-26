@@ -885,9 +885,17 @@ export class MarketplaceStore {
       for (const name of childDirectories(publisherPath)) {
         const id = `${publisher}/${name}`;
         const packageDir = path.join(publisherPath, name);
-        const selectedVersion = lockfile.packages[id]?.manifestVersion;
-        for (const version of childEntries(packageDir)) {
-          if (version === selectedVersion) continue;
+        const selectedEntry = lockfile.packages[id];
+        const selectedVersion = selectedEntry?.manifestVersion;
+        const unselectedVersions = childEntries(packageDir).filter(
+          (version) => version !== selectedVersion,
+        );
+        if (selectedEntry && unselectedVersions.length > 0) {
+          // Do not destroy recoverable package bytes until the lock-selected
+          // version has passed the same integrity checks as a normal load.
+          this.loadLockedPackage(lockfile, id);
+        }
+        for (const version of unselectedVersions) {
           removeTree(path.join(packageDir, version));
         }
         if (!selectedVersion) this.removeEmptyDirectory(packageDir);

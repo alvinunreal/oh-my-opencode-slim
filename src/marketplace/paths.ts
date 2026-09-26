@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export interface MarketplacePaths {
   rootDir: string;
@@ -10,15 +10,14 @@ export interface MarketplacePaths {
 }
 
 export function getMarketplacePaths(rootDir?: string): MarketplacePaths {
+  const xdgDataHome = process.env.XDG_DATA_HOME?.trim();
+  const dataHome =
+    xdgDataHome && isAbsolute(xdgDataHome)
+      ? xdgDataHome
+      : join(homedir(), '.local', 'share');
   const root =
     rootDir ??
-    join(
-      process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'),
-      'opencode',
-      'storage',
-      'oh-my-opencode-slim',
-      'marketplace',
-    );
+    join(dataHome, 'opencode', 'storage', 'oh-my-opencode-slim', 'marketplace');
   return {
     rootDir: root,
     packagesDir: join(root, 'packages'),
