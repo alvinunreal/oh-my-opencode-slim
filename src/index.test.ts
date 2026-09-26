@@ -2221,6 +2221,7 @@ describe('plugin config model inheritance', () => {
           model: 'host/selected',
           prompt: 'host prompt',
           options: { nested: { stable: true } },
+          permission: { read: 'allow', first_tool: 'allow' },
         },
       },
       mcp: { host_remote: { type: 'remote' } },
@@ -2231,6 +2232,12 @@ describe('plugin config model inheritance', () => {
       const firstProjection = structuredClone(hostConfig);
       const changedAgents = hostConfig.agent as Record<string, unknown>;
       changedAgents.foreign_agent = { model: 'foreign/current' };
+      const changedExplorer = changedAgents.explorer as Record<string, unknown>;
+      changedExplorer.model = 'host/replay';
+      changedExplorer.permission = {
+        read: 'deny',
+        replay_tool: 'allow',
+      };
       const changedMcps = hostConfig.mcp as Record<string, unknown>;
       changedMcps.foreign_current = { type: 'remote' };
       await hooks.config?.(hostConfig);
@@ -2243,8 +2250,13 @@ describe('plugin config model inheritance', () => {
         model: 'host/selected',
         prompt: 'host prompt',
         options: { nested: { stable: true } },
-        permission: { 'host_remote_*': 'deny' },
+        permission: {
+          read: 'allow',
+          first_tool: 'allow',
+          'host_remote_*': 'deny',
+        },
       });
+      expect(agents.explorer?.permission).not.toHaveProperty('replay_tool');
       expect(agents.explorer).toEqual(
         (firstProjection.agent as Record<string, unknown>).explorer,
       );

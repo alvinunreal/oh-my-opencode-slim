@@ -232,7 +232,7 @@ not an optional-degradation path.
       the v1 after-hook output from the error text (so json-error-recovery
       still appends its reminder to a failed call's output), and an
       errored call never presents its result content as a success.
-    - `event` → `ctx.event.subscribe()` loop feeding `mapV2EventToV1`
+   - `event` → `ctx.event.subscribe()` loop feeding `mapV2EventToV1`
       (`src/v2/event-adapter.ts`): additive synthesis only — the raw v2 event
       is always dispatched first (the interview bridge depends on it), then
       synthesized v1 shapes: flat child `session.created` → v1
@@ -334,6 +334,16 @@ mechanism: neither a later idle pair nor a busy→idle contrast cycle re-arms
 an outcome read. Note `stopConfirmationMs` doubles as the retry cadence —
 raising it stretches the stranding window proportionally (~4× its value at
 the default budget).
+
+The first complete native agent snapshot finalizes the managed registry for
+the current plugin generation. Subsequent v1 `config()` calls and v2 agent
+transform replays reproject that same owned model and permission policy; they
+do not absorb later changes to managed host entries or native rules. Foreign
+host-owned entries remain outside the managed projection. To apply changed
+managed configuration, reload the plugin so a fresh generation can capture a
+new snapshot. This is a generation boundary, not hot configuration: the
+planned V3 PR 10 status/reload work will report desired-versus-live state and
+provide explicit reload control, without making an active registry mutable.
 
 ## Feature matrix
 

@@ -418,10 +418,13 @@ describe('createV2Setup e2e', () => {
     expect(() => deferred?.({ list: () => [] })).toThrow('retired');
   }, 20_000);
 
-  test('agent transform replay reuses the first finalized host snapshot', async () => {
+  test('agent transform replay reuses the first finalized model and native policy', async () => {
     const { ctx } = makeMockV2Context(projectDir);
     const projectedModels: Array<Record<string, unknown> | undefined> = [];
     const projectedRequests: Array<Record<string, unknown> | undefined> = [];
+    const projectedPermissions: Array<Record<string, unknown>[] | undefined> =
+      [];
+    const nativePermissions: Array<Record<string, unknown>[]> = [];
     const updatedAgents: string[] = [];
     const agent = ctx.agent as unknown as {
       transform: (callback: (draft: unknown) => void) => Promise<{
@@ -430,6 +433,14 @@ describe('createV2Setup e2e', () => {
     };
     agent.transform = async (callback) => {
       for (const providerID of ['host-first', 'host-replay']) {
+        const permissions = [
+          {
+            action: 'read',
+            resource: '*',
+            effect: providerID === 'host-first' ? 'allow' : 'deny',
+          },
+        ];
+        nativePermissions.push(permissions);
         const native = {
           id: 'orchestrator',
           mode: 'primary',
@@ -439,7 +450,7 @@ describe('createV2Setup e2e', () => {
             headers: { 'x-native': 'preserve' },
             body: { hostSetting: true },
           },
-          permissions: [{ action: 'read', resource: '*', effect: 'allow' }],
+          permissions,
           untouchedByPlugin: 'foreign',
         };
         const foreign = {
@@ -465,6 +476,9 @@ describe('createV2Setup e2e', () => {
               projectedRequests.push(
                 draft.request as Record<string, unknown> | undefined,
               );
+              projectedPermissions.push(
+                draft.permissions as Record<string, unknown>[] | undefined,
+              );
             }
           },
           remove: () => {},
@@ -478,6 +492,12 @@ describe('createV2Setup e2e', () => {
       expect(projectedModels.length).toBeGreaterThan(1);
       expect(
         projectedModels.every((model) => model?.providerID === 'host-first'),
+      ).toBe(true);
+      expect(nativePermissions[1]?.[0]?.effect).toBe('deny');
+      expect(
+        projectedPermissions.every(
+          (permissions) => permissions?.at(-1)?.effect === 'allow',
+        ),
       ).toBe(true);
       expect(projectedRequests).toHaveLength(projectedModels.length);
       for (const request of projectedRequests) {
