@@ -341,6 +341,29 @@ export const PresetAgentsSchema = z.record(
 
 export type Preset = z.infer<typeof PresetAgentsSchema>;
 
+const MarketplacePackageIdSchema = z.string().trim().min(1);
+const MarketplacePackageIdsSchema = z
+  .array(MarketplacePackageIdSchema)
+  .superRefine((ids, ctx) => {
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: 'custom', message: 'Package IDs must be unique' });
+    }
+  });
+
+export const MarketplaceActivationSchema = z
+  .object({
+    agents: MarketplacePackageIdsSchema.optional(),
+    agents_add: MarketplacePackageIdsSchema.optional().describe(
+      'Package IDs to add to the inherited marketplace agents list after optional agents replacement.',
+    ),
+    agents_remove: MarketplacePackageIdsSchema.optional().describe(
+      'Package IDs to remove after additions; removal wins over addition.',
+    ),
+  })
+  .strict();
+
+export type MarketplaceActivation = z.infer<typeof MarketplaceActivationSchema>;
+
 /**
  * Structured preset syntax. The `agents` wrapper is the preferred syntax for
  * new presets; the loader also accepts the inline form below so adding an
@@ -350,18 +373,26 @@ export const PresetDefinitionSchema = z
   .object({
     extends: z.string().min(1).optional(),
     agents: PresetAgentsSchema,
+    marketplace: MarketplaceActivationSchema.optional(),
   })
   .strict();
 
 const InlinePresetDefinitionSchema = z
   .object({
     extends: z.string().min(1),
+    marketplace: MarketplaceActivationSchema.optional(),
+  })
+  .catchall(AgentOverrideConfigSchema);
+
+const FlatPresetSchema = z
+  .object({
+    marketplace: MarketplaceActivationSchema.optional(),
   })
   .catchall(AgentOverrideConfigSchema);
 
 /** Raw preset syntax accepted in configuration files. */
 export const PresetSchema = z.xor(
-  [PresetDefinitionSchema, InlinePresetDefinitionSchema, PresetAgentsSchema],
+  [PresetDefinitionSchema, InlinePresetDefinitionSchema, FlatPresetSchema],
   {
     error:
       'Preset syntax is ambiguous: use a non-colliding custom agent name instead of an agents wrapper collision.',

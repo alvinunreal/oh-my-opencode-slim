@@ -1,6 +1,15 @@
 /// <reference types="bun-types" />
 
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
+import * as fs from 'node:fs';
 import {
   existsSync,
   mkdirSync,
@@ -11,16 +20,19 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as marketplaceLease from '../marketplace/lease';
 import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
   detectCurrentConfig,
   disableDefaultAgents,
   enableLspByDefault,
+  mutateJsonFile,
   parseConfig,
   parseConfigFile,
   stripJsonComments,
   writeConfig,
+  writeJsonAtomic,
   writeLiteConfig,
 } from './config-io';
 import * as paths from './paths';
@@ -126,6 +138,159 @@ describe('config-io', () => {
     expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8'))).toEqual({
       old: true,
     });
+  });
+
+  test('mutateJsonFile preserves JSONC comments and unrelated keys', () => {
+    const path = join(tmpDir, 'settings.jsonc');
+    writeFileSync(
+      path,
+      '{\n  // Keep this explanation\n  "unrelated": { "enabled": true },\n  "preset": "old",\n}\n',
+    );
+
+    mutateJsonFile(path, (current) => ({ ...current, preset: 'new' }));
+
+    const savedText = readFileSync(path, 'utf-8');
+    expect(savedText).toContain('// Keep this explanation');
+    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+      unrelated: { enabled: true },
+      preset: 'new',
+    });
+    expect(readFileSync(`${path}.bak`, 'utf-8')).toContain('"preset": "old"');
+  });
+
+  test('mutateJsonFile accepts BOM-prefixed JSON and keeps the BOM and keys', () => {
+    const path = join(tmpDir, 'bom.json');
+    writeFileSync(path, '\uFEFF{\n  "unrelated": true,\n  "value": 1\n}\n');
+
+    mutateJsonFile(path, (current) => ({ ...current, value: 2 }));
+
+    const savedText = readFileSync(path, 'utf-8');
+    expect(savedText.startsWith('\uFEFF')).toBe(true);
+    expect(JSON.parse(savedText.replace(/^\uFEFF/, ''))).toEqual({
+      unrelated: true,
+      value: 2,
+    });
+    expect(readFileSync(`${path}.bak`, 'utf-8')).toContain('\uFEFF');
+  });
+
+  test('mutateJsonFile accepts BOM-prefixed JSONC and preserves comments and keys', () => {
+    const path = join(tmpDir, 'bom.jsonc');
+    writeFileSync(
+      path,
+      '\uFEFF{\n  // Keep this explanation\n  "unrelated": true,\n  "value": 1,\n}\n',
+    );
+
+    mutateJsonFile(path, (current) => ({ ...current, value: 2 }));
+
+    const savedText = readFileSync(path, 'utf-8');
+    expect(savedText.startsWith('\uFEFF')).toBe(true);
+    expect(savedText).toContain('// Keep this explanation');
+    expect(
+      JSON.parse(stripJsonComments(savedText.replace(/^\uFEFF/, ''))),
+    ).toEqual({
+      unrelated: true,
+      value: 2,
+    });
+    expect(readFileSync(`${path}.bak`, 'utf-8')).toContain('"value": 1');
+  });
+
+  test('retries failed lease cleanup after a committed config publication', () => {
+    const path = join(tmpDir, 'lease-retry.json');
+    const originalUnlink = fs.unlinkSync;
+    const unlink = spyOn(fs, 'unlinkSync');
+    let failLeaseUnlink = true;
+    unlink.mockImplementation(((target: fs.PathLike) => {
+      if (String(target).endsWith('.lease') && failLeaseUnlink) {
+        failLeaseUnlink = false;
+        throw new Error('lease unlink failure');
+      }
+      return originalUnlink.call(fs, target);
+    }) as typeof fs.unlinkSync);
+
+    expect(() => writeJsonAtomic(path, { value: 1 })).toThrow(
+      'lease unlink failure',
+    );
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ value: 1 });
+
+    writeJsonAtomic(path, { value: 2 });
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ value: 2 });
+  });
+
+  test('preserves publication error when lease cleanup also fails and retries', () => {
+    const path = join(tmpDir, 'failed-lease-retry.json');
+    const publish = spyOn(marketplaceLease, 'writeAtomic').mockImplementation(
+      () => {
+        throw new Error('original publication failure');
+      },
+    );
+    const originalUnlink = fs.unlinkSync;
+    const unlink = spyOn(fs, 'unlinkSync');
+    let failLeaseUnlink = true;
+    unlink.mockImplementation(((target: fs.PathLike) => {
+      if (String(target).endsWith('.lease') && failLeaseUnlink) {
+        failLeaseUnlink = false;
+        throw new Error('secondary lease unlink failure');
+      }
+      return originalUnlink.call(fs, target);
+    }) as typeof fs.unlinkSync);
+
+    expect(() => writeJsonAtomic(path, { value: 1 })).toThrow(
+      'original publication failure',
+    );
+    expect(existsSync(path)).toBe(false);
+
+    publish.mockRestore();
+    writeJsonAtomic(path, { value: 2 });
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ value: 2 });
+  });
+
+  test('serialized JSON mutations do not lose cross-process updates', async () => {
+    const path = join(tmpDir, 'shared.json');
+    writeFileSync(path, '{"writers": 0}');
+    const script =
+      `import { mutateJsonFile } from './src/cli/config-io.ts';\n` +
+      `mutateJsonFile(process.env.CONFIG_PATH!, (current) => ({ ...current, writers: Number(current.writers) + 1 }));`;
+
+    await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        const child = Bun.spawn(['bun', '-e', script], {
+          cwd: process.cwd(),
+          env: { ...process.env, CONFIG_PATH: path },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        const exitCode = await child.exited;
+        if (exitCode !== 0) {
+          throw new Error(await new Response(child.stderr).text());
+        }
+      }),
+    );
+
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ writers: 8 });
+  });
+
+  test('failed atomic publication leaves the original config intact', () => {
+    const path = join(tmpDir, 'publication.jsonc');
+    const original = '{\n  // Existing setting\n  "value": 1,\n}\n';
+    writeFileSync(path, original);
+    const publish = spyOn(marketplaceLease, 'writeAtomic').mockImplementation(
+      () => {
+        throw new Error('publish failure');
+      },
+    );
+
+    expect(() => writeJsonAtomic(path, { value: 2 })).toThrow(
+      'publish failure',
+    );
+    expect(readFileSync(path, 'utf-8')).toBe(original);
+    expect(readFileSync(`${path}.bak`, 'utf-8')).toBe(original);
+    publish.mockRestore();
+  });
+
+  test('mutateJsonFile starts from an empty object for a missing config', () => {
+    const path = join(tmpDir, 'created.json');
+    mutateJsonFile(path, (current) => ({ ...current, enabled: true }));
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ enabled: true });
   });
 
   test('addPluginToOpenCodeConfig adds plugin and removes duplicates', async () => {

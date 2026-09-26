@@ -206,12 +206,14 @@ describe('openPresetManager', () => {
         base: {
           orchestrator: { model: 'anthropic/claude-3.5-haiku' },
           oracle: { model: 'openai/gpt-6-luna' },
+          marketplace: { agents: ['team/base/agent'] },
         },
         child: {
           extends: 'base',
           agents: {
             explorer: { model: 'openai/gpt-5-mini' },
           },
+          marketplace: { agents_add: ['team/toolkit/reviewer'] },
         },
       },
     });
@@ -277,11 +279,16 @@ describe('openPresetManager', () => {
     const persistedChild = (
       persisted.presets as Record<string, Record<string, unknown>>
     )?.child;
+    expect(
+      (persisted.presets as Record<string, Record<string, unknown>>).base
+        .marketplace,
+    ).toEqual({ agents: ['team/base/agent'] });
     expect(persistedChild).toEqual({
       extends: 'base',
       agents: {
         explorer: { model: 'openai/gpt-5-mini' },
       },
+      marketplace: { agents_add: ['team/toolkit/reviewer'] },
     });
   });
 
@@ -421,6 +428,62 @@ describe('openPresetManager', () => {
     // Preset persisted to user config
     const persisted = readUserConfigFile();
     expect(persisted.preset).toBe('child');
+  });
+
+  test('retains same-preset marketplace and agent updates made while editing', async () => {
+    writeUserConfigFile({
+      presets: {
+        active: {
+          orchestrator: { model: 'openai/old' },
+          marketplace: { agents: ['team/a'] },
+        },
+      },
+    });
+
+    const mock = createMockApi();
+    openPresetManager(mock.api, tempDir, snapshotRef);
+    mock.selectOption(mock.getSelectProps(), { value: 'active' });
+    mock.selectOption(mock.getSelectProps(), { value: 'edit' });
+    mock.selectOption(mock.getSelectProps(), { value: 'orchestrator' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const modelSelect = mock.getSelectProps();
+    expect(modelSelect?.title).toBe('Edit orchestrator — model');
+    const modelOptions = modelSelect?.options as Array<{ value: string }>;
+    const newModel = modelOptions.find(
+      (option) => option.value === 'anthropic/claude-3.5-haiku',
+    );
+    expect(newModel).toBeDefined();
+    if (!newModel) throw new Error('Expected model option');
+    mock.selectOption(modelSelect, newModel);
+
+    // Simulate a marketplace activation and another agent edit committed to
+    // this same preset while the editor is open.
+    const current = readUserConfigFile();
+    const presets = current.presets as Record<string, Record<string, unknown>>;
+    presets.active.marketplace = { agents: ['team/a', 'team/b'] };
+    presets.active.oracle = { model: 'openai/concurrent' };
+    writeUserConfigFile(current);
+
+    const temperature = mock.getPromptProps();
+    if (!temperature) throw new Error('Expected temperature prompt');
+    (temperature.onConfirm as (value: string) => void)('0.7');
+    const optionsPrompt = mock.getPromptProps();
+    if (!optionsPrompt) throw new Error('Expected options prompt');
+    (optionsPrompt.onConfirm as (value: string) => void)('');
+
+    mock.selectOption(mock.getSelectProps(), { value: '__omo_save__' });
+    const saved = readUserConfigFile();
+    const savedPresets = saved.presets as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    expect(savedPresets.active.marketplace).toEqual({
+      agents: ['team/a', 'team/b'],
+    });
+    const savedAgents = savedPresets.active.agents;
+    expect(savedAgents.oracle).toEqual({ model: 'openai/concurrent' });
+    expect(savedAgents.orchestrator.model).toBe('anthropic/claude-3.5-haiku');
   });
 
   test('marks project presets as [project - read-only] and limits actions', () => {

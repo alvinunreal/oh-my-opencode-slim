@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
-import { stripJsonComments } from '../cli/config-io';
+import { isDeepStrictEqual } from 'node:util';
+import { mutateJsonFile, stripJsonComments } from '../cli/config-io';
 import type {
   AgentOverrideConfig,
   PluginConfig,
@@ -7,14 +8,10 @@ import type {
   PresetDefinition,
   PresetInput,
 } from '../config';
-import {
-  deepMerge,
-  normalizePreset,
-  PresetResolutionError,
-  resolvePreset,
-} from '../config';
+import { deepMerge, normalizePreset, PresetResolutionError } from '../config';
 import { AGENT_ALIASES } from '../config/constants';
 import { findPluginConfigPaths } from '../config/loader';
+import { resolvePresetDefinition } from '../config/presets';
 
 export type PresetMap = Record<string, PresetInput>;
 
@@ -116,8 +113,11 @@ export function switchPresetOnDisk(
   }
 
   let effectivePreset: Preset;
+  let hasMarketplaceActivation = false;
   try {
-    effectivePreset = resolvePreset(presetName, presets);
+    const definition = resolvePresetDefinition(presetName, presets);
+    effectivePreset = definition.agents;
+    hasMarketplaceActivation = definition.marketplace !== undefined;
   } catch (error) {
     return {
       ok: false,
@@ -130,7 +130,7 @@ export function switchPresetOnDisk(
     };
   }
 
-  if (!hasPresetOverrides(effectivePreset)) {
+  if (!hasPresetOverrides(effectivePreset) && !hasMarketplaceActivation) {
     return {
       ok: false,
       presetName,
@@ -364,30 +364,22 @@ function persistPresetName(
     };
   }
 
-  let persisted: Record<string, unknown>;
   try {
-    // Strip a UTF-8 BOM (RFC 8259 permits one); JSON.parse would otherwise
-    // fail with "Unrecognized token" and the preset would not be persisted.
-    const raw = fs.readFileSync(userConfigPath, 'utf-8').replace(/^\uFEFF/, '');
-    const parsed: unknown = JSON.parse(stripJsonComments(raw));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('the config root must be a JSON object');
-    }
-    persisted = parsed as Record<string, unknown>;
+    mutateJsonFile(userConfigPath, (current) => ({
+      ...current,
+      preset: presetName,
+    }));
   } catch (error) {
+    const message = describeError(error);
+    const isReadError =
+      message.includes('Config file must contain') ||
+      message.toLowerCase().includes('parse') ||
+      message.toLowerCase().includes('json');
     return {
       ok: false,
-      message: `Could not read or parse the user config file: ${describeError(error)}.`,
-    };
-  }
-
-  try {
-    persisted.preset = presetName;
-    fs.writeFileSync(userConfigPath, `${JSON.stringify(persisted, null, 2)}\n`);
-  } catch (error) {
-    return {
-      ok: false,
-      message: `Could not write the user config file: ${describeError(error)}.`,
+      message: isReadError
+        ? `Could not read or parse the user config file: ${message}.`
+        : `Could not write the user config file: ${message}.`,
     };
   }
 
@@ -592,24 +584,6 @@ export function wouldCreatePresetCycle(
 }
 
 /**
- * Write the user-level config file (plain JSON; JSONC comments are not
- * preserved, matching the existing switchPreset behavior). Best-effort.
- */
-function writeUserConfig(
-  directory: string,
-  config: Record<string, unknown>,
-): boolean {
-  try {
-    const { userConfigPath } = findPluginConfigPaths(directory);
-    if (!userConfigPath) return false;
-    fs.writeFileSync(userConfigPath, `${JSON.stringify(config, null, 2)}\n`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Persist a preset (create or overwrite) into the user config's `presets`
  * object. Supports both flat agent maps and structured preset definitions with `extends`.
  * Preserves local `extends` and local agents only without materializing inherited agents.
@@ -619,39 +593,76 @@ export function writePreset(
   directory: string,
   name: string,
   preset: Preset | PresetDefinition,
+  options: { mergeChangesFrom?: PresetDefinition } = {},
 ): boolean {
-  const config = readUserConfig(directory) ?? {};
-  const presets =
-    (config.presets as Record<string, PresetInput> | undefined) ?? {};
+  try {
+    const { userConfigPath } = findPluginConfigPaths(directory);
+    if (!userConfigPath) return false;
+    mutateJsonFile(userConfigPath, (config) => {
+      const presets = isRecord(config.presets) ? config.presets : {};
+      const normalized = normalizePreset(preset);
+      if (options.mergeChangesFrom && isRecord(presets[name])) {
+        const current = normalizePreset(presets[name] as PresetInput);
+        const base = options.mergeChangesFrom;
+        const agents = { ...current.agents };
+        const agentNames = new Set([
+          ...Object.keys(base.agents),
+          ...Object.keys(normalized.agents),
+        ]);
+        for (const agentName of agentNames) {
+          const wasPresent = Object.hasOwn(base.agents, agentName);
+          const isPresent = Object.hasOwn(normalized.agents, agentName);
+          const changed =
+            wasPresent !== isPresent ||
+            (wasPresent &&
+              isPresent &&
+              !isDeepStrictEqual(
+                base.agents[agentName],
+                normalized.agents[agentName],
+              ));
+          if (!changed) continue;
+          if (isPresent) {
+            agents[agentName] = normalized.agents[agentName];
+          } else {
+            delete agents[agentName];
+          }
+        }
+        normalized.agents = agents;
+        // Marketplace activation may have changed while the editor was open.
+        // Its serialized on-disk value is authoritative for this agent edit.
+        normalized.marketplace = current.marketplace;
+      }
+      if (Object.keys(normalized.agents).length === 0) {
+        if (normalized.extends !== undefined) {
+          presets[name] = {
+            extends: normalized.extends,
+            agents: {},
+            ...(normalized.marketplace !== undefined
+              ? { marketplace: normalized.marketplace }
+              : {}),
+          };
+          return { ...config, presets };
+        }
 
-  if (
-    'extends' in preset &&
-    typeof preset.extends === 'string' &&
-    preset.extends
-  ) {
-    const agents =
-      'agents' in preset && preset.agents && typeof preset.agents === 'object'
-        ? (preset.agents as Preset)
-        : {};
-    const definition: PresetDefinition = {
-      extends: preset.extends,
-      agents,
-    };
-    presets[name] = definition;
-  } else if (
-    'agents' in preset &&
-    typeof preset.agents === 'object' &&
-    preset.agents !== null
-  ) {
-    // PresetDefinition without extends (or extends is undefined)
-    presets[name] = preset.agents as Preset;
-  } else {
-    // Plain agent record
-    presets[name] = preset as Preset;
+        // Preserve the flat representation for empty presets: `agents` can
+        // itself be a custom agent name in the flat syntax.
+        const flat: Record<string, unknown> = {};
+        if (normalized.marketplace !== undefined) {
+          flat.marketplace = normalized.marketplace;
+        }
+        presets[name] = flat;
+      } else {
+        presets[name] =
+          normalized.extends || normalized.marketplace !== undefined
+            ? normalized
+            : normalized.agents;
+      }
+      return { ...config, presets };
+    });
+    return true;
+  } catch {
+    return false;
   }
-
-  config.presets = presets;
-  return writeUserConfig(directory, config);
 }
 
 /**
@@ -660,24 +671,29 @@ export function writePreset(
  * or if other presets in the editable config depend on it.
  */
 export function deletePreset(directory: string, name: string): boolean {
-  const config = readUserConfig(directory);
-  if (!config) return false;
-  const presets = config.presets as Record<string, PresetInput> | undefined;
-  if (!presets || !(name in presets)) return false;
-
-  // Reject deleting a base preset that has dependents across all configured presets (user or project)
-  const allPresets = getAllConfiguredPresets(directory);
-  const dependents = findPresetDependents(name, allPresets);
-  if (dependents.length > 0) {
+  try {
+    const { userConfigPath } = findPluginConfigPaths(directory);
+    if (!userConfigPath) return false;
+    let deleted = false;
+    mutateJsonFile(userConfigPath, (config) => {
+      if (!isRecord(config.presets) || !Object.hasOwn(config.presets, name)) {
+        return config;
+      }
+      const allPresets = getAllConfiguredPresets(directory);
+      if (findPresetDependents(name, allPresets).length > 0) return config;
+      delete config.presets[name];
+      if (config.preset === name) delete config.preset;
+      deleted = true;
+      return config;
+    });
+    return deleted;
+  } catch {
     return false;
   }
+}
 
-  delete presets[name];
-  // If the active preset was deleted, clear the `preset` field too.
-  if (config.preset === name) {
-    delete config.preset;
-  }
-  return writeUserConfig(directory, config);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

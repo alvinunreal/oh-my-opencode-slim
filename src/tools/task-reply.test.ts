@@ -633,41 +633,47 @@ describe('task_reply v2 event transport integration', () => {
     const board = new BackgroundJobBoard();
     registerBackgroundChild(board);
     const hook = createInputWaitHook(board);
-    const reply = mock(async () => ({ data: true }));
-    const input = buildPluginInput(makeV2Ctx(reply as never));
-    const { task_reply } = createTaskReplyTool({
-      input: input as never,
-      backgroundJobBoard: board,
-    });
+    try {
+      const reply = mock(async () => ({ data: true }));
+      const input = buildPluginInput(makeV2Ctx(reply as never));
+      const { task_reply } = createTaskReplyTool({
+        input: input as never,
+        backgroundJobBoard: board,
+      });
 
-    await routeMappedV2Event(hook, {
-      type: 'permission.asked',
-      data: {
-        id: 'per_1',
+      await routeMappedV2Event(hook, {
+        type: 'permission.asked',
+        data: {
+          id: 'per_1',
+          sessionID: 'ses_child1',
+          action: 'tool.execute',
+          resources: ['bash:*'],
+        },
+      });
+
+      expect(getChildInputWait('ses_child1', 'per_1')).toMatchObject({
+        kind: 'permission',
+        permission: 'tool.execute',
+        patterns: ['bash:*'],
+      });
+
+      await task_reply.execute(
+        { task_id: 'ses_child1', request_id: 'per_1', reply: 'always' },
+        { sessionID: 'parent-1' } as never,
+      );
+
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(reply.mock.calls[0]?.[0]).toEqual({
         sessionID: 'ses_child1',
-        action: 'tool.execute',
-        resources: ['bash:*'],
-      },
-    });
-
-    expect(getChildInputWait('ses_child1', 'per_1')).toMatchObject({
-      kind: 'permission',
-      permission: 'tool.execute',
-      patterns: ['bash:*'],
-    });
-
-    await task_reply.execute(
-      { task_id: 'ses_child1', request_id: 'per_1', reply: 'always' },
-      { sessionID: 'parent-1' } as never,
-    );
-
-    expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply.mock.calls[0]?.[0]).toEqual({
-      sessionID: 'ses_child1',
-      requestID: 'per_1',
-      decision: 'always',
-    });
-    expect(getChildInputWait('ses_child1', 'per_1')).toBeUndefined();
+        requestID: 'per_1',
+        decision: 'always',
+      });
+      expect(getChildInputWait('ses_child1', 'per_1')).toBeUndefined();
+    } finally {
+      await hook.event({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+    }
   });
 
   test('v2 form.created maps to a question wait but unsupported task_reply keeps the wait', async () => {
@@ -676,40 +682,46 @@ describe('task_reply v2 event transport integration', () => {
     const board = new BackgroundJobBoard();
     registerBackgroundChild(board);
     const hook = createInputWaitHook(board);
-    const input = buildPluginInput(makeV2Ctx());
-    const { task_reply } = createTaskReplyTool({
-      input: input as never,
-      backgroundJobBoard: board,
-    });
+    try {
+      const input = buildPluginInput(makeV2Ctx());
+      const { task_reply } = createTaskReplyTool({
+        input: input as never,
+        backgroundJobBoard: board,
+      });
 
-    await routeMappedV2Event(hook, {
-      type: 'form.created',
-      data: {
-        form: {
-          id: 'form_1',
-          sessionID: 'ses_child1',
-          fields: [
-            {
-              key: 'environment',
-              title: 'Pick environment',
-              type: 'select',
-              options: [{ label: 'staging', description: 'Use staging' }],
-            },
-          ],
+      await routeMappedV2Event(hook, {
+        type: 'form.created',
+        data: {
+          form: {
+            id: 'form_1',
+            sessionID: 'ses_child1',
+            fields: [
+              {
+                key: 'environment',
+                title: 'Pick environment',
+                type: 'select',
+                options: [{ label: 'staging', description: 'Use staging' }],
+              },
+            ],
+          },
         },
-      },
-    });
+      });
 
-    expect(getChildInputWait('ses_child1', 'form_1')).toMatchObject({
-      kind: 'question',
-      requestID: 'form_1',
-    });
-    await expect(
-      task_reply.execute(
-        { task_id: 'ses_child1', request_id: 'form_1', answers: ['staging'] },
-        { sessionID: 'parent-1' } as never,
-      ),
-    ).rejects.toThrow('no question.reply API');
-    expect(getChildInputWait('ses_child1', 'form_1')).not.toBeUndefined();
+      expect(getChildInputWait('ses_child1', 'form_1')).toMatchObject({
+        kind: 'question',
+        requestID: 'form_1',
+      });
+      await expect(
+        task_reply.execute(
+          { task_id: 'ses_child1', request_id: 'form_1', answers: ['staging'] },
+          { sessionID: 'parent-1' } as never,
+        ),
+      ).rejects.toThrow('no question.reply API');
+      expect(getChildInputWait('ses_child1', 'form_1')).not.toBeUndefined();
+    } finally {
+      await hook.event({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+    }
   });
 });

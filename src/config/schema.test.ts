@@ -10,6 +10,7 @@ import {
 import { z } from 'zod';
 import {
   InterviewConfigSchema,
+  MarketplaceActivationSchema,
   MultiplexerConfigSchema,
   MultiplexerConfigStrictSchema,
   PluginConfigSchema,
@@ -70,6 +71,29 @@ describe('PluginConfigSchema ACP wrapper models', () => {
 });
 
 describe('PluginConfigSchema preset syntax', () => {
+  it('validates marketplace activation replacements and directives', () => {
+    expect(
+      MarketplaceActivationSchema.parse({
+        agents: [' owner/one '],
+        agents_add: ['owner/two'],
+        agents_remove: ['owner/three'],
+      }),
+    ).toEqual({
+      agents: ['owner/one'],
+      agents_add: ['owner/two'],
+      agents_remove: ['owner/three'],
+    });
+    expect(
+      PluginConfigSchema.safeParse({
+        presets: {
+          invalid: {
+            marketplace: { agents_add: ['owner/one', 'owner/one'] },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts legacy custom names that resemble metadata fields', () => {
     const result = PluginConfigSchema.safeParse({
       presets: {

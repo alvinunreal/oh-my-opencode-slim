@@ -3,13 +3,15 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { MarketplaceLockOwnershipError } from '../marketplace/errors';
+import { acquireMarketplaceLease, writeAtomic } from '../marketplace/lease';
+import { getMarketplacePaths } from '../marketplace/paths';
 import {
   INSTALLER_MANAGED_PLUGIN_OPTION,
   type PluginEntry,
@@ -439,24 +441,141 @@ export function parseConfig(path: string): {
  * Write config to file atomically.
  */
 export function writeConfig(configPath: string, config: OpenCodeConfig): void {
-  if (configPath.endsWith('.jsonc')) {
-    console.warn(
-      '[config-manager] Writing to .jsonc file - comments will not be preserved',
-    );
+  writeJsonAtomic(configPath, config);
+}
+
+type JsonConfig = Record<string, unknown>;
+
+const pendingConfigLeaseCleanup = new Map<
+  string,
+  ReturnType<typeof acquireMarketplaceLease>
+>();
+
+function configWriteLockPaths(configPath: string) {
+  const absolutePath = resolve(configPath);
+  const lockRoot = join(
+    dirname(absolutePath),
+    `.${basename(absolutePath)}.write-lock`,
+  );
+  return getMarketplacePaths(lockRoot);
+}
+
+function retryPendingConfigLeaseCleanup(lockDir: string): void {
+  const cleanupKey = resolve(lockDir);
+  const pending = pendingConfigLeaseCleanup.get(cleanupKey);
+  if (!pending) return;
+
+  try {
+    pending.release();
+  } catch (error) {
+    if (!(error instanceof MarketplaceLockOwnershipError)) throw error;
+  }
+  if (pendingConfigLeaseCleanup.get(cleanupKey) === pending) {
+    pendingConfigLeaseCleanup.delete(cleanupKey);
+  }
+}
+
+function withConfigWriteLease<T>(configPath: string, operation: () => T): T {
+  const paths = configWriteLockPaths(configPath);
+  retryPendingConfigLeaseCleanup(paths.lockDir);
+  const lease = acquireMarketplaceLease(paths);
+  let result: T | undefined;
+  let operationError: unknown;
+  let operationFailed = false;
+  try {
+    result = lease.commit(operation);
+  } catch (error) {
+    operationError = error;
+    operationFailed = true;
   }
 
-  const tmpPath = `${configPath}.tmp`;
+  try {
+    lease.release();
+  } catch (releaseError) {
+    pendingConfigLeaseCleanup.set(resolve(paths.lockDir), lease);
+    if (!operationFailed) throw releaseError;
+  }
+  if (operationFailed) throw operationError;
+  return result as T;
+}
+
+/** Run a config operation under the same cross-process lease as its writer. */
+export function withSerializedConfigWrites<T>(
+  configPaths: string[],
+  operation: () => T,
+): T {
+  const orderedPaths = [
+    ...new Set(configPaths.map((path) => resolve(path))),
+  ].sort();
+  const acquire = (index: number): T => {
+    if (index === orderedPaths.length) return operation();
+    return withConfigWriteLease(orderedPaths[index], () => acquire(index + 1));
+  };
+  return acquire(0);
+}
+
+function jsoncComments(source: string): string[] {
+  const comments: string[] = [];
+  const commentPattern = /\\"|"(?:\\"|[^"])*"|(\/\/[^\r\n]*|\/\*[\s\S]*?\*\/)/g;
+  for (const match of source.matchAll(commentPattern)) {
+    if (match[1]) comments.push(match[1]);
+  }
+  return comments;
+}
+
+function parseJsonConfigText(source: string): JsonConfig {
+  const parsed: unknown = JSON.parse(
+    stripJsonComments(source.replace(/^\uFEFF/, '')),
+  );
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Config file must contain a JSON object');
+  }
+  return parsed as JsonConfig;
+}
+
+function publishConfig(
+  configPath: string,
+  config: OpenCodeConfig,
+  currentText?: string,
+): void {
   const bakPath = `${configPath}.bak`;
-  const content = `${JSON.stringify(config, null, 2)}\n`;
+  if (currentText !== undefined) copyFileSync(configPath, bakPath);
 
-  // Backup existing config if it exists
-  if (existsSync(configPath)) {
-    copyFileSync(configPath, bakPath);
-  }
+  const comments =
+    configPath.endsWith('.jsonc') && currentText
+      ? jsoncComments(currentText)
+      : [];
+  const commentPrefix = comments.length > 0 ? `${comments.join('\n')}\n` : '';
+  const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const content = `${bom}${commentPrefix}${JSON.stringify(config, null, 2)}\n`;
+  writeAtomic(configPath, content);
+}
 
-  // Atomic write pattern: write to tmp, then rename
-  writeFileSync(tmpPath, content);
-  renameSync(tmpPath, configPath);
+/** Atomically publish a JSON value with a backup of the previous file. */
+export function writeJsonAtomic(filePath: string, value: unknown): void {
+  withConfigWriteLease(filePath, () => {
+    const previous = existsSync(filePath)
+      ? readFileSync(filePath, 'utf-8')
+      : undefined;
+    publishConfig(filePath, value as OpenCodeConfig, previous);
+  });
+}
+
+/** Read, mutate, and atomically publish a JSON/JSONC config under one lease. */
+export function mutateJsonFile(
+  configPath: string,
+  mutate: (current: JsonConfig) => JsonConfig,
+): void {
+  withConfigWriteLease(configPath, () => {
+    const currentText = existsSync(configPath)
+      ? readFileSync(configPath, 'utf-8')
+      : undefined;
+    const current = currentText ? parseJsonConfigText(currentText) : {};
+    const originalValue = JSON.stringify(current);
+    const updated = mutate(current);
+    if (JSON.stringify(updated) === originalValue) return;
+    publishConfig(configPath, updated as OpenCodeConfig, currentText);
+  });
 }
 
 export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
@@ -473,31 +592,18 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
   }
 
   try {
-    const { config: parsedConfig, error } = parseConfig(configPath);
-    if (error) {
-      return {
-        success: false,
-        configPath,
-        error: `Failed to parse config: ${error}`,
-      };
-    }
-    const config = parsedConfig ?? {};
-    const plugins = getPlugins(config);
-
     const pluginEntry = getPluginEntry();
-
-    // Remove existing oh-my-opencode-slim entries
-    const filteredPlugins = plugins.filter(
-      (plugin) => !isMatchingPluginEntry(plugin),
-    );
-
-    // Add fresh entry, keeping the key the file already uses (both keys
-    // are accepted by the opencode2 host; `plugin` also works on v1).
-    filteredPlugins.push(pluginEntry);
-    if (Array.isArray(config.plugins)) config.plugins = filteredPlugins;
-    else config.plugin = filteredPlugins;
-
-    writeConfig(configPath, config);
+    mutateJsonFile(configPath, (current) => {
+      const config = current as OpenCodeConfig;
+      const plugins = getPlugins(config);
+      const filteredPlugins = plugins.filter(
+        (plugin) => !isMatchingPluginEntry(plugin),
+      );
+      filteredPlugins.push(pluginEntry);
+      if (Array.isArray(config.plugins)) config.plugins = filteredPlugins;
+      else config.plugin = filteredPlugins;
+      return config;
+    });
     return { success: true, configPath };
   } catch (err) {
     return {
@@ -522,25 +628,16 @@ export async function addPluginToOpenCodeTuiConfig(): Promise<ConfigMergeResult>
   }
 
   try {
-    const { config: parsedConfig, error } = parseConfig(configPath);
-    if (error) {
-      return {
-        success: false,
-        configPath,
-        error: `Failed to parse TUI config: ${error}`,
-      };
-    }
-    const config = parsedConfig ?? {};
-    const plugins = getPlugins(config);
     const pluginEntry = getPluginEntry();
-    const filteredPlugins = plugins.filter(
-      (plugin) => !isMatchingPluginEntry(plugin),
-    );
-
-    filteredPlugins.push(pluginEntry);
-    config.plugin = filteredPlugins;
-
-    writeConfig(configPath, config);
+    mutateJsonFile(configPath, (current) => {
+      const config = current as OpenCodeConfig;
+      const filteredPlugins = getPlugins(config).filter(
+        (plugin) => !isMatchingPluginEntry(plugin),
+      );
+      filteredPlugins.push(pluginEntry);
+      config.plugin = filteredPlugins;
+      return config;
+    });
     return { success: true, configPath };
   } catch (err) {
     return {
@@ -563,19 +660,7 @@ export function writeLiteConfig(
   try {
     ensureConfigDir();
     const config = generateLiteConfig(installConfig);
-
-    // Atomic write for lite config too
-    const tmpPath = `${configPath}.tmp`;
-    const bakPath = `${configPath}.bak`;
-    const content = `${JSON.stringify(config, null, 2)}\n`;
-
-    // Backup existing config if it exists
-    if (existsSync(configPath)) {
-      copyFileSync(configPath, bakPath);
-    }
-
-    writeFileSync(tmpPath, content);
-    renameSync(tmpPath, configPath);
+    writeConfig(configPath, config as OpenCodeConfig);
 
     return { success: true, configPath };
   } catch (err) {
@@ -592,29 +677,23 @@ export function disableDefaultAgents(): ConfigMergeResult {
 
   try {
     ensureOpenCodeConfigDir();
-    const { config: parsedConfig, error } = parseConfig(configPath);
-    if (error) {
-      return {
-        success: false,
-        configPath,
-        error: `Failed to parse config: ${error}`,
-      };
-    }
-    const config = parsedConfig ?? {};
-
-    const agent = (config.agent ?? {}) as Record<string, unknown>;
-    for (const agentName of DEFAULT_OPENCODE_AGENTS_TO_DISABLE) {
-      const existing = agent[agentName];
-      agent[agentName] = {
-        ...(existing && typeof existing === 'object' && !Array.isArray(existing)
-          ? existing
-          : {}),
-        disable: true,
-      };
-    }
-    config.agent = agent;
-
-    writeConfig(configPath, config);
+    mutateJsonFile(configPath, (current) => {
+      const config = current as OpenCodeConfig;
+      const agent = (config.agent ?? {}) as Record<string, unknown>;
+      for (const agentName of DEFAULT_OPENCODE_AGENTS_TO_DISABLE) {
+        const existing = agent[agentName];
+        agent[agentName] = {
+          ...(existing &&
+          typeof existing === 'object' &&
+          !Array.isArray(existing)
+            ? existing
+            : {}),
+          disable: true,
+        };
+      }
+      config.agent = agent;
+      return config;
+    });
     return { success: true, configPath };
   } catch (err) {
     return {
@@ -630,20 +709,12 @@ export function enableLspByDefault(): ConfigMergeResult {
 
   try {
     ensureOpenCodeConfigDir();
-    const { config: parsedConfig, error } = parseConfig(configPath);
-    if (error) {
-      return {
-        success: false,
-        configPath,
-        error: `Failed to parse config: ${error}`,
-      };
-    }
-    const config = parsedConfig ?? {};
-
-    if (config.lsp === undefined) {
+    mutateJsonFile(configPath, (current) => {
+      const config = current as OpenCodeConfig;
+      if (config.lsp !== undefined) return current;
       config.lsp = true;
-      writeConfig(configPath, config);
-    }
+      return config;
+    });
 
     return { success: true, configPath };
   } catch (err) {

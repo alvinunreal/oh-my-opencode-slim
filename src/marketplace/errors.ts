@@ -56,3 +56,10 @@ export class MarketplaceCompatibilityError extends MarketplaceError {
     this.name = 'MarketplaceCompatibilityError';
   }
 }
+
+export class MarketplaceActivationError extends MarketplaceError {
+  constructor(message: string) {
+    super(message, 'activation');
+    this.name = 'MarketplaceActivationError';
+  }
+}

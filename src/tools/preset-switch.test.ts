@@ -157,13 +157,56 @@ describe('switchPresetOnDisk', () => {
 
     switchPresetOnDisk(tempDir, 'cheap', config);
 
-    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+    const jsonText = fs
+      .readFileSync(configPath, 'utf-8')
+      .replace(/^\/\/[^\r\n]*\r?\n/, '');
+    const persisted = JSON.parse(jsonText) as {
       preset?: string;
       agents?: Record<string, unknown>;
     };
     expect(persisted.preset).toBe('cheap');
     expect(persisted.agents).toEqual({
       orchestrator: { model: 'old-model' },
+    });
+  });
+
+  test('switching preserves activation directives and allows activation-only presets', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.jsonc');
+    const activation = { agents_add: ['team/toolkit/reviewer'] };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        preset: 'old',
+        presets: {
+          base: { marketplace: { agents: ['team/toolkit/base'] } },
+          active: {
+            extends: 'base',
+            agents: { orchestrator: { model: 'openai/gpt-6' } },
+            marketplace: activation,
+          },
+          marketplaceOnly: { marketplace: { agents: [] } },
+        },
+      }),
+    );
+
+    const result = switchPresetOnDisk(tempDir, 'marketplaceOnly', {
+      presets: {
+        marketplaceOnly: { marketplace: { agents: [] } },
+      },
+    } as PluginConfig);
+
+    expect(result.ok).toBe(true);
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      preset?: string;
+      presets: Record<string, { marketplace?: unknown }>;
+    };
+    expect(persisted.preset).toBe('marketplaceOnly');
+    expect(persisted.presets.active.marketplace).toEqual(activation);
+    expect(persisted.presets.base.marketplace).toEqual({
+      agents: ['team/toolkit/base'],
     });
   });
 
@@ -190,9 +233,9 @@ describe('switchPresetOnDisk', () => {
     const result = switchPresetOnDisk(tempDir, 'cheap', config);
     expect(result.ok).toBe(true);
 
-    // The BOM is stripped on read, so the preset name is persisted; the
-    // rewritten file is plain JSON that parses cleanly.
-    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    expect(content.startsWith('\uFEFF')).toBe(true);
+    const persisted = JSON.parse(content.slice(1)) as {
       preset?: string;
       agents?: Record<string, unknown>;
     };
@@ -703,7 +746,9 @@ describe('writePreset', () => {
     });
 
     expect(ok).toBe(true);
-    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    expect(content.startsWith('\uFEFF')).toBe(true);
+    const persisted = JSON.parse(content.slice(1)) as {
       preset?: string;
       presets?: Record<string, unknown>;
     };
@@ -814,6 +859,173 @@ describe('writePreset', () => {
     expect(persisted.presets?.child).toEqual({
       extends: 'base',
       agents: {},
+    });
+  });
+
+  test('preserves empty structured agents alongside marketplace directives', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(configPath, '{}');
+
+    expect(
+      writePreset(tempDir, 'child', {
+        extends: 'base',
+        agents: {},
+        marketplace: { agents_add: ['team/agent'] },
+      }),
+    ).toBe(true);
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, unknown>;
+    };
+    expect(persisted.presets.child).toEqual({
+      extends: 'base',
+      agents: {},
+      marketplace: { agents_add: ['team/agent'] },
+    });
+  });
+
+  test('writes activation-only definitions and preserves JSONC and unrelated keys', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.jsonc');
+    fs.writeFileSync(
+      configPath,
+      '{\n  // retained note\n  "unrelated": true,\n  "presets": {}\n}',
+    );
+
+    expect(
+      writePreset(tempDir, 'marketplace', {
+        marketplace: { agents: ['team/toolkit/reviewer'] },
+      }),
+    ).toBe(true);
+
+    const contents = fs.readFileSync(configPath, 'utf-8');
+    expect(contents).toContain('// retained note');
+    const persisted = JSON.parse(
+      contents.replace('// retained note\n', ''),
+    ) as {
+      unrelated: boolean;
+      presets: Record<string, unknown>;
+    };
+    expect(persisted.unrelated).toBe(true);
+    expect(persisted.presets.marketplace).toEqual({
+      marketplace: { agents: ['team/toolkit/reviewer'] },
+    });
+  });
+
+  test('merges editor changes against the current same-preset config', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          active: {
+            orchestrator: { model: 'openai/old' },
+            marketplace: { agents: ['team/a'] },
+          },
+        },
+      }),
+    );
+
+    const base = getEditablePreset(tempDir, 'active');
+    const current = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, unknown>>;
+    };
+    current.presets.active.marketplace = { agents: ['team/a', 'team/b'] };
+    current.presets.active.oracle = { model: 'openai/concurrent' };
+    fs.writeFileSync(configPath, JSON.stringify(current));
+
+    expect(
+      writePreset(
+        tempDir,
+        'active',
+        {
+          ...base,
+          agents: {
+            ...base.agents,
+            orchestrator: { model: 'anthropic/new' },
+          },
+          marketplace: base.marketplace,
+        },
+        { mergeChangesFrom: base },
+      ),
+    ).toBe(true);
+
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, unknown>>;
+    };
+    expect(saved.presets.active.marketplace).toEqual({
+      agents: ['team/a', 'team/b'],
+    });
+    const savedAgents = saved.presets.active.agents as Record<string, unknown>;
+    expect(savedAgents.oracle).toEqual({
+      model: 'openai/concurrent',
+    });
+    expect(savedAgents.orchestrator).toEqual({
+      model: 'anthropic/new',
+    });
+  });
+
+  test('serializes preset writes with concurrent config mutations', async () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const readyPath = path.join(tempDir, 'lease-held');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: { active: { marketplace: { agents: ['team/agent'] } } },
+      }),
+    );
+
+    const configIoUrl = new URL('../cli/config-io.ts', import.meta.url).href;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { mutateJsonFile } = await import(${JSON.stringify(configIoUrl)});\n` +
+          `const fs = await import('node:fs');\n` +
+          `mutateJsonFile(process.argv[1], (current) => {\n` +
+          `  fs.writeFileSync(process.argv[2], 'ready');\n` +
+          `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);\n` +
+          `  return { ...current, concurrentWriter: true };\n` +
+          `});`,
+        configPath,
+        readyPath,
+      ],
+      { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' },
+    );
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(readyPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(fs.existsSync(readyPath)).toBe(true);
+
+    expect(
+      writePreset(tempDir, 'newPreset', {
+        marketplace: { agents_add: ['team/new-agent'] },
+      }),
+    ).toBe(true);
+    expect(await child.exited).toBe(0);
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      concurrentWriter?: boolean;
+      presets?: Record<string, { marketplace?: unknown }>;
+    };
+    expect(persisted.concurrentWriter).toBe(true);
+    expect(persisted.presets?.active.marketplace).toEqual({
+      agents: ['team/agent'],
+    });
+    expect(persisted.presets?.newPreset.marketplace).toEqual({
+      agents_add: ['team/new-agent'],
     });
   });
 });
