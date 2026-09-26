@@ -442,7 +442,11 @@ describe('createV2Setup e2e', () => {
           permissions: [{ action: 'read', resource: '*', effect: 'allow' }],
           untouchedByPlugin: 'foreign',
         };
-        const foreign = { id: 'foreign-agent', mode: 'primary' };
+        const foreign = {
+          id: 'foreign-agent',
+          mode: 'primary',
+          permissions: [],
+        };
         callback({
           list: () => [{ id: 'orchestrator' }, foreign],
           get: (id: string) => (id === 'orchestrator' ? native : foreign),
@@ -487,6 +491,36 @@ describe('createV2Setup e2e', () => {
     } finally {
       await cleanup();
     }
+  }, 20_000);
+
+  test('malformed listed native agent permissions fail setup and unwind registrations', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    let deferred: ((draft: unknown) => void) | undefined;
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+      list: () => Promise<unknown[]>;
+    };
+    agent.transform = async (callback) => {
+      deferred = callback;
+      return {
+        dispose: () => calls.disposed.push('malformed-agent-transform'),
+      };
+    };
+    agent.list = async () => {
+      deferred?.({
+        list: () => [{ id: 'explorer' }],
+        get: () => ({ id: 'explorer', mode: 'subagent' }),
+      });
+      return [];
+    };
+
+    await expect(createV2Setup()(ctx)).rejects.toThrow(
+      "Native agent 'explorer' did not expose a permissions array",
+    );
+    expect(calls.disposed).toContain('malformed-agent-transform');
+    expect(calls.disposed).toContain('mcp.transform');
   }, 20_000);
 
   test('v2 draft registration applies display-name model and ordered policy overrides', async () => {
@@ -556,6 +590,9 @@ describe('createV2Setup e2e', () => {
         providerID: 'canonical',
         id: 'canonical-model',
       });
+      expect(canonical?.permissions).not.toEqual(
+        expect.arrayContaining(visibleRules),
+      );
     } finally {
       await cleanup();
     }
@@ -791,11 +828,13 @@ describe('createV2Setup e2e', () => {
         id: 'orchestrator',
         mode: 'primary',
         model: { providerID: 'openai', id: 'parent-model' },
+        permissions: [],
       },
       fixer: {
         id: 'fixer',
         mode: 'subagent',
         model: { providerID: 'anthropic', id: 'child-model' },
+        permissions: [],
       },
     };
     agent.transform = async (callback) => {

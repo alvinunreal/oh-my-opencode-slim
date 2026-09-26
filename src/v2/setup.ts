@@ -1921,6 +1921,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 const name = typeof listed.id === 'string' ? listed.id : '';
                 if (!name) continue;
                 const native = draft.get(name) ?? listed;
+                if (!Array.isArray(native.permissions)) {
+                  throw new Error(
+                    `Native agent '${name}' did not expose a permissions array`,
+                  );
+                }
                 const snapshot = snapshotNativeAgentForRegistry(native);
                 hostAgents[name] = snapshot.config;
                 nativeByAgent[name] = snapshot.permissions;
