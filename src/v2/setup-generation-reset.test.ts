@@ -27,7 +27,7 @@ import type { V2Context, V2SessionModelRequestEvent } from './types';
 const LIST_WARNING = '[v2][shim] session.list unavailable on this host build';
 const PERMISSION_BRIDGE_DISABLED_WARNING =
   '[v2][permission-rules] child permission bridge disabled: native agent ' +
-  'snapshot and ctx.session.get/update are required';
+  'snapshot and ctx.session.update are required';
 
 function makePrimaryRequest(): V2SessionModelRequestEvent {
   return {

@@ -584,10 +584,10 @@ describe('createPermissionRulesBridge', () => {
           }),
       ),
     });
-    const eventApply = bridge.applyChildSession('ses_child_1', 'probe');
+    const eventApply = bridge.observeEvent(makeChildCreatedEvent({}));
     let promptDone = false;
     const promptApply = bridge
-      .applyChildSession('ses_child_1', 'probe')
+      .ensurePromptPermission('ses_child_1')
       .then(() => {
         promptDone = true;
       });
@@ -602,9 +602,10 @@ describe('createPermissionRulesBridge', () => {
         throw new Error('update failed');
       }),
     });
-    await expect(
-      failed.applyChildSession('ses_child_2', 'probe'),
-    ).rejects.toThrow('update failed');
+    await failed.observeEvent(makeChildCreatedEvent({}));
+    await expect(failed.ensurePromptPermission('ses_child_1')).rejects.toThrow(
+      'update failed',
+    );
   });
 
   test('session.created observation remains pending until its rules update completes', async () => {
@@ -641,9 +642,9 @@ describe('createPermissionRulesBridge', () => {
     });
     await bridge.dispose();
     await bridge.observeSessionCreated(makeChildCreatedEvent({}));
-    await expect(
-      bridge.applyChildSession('ses_child_1', 'probe'),
-    ).rejects.toThrow('disposed');
+    await expect(bridge.ensurePromptPermission('ses_child_1')).rejects.toThrow(
+      'disposed',
+    );
     expect(calls).toHaveLength(0);
   });
 
@@ -757,8 +758,11 @@ describe('createPermissionRulesBridge', () => {
       policy: undefined,
     });
 
+    await bridge.observeEvent(
+      makeChildCreatedEvent({ sessionID: 'ses_child_missing_policy' }),
+    );
     await expect(
-      bridge.applyChildSession('ses_child_missing_policy', 'probe'),
+      bridge.ensurePromptPermission('ses_child_missing_policy'),
     ).rejects.toThrow('permission policy unavailable');
     await bridge.observeSessionCreated(
       makeChildCreatedEvent({ sessionID: 'ses_child_missing_policy' }),
@@ -777,7 +781,10 @@ describe('createPermissionRulesBridge', () => {
         });
       }),
     });
-    const admission = bridge.applyChildSession('ses_child_held', 'probe');
+    const eventApply = bridge.observeEvent(
+      makeChildCreatedEvent({ sessionID: 'ses_child_held' }),
+    );
+    const admission = bridge.ensurePromptPermission('ses_child_held');
     let admissionSucceeded = false;
     const observedAdmission = admission.then(
       () => {
@@ -800,6 +807,7 @@ describe('createPermissionRulesBridge', () => {
 
     finishUpdate();
     await expect(admission).rejects.toThrow('barrier expired');
+    await eventApply;
     await Promise.all([observedAdmission, disposal]);
     expect(disposalFinished).toBe(true);
     expect(admissionSucceeded).toBe(false);
@@ -889,8 +897,13 @@ describe('createV2Setup permission rules wiring', () => {
         | ((event: V2SessionPromptEvent) => Promise<void>)
         | undefined;
       let holdRulesUpdate = false;
-      let finishRulesUpdate!: () => void;
-      let failNextRulesUpdate = false;
+      let heldUpdatePending = false;
+      let finishRulesUpdate!: (error?: Error) => void;
+      const failedUpdateSessions = new Set<string>();
+      const failedLookupSessions = new Set<string>();
+      const getCalls: string[] = [];
+      let pendingLookupSessionID: string | undefined;
+      let rejectPendingLookup!: (error: Error) => void;
       let registrationDisposals = 0;
       let cleanedUp = false;
       const eventQueue: Record<string, unknown>[] = [];
@@ -942,12 +955,22 @@ describe('createV2Setup permission rules wiring', () => {
           ...(getAvailable
             ? {
                 get: async ({ sessionID }: { sessionID: string }) => ({
-                  data:
-                    sessionID === 'ses_probe_root'
+                  data: await (async () => {
+                    getCalls.push(sessionID);
+                    if (sessionID === pendingLookupSessionID) {
+                      return await new Promise<never>((_resolve, reject) => {
+                        rejectPendingLookup = reject;
+                      });
+                    }
+                    if (failedLookupSessions.has(sessionID)) {
+                      throw new Error('session lookup failed');
+                    }
+                    return sessionID === 'ses_probe_root'
                       ? { agent: 'orchestrator' }
                       : sessionID === 'ses_probe_foreign'
                         ? { parentID: 'ses_parent', agent: 'host-agent' }
-                        : { parentID: 'ses_parent', agent: 'explorer' },
+                        : { parentID: 'ses_parent', agent: 'explorer' };
+                  })(),
                 }),
               }
             : {}),
@@ -955,19 +978,21 @@ describe('createV2Setup permission rules wiring', () => {
             ? {
                 update: async (input: RulesCall) => {
                   calls.push(input);
-                  if (failNextRulesUpdate) {
-                    failNextRulesUpdate = false;
+                  if (failedUpdateSessions.has(input.sessionID)) {
                     throw new Error('held permission update failed');
                   }
                   if (neverSettleUpdate) {
                     await new Promise<void>((resolve) => {
-                      finishRulesUpdate = resolve;
+                      finishRulesUpdate = () => resolve();
                     });
                   }
                   if (holdRulesUpdate) {
-                    await new Promise<void>((resolve) => {
-                      finishRulesUpdate = resolve;
+                    heldUpdatePending = true;
+                    await new Promise<void>((resolve, reject) => {
+                      finishRulesUpdate = (error) =>
+                        error ? reject(error) : resolve();
                     });
+                    heldUpdatePending = false;
                   }
                   return {};
                 },
@@ -1013,9 +1038,30 @@ describe('createV2Setup permission rules wiring', () => {
         // agent.list() during setup forced the host's deferred transform.
         expect(transformsApplied).toBe(true);
         expect(promptHandler).toBeDefined();
-        const bridgeEnabled =
-          snapshotAvailable && getAvailable && updateAvailable;
-        holdRulesUpdate = bridgeEnabled && !neverSettleUpdate;
+        const bridgeEnabled = snapshotAvailable && updateAvailable;
+        const prompt = promptHandler as NonNullable<typeof promptHandler>;
+        holdRulesUpdate = bridgeEnabled;
+        if (getAvailable && bridgeEnabled) {
+          pendingLookupSessionID = 'ses_probe_child';
+        }
+        let admissionFinished = false;
+        let admissionError: unknown;
+        const admission = prompt({
+          sessionID: 'ses_probe_child',
+          messageID: 'msg_before_creation',
+          prompt: { text: 'prompt before child creation' },
+        }).then(
+          () => {
+            admissionFinished = true;
+          },
+          (error: unknown) => {
+            admissionError = error;
+          },
+        );
+        if (getAvailable && bridgeEnabled) {
+          await Promise.resolve();
+          expect(getCalls).toContain('ses_probe_child');
+        }
         publishEvent({
           type: 'session.created',
           data: {
@@ -1032,18 +1078,13 @@ describe('createV2Setup permission rules wiring', () => {
         }
         if (neverSettleUpdate) {
           expect(calls).toHaveLength(1);
-          const admission = (
-            promptHandler as NonNullable<typeof promptHandler>
-          )({
-            sessionID: 'ses_probe_child',
-            messageID: 'msg_hanging',
-            prompt: { text: 'must time out' },
-          });
-          const rejectedAdmission =
-            expect(admission).rejects.toThrow('timed out');
+          if (getAvailable) {
+            rejectPendingLookup(new Error('creation beat identity lookup'));
+          }
           await cleanup();
           cleanedUp = true;
-          await rejectedAdmission;
+          await admission;
+          expect(String(admissionError)).toMatch(/timed out|disposed/);
           expect(registrationDisposals).toBeGreaterThan(0);
           finishRulesUpdate();
           await Bun.sleep(0);
@@ -1082,21 +1123,112 @@ describe('createV2Setup permission rules wiring', () => {
           return;
         }
         expect(calls).toHaveLength(1);
-        let admissionFinished = false;
-        const admission = (promptHandler as NonNullable<typeof promptHandler>)({
+        expect(heldUpdatePending).toBe(true);
+        if (getAvailable) {
+          rejectPendingLookup(new Error('creation beat identity lookup'));
+          await Promise.resolve();
+          expect(admissionFinished).toBe(false);
+        } else {
+          await admission; // update-only pre-creation prompt degrades
+          expect(admissionFinished).toBe(true);
+        }
+        let knownAdmissionFinished = false;
+        const knownAdmission = prompt({
           sessionID: 'ses_probe_child',
           messageID: 'msg_probe_child',
           prompt: { text: 'first child input' },
         }).then(() => {
-          admissionFinished = true;
+          knownAdmissionFinished = true;
         });
         await Promise.resolve();
-        expect(admissionFinished).toBe(false);
+        expect(knownAdmissionFinished).toBe(false);
         finishRulesUpdate();
-        await admission;
-        expect(admissionFinished).toBe(true);
+        await Promise.all([admission, knownAdmission]);
+        expect(admissionError).toBeUndefined();
+        expect(knownAdmissionFinished).toBe(true);
+        if (getAvailable) expect(admissionFinished).toBe(true);
         holdRulesUpdate = false;
-        failNextRulesUpdate = true;
+
+        // Positive root/foreign and managed identities skip the optional lookup.
+        const beforeKnownUnmanagedEvents = calls.length;
+        publishEvent({
+          type: 'session.created',
+          data: { sessionID: 'ses_probe_root', agent: 'orchestrator' },
+        });
+        publishEvent({
+          type: 'session.created',
+          data: {
+            sessionID: 'ses_probe_foreign',
+            parentID: 'ses_parent',
+            agent: 'host-agent',
+          },
+        });
+        publishEvent({
+          type: 'session.created',
+          data: {
+            sessionID: 'ses_probe_barrier',
+            parentID: 'ses_parent',
+            agent: 'explorer',
+          },
+        });
+        const unmanagedDeadline = Date.now() + 2_000;
+        while (
+          calls.length === beforeKnownUnmanagedEvents &&
+          Date.now() < unmanagedDeadline
+        ) {
+          await Bun.sleep(10);
+        }
+        expect(calls.at(-1)?.sessionID).toBe('ses_probe_barrier');
+        const getCallsAfterKnownManaged = getCalls.length;
+        await prompt({
+          sessionID: 'ses_probe_root',
+          messageID: 'msg_root',
+          prompt: { text: 'root prompt' },
+        });
+        await prompt({
+          sessionID: 'ses_probe_foreign',
+          messageID: 'msg_foreign',
+          prompt: { text: 'foreign prompt' },
+        });
+        expect(getCalls).toHaveLength(getCallsAfterKnownManaged);
+
+        // Unknown lookup failure degrades this admission, but a later child
+        // creation still applies the native projection.
+        failedLookupSessions.add('ses_probe_unknown');
+        await (promptHandler as NonNullable<typeof promptHandler>)({
+          sessionID: 'ses_probe_unknown',
+          messageID: 'msg_unknown',
+          prompt: { text: 'unknown identity prompt' },
+        });
+        if (getAvailable) expect(getCalls).toContain('ses_probe_unknown');
+        const priorCalls = calls.length;
+        publishEvent({
+          type: 'session.created',
+          data: {
+            sessionID: 'ses_probe_unknown',
+            parentID: 'ses_parent',
+            agent: 'explorer',
+          },
+        });
+        const unknownDeadline = Date.now() + 2_000;
+        while (calls.length === priorCalls && Date.now() < unknownDeadline) {
+          await Bun.sleep(10);
+        }
+        expect(calls).toHaveLength(priorCalls + 1);
+
+        // A known managed identity never consults get, and a failed update
+        // rejects prompt admission rather than reporting false success.
+        failedUpdateSessions.add('ses_probe_failed');
+        publishEvent({
+          type: 'session.created',
+          data: {
+            sessionID: 'ses_probe_failed',
+            parentID: 'ses_parent',
+            agent: 'explorer',
+          },
+        });
+        await Bun.sleep(10);
+        const beforeFailedPromptLookupCount = getCalls.length;
         await expect(
           (promptHandler as NonNullable<typeof promptHandler>)({
             sessionID: 'ses_probe_failed',
@@ -1104,6 +1236,49 @@ describe('createV2Setup permission rules wiring', () => {
             prompt: { text: 'must not proceed' },
           }),
         ).rejects.toThrow('held permission update failed');
+        expect(getCalls).toHaveLength(beforeFailedPromptLookupCount);
+
+        if (getAvailable) {
+          const updatesBeforeAgentSelection = calls.length;
+          publishEvent({
+            type: 'session.agent.selected',
+            data: { sessionID: 'ses_probe_child', agent: 'host-agent' },
+          });
+          await Bun.sleep(10);
+          const lookupsBeforeForeignPrompt = getCalls.length;
+          await (promptHandler as NonNullable<typeof promptHandler>)({
+            sessionID: 'ses_probe_child',
+            messageID: 'msg_selected_foreign',
+            prompt: { text: 'selected foreign agent' },
+          });
+          expect(getCalls).toHaveLength(lookupsBeforeForeignPrompt);
+          expect(calls).toHaveLength(updatesBeforeAgentSelection);
+
+          publishEvent({
+            type: 'session.agent.selected',
+            data: { sessionID: 'ses_probe_child', agent: 'explorer' },
+          });
+          const selectedDeadline = Date.now() + 2_000;
+          while (
+            calls.length === updatesBeforeAgentSelection &&
+            Date.now() < selectedDeadline
+          ) {
+            await Bun.sleep(10);
+          }
+          expect(calls).toHaveLength(updatesBeforeAgentSelection + 1);
+          const lookupsBeforeDeletedPrompt = getCalls.length;
+          publishEvent({
+            type: 'session.deleted',
+            data: { sessionID: 'ses_probe_child' },
+          });
+          await Bun.sleep(10);
+          await (promptHandler as NonNullable<typeof promptHandler>)({
+            sessionID: 'ses_probe_child',
+            messageID: 'msg_after_delete',
+            prompt: { text: 'after deletion' },
+          });
+          expect(getCalls.length).toBe(lookupsBeforeDeletedPrompt + 1);
+        }
         expect(calls[0].sessionID).toBe('ses_probe_child');
         // The fixture's exact-match entry made it through the derivation
         // (v1 `bash` maps to the v2 `execute` + `bash` actions).
