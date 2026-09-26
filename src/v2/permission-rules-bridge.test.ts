@@ -632,6 +632,133 @@ describe('createPermissionRulesBridge', () => {
     expect(downstreamCanContinue).toBe(true);
   });
 
+  test('unrelated session events do not stale an outstanding identity lookup', async () => {
+    let resolveLookup!: (value: unknown) => void;
+    const calls: RulesCall[] = [];
+    const getCalls: string[] = [];
+    const bridge = makeBridge({
+      session: {
+        get: async ({ sessionID }: { sessionID: string }) => {
+          getCalls.push(sessionID);
+          return await new Promise((resolve) => {
+            resolveLookup = resolve;
+          });
+        },
+        update: async (input: RulesCall) => {
+          calls.push(input);
+          return {};
+        },
+      } as unknown as V2Session,
+    });
+
+    const admission = bridge.ensurePromptPermission('ses_lookup_a');
+    await Promise.resolve();
+    expect(getCalls).toEqual(['ses_lookup_a']);
+    await bridge.observeEvent({
+      type: 'session.created',
+      data: {
+        sessionID: 'ses_unrelated_b',
+        parentID: 'ses_parent',
+        agent: 'probe',
+      },
+    });
+    resolveLookup({
+      data: { parentID: 'ses_parent', agent: 'probe' },
+    });
+    await admission;
+
+    expect(calls.map(({ sessionID }) => sessionID)).toEqual([
+      'ses_unrelated_b',
+      'ses_lookup_a',
+    ]);
+    await bridge.dispose();
+  });
+
+  test.each([
+    {
+      description: 'changed creation',
+      event: {
+        type: 'session.created',
+        data: {
+          sessionID: 'ses_lookup_a',
+          parentID: 'ses_parent',
+          agent: 'host-agent',
+        },
+      },
+    },
+    {
+      description: 'agent selection',
+      event: {
+        type: 'session.agent.selected',
+        data: {
+          sessionID: 'ses_lookup_a',
+          parentID: 'ses_parent',
+          agent: 'host-agent',
+        },
+      },
+    },
+    {
+      description: 'deletion',
+      event: {
+        type: 'session.deleted',
+        data: { sessionID: 'ses_lookup_a' },
+      },
+    },
+  ])(
+    'a stale identity lookup cannot overwrite a later $description event',
+    async ({ event }) => {
+      let resolveLookup!: (value: unknown) => void;
+      const calls: RulesCall[] = [];
+      const bridge = makeBridge({
+        session: {
+          get: async () =>
+            await new Promise((resolve) => {
+              resolveLookup = resolve;
+            }),
+          update: async (input: RulesCall) => {
+            calls.push(input);
+            return {};
+          },
+        } as unknown as V2Session,
+      });
+
+      const admission = bridge.ensurePromptPermission('ses_lookup_a');
+      await Promise.resolve();
+      await bridge.observeEvent(event);
+      resolveLookup({
+        data: { parentID: 'ses_parent', agent: 'probe' },
+      });
+      await admission;
+
+      expect(calls).toHaveLength(0);
+      await bridge.dispose();
+    },
+  );
+
+  test('duplicate creation events share one in-flight permission update', async () => {
+    let finishUpdate!: () => void;
+    const calls: RulesCall[] = [];
+    const bridge = makeBridge({
+      session: makeSession(async (input) => {
+        calls.push(input as RulesCall);
+        await new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        });
+        return {};
+      }),
+    });
+    const first = bridge.observeEvent(makeChildCreatedEvent({}));
+    await Promise.resolve();
+    const duplicate = bridge.observeEvent(makeChildCreatedEvent({}));
+    await Promise.resolve();
+
+    expect(calls).toHaveLength(1);
+    finishUpdate();
+    await Promise.all([first, duplicate]);
+    expect(calls).toHaveLength(1);
+    await bridge.dispose();
+  });
+
   test('dispose prevents any later permission writes', async () => {
     const calls: RulesCall[] = [];
     const bridge = makeBridge({
@@ -869,6 +996,12 @@ describe('createV2Setup permission rules wiring', () => {
       snapshotAvailable: true,
       getAvailable: true,
       updateAvailable: true,
+      abortRegistrationFailure: true,
+    },
+    {
+      snapshotAvailable: true,
+      getAvailable: true,
+      updateAvailable: true,
       neverSettleUpdate: true,
     },
   ])(
@@ -877,6 +1010,7 @@ describe('createV2Setup permission rules wiring', () => {
       snapshotAvailable,
       getAvailable,
       updateAvailable,
+      abortRegistrationFailure = false,
       neverSettleUpdate = false,
     }) => {
       const calls: RulesCall[] = [];
@@ -909,6 +1043,9 @@ describe('createV2Setup permission rules wiring', () => {
       const eventQueue: Record<string, unknown>[] = [];
       let wakeEvent: (() => void) | undefined;
       let eventStreamStopped = false;
+      const requiredRegistrationError = new Error(
+        'required context registration failed',
+      );
       const ctx = {
         app: { name: 'opencode', version: 'v2-perm-rules-test' },
         options: {},
@@ -943,11 +1080,17 @@ describe('createV2Setup permission rules wiring', () => {
         },
         session: {
           hook: async (name: string, callback: unknown) => {
+            if (name === 'context' && abortRegistrationFailure) {
+              throw requiredRegistrationError;
+            }
             if (name === 'prompt') {
               promptHandler = callback as typeof promptHandler;
             }
             return {
               dispose: () => {
+                if (name === 'prompt' && abortRegistrationFailure) {
+                  return new Promise<void>(() => {});
+                }
                 registrationDisposals += 1;
               },
             };
@@ -981,12 +1124,15 @@ describe('createV2Setup permission rules wiring', () => {
                   if (failedUpdateSessions.has(input.sessionID)) {
                     throw new Error('held permission update failed');
                   }
-                  if (neverSettleUpdate) {
+                  if (
+                    neverSettleUpdate &&
+                    input.sessionID === 'ses_probe_child'
+                  ) {
                     await new Promise<void>((resolve) => {
                       finishRulesUpdate = () => resolve();
                     });
                   }
-                  if (holdRulesUpdate) {
+                  if (holdRulesUpdate && !neverSettleUpdate) {
                     heldUpdatePending = true;
                     await new Promise<void>((resolve, reject) => {
                       finishRulesUpdate = (error) =>
@@ -1032,7 +1178,14 @@ describe('createV2Setup permission rules wiring', () => {
         wakeEvent = undefined;
       };
 
-      const cleanup = await createV2Setup()(ctx);
+      const setupPromise = createV2Setup()(ctx);
+      if (abortRegistrationFailure) {
+        const startedAt = Date.now();
+        await expect(setupPromise).rejects.toBe(requiredRegistrationError);
+        expect(Date.now() - startedAt).toBeLessThan(6_000);
+        return;
+      }
+      const cleanup = await setupPromise;
 
       try {
         // agent.list() during setup forced the host's deferred transform.
@@ -1041,7 +1194,7 @@ describe('createV2Setup permission rules wiring', () => {
         const bridgeEnabled = snapshotAvailable && updateAvailable;
         const prompt = promptHandler as NonNullable<typeof promptHandler>;
         holdRulesUpdate = bridgeEnabled;
-        if (getAvailable && bridgeEnabled) {
+        if (getAvailable && bridgeEnabled && !neverSettleUpdate) {
           pendingLookupSessionID = 'ses_probe_child';
         }
         let admissionFinished = false;
@@ -1078,17 +1231,30 @@ describe('createV2Setup permission rules wiring', () => {
         }
         if (neverSettleUpdate) {
           expect(calls).toHaveLength(1);
-          if (getAvailable) {
-            rejectPendingLookup(new Error('creation beat identity lookup'));
+          await admission;
+          expect(String(admissionError)).toContain('timed out');
+          publishEvent({
+            type: 'session.created',
+            data: {
+              sessionID: 'ses_probe_next',
+              parentID: 'ses_probe_parent',
+              agent: 'explorer',
+            },
+          });
+          const nextEventDeadline = Date.now() + 2_000;
+          while (calls.length < 2 && Date.now() < nextEventDeadline) {
+            await Bun.sleep(10);
           }
+          expect(calls.map(({ sessionID }) => sessionID)).toEqual([
+            'ses_probe_child',
+            'ses_probe_next',
+          ]);
+          finishRulesUpdate();
           await cleanup();
           cleanedUp = true;
-          await admission;
-          expect(String(admissionError)).toMatch(/timed out|disposed/);
           expect(registrationDisposals).toBeGreaterThan(0);
-          finishRulesUpdate();
           await Bun.sleep(0);
-          expect(calls).toHaveLength(1);
+          expect(calls).toHaveLength(2);
           await expect(
             (promptHandler as NonNullable<typeof promptHandler>)({
               sessionID: 'ses_probe_late',
@@ -1096,7 +1262,7 @@ describe('createV2Setup permission rules wiring', () => {
               prompt: { text: 'late prompt' },
             }),
           ).rejects.toThrow('disposed');
-          expect(calls).toHaveLength(1);
+          expect(calls).toHaveLength(2);
           return;
         }
         if (!bridgeEnabled) {

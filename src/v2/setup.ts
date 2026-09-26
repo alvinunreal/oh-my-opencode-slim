@@ -888,19 +888,26 @@ export function createPermissionRulesBridge(
    * child; FIFO-bounded like every per-session bridge map). */
   const applied = new Map<string, true>();
   const identities = new Map<string, PermissionSessionIdentity | null>();
+  const pendingIdentityLookups = new Map<
+    string,
+    { invalidated: boolean; operation?: Promise<void> }
+  >();
   const applying = new Map<
     string,
     { operation: Promise<void>; timedOut: boolean }
   >();
   let disposed = false;
   let disposal: Promise<void> | undefined;
-  let identityRevision = 0;
 
   function cacheIdentity(
     sessionID: string,
     identity: PermissionSessionIdentity | null,
+    lookup?: { invalidated: boolean; operation?: Promise<void> },
   ): void {
-    identityRevision += 1;
+    const pendingLookup = pendingIdentityLookups.get(sessionID);
+    if (pendingLookup && pendingLookup !== lookup) {
+      pendingLookup.invalidated = true;
+    }
     identities.set(sessionID, identity);
     pruneSessionMap(identities);
   }
@@ -1155,52 +1162,60 @@ export function createPermissionRulesBridge(
       warnUnknownIdentity();
       return;
     }
-    const startingRevision = identityRevision;
-    let response: unknown;
-    try {
-      response = await withTimeout(
-        getSession.call(session, { sessionID }),
-        PERMISSION_RULES_OPERATION_TIMEOUT_MS,
-        'Child session identity lookup timed out',
-      );
-    } catch (err) {
-      const current = identities.get(sessionID);
-      if (
-        current !== initialIdentity ||
-        identityRevision !== startingRevision
-      ) {
-        await enforceKnownIdentity(sessionID, current);
-        if (current?.state === 'unknown' || current === null || !current) {
-          warnUnknownIdentity();
-        }
+    let pendingLookup = pendingIdentityLookups.get(sessionID);
+    if (!pendingLookup) {
+      if (pendingIdentityLookups.size >= MAX_PENDING_PERMISSION_UPDATES) {
+        warnUnknownIdentity();
         return;
       }
-      warnUnknownIdentity();
-      log('[v2][permission-rules] session identity lookup failed', String(err));
-      return;
+      pendingLookup = { invalidated: false };
+      pendingIdentityLookups.set(sessionID, pendingLookup);
+      const lookup = pendingLookup;
+      lookup.operation = (async () => {
+        try {
+          const response = await withTimeout(
+            getSession.call(session, { sessionID }),
+            PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+            'Child session identity lookup timed out',
+          );
+          if (lookup.invalidated || disposed) return;
+          const record =
+            isRecord(response) && isRecord(response.data)
+              ? response.data
+              : response;
+          if (
+            !isRecord(record) ||
+            (!Object.hasOwn(record, 'parentID') &&
+              typeof record.agent !== 'string')
+          ) {
+            warnUnknownIdentity();
+            return;
+          }
+          const identity = identityFromPayload(record, 'lookup');
+          cacheIdentity(sessionID, identity, lookup);
+        } catch (err) {
+          if (!lookup.invalidated) {
+            warnUnknownIdentity();
+            log(
+              '[v2][permission-rules] session identity lookup failed',
+              String(err),
+            );
+          }
+        } finally {
+          if (pendingIdentityLookups.get(sessionID) === lookup) {
+            pendingIdentityLookups.delete(sessionID);
+          }
+        }
+      })();
     }
-
+    await pendingLookup.operation;
+    if (disposed) throw new Error('permission rules bridge is disposed');
     const current = identities.get(sessionID);
-    if (current !== initialIdentity || identityRevision !== startingRevision) {
+    if (current?.state === 'managed') {
       await enforceKnownIdentity(sessionID, current);
-      if (current?.state === 'unknown' || current === null || !current) {
-        warnUnknownIdentity();
-      }
-      return;
-    }
-    const record =
-      isRecord(response) && isRecord(response.data) ? response.data : response;
-    if (
-      !isRecord(record) ||
-      (!Object.hasOwn(record, 'parentID') && typeof record.agent !== 'string')
-    ) {
+    } else if (current?.state === 'unknown' || current === null || !current) {
       warnUnknownIdentity();
-      return;
     }
-    const identity = identityFromPayload(record, 'lookup');
-    cacheIdentity(sessionID, identity);
-    await enforceKnownIdentity(sessionID, identity);
-    if (identity.state === 'unknown') warnUnknownIdentity();
   }
 
   return {
@@ -1228,6 +1243,7 @@ export function createPermissionRulesBridge(
         .then(() => {
           applying.clear();
           identities.clear();
+          pendingIdentityLookups.clear();
           applied.clear();
         });
       return disposal;
@@ -1717,6 +1733,22 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     let stopPermissionEventIntake: (() => Promise<void>) | undefined;
     let v1Hooks: Record<string, unknown> | undefined;
 
+    const boundedPermissionStop = (
+      stop: () => Promise<void> | void,
+      message: string,
+    ): (() => Promise<void>) => {
+      let stopping: Promise<void> | undefined;
+      return () => {
+        if (stopping) return stopping;
+        stopping = withTimeout(
+          Promise.resolve().then(stop),
+          PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+          message,
+        );
+        return stopping;
+      };
+    };
+
     // ── Storage domain (optional): background-job persistence ──
     // Configured BEFORE the v1 factory runs so board/ledger creation
     // seeds from the persisted state. Absent domain → pure in-memory
@@ -2094,9 +2126,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           }
           await bridge.handlePrompt(event);
         });
-        stopPermissionPromptAdmission = async () => {
-          await promptReg.dispose();
-        };
+        stopPermissionPromptAdmission = boundedPermissionStop(
+          () => promptReg.dispose(),
+          'Permission prompt hook disposal timed out',
+        );
         disposers.push(stopPermissionPromptAdmission);
         promptBridge = bridge;
         log('[v2] native session prompt hook registered');
@@ -2291,10 +2324,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               log('[v2] event stream ended', String(err));
             }
           })();
-          stopPermissionEventIntake = async () => {
+          stopPermissionEventIntake = boundedPermissionStop(async () => {
             eventStopped = true;
             await eventIterator.return?.();
-          };
+          }, 'Permission event intake stop timed out');
           disposers.push(stopPermissionEventIntake);
           log('[v2] event stream subscribed');
         }
@@ -2331,11 +2364,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         ]) {
           try {
             if (!stop) continue;
-            await withTimeout(
-              Promise.resolve().then(stop),
-              PERMISSION_RULES_OPERATION_TIMEOUT_MS,
-              'Permission bridge shutdown step timed out',
-            );
+            await stop();
           } catch (err) {
             log('[v2] permission bridge stop failed', String(err));
           }
