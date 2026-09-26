@@ -376,9 +376,9 @@ describe('createV2Setup e2e', () => {
         background: true,
       });
 
-      // (2) Write-back rewrite: a v2 `sessionID` that is not a
-      // resolvable/valid task id maps to v1 `task_id`. Unknown aliases are
-      // dropped so task() can spawn a new session instead of refusing.
+      // (2) An unknown v2 `sessionID` maps to an explicit v1 `task_id`.
+      // Refusal propagates through the bridge without changing the input
+      // or registering another child.
       const resumeEvent = {
         tool: 'subagent',
         sessionID: 'ses_parent',
@@ -393,10 +393,18 @@ describe('createV2Setup e2e', () => {
           sessionID: 'resume_me',
         },
       };
-      const resumeHook = calls.toolBeforeCb;
-      if (!resumeHook) throw new Error('tool:execute.before not captured');
-      await resumeHook(resumeEvent);
-      expect(resumeEvent.input.sessionID).toBeUndefined();
+      await expect(beforeHook(resumeEvent)).rejects.toThrow(
+        'The task_id was not dropped; no new session was created.',
+      );
+      expect(resumeEvent.input.sessionID).toBe('resume_me');
+      const taskStatus = calls.toolAdds.find((t) => t.name === 'task_status');
+      if (!taskStatus) throw new Error('task_status tool not registered');
+      await expect(
+        taskStatus.execute(
+          { task_id: 'resume_me' },
+          { sessionID: 'ses_parent' },
+        ),
+      ).rejects.toThrow('Unknown task ID or alias: resume_me');
 
       // (3) v2 subagent result: plain-text background output. The
       // after-bridge maps content → v1 `output` under tool 'task'; the
@@ -419,8 +427,6 @@ describe('createV2Setup e2e', () => {
 
       // Board observable: the task_status v2 tool captured from the
       // tool draft reads the registered job through the real board.
-      const taskStatus = calls.toolAdds.find((t) => t.name === 'task_status');
-      if (!taskStatus) throw new Error('task_status tool not registered');
       const status = (await taskStatus.execute(
         { task_id: 'ses_kid_1' },
         { sessionID: 'ses_parent' },

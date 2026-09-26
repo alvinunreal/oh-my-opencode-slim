@@ -71,6 +71,14 @@ const ALLOWLIST = new Map<string, string>([
     'Date.now() establishes in-memory request/observation ordering for generation-safe status reconciliation; board timestamps are never formatted into prompt content.',
   ],
   [
+    'hooks/task-session-manager/session-recovery.ts',
+    'Date.now() bounds host status and transcript evidence for internal recovery attribution; observed timestamps are not serialized into prompt content.',
+  ],
+  [
+    'hooks/task-session-manager/tool-execute-hooks.ts',
+    'Date.now() timestamps the persistent resume claim baseline for internal admission bookkeeping; claimedAt is never formatted into prompt content.',
+  ],
+  [
     'hooks/image-hook.ts',
     'Date.now() throttles temp-image cleanup; extracted image paths are deterministic per part id.',
   ],

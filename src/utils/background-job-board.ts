@@ -12,6 +12,7 @@ import {
 import type { BackgroundJobStore } from './background-job-store';
 import {
   clearBackgroundJobSuppression,
+  getBackgroundJobLifecycleLedger,
   recordBackgroundJobSuppression,
 } from './background-job-store';
 import {
@@ -121,6 +122,14 @@ export interface BackgroundJobBoardOptions {
    * shared persistence high-water marks (0 without a storage backend —
    * exactly the pre-persistence behavior). */
   aliasCounterHighWater?: (parentSessionID: string, prefix: string) => number;
+  /** Synchronous durable reservation for new task IDs; returns the recorded alias. */
+  aliasAllocator?: (
+    parentSessionID: string,
+    agent: string,
+    taskID: string,
+    prefix: string,
+    minimumCounter: number,
+  ) => string;
 }
 
 export interface BackgroundJobLaunchInput {
@@ -140,6 +149,27 @@ export interface BackgroundJobLaunchInput {
   lease?: BackgroundJobLease;
   now?: number;
 }
+
+/** Caller has attributed this host child to the parent's structured transcript. */
+export interface BackgroundJobAdoptionIdentity {
+  parentSessionID: string;
+  taskID: string;
+  agent: string;
+  alias: string;
+  description?: string;
+  background: true;
+}
+
+export type BackgroundJobAdoptionEvidence =
+  | { kind: 'live'; observedBusyAt: number; runStartedAt?: number }
+  | {
+      kind: 'terminal';
+      state: 'completed' | 'error' | 'cancelled';
+      resultSummary: string;
+      completedAt: number;
+      acknowledged: boolean;
+    }
+  | { kind: 'stopped'; resultSummary: string; completedAt: number };
 
 export interface BackgroundJobStatusInput {
   taskID: string;
@@ -186,6 +216,13 @@ export class BackgroundJobLaunchConflictError extends Error {
   }
 }
 
+export class BackgroundJobAdoptionConflictError extends Error {
+  constructor(taskID: string, message: string) {
+    super(`Cannot adopt existing session ${taskID}: ${message}`);
+    this.name = 'BackgroundJobAdoptionConflictError';
+  }
+}
+
 const CANONICAL_TERMINAL_STATES = new Set<TaskOutputState>([
   'completed',
   'error',
@@ -221,6 +258,9 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     parentSessionID: string,
     prefix: string,
   ) => number;
+  private readonly aliasAllocator?: NonNullable<
+    BackgroundJobBoardOptions['aliasAllocator']
+  >;
 
   constructor(options: BackgroundJobBoardOptions = {}) {
     this.maxReusablePerAgent =
@@ -232,6 +272,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       options.readContextMaxFiles ?? DEFAULT_READ_CONTEXT_MAX_FILES;
     this.aliasCounterHighWater =
       options.aliasCounterHighWater ?? aliasHighWaterMark;
+    this.aliasAllocator = options.aliasAllocator;
   }
 
   addTerminalStateListener(listener: TerminalStateListener): void {
@@ -408,12 +449,190 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       lastLiveBusyAt: now,
       lastUsedAt: now,
       updatedAt: now,
-      alias: this.nextAlias(input.parentSessionID, input.agent),
+      alias: this.nextAlias(input.parentSessionID, input.agent, input.taskID),
       contextFiles: [],
       totalErrors: 0,
       timeoutCount: 0,
     };
 
+    this.setJob(record);
+    return record;
+  }
+
+  /** Import observed host state without launching or publishing a terminal event. */
+  adoptExistingSession(
+    identity: BackgroundJobAdoptionIdentity,
+    evidence: BackgroundJobAdoptionEvidence,
+  ): BackgroundJobRecord {
+    const taskID = identity?.taskID ?? '';
+    const conflict = (message: string): never => {
+      throw new BackgroundJobAdoptionConflictError(String(taskID), message);
+    };
+    for (const key of [
+      'parentSessionID',
+      'taskID',
+      'agent',
+      'alias',
+    ] as const) {
+      const value = identity?.[key];
+      if (
+        typeof value !== 'string' ||
+        !value.trim() ||
+        value !== value.trim()
+      ) {
+        conflict(`${key} must be a nonempty, unpadded string`);
+      }
+    }
+    if (
+      identity.background !== true ||
+      (identity.description !== undefined &&
+        (typeof identity.description !== 'string' ||
+          !identity.description.trim()))
+    ) {
+      conflict('invalid background identity or description');
+    }
+
+    const validTime = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0;
+    if (evidence?.kind === 'live') {
+      if (
+        'state' in evidence ||
+        !validTime(evidence.observedBusyAt) ||
+        (evidence.runStartedAt !== undefined &&
+          (!validTime(evidence.runStartedAt) ||
+            evidence.runStartedAt > evidence.observedBusyAt))
+      ) {
+        conflict(
+          'live adoption requires a valid attributable busy observation',
+        );
+      }
+    } else if (evidence?.kind === 'terminal' || evidence?.kind === 'stopped') {
+      if (
+        (evidence.kind === 'stopped' && 'state' in evidence) ||
+        !validTime(evidence.completedAt) ||
+        typeof evidence.resultSummary !== 'string' ||
+        !evidence.resultSummary.trim()
+      ) {
+        conflict(
+          'terminal adoption requires a completion time and result summary',
+        );
+      }
+      if (
+        evidence.kind === 'terminal' &&
+        (!CANONICAL_TERMINAL_STATES.has(evidence.state) ||
+          typeof evidence.acknowledged !== 'boolean')
+      ) {
+        conflict('unknown terminal state or acknowledgement');
+      }
+    } else {
+      conflict('unknown evidence kind');
+    }
+
+    const ledger = getBackgroundJobLifecycleLedger(this);
+    const evicted = ledger.trimmedIdentities.get(taskID);
+    if (ledger.tombstones.has(taskID)) {
+      if (
+        !evicted ||
+        evicted.parentSessionID !== identity.parentSessionID ||
+        evicted.agent !== identity.agent ||
+        evicted.alias !== identity.alias ||
+        evicted.background !== true ||
+        (identity.description !== undefined &&
+          evicted.description !== identity.description)
+      ) {
+        conflict('task ID is suppressed');
+      }
+    }
+    const existing = this.jobs.get(taskID);
+    if (existing) {
+      if (
+        existing.parentSessionID !== identity.parentSessionID ||
+        existing.agent !== identity.agent ||
+        existing.alias !== identity.alias ||
+        existing.background !== true ||
+        (identity.description !== undefined &&
+          existing.description !== identity.description)
+      ) {
+        conflict('task ID already belongs to a different identity');
+      }
+      const compatible =
+        evidence.kind === 'live'
+          ? existing.state === 'running'
+          : evidence.kind === 'stopped'
+            ? existing.state === 'stopped'
+            : existing.terminalState === evidence.state &&
+              existing.terminalUnreconciled === !evidence.acknowledged &&
+              (evidence.acknowledged
+                ? existing.state === 'reconciled'
+                : existing.state === evidence.state);
+      if (!compatible) {
+        conflict(
+          'state conflicts with observed evidence; reconcile by generation',
+        );
+      }
+      return existing;
+    }
+    if (
+      this.list(identity.parentSessionID).some(
+        (job) =>
+          job.alias === identity.alias ||
+          job.taskID === identity.alias ||
+          job.alias === identity.taskID,
+      )
+    ) {
+      conflict('alias already belongs to another task in this parent');
+    }
+
+    // Generation is a local observation fence, not the host's original run count.
+    const generation = ++this.executionSequence;
+    const observedAt =
+      evidence.kind === 'live' ? evidence.observedBusyAt : evidence.completedAt;
+    // Terminal evidence gives no start time; use completion for local ordering only.
+    const runStartedAt =
+      evidence.kind === 'live'
+        ? (evidence.runStartedAt ?? observedAt)
+        : observedAt;
+    const record: BackgroundJobRecord = {
+      taskID,
+      parentSessionID: identity.parentSessionID,
+      agent: identity.agent,
+      alias: identity.alias,
+      description: identity.description ?? `background ${identity.agent} task`,
+      background: true,
+      state:
+        evidence.kind === 'live'
+          ? 'running'
+          : evidence.kind === 'stopped'
+            ? 'stopped'
+            : evidence.acknowledged
+              ? 'reconciled'
+              : evidence.state,
+      generation,
+      taskGeneration: 1,
+      terminalRevision: evidence.kind === 'live' ? 0 : 1,
+      activityRevision: 0,
+      terminalUnreconciled:
+        evidence.kind === 'terminal' && !evidence.acknowledged,
+      timedOut: false,
+      recoverableAfterLiveBusy: false,
+      statusUncertain: false,
+      cancellationRequested: false,
+      launchedAt: runStartedAt,
+      lastLaunchedAt: runStartedAt,
+      runStartedAt,
+      lastLiveBusyAt:
+        evidence.kind === 'live' ? evidence.observedBusyAt : undefined,
+      updatedAt: observedAt,
+      lastUsedAt: observedAt,
+      completedAt: evidence.kind === 'live' ? undefined : evidence.completedAt,
+      resultSummary:
+        evidence.kind === 'live' ? undefined : evidence.resultSummary,
+      terminalState: evidence.kind === 'terminal' ? evidence.state : undefined,
+      contextFiles: evicted?.contextFiles ?? [],
+      totalErrors: 0,
+      timeoutCount: 0,
+    };
+    this.bumpAdoptedAlias(identity);
     this.setJob(record);
     return record;
   }
@@ -1077,9 +1296,17 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     taskIDOrAlias: string,
   ): BackgroundJobRecord | undefined {
     const value = taskIDOrAlias.trim();
-    return this.list(parentSessionID).find(
+    const matches = this.list(parentSessionID).filter(
       (job) => job.taskID === value || job.alias === value,
     );
+    if (matches.length > 1) {
+      log('Ambiguous background job identifier; refusing to resolve', {
+        parentSessionID,
+        key: value,
+      });
+      return undefined;
+    }
+    return matches[0];
   }
 
   resolveReusable(
@@ -1414,6 +1641,12 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   }
 
   clearParent(parentSessionID: string): void {
+    for (const [taskID, identity] of getBackgroundJobLifecycleLedger(this)
+      .trimmedIdentities) {
+      if (identity.parentSessionID === parentSessionID) {
+        recordBackgroundJobSuppression(this, taskID);
+      }
+    }
     for (const job of this.list(parentSessionID)) {
       recordBackgroundJobSuppression(this, job.taskID);
       this.deleteJob(job.taskID);
@@ -1454,8 +1687,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
         (entry.terminalState ?? terminalStateOf(entry.state)) !== undefined &&
         sumContextLines(entry) > this.maxContextLines
       ) {
-        recordBackgroundJobSuppression(this, entry.taskID);
-        this.deleteJob(entry.taskID);
+        this.evictJob(entry);
       }
     }
 
@@ -1470,8 +1702,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       )
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
     for (const stale of reusable.slice(this.maxReusablePerAgent)) {
-      recordBackgroundJobSuppression(this, stale.taskID);
-      this.deleteJob(stale.taskID);
+      this.evictJob(stale);
     }
   }
 
@@ -1486,8 +1717,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
         !this.liveLeases.has(entry.taskID) &&
         sumContextLines(entry) > this.maxContextLines
       ) {
-        recordBackgroundJobSuppression(this, entry.taskID);
-        this.deleteJob(entry.taskID);
+        this.evictJob(entry);
       }
     }
 
@@ -1500,9 +1730,34 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       )
       .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
     for (const stale of retained.slice(this.maxReusablePerAgent)) {
-      recordBackgroundJobSuppression(this, stale.taskID);
-      this.deleteJob(stale.taskID);
+      this.evictJob(stale);
     }
+  }
+
+  private evictJob(record: BackgroundJobRecord): void {
+    const ledger = getBackgroundJobLifecycleLedger(this);
+    if (
+      ledger.tombstones.has(record.taskID) &&
+      !ledger.trimmedIdentities.has(record.taskID)
+    ) {
+      this.deleteJob(record.taskID);
+      return;
+    }
+    recordBackgroundJobSuppression(
+      this,
+      record.taskID,
+      record.background
+        ? {
+            parentSessionID: record.parentSessionID,
+            agent: record.agent,
+            alias: record.alias,
+            background: true,
+            description: record.description,
+            contextFiles: record.contextFiles,
+          }
+        : undefined,
+    );
+    this.deleteJob(record.taskID);
   }
 
   private formatReusableJob(job: BackgroundJobRecord): string {
@@ -1536,21 +1791,94 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     return lines.join('\n');
   }
 
-  private nextAlias(parentSessionID: string, agent: string): string {
+  private nextAlias(
+    parentSessionID: string,
+    agent: string,
+    taskID: string,
+  ): string {
     const prefix = AGENT_PREFIX[agent] ?? (agent.slice(0, 3) || 'job');
     const key = `${parentSessionID}:${prefix}`;
-    // Seed from the persisted high-water mark so a post-restart board
-    // never reuses a historical alias. The alias→taskID mapping is NOT
-    // restored: old aliases resolve as not-found, which is the intended
-    // improvement over silently reusing them for unrelated tasks.
+    // The legacy counter protects launches without an allocator; a durable
+    // allocator also receives it as a floor for new reservations.
     const seeded = this.aliasCounterHighWater(parentSessionID, prefix);
-    const next = Math.max(this.counters.get(key) ?? 0, seeded) + 1;
+    const minimumCounter = Math.max(this.counters.get(key) ?? 0, seeded);
+    const localJobs = this.list(parentSessionID);
+    const aliases = new Set(localJobs.map((job) => job.alias));
+    const allocate = this.aliasAllocator;
+    if (allocate) {
+      try {
+        const reserve = () =>
+          allocate(parentSessionID, agent, taskID, prefix, minimumCounter);
+        let alias: string;
+        try {
+          alias = reserve();
+        } catch {
+          // A failed directory fsync can follow a successful atomic rename.
+          // Re-reserving the same ID rereads that mapping before fallback.
+          alias = reserve();
+        }
+        const suffix =
+          typeof alias === 'string' ? alias.slice(prefix.length + 1) : '';
+        if (
+          typeof alias !== 'string' ||
+          !alias.startsWith(`${prefix}-`) ||
+          !/^[1-9]\d*$/.test(suffix) ||
+          !Number.isSafeInteger(Number(suffix)) ||
+          aliases.has(alias) ||
+          localJobs.some((job) => job.taskID === alias) ||
+          alias === taskID
+        ) {
+          throw new Error('invalid or conflicting reserved alias');
+        }
+        this.bumpAdoptedAlias({
+          parentSessionID,
+          taskID,
+          agent,
+          alias,
+          background: true,
+        });
+        return alias;
+      } catch (error) {
+        log('Background job alias reservation unavailable; using task ID', {
+          taskID,
+          parentSessionID,
+          ...(aliases.has(taskID)
+            ? { warning: 'task ID also names another local alias' }
+            : {}),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return taskID;
+      }
+    }
+    let next = minimumCounter + 1;
+    while (aliases.has(`${prefix}-${next}`)) {
+      next += 1;
+    }
     this.counters.set(key, next);
     // Write-through: persist the last-seen counter (no-op without a
     // storage backend).
     bumpAliasHighWaterMark(parentSessionID, prefix, next);
 
     return `${prefix}-${next}`;
+  }
+
+  private bumpAdoptedAlias(identity: BackgroundJobAdoptionIdentity): void {
+    const prefix =
+      AGENT_PREFIX[identity.agent] ?? (identity.agent.slice(0, 3) || 'job');
+    const stem = `${prefix}-`;
+    if (!identity.alias.startsWith(stem)) return;
+    const suffix = identity.alias.slice(stem.length);
+    const ordinal = Number(suffix);
+    if (
+      !/^[1-9]\d*$/.test(suffix) ||
+      !Number.isSafeInteger(ordinal) ||
+      String(ordinal) !== suffix
+    ) {
+      return;
+    }
+    const key = `${identity.parentSessionID}:${prefix}`;
+    this.counters.set(key, Math.max(this.counters.get(key) ?? 0, ordinal));
+    bumpAliasHighWaterMark(identity.parentSessionID, prefix, ordinal);
   }
 
   private nextLeaseToken(kind: BackgroundJobLeaseKind): string {

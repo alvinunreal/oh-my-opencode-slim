@@ -1,6 +1,609 @@
-import { describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BackgroundJobBoard as ProductionBoard } from './background-job-board';
 import { BackgroundJobBoard } from './background-job-fixture';
+import { createBackgroundJobIdentityIndex } from './background-job-identity-index';
+import { getBackgroundJobLifecycleLedger } from './background-job-store';
+import * as loggerModule from './logger';
+
+describe('durable launch aliases', () => {
+  let root: string;
+  let priorXdg: string | undefined;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'board-alias-'));
+    priorXdg = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = root;
+  });
+
+  afterEach(() => {
+    if (priorXdg === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = priorXdg;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const optionsFor = (projectDir: string) => {
+    const index = createBackgroundJobIdentityIndex(projectDir);
+    return {
+      aliasCounterHighWater: () => 0,
+      aliasAllocator: (
+        parent: string,
+        agent: string,
+        taskID: string,
+        prefix: string,
+        minimumCounter: number,
+      ) => index.reserve(parent, taskID, agent, prefix, minimumCounter).alias,
+    };
+  };
+  const launch = (taskID: string) => ({
+    taskID,
+    parentSessionID: 'parent-1',
+    agent: 'fixer',
+    background: true,
+  });
+
+  test('a restart restores the same alias for the same task ID', () => {
+    const project = join(root, 'project');
+    const first = new ProductionBoard(optionsFor(project)).registerLaunch(
+      launch('ses_existing'),
+    );
+    const restarted = new ProductionBoard(optionsFor(project));
+    const same = restarted.registerLaunch(launch('ses_existing'));
+    const next = restarted.registerLaunch(launch('ses_new'));
+
+    expect(first.alias).toBe('fix-1');
+    expect(same.alias).toBe(first.alias);
+    expect(next.alias).toBe('fix-2');
+  });
+
+  test('projects have separate alias reservations', () => {
+    const first = new ProductionBoard(optionsFor(join(root, 'first')));
+    const second = new ProductionBoard(optionsFor(join(root, 'second')));
+    expect(first.registerLaunch(launch('ses_a')).alias).toBe('fix-1');
+    expect(second.registerLaunch(launch('ses_b')).alias).toBe('fix-1');
+  });
+
+  test('two live boards reserve different aliases in the same project', () => {
+    const project = join(root, 'shared');
+    const first = new ProductionBoard(optionsFor(project));
+    const second = new ProductionBoard(optionsFor(project));
+    expect(first.registerLaunch(launch('ses_a')).alias).toBe('fix-1');
+    expect(second.registerLaunch(launch('ses_b')).alias).toBe('fix-2');
+    expect(first.registerLaunch(launch('ses_c')).alias).toBe('fix-3');
+  });
+
+  test('an unavailable reservation keeps the native child under its exact task ID', () => {
+    const board = new ProductionBoard({
+      aliasCounterHighWater: () => 0,
+      aliasAllocator: () => {
+        throw new Error('unreadable index');
+      },
+    });
+    const record = board.registerLaunch(launch('ses_existing'));
+    expect(record).toMatchObject({ alias: 'ses_existing', state: 'running' });
+    expect(board.resolve('parent-1', 'ses_existing')).toBe(record);
+    expect(board.resolve('parent-1', 'fix-1')).toBeUndefined();
+    expect(board.registerLaunch(launch('ses_other')).alias).toBe('ses_other');
+  });
+
+  test('rechecks a reservation written before a post-rename failure', () => {
+    const index = createBackgroundJobIdentityIndex(join(root, 'recheck'));
+    let reservations = 0;
+    const board = new ProductionBoard({
+      aliasCounterHighWater: () => 0,
+      aliasAllocator: (parent, agent, taskID, prefix, minimumCounter) => {
+        const alias = index.reserve(
+          parent,
+          taskID,
+          agent,
+          prefix,
+          minimumCounter,
+        ).alias;
+        if (++reservations === 1) throw new Error('directory fsync failed');
+        return alias;
+      },
+    });
+    const record = board.registerLaunch(launch('ses_written'));
+    expect(record.alias).toBe('fix-1');
+    expect(index.lookup('parent-1', 'ses_written')?.alias).toBe(record.alias);
+    expect(reservations).toBe(2);
+  });
+
+  test('unavailable index plus a task ID matching another alias refuses ambiguous resolution', () => {
+    const log = spyOn(loggerModule, 'log').mockImplementation(() => {});
+    try {
+      const board = new ProductionBoard({
+        aliasCounterHighWater: () => 0,
+        aliasAllocator: (_parent, _agent, taskID) => {
+          if (taskID === 'ses_first') return 'fix-1';
+          throw new Error('unreadable index');
+        },
+      });
+      const first = board.registerLaunch(launch('ses_first'));
+      const fallback = board.registerLaunch(launch('fix-1'));
+      expect(first.alias).toBe('fix-1');
+      expect(fallback.alias).toBe('fix-1');
+      expect(board.get('fix-1')).toBe(fallback);
+      expect(board.resolve('parent-1', 'fix-1')).toBeUndefined();
+      expect(board.resolveReusable('parent-1', 'fix-1')).toBeUndefined();
+      expect(log).toHaveBeenCalledWith(
+        'Background job alias reservation unavailable; using task ID',
+        expect.objectContaining({
+          taskID: 'fix-1',
+          warning: 'task ID also names another local alias',
+        }),
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('an allocator collision falls back to the task ID without replacing the first alias', () => {
+    const board = new ProductionBoard({
+      aliasCounterHighWater: () => 0,
+      aliasAllocator: () => 'fix-1',
+    });
+    const first = board.registerLaunch(launch('ses_a'));
+    const second = board.registerLaunch(launch('ses_b'));
+    expect(first.alias).toBe('fix-1');
+    expect(second.alias).toBe('ses_b');
+    expect(board.resolve('parent-1', 'fix-1')).toBe(first);
+    expect(board.resolve('parent-1', 'ses_b')).toBe(second);
+  });
+
+  test('a reserved alias cannot shadow a locally tracked task ID', () => {
+    const board = new ProductionBoard({
+      aliasCounterHighWater: () => 0,
+      aliasAllocator: (_parent, _agent, taskID) =>
+        taskID === 'ses_first' ? 'fix-1' : 'fix-2',
+    });
+    board.adoptExistingSession(
+      {
+        parentSessionID: 'parent-1',
+        taskID: 'fix-2',
+        agent: 'oracle',
+        alias: 'ora-8',
+        background: true,
+      },
+      { kind: 'live', observedBusyAt: 200 },
+    );
+    expect(board.registerLaunch(launch('ses_first')).alias).toBe('fix-1');
+    expect(board.registerLaunch(launch('ses_second')).alias).toBe('ses_second');
+    expect(board.resolve('parent-1', 'fix-2')?.taskID).toBe('fix-2');
+  });
+
+  test('passes the local high-water mark to the synchronous allocator', () => {
+    const reserve = mock(
+      (_parent: string, _agent: string, _taskID: string, prefix: string) =>
+        `${prefix}-8`,
+    );
+    const board = new ProductionBoard({
+      aliasCounterHighWater: () => 7,
+      aliasAllocator: reserve,
+    });
+    expect(board.registerLaunch(launch('ses_a')).alias).toBe('fix-8');
+    expect(reserve).toHaveBeenCalledWith(
+      'parent-1',
+      'fixer',
+      'ses_a',
+      'fix',
+      7,
+    );
+  });
+});
+
+describe('adoptExistingSession', () => {
+  const identity = {
+    taskID: 'host-child',
+    parentSessionID: 'parent-1',
+    agent: 'explorer',
+    alias: 'exp-8',
+    description: 'host task',
+    background: true,
+  } as const;
+  const terminal = {
+    kind: 'terminal',
+    state: 'completed',
+    resultSummary: 'host result',
+    completedAt: 250,
+    acknowledged: true,
+  } as const;
+
+  test('imports an acknowledged completion as reusable without launching or notifying', () => {
+    const board = new ProductionBoard({ aliasCounterHighWater: () => 0 });
+    const terminalListener = mock(() => {});
+    const mutationListener = mock(() => {});
+    board.addTerminalStateListener(terminalListener);
+    board.addMutationListener(mutationListener);
+
+    const adopted = board.adoptExistingSession(identity, terminal);
+    expect(adopted).toMatchObject({
+      alias: 'exp-8',
+      state: 'reconciled',
+      terminalState: 'completed',
+      terminalUnreconciled: false,
+      resultSummary: 'host result',
+      completedAt: 250,
+      generation: 1,
+      taskGeneration: 1,
+      terminalRevision: 1,
+      lastLiveBusyAt: undefined,
+    });
+    expect(board.resolveReusable('parent-1', 'exp-8', 'explorer')).toBe(
+      adopted,
+    );
+    expect(board.hasRunningJobs()).toBe(false);
+    expect(terminalListener).not.toHaveBeenCalled();
+    expect(mutationListener).toHaveBeenCalledTimes(1);
+    const next = board.registerLaunch({
+      taskID: 'new-child',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+    expect(next.alias).toBe('exp-9');
+    expect(next.generation).toBe(2);
+  });
+
+  test('unacknowledged terminal outcomes retain their actual state without a synthetic wake', () => {
+    for (const state of ['completed', 'error', 'cancelled'] as const) {
+      const board = new ProductionBoard();
+      const listener = mock(() => {});
+      board.addTerminalStateListener(listener);
+      const adopted = board.adoptExistingSession(identity, {
+        ...terminal,
+        state,
+        acknowledged: false,
+      });
+      expect(adopted).toMatchObject({
+        state,
+        terminalState: state,
+        terminalUnreconciled: true,
+        resultSummary: 'host result',
+      });
+      expect(board.resolveReusable('parent-1', identity.alias)).toBeUndefined();
+      expect(
+        board.formatForPromptWithMetadata('parent-1')
+          ?.terminalUnreconciledTaskIDs,
+      ).toEqual([
+        {
+          taskID: identity.taskID,
+          generation: adopted.generation,
+          terminalRevision: 1,
+        },
+      ]);
+      expect(listener).not.toHaveBeenCalled();
+    }
+  });
+
+  test('retains a stopped child for task_revive, never ordinary reuse', () => {
+    const board = new ProductionBoard();
+    const listener = mock(() => {});
+    board.addTerminalStateListener(listener);
+    const stopped = board.adoptExistingSession(identity, {
+      kind: 'stopped',
+      completedAt: 250,
+      resultSummary: 'host observed stop without result',
+    });
+    expect(stopped).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: false,
+      terminalState: undefined,
+      resultSummary: 'host observed stop without result',
+    });
+    expect(board.resolve('parent-1', 'exp-8')).toBe(stopped);
+    expect(board.resolveReusable('parent-1', 'exp-8')).toBeUndefined();
+    expect(board.formatForPrompt('parent-1')).toContain(
+      '#### Retained / Recovery',
+    );
+    expect(board.formatForPrompt('parent-1')).toContain('task_revive');
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  test('live adoption requires busy evidence and does not claim a host execution count', () => {
+    const board = new ProductionBoard();
+    const adopted = board.adoptExistingSession(identity, {
+      kind: 'live',
+      observedBusyAt: 200,
+      runStartedAt: 100,
+    });
+    expect(adopted).toMatchObject({
+      state: 'running',
+      generation: 1,
+      taskGeneration: 1,
+      lastLiveBusyAt: 200,
+      runStartedAt: 100,
+      launchedAt: 100,
+      terminalRevision: 0,
+    });
+    expect(board.hasRunning('parent-1')).toBe(true);
+  });
+
+  test('duplicate task IDs preserve leases and reject identity conflicts', () => {
+    const board = new ProductionBoard();
+    const adopted = board.adoptExistingSession(identity, {
+      kind: 'live',
+      observedBusyAt: 200,
+    });
+    const lease = board.acquireMessageLease(
+      identity.taskID,
+      adopted.generation,
+    );
+    if (!lease) throw new Error('Expected message lease');
+    expect(lease).toBeDefined();
+    const mutationListener = mock(() => {});
+    board.addMutationListener(mutationListener);
+    expect(
+      board.adoptExistingSession(identity, {
+        kind: 'live',
+        observedBusyAt: 200,
+      }),
+    ).toBe(adopted);
+    expect(board.validateLease(lease)).toBe(true);
+    expect(board.get(identity.taskID)).toBe(adopted);
+    expect(mutationListener).not.toHaveBeenCalled();
+    for (const mismatch of [
+      { parentSessionID: 'parent-2' },
+      { agent: 'oracle' },
+      { alias: 'exp-9' },
+      { description: 'different task' },
+    ]) {
+      expect(() =>
+        board.adoptExistingSession({ ...identity, ...mismatch }, terminal),
+      ).toThrow('different identity');
+    }
+    expect(board.validateLease(lease)).toBe(true);
+    expect(board.releaseLease(lease)).toBe(true);
+  });
+
+  test('refuses contradictory evidence for a tracked run without changing generation or lease', () => {
+    const board = new ProductionBoard();
+    const live = board.adoptExistingSession(identity, {
+      kind: 'live',
+      observedBusyAt: 100,
+    });
+    const lease = board.acquireMessageLease(identity.taskID, live.generation);
+    if (!lease) throw new Error('Expected message lease');
+    expect(lease).toBeDefined();
+    expect(() => board.adoptExistingSession(identity, terminal)).toThrow(
+      'state conflicts with observed evidence',
+    );
+    expect(board.get(identity.taskID)).toBe(live);
+    expect(board.validateLease(lease)).toBe(true);
+    expect(board.releaseLease(lease)).toBe(true);
+
+    const finished = new ProductionBoard();
+    const reconciled = finished.adoptExistingSession(identity, terminal);
+    expect(() =>
+      finished.adoptExistingSession(identity, {
+        kind: 'live',
+        observedBusyAt: 300,
+      }),
+    ).toThrow('state conflicts with observed evidence');
+    expect(() =>
+      finished.adoptExistingSession(identity, {
+        ...terminal,
+        state: 'error',
+      }),
+    ).toThrow('state conflicts with observed evidence');
+    expect(() =>
+      finished.adoptExistingSession(identity, {
+        ...terminal,
+        acknowledged: false,
+      }),
+    ).toThrow('state conflicts with observed evidence');
+    expect(finished.get(identity.taskID)).toBe(reconciled);
+    expect(finished.resolveReusable('parent-1', identity.alias)).toBe(
+      reconciled,
+    );
+
+    const unacknowledged = new ProductionBoard();
+    unacknowledged.adoptExistingSession(identity, {
+      ...terminal,
+      acknowledged: false,
+    });
+    expect(() =>
+      unacknowledged.adoptExistingSession(identity, terminal),
+    ).toThrow('state conflicts with observed evidence');
+    expect(
+      unacknowledged.resolveReusable('parent-1', identity.alias),
+    ).toBeUndefined();
+  });
+
+  test('rejects alias collisions within a parent but permits another parent', () => {
+    const board = new ProductionBoard();
+    board.adoptExistingSession(identity, terminal);
+    expect(() =>
+      board.adoptExistingSession({ ...identity, taskID: 'second' }, terminal),
+    ).toThrow('alias already belongs');
+    expect(
+      board.adoptExistingSession(
+        { ...identity, taskID: 'other', parentSessionID: 'parent-2' },
+        terminal,
+      ).alias,
+    ).toBe('exp-8');
+    expect(board.list('parent-1')).toHaveLength(1);
+  });
+
+  test('respects tombstones without clearing suppression', () => {
+    const board = new ProductionBoard({ aliasCounterHighWater: () => 0 });
+    board.drop(identity.taskID);
+    const ledger = getBackgroundJobLifecycleLedger(board);
+    expect(ledger.tombstones.has(identity.taskID)).toBe(true);
+    expect(() => board.adoptExistingSession(identity, terminal)).toThrow(
+      'suppressed',
+    );
+    expect(ledger.tombstones.has(identity.taskID)).toBe(true);
+    expect(board.get(identity.taskID)).toBeUndefined();
+  });
+
+  test('host-verified adoption recovers a locally trimmed identity without clearing its replay tombstone', () => {
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    const older = board.registerLaunch({
+      ...identity,
+      taskID: 'ses_trimmed',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: older.taskID,
+      state: 'completed',
+      resultSummary: 'host result',
+      now: 110,
+    });
+    board.markReconciled(older.taskID, 120);
+    const newer = board.registerLaunch({
+      ...identity,
+      taskID: 'ses_newer',
+      now: 200,
+    });
+    board.updateStatus({
+      taskID: newer.taskID,
+      state: 'completed',
+      resultSummary: 'newer result',
+      now: 210,
+    });
+    board.markReconciled(newer.taskID, 220);
+    expect(board.get(older.taskID)).toBeUndefined();
+    const ledger = getBackgroundJobLifecycleLedger(board);
+    expect(ledger.tombstones.has(older.taskID)).toBe(true);
+
+    const restored = board.adoptExistingSession(
+      { ...identity, taskID: older.taskID, alias: older.alias },
+      { ...terminal, completedAt: 110 },
+    );
+    expect(restored.state).toBe('reconciled');
+    expect(board.resolveReusable('parent-1', older.alias)).toBe(restored);
+    expect(ledger.tombstones.has(older.taskID)).toBe(true);
+    board.drop(older.taskID);
+    expect(() =>
+      board.adoptExistingSession(
+        { ...identity, taskID: older.taskID, alias: older.alias },
+        terminal,
+      ),
+    ).toThrow('suppressed');
+  });
+
+  test('context-trimmed records remain ineligible for reuse after adoption', () => {
+    const board = new BackgroundJobBoard({
+      maxContextLines: 5,
+      readContextMinLines: 1,
+    });
+    const job = board.registerLaunch({ ...identity, now: 100 });
+    board.addContext(job.taskID, [
+      { path: 'long-file.ts', lineCount: 10, lastReadAt: 105 },
+    ]);
+    const retainedContext = board.get(job.taskID)?.contextFiles;
+    board.updateStatus({
+      taskID: job.taskID,
+      state: 'completed',
+      resultSummary: 'host result',
+      now: 110,
+    });
+    board.markReconciled(job.taskID, 120);
+    expect(board.get(job.taskID)).toBeUndefined();
+    expect(
+      getBackgroundJobLifecycleLedger(board).tombstones.has(job.taskID),
+    ).toBe(true);
+
+    const restored = board.adoptExistingSession(
+      { ...identity, alias: job.alias },
+      { ...terminal, completedAt: 110 },
+    );
+    expect(restored.contextFiles).toEqual(retainedContext);
+    expect(board.resolveReusable('parent-1', job.alias)).toBeUndefined();
+  });
+
+  test('explicit parent deletion blocks recovery of previously evicted tasks', () => {
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 0 });
+    const job = board.registerLaunch({ ...identity, now: 100 });
+    board.updateStatus({
+      taskID: job.taskID,
+      state: 'completed',
+      resultSummary: 'host result',
+      now: 110,
+    });
+    board.markReconciled(job.taskID, 120);
+    expect(board.get(job.taskID)).toBeUndefined();
+    board.clearParent(identity.parentSessionID);
+    expect(() =>
+      board.adoptExistingSession({ ...identity, alias: job.alias }, terminal),
+    ).toThrow('suppressed');
+  });
+
+  test('rejects incomplete identities and unknown or incomplete evidence', () => {
+    const board = new ProductionBoard({ aliasCounterHighWater: () => 0 });
+    for (const badIdentity of [
+      { ...identity, taskID: ' ' },
+      { ...identity, alias: '' },
+      { ...identity, parentSessionID: '' },
+      { ...identity, agent: '' },
+      { ...identity, background: false },
+    ]) {
+      expect(() =>
+        board.adoptExistingSession(
+          badIdentity as unknown as typeof identity,
+          terminal,
+        ),
+      ).toThrow();
+    }
+    for (const badEvidence of [
+      { kind: 'unknown' },
+      { kind: 'live', observedBusyAt: Number.NaN },
+      { kind: 'live', observedBusyAt: 200, runStartedAt: 201 },
+      { kind: 'live', observedBusyAt: 200, state: 'unknown' },
+      {
+        kind: 'stopped',
+        completedAt: 250,
+        resultSummary: 'stopped',
+        state: 'unknown',
+      },
+      { ...terminal, state: 'unknown' },
+      { ...terminal, resultSummary: '' },
+      { ...terminal, completedAt: Number.POSITIVE_INFINITY },
+      { ...terminal, acknowledged: undefined },
+    ]) {
+      expect(() =>
+        board.adoptExistingSession(
+          identity,
+          badEvidence as unknown as typeof terminal,
+        ),
+      ).toThrow();
+    }
+    expect(board.list()).toEqual([]);
+    expect(
+      board.registerLaunch({
+        taskID: 'fresh',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      }).alias,
+    ).toBe('exp-1');
+  });
+
+  test('generated aliases skip imported collisions outside their prefix', () => {
+    const board = new ProductionBoard({ aliasCounterHighWater: () => 0 });
+    board.adoptExistingSession({ ...identity, alias: 'exp-01' }, terminal);
+    board.adoptExistingSession(
+      { ...identity, taskID: 'other', agent: 'oracle', alias: 'exp-1' },
+      terminal,
+    );
+    expect(
+      board.registerLaunch({
+        taskID: 'fresh',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      }).alias,
+    ).toBe('exp-2');
+  });
+});
 
 describe('BackgroundJobBoard', () => {
   test('registers background launches as running jobs with aliases', () => {

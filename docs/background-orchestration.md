@@ -79,9 +79,63 @@ it is not yet known to be delegated work. Attribution through the existing task
 launch path promotes it to an ordinary listed task, including recovery wakes.
 This distinction uses explicit provenance, not agent names or description text.
 
-Aliases and reusable-session history are process-local and do not survive process
-restarts as a reusable board. Post-restart recovery is partial and best-effort;
-it does not guarantee restoration of those aliases or the complete history.
+Newly launched aliases are stored in a per-project private local identity index
+when writable; if reservation fails, the board uses the exact task ID instead.
+After restart, reuse requires verification against the host; the index alone is
+not proof of a reusable child. Pre-upgrade aliases cannot be reconstructed, but
+an exact task ID can be checked against structured parent delegation and host
+session evidence. This preserves the identity and context of an existing child,
+not proof that its latest run finished. Recovery remains partial, not a
+restoration of full history.
+
+A native synthetic completion with no plugin provenance is not, by itself,
+proof that the parent received or acknowledged that child's result. For a
+verified completed child after restart, a successful `task_result` with text
+matching the current child run confirms parent consumption immediately;
+same-ID continuation needs no later `finish: stop`. Native completion results
+and plugin-origin notifications can also establish confirmation when followed
+by a qualifying parent `finish: stop` turn.
+
+After that matching retrieval, later user and system messages, text-only
+assistant messages, a refused `task()` or `subagent()` whose error or output
+contains `no new session was created` or `resume blocked` (matched
+case-insensitively), and a stop with no text leave the confirmation intact.
+A later message created in the same millisecond as the retrieval's end is
+evaluated by its contents; an earlier, missing, or future creation time blocks
+confirmation. The other parts of the parent message containing `task_result`
+are checked too: a failed `bash` or an already completed other
+`task()`/`subagent()` blocks that retrieval, while a successful ordinary tool with no error, or a host `patch` part,
+leaves it intact. OpenCode 1.18.32 appends `patch` to the same assistant
+message when the step changes files. The part is not confirmation by itself.
+
+An in-flight `task()` or `subagent()` call in `running` or `pending` state has
+not admitted a prompt and leaves that confirmation intact. A pending or
+running `read`, `bash`, or `grep` part with empty `part.error` and `state.error`
+also preserves it, including alongside the current `task()` call.
+
+OpenCode 1.18.32 records a missing explicit `description` as a pre-dispatch
+`SchemaError`. The string form contains `SchemaError`, `description`,
+`Missing key`, and `at ["description"]`; the equivalent object form is
+`{ name: "SchemaError", message: "Missing key at [\"description\"]" }`.
+Either form leaves the confirmation intact. A missing `subagent_type` or other
+`SchemaError` blocks confirmation unless its error or output also says `no new
+session was created` (case-insensitively), which identifies a pre-dispatch
+refusal.
+
+The following still block confirmation or reuse: a `task()` or `subagent()`
+that actually dispatched a prompt, whether it completed or failed; a failed
+ordinary tool; an empty tool state; an unknown part other than a host `patch`;
+another ended child task; and a child in `busy`, `retry`, `error`,
+`cancelled`, or `stopped` state.
+Before parent confirmation, an explicit `task_id` is refused without
+creating a session. A dispatched `task()` or `subagent()` blocks another prompt
+for the same child.
+
+### Recovery limitations
+
+The `running`/`pending` exception classifies only the current task call as
+unadmitted; it cannot establish whether another parallel child has already
+crossed its send boundary.
 
 ---
 
@@ -185,6 +239,8 @@ A cancelled, errored, or stopped retained session may be revived immediately
 once its retained state has been verified safe. Acknowledgement controls parent
 and job-board consumption and reusable-pool display, not same-session revival.
 `task()` never drops an explicit `task_id` to spawn another session.
+After a host restart, `task_revive` also needs current-run host idle proof; a
+preserved session alone cannot authorize a new instruction.
 
 Terminal jobs are reconciled automatically after their result is injected into
 the orchestrator session. That lifecycle state is not proof the output was used;
@@ -214,19 +270,69 @@ idle parent with incomplete todos after continuous idle time; it does not depend
 on the local job board.
 
 After a full OpenCode or plugin restart, persisted running background-task
-history is rehydrated into the local job board and immediately reconciled against
-live host session status. A missing or idle child is a stop candidate: after a
-5s confirmation grace it is surfaced as `stopped, unreconciled`, while a busy
-child remains running; status lookup failures remain uncertain rather than being
-treated as completion. When the host client exposes `session.get`, each newly
-rehydrated task is also probed for existence: a session deleted while the plugin
-was down is tombstoned and torn down instead of resurrecting as a
-forever-running ghost, and a session that already reached a terminal host
-outcome is settled to it (the typed NotFound classification is a v2
-in-process artifact — on v1 hosts the probe harmlessly never tombstones). On
+history is rehydrated into the local job board and reconciled against available
+host evidence. Where live status is available, a missing or idle child is a stop
+candidate: after a 5s confirmation grace it is surfaced as `stopped,
+unreconciled`, while a busy child remains running; status lookup failures remain
+uncertain. When the host client exposes `session.get`, each newly rehydrated task
+is also probed for existence: a session deleted while the plugin was down is
+tombstoned and torn down instead of resurrecting as a forever-running ghost.
+An attributable terminal host outcome can settle an existing child; mere
+existence cannot (the typed NotFound classification is a v2 in-process artifact
+— on v1 hosts the probe harmlessly never tombstones). On
 OpenCode v2 hosts with the optional `ctx.storage` domain, deletion tombstones
 and alias counters additionally persist across host restarts (see the
 [v2 compatibility doc](opencode-v2-compatibility.md#background-job-state-rehydrate-probe-and-persistence)).
+
+Explicit `task_id` reuse after restart is fail-closed: a stored alias or exact
+ID must resolve to the same parent's child through durable identity and claim
+state. Completed-after-restart same-ID continuation also needs an attributable
+terminal result for that child's current run, fresh real host status confirming
+quiescence, and parent confirmation: either a matching successful `task_result`
+retrieval, or native completion output or a plugin-origin notification followed
+by a qualifying parent stop. Retrieval confirms immediately; the other paths
+require the later stop. Neither a transcript ending nor an unattributed native
+synthetic completion supplies those proofs. If alias reservation fails, use the
+exact task ID: with a readable index but no mapping, it can be checked via
+structured parent delegation. An alias without its mapping cannot be recovered;
+an unreadable index fails closed.
+
+The tested OpenCode 1.18.32 v1 server entrypoint exposes a real
+`session.status` map. Its embedded v2 plugin pass may abort on a reduced setup
+context; that does not turn the v1 server path into a statusless v2 host. On a
+different host, OpenCode v2.0.15, `Session.Info.outcome`, `time.idle`, and a
+durable idle message are not persisted. After restart, `session.get` lacks run
+status and `wait`/active state was process-local; `time.updated` cannot prove
+the current run completed. On that host an orphan `task_result` remains `pending`
+without attributable current-run host idle proof, even if identity and context
+survive. A host with the necessary evidence can use matching `task_result`
+retrieval as immediate parent confirmation for same-ID continuation; native
+completion and plugin-origin notification still use the later parent-stop path.
+`task_revive` cannot bypass missing current-run idle proof. An unknown explicit
+ID is never dropped to spawn a replacement; a truly missing child requires an
+explicit new task without `task_id`. Restart recovery is not automatic.
+
+There is one deliberately narrower same-process exception. Within one plugin
+setup generation, the terminal gate records a completed/error/cancelled
+publication with its exact board generation and terminal revision. After the
+parent retrieves the matched result, a private, non-persisted resume token may
+authorize one same-ID `task()` admission on a statusless v2.0.15 host. The token
+is fenced by the child admission, generation, terminal revision, and result
+text; a new admission, plugin disposal, ambiguous send, or host restart
+invalidates it. This does not make v2.0.15 restart recovery automatic and does
+not authorize `task_message` or `task_revive` without their own host evidence.
+
+The control tools share the same recovery boundary. `task_status` may perform a
+read-only report for a verified exact session ID even when no durable alias can
+be adopted; it marks that result as read-only and does not make it eligible for
+`task_message` or `task_revive`. `task_message` only writes to a verified live
+child, while `task_revive` only writes to a verified retained child and never
+aborts an orphan merely because its session record still exists. Before either
+write, a bounded child-transcript baseline read and a durable operation claim
+are required. Claims use token-fenced phases (`prepared`, `sent_unknown`,
+`accepted`, and `compensating`): deterministic pre-send failures and explicit
+host rejections may clear a claim, but a timeout or generic transport failure
+keeps the claim quarantined until admission is proven or safely compensated.
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
@@ -372,6 +478,8 @@ been verified safe. Acknowledgement controls parent and job-board consumption
 and reusable-pool display, not same-session revival. Stopped sessions stay out
 of the ordinary `task()` reuse pool because that generation has no terminal
 result; after ack they appear under Retained / Recovery.
+After restart, verification also requires attributable current-run idle proof;
+retention alone does not make revival safe.
 
 The current todo list can represent user-visible work, but task IDs and file
 ownership need to be explicit in the orchestrator's working context.
@@ -457,18 +565,19 @@ spell and stops polling until new activity.
 
 **v2 hosts (children-driven degraded mode):** v2 has no todo/children/status
 surfaces, so with `mode: "auto"` the scheduler runs in children-driven mode.
-The wake condition becomes "children without a terminal `outcome`" — v2
-records an outcome (succeeded|failed|interrupted) only on terminal transition —
-plus pending stopped-job recovery. Children are enumerated via
-`session.list({parentID})` (event-tracked fallback from `session.created`
-links when the listing is unavailable), scoped to the session's directory, and
-a child with no fresh update evidence (host `time.updated` or a tracked status
-change within 3× the interval) counts as inactive. The wake prompt asks the
-orchestrator to check on unfinished background child sessions and unreconciled
-jobs, is delivered with `queue` semantics (like v1's queued prompt_async), and
-the children-only fingerprint keeps the two-wake no-progress cap bounding
-cost. v2's native subagent completion nudges still cover the happy path; this
-watchdog covers stuck children and unreconciled jobs.
+The wake condition becomes "children without a terminal `outcome`" where the
+host exposes it (succeeded|failed|interrupted), plus pending stopped-job
+recovery. Pinned v2.0.15 does not persist `outcome` across restarts. Children
+are enumerated via `session.list({parentID})` (event-tracked fallback from
+`session.created` links when the listing is unavailable), scoped to the
+session's directory. A child with no fresh update evidence (host
+`time.updated` or a tracked status change within 3× the interval) counts as
+inactive. Freshness is a watchdog heuristic, not current-run completion proof.
+The wake prompt asks the orchestrator to check on unfinished background child
+sessions and unreconciled jobs. It is delivered with `queue` semantics (like
+v1's queued prompt_async); the children-only fingerprint bounds cost with a
+two-wake no-progress cap. v2's native subagent completion nudges still cover
+the happy path; this watchdog covers stuck children and unreconciled jobs.
 
 For external manual work, the orchestrator first gives the user concrete steps,
 then calls `wait_for_user` as its final tool action. This explicit signal covers
@@ -540,10 +649,29 @@ job back to running; the session remains listed under Retained / Recovery until
 revived or evicted. Only explicit terminal task output proves completion, error,
 or cancellation.
 
+When the current child run's trailing assistant message has `info.error` as an
+`Error` instance or ordinary object whose `name` is exactly
+`MessageAbortedError`, terminal publication submits `stopped` rather than
+`error`; string errors and other error objects remain `error`. A live `busy` or
+`retry` observation still takes precedence and does not submit `stopped`.
+`task_revive` can still return `status_uncertain` while the preceding evidence
+read remains open.
+
 Stopped-job recovery facts are checked again by task ID and run generation
 before a queued recovery wake is delivered. The inline detail queue is bounded;
 when it overflows, the wake carries an explicit overflow signal directing the
 orchestrator to inspect all unreconciled stopped jobs on the board.
+
+`task_status` applies a separate reporting rule. When a successful read returns
+a valid status map with no entry for the session, it reports a certain board
+state of `completed`, `error`, `cancelled`, `reconciled`, or `stopped` when
+that record's own `statusUncertain` is not `true`; it does not append
+`(unconfirmed)` or report `no live status entry`. A missing entry is never
+reported as `idle`, while live `busy`, `retry`, or explicit `idle` takes
+precedence. Running board records, failed or timed-out reads, malformed
+entries, and uncertain records remain unconfirmed. The coordinator continues
+to use the existing 5s confirmation grace before recording a running task as
+`stopped, unreconciled`.
 
 Malformed status entries and failed status requests are surfaced as `status
 uncertain`; they never prove that a job stopped or completed and do not confirm

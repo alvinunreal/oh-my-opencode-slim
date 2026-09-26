@@ -43,11 +43,13 @@ plugin rejected with "invalid tui export".
   (agent/aisdk/catalog/command/integration/plugin/reference/skill — no
   tool/session/event/mcp/generate). A dual-export plugin registered via the
   v1 `plugin:` key therefore gets **both** invocations: full v1
-  functionality flows through `server()`, while the parallel pass produces
-  the expected `[v2] … failed` / `bridges: 4` log noise (see
+  functionality flows through `server()`, while the parallel `setup` pass
+  may abort on that reduced context and produce `[v2] … failed` /
+  `bridges: 4` log noise (see
   [Environment caveats](#environment-caveats)). A v2 `plugins:` entry yields
   the setup pass alone — v1 does not convert v2 plugin declarations into v1
-  hooks.
+  hooks. The tested OpenCode 1.18.32 v1 server entrypoint has a real
+  `session.status` map; this reduced v2 pass does not remove it.
 - **v2 loader** (`PluginModule` schema in
   `packages/core/src/plugin/supervisor.ts`) decodes `default` as
   `{ id, setup }` (Effect Schema 4 rejects function defaults) and calls
@@ -124,9 +126,9 @@ its probe only ever matters on non-stable host builds.
    v2 flat session calls — `session.get`, `session.abort`→`interrupt`
    (`resume: false` aborts the active run), `session.messages`→`context`
    (mapped entries preserve the v2 terminal metadata — `time.completed`,
-   `finish`, `error` — and the 2.0.8 trailing `idle` lifecycle marker maps
-   to the skippable v1 `system` role, so transcript classification works
-   natively on v2), `session.prompt` (default `delivery: "steer"`;
+   `finish`, `error` — and a trailing `idle` marker, when provided, maps
+   to the skippable v1 `system` role; pinned v2.0.15 has no durable idle
+   message after restart), `session.prompt` (default `delivery: "steer"`;
    `noReply: true` maps to `delivery: "queue", resume: false`),
    `session.update`→
    `session.update` (`{sessionID, title}`), `session.delete`→`remove` (same
@@ -291,13 +293,23 @@ interview notifications, retain the same no-resume semantics.
 `experimental_v2.waitForSessionIdle(sessionID)` exists only when the host provides
 `session.wait({sessionID})`. It delegates that method alongside the unchanged
 `generateText` channel; it fabricates neither a status map nor board state.
-`session.status` remains absent. Historical `session.get` outcomes cannot authorize
-revive. The official 2.0.5 prompt intent fields and wait signature are pinned in
-`mirror-conformance.ts`, and tool→shim→host contracts have dedicated tests.
+On the v2 shim, `session.status` remains absent; this says nothing about the v1
+server entrypoint's real status map. Historical `session.get` outcomes cannot
+authorize revive. The official 2.0.5 prompt intent fields and wait signature
+are pinned in `mirror-conformance.ts`, and tool→shim→host contracts have
+dedicated tests.
 The 2.0.5 promise adapter does not forward AbortSignal to these methods, so the
 bounded idle wait does not pretend to cancel the host operation: late settlement
 is observed without authorizing a prompt. It waits for idle within its budget,
 not for an atomic reservation; queued delivery can still follow an external resume.
+
+The pinned v2.0.15 `Session.Info.time` has only `created`, `updated`, and
+`archived`: no persisted `outcome` or `time.idle`, and no durable idle message.
+Current development hosts add `outcome`, `time.idle`, and a durable idle message,
+but that is not a v2.0.15 guarantee. After a host restart, `session.get` lacks
+run status and `session.wait`/active state was process-local; `time.updated`
+does not establish that the current run completed. The terminal gate cannot
+infer current-run idle from those fields alone.
 
 The terminal gate alone attributes `session.get` outcomes, in both v1 and v2.
 Only integrations explicitly declaring `hostOutcomeClock: 'shared-unix-ms'`
@@ -340,7 +352,8 @@ the default budget).
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
 | Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
 | webfetch secondary-model summaries | ✅ | ✅ via `ctx.generate.text` | host without `ctx.generate` → summaries unavailable (logged) |
-| Background-job state persistence (tombstones, deletion epochs, alias high-water marks) | ➖ process-local | ✅ via `ctx.storage` | optional domain; absent → pure in-memory fallback, zero behavior change (see [Background job state](#background-job-state-rehydrate-probe-and-persistence)) |
+| Background-job lifecycle persistence (tombstones, deletion epochs, alias high-water marks) | ➖ process-local | ✅ via `ctx.storage` | optional domain; absent → in-memory lifecycle fallback (see [Background job state](#background-job-state-rehydrate-probe-and-persistence)) |
+| Background-job identity index (new alias mappings) | ✅ project-local | ✅ project-local | private local file, independent of `ctx.storage`; reuse after restart requires host verification (see [Identity index](#project-local-identity-index-v1v2)) |
 | Foreground model fallback (rate-limit failover) | ✅ | ✅ shim translates re-prompt into `session.switchModel` + `delivery:"steer"` prompt | — |
 | `/preset` (interactive switcher) | ✅ | ✅ TUI plugin entry (`./tui` → `dist/tui2.js`): sidebar + `/preset` dialog or `/preset <name>` fast path | The layer registers from an `append: "app"` slot render because the host's `keymap.layer` is provider-scoped (calling it from plugin `setup` throws `Keymap.Provider is missing`); the command carries an `id` and `slash.arguments`; host needs `ui.slot` + `keymap.layer`; the interactive picker needs `ui.dialog.select` while `/preset <name>` works without it; feedback uses `ui.toast.show`; config-file `preset` still applies at load |
 | TUI default agent | ✅ orchestrator | ✅ orchestrator — `draft.default("orchestrator")`; the v2 TUI honors `default_agent` and hoists the default to the head of the agent list | — |
@@ -659,8 +672,8 @@ taskID:
 - **Any other rejection fails open** — the job stays registered and the
   normal reconciliation paths keep their chance. The probe never rejects
   unhandled.
-- **A resolved terminal outcome settles the job** through the same
-  `updateStatus` semantics as the idle-reconciliation host-outcome path:
+- **An attributable terminal outcome, when exposed, settles the job** through
+  the same `updateStatus` semantics as the idle-reconciliation host-outcome path:
   `succeeded` requires usable final assistant text (otherwise the
   textless-completion diagnostics apply, per the #1115 precedent);
   `failed` settles as error with the host outcome recorded; `interrupted`
@@ -693,18 +706,108 @@ the v1 factory runs):
   monotonic).
 - **Alias counters** persist the last-seen counter per
   `<parentSessionID>:<prefix>`. A post-restart board seeds from these
-  high-water marks, so a new alias never collides with a historical one.
-  The alias→taskID mapping itself is **not** restored — old aliases
-  resolve as not-found after a restart, which is the intended improvement
-  over silently reusing them for unrelated tasks.
-- **Seeding is backend-only.** Without `ctx.storage` (v1 hosts, hosts
-  without the domain) the module is a pure in-memory no-op sink: zero
-  behavior change, fresh boards and ledgers start exactly as
-  process-local as before.
+  high-water marks; `ctx.storage` does **not** store alias-to-taskID
+  mappings. New mappings live in the separate project-local identity index
+  below.
+- **Seeding is backend-only for this lifecycle store.** Without
+  `ctx.storage` (v1 hosts, hosts without the domain), tombstones, deletion
+  epochs, and these alias-counter seeds remain process-local. This does not
+  disable the independent identity index on either host flavor.
 - **Bounded and serialized.** Persisted tombstones (and their epoch
   entries) self-cap at the 500 most recent by recorded time; writes for
   one key are serialized in-process (no concurrent read-modify-write);
   write failures log and degrade to process-local behavior.
+
+### Project-local identity index (v1/v2)
+
+New aliases are reserved with their exact host task IDs in a per-project,
+private local identity index on both v1 and v2. The index survives plugin
+and host restarts independently of `ctx.storage`; its alias counter prevents
+retired aliases from being silently reassigned. If reservation fails, the
+board uses the exact task ID instead. Pre-upgrade aliases were never indexed
+and cannot be reconstructed; an exact ID can still be checked against a
+structured parent delegation and host session evidence. The index is bounded:
+older settled mappings can be evicted, so an alias without its mapping cannot
+be recovered. Trimming a job from the in-memory board is not session deletion
+and does not itself remove its indexed identity; confirmed deletion removes
+the mapping. A child's latest user-message advancement can clear an admitted
+resume claim without redispatch. After a pre-dispatch crash, an unsettled claim
+that cannot be proved not admitted stays blocked.
+
+An indexed alias is an identity hint, **not** permission to continue a child.
+Explicit `task_id` reuse after restart must verify durable identity and claim
+state for the same parent/child. Completed-after-restart continuation additionally
+requires attributable terminal evidence for that child's current run, fresh real
+host status confirming quiescence, and parent confirmation. A successful
+`task_result` whose text matches that child and run confirms immediately;
+native completion output or a plugin-origin notification followed by a
+qualifying parent `finish: stop` also confirms. An unattributed native
+synthetic completion without plugin provenance alone proves neither
+notification nor acknowledgement. An exact ID with no mapping can be considered
+only with a readable index and structured parent delegation; an unreadable index
+fails closed.
+
+For a host actually running v2.0.15, orphan `task_result` intentionally returns
+`pending` without attributable current-run host idle proof, even when the child
+completed before restart and its ID, alias, and context survive. That v2-specific
+limitation is not a diagnosis of the tested OpenCode 1.18.32 v1 server path,
+which exposes a real `session.status` map. On a host with sufficient evidence,
+call `task_result` with the old alias or exact ID. The matching successful
+retrieval is sufficient parent confirmation for same-ID continuation when the
+host provides the required evidence; native completion and plugin-origin
+notification retain the later parent-stop route. After that retrieval, user
+and system messages, text-only assistant messages, a no-text stop, a refused
+`task()` or `subagent()` whose error or output contains `no new session was
+created` or `resume blocked` (case-insensitive), an unadmitted `running` or
+`pending` task call, a pending or running `read`, `bash`, or `grep` part with
+empty `part.error` and `state.error`, and a host `patch` part leave
+confirmation intact, even in the same parent step. OpenCode 1.18.32 appends
+`patch` to that assistant message when the step changes files. It is not
+confirmation by itself. Later messages created at the retrieval's end time are
+evaluated by content; an earlier, missing, or future creation time blocks
+confirmation. The `task_result` parent message itself must also pass the
+sibling-part check: a failed `bash` or another already completed
+`task()`/`subagent()` blocks that retrieval, while an error-free successful
+ordinary tool does not.
+
+A missing-`description` SchemaError with the OpenCode 1.18.32 text
+`SchemaError`, `description`, `Missing key`, and
+`at ["description"]`, or the equivalent object form
+`{ name: "SchemaError", message: "Missing key at [\"description\"]" }`, is also
+pre-dispatch. A missing `subagent_type` or other `SchemaError` blocks unless
+the error or output also contains `no new session was created`
+(case-insensitively); that explicit refusal did not create a child session.
+
+An actually dispatched task prompt, a failed ordinary tool, an empty tool state,
+an unknown part other than a host `patch`, another ended child task, and `busy`, `retry`, `error`,
+`cancelled`, or `stopped` child state still block. Before parent confirmation,
+an explicit ID is refused without creating a session. `task_revive` cannot bypass
+missing current-run idle proof. `task()` never silently spawns for an unknown
+explicit ID or automatically resumes a stopped child; a new session must be
+requested explicitly. Neither a synthetic completion nor the index alone
+guarantees continuation. See
+[Background orchestration](background-orchestration.md#unattributed-sessions-and-restart-scope)
+for the operational recovery boundary.
+
+On the pinned v2.0.15 host, same-process `task()` continuation has a narrower
+exception: after the local terminal gate commits the exact child generation and
+terminal revision and the parent retrieves the matching result, the plugin may
+issue a private one-shot resume token. The token is held only by the current
+setup generation and is never persisted. It cannot be reconstructed after
+restart, setup disposal, a newer child admission, a changed result, or an
+ambiguous native send. This same-process path retains the v2.0.15 restart
+limitation.
+
+The same boundary applies to control tools after a restart. `task_status` can
+report a verified exact ID in read-only mode without adopting it into the
+control board. `task_message` requires a live-status proof, a bounded latest
+child-user baseline, and a durable token-fenced operation claim. `task_revive`
+requires a verified stopped/retained session and a current idle capability; it
+does not abort an orphan whose runtime state is unavailable. A missing or late
+baseline, a stale claim token, or an unavailable v2 status/idle capability
+blocks the write. Explicit host rejection can settle a prepared/sent claim,
+but generic timeout or network failure remains an unsettled admission and is
+not retried automatically.
 
 ### Diagnostics
 
@@ -737,6 +840,10 @@ All other log sites rely on the shape-based redaction at the logger
 choke point.
 
 ## Limitations
+
+The `running`/`pending` classification establishes only that the current
+`task()`/`subagent()` has not admitted a prompt; another parallel child may
+already have crossed its send boundary.
 
 ### Interview
 
@@ -818,23 +925,20 @@ How it differs from the v1 path:
   (`session.get` is optional model enrichment). v1 keeps its exact
   historical probe set (`get`/`todo`/`children`/`status`/`promptAsync`).
 - **Children enumeration:** `session.list({ parentID })` through the shim
-  (v2 `Session.Info` → v1 envelope; `outcome` and `time.updated` mapped).
-  When the listing is unavailable (missing/erroring/empty), an event-tracked
-  fallback uses the adapter-synthesized `session.created` parentID links plus
-  tracked busy/idle statuses — refreshed on every evaluation with the host's
-  authoritative `outcome`/`time.updated` via `session.get` (fail-soft per
-  child). A finished child is therefore terminal immediately instead of
-  reading active for the whole staleness window, and a live child stays
-  visible on its host evidence rather than dropping out on stale local
-  evidence. `session.list` is not exposed to plugins on any stable
-  host
-  (see
+  (v2 `Session.Info` → v1 envelope; available `outcome` and `time.updated`
+  mapped). When the listing is unavailable (missing/erroring/empty), an
+  event-tracked fallback uses adapter-synthesized `session.created` parentID
+  links plus tracked busy/idle statuses — refreshed on every evaluation with
+  available host `outcome`/`time.updated` via `session.get` (fail-soft per
+  child). A finished child with a reported outcome is terminal immediately.
+  Without it, freshness is only a watchdog heuristic, not proof of completion.
+  `session.list` is not exposed to plugins on any stable host (see
   [Not exposed to plugins](#not-exposed-to-plugins-sessionlist-sessionremove)),
   so the event-tracked fallback is the operative path. Results are scoped
   to the session's directory when the host reports one.
-- **Wake condition:** children with `outcome === undefined` (v2 records an
-  outcome only on terminal transition: succeeded|failed|interrupted) that
-  still have fresh update evidence — host `time.updated` or a tracked status
+- **Wake condition:** children with `outcome === undefined` (where exposed,
+  v2 records an outcome on terminal transition: succeeded|failed|interrupted)
+  that still have fresh update evidence — host `time.updated` or a tracked status
   change newer than 3× the wake interval (staleness bound for children that
   crash mid-run without recording an outcome). Stopped-job recovery wakes
   bypass the condition, as on v1.

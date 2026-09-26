@@ -62,6 +62,14 @@ conservatively passes the path through.
 | `task_revive` | Resume a retained session with a new instruction |
 | `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message |
 
+`task_status` reports `completed`, `error`, `cancelled`, `reconciled`, or
+`stopped` without `(unconfirmed)` when a successful read finds a valid status
+map without that session and the record's own `statusUncertain` is not `true`;
+it does not report the missing entry as `idle` or `no live status entry`. Live
+`busy`, `retry`, or explicit `idle` takes precedence, while running records,
+failed or timed-out reads, malformed entries, and uncertain records remain
+unconfirmed.
+
 The task controls use the task ID or Background Job Board alias for the task being
 managed. `task_message` does not interrupt the current generation. `task_cancel`
 stops the generation but retains its session; it does not roll back partial edits.

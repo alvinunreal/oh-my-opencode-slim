@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { BackgroundJobBoard } from './background-job-fixture';
 import {
   aliasHighWaterMark,
   type BackgroundJobStorageBackend,
@@ -10,7 +11,6 @@ import {
   recordSuppression,
 } from './background-job-persistence';
 import {
-  BackgroundJobBoard,
   clearBackgroundJobSuppression,
   getBackgroundJobLifecycleLedger,
   recordBackgroundJobSuppression,
@@ -92,6 +92,264 @@ describe('background-job persistence', () => {
     // Next recorded epoch stays monotonic past the restored one.
     recordBackgroundJobSuppression(freshBoard, 'ses_next');
     expect(ledger.deletionEpochs.get('ses_next')).toBe(2);
+  });
+
+  test('count trim survives restart and permits only verified matching re-adoption', async () => {
+    const { backend } = createMemoryBackend();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    const launch = (taskID: string, now: number) => {
+      const job = board.registerLaunch({
+        taskID,
+        parentSessionID: 'parent',
+        agent: 'fixer',
+        description: 'verified job',
+        background: true,
+        now,
+      });
+      board.updateStatus({ taskID, state: 'completed', now: now + 1 });
+      board.markReconciled(taskID, now + 2);
+      return job;
+    };
+    const first = launch('trimmed', 100);
+    launch('retained', 200);
+    expect(board.get(first.taskID)).toBeUndefined();
+    await flushWrites();
+
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const restarted = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    const ledger = getBackgroundJobLifecycleLedger(restarted);
+    const identity = {
+      taskID: first.taskID,
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      alias: first.alias,
+      description: 'verified job',
+      background: true,
+    } as const;
+    const evidence = {
+      kind: 'terminal',
+      state: 'completed',
+      resultSummary: 'verified result',
+      completedAt: 101,
+      acknowledged: true,
+    } as const;
+    expect(ledger.trimmedIdentities.get(first.taskID)?.alias).toBe(first.alias);
+    for (const mismatch of [
+      { alias: 'fix-999' },
+      { parentSessionID: 'other' },
+    ]) {
+      expect(() =>
+        restarted.adoptExistingSession({ ...identity, ...mismatch }, evidence),
+      ).toThrow('suppressed');
+    }
+    const adopted = restarted.adoptExistingSession(identity, evidence);
+    expect(adopted).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'completed',
+      resultSummary: 'verified result',
+      completedAt: 101,
+      terminalRevision: 1,
+    });
+    expect(ledger.tombstones.has(first.taskID)).toBe(true);
+    const epoch = ledger.deletionEpochs.get(first.taskID);
+    expect(restarted.adoptExistingSession(identity, evidence)).toBe(adopted);
+    expect(ledger.deletionEpochs.get(first.taskID)).toBe(epoch);
+    restarted.drop(first.taskID);
+    expect(ledger.deletionEpochs.get(first.taskID)).toBeGreaterThan(epoch ?? 0);
+    await flushWrites();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const afterDeletion = new BackgroundJobBoard();
+    expect(() =>
+      afterDeletion.adoptExistingSession(identity, evidence),
+    ).toThrow('suppressed');
+  });
+
+  test('context trim retains its reuse cap after restart; live adoption adds no terminal evidence', async () => {
+    const { backend } = createMemoryBackend();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const options = { maxContextLines: 5, readContextMinLines: 1 };
+    const board = new BackgroundJobBoard(options);
+    const job = board.registerLaunch({
+      taskID: 'context-trimmed',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      background: true,
+      now: 100,
+    });
+    board.addContext(job.taskID, [
+      { path: 'big.ts', lineCount: 10, lastReadAt: 100 },
+    ]);
+    board.updateStatus({ taskID: job.taskID, state: 'completed', now: 110 });
+    board.markReconciled(job.taskID, 120);
+    expect(board.get(job.taskID)).toBeUndefined();
+    await flushWrites();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const restarted = new BackgroundJobBoard(options);
+    const identity = {
+      taskID: job.taskID,
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      alias: job.alias,
+      background: true,
+    } as const;
+    const adopted = restarted.adoptExistingSession(identity, {
+      kind: 'terminal',
+      state: 'completed',
+      resultSummary: 'host result',
+      completedAt: 110,
+      acknowledged: true,
+    });
+    expect(adopted.contextFiles).toEqual([
+      { path: 'big.ts', lineCount: 10, lastReadAt: 100 },
+    ]);
+    expect(restarted.resolveReusable('parent', job.alias)).toBeUndefined();
+
+    const sameTrim = new BackgroundJobBoard(options);
+    const live = sameTrim.adoptExistingSession(identity, {
+      kind: 'live',
+      observedBusyAt: 200,
+    });
+    expect(live).toMatchObject({
+      state: 'running',
+      terminalState: undefined,
+      resultSummary: undefined,
+      completedAt: undefined,
+      terminalRevision: 0,
+    });
+
+    restarted.drop(job.taskID);
+    await flushWrites();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    expect(() =>
+      new BackgroundJobBoard().adoptExistingSession(identity, {
+        kind: 'live',
+        observedBusyAt: 200,
+      }),
+    ).toThrow('suppressed');
+  });
+
+  test('deleted parent overrides a persisted trim even when no job is loaded', async () => {
+    const { backend } = createMemoryBackend();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 0 });
+    const job = board.registerLaunch({
+      taskID: 'trimmed-parent',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      background: true,
+      now: 100,
+    });
+    board.updateStatus({ taskID: job.taskID, state: 'completed', now: 110 });
+    board.markReconciled(job.taskID, 120);
+    await flushWrites();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const restarted = new BackgroundJobBoard();
+    const oldEpoch = getBackgroundJobLifecycleLedger(
+      restarted,
+    ).deletionEpochs.get(job.taskID);
+    restarted.clearParent('parent');
+    expect(
+      getBackgroundJobLifecycleLedger(restarted).deletionEpochs.get(job.taskID),
+    ).toBeGreaterThan(oldEpoch ?? 0);
+    await flushWrites();
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    expect(() =>
+      new BackgroundJobBoard().adoptExistingSession(
+        {
+          taskID: job.taskID,
+          parentSessionID: 'parent',
+          agent: 'fixer',
+          alias: job.alias,
+          background: true,
+        },
+        { kind: 'live', observedBusyAt: 200 },
+      ),
+    ).toThrow('suppressed');
+  });
+
+  test('legacy untyped and malformed trim tombstones fail closed', async () => {
+    const { backend, map } = createMemoryBackend();
+    const identity = {
+      taskID: 'legacy',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      alias: 'fix-1',
+      background: true,
+    } as const;
+    map.set('omo/bgj/tombstone/legacy', {
+      taskID: 'legacy',
+      epoch: 7,
+      recordedAt: 100,
+    });
+    map.set('omo/bgj/tombstone/malformed', {
+      taskID: 'malformed',
+      epoch: 8,
+      recordedAt: 101,
+      reason: 'trim',
+      trimmedIdentity: { ...identity, contextFiles: 'invalid' },
+    });
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const board = new BackgroundJobBoard();
+    for (const taskID of ['legacy', 'malformed']) {
+      expect(() =>
+        board.adoptExistingSession(
+          { ...identity, taskID },
+          {
+            kind: 'live',
+            observedBusyAt: 200,
+          },
+        ),
+      ).toThrow('suppressed');
+    }
+    expect(getBackgroundJobLifecycleLedger(board).nextEpoch).toBe(8);
+  });
+
+  test('a newer deletion epoch fences a stale trim tombstone', async () => {
+    const { backend, map } = createMemoryBackend();
+    map.set('omo/bgj/tombstone/stale-trim', {
+      taskID: 'stale-trim',
+      epoch: 3,
+      recordedAt: 100,
+      reason: 'trim',
+      trimmedIdentity: {
+        parentSessionID: 'parent',
+        agent: 'fixer',
+        alias: 'fix-1',
+        background: true,
+        description: 'task',
+        contextFiles: [],
+      },
+    });
+    map.set('omo/bgj/epoch/stale-trim', 4);
+    configureBackgroundJobPersistence(backend);
+    await loadInitialBackgroundJobPersistence();
+    const board = new BackgroundJobBoard();
+    const ledger = getBackgroundJobLifecycleLedger(board);
+    expect(ledger.deletionEpochs.get('stale-trim')).toBe(4);
+    expect(ledger.trimmedIdentities.has('stale-trim')).toBe(false);
+    expect(() =>
+      board.adoptExistingSession(
+        {
+          taskID: 'stale-trim',
+          parentSessionID: 'parent',
+          agent: 'fixer',
+          alias: 'fix-1',
+          background: true,
+        },
+        { kind: 'live', observedBusyAt: 200 },
+      ),
+    ).toThrow('suppressed');
   });
 
   test('clear-on-relaunch write-through removes the persisted tombstone but keeps the epoch', async () => {

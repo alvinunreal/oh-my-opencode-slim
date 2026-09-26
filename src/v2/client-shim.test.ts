@@ -3,12 +3,17 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { classifySessionRecovery } from '../hooks/task-session-manager/session-recovery';
 import {
   isReplayableUserMessage,
   partsFromReplayMessage,
 } from '../hooks/types';
 import { createInternalAgentTextPart } from '../utils/internal-initiator';
-import { buildPluginInput } from './client-shim';
+import { createSameProcessResumeEvidence } from '../utils/same-process-resume-evidence';
+import {
+  buildPluginInput,
+  resetClientShimGenerationWarnings,
+} from './client-shim';
 import type { V2Context } from './types';
 
 function makeCtx(overrides?: Partial<V2Context['session']>): V2Context {
@@ -175,8 +180,7 @@ describe('v2 client shim delegation', () => {
     ).toEqual(['m1', 'm2']);
   });
 
-  test('messages without query.limit keeps the full context read', async () => {
-    const messageCalls: unknown[] = [];
+  test('messages without query.limit falls back to context when unavailable', async () => {
     const input = buildPluginInput(
       makeCtx({
         context: async () => [
@@ -186,9 +190,54 @@ describe('v2 client shim delegation', () => {
             content: [{ type: 'text', text: 'hello' }],
           },
         ],
-        messages: async (i: unknown) => {
+      } as never),
+    );
+    const res = await (
+      input.client as {
+        session: {
+          messages: (a: unknown) => Promise<{ data: unknown[] }>;
+        };
+      }
+    ).session.messages({ path: { id: 'ses_1' } });
+    expect(res.data).toHaveLength(1);
+  });
+
+  test('messages reads a complete ascending paginated transcript before context', async () => {
+    const contextCalls: unknown[] = [];
+    const messageCalls: unknown[] = [];
+    const input = buildPluginInput(
+      makeCtx({
+        context: async (i: unknown) => {
+          contextCalls.push(i);
+          return [];
+        },
+        messages: async (i: {
+          sessionID: string;
+          order?: string;
+          cursor?: string;
+        }) => {
           messageCalls.push(i);
-          return { data: [] };
+          if (i.cursor === undefined) {
+            return {
+              data: [
+                {
+                  id: 'm1',
+                  type: 'user',
+                  content: [{ type: 'text', text: 'background task' }],
+                },
+              ],
+              cursor: { next: 'page-2', previous: null },
+            };
+          }
+          return {
+            data: [
+              {
+                id: 'm2',
+                type: 'assistant',
+                content: [{ type: 'text', text: 'completed result' }],
+              },
+            ],
+          };
         },
       } as never),
     );
@@ -199,8 +248,213 @@ describe('v2 client shim delegation', () => {
         };
       }
     ).session.messages({ path: { id: 'ses_1' } });
-    expect(messageCalls).toEqual([]);
-    expect(res.data).toHaveLength(1);
+
+    expect(messageCalls).toEqual([
+      { sessionID: 'ses_1', order: 'asc' },
+      { sessionID: 'ses_1', order: 'asc', cursor: 'page-2' },
+    ]);
+    expect(contextCalls).toEqual([]);
+    expect(
+      res.data.map((m) => (m as { info: { id: string } }).info.id),
+    ).toEqual(['m1', 'm2']);
+    expect(
+      res.data.map((m) => (m as { info: { role: string } }).info.role),
+    ).toEqual(['user', 'assistant']);
+  });
+
+  test('does not expose a pseudo latest-user session capability', () => {
+    resetClientShimGenerationWarnings();
+    const input = buildPluginInput(
+      makeCtx({ context: async () => [] } as never),
+    );
+    expect('latestUser' in (input.client as { session: object }).session).toBe(
+      false,
+    );
+  });
+
+  test('completed child retrieval can immediately reuse the same alias with paginated messages', async () => {
+    const base = 100;
+    const parent = [
+      {
+        id: 'parent-delegation',
+        type: 'assistant',
+        time: { created: base + 10, completed: base + 30 },
+        content: [
+          {
+            type: 'tool',
+            name: 'subagent',
+            state: {
+              status: 'completed',
+              input: {
+                agent: 'fixer',
+                background: true,
+                description: 'Fix it',
+              },
+              time: { start: base + 10, end: base + 20 },
+              content: [
+                { type: 'text', text: 'task_id: child\nstate: running' },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        id: 'parent-retrieval',
+        type: 'assistant',
+        time: { created: base + 120 },
+        content: [
+          {
+            type: 'tool',
+            name: 'task_result',
+            state: {
+              status: 'completed',
+              input: { task_id: 'fix-1' },
+              time: { start: base + 120, end: base + 130 },
+              content: [
+                {
+                  type: 'text',
+                  text: 'done',
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        id: 'parent-ack',
+        type: 'assistant',
+        finish: 'stop',
+        time: { created: base + 140, completed: base + 150 },
+        content: [{ type: 'text', text: 'Received.' }],
+      },
+    ];
+    const child = [
+      {
+        id: 'child-user',
+        type: 'user',
+        time: { created: base + 40 },
+        content: [{ type: 'text', text: 'Fix it' }],
+      },
+      {
+        id: 'child-answer',
+        type: 'assistant',
+        finish: 'stop',
+        time: { created: base + 50, completed: base + 100 },
+        content: [{ type: 'text', text: 'done' }],
+      },
+    ];
+    const resumeEvidence = createSameProcessResumeEvidence();
+    resumeEvidence.observeAdmission({
+      sessionID: 'child',
+      messageID: 'child-user',
+      createdAt: base + 40,
+    });
+    resumeEvidence.recordTerminal({
+      taskID: 'child',
+      parentSessionID: 'parent',
+      generation: 4,
+      terminalRevision: 1,
+      state: 'completed',
+      resultSummary: 'done',
+      completedAt: base + 100,
+    });
+    resumeEvidence.observeAdmission({
+      sessionID: 'parent',
+      messageID: 'parent-user-2',
+      createdAt: base + 120,
+    });
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [],
+        get: async ({ sessionID }: { sessionID: string }) => ({
+          id: sessionID,
+          parentID: 'parent',
+          agent: 'fixer',
+          location: { directory: '/proj' },
+          time: { created: base, updated: base + 110 },
+        }),
+        messages: async ({
+          sessionID,
+          cursor,
+        }: {
+          sessionID: string;
+          cursor?: string;
+        }) => {
+          const transcript = sessionID === 'parent' ? parent : child;
+          const start = cursor === undefined ? 0 : Number(cursor);
+          const page = transcript.slice(start, start + 2);
+          const next = start + page.length;
+          return {
+            data: page,
+            ...(next < transcript.length ? { cursor: String(next) } : {}),
+          };
+        },
+      } as never),
+    );
+    const session = (
+      input.client as {
+        session: {
+          messages: (a: unknown) => Promise<unknown>;
+          get: (a: unknown) => Promise<unknown>;
+        };
+      }
+    ).session;
+
+    const recovery = await classifySessionRecovery({
+      requested: { alias: 'fix-1' },
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      directory: '/proj',
+      identityIndex: {
+        lookup: () => ({
+          parentSessionID: 'parent',
+          taskID: 'child',
+          alias: 'fix-1',
+          agent: 'fixer',
+          directory: '/proj',
+        }),
+      },
+      readParentTranscript: () => session.messages({ path: { id: 'parent' } }),
+      readChildTranscript: () => session.messages({ path: { id: 'child' } }),
+      getSession: () => session.get({ path: { id: 'child' } }),
+      now: () => base + 200,
+    });
+
+    expect(recovery).toMatchObject({ kind: 'uncertain' });
+
+    const authorized = await classifySessionRecovery({
+      requested: { alias: 'fix-1' },
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      directory: '/proj',
+      identityIndex: {
+        lookup: () => ({
+          parentSessionID: 'parent',
+          taskID: 'child',
+          alias: 'fix-1',
+          agent: 'fixer',
+          directory: '/proj',
+        }),
+      },
+      readParentTranscript: () => session.messages({ path: { id: 'parent' } }),
+      readChildTranscript: () => session.messages({ path: { id: 'child' } }),
+      getSession: () => session.get({ path: { id: 'child' } }),
+      sameProcessResumeEvidence: resumeEvidence,
+      sameProcessResumeEvidenceContext: { generation: 4, terminalRevision: 1 },
+      now: () => base + 200,
+    });
+
+    expect(authorized).toMatchObject({
+      kind: 'reusable',
+      taskID: 'child',
+      alias: 'fix-1',
+      evidence: {
+        resultSummary: 'done',
+        acknowledged: true,
+        resumeToken: {},
+      },
+    });
+    resumeEvidence.dispose();
   });
 
   test('promptAsync switches model then steers when body.model present', async () => {

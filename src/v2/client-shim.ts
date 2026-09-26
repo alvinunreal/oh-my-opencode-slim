@@ -27,6 +27,7 @@ import {
   isInternalInitiatorPart,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
+import type { SameProcessResumeEvidenceBroker } from '../utils/same-process-resume-evidence';
 import {
   createInternalSyntheticMessageID,
   recordInternalAdmission,
@@ -50,6 +51,9 @@ export interface ExperimentalV2 {
     prompt: string,
     model?: V2GenerateModelRef,
   ) => Promise<{ text: string }>;
+  /** Setup-local same-process resume evidence. This is a capability passed to
+   * recovery code, never a session API or module-global cache. */
+  sameProcessResumeEvidence?: SameProcessResumeEvidenceBroker;
 }
 
 /** Directory from the host-reported location; cwd on hosts without
@@ -144,6 +148,105 @@ function toV1Message(m: Record<string, unknown>) {
       ? (m.content as Array<Record<string, unknown>>).map((p) => ({ ...p }))
       : [],
   };
+}
+
+const MAX_FULL_TRANSCRIPT_PAGES = 1_000;
+const MAX_FULL_TRANSCRIPT_MESSAGES = 100_000;
+
+/** Read the complete v2 message projection without silently accepting a
+ * stalled or malformed cursor stream. The v1 callers rely on this being an
+ * ascending transcript when checking the latest child admission. */
+async function readFullTranscript(
+  messages: NonNullable<V2Context['session']['messages']>,
+  sessionID: string,
+): Promise<Array<Record<string, unknown>>> {
+  const result: Array<Record<string, unknown>> = [];
+  const seenCursors = new Set<string>();
+  const seenPages = new Set<string>();
+  const seenMessageIDs = new Set<string>();
+  let cursor: string | undefined;
+
+  for (
+    let pageNumber = 0;
+    pageNumber < MAX_FULL_TRANSCRIPT_PAGES;
+    pageNumber++
+  ) {
+    if (cursor !== undefined) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(
+          '[v2] session.messages returned a repeated pagination cursor',
+        );
+      }
+      seenCursors.add(cursor);
+    }
+
+    const response = await messages({
+      sessionID,
+      order: 'asc',
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    if (!isRecord(response) || !Array.isArray(response.data)) {
+      throw new Error(
+        '[v2] session.messages returned an invalid full-transcript page',
+      );
+    }
+    const page = response.data;
+    if (!page.every(isRecord)) {
+      throw new Error(
+        '[v2] session.messages returned a malformed full-transcript page',
+      );
+    }
+    const pageItems = page as Array<Record<string, unknown>>;
+    const pageSignature = pageItems
+      .map((message) =>
+        typeof message.id === 'string' ? message.id : JSON.stringify(message),
+      )
+      .join('\u0000');
+    if (seenPages.has(pageSignature)) {
+      throw new Error(
+        '[v2] session.messages returned a repeated pagination page',
+      );
+    }
+    seenPages.add(pageSignature);
+
+    for (const message of pageItems) {
+      const id = typeof message.id === 'string' ? message.id : undefined;
+      if (id !== undefined) {
+        if (seenMessageIDs.has(id)) continue;
+        seenMessageIDs.add(id);
+      }
+      result.push(message);
+      if (result.length > MAX_FULL_TRANSCRIPT_MESSAGES) {
+        throw new Error(
+          '[v2] session.messages full transcript exceeded the safety limit',
+        );
+      }
+    }
+
+    const rawCursor = response.cursor;
+    const nextCursor =
+      typeof rawCursor === 'string'
+        ? rawCursor
+        : isRecord(rawCursor) &&
+            (rawCursor.next === undefined ||
+              rawCursor.next === null ||
+              typeof rawCursor.next === 'string')
+          ? (rawCursor.next ?? undefined)
+          : undefined;
+    if (nextCursor === undefined || nextCursor === '') {
+      return result;
+    }
+    if (typeof rawCursor !== 'string' && !isRecord(rawCursor)) {
+      throw new Error(
+        '[v2] session.messages returned an invalid pagination cursor',
+      );
+    }
+    cursor = nextCursor;
+  }
+
+  throw new Error(
+    '[v2] session.messages full transcript exceeded the page safety limit',
+  );
 }
 
 /**
@@ -343,15 +446,11 @@ export function buildPluginInput(
               id: sessionIDOf(args),
             });
           },
-      // `messages` is exposed only when the host provides
-      // session.context — the terminal gate's transcriptSourceAbsent
-      // predicate methods-presence as the capability signal, and a
-      // fake-empty `{data: []}` stub here would read as "source present
-      // but empty" (classifier verdict `absent` → a baseline-less child
-      // STOPPED_WITHOUT_TERMINAL_RESULT) instead of honest capability
-      // absence (same no-fake-success doctrine as the `get` omission
-      // above).
-      ...(s.context
+      // `messages` is exposed when the host provides either transcript
+      // source. Prefer the native paginated projection for an unbounded read:
+      // v2 context is the post-compaction active context and can omit the
+      // historical child admission needed by task resume validation.
+      ...(typeof s.context === 'function' || typeof s.messages === 'function'
         ? {
             messages: async (args: Record<string, unknown>) => {
               const query = isRecord(args?.query) ? args.query : undefined;
@@ -374,6 +473,13 @@ export function buildPluginInput(
                 })) as { data?: Array<Record<string, unknown>> } | undefined;
                 const items = Array.isArray(page?.data) ? page.data : [];
                 return { data: items.slice().reverse().map(toV1Message) };
+              }
+              if (typeof s.messages === 'function') {
+                return {
+                  data: (
+                    await readFullTranscript(s.messages, sessionIDOf(args))
+                  ).map(toV1Message),
+                };
               }
               return {
                 data: (
@@ -686,11 +792,14 @@ export function buildPluginInput(
     worktree: directory,
     experimental_workspace: { register() {} },
     $: typeof Bun !== 'undefined' ? Bun.$ : undefined,
-    ...(extras?.generateText || wait
+    ...(extras?.generateText || extras?.sameProcessResumeEvidence || wait
       ? {
           experimental_v2: {
             ...(extras?.generateText
               ? { generateText: extras.generateText }
+              : {}),
+            ...(extras?.sameProcessResumeEvidence
+              ? { sameProcessResumeEvidence: extras.sameProcessResumeEvidence }
               : {}),
             ...(wait
               ? {

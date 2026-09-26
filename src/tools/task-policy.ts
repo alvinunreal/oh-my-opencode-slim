@@ -9,6 +9,19 @@ import {
 export const STUCK_IDLE_THRESHOLD_MS = 120_000;
 
 /**
+ * Board states a valid status map may confirm by simply omitting the
+ * session. OpenCode drops idle sessions from session.status, so absence is
+ * not evidence that a still-running task finished.
+ */
+const BOARD_STATES_CONFIRMED_WHEN_ABSENT = new Set<string>([
+  'completed',
+  'error',
+  'cancelled',
+  'reconciled',
+  'stopped',
+]);
+
+/**
  * Bounded, explicit observation of a tracked child's live session status.
  *
  * `ok` is true only when the host status map was read successfully (within
@@ -59,9 +72,13 @@ export function observationFromSnapshot(
 }
 
 /**
- * Shared status/activity policy used by task_status. The board state is only
- * reported with explicit uncertainty when the live read is unavailable, so a
- * stale board record is never presented as a confident live status.
+ * Shared status/activity policy used by task_status.
+ *
+ * Live busy, retry, and idle always win over the board. A successful read
+ * whose valid map has no entry confirms a non-uncertain terminal board
+ * state (completed, error, cancelled, reconciled, or stopped). A
+ * still-running record, a failed or timed-out read, and a malformed entry
+ * stay uncertain. Absence is never reported as idle.
  */
 export function summarizeTaskStatus(
   job: BackgroundJobRecord,
@@ -69,6 +86,12 @@ export function summarizeTaskStatus(
   lastActivityAt: number | undefined,
   now: number,
 ): TaskStatusReport {
+  const confirmedAbsentTerminal =
+    observation.ok === true &&
+    observation.status === undefined &&
+    !observation.error &&
+    BOARD_STATES_CONFIRMED_WHEN_ABSENT.has(job.state) &&
+    job.statusUncertain !== true;
   let state: string;
   let source: 'live' | 'board';
   let uncertain: boolean;
@@ -76,10 +99,14 @@ export function summarizeTaskStatus(
     state = observation.status;
     source = 'live';
     uncertain = false;
+  } else if (confirmedAbsentTerminal) {
+    state = job.state;
+    source = 'board';
+    uncertain = false;
   } else {
-    // Board state is only reported with explicit uncertainty when the live
-    // read is unavailable, so a stale board record is never presented as a
-    // confident live status.
+    // Still-running, uncertain, or unreadable board records stay explicitly
+    // uncertain. A stale board record is never presented as a confident live
+    // status.
     state = job.state;
     source = 'board';
     uncertain = true;

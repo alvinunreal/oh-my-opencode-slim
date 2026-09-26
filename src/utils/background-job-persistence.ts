@@ -41,6 +41,7 @@
  * improvement over silently reusing them for unrelated tasks.
  */
 
+import type { ContextFile } from './background-job-board';
 import { log } from './logger';
 
 /** Subset of the v2 `StorageDomain` this module consumes (see
@@ -70,6 +71,18 @@ export interface PersistedTombstoneEntry {
   taskID: string;
   epoch: number;
   recordedAt: number;
+  /** Legacy entries without a reason are treated as deletions. */
+  reason?: 'trim' | 'deleted';
+  trimmedIdentity?: PersistedTrimIdentity;
+}
+
+export interface PersistedTrimIdentity {
+  parentSessionID: string;
+  agent: string;
+  alias: string;
+  background: true;
+  description: string;
+  contextFiles: ContextFile[];
 }
 
 export interface PersistedBackgroundJobState {
@@ -205,13 +218,31 @@ export async function loadInitialBackgroundJobPersistence(): Promise<PersistedBa
                 ? value.recordedAt
                 : 0,
           };
+          if (
+            value.reason === 'trim' &&
+            isTrimIdentity(value.trimmedIdentity)
+          ) {
+            record.reason = 'trim';
+            record.trimmedIdentity = value.trimmedIdentity;
+          } else if (value.reason === 'deleted') {
+            record.reason = 'deleted';
+          }
           state.tombstones.set(record.taskID, record);
-          state.deletionEpochs.set(record.taskID, record.epoch);
+          state.deletionEpochs.set(
+            record.taskID,
+            Math.max(
+              state.deletionEpochs.get(record.taskID) ?? 0,
+              record.epoch,
+            ),
+          );
         }
       } else if (entry.key.startsWith(EPOCH_PREFIX)) {
         const taskID = entry.key.slice(EPOCH_PREFIX.length);
         if (typeof entry.value === 'number' && Number.isFinite(entry.value)) {
-          state.deletionEpochs.set(taskID, entry.value);
+          state.deletionEpochs.set(
+            taskID,
+            Math.max(state.deletionEpochs.get(taskID) ?? 0, entry.value),
+          );
         }
       } else if (entry.key.startsWith(ALIAS_PREFIX)) {
         const composite = entry.key.slice(ALIAS_PREFIX.length);
@@ -243,12 +274,18 @@ export function persistedBackgroundJobState(): PersistedBackgroundJobState {
  * `recordBackgroundJobSuppression`). The epoch comes from the ledger so
  * in-memory and persisted epochs stay identical.
  */
-export function recordSuppression(taskID: string, epoch?: number): void {
+export function recordSuppression(
+  taskID: string,
+  epoch?: number,
+  trimmedIdentity?: PersistedTrimIdentity,
+): void {
   const effectiveEpoch = epoch ?? nextFreeEpoch();
   const record: PersistedTombstoneEntry = {
     taskID,
     epoch: effectiveEpoch,
     recordedAt: Date.now(),
+    reason: trimmedIdentity ? 'trim' : 'deleted',
+    ...(trimmedIdentity ? { trimmedIdentity } : {}),
   };
   liveTombstones.set(taskID, record);
   enforceTombstoneCap();
@@ -260,6 +297,31 @@ export function recordSuppression(taskID: string, epoch?: number): void {
   enqueueWrite(epochKey(taskID), async () => {
     await backend?.set(epochKey(taskID), effectiveEpoch);
   });
+}
+
+function isTrimIdentity(value: unknown): value is PersistedTrimIdentity {
+  if (!value || typeof value !== 'object') return false;
+  const identity = value as Partial<PersistedTrimIdentity>;
+  return (
+    typeof identity.parentSessionID === 'string' &&
+    !!identity.parentSessionID &&
+    typeof identity.agent === 'string' &&
+    !!identity.agent &&
+    typeof identity.alias === 'string' &&
+    !!identity.alias &&
+    identity.background === true &&
+    typeof identity.description === 'string' &&
+    Array.isArray(identity.contextFiles) &&
+    identity.contextFiles.every(
+      (file) =>
+        file &&
+        typeof file.path === 'string' &&
+        typeof file.lineCount === 'number' &&
+        Number.isFinite(file.lineCount) &&
+        typeof file.lastReadAt === 'number' &&
+        Number.isFinite(file.lastReadAt),
+    )
+  );
 }
 
 /** Epoch suggestion when no ledger epoch was supplied. */

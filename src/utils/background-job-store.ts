@@ -1,4 +1,6 @@
 import type {
+  BackgroundJobAdoptionEvidence,
+  BackgroundJobAdoptionIdentity,
   BackgroundJobLaunchInput,
   BackgroundJobLease,
   BackgroundJobPromptMetadata,
@@ -8,6 +10,7 @@ import type {
   ContextFile,
   WallClockTimeoutClaimInput,
 } from './background-job-board';
+import type { PersistedTrimIdentity } from './background-job-persistence';
 import {
   clearSuppression as clearSuppressionPersisted,
   persistedBackgroundJobState,
@@ -46,6 +49,7 @@ export interface BackgroundJobInjectedCompletionFence {
  */
 export interface BackgroundJobLifecycleLedger {
   tombstones: Set<string>;
+  trimmedIdentities: Map<string, PersistedTrimIdentity>;
   deletionEpochs: Map<string, number>;
   injectedCompletionFences: Map<string, BackgroundJobInjectedCompletionFence>;
   syntheticTerminalOccurrences: Map<
@@ -94,7 +98,15 @@ function seedFromPersistence(ledger: BackgroundJobLifecycleLedger): void {
   }
   for (const [taskID, record] of snapshot.tombstones) {
     ledger.tombstones.add(taskID);
-    ledger.deletionEpochs.set(taskID, record.epoch);
+    const latestEpoch = snapshot.deletionEpochs.get(taskID) ?? record.epoch;
+    ledger.deletionEpochs.set(taskID, latestEpoch);
+    if (
+      latestEpoch === record.epoch &&
+      record.reason === 'trim' &&
+      record.trimmedIdentity
+    ) {
+      ledger.trimmedIdentities.set(taskID, record.trimmedIdentity);
+    }
   }
   for (const [taskID, epoch] of snapshot.deletionEpochs) {
     if (!ledger.deletionEpochs.has(taskID)) {
@@ -115,6 +127,7 @@ export function getBackgroundJobLifecycleLedger(
 
   const ledger: BackgroundJobLifecycleLedger = {
     tombstones: new Set<string>(),
+    trimmedIdentities: new Map(),
     deletionEpochs: new Map<string, number>(),
     injectedCompletionFences: new Map(),
     syntheticTerminalOccurrences: new Map(),
@@ -135,13 +148,17 @@ export function getBackgroundJobLifecycleLedger(
 export function recordBackgroundJobSuppression(
   store: BackgroundJobStore,
   taskID: string,
+  trimmedIdentity?: PersistedTrimIdentity,
 ): void {
   const ledger = getBackgroundJobLifecycleLedger(store);
-  if (ledger.tombstones.has(taskID)) return;
+  if (ledger.tombstones.has(taskID) && !ledger.trimmedIdentities.has(taskID))
+    return;
   ledger.tombstones.add(taskID);
+  if (trimmedIdentity) ledger.trimmedIdentities.set(taskID, trimmedIdentity);
+  else ledger.trimmedIdentities.delete(taskID);
   const epoch = ++ledger.nextEpoch;
   ledger.deletionEpochs.set(taskID, epoch);
-  recordSuppressionPersisted(taskID, epoch);
+  recordSuppressionPersisted(taskID, epoch, trimmedIdentity);
 }
 
 /** Clear only the active rehydrate tombstone for a proven new launch.
@@ -154,6 +171,7 @@ export function clearBackgroundJobSuppression(
   taskID: string,
 ): void {
   getBackgroundJobLifecycleLedger(store).tombstones.delete(taskID);
+  getBackgroundJobLifecycleLedger(store).trimmedIdentities.delete(taskID);
   clearSuppressionPersisted(taskID);
 }
 
@@ -166,6 +184,11 @@ export function clearBackgroundJobSuppression(
 export interface BackgroundJobStore {
   // ── Mutation methods ──────────────────────────────────────────────
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord;
+  /** Caller has verified identity and evidence against host and parent. */
+  adoptExistingSession(
+    identity: BackgroundJobAdoptionIdentity,
+    evidence: BackgroundJobAdoptionEvidence,
+  ): BackgroundJobRecord;
   acquireCancellationLease(
     taskID: string,
     generation: number,

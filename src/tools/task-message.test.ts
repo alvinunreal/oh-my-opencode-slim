@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BackgroundJobBoard as ProductionBoard } from '../utils/background-job-board';
 import { BackgroundJobBoard } from '../utils/background-job-fixture';
+import { createBackgroundJobIdentityIndex } from '../utils/background-job-identity-index';
+import type { TaskControlRecovery } from './task-control-recovery';
 import { createTaskMessageTool } from './task-message';
 
 let client: Record<string, any>;
@@ -49,7 +54,705 @@ function createToolWithTimeout(board: BackgroundJobBoard, timeoutMs: number) {
   }).task_message;
 }
 
+function makeDurableSession(prompt: ReturnType<typeof mock>) {
+  return {
+    ...makeSession(prompt),
+    messages: mock(async () => ({
+      data: [{ info: { id: 'child-user-1', role: 'user' } }],
+    })),
+  };
+}
+
+function makeDurableRecovery(
+  board: BackgroundJobBoard,
+  options: {
+    markOperationSent?: () => boolean | undefined;
+    markOperationAccepted?: () => boolean | undefined;
+    onSettle?: (resolution: string) => void;
+  } = {},
+) {
+  let claimed = false;
+  const recovery = {
+    resolve: async (parentSessionID: string, requested: string) => {
+      const job = board.resolve(parentSessionID, requested);
+      return job
+        ? { kind: 'board' as const, requested, job }
+        : { kind: 'unknown' as const, requested, reason: 'missing' };
+    },
+    hasDurableOperationClaims: () => true,
+    readLatestChildUser: async () => ({ childLatestUserID: 'child-user-1' }),
+    claimOperation: () => {
+      if (claimed) return undefined;
+      claimed = true;
+      return 'claim-1';
+    },
+    markOperationSent: () =>
+      options.markOperationSent === undefined
+        ? true
+        : options.markOperationSent(),
+    markOperationAccepted: () => options.markOperationAccepted?.() ?? true,
+    beginOperationCompensation: () => true,
+    settleOperation: (
+      _parentSessionID: string,
+      _taskID: string,
+      _operation: 'message' | 'revive',
+      _token: string,
+      resolution?: string,
+    ) => {
+      if (resolution) options.onSettle?.(resolution);
+      claimed = false;
+    },
+    isClaimed: () => claimed,
+  };
+  return recovery as unknown as TaskControlRecovery & {
+    isClaimed: () => boolean;
+  };
+}
+
+function createDurableTool(
+  board: BackgroundJobBoard,
+  prompt: ReturnType<typeof mock>,
+  recovery: TaskControlRecovery,
+  directory = '/test',
+  messageTimeoutMs?: number,
+) {
+  client = { session: makeDurableSession(prompt) };
+  return createTaskMessageTool({
+    input: { directory } as any,
+    backgroundJobBoard: board,
+    recovery,
+    messageTimeoutMs,
+  }).task_message;
+}
+
+const orphanIdentity = {
+  parentSessionID: 'parent-1',
+  taskID: 'ses_child1',
+  agent: 'fixer',
+  alias: 'fix-1',
+  directory: '/test',
+};
+
+const orphanParent = {
+  data: [
+    {
+      info: {
+        id: 'call',
+        role: 'assistant',
+        sessionID: 'parent-1',
+        time: { created: 1 },
+      },
+      parts: [
+        {
+          type: 'tool',
+          name: 'task',
+          state: {
+            input: { subagent_type: 'fixer', background: true },
+            output: 'task_id: ses_child1\nstate: running',
+          },
+        },
+      ],
+    },
+  ],
+};
+
+function createOrphanMessageTool(
+  board: BackgroundJobBoard,
+  status: unknown,
+  child = { data: [] },
+  identityIndex: typeof orphanIdentity | null = orphanIdentity,
+) {
+  const prompt = makePrompt();
+  client = {
+    session: {
+      messages: mock(async ({ path }: { path: { id: string } }) =>
+        path.id === 'parent-1' ? orphanParent : child,
+      ),
+      get: mock(async () => ({
+        data: {
+          id: 'ses_child1',
+          parentID: 'parent-1',
+          directory: '/test',
+          model: { providerID: 'openai', id: 'gpt-6' },
+        },
+      })),
+      status: mock(async () => status),
+      prompt,
+    },
+  };
+  const task_message = createTaskMessageTool({
+    input: { directory: '/test' } as any,
+    backgroundJobBoard: board,
+    identityIndex:
+      identityIndex === null
+        ? { lookup: () => undefined, reserve: () => orphanIdentity }
+        : { lookup: () => identityIndex },
+  }).task_message;
+  return { task_message, prompt };
+}
+
 describe('task_message', () => {
+  test('claims an exact task ID through the production identity index', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'task-message-index-'));
+    try {
+      const board = new BackgroundJobBoard();
+      registerRunningChild(board);
+      const index = createBackgroundJobIdentityIndex(project);
+      index.reserve('parent-1', 'ses_child1', 'fixer', 'fix');
+      const claimOperation = spyOn(index, 'claimOperation');
+      const prompt = makePrompt();
+      client = { session: makeDurableSession(prompt) };
+      const task_message = createTaskMessageTool({
+        input: { directory: project } as any,
+        backgroundJobBoard: board,
+        identityIndex: index,
+      }).task_message;
+
+      await expect(
+        task_message.execute({ task_id: 'ses_child1', message: 'Continue.' }, {
+          sessionID: 'parent-1',
+        } as any),
+      ).resolves.toContain('ses_child1');
+
+      expect(claimOperation).toHaveBeenCalledWith(
+        'parent-1',
+        'ses_child1',
+        'message',
+        expect.objectContaining({ childLatestUserID: 'child-user-1' }),
+      );
+      expect(
+        index.inspectOperationClaim('parent-1', 'ses_child1', 'message'),
+      ).toBeUndefined();
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('fails closed when another owner holds the claim and child read fails', async () => {
+    const project = mkdtempSync(
+      join(tmpdir(), 'task-message-baseline-failure-'),
+    );
+    try {
+      const board = new BackgroundJobBoard();
+      registerRunningChild(board);
+      const owner = createBackgroundJobIdentityIndex(project);
+      const contender = createBackgroundJobIdentityIndex(project);
+      owner.reserve('parent-1', 'ses_child1', 'fixer', 'fix');
+      const heldToken = owner.claimOperation(
+        'parent-1',
+        'ses_child1',
+        'message',
+        { childLatestUserID: 'child-user-1' },
+      );
+      expect(heldToken).toBeDefined();
+
+      const prompt = makePrompt();
+      client = {
+        session: {
+          get: mock(async () => ({
+            data: { model: { providerID: 'openai', id: 'gpt-6' } },
+          })),
+          messages: mock(async () => {
+            throw new Error('child transcript unavailable');
+          }),
+          prompt,
+        },
+      };
+      const task_message = createTaskMessageTool({
+        input: { directory: project } as any,
+        backgroundJobBoard: board,
+        identityIndex: contender,
+      }).task_message;
+
+      await expect(
+        task_message.execute(
+          { task_id: 'ses_child1', message: 'Do not send.' },
+          {
+            sessionID: 'parent-1',
+          } as any,
+        ),
+      ).rejects.toThrow('verifiable latest child user baseline unavailable');
+      expect(prompt).not.toHaveBeenCalled();
+      expect(
+        owner.inspectOperationClaim('parent-1', 'ses_child1', 'message'),
+      ).toMatchObject({ token: heldToken, phase: 'prepared' });
+
+      const job = board.get('ses_child1');
+      expect(job).toBeDefined();
+      if (!job) throw new Error('missing running job');
+      const cancellationLease = board.acquireCancellationLease(
+        job.taskID,
+        job.generation,
+      );
+      expect(cancellationLease).toBeDefined();
+      if (cancellationLease) board.releaseLease(cancellationLease);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('bounds a never-settling child baseline read and releases the lease', async () => {
+    const project = mkdtempSync(
+      join(tmpdir(), 'task-message-baseline-timeout-'),
+    );
+    try {
+      const board = new BackgroundJobBoard();
+      registerRunningChild(board);
+      const index = createBackgroundJobIdentityIndex(project);
+      index.reserve('parent-1', 'ses_child1', 'fixer', 'fix');
+      const prompt = makePrompt();
+      client = {
+        session: {
+          messages: mock(() => new Promise<unknown>(() => {})),
+          prompt,
+        },
+      };
+      const task_message = createTaskMessageTool({
+        input: { directory: project } as any,
+        backgroundJobBoard: board,
+        identityIndex: index,
+        messageTimeoutMs: 5,
+      }).task_message;
+
+      await expect(
+        task_message.execute(
+          { task_id: 'ses_child1', message: 'Do not send.' },
+          {
+            sessionID: 'parent-1',
+          } as any,
+        ),
+      ).rejects.toThrow(
+        /verifiable latest child user baseline unavailable.*timed out/,
+      );
+      expect(prompt).not.toHaveBeenCalled();
+      expect(
+        index.inspectOperationClaim('parent-1', 'ses_child1', 'message'),
+      ).toBeUndefined();
+
+      const job = board.get('ses_child1');
+      expect(job).toBeDefined();
+      if (!job) throw new Error('missing running job');
+      const cancellationLease = board.acquireCancellationLease(
+        job.taskID,
+        job.generation,
+      );
+      expect(cancellationLease).toBeDefined();
+      if (cancellationLease) board.releaseLease(cancellationLease);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('does not prompt when another owner replaces the token before send', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'task-message-token-replaced-'));
+    try {
+      const board = new BackgroundJobBoard();
+      registerRunningChild(board);
+      const owner = createBackgroundJobIdentityIndex(project);
+      const replacementOwner = createBackgroundJobIdentityIndex(project);
+      owner.reserve('parent-1', 'ses_child1', 'fixer', 'fix');
+      const baseline = { childLatestUserID: 'child-user-1' };
+      const originalMarkOperationSent = owner.markOperationSent.bind(owner);
+      let replacementToken: string | undefined;
+      owner.markOperationSent = (parentSessionID, taskID, operation, token) => {
+        replacementOwner.settleOperation(
+          parentSessionID,
+          taskID,
+          operation,
+          token,
+          'authoritative_rejection',
+        );
+        replacementToken = replacementOwner.claimOperation(
+          parentSessionID,
+          taskID,
+          operation,
+          baseline,
+        );
+        return originalMarkOperationSent(
+          parentSessionID,
+          taskID,
+          operation,
+          token,
+        );
+      };
+
+      const prompt = makePrompt();
+      client = { session: makeDurableSession(prompt) };
+      const task_message = createTaskMessageTool({
+        input: { directory: project } as any,
+        backgroundJobBoard: board,
+        identityIndex: owner,
+      }).task_message;
+
+      await expect(
+        task_message.execute(
+          { task_id: 'ses_child1', message: 'Do not send.' },
+          {
+            sessionID: 'parent-1',
+          } as any,
+        ),
+      ).rejects.toThrow('claim fence lost');
+      expect(prompt).not.toHaveBeenCalled();
+      expect(replacementToken).toBeDefined();
+      expect(
+        replacementOwner.inspectOperationClaim(
+          'parent-1',
+          'ses_child1',
+          'message',
+        ),
+      ).toMatchObject({ token: replacementToken, phase: 'prepared' });
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('sends a normal board message after acquiring a valid baseline claim', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    const recovery = makeDurableRecovery(board);
+
+    await expect(
+      createDurableTool(board, prompt, recovery).execute(
+        { task_id: 'ses_child1', message: 'Continue.' },
+        { sessionID: 'parent-1' } as any,
+      ),
+    ).resolves.toContain('queued');
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
+  test('settles a claimed message on a deterministic pre-send failure', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    client = {
+      session: {
+        ...makeDurableSession(prompt),
+        get: mock(async () => ({
+          data: { model: { id: 'missing-provider' } },
+        })),
+      },
+    };
+    const task_message = createTaskMessageTool({
+      input: { directory: '/test' } as any,
+      backgroundJobBoard: board,
+      recovery,
+    }).task_message;
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Do not send.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('no authoritative model identity');
+    expect(prompt).not.toHaveBeenCalled();
+    expect(settlements).toEqual(['pre_send_failure']);
+  });
+
+  test('settles an authoritative API rejection without retaining the claim', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = mock(async () => ({ error: { message: 'HTTP 409' } }));
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    const task_message = createDurableTool(board, prompt, recovery);
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Rejected.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('HTTP 409');
+    expect(settlements).toEqual(['authoritative_rejection']);
+    expect(recovery.isClaimed()).toBe(false);
+  });
+
+  test('an HTTP 500 after the prompt keeps the durable claim', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = mock(async () => {
+      throw Object.assign(new Error('HTTP 500'), {
+        status: 500,
+        error: { message: 'upstream failed' },
+      });
+    });
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    const task_message = createDurableTool(board, prompt, recovery);
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Retry.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('HTTP 500');
+    expect(settlements).toEqual([]);
+    expect(recovery.isClaimed()).toBe(true);
+  });
+
+  test('a thrown HTTP 409 clears the durable claim', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = mock(async () => {
+      throw Object.assign(new Error('HTTP 409'), { status: 409 });
+    });
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    const task_message = createDurableTool(board, prompt, recovery);
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Rejected.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('HTTP 409');
+    expect(settlements).toEqual(['authoritative_rejection']);
+    expect(recovery.isClaimed()).toBe(false);
+  });
+
+  test('a status-less thrown error keeps the durable claim', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = mock(async () => {
+      throw Object.assign(new Error('socket closed'), {
+        error: { message: 'socket closed' },
+      });
+    });
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    const task_message = createDurableTool(board, prompt, recovery);
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Retry.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('socket closed');
+    expect(settlements).toEqual([]);
+    expect(recovery.isClaimed()).toBe(true);
+  });
+
+  test.each([false, undefined])(
+    'marks sent before prompt and refuses to prompt when that transition is %s',
+    async (sent) => {
+      const board = new BackgroundJobBoard();
+      registerRunningChild(board);
+      const prompt = makePrompt();
+      const settlements: string[] = [];
+      const recovery = makeDurableRecovery(board, {
+        markOperationSent: () => sent,
+        onSettle: (resolution) => settlements.push(resolution),
+      });
+      const task_message = createDurableTool(board, prompt, recovery);
+
+      await expect(
+        task_message.execute(
+          { task_id: 'ses_child1', message: 'Do not send.' },
+          { sessionID: 'parent-1' } as any,
+        ),
+      ).rejects.toThrow('could not be marked sent');
+      expect(prompt).not.toHaveBeenCalled();
+      expect(settlements).toEqual(['pre_send_failure']);
+    },
+  );
+
+  test('timeout leaves the durable claim in place and blocks retry', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const transport = Promise.withResolvers<unknown>();
+    const prompt = mock(() => transport.promise);
+    const recovery = makeDurableRecovery(board);
+    const task_message = createDurableTool(board, prompt, recovery, '/test', 5);
+    const context = { sessionID: 'parent-1' } as any;
+
+    await expect(
+      task_message.execute(
+        { task_id: 'ses_child1', message: 'First.' },
+        context,
+      ),
+    ).rejects.toThrow('timed out');
+    expect(recovery.isClaimed()).toBe(true);
+    await expect(
+      task_message.execute(
+        { task_id: 'ses_child1', message: 'Retry.' },
+        context,
+      ),
+    ).rejects.toThrow('message/control lease unavailable');
+    expect(prompt).toHaveBeenCalledTimes(1);
+    transport.reject(new Error('late network failure'));
+    await Bun.sleep(0);
+  });
+
+  test('late successful response settles a timed-out claim exactly once', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const transport = Promise.withResolvers<unknown>();
+    const prompt = mock(() => transport.promise);
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    const task_message = createDurableTool(board, prompt, recovery, '/test', 5);
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Wait.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('timed out');
+    transport.resolve({});
+    await Bun.sleep(0);
+    await Bun.sleep(0);
+    expect(settlements).toEqual(['accepted_and_completed']);
+    expect(recovery.isClaimed()).toBe(false);
+  });
+
+  test('late generic rejection retains the durable claim', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const transport = Promise.withResolvers<unknown>();
+    const prompt = mock(() => transport.promise);
+    const settlements: string[] = [];
+    const recovery = makeDurableRecovery(board, {
+      onSettle: (resolution) => settlements.push(resolution),
+    });
+    const task_message = createDurableTool(board, prompt, recovery, '/test', 5);
+
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'Wait.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('timed out');
+    transport.reject(new Error('network unavailable'));
+    await Bun.sleep(0);
+    expect(settlements).toEqual([]);
+    expect(recovery.isClaimed()).toBe(true);
+  });
+
+  test('a stale late token cannot clear a replacement claim', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'task-message-stale-'));
+    try {
+      const board = new BackgroundJobBoard();
+      registerRunningChild(board);
+      const index = createBackgroundJobIdentityIndex(project);
+      index.reserve('parent-1', 'ses_child1', 'fixer', 'fix');
+      const transport = Promise.withResolvers<unknown>();
+      const prompt = mock(() => transport.promise);
+      client = { session: makeDurableSession(prompt) };
+      const task_message = createTaskMessageTool({
+        input: { directory: project } as any,
+        backgroundJobBoard: board,
+        identityIndex: index,
+        messageTimeoutMs: 5,
+      }).task_message;
+      const baseline = { childLatestUserID: 'child-user-1' };
+
+      await expect(
+        task_message.execute({ task_id: 'ses_child1', message: 'Old.' }, {
+          sessionID: 'parent-1',
+        } as any),
+      ).rejects.toThrow('timed out');
+      const oldClaim = index.inspectOperationClaim(
+        'parent-1',
+        'ses_child1',
+        'message',
+      );
+      if (!oldClaim) throw new Error('missing old operation claim');
+      index.settleOperation(
+        'parent-1',
+        'ses_child1',
+        'message',
+        oldClaim.token,
+        'authoritative_rejection',
+      );
+      const replacement = index.claimOperation(
+        'parent-1',
+        'ses_child1',
+        'message',
+        baseline,
+      );
+      if (!replacement) throw new Error('missing replacement operation claim');
+
+      transport.resolve({});
+      await Bun.sleep(0);
+      expect(
+        index.inspectOperationClaim('parent-1', 'ses_child1', 'message'),
+      ).toMatchObject({ token: replacement, phase: 'prepared' });
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('sends exactly once to a live orphan after safe adoption', async () => {
+    const board = new BackgroundJobBoard();
+    const { task_message, prompt } = createOrphanMessageTool(board, {
+      data: { ses_child1: { type: 'busy' } },
+    });
+
+    await expect(
+      task_message.execute({ task_id: 'fix-1', message: 'Please continue.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).resolves.toContain('queued');
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
+  test('queues a live orphan by exact session ID without a persisted mapping', async () => {
+    const board = new BackgroundJobBoard();
+    const { task_message, prompt } = createOrphanMessageTool(
+      board,
+      { data: { ses_child1: { type: 'busy' } } },
+      { data: [] },
+      null,
+    );
+
+    await expect(
+      task_message.execute(
+        { task_id: 'ses_child1', message: 'Please continue.' },
+        { sessionID: 'parent-1' } as any,
+      ),
+    ).resolves.toContain('ses_child1');
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(board.resolve('parent-1', 'ses_child1')).toMatchObject({
+      taskID: 'ses_child1',
+      alias: 'fix-1',
+    });
+  });
+
+  test('refuses a stopped orphan without prompting it', async () => {
+    const board = new BackgroundJobBoard();
+    const { task_message, prompt } = createOrphanMessageTool(
+      board,
+      { data: {} },
+      {
+        data: [
+          { info: { id: 'u1', role: 'user', time: { created: 2 } }, parts: [] },
+          {
+            info: {
+              id: 'e1',
+              role: 'assistant',
+              error: { name: 'MessageAbortedError' },
+            },
+            parts: [],
+          },
+        ],
+      },
+    );
+
+    await expect(
+      task_message.execute({ task_id: 'fix-1', message: 'Do not send.' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow(/stopped without a terminal result/);
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
   test('queues messages for a parent-owned running child', async () => {
     const board = new BackgroundJobBoard();
     registerRunningChild(board);

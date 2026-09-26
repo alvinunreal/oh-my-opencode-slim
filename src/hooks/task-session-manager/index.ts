@@ -15,6 +15,7 @@ import {
   parseTaskStateFromOutput,
   recordBackgroundJobSuppression,
 } from '../../utils';
+import type { createBackgroundJobIdentityIndex } from '../../utils/background-job-identity-index';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -23,6 +24,7 @@ import {
 import { fetchChildTranscript } from '../../utils/child-transcript';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { getClient } from '../../utils/opencode-client';
+import type { SameProcessResumeEvidence } from '../../utils/same-process-resume-evidence';
 import { isGenuineOperatorMessage } from '../orchestrator-wake/index';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
@@ -181,12 +183,15 @@ export function createTaskSessionManagerHook(
     readContextMinLines?: number;
     readContextMaxFiles?: number;
     backgroundJobBoard?: BackgroundJobStore;
+    identityIndex?: ReturnType<typeof createBackgroundJobIdentityIndex>;
     terminalGate?: BackgroundJobTerminalGate;
     hostOutcomeClock?: 'shared-unix-ms';
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
     /** Shared by plugin generations for one admission runtime. */
     pendingCallTracker?: PendingCallTracker;
+    /** One process-local resume-evidence broker for this plugin generation. */
+    resumeEvidence?: SameProcessResumeEvidence;
     getModelForAgent?: (
       agentType: string,
       parentSessionID?: string,
@@ -463,8 +468,19 @@ export function createTaskSessionManagerHook(
           backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
           undefined;
         if (!hardTimedOut) {
+          const parent = backgroundJobBoard.get(sessionId)?.parentSessionID;
           rememberDeletedSession(sessionId);
           backgroundJobBoard.drop(sessionId);
+          if (parent) {
+            try {
+              options.identityIndex?.forget(parent, sessionId);
+            } catch (error) {
+              log(
+                '[task-session-manager] identity forget failed',
+                String(error),
+              );
+            }
+          }
         }
         options.backgroundJobSupervisor?.clearParent(sessionId);
         backgroundJobBoard.clearParent(sessionId);
@@ -592,6 +608,21 @@ export function createTaskSessionManagerHook(
       ) {
         return;
       }
+      if (typeof messageIdentity === 'string') {
+        const messageInfo = outputMessage ?? inputMessage;
+        const messageTime = isObjectRecord(messageInfo?.time)
+          ? messageInfo.time.created
+          : undefined;
+        options.resumeEvidence?.observeAdmission({
+          sessionID,
+          messageID: messageIdentity,
+          ...(typeof messageTime === 'number' &&
+          Number.isFinite(messageTime) &&
+          messageTime >= 0
+            ? { createdAt: messageTime }
+            : {}),
+        });
+      }
       idleSessionTokens.onExternalUserMessage(sessionID, messageIdentity);
     },
 
@@ -603,19 +634,29 @@ export function createTaskSessionManagerHook(
         shouldManageSession: options.shouldManageSession,
         registerSessionAsOrchestrator: options.registerSessionAsOrchestrator,
         backgroundJobBoard,
+        terminalGate,
         backgroundJobSupervisor: options.backgroundJobSupervisor,
         backgroundTaskConcurrency: options.backgroundTaskConcurrency,
         getModelForAgent: options.getModelForAgent,
         getSessionModel: options.getSessionModel,
         sameProviderPolicy: options.sameProviderPolicy,
         pendingCallTracker,
+        resumeEvidence: options.resumeEvidence,
         taskContextTracker,
         getLifecycleEpoch: () => rehydrateState.nextEpoch,
         hasUntrackedRunningChild: options.hasUntrackedRunningChild,
+        identityIndex: options.identityIndex,
+        hostClient: getClient(_ctx),
+        directory: _ctx.directory,
       }),
 
     'tool.execute.after': async (
-      input: { tool: string; sessionID?: string; callID?: string },
+      input: {
+        tool: string;
+        sessionID?: string;
+        callID?: string;
+        nativeToolStatus?: 'error' | 'completed';
+      },
       output: { output: unknown; metadata?: unknown },
     ): Promise<void> => {
       await handleToolExecuteAfter(input, output, {
@@ -630,6 +671,7 @@ export function createTaskSessionManagerHook(
         recordLifecycleSuppression: (taskID) =>
           recordBackgroundJobSuppression(backgroundJobBoard, taskID),
         pendingCallTracker,
+        resumeEvidence: options.resumeEvidence,
         taskContextTracker,
         clearRehydrateTombstone: (taskID) => {
           clearBackgroundJobSuppression(backgroundJobBoard, taskID);
@@ -638,6 +680,7 @@ export function createTaskSessionManagerHook(
           const deletionEpoch = rehydrateState.deletionEpochs.get(taskID);
           return deletionEpoch !== undefined && lifecycleEpoch < deletionEpoch;
         },
+        identityIndex: options.identityIndex,
       });
       runtimeStatusReconciler.schedule();
     },
@@ -708,7 +751,12 @@ export function createTaskSessionManagerHook(
       event: {
         type: string;
         properties?: {
-          info?: { id?: string; parentID?: string; agent?: string };
+          info?: {
+            id?: string;
+            parentID?: string;
+            agent?: string;
+            generation?: number;
+          };
           id?: string;
           requestID?: string;
           sessionID?: string;
@@ -718,6 +766,18 @@ export function createTaskSessionManagerHook(
         };
       };
     }): Promise<void> => {
+      const deletedID =
+        input.event.type === 'session.deleted'
+          ? (input.event.properties?.info?.id ??
+            input.event.properties?.sessionID)
+          : undefined;
+      const deletedRecord = deletedID
+        ? backgroundJobBoard.get(deletedID)
+        : undefined;
+      const deletedParent =
+        input.event.properties?.info?.parentID ??
+        deletedRecord?.parentSessionID;
+      const deletedGeneration = input.event.properties?.info?.generation;
       if (input.event.type === 'session.deleted') {
         const sessionID =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
@@ -756,7 +816,66 @@ export function createTaskSessionManagerHook(
           observeSyntheticTerminalPart(injectionState, part),
         revivedRunTracker: options.revivedRunTracker,
         onChildInputWait: options.onChildInputWait,
-      }).then(() => runtimeStatusReconciler.schedule());
+      }).then(async () => {
+        if (
+          deletedID &&
+          deletedParent &&
+          !options.isFallbackInProgress?.(deletedID) &&
+          (!deletedRecord ||
+            backgroundJobBoard.get(deletedID)?.generation !==
+              deletedRecord.generation ||
+            deletedRecord.generation === 1 ||
+            deletedGeneration === deletedRecord.generation)
+        ) {
+          try {
+            if (
+              options.identityIndex?.hasUnsettledResume(
+                deletedParent,
+                deletedID,
+              )
+            ) {
+              const get = getClient(_ctx).session?.get;
+              let confirmedDeleted = false;
+              if (typeof get === 'function') {
+                try {
+                  const response = await get({
+                    path: { id: deletedID },
+                    query: { directory: _ctx.directory },
+                  });
+                  const error: unknown = isObjectRecord(response)
+                    ? response.error
+                    : undefined;
+                  confirmedDeleted =
+                    isObjectRecord(error) &&
+                    (error._tag === 'Session.NotFoundError' ||
+                      error.name === 'NotFoundError');
+                } catch (error) {
+                  confirmedDeleted =
+                    isObjectRecord(error) &&
+                    (error._tag === 'Session.NotFoundError' ||
+                      error.name === 'NotFoundError');
+                }
+              }
+              if (!confirmedDeleted) {
+                log(
+                  '[task-session-manager] deletion unresolved; resume claim retained',
+                  {
+                    taskID: deletedID,
+                  },
+                );
+              } else {
+                // A claim owned by another process is still fenced by forget().
+                options.identityIndex.forget(deletedParent, deletedID);
+              }
+            } else {
+              options.identityIndex?.forget(deletedParent, deletedID);
+            }
+          } catch (error) {
+            log('[task-session-manager] identity forget failed', String(error));
+          }
+        }
+        runtimeStatusReconciler.schedule();
+      });
     },
   };
 }

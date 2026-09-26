@@ -45,6 +45,7 @@ export type ChildTerminalEvidence =
   | { kind: 'ready'; text: string }
   | { kind: 'textless' }
   | { kind: 'pending' }
+  | { kind: 'aborted' }
   | { kind: 'error'; errorText: string }
   | { kind: 'no-assistant' }
   | { kind: 'no-new-messages' };
@@ -118,8 +119,16 @@ export type TranscriptMessage = LooseMessage;
 export type TerminalEvidenceVerdict =
   | { verdict: 'completed'; text: string }
   | { verdict: 'error'; text: string }
+  | { verdict: 'aborted' }
   | { verdict: 'absent' }
   | { verdict: 'retry'; reason: string };
+
+function isMessageAbortedError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.name === 'MessageAbortedError') ||
+    (isRecord(error) && error.name === 'MessageAbortedError')
+  );
+}
 
 function verdictFromEvidence(
   evidence: ChildTerminalEvidence,
@@ -127,6 +136,8 @@ function verdictFromEvidence(
   switch (evidence.kind) {
     case 'ready':
       return { verdict: 'completed', text: evidence.text };
+    case 'aborted':
+      return { verdict: 'aborted' };
     case 'error':
       return { verdict: 'error', text: evidence.errorText };
     case 'pending':
@@ -297,6 +308,8 @@ export function classifyAssistantTurnEvidence(
   // (e.g. 'tool-calls'/'unknown') survived the failure — the error is
   // the outcome, the finish flag is leftover state.
   if (last.info?.error !== undefined && last.info?.error !== null) {
+    // A host abort is not a failed run. Other errors stay failures.
+    if (isMessageAbortedError(last.info.error)) return { kind: 'aborted' };
     return { kind: 'error', errorText: stringifyError(last.info.error) };
   }
 

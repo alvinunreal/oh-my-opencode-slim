@@ -1,4 +1,6 @@
 import type {
+  BackgroundJobAdoptionEvidence,
+  BackgroundJobAdoptionIdentity,
   BackgroundJobBoard,
   BackgroundJobLaunchInput,
   BackgroundJobLease,
@@ -193,6 +195,26 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
       agent: record.agent,
       alias: record.alias,
     });
+    return record;
+  }
+
+  adoptExistingSession(
+    identity: BackgroundJobAdoptionIdentity,
+    evidence: BackgroundJobAdoptionEvidence,
+  ): BackgroundJobRecord {
+    const before = identity?.taskID
+      ? this.board.get(identity.taskID)
+      : undefined;
+    const record = this.board.adoptExistingSession(identity, evidence);
+    if (!before) {
+      this.notifyLaunchIdentity({
+        kind: 'registered',
+        taskID: record.taskID,
+        parentSessionID: record.parentSessionID,
+        agent: record.agent,
+        alias: record.alias,
+      });
+    }
     return record;
   }
 

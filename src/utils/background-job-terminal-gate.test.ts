@@ -141,6 +141,15 @@ describe('terminal evidence policy (migrated from stop confirmation)', () => {
       classifyTerminalEvidence(response, { baselineMessageID: 'baseline' }),
     ).toEqual({ verdict: 'error', text: 'failed' });
   });
+  test('MessageAbortedError is aborted rather than a failed run', () => {
+    const response = answer();
+    Object.assign(response.data[1].info, {
+      error: { name: 'MessageAbortedError' },
+    });
+    expect(
+      classifyTerminalEvidence(response, { baselineMessageID: 'baseline' }),
+    ).toEqual({ verdict: 'aborted' });
+  });
   test('missing baseline cannot recover historical answers', () => {
     expect(
       classifyTerminalEvidence(answer(), { baselineMessageID: 'missing' })

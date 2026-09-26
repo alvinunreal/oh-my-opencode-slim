@@ -1,6 +1,7 @@
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { BackgroundJobCoordinator } from './background-job-coordinator';
 import { BackgroundJobBoard, boardFixture } from './background-job-fixture';
+import { getBackgroundJobLifecycleLedger } from './background-job-store';
 import * as loggerModule from './logger';
 
 function createMockBoard(isRunning = false) {
@@ -13,6 +14,62 @@ function createMockBoard(isRunning = false) {
 }
 
 describe('BackgroundJobCoordinator', () => {
+  test('adoption forwards only new identities, without terminal dispatch or relaunch', () => {
+    const board = new BackgroundJobBoard();
+    const coordinator = new BackgroundJobCoordinator(board);
+    const identities = mock(() => {});
+    const terminals = mock(() => {});
+    const outcomes = mock(() => {});
+    coordinator.addLaunchIdentityListener(identities);
+    coordinator.addTerminalStateListener(terminals);
+    coordinator.addTerminalOutcomeListener(outcomes);
+    const identity = {
+      taskID: 'host-child',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      alias: 'fix-7',
+      background: true,
+    } as const;
+    const evidence = {
+      kind: 'terminal',
+      state: 'completed',
+      resultSummary: 'host result',
+      completedAt: 250,
+      acknowledged: true,
+    } as const;
+    const adopted = coordinator.adoptExistingSession(identity, evidence);
+    expect(identities).toHaveBeenCalledTimes(1);
+    expect(identities).toHaveBeenCalledWith({
+      kind: 'registered',
+      taskID: identity.taskID,
+      parentSessionID: identity.parentSessionID,
+      agent: identity.agent,
+      alias: identity.alias,
+    });
+    expect(coordinator.adoptExistingSession(identity, evidence)).toBe(adopted);
+    expect(identities).toHaveBeenCalledTimes(1);
+    expect(adopted.state).toBe('reconciled');
+    expect(terminals).not.toHaveBeenCalled();
+    expect(outcomes).not.toHaveBeenCalled();
+    expect(() =>
+      coordinator.adoptExistingSession(
+        { ...identity, alias: 'fix-8' },
+        evidence,
+      ),
+    ).toThrow();
+    expect(identities).toHaveBeenCalledTimes(1);
+    coordinator.drop(identity.taskID);
+    expect(
+      getBackgroundJobLifecycleLedger(coordinator).tombstones.has(
+        identity.taskID,
+      ),
+    ).toBe(true);
+    expect(() => coordinator.adoptExistingSession(identity, evidence)).toThrow(
+      'suppressed',
+    );
+    expect(identities).toHaveBeenCalledTimes(2);
+  });
+
   test('deferIfRunning returns false when job is running', () => {
     const board = createMockBoard(true);
     const coordinator = new BackgroundJobCoordinator(board);

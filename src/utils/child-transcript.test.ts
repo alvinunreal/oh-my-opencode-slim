@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
+  classifyTerminalEvidence,
   extractChildTerminalEvidence,
   fetchChildTranscript,
   stringifyError,
@@ -106,6 +107,34 @@ describe('extractChildTerminalEvidence', () => {
       data: [message({ id: 'last', completed: 5, error: 'model exploded' })],
     });
     expect(evidence).toEqual({ kind: 'error', errorText: 'model exploded' });
+  });
+
+  test('MessageAbortedError is an abort, not a failure', () => {
+    const evidence = extractChildTerminalEvidence({
+      data: [
+        message({
+          id: 'last',
+          completed: 5,
+          error: { name: 'MessageAbortedError' },
+        }),
+      ],
+    });
+    expect(evidence).toEqual({ kind: 'aborted' });
+    expect(
+      classifyTerminalEvidence(
+        {
+          data: [
+            message({ id: 'baseline', role: 'user', completed: 1 }),
+            message({
+              id: 'last',
+              completed: 5,
+              error: { name: 'MessageAbortedError' },
+            }),
+          ],
+        },
+        { baselineMessageID: 'baseline' },
+      ),
+    ).toEqual({ verdict: 'aborted' });
   });
 
   test('error objects are stringified', () => {

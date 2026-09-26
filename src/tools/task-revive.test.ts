@@ -7,6 +7,9 @@ import {
   spyOn,
   test,
 } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import {
   createRevivedRunTracker,
@@ -14,6 +17,7 @@ import {
 } from '../hooks/task-session-manager/revived-run-tracker';
 import { BackgroundJobBoard as ProductionBoard } from '../utils/background-job-board';
 import { BackgroundJobBoard } from '../utils/background-job-fixture';
+import { createBackgroundJobIdentityIndex } from '../utils/background-job-identity-index';
 import { getBackgroundJobLifecycleLedger } from '../utils/background-job-store';
 import {
   type BackgroundJobTerminalGate,
@@ -23,7 +27,11 @@ import * as logger from '../utils/logger';
 import * as opencodeClient from '../utils/opencode-client';
 import { OperationTimeoutError } from '../utils/session';
 import { createCancelTaskTool } from './cancel-task';
-import { createTaskReviveTool } from './task-revive';
+import type { TaskControlRecovery } from './task-control-recovery';
+import {
+  createTaskReviveTool,
+  type TaskReviveToolOptions,
+} from './task-revive';
 
 const gates: BackgroundJobTerminalGate[] = [];
 
@@ -35,7 +43,10 @@ function createTool(overrides?: {
   /** v2 wait capability injected as experimental_v2.waitForSessionIdle. */
   waitIdle?: () => Promise<void>;
   promptAsync?: () => Promise<unknown>;
-  messages?: () => Promise<unknown>;
+  messages?: (args?: unknown) => Promise<unknown>;
+  get?: () => Promise<unknown>;
+  identityIndex?: TaskReviveToolOptions['identityIndex'];
+  recovery?: TaskReviveToolOptions['recovery'];
   baselineTimeoutMs?: number;
   admissionTimeoutMs?: number;
   onLaunch?: () => void;
@@ -57,6 +68,7 @@ function createTool(overrides?: {
         status: overrides?.omitStatus ? undefined : status,
         promptAsync,
         messages: overrides?.messages,
+        get: overrides?.get,
       },
     },
   } as never;
@@ -85,6 +97,8 @@ function createTool(overrides?: {
     backgroundJobSupervisor: { onLaunch } as never,
     baselineTimeoutMs: overrides?.baselineTimeoutMs,
     admissionTimeoutMs: overrides?.admissionTimeoutMs,
+    identityIndex: overrides?.identityIndex,
+    recovery: overrides?.recovery,
   });
   const cancelTools = createCancelTaskTool({
     input,
@@ -107,6 +121,46 @@ function createTool(overrides?: {
     taskRevive: tools.task_revive,
   };
 }
+
+const orphanIdentity = {
+  parentSessionID: 'parent-1',
+  taskID: 'ses_1',
+  agent: 'explorer',
+  alias: 'exp-1',
+  directory: '/test/project',
+};
+
+const orphanParent = {
+  data: [
+    {
+      info: { id: 'call', role: 'assistant', sessionID: 'parent-1' },
+      parts: [
+        {
+          type: 'tool',
+          name: 'task',
+          state: {
+            input: { subagent_type: 'explorer', background: true },
+            output: 'task_id: ses_1\nstate: running',
+          },
+        },
+      ],
+    },
+  ],
+};
+
+const orphanChildError = {
+  data: [
+    { info: { id: 'u1', role: 'user', time: { created: 110 } }, parts: [] },
+    {
+      info: {
+        id: 'e1',
+        role: 'assistant',
+        error: { name: 'MessageAbortedError' },
+      },
+      parts: [],
+    },
+  ],
+};
 
 const context = { sessionID: 'parent-1', agent: 'orchestrator' } as any;
 
@@ -176,7 +230,632 @@ function controlledAdmissionDeadline() {
   };
 }
 
+async function withRealIdentityIndex<T>(
+  callback: (
+    index: ReturnType<typeof createBackgroundJobIdentityIndex>,
+  ) => Promise<T>,
+): Promise<T> {
+  const root = mkdtempSync(join(tmpdir(), 'slim-task-revive-'));
+  const previousDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = root;
+  try {
+    return await callback(createBackgroundJobIdentityIndex('/test/project'));
+  } finally {
+    if (previousDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousDataHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function realStoppedOrphanOptions(
+  identityIndex: TaskReviveToolOptions['identityIndex'],
+  overrides: Parameters<typeof createTool>[0] = {},
+) {
+  return {
+    ...overrides,
+    identityIndex,
+    revivedRunTracker: overrides.revivedRunTracker ?? {
+      probe: async () => false,
+    },
+    status: overrides.status ?? (async () => ({ data: {} })),
+    messages:
+      overrides.messages ??
+      (async (args?: unknown) =>
+        (args as { path?: { id?: string } })?.path?.id === 'parent-1'
+          ? orphanParent
+          : orphanChildError),
+    get:
+      overrides.get ??
+      (async () => ({
+        data: {
+          id: 'ses_1',
+          parentID: 'parent-1',
+          directory: '/test/project',
+          time: { created: 100 },
+        },
+      })),
+  };
+}
+
+async function flushPromises(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
+function makeDurableBoardRecovery(
+  board: BackgroundJobBoard | (() => BackgroundJobBoard),
+  markOperationSent?: () => boolean | undefined,
+): TaskControlRecovery {
+  const getBoard = typeof board === 'function' ? board : () => board;
+  const recovery: Record<string, unknown> = {
+    resolve: async (parentSessionID: string, requested: string) => {
+      const job = getBoard().resolve(parentSessionID, requested);
+      return job
+        ? { kind: 'board' as const, requested, job }
+        : { kind: 'unknown' as const, requested, reason: 'missing' };
+    },
+    hasDurableOperationClaims: () => true,
+    readLatestChildUser: async () => ({ childLatestUserID: 'child-user-1' }),
+    claimOperation: () => 'claim-1',
+    markOperationAccepted: () => true,
+    beginOperationCompensation: () => true,
+    settleOperation: () => true,
+  };
+  if (markOperationSent) recovery.markOperationSent = markOperationSent;
+  return recovery as unknown as TaskControlRecovery;
+}
+
 describe('task_revive tool', () => {
+  test('claims and settles an exact-ID stopped orphan in the real index', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+          admissionTimeoutMs: 1_000,
+        }),
+      );
+      const pending = fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'continue' },
+        context,
+      );
+      for (
+        let i = 0;
+        i < 50 && fixture.promptAsync.mock.calls.length === 0;
+        i++
+      )
+        await Promise.resolve();
+
+      expect(fixture.abort).not.toHaveBeenCalled();
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'sent_unknown' });
+
+      send.resolve({});
+      expect(String(await pending)).toContain('status: started');
+      await flushPromises();
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('clears a revive claim on deterministic pre-send baseline failure', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          revivedRunTracker: {
+            captureBaseline: async () => {
+              throw new Error('baseline unavailable');
+            },
+          },
+        }),
+      );
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'do not send' },
+          context,
+        ),
+      ).rejects.toThrow(/baseline unavailable/);
+      expect(fixture.promptAsync).not.toHaveBeenCalled();
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('clears a revive claim on authoritative prompt rejection', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: async () => ({ error: 'host refused' }),
+        }),
+      );
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'reject me' },
+          context,
+        ),
+      ).rejects.toThrow('host refused');
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('settles a thrown status-bearing prompt rejection promptly', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const error = Object.assign(new Error('host refused'), {
+        statusCode: 409,
+      });
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => Promise.reject(error),
+        }),
+      );
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'reject me' },
+          context,
+        ),
+      ).rejects.toThrow('host refused');
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('classifies a status-bearing response envelope as authoritative', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: async () => ({ response: { status: 409 } }),
+        }),
+      );
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'reject me' },
+          context,
+        ),
+      ).rejects.toThrow(/revive failed/);
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('a thrown HTTP 500 keeps the revive claim', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () =>
+            Promise.reject(
+              Object.assign(new Error('HTTP 500'), {
+                status: 500,
+                error: { message: 'socket closed' },
+              }),
+            ),
+        }),
+      );
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'retry me' },
+          context,
+        ),
+      ).rejects.toThrow('HTTP 500');
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'sent_unknown' });
+    });
+  });
+
+  test('settles a late thrown status-bearing rejection after the caller deadline', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const deadline = controlledAdmissionDeadline();
+      const send = Promise.withResolvers<unknown>();
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+          admissionTimeoutMs: 1_000,
+        }),
+      );
+
+      const pending = fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'late reject' },
+        context,
+      );
+      (await deadline.ready)();
+      expect(String(await pending)).toContain('status: admission_unknown');
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'sent_unknown' });
+
+      send.reject(
+        Object.assign(new Error('HTTP 409 host refused'), { status: 409 }),
+      );
+      await flushPromises();
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('a timed-out admission blocks a second revive', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+          admissionTimeoutMs: 1,
+        }),
+      );
+
+      const first = await fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'first' },
+        context,
+      );
+      expect(String(first)).toContain('status: admission_unknown');
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'sent_unknown' });
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'second' },
+          context,
+        ),
+      ).rejects.toThrow(/unsettled/);
+
+      send.resolve({});
+      await flushPromises();
+    });
+  });
+
+  test('late success registers exactly once and settles the claim', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+          admissionTimeoutMs: 1,
+        }),
+      );
+      const register = spyOn(fixture.revivedRunTracker, 'register');
+
+      await fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'late success' },
+        context,
+      );
+      send.resolve({});
+      await flushPromises();
+      send.resolve({});
+      expect(register).toHaveBeenCalledTimes(1);
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('late generic rejection retains sent_unknown and blocks retry', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+          admissionTimeoutMs: 1,
+        }),
+      );
+
+      await fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'late rejection' },
+        context,
+      );
+      send.reject(new Error('network unavailable'));
+      await flushPromises();
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'sent_unknown' });
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'retry' },
+          context,
+        ),
+      ).rejects.toThrow(/unsettled/);
+    });
+  });
+
+  test('fails closed before abort or prompt when a board baseline is unavailable', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const fixture = createTool({ identityIndex });
+      acknowledgedCompleted(fixture.board);
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'do not send' },
+          context,
+        ),
+      ).rejects.toThrow(/latest native child user turn cannot be verified/);
+      expect(fixture.abort).not.toHaveBeenCalled();
+      expect(fixture.promptAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  test.each([
+    ['false', () => false],
+    ['undefined', () => undefined],
+  ] as const)(
+    'does not prompt when markOperationSent returns %s',
+    async (_label, mark) => {
+      let board!: BackgroundJobBoard;
+      const fixture = createTool({
+        recovery: makeDurableBoardRecovery(() => board, mark),
+      });
+      board = fixture.board;
+      acknowledgedCompleted(board);
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'do not send' },
+          context,
+        ),
+      ).rejects.toThrow(/claim fence lost/);
+      expect(fixture.abort).not.toHaveBeenCalled();
+      expect(fixture.promptAsync).not.toHaveBeenCalled();
+    },
+  );
+
+  test('does not prompt when markOperationSent is unavailable', async () => {
+    let board!: BackgroundJobBoard;
+    const fixture = createTool({
+      recovery: makeDurableBoardRecovery(() => board),
+    });
+    board = fixture.board;
+    acknowledgedCompleted(board);
+
+    await expect(
+      fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'do not send' },
+        context,
+      ),
+    ).rejects.toThrow(/claim fence lost/);
+    expect(fixture.abort).not.toHaveBeenCalled();
+    expect(fixture.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('does not abort or prompt after a pre-send token replacement', async () => {
+    let board!: BackgroundJobBoard;
+    const fixture = createTool({
+      recovery: makeDurableBoardRecovery(
+        () => board,
+        () => false,
+      ),
+    });
+    board = fixture.board;
+    board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+    });
+
+    await expect(
+      fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'do not send' },
+        context,
+      ),
+    ).rejects.toThrow(/claim fence lost/);
+    expect(fixture.abort).not.toHaveBeenCalled();
+    expect(fixture.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('accepted deletion compensates and clears only after quiescence', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+        }),
+      );
+      const pending = fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'delete after accept' },
+        context,
+      );
+      for (
+        let i = 0;
+        i < 50 && fixture.promptAsync.mock.calls.length === 0;
+        i++
+      )
+        await Promise.resolve();
+      const lease = acquire.mock.results[0]?.value;
+      if (!lease) throw new Error('missing relaunch lease');
+      fixture.board.drop('ses_1');
+      send.resolve({});
+      await expect(pending).rejects.toThrow(/compensation initiated/);
+      await flushPromises();
+      expect(fixture.abort).toHaveBeenCalledTimes(1);
+      expect(fixture.board.validateLease(lease)).toBe(false);
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+    });
+  });
+
+  test('ambiguous compensation retains the compensating quarantine', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      let ambiguous = false;
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          promptAsync: () => send.promise,
+          status: async () => ({
+            data: ambiguous ? { ses_1: { type: 'busy' } } : {},
+          }),
+        }),
+      );
+      const pending = fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'ambiguous compensation' },
+        context,
+      );
+      for (
+        let i = 0;
+        i < 50 && fixture.promptAsync.mock.calls.length === 0;
+        i++
+      )
+        await Promise.resolve();
+      const lease = acquire.mock.results[0]?.value;
+      if (!lease) throw new Error('missing relaunch lease');
+      fixture.board.drop('ses_1');
+      ambiguous = true;
+      send.resolve({});
+      await expect(pending).rejects.toThrow(/compensation initiated/);
+      await flushPromises();
+      expect(fixture.abort).toHaveBeenCalledTimes(1);
+      expect(fixture.board.validateLease(lease)).toBe(true);
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'compensating' });
+    });
+  });
+
+  test('late accepted deletion with rejected abort retains the compensating claim', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const send = Promise.withResolvers<unknown>();
+      const stop = Promise.withResolvers<unknown>();
+      const compensationDone = Promise.withResolvers<void>();
+      spyOn(logger, 'log').mockImplementation((message) => {
+        if (message === '[task-revive] compensation unconfirmed')
+          compensationDone.resolve();
+      });
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          admissionTimeoutMs: 1,
+          promptAsync: () => send.promise,
+          abort: () => stop.promise,
+        }),
+      );
+
+      const output = await fixture.taskRevive.execute(
+        { task_id: 'ses_1', prompt: 'late deleted admission' },
+        context,
+      );
+      expect(String(output)).toContain('status: admission_unknown');
+      const lease = acquire.mock.results[0]?.value;
+      if (!lease) throw new Error('missing relaunch lease');
+      fixture.board.drop('ses_1');
+      send.resolve({});
+      for (let i = 0; i < 20 && !fixture.abort.mock.calls.length; i++)
+        await Promise.resolve();
+      expect(fixture.abort).toHaveBeenCalledTimes(1);
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'compensating' });
+      expect(fixture.board.validateLease(lease)).toBe(true);
+
+      stop.reject(new Error('abort transport failed'));
+      await compensationDone.promise;
+      await flushPromises();
+      expect(fixture.abort).toHaveBeenCalledTimes(1);
+      expect(fixture.board.validateLease(lease)).toBe(true);
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toMatchObject({ phase: 'compensating' });
+    });
+  });
+
+  test('adopts a stopped orphan and prompts exactly once without aborting', async () => {
+    const fixture = createTool({
+      status: async () => ({ data: {} }),
+      messages: async (args) =>
+        (args as { path?: { id?: string } })?.path?.id === 'parent-1'
+          ? orphanParent
+          : orphanChildError,
+      get: async () => ({
+        data: {
+          id: 'ses_1',
+          parentID: 'parent-1',
+          directory: '/test/project',
+          time: { created: 100 },
+        },
+      }),
+      identityIndex: { lookup: () => orphanIdentity },
+      revivedRunTracker: { probe: async () => false },
+    });
+
+    const output = await fixture.taskRevive.execute(
+      { task_id: 'exp-1', prompt: 'Continue the retained work' },
+      context,
+    );
+
+    expect(output).toContain('task_id: ses_1');
+    expect(fixture.abort).not.toHaveBeenCalled();
+    expect(fixture.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('adopts a stopped exact session ID without an identity index', async () => {
+    const fixture = createTool({
+      status: async () => ({ data: {} }),
+      messages: async (args) =>
+        (args as { path?: { id?: string } })?.path?.id === 'parent-1'
+          ? orphanParent
+          : orphanChildError,
+      get: async () => ({
+        data: {
+          id: 'ses_1',
+          parentID: 'parent-1',
+          directory: '/test/project',
+          time: { created: 100 },
+        },
+      }),
+      revivedRunTracker: { probe: async () => false },
+    });
+
+    const output = await fixture.taskRevive.execute(
+      { task_id: 'ses_1', prompt: 'Continue the retained work' },
+      context,
+    );
+
+    expect(output).toContain('task_id: ses_1');
+    expect(fixture.abort).not.toHaveBeenCalled();
+    expect(fixture.promptAsync).toHaveBeenCalledTimes(1);
+    expect(fixture.board.get('ses_1')).toMatchObject({
+      alias: 'ses_1',
+      state: 'running',
+    });
+  });
+
+  test('refuses an uncertain orphan without aborting or prompting', async () => {
+    const fixture = createTool({
+      status: async () => ({ error: 'offline' }),
+      messages: async (args) =>
+        (args as { path?: { id?: string } })?.path?.id === 'parent-1'
+          ? orphanParent
+          : orphanChildError,
+      get: async () => ({
+        data: {
+          id: 'ses_1',
+          parentID: 'parent-1',
+          directory: '/test/project',
+          time: { created: 100 },
+        },
+      }),
+      identityIndex: { lookup: () => orphanIdentity },
+    });
+
+    await expect(
+      fixture.taskRevive.execute(
+        { task_id: 'exp-1', prompt: 'Do not send' },
+        context,
+      ),
+    ).rejects.toThrow(/uncertain orphan recovery/);
+    expect(fixture.abort).not.toHaveBeenCalled();
+    expect(fixture.promptAsync).not.toHaveBeenCalled();
+  });
+
   test.each([
     ['early', 'idle'],
     ['early', 'rejected'],
@@ -622,6 +1301,36 @@ describe('task_revive tool', () => {
     expect(board.get('ses_1')).toMatchObject({
       generation: 2,
       state: 'running',
+    });
+  });
+
+  test('cleans up a durable claim and lease after a never-settling baseline', async () => {
+    await withRealIdentityIndex(async (identityIndex) => {
+      const baseline = Promise.withResolvers<string | undefined>();
+      const fixture = createTool(
+        realStoppedOrphanOptions(identityIndex, {
+          baselineTimeoutMs: 1,
+          revivedRunTracker: { captureBaseline: () => baseline.promise },
+        }),
+      );
+
+      await expect(
+        fixture.taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'do not send' },
+          context,
+        ),
+      ).rejects.toThrow(/baseline.*deadline/i);
+      expect(fixture.abort).not.toHaveBeenCalled();
+      expect(fixture.promptAsync).not.toHaveBeenCalled();
+      expect(
+        identityIndex.inspectOperationClaim('parent-1', 'ses_1', 'revive'),
+      ).toBeUndefined();
+      const replacement = fixture.board.acquireRelaunchLease('ses_1', 1);
+      expect(replacement).toBeDefined();
+      if (replacement) fixture.board.releaseLease(replacement);
+
+      baseline.resolve('late-baseline');
+      await baseline.promise;
     });
   });
 

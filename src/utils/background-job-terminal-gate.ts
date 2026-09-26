@@ -1044,6 +1044,14 @@ export function createBackgroundJobTerminalGate(options: {
           });
       }
     }
+    if (evidence.verdict === 'aborted')
+      return commit(
+        token,
+        'stopped',
+        'The current child turn was aborted.',
+        undefined,
+        'transcript',
+      );
     if (evidence.verdict === 'completed' || evidence.verdict === 'error')
       return commit(
         token,

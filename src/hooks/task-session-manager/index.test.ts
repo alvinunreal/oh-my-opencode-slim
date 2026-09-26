@@ -11,10 +11,17 @@ import {
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
+import type {
+  createBackgroundJobIdentityIndex,
+  ResumeClaimBaseline,
+} from '../../utils/background-job-identity-index';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
 } from '../../utils/background-job-terminal-gate';
+import * as logger from '../../utils/logger';
+import { createSameProcessResumeEvidence } from '../../utils/same-process-resume-evidence';
+import { buildPluginInput } from '../../v2/client-shim';
 import {
   createPhaseReminderHook,
   PHASE_REMINDER_METADATA_KEY,
@@ -117,6 +124,7 @@ type HookOptions = {
   maxRetainedSnapshots?: number;
   backgroundJobBoard?: BackgroundJobBoard;
   terminalGate?: BackgroundJobTerminalGate;
+  resumeEvidence?: ReturnType<typeof createSameProcessResumeEvidence>;
   hostOutcomeClock?: 'shared-unix-ms';
   sessionStatus?: unknown;
   sessionClient?: Record<string, unknown>;
@@ -129,6 +137,7 @@ type HookOptions = {
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   backgroundTaskConcurrency?: BackgroundTaskConcurrency;
   pendingCallTracker?: PendingCallTracker;
+  identityIndex?: ReturnType<typeof createBackgroundJobIdentityIndex>;
   getModelForAgent?: (agentType: string) => string | undefined;
 };
 
@@ -199,10 +208,12 @@ function createHook(options?: HookOptions) {
       readContextMaxFiles: options?.readContextMaxFiles,
       backgroundJobBoard: options?.backgroundJobBoard,
       terminalGate: options?.terminalGate,
+      resumeEvidence: options?.resumeEvidence,
       hostOutcomeClock: options?.hostOutcomeClock,
       backgroundJobSupervisor: options?.backgroundJobSupervisor,
       backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
       pendingCallTracker: options?.pendingCallTracker,
+      identityIndex: options?.identityIndex,
       getModelForAgent: options?.getModelForAgent,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
@@ -216,6 +227,333 @@ function createHook(options?: HookOptions) {
   );
 
   return { hook, complete };
+}
+
+function recoveryFixture() {
+  const base = Date.now() - 2_000;
+  const records = new Map<
+    string,
+    {
+      parentSessionID: string;
+      taskID: string;
+      agent: string;
+      alias: string;
+      directory: string;
+    }
+  >();
+  const claims = new Map<
+    string,
+    { token: string; baseline?: ResumeClaimBaseline }
+  >();
+  let serial = 0;
+  const childMessages: Array<{
+    info: Record<string, unknown>;
+    parts: unknown[];
+  }> = [
+    {
+      info: { role: 'user', id: 'admission', time: { created: base + 100 } },
+      parts: [],
+    },
+    {
+      info: {
+        role: 'assistant',
+        id: 'result',
+        finish: 'stop',
+        time: { completed: base + 500 },
+      },
+      parts: [{ type: 'text', text: 'Fixed.' }],
+    },
+  ];
+  const index = {
+    lookup(parent: string, key: string) {
+      return [...records.values()].find(
+        (item) =>
+          item.parentSessionID === parent &&
+          (item.alias === key || item.taskID === key),
+      );
+    },
+    reserve(parent: string, taskID: string, agent: string, prefix: string) {
+      const existing = records.get(taskID);
+      if (existing) return existing;
+      const item = {
+        parentSessionID: parent,
+        taskID,
+        agent,
+        alias: `${prefix}-${++serial}`,
+        directory: '/tmp',
+      };
+      records.set(taskID, item);
+      return item;
+    },
+    claimResume(
+      _parent: string,
+      taskID: string,
+      baseline?: ResumeClaimBaseline,
+    ) {
+      if (!records.has(taskID) || claims.has(taskID)) return undefined;
+      const token = `claim-${++serial}`;
+      claims.set(taskID, { token, baseline });
+      return token;
+    },
+    inspectResumeClaim(_parent: string, taskID: string) {
+      return claims.get(taskID);
+    },
+    settleResume(_parent: string, taskID: string, token: string) {
+      if (claims.get(taskID)?.token === token) claims.delete(taskID);
+    },
+    hasUnsettledResume(_parent: string, taskID: string) {
+      return claims.has(taskID);
+    },
+    forget(_parent: string, taskID: string) {
+      records.delete(taskID);
+    },
+  } as ReturnType<typeof createBackgroundJobIdentityIndex>;
+  const sessionClient: Record<string, unknown> = {
+    status: undefined,
+    get: async () => ({
+      data: {
+        id: 'ses_recover',
+        parentID: 'parent-1',
+        agent: 'fixer',
+        directory: '/tmp',
+        outcome: 'succeeded',
+        time: { created: base, idle: base + 600 },
+      },
+    }),
+    messages: async ({ path }: { path: { id: string } }) => ({
+      data:
+        path.id === 'parent-1'
+          ? [
+              {
+                info: {
+                  role: 'assistant',
+                  id: 'task-output',
+                  time: { created: base + 50 },
+                },
+                parts: [
+                  {
+                    type: 'tool',
+                    tool: 'task',
+                    state: {
+                      input: {
+                        subagent_type: 'fixer',
+                        background: true,
+                        description: 'Fix it',
+                      },
+                      output:
+                        '<task id="ses_recover" state="completed"><task_result>Fixed.</task_result></task>',
+                      time: { end: base + 700 },
+                    },
+                  },
+                ],
+              },
+              {
+                info: {
+                  role: 'user',
+                  id: 'notification',
+                  time: { created: base + 750 },
+                },
+                parts: [
+                  createInternalAgentTextPart(
+                    '<task id="ses_recover" state="completed"><task_result>Fixed.</task_result></task>',
+                  ),
+                ],
+              },
+              {
+                info: {
+                  role: 'assistant',
+                  id: 'ack',
+                  finish: 'stop',
+                  time: { created: base + 800, completed: base + 850 },
+                },
+                parts: [{ type: 'text', text: 'Result received.' }],
+              },
+            ]
+          : childMessages,
+    }),
+  };
+  return { index, claims, sessionClient, base, childMessages };
+}
+
+function sessionClientWithParentTaskError(
+  sessionClient: Record<string, unknown>,
+  claims: Map<string, { token: string; baseline?: ResumeClaimBaseline }>,
+  error: unknown,
+  offset = 0,
+): Record<string, unknown> {
+  const original = sessionClient.messages as (args: {
+    path: { id: string };
+  }) => Promise<{ data: unknown[] }>;
+  return {
+    ...sessionClient,
+    messages: async (args: { path: { id: string } }) => {
+      const response = await original(args);
+      if (args.path.id !== 'parent-1') return response;
+      const claimedAt =
+        claims.get('ses_recover')?.baseline?.claimedAt ?? Date.now();
+      return {
+        data: [
+          ...response.data,
+          {
+            info: {
+              role: 'assistant',
+              sessionID: 'parent-1',
+              id: 'schema-rejection',
+            },
+            parts: [
+              {
+                type: 'tool',
+                tool: 'task',
+                state: {
+                  status: 'error',
+                  input: { task_id: 'fix-1' },
+                  error,
+                  time: { end: claimedAt + offset },
+                },
+              },
+            ],
+          },
+        ],
+      };
+    },
+  };
+}
+
+function verifiedKnownHost(
+  board: BackgroundJobBoard,
+  taskID: string,
+  status: 'idle' | 'busy' | (() => 'idle' | 'busy' | undefined) = 'idle',
+): Record<string, unknown> {
+  const base = Date.now() - 2_000;
+  const job = () => board.get(taskID);
+  const result = () => job()?.resultSummary || 'done';
+  return {
+    get: async () => ({
+      data: {
+        id: taskID,
+        parentID: job()?.parentSessionID,
+        agent: job()?.agent,
+        directory: '/tmp',
+        outcome:
+          (typeof status === 'function' ? status() : status) === 'idle'
+            ? 'succeeded'
+            : undefined,
+        time:
+          (typeof status === 'function' ? status() : status) === 'idle'
+            ? { created: base, idle: base + 600 }
+            : { created: base },
+      },
+    }),
+    status: async () => {
+      const current = typeof status === 'function' ? status() : status;
+      return { data: current ? { [taskID]: { type: current } } : {} };
+    },
+    messages: async ({ path }: { path: { id: string } }) => ({
+      data:
+        path.id === job()?.parentSessionID
+          ? [
+              {
+                info: {
+                  id: 'delegation',
+                  role: 'assistant',
+                  sessionID: path.id,
+                  time: { created: base + 50 },
+                },
+                parts: [
+                  {
+                    type: 'tool',
+                    tool: 'task',
+                    state: {
+                      input: { subagent_type: job()?.agent, background: true },
+                      output: `task_id: ${taskID}\nstate: running`,
+                    },
+                  },
+                ],
+              },
+              {
+                info: {
+                  id: 'notice',
+                  role: 'user',
+                  sessionID: path.id,
+                  time: { created: base + 750 },
+                },
+                parts: [
+                  createInternalAgentTextPart(
+                    `<task id="${taskID}" state="completed"><task_result>${result()}</task_result></task>`,
+                  ),
+                ],
+              },
+              {
+                info: {
+                  id: 'ack',
+                  role: 'assistant',
+                  sessionID: path.id,
+                  finish: 'stop',
+                  time: { created: base + 800, completed: base + 850 },
+                },
+                parts: [{ type: 'text', text: 'Acknowledged.' }],
+              },
+            ]
+          : [
+              {
+                info: {
+                  id: 'admission',
+                  role: 'user',
+                  time: { created: base + 100 },
+                },
+                parts: [],
+              },
+              {
+                info: {
+                  id: 'answer',
+                  role: 'assistant',
+                  finish: 'stop',
+                  time: { completed: base + 500 },
+                },
+                parts: [{ type: 'text', text: result() }],
+              },
+            ],
+    }),
+  };
+}
+
+function identityIndexForBoard(
+  board: BackgroundJobBoard,
+): ReturnType<typeof createBackgroundJobIdentityIndex> {
+  const claims = new Map<
+    string,
+    { token: string; baseline?: ResumeClaimBaseline }
+  >();
+  return {
+    lookup(parent: string, key: string) {
+      const job = board.resolve(parent, key);
+      return (
+        job && {
+          parentSessionID: parent,
+          taskID: job.taskID,
+          agent: job.agent,
+          alias: job.alias,
+          directory: '/tmp',
+        }
+      );
+    },
+    claimResume(
+      _parent: string,
+      taskID: string,
+      baseline?: ResumeClaimBaseline,
+    ) {
+      if (claims.has(taskID)) return undefined;
+      const token = `claim-${taskID}`;
+      claims.set(taskID, { token, baseline });
+      return token;
+    },
+    inspectResumeClaim(_parent: string, taskID: string) {
+      return claims.get(taskID);
+    },
+    settleResume(_parent: string, taskID: string, token: string) {
+      if (claims.get(taskID)?.token === token) claims.delete(taskID);
+    },
+  } as ReturnType<typeof createBackgroundJobIdentityIndex>;
 }
 
 function createMessages(sessionID: string, text = 'user message') {
@@ -1926,7 +2264,7 @@ describe('task-session-manager hook', () => {
     expect(boardText(messages)).toContain('Result: plan is sound');
   });
 
-  test('resumes acknowledged cancelled and errored sessions through task_id', async () => {
+  test('refuses failed sessions without corroborating host terminal evidence', async () => {
     for (const state of ['cancelled', 'error'] as const) {
       const board = new BackgroundJobBoard();
       const original = board.registerLaunch({
@@ -1939,7 +2277,11 @@ describe('task-session-manager hook', () => {
       const { hook } = createHook({ backgroundJobBoard: board });
 
       const beforeAcknowledgement = {
-        args: { subagent_type: 'oracle', task_id: original.alias },
+        args: {
+          subagent_type: 'oracle',
+          description: `${state} review retry`,
+          task_id: original.alias,
+        },
       };
       await expect(
         hook['tool.execute.before'](
@@ -1956,26 +2298,164 @@ describe('task-session-manager hook', () => {
       board.markReconciled(original.taskID);
 
       const resume = {
-        args: { subagent_type: 'oracle', task_id: original.alias },
-      };
-      await hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: `${state}-resume` },
-        resume,
-      );
-      expect(resume.args.task_id).toBe(original.taskID);
-
-      await hook['tool.execute.after'](
-        { tool: 'task', sessionID: 'parent-1', callID: `${state}-resume` },
-        {
-          output: [`task_id: ${original.taskID}`, 'state: running'].join('\n'),
+        args: {
+          subagent_type: 'oracle',
+          description: `${state} review retry`,
+          task_id: original.alias,
         },
-      );
+      };
+      await expect(
+        hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: `${state}-resume` },
+          resume,
+        ),
+      ).rejects.toThrow(/fresh host evidence/);
+      expect(resume.args.task_id).toBe(original.alias);
+      expect(board.get(original.taskID)?.generation).toBe(original.generation);
+    }
+  });
 
-      expect(board.get(original.taskID)).toMatchObject({
-        generation: original.generation + 1,
-        state: 'running',
-        terminalUnreconciled: false,
+  test('logs the classifier reason when reusable host evidence is unavailable', async () => {
+    const board = new BackgroundJobBoard();
+    setupCompletedJob(board);
+    board.markReconciled('child-1');
+    const job = board.get('child-1');
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+    });
+    const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
+    try {
+      await expect(
+        hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: 'resume-no-get' },
+          {
+            args: {
+              subagent_type: 'oracle',
+              description: 'retry review',
+              task_id: 'ora-1',
+            },
+          },
+        ),
+      ).rejects.toThrow(
+        /^Task ora-1: fresh host evidence does not confirm a reusable session; resume blocked\.$/,
+      );
+      const refusal = logSpy.mock.calls.find(
+        ([message, details]) =>
+          message === '[task-session-manager] refused explicit task_id' &&
+          details?.task_id === 'ora-1' &&
+          details?.reason === 'session.get unavailable',
+      );
+      expect(refusal?.[1]).toEqual({
+        task_id: 'ora-1',
+        recovery: 'uncertain',
+        reason: 'session.get unavailable',
+        hasPendingAcknowledgement: false,
+        hasBrokerToken: false,
+        boardGeneration: job?.generation,
+        boardTerminalRevision: job?.terminalRevision,
       });
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('unproven parent notice or acknowledgement gives a bounded same-ID retry instruction without dispatch', async () => {
+    for (const [reason, requested] of [
+      ['parent terminal notice unproven', 'ora-1'],
+      ['parent acknowledgement unproven', 'child-1'],
+    ] as const) {
+      const board = new BackgroundJobBoard();
+      setupCompletedJob(board);
+      board.markReconciled('child-1');
+      const original = { ...board.get('child-1') };
+      const identityIndex = identityIndexForBoard(board);
+      const claimSpy = spyOn(identityIndex, 'claimResume');
+      const adoptSpy = spyOn(board, 'adoptExistingSession');
+      const pendingCallTracker = createPendingCallTracker();
+      const host = verifiedKnownHost(board, 'child-1');
+      const readMessages = host.messages as (args: {
+        path: { id: string };
+      }) => Promise<{
+        data: { info: { id: string }; parts: unknown[] }[];
+      }>;
+      const { hook } = createHook({
+        backgroundJobBoard: board,
+        identityIndex,
+        pendingCallTracker,
+        sessionClient: {
+          ...host,
+          messages: async (args: { path: { id: string } }) => {
+            const response = await readMessages(args);
+            if (args.path.id !== 'parent-1') return response;
+            return {
+              data: response.data
+                .filter(
+                  (message) =>
+                    reason !== 'parent acknowledgement unproven' ||
+                    message.info.id !== 'ack',
+                )
+                .map((message) =>
+                  reason === 'parent terminal notice unproven' &&
+                  message.info.id === 'notice'
+                    ? {
+                        ...message,
+                        parts: [
+                          {
+                            ...((message.parts[0] ?? {}) as object),
+                            metadata: {},
+                          },
+                        ],
+                      }
+                    : message,
+                ),
+            };
+          },
+        },
+      });
+      const args = {
+        subagent_type: 'oracle',
+        description: 'retry review',
+        prompt: 'additional review',
+        task_id: requested,
+      };
+      const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
+      try {
+        await expect(
+          hook['tool.execute.before'](
+            {
+              tool: 'task',
+              sessionID: 'parent-1',
+              callID: `resume-${requested}`,
+            },
+            { args },
+          ),
+        ).rejects.toThrow(
+          `Task ${requested}: fresh host evidence does not confirm a reusable session; resume blocked. Call task_result with task_id "${requested}" (the same alias or exact ID), then retry once with the original task_id. Do not wait for a later parent turn. No new session was created.`,
+        );
+        expect(
+          logSpy.mock.calls.find(
+            ([message, details]) =>
+              message === '[task-session-manager] refused explicit task_id' &&
+              details?.task_id === requested &&
+              details?.reason === reason,
+          )?.[1],
+        ).toMatchObject({ recovery: 'uncertain', reason });
+        expect(args).toEqual({
+          subagent_type: 'oracle',
+          description: 'retry review',
+          prompt: 'additional review',
+          task_id: requested,
+        });
+        expect(claimSpy).not.toHaveBeenCalled();
+        expect(adoptSpy).not.toHaveBeenCalled();
+        expect(pendingCallTracker.peekByParent('parent-1')).toBeUndefined();
+        expect(board.get('child-1')).toEqual(original);
+      } finally {
+        logSpy.mockRestore();
+        claimSpy.mockRestore();
+        adoptSpy.mockRestore();
+      }
     }
   });
 
@@ -1992,7 +2472,11 @@ describe('task-session-manager hook', () => {
     const { hook } = createHook({ backgroundJobBoard: board });
 
     const beforeAcknowledgement = {
-      args: { subagent_type: 'oracle', task_id: original.alias },
+      args: {
+        subagent_type: 'oracle',
+        description: 'stopped review retry',
+        task_id: original.alias,
+      },
     };
     await expect(
       hook['tool.execute.before'](
@@ -2005,7 +2489,11 @@ describe('task-session-manager hook', () => {
     board.markReconciled(original.taskID);
 
     const afterAcknowledgement = {
-      args: { subagent_type: 'oracle', task_id: original.alias },
+      args: {
+        subagent_type: 'oracle',
+        description: 'stopped review retry',
+        task_id: original.alias,
+      },
     };
     await expect(
       hook['tool.execute.before'](
@@ -2077,9 +2565,16 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('reuses timed-out running aliases after live busy recovery', async () => {
+  test('refuses timed-out running aliases while the recovered host is busy or retrying', async () => {
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    let hostStatus: 'busy' | 'retry' | undefined;
+    const pendingCallTracker = createPendingCallTracker();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      pendingCallTracker,
+      sessionClient: verifiedKnownHost(board, 'child-1', () => hostStatus),
+    });
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
@@ -2122,21 +2617,26 @@ describe('task-session-manager hook', () => {
     expect(
       board.resolveRecoverable('parent-1', 'exp-1', 'explorer')?.taskID,
     ).toBe('child-1');
-
-    const resume = {
-      args: { subagent_type: 'explorer', task_id: 'exp-1' },
-    };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
-      resume,
-    );
-
-    expect(resume.args.task_id).toBe('child-1');
-    expect(board.get('child-1')).toMatchObject({
-      state: 'running',
-      timedOut: false,
-      recoverableAfterLiveBusy: true,
-    });
+    const generation = board.get('child-1')?.generation;
+    for (const status of ['busy', 'retry'] as const) {
+      hostStatus = status;
+      const resume = {
+        args: {
+          subagent_type: 'explorer',
+          description: 'resume timed out session',
+          task_id: 'exp-1',
+        },
+      };
+      await expect(
+        hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: `resume-${status}` },
+          resume,
+        ),
+      ).rejects.toThrow(/busy or retrying.*task_status or task_message/);
+      expect(resume.args.task_id).toBe('exp-1');
+      expect(pendingCallTracker.peekByParent('parent-1')).toBeUndefined();
+      expect(board.get('child-1')?.generation).toBe(generation);
+    }
   });
 
   test('holds a relaunch lease through after and releases it after registration', async () => {
@@ -2146,9 +2646,17 @@ describe('task-session-manager hook', () => {
       parentSessionID: 'parent-1',
     });
     board.markReconciled('child-1');
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1'),
+    });
     const resume = {
-      args: { subagent_type: 'oracle', task_id: 'ora-1' },
+      args: {
+        subagent_type: 'oracle',
+        description: 'resume review plan',
+        task_id: 'ora-1',
+      },
     };
 
     await hook['tool.execute.before'](
@@ -2240,15 +2748,25 @@ describe('task-session-manager hook', () => {
       first.generation,
     );
     expect(cancellationLease).toBeDefined();
-    const { hook } = createHook({ backgroundJobBoard: board });
-    const resume = { args: { subagent_type: 'fixer', task_id: 'fix-1' } };
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1', 'busy'),
+    });
+    const resume = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'resume fixer task',
+        task_id: 'fix-1',
+      },
+    };
 
     await expect(
       hook['tool.execute.before'](
         { tool: 'task', sessionID: 'parent-1', callID: 'blocked-resume' },
         resume,
       ),
-    ).rejects.toThrow('cannot be resumed safely');
+    ).rejects.toThrow(/busy or retrying.*cannot send another prompt/);
     expect(resume.args.task_id).toBe('fix-1');
     expect(board.get(first.taskID)?.generation).toBe(first.generation);
     if (!cancellationLease) {
@@ -2399,11 +2917,21 @@ describe('task-session-manager hook', () => {
       parentSessionID: 'parent-1',
     });
     board.markReconciled('child-1');
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1'),
+    });
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-error' },
-      { args: { subagent_type: 'oracle', task_id: 'ora-1' } },
+      {
+        args: {
+          subagent_type: 'oracle',
+          description: 'resume error task',
+          task_id: 'ora-1',
+        },
+      },
     );
     await hook['tool.execute.after'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-error' },
@@ -2426,11 +2954,21 @@ describe('task-session-manager hook', () => {
     board.addContext = () => {
       throw new Error('context tracking failed');
     };
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1'),
+    });
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-throw' },
-      { args: { subagent_type: 'oracle', task_id: 'ora-1' } },
+      {
+        args: {
+          subagent_type: 'oracle',
+          description: 'resume throwing task',
+          task_id: 'ora-1',
+        },
+      },
     );
     await expect(
       hook['tool.execute.after'](
@@ -2449,7 +2987,14 @@ describe('task-session-manager hook', () => {
 
   test('does not bypass live busy recovery gate for known raw session ids', async () => {
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    let hostBusy = false;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'ses_timeout', () =>
+        hostBusy ? 'busy' : undefined,
+      ),
+    });
 
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
@@ -2475,15 +3020,21 @@ describe('task-session-manager hook', () => {
     );
 
     const resumeBeforeLiveBusy = {
-      args: { subagent_type: 'explorer', task_id: 'ses_timeout' },
+      args: {
+        subagent_type: 'explorer',
+        description: 'resume timed out session',
+        task_id: 'ses_timeout',
+      },
     };
     await expect(
       hook['tool.execute.before'](
         { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
         resumeBeforeLiveBusy,
       ),
-    ).rejects.toThrow('still running');
+    ).rejects.toThrow(/still running|fresh host evidence/);
     expect(resumeBeforeLiveBusy.args.task_id).toBe('ses_timeout');
+    expect(board.list('parent-1')).toHaveLength(1);
+    expect(board.get('ses_timeout')?.generation).toBe(1);
 
     await hook.event({
       event: {
@@ -2495,16 +3046,24 @@ describe('task-session-manager hook', () => {
         },
       },
     });
+    hostBusy = true;
 
     const resumeAfterLiveBusy = {
-      args: { subagent_type: 'explorer', task_id: 'ses_timeout' },
+      args: {
+        subagent_type: 'explorer',
+        description: 'resume timed out session',
+        task_id: 'ses_timeout',
+      },
     };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume-2' },
-      resumeAfterLiveBusy,
-    );
-
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume-2' },
+        resumeAfterLiveBusy,
+      ),
+    ).rejects.toThrow(/busy or retrying/);
     expect(resumeAfterLiveBusy.args.task_id).toBe('ses_timeout');
+    expect(board.list('parent-1')).toHaveLength(1);
+    expect(board.get('ses_timeout')?.generation).toBe(1);
   });
 
   test('busy timeout recovery clears timeout overlay from prompt', async () => {
@@ -5073,7 +5632,11 @@ describe('task-session-manager hook', () => {
 
   test('completed reconciled job appears reusable and resumes via task', async () => {
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1'),
+    });
 
     board.registerLaunch({
       taskID: 'child-1',
@@ -5128,7 +5691,11 @@ describe('task-session-manager hook', () => {
 
   test('only acknowledged terminal jobs resolve as reusable task sessions', async () => {
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'done-1'),
+    });
 
     board.registerLaunch({
       taskID: 'done-1',
@@ -5147,35 +5714,38 @@ describe('task-session-manager hook', () => {
     board.markReconciled('err-1');
 
     const unreconciled = {
-      args: { subagent_type: 'oracle', task_id: 'ora-1' },
+      args: {
+        subagent_type: 'oracle',
+        description: 'review plan retry',
+        task_id: 'ora-1',
+      },
     };
-    await expect(
-      hook['tool.execute.before'](
-        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-        unreconciled,
-      ),
-    ).rejects.toThrow(/unreconciled; task\(\) cannot resume/);
-    expect(unreconciled.args.task_id).toBe('ora-1');
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+      unreconciled,
+    );
+    expect(unreconciled.args.task_id).toBe('done-1');
+    expect(board.get('done-1')).toMatchObject({
+      state: 'reconciled',
+      terminalUnreconciled: false,
+    });
 
     board.markReconciled('done-1');
 
-    const failed = { args: { subagent_type: 'oracle', task_id: 'ora-2' } };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
-      failed,
-    );
-    expect(failed.args.task_id).toBe('err-1');
-    await hook['tool.execute.after'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
-      { output: ['task_id: err-1', 'state: running'].join('\n') },
-    );
-
-    const completed = { args: { subagent_type: 'oracle', task_id: 'ora-1' } };
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-3' },
-      completed,
-    );
-    expect(completed.args.task_id).toBe('done-1');
+    const failed = {
+      args: {
+        subagent_type: 'oracle',
+        description: 'bad review retry',
+        task_id: 'ora-2',
+      },
+    };
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-2' },
+        failed,
+      ),
+    ).rejects.toThrow(/fresh host evidence/);
+    expect(failed.args.task_id).toBe('ora-2');
 
     const messages = createMessages('parent-1', 'continue');
     await transformMessages(hook, messages);
@@ -5195,7 +5765,13 @@ describe('task-session-manager hook', () => {
       description: 'map hooks',
     });
 
-    const resume = { args: { subagent_type: 'explorer', task_id: 'exp-1' } };
+    const resume = {
+      args: {
+        subagent_type: 'explorer',
+        description: 'map hooks retry',
+        task_id: 'exp-1',
+      },
+    };
     await expect(
       hook['tool.execute.before'](
         { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
@@ -5247,26 +5823,14 @@ describe('task-session-manager hook', () => {
     expect(resume.args.task_id).toBe('exp-1');
   });
 
-  test('custom subagent unknown native task_id drops the id and spawns fresh', async () => {
+  test('custom subagent unknown native task_id refuses without spawning', async () => {
     const { hook } = createHook();
     const resume = {
-      args: { subagent_type: 'repro-helper', task_id: 'ses_custom123' },
-    };
-
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
-      resume,
-    );
-
-    expect(resume.args.task_id).toBeUndefined();
-  });
-
-  test('unknown alias refuses when an untracked child may still be running', async () => {
-    const { hook } = createHook({
-      hasUntrackedRunningChild: async () => true,
-    });
-    const resume = {
-      args: { subagent_type: 'fixer', task_id: 'fix-99' },
+      args: {
+        subagent_type: 'repro-helper',
+        description: 'custom task retry',
+        task_id: 'ses_custom123',
+      },
     };
 
     await expect(
@@ -5274,18 +5838,43 @@ describe('task-session-manager hook', () => {
         { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
         resume,
       ),
-    ).rejects.toThrow(/may have lost its mapping/);
+    ).rejects.toThrow(/Recovery is unconfirmed/);
+    expect(resume.args.task_id).toBe('ses_custom123');
+  });
+
+  test('unknown alias refuses even when legacy untracked-child probe reports busy', async () => {
+    const { hook } = createHook({
+      hasUntrackedRunningChild: async () => true,
+    });
+    const resume = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'unknown task retry',
+        task_id: 'fix-99',
+      },
+    };
+
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+        resume,
+      ),
+    ).rejects.toThrow(/Recovery is unconfirmed/);
     expect(resume.args.task_id).toBe('fix-99');
   });
 
-  test('unknown alias refuses when the host probe fails (fail closed)', async () => {
+  test('unknown alias refuses even when the legacy host probe fails', async () => {
     const { hook } = createHook({
       hasUntrackedRunningChild: async () => {
         throw new Error('probe down');
       },
     });
     const resume = {
-      args: { subagent_type: 'fixer', task_id: 'fix-99' },
+      args: {
+        subagent_type: 'fixer',
+        description: 'unknown task retry',
+        task_id: 'fix-99',
+      },
     };
 
     await expect(
@@ -5293,13 +5882,17 @@ describe('task-session-manager hook', () => {
         { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
         resume,
       ),
-    ).rejects.toThrow(/may have lost its mapping/);
+    ).rejects.toThrow(/Recovery is unconfirmed/);
     expect(resume.args.task_id).toBe('fix-99');
   });
 
   test('custom subagent aliases resolve for the same custom agent', async () => {
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1'),
+    });
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -5310,7 +5903,11 @@ describe('task-session-manager hook', () => {
     board.markReconciled('child-1');
 
     const resume = {
-      args: { subagent_type: 'repro-helper', task_id: 'rep-1' },
+      args: {
+        subagent_type: 'repro-helper',
+        description: 'ask secret letter retry',
+        task_id: 'rep-1',
+      },
     };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
@@ -5332,7 +5929,13 @@ describe('task-session-manager hook', () => {
     board.updateStatus({ taskID: 'child-1', state: 'completed' });
     board.markReconciled('child-1');
 
-    const wrongAgent = { args: { subagent_type: 'oracle', task_id: 'exp-1' } };
+    const wrongAgent = {
+      args: {
+        subagent_type: 'oracle',
+        description: 'map hooks retry',
+        task_id: 'exp-1',
+      },
+    };
     await expect(
       hook['tool.execute.before'](
         { tool: 'task', sessionID: 'parent-1', callID: 'agent' },
@@ -5344,7 +5947,11 @@ describe('task-session-manager hook', () => {
 
   test('resuming reusable job relaunches running and removes reusable entry', async () => {
     const board = new BackgroundJobBoard();
-    const { hook } = createHook({ backgroundJobBoard: board });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'child-1'),
+    });
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -5354,7 +5961,13 @@ describe('task-session-manager hook', () => {
     board.updateStatus({ taskID: 'child-1', state: 'completed' });
     board.markReconciled('child-1');
 
-    const resume = { args: { subagent_type: 'explorer', task_id: 'exp-1' } };
+    const resume = {
+      args: {
+        subagent_type: 'explorer',
+        description: 'map hooks retry',
+        task_id: 'exp-1',
+      },
+    };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
       resume,
@@ -5370,6 +5983,171 @@ describe('task-session-manager hook', () => {
       'exp-1 / child-1 / explorer / running',
     );
     expect(boardText(messages)).toContain('#### Reusable Sessions\n- none');
+  });
+
+  test('carries and accepts same-process resume evidence through task reuse', async () => {
+    const board = new BackgroundJobBoard();
+    const resumeEvidence = createSameProcessResumeEvidence();
+    const base = Date.now() - 2_000;
+    const statuslessHost = {
+      get: async () => ({
+        data: {
+          id: 'child-1',
+          parentID: 'parent-1',
+          agent: 'explorer',
+          directory: '/tmp',
+        },
+      }),
+      messages: async ({ path }: { path: { id: string } }) => ({
+        data:
+          path.id === 'parent-1'
+            ? [
+                {
+                  info: {
+                    id: 'delegation',
+                    role: 'assistant',
+                    sessionID: 'parent-1',
+                    time: { created: base },
+                  },
+                  parts: [
+                    {
+                      type: 'tool',
+                      name: 'subagent',
+                      state: {
+                        status: 'completed',
+                        input: {
+                          agent: 'explorer',
+                          background: true,
+                          description: 'map hooks',
+                        },
+                        time: { start: base, end: base + 1 },
+                        content: [
+                          {
+                            type: 'text',
+                            text: 'task_id: child-1\nstate: running',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+                {
+                  info: {
+                    id: 'retrieval',
+                    role: 'assistant',
+                    sessionID: 'parent-1',
+                    time: { created: base + 100 },
+                  },
+                  parts: [
+                    {
+                      type: 'tool',
+                      name: 'task_result',
+                      state: {
+                        status: 'completed',
+                        input: { task_id: 'child-1' },
+                        time: { start: base + 100, end: base + 110 },
+                        content: [{ type: 'text', text: 'done' }],
+                      },
+                    },
+                  ],
+                },
+                {
+                  info: {
+                    id: 'ack',
+                    role: 'assistant',
+                    sessionID: 'parent-1',
+                    finish: 'stop',
+                    time: { created: base + 120, completed: base + 130 },
+                  },
+                  parts: [{ type: 'text', text: 'Received.' }],
+                },
+              ]
+            : [
+                {
+                  info: {
+                    id: 'child-user',
+                    role: 'user',
+                    sessionID: 'child-1',
+                    time: { created: base + 10 },
+                  },
+                  parts: [{ type: 'text', text: 'Map hooks.' }],
+                },
+                {
+                  info: {
+                    id: 'child-answer',
+                    role: 'assistant',
+                    sessionID: 'child-1',
+                    finish: 'stop',
+                    time: { created: base + 20, completed: base + 30 },
+                  },
+                  parts: [{ type: 'text', text: 'done' }],
+                },
+              ],
+      }),
+    };
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: {
+        ...statuslessHost,
+        status: undefined,
+      },
+      resumeEvidence,
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map hooks',
+    });
+    board.updateStatus({
+      taskID: 'child-1',
+      state: 'completed',
+      resultSummary: 'done',
+      now: base + 100,
+    });
+    board.markReconciled('child-1');
+
+    const record = board.get('child-1');
+    if (!record || record.completedAt === undefined) {
+      throw new Error('missing completed board record');
+    }
+    resumeEvidence.observeAdmission({
+      sessionID: 'child-1',
+      messageID: 'child-user',
+      createdAt: base + 10,
+    });
+    resumeEvidence.recordTerminal({
+      taskID: record.taskID,
+      parentSessionID: record.parentSessionID,
+      generation: record.generation,
+      terminalRevision: record.terminalRevision,
+      state: 'completed',
+      resultSummary: record.resultSummary ?? 'done',
+      completedAt: record.completedAt,
+    });
+    resumeEvidence.observeAdmission({
+      sessionID: 'parent-1',
+      messageID: 'parent-user-2',
+      createdAt: base + 101,
+    });
+    const resume = {
+      args: {
+        subagent_type: 'explorer',
+        description: 'map hooks retry',
+        task_id: 'exp-1',
+      },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume-evidence' },
+      resume,
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume-evidence' },
+      { output: ['task_id: child-1', 'state: running'].join('\n') },
+    );
+
+    expect(board.get('child-1')).toMatchObject({ state: 'running' });
   });
 
   test('bare task id output without state does not create reusable job', async () => {
@@ -5389,7 +6167,12 @@ describe('task-session-manager hook', () => {
   });
 
   test('completed foreground XML task output becomes reusable after reconciliation', async () => {
-    const { hook } = createHook();
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      identityIndex: identityIndexForBoard(board),
+      sessionClient: verifiedKnownHost(board, 'ses_child'),
+    });
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
       { args: { subagent_type: 'fixer', description: 'reuse probe' } },
@@ -5429,7 +6212,13 @@ describe('task-session-manager hook', () => {
       'fix-1 / ses_child / fixer / completed, reconciled',
     );
 
-    const resume = { args: { subagent_type: 'fixer', task_id: 'fix-1' } };
+    const resume = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'reuse foreground task',
+        task_id: 'fix-1',
+      },
+    };
     await hook['tool.execute.before'](
       { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
       resume,
@@ -5475,35 +6264,1693 @@ describe('task-session-manager hook', () => {
     });
   });
 
-  test('drops hallucinated UUID task_ids and spawns fresh instead of refusing', async () => {
+  test('refuses unverified UUID task_ids without silently spawning', async () => {
     const { hook } = createHook();
-    // The exact shape from the 2026-09-19 outage: a fallback provider invented
-    // random UUIDs in task_id, then models copied the pattern from compacted
-    // history while every refusal blocked all delegations.
+    // Even a hallucinated UUID must not turn an explicit same-ID request
+    // into a different native child; the caller can omit task_id deliberately.
     const spawn = {
       args: {
         subagent_type: 'fixer',
+        description: 'verify explicit UUID task',
         task_id: '474bd269-eac6-40a9-9408-9fe430e8cd19',
       },
     };
 
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
-      spawn,
-    );
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+        spawn,
+      ),
+    ).rejects.toThrow(/Recovery is unconfirmed/);
 
-    expect(spawn.args.task_id).toBeUndefined();
+    expect(spawn.args.task_id).toBe('474bd269-eac6-40a9-9408-9fe430e8cd19');
   });
 
-  test('drops unknown reusable aliases and continues as a new spawn', async () => {
+  test('refuses unknown reusable aliases without a persisted mapping', async () => {
     const { hook } = createHook();
-    const resume = { args: { subagent_type: 'fixer', task_id: 'fix-99' } };
+    const resume = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'unknown reusable task',
+        task_id: 'fix-99',
+      },
+    };
 
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'resume-1' },
+        resume,
+      ),
+    ).rejects.toThrow(/Recovery is unconfirmed/);
+    expect(resume.args.task_id).toBe('fix-99');
+  });
+
+  test('explicit task_id schema preflight does not inspect identity or claim', async () => {
+    const { index } = recoveryFixture();
+    const originalLookup = index.lookup.bind(index);
+    const originalClaimResume = index.claimResume.bind(index);
+    let lookups = 0;
+    let claims = 0;
+    index.lookup = ((parent: string, key: string) => {
+      lookups += 1;
+      return originalLookup(parent, key);
+    }) as typeof index.lookup;
+    index.claimResume = ((
+      parent: string,
+      taskID: string,
+      baseline?: ResumeClaimBaseline,
+    ) => {
+      claims += 1;
+      return originalClaimResume(parent, taskID, baseline);
+    }) as typeof index.claimResume;
+    const { hook } = createHook({ identityIndex: index });
+
+    for (const [callID, description] of [
+      ['missing', undefined],
+      ['non-string', 42],
+      ['blank', '   '],
+    ] as const) {
+      const args = {
+        args: {
+          subagent_type: 'fixer',
+          task_id: 'fix-46',
+          ...(description === undefined ? {} : { description }),
+        },
+      };
+      await expect(
+        hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID },
+          args,
+        ),
+      ).rejects.toThrow(/no new session was created/);
+      expect(args.args.task_id).toBe('fix-46');
+    }
+
+    expect(lookups).toBe(0);
+    expect(claims).toBe(0);
+  });
+
+  test('matching missing-description SchemaError settles a claim before retry', async () => {
+    const { index, claims, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const first = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'schema-bad' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'first attempt',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    const firstToken = claims.get('ses_recover')?.token;
+    expect(firstToken).toBeDefined();
+
+    const retry = createHook({
+      identityIndex: index,
+      sessionClient: sessionClientWithParentTaskError(sessionClient, claims, {
+        name: 'SchemaError',
+        message: 'Missing key at ["description"]',
+      }),
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'corrected retry',
+        task_id: 'fix-1',
+      },
+    };
+    await retry.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'schema-retry' },
+      args,
+    );
+
+    expect(args.args.task_id).toBe('ses_recover');
+    expect(claims.get('ses_recover')?.token).not.toBe(firstToken);
+  });
+
+  test.each([
+    ['generic error', { name: 'TransportError', message: 'request failed' }, 0],
+    [
+      'old schema error',
+      { name: 'SchemaError', message: 'Missing key at ["description"]' },
+      -2_001,
+    ],
+  ])(
+    'generic or old schema evidence keeps the claim blocked: %s',
+    async (_label, error, offset) => {
+      const { index, claims, sessionClient } = recoveryFixture();
+      index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+      const first = createHook({
+        identityIndex: index,
+        sessionClient,
+        backgroundJobBoard: new BackgroundJobBoard(),
+      });
+      await first.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'claim' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'first attempt',
+            task_id: 'fix-1',
+          },
+        },
+      );
+      const token = claims.get('ses_recover')?.token;
+      const retry = createHook({
+        identityIndex: index,
+        sessionClient: sessionClientWithParentTaskError(
+          sessionClient,
+          claims,
+          error,
+          offset,
+        ),
+        backgroundJobBoard: new BackgroundJobBoard(),
+      });
+      await expect(
+        retry.hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: 'blocked' },
+          {
+            args: {
+              subagent_type: 'fixer',
+              description: 'corrected retry',
+              task_id: 'fix-1',
+            },
+          },
+        ),
+      ).rejects.toThrow(/another resume is unsettled/);
+      expect(claims.get('ses_recover')?.token).toBe(token);
+    },
+  );
+
+  test('restores persisted alias, claims before dispatch, and settles only after exact native output', async () => {
+    const { index, claims, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    const first = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    const resume = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'first' },
       resume,
     );
-    expect(resume.args.task_id).toBeUndefined();
+    expect(resume.args.task_id).toBe('ses_recover');
+    expect(board.get('ses_recover')?.alias).toBe('fix-1');
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+    expect(claims.get('ses_recover')?.baseline).toMatchObject({
+      childLatestUserID: 'admission',
+    });
+
+    const restarted = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await expect(
+      restarted.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'second' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/another resume is unsettled/);
+
+    await first.hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'first' },
+      { output: 'task_id: ses_other\nstate: running' },
+    );
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+    // The mismatched native output was consumed: the claim must stay open.
+  });
+
+  test('pre-dispatch crash with the same child user keeps the old claim and blocks replay', async () => {
+    const { index, claims, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const first = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'crashed' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    const token = claims.get('ses_recover')?.token;
+    expect(claims.get('ses_recover')?.baseline).toMatchObject({
+      childLatestUserID: 'admission',
+      childLatestUserCreatedAt: expect.any(Number),
+      claimedAt: expect.any(Number),
+    });
+    const restarted = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await expect(
+      restarted.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'retry' },
+        args,
+      ),
+    ).rejects.toThrow(/another resume is unsettled/);
+    expect(args.args.task_id).toBe('fix-1');
+    expect(claims.get('ses_recover')?.token).toBe(token);
+  });
+
+  test('same-ID reuse without a persistent identity index cannot dispatch', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_child',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_child',
+      state: 'completed',
+      resultSummary: 'done',
+    });
+    board.markReconciled('ses_child');
+    const generation = board.get('ses_child')?.generation;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      sessionClient: verifiedKnownHost(board, 'ses_child'),
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'no-index' },
+        args,
+      ),
+    ).rejects.toThrow(/persistent identity index unavailable/);
+    expect(args.args.task_id).toBe('fix-1');
+    expect(board.get('ses_child')?.generation).toBe(generation);
+  });
+
+  test('invalid latest child user ID blocks a new claim and releases its lease', async () => {
+    const { index, claims, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_recover',
+      state: 'completed',
+      resultSummary: 'Fixed.',
+    });
+    board.markReconciled('ses_recover');
+    const original = sessionClient.messages as (args: {
+      path: { id: string };
+    }) => Promise<{ data: unknown[] }>;
+    let childReads = 0;
+    const { hook } = createHook({
+      identityIndex: index,
+      backgroundJobBoard: board,
+      sessionClient: {
+        ...sessionClient,
+        messages: async (args: { path: { id: string } }) => {
+          const response = await original(args);
+          if (args.path.id !== 'ses_recover' || ++childReads === 1)
+            return response;
+          return {
+            data: [
+              ...response.data,
+              {
+                info: { role: 'user' },
+                parts: [{ type: 'text', text: 'No stable ID' }],
+              },
+            ],
+          };
+        },
+      },
+    });
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'bad-baseline' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/latest native child user turn cannot be verified/);
+    expect(claims.has('ses_recover')).toBe(false);
+    const lease = board.acquireRelaunchLease(
+      'ses_recover',
+      board.get('ses_recover')?.generation ?? -1,
+    );
+    expect(lease).toBeDefined();
+    if (lease) board.releaseLease(lease);
+  });
+
+  test('a new native child user settles lost-output intent but never dispatches the retry', async () => {
+    const { index, claims, sessionClient, childMessages, base } =
+      recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const first = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'lost' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    childMessages.push({
+      info: { role: 'user', id: 'resumed-1', time: { created: base + 900 } },
+      parts: [{ type: 'text', text: 'Continue' }],
+    });
+    const restarted = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await expect(
+      restarted.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'retry' },
+        args,
+      ),
+    ).rejects.toThrow(
+      /previous resume was already admitted.*task_status or task_result/,
+    );
+    expect(args.args.task_id).toBe('fix-1');
+    expect(claims.has('ses_recover')).toBe(false);
+    await expect(
+      restarted.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'again' },
+        args,
+      ),
+    ).rejects.toThrow(/Recovery is unconfirmed/);
+  });
+
+  test('v1 session.get without agent settles admitted intent with matching parent delegation', async () => {
+    const { index, claims, sessionClient, childMessages, base } =
+      recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const originalGet = sessionClient.get as () => Promise<{
+      data: Record<string, unknown>;
+    }>;
+    const v1Get = async () => {
+      const { agent: _agent, ...data } = (await originalGet()).data;
+      return { data };
+    };
+    const v1Client = { ...sessionClient, get: v1Get };
+    const first = createHook({ identityIndex: index, sessionClient: v1Client });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'v1-lost' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    expect(claims.get('ses_recover')?.baseline?.childLatestUserID).toBe(
+      'admission',
+    );
+    childMessages.push({
+      info: { role: 'user', id: 'v1-admitted', time: { created: base + 900 } },
+      parts: [{ type: 'text', text: 'Continue' }],
+    });
+    const restarted = createHook({
+      identityIndex: index,
+      sessionClient: v1Client,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await expect(
+      restarted.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'v1-retry' },
+        args,
+      ),
+    ).rejects.toThrow(/previous resume was already admitted.*task_status/);
+    expect(args.args.task_id).toBe('fix-1');
+    expect(claims.has('ses_recover')).toBe(false);
+  });
+
+  test('v1 missing agent cannot settle a claim with foreign indexed identity or delegation', async () => {
+    for (const conflict of [
+      'index-parent',
+      'index-agent',
+      'index-directory',
+      'host-parent',
+      'host-directory',
+      'delegation',
+      'foreground-delegation',
+      'no-delegation',
+    ] as const) {
+      const { index, claims, sessionClient, childMessages, base } =
+        recoveryFixture();
+      index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+      const first = createHook({ identityIndex: index, sessionClient });
+      await first.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'v1-lost' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      );
+      childMessages.push({
+        info: {
+          role: 'user',
+          id: 'v1-admitted',
+          time: { created: base + 900 },
+        },
+        parts: [],
+      });
+      const get = sessionClient.get as () => Promise<{
+        data: Record<string, unknown>;
+      }>;
+      const originalMessages = sessionClient.messages as (args: {
+        path: { id: string };
+      }) => Promise<{ data: unknown[] }>;
+      const originalLookup = index.lookup.bind(index);
+      let lookups = 0;
+      if (conflict.startsWith('index-')) {
+        index.lookup = ((parent: string, key: string) => {
+          const identity = originalLookup(parent, key);
+          return ++lookups === 1 || !identity
+            ? identity
+            : {
+                ...identity,
+                ...(conflict === 'index-parent'
+                  ? { parentSessionID: 'foreign' }
+                  : conflict === 'index-directory'
+                    ? { directory: '/foreign' }
+                    : { agent: 'oracle' }),
+              };
+        }) as typeof index.lookup;
+      }
+      const retry = createHook({
+        identityIndex: index,
+        sessionClient: {
+          ...sessionClient,
+          get: async () => {
+            const { agent: _agent, ...data } = (await get()).data;
+            return {
+              data: {
+                ...data,
+                ...(conflict === 'host-parent'
+                  ? { parentID: 'foreign' }
+                  : conflict === 'host-directory'
+                    ? { directory: '/foreign' }
+                    : {}),
+              },
+            };
+          },
+          messages: async (args: { path: { id: string } }) => {
+            const response = await originalMessages(args);
+            if (args.path.id !== 'parent-1') return response;
+            if (conflict === 'no-delegation') return { data: [] };
+            if (
+              conflict !== 'delegation' &&
+              conflict !== 'foreground-delegation'
+            )
+              return response;
+            return {
+              data: response.data.map((message) => {
+                if (!isObjectRecord(message) || !Array.isArray(message.parts))
+                  return message;
+                return {
+                  ...message,
+                  parts: message.parts.map((part: unknown) => {
+                    if (
+                      !isObjectRecord(part) ||
+                      part.type !== 'tool' ||
+                      !isObjectRecord(part.state) ||
+                      !isObjectRecord(part.state.input)
+                    )
+                      return part;
+                    return {
+                      ...part,
+                      state: {
+                        ...part.state,
+                        input: {
+                          ...part.state.input,
+                          ...(conflict === 'delegation'
+                            ? { subagent_type: 'oracle' }
+                            : { background: false }),
+                        },
+                      },
+                    };
+                  }),
+                };
+              }),
+            };
+          },
+        },
+      });
+      await expect(
+        retry.hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: `v1-${conflict}` },
+          {
+            args: {
+              subagent_type: 'fixer',
+              description: 'recover scheduler task',
+              task_id: 'fix-1',
+            },
+          },
+        ),
+      ).rejects.toThrow(/another resume is unsettled/);
+      expect(claims.has('ses_recover')).toBe(true);
+    }
+  });
+
+  test('a subsequent resume waits for the admitted run to finish and be acknowledged', async () => {
+    const { index, claims, sessionClient, childMessages, base } =
+      recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const first = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'lost' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    childMessages.push({
+      info: { role: 'user', id: 'resumed-1', time: { created: base + 900 } },
+      parts: [],
+    });
+    const retry = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await expect(
+      retry.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'ack-intent' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/previous resume was already admitted/);
+    await expect(
+      retry.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'still-working' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/Recovery is unconfirmed/);
+
+    childMessages.push({
+      info: {
+        role: 'assistant',
+        id: 'second-result',
+        finish: 'stop',
+        time: { completed: base + 1100 },
+      },
+      parts: [{ type: 'text', text: 'Fixed.' }],
+    });
+    const parentMessages = [
+      {
+        info: {
+          role: 'assistant',
+          id: 'delegation',
+          sessionID: 'parent-1',
+          time: { created: base + 800 },
+        },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'task',
+            state: {
+              input: { subagent_type: 'fixer', background: true },
+              output: 'task_id: ses_recover\nstate: running',
+              time: { end: base + 850 },
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          role: 'user',
+          id: 'second-notice',
+          sessionID: 'parent-1',
+          time: { created: base + 1300 },
+        },
+        parts: [
+          createInternalAgentTextPart(
+            '<task id="ses_recover" state="completed"><task_result>Fixed.</task_result></task>',
+          ),
+        ],
+      },
+      {
+        info: {
+          role: 'assistant',
+          id: 'second-ack',
+          sessionID: 'parent-1',
+          finish: 'stop',
+          time: { created: base + 1400, completed: base + 1450 },
+        },
+        parts: [{ type: 'text', text: 'Received new result.' }],
+      },
+    ];
+    const finished = createHook({
+      identityIndex: index,
+      backgroundJobBoard: new BackgroundJobBoard(),
+      sessionClient: {
+        ...sessionClient,
+        get: async () => ({
+          data: {
+            id: 'ses_recover',
+            parentID: 'parent-1',
+            agent: 'fixer',
+            directory: '/tmp',
+            outcome: 'succeeded',
+            time: { created: base, idle: base + 1200 },
+          },
+        }),
+        messages: async ({ path }: { path: { id: string } }) => ({
+          data: path.id === 'ses_recover' ? childMessages : parentMessages,
+        }),
+      },
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await expect(
+      finished.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'no-current-proof' },
+        args,
+      ),
+    ).rejects.toThrow(/Call task_result with task_id "fix-1"/);
+    expect(args.args.task_id).toBe('fix-1');
+    expect(claims.has('ses_recover')).toBe(false);
+
+    parentMessages.splice(2, 0, {
+      info: {
+        role: 'assistant',
+        id: 'second-retrieval',
+        sessionID: 'parent-1',
+        time: { created: base + 1320 },
+      },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'task_result',
+          state: {
+            input: { task_id: 'ses_recover' },
+            status: 'completed',
+            time: { start: base + 1320, end: base + 1350 },
+            output: 'Fixed.',
+          },
+        },
+      ],
+    });
+    await finished.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'after-terminal' },
+      args,
+    );
+    expect(args.args.task_id).toBe('ses_recover');
+    expect(claims.get('ses_recover')?.baseline?.childLatestUserID).toBe(
+      'resumed-1',
+    );
+  });
+
+  test('legacy claim and unreadable child admission stay unsettled', async () => {
+    const { index, claims, sessionClient, childMessages, base } =
+      recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const token = index.claimResume('parent-1', 'ses_recover');
+    childMessages.push({
+      info: { role: 'user', id: 'resumed-1', time: { created: base + 900 } },
+      parts: [],
+    });
+    const { hook } = createHook({ identityIndex: index, sessionClient });
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'legacy' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/another resume is unsettled/);
+    expect(claims.get('ses_recover')).toEqual({ token, baseline: undefined });
+  });
+
+  test('foreign host parent or agent never confirms an unsettled admission', async () => {
+    for (const mismatch of [{ parentID: 'foreign' }, { agent: 'oracle' }]) {
+      const { index, claims, sessionClient, childMessages, base } =
+        recoveryFixture();
+      index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+      const first = createHook({ identityIndex: index, sessionClient });
+      await first.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'lost' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      );
+      childMessages.push({
+        info: { role: 'user', id: 'resumed-1', time: { created: base + 900 } },
+        parts: [],
+      });
+      const get = sessionClient.get as () => Promise<{
+        data: Record<string, unknown>;
+      }>;
+      const retry = createHook({
+        identityIndex: index,
+        sessionClient: {
+          ...sessionClient,
+          get: async () => ({ data: { ...(await get()).data, ...mismatch } }),
+        },
+      });
+      await expect(
+        retry.hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: 'retry' },
+          {
+            args: {
+              subagent_type: 'fixer',
+              description: 'recover scheduler task',
+              task_id: 'fix-1',
+            },
+          },
+        ),
+      ).rejects.toThrow(/another resume is unsettled/);
+      expect(claims.has('ses_recover')).toBe(true);
+    }
+  });
+
+  test('unreadable child transcript cannot settle an otherwise matching claim', async () => {
+    const { index, claims, sessionClient, childMessages, base } =
+      recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const first = createHook({ identityIndex: index, sessionClient });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'lost' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    childMessages.push({
+      info: { role: 'user', id: 'resumed-1', time: { created: base + 900 } },
+      parts: [],
+    });
+    const messages = sessionClient.messages as (args: {
+      path: { id: string };
+    }) => Promise<unknown>;
+    const retry = createHook({
+      identityIndex: index,
+      sessionClient: {
+        ...sessionClient,
+        messages: (args: { path: { id: string } }) =>
+          args.path.id === 'ses_recover'
+            ? Promise.resolve({ error: { name: 'Unavailable' } })
+            : messages(args),
+      },
+    });
+    await expect(
+      retry.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'retry' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/another resume is unsettled/);
+    expect(claims.has('ses_recover')).toBe(true);
+  });
+
+  test('v2 context shim preserves ordered user IDs for admission proof', async () => {
+    const { index, claims, sessionClient, base } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const first = createHook({ identityIndex: index, sessionClient });
+    await first.hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'v2-lost' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    const shim = buildPluginInput({
+      session: {
+        get: async () => ({
+          id: 'ses_recover',
+          parentID: 'parent-1',
+          agent: 'fixer',
+          directory: '/tmp',
+        }),
+        context: async () => [
+          {
+            id: 'admission',
+            role: 'user',
+            time: { created: base + 100 },
+            content: [],
+          },
+          {
+            id: 'result',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Fixed.' }],
+          },
+          {
+            id: 'resumed-v2',
+            role: 'user',
+            time: { created: base + 900 },
+            content: [{ type: 'text', text: 'Continue' }],
+          },
+        ],
+      },
+    } as never);
+    const retry = createHook({
+      identityIndex: index,
+      sessionClient: (shim as { client: { session: Record<string, unknown> } })
+        .client.session,
+    });
+    await expect(
+      retry.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'v2-retry' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/previous resume was already admitted/);
+    expect(claims.has('ses_recover')).toBe(false);
+  });
+
+  test('verified exact session ID reserves an alias and settles a matching native response', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'ses_recover',
+      },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+      args,
+    );
+    expect(args.args.task_id).toBe('ses_recover');
+    expect(index.lookup('parent-1', 'ses_recover')?.alias).toBe('fix-1');
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+      { output: 'task_id: ses_recover\nstate: running' },
+    );
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
+    expect(board.get('ses_recover')).toMatchObject({
+      alias: 'fix-1',
+      state: 'running',
+    });
+  });
+
+  test('same-process exact ID repairs a failed alias reservation only after host verification', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    const board = new BackgroundJobBoard({
+      aliasAllocator: () => {
+        throw new Error('reservation failed');
+      },
+    });
+    board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_recover',
+      state: 'completed',
+      resultSummary: 'Fixed.',
+    });
+    board.markReconciled('ses_recover');
+    expect(board.get('ses_recover')?.alias).toBe('ses_recover');
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    const resume = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'ses_recover',
+      },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'repair' },
+      resume,
+    );
+    expect(resume.args.task_id).toBe('ses_recover');
+    expect(index.lookup('parent-1', 'ses_recover')?.alias).toBe('fix-1');
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+  });
+
+  test('persisted alias resolves a same-process board record still labelled by its task ID', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard({
+      aliasAllocator: () => {
+        throw new Error('reservation failed');
+      },
+    });
+    board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_recover',
+      state: 'completed',
+      resultSummary: 'Fixed.',
+    });
+    board.markReconciled('ses_recover');
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'known-alias' },
+      args,
+    );
+    expect(args.args.task_id).toBe('ses_recover');
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+  });
+
+  test('unreadable index refuses same-process exact ID without a claim', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_recover',
+      state: 'completed',
+      resultSummary: 'Fixed.',
+    });
+    board.markReconciled('ses_recover');
+    index.lookup = () => {
+      throw new Error('corrupt');
+    };
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'ses_recover',
+      },
+    };
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'corrupt' },
+        args,
+      ),
+    ).rejects.toThrow(/identity index unreadable/);
+    expect(args.args.task_id).toBe('ses_recover');
+    expect(board.get('ses_recover')?.state).toBe('reconciled');
+  });
+
+  test('host busy blocks a board-reusable alias without adopting a new state', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    board.updateStatus({
+      taskID: 'ses_recover',
+      state: 'completed',
+      resultSummary: 'Fixed.',
+    });
+    board.markReconciled('ses_recover');
+    const original = board.get('ses_recover');
+    const { hook } = createHook({
+      identityIndex: index,
+      backgroundJobBoard: board,
+      sessionClient: {
+        ...sessionClient,
+        status: async () => ({ data: { ses_recover: { type: 'busy' } } }),
+      },
+    });
+    const args = {
+      args: {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        task_id: 'fix-1',
+      },
+    };
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'host-busy' },
+        args,
+      ),
+    ).rejects.toThrow(/busy or retrying.*cannot send another prompt/);
+    expect(args.args.task_id).toBe('fix-1');
+    expect(board.get('ses_recover')?.generation).toBe(original?.generation);
+  });
+
+  test('stale running board is not adopted over confirmed host terminal state', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    const running = board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'stale' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/still running|fresh host evidence/);
+    expect(board.get('ses_recover')?.generation).toBe(running.generation);
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
+  });
+
+  test('v2 error text cannot relaunch or settle a persistent claim', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'errored' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    const generation = board.get('ses_recover')?.generation;
+    const errorText = 'task_id: ses_recover\nstate: running';
+    const output = { output: errorText };
+    await hook['tool.execute.after'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'errored',
+        nativeToolStatus: 'error',
+      },
+      output,
+    );
+    expect(output.output).toBe(errorText);
+    expect(board.get('ses_recover')?.generation).toBe(generation);
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'next' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/another resume is unsettled/);
+  });
+
+  test('v2 error text cannot register a fresh task and remains unchanged', async () => {
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({ backgroundJobBoard: board });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'failed-launch' },
+      { args: { subagent_type: 'fixer', background: true } },
+    );
+    const output = { output: 'task_id: ses_failed\nstate: running' };
+    await hook['tool.execute.after'](
+      {
+        tool: 'task',
+        sessionID: 'parent-1',
+        callID: 'failed-launch',
+        nativeToolStatus: 'error',
+      },
+      output,
+    );
+    expect(output.output).toBe('task_id: ses_failed\nstate: running');
+    expect(board.get('ses_failed')).toBeUndefined();
+  });
+
+  test('session.deleted retains an unsettled claim while host still finds the child', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'pending-deletion' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: { info: { id: 'ses_recover', parentID: 'parent-1' } },
+      },
+    });
+    expect(index.lookup('parent-1', 'ses_recover')).toBeDefined();
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(true);
+  });
+
+  test('unacknowledged terminal remains unavailable and is not adopted', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    const board = new BackgroundJobBoard();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const originalMessages = sessionClient.messages as (args: {
+      path: { id: string };
+    }) => Promise<{ data: unknown[] }>;
+    const { hook } = createHook({
+      identityIndex: index,
+      backgroundJobBoard: board,
+      sessionClient: {
+        ...sessionClient,
+        messages: async (args: { path: { id: string } }) => {
+          const response = await originalMessages(args);
+          return args.path.id === 'parent-1'
+            ? { data: response.data.slice(0, 1) }
+            : response;
+        },
+      },
+    });
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'unacknowledged' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      'Call task_result with task_id "fix-1" (the same alias or exact ID), then retry once with the original task_id. Do not wait for a later parent turn. No new session was created.',
+    );
+    expect(board.get('ses_recover')).toBeUndefined();
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
+  });
+
+  test('empty board with persisted identity gives a bounded same-ID retry for unproven parent evidence', async () => {
+    for (const [reason, requested] of [
+      ['parent terminal notice unproven', 'fix-1'],
+      ['parent acknowledgement unproven', 'ses_recover'],
+    ] as const) {
+      const { index, sessionClient, base } = recoveryFixture();
+      const identity = index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+      const board = new BackgroundJobBoard();
+      const pendingCallTracker = createPendingCallTracker();
+      const claimSpy = spyOn(index, 'claimResume');
+      const adoptSpy = spyOn(board, 'adoptExistingSession');
+      const prompt = mock(async () => ({}));
+      const promptAsync = mock(async () => ({}));
+      const readMessages = sessionClient.messages as (args: {
+        path: { id: string };
+      }) => Promise<{
+        data: { info: { id: string }; parts: unknown[] }[];
+      }>;
+      const { hook } = createHook({
+        identityIndex: index,
+        backgroundJobBoard: board,
+        pendingCallTracker,
+        sessionClient: {
+          ...sessionClient,
+          prompt,
+          promptAsync,
+          messages: async (args: { path: { id: string } }) => {
+            const response = await readMessages(args);
+            if (args.path.id !== 'parent-1') return response;
+            return {
+              data: response.data
+                .filter(
+                  (message) =>
+                    reason !== 'parent acknowledgement unproven' ||
+                    message.info.id !== 'ack',
+                )
+                .map((message) =>
+                  reason === 'parent terminal notice unproven'
+                    ? message.info.id === 'notification'
+                      ? { ...message, parts: [] }
+                      : message.info.id === 'task-output'
+                        ? {
+                            ...message,
+                            parts: [
+                              {
+                                type: 'tool',
+                                tool: 'task',
+                                state: {
+                                  input: {
+                                    subagent_type: 'fixer',
+                                    background: true,
+                                    description: 'Fix it',
+                                  },
+                                  output:
+                                    'task_id: ses_recover\nstate: running',
+                                  time: { end: base + 700 },
+                                },
+                              },
+                            ],
+                          }
+                        : message
+                    : message,
+                ),
+            };
+          },
+        },
+      });
+      const args = {
+        subagent_type: 'fixer',
+        description: 'recover scheduler task',
+        prompt: 'additional review',
+        task_id: requested,
+      };
+      const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
+      try {
+        await expect(
+          hook['tool.execute.before'](
+            { tool: 'task', sessionID: 'parent-1', callID: requested },
+            { args },
+          ),
+        ).rejects.toThrow(
+          `Task ${requested}: fresh host evidence does not confirm a reusable session; resume blocked. Call task_result with task_id "${requested}" (the same alias or exact ID), then retry once with the original task_id. Do not wait for a later parent turn. No new session was created.`,
+        );
+        expect(
+          logSpy.mock.calls.find(
+            ([message, details]) =>
+              message === '[task-session-manager] refused explicit task_id' &&
+              details?.task_id === requested &&
+              details?.reason === reason,
+          )?.[1],
+        ).toMatchObject({ recovery: 'uncertain', reason });
+        expect(args.task_id).toBe(requested);
+        expect(index.lookup('parent-1', requested)).toEqual(identity);
+        expect(board.list('parent-1')).toEqual([]);
+        expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
+        expect(claimSpy).not.toHaveBeenCalled();
+        expect(adoptSpy).not.toHaveBeenCalled();
+        expect(prompt).not.toHaveBeenCalled();
+        expect(promptAsync).not.toHaveBeenCalled();
+        expect(pendingCallTracker.peekByParent('parent-1')).toBeUndefined();
+      } finally {
+        logSpy.mockRestore();
+        claimSpy.mockRestore();
+        adoptSpy.mockRestore();
+      }
+    }
+  });
+
+  test('no-callID exact resumed task ID settles a pinned persistent claim', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'fix-1',
+        },
+      },
+    );
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1' },
+      { output: 'task_id: ses_recover\nstate: running' },
+    );
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
+  });
+
+  test('failed admission before native dispatch settles the persistent claim', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: new BackgroundJobBoard(),
+      backgroundTaskConcurrency: {
+        acquire: () => ({
+          ready: Promise.reject(new Error('admission rejected')),
+          releaseIfUnbound() {},
+        }),
+      } as unknown as BackgroundTaskConcurrency,
+    });
+    await expect(
+      hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'rejected' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+            background: true,
+          },
+        },
+      ),
+    ).rejects.toThrow('admission rejected');
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
+  });
+
+  test('session.deleted forgets persistent identity; board-only removal does not', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    board.drop('ses_recover');
+    expect(index.lookup('parent-1', 'fix-1')).toBeDefined();
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: {
+          info: { id: 'ses_recover', parentID: 'parent-1' },
+        },
+      },
+    });
+    expect(index.lookup('parent-1', 'fix-1')).toBeUndefined();
+  });
+
+  test('session.deleted forgets indexed child still present on the board', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: {
+          info: { id: 'ses_recover', parentID: 'parent-1' },
+        },
+      },
+    });
+    expect(index.lookup('parent-1', 'fix-1')).toBeUndefined();
+  });
+
+  test('unattributed deletion after same-ID relaunch retains persistent identity', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const board = new BackgroundJobBoard();
+    const launch = {
+      taskID: 'ses_recover',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    };
+    board.registerLaunch(launch);
+    board.registerLaunch(launch);
+    const { hook } = createHook({
+      identityIndex: index,
+      sessionClient,
+      backgroundJobBoard: board,
+    });
+    await hook.event({
+      event: {
+        type: 'session.deleted',
+        properties: {
+          info: { id: 'ses_recover', parentID: 'parent-1' },
+        },
+      },
+    });
+    expect(index.lookup('parent-1', 'fix-1')).toBeDefined();
+  });
+
+  test('missing, malformed and unreadable host results never drop an explicit ID', async () => {
+    const { index, sessionClient } = recoveryFixture();
+    for (const [get, hint] of [
+      [
+        async () => {
+          throw { _tag: 'Session.NotFoundError' };
+        },
+        'confirmed it missing',
+      ],
+      [
+        async () => ({ error: { name: 'Unavailable' } }),
+        'Recovery is unconfirmed',
+      ],
+      [
+        async () => ({ data: { id: 'ses_recover', parentID: 'wrong' } }),
+        'Recovery is unconfirmed',
+      ],
+      [undefined, 'Recovery is unconfirmed'],
+    ] as const) {
+      const { hook } = createHook({
+        identityIndex: index,
+        sessionClient: { ...sessionClient, get },
+      });
+      const args = {
+        args: {
+          subagent_type: 'fixer',
+          description: 'recover scheduler task',
+          task_id: 'ses_recover',
+        },
+      };
+      await expect(
+        hook['tool.execute.before'](
+          { tool: 'task', sessionID: 'parent-1', callID: 'resume' },
+          args,
+        ),
+      ).rejects.toThrow(hint);
+      expect(args.args.task_id).toBe('ses_recover');
+      expect(index.lookup('parent-1', 'ses_recover')).toBeUndefined();
+    }
+  });
+
+  test('busy and interrupted evidence refuse task resume without a new spawn', async () => {
+    const { index, sessionClient, base } = recoveryFixture();
+    index.reserve('parent-1', 'ses_recover', 'fixer', 'fix');
+    const busy = createHook({
+      identityIndex: index,
+      sessionClient: {
+        ...sessionClient,
+        status: async () => ({ data: { ses_recover: { type: 'busy' } } }),
+      },
+    });
+    await expect(
+      busy.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'busy' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/busy or retrying/);
+
+    const interrupted = createHook({
+      identityIndex: index,
+      sessionClient: {
+        ...sessionClient,
+        get: async () => ({
+          data: {
+            ...(await (sessionClient.get as () => Promise<{ data: object }>)())
+              .data,
+            outcome: 'interrupted',
+          },
+        }),
+        messages: async (args: { path: { id: string } }) => {
+          if (args.path.id === 'ses_recover')
+            return {
+              data: [
+                {
+                  info: {
+                    role: 'user',
+                    id: 'u',
+                    time: { created: base + 100 },
+                  },
+                  parts: [],
+                },
+              ],
+            };
+          const result = await (
+            sessionClient.messages as (args: unknown) => Promise<{
+              data: Array<{ parts: Array<{ state?: { output?: string } }> }>;
+            }>
+          )(args);
+          const state = result.data[0]?.parts[0]?.state;
+          if (!state) throw new Error('missing parent task part');
+          state.output = 'task_id: ses_recover\nstate: running';
+          return result;
+        },
+      },
+    });
+    await expect(
+      interrupted.hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'stopped' },
+        {
+          args: {
+            subagent_type: 'fixer',
+            description: 'recover scheduler task',
+            task_id: 'fix-1',
+          },
+        },
+      ),
+    ).rejects.toThrow(/task_revive/);
+    expect(index.hasUnsettledResume('parent-1', 'ses_recover')).toBe(false);
   });
 
   test('reads before and after launch attach with unique-line counts and caps', async () => {
