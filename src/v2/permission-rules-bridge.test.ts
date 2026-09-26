@@ -49,7 +49,12 @@ import {
   deriveExactPermissionRules,
   resetV2GenerationWarnings,
 } from './setup';
-import type { V2Context, V2PermissionRule, V2Session } from './types';
+import type {
+  V2Context,
+  V2PermissionRule,
+  V2Session,
+  V2SessionPromptEvent,
+} from './types';
 
 /** Task-policy fixture: nested exact patterns alongside entries that
  * cannot be expressed exactly (the '*' catch-all key, wildcard resource
@@ -565,6 +570,79 @@ describe('createPermissionRulesBridge', () => {
     expect(attempts).toBe(2);
   });
 
+  test('prompt-side application shares the in-flight update and surfaces failure', async () => {
+    let finishUpdate!: () => void;
+    const bridge = makeBridge({
+      session: makeSession(
+        () =>
+          new Promise((resolve) => {
+            finishUpdate = () => resolve({});
+          }),
+      ),
+    });
+    const eventApply = bridge.applyChildSession('ses_child_1', 'probe');
+    let promptDone = false;
+    const promptApply = bridge
+      .applyChildSession('ses_child_1', 'probe')
+      .then(() => {
+        promptDone = true;
+      });
+    await Promise.resolve();
+    expect(promptDone).toBe(false);
+    finishUpdate();
+    await Promise.all([eventApply, promptApply]);
+    expect(promptDone).toBe(true);
+
+    const failed = makeBridge({
+      session: makeSession(async () => {
+        throw new Error('update failed');
+      }),
+    });
+    await expect(
+      failed.applyChildSession('ses_child_2', 'probe'),
+    ).rejects.toThrow('update failed');
+  });
+
+  test('session.created observation remains pending until its rules update completes', async () => {
+    let finishUpdate!: () => void;
+    const bridge = makeBridge({
+      session: makeSession(
+        () =>
+          new Promise((resolve) => {
+            finishUpdate = () => resolve({});
+          }),
+      ),
+    });
+    let downstreamCanContinue = false;
+    const dispatch = bridge
+      .observeSessionCreated(makeChildCreatedEvent({}))
+      .then(() => {
+        downstreamCanContinue = true;
+      });
+
+    await Promise.resolve();
+    expect(downstreamCanContinue).toBe(false);
+    finishUpdate();
+    await dispatch;
+    expect(downstreamCanContinue).toBe(true);
+  });
+
+  test('dispose prevents any later permission writes', async () => {
+    const calls: RulesCall[] = [];
+    const bridge = makeBridge({
+      session: makeSession(async (input) => {
+        calls.push(input as RulesCall);
+        return {};
+      }),
+    });
+    await bridge.dispose();
+    await bridge.observeSessionCreated(makeChildCreatedEvent({}));
+    await expect(
+      bridge.applyChildSession('ses_child_1', 'probe'),
+    ).rejects.toThrow('disposed');
+    expect(calls).toHaveLength(0);
+  });
+
   test('malformed events resolve without throwing (fail-soft)', async () => {
     const bridge = makeBridge({
       session: makeSession(async () => {
@@ -649,6 +727,63 @@ describe('createPermissionRulesBridge', () => {
 
     expect(calls).toHaveLength(0);
   });
+
+  test('an explicitly compiled empty policy does not replace session permissions', async () => {
+    const calls: RulesCall[] = [];
+    const bridge = makeBridge({
+      session: makeSession(async (input) => {
+        calls.push(input as RulesCall);
+        return {};
+      }),
+      policy: [],
+    });
+
+    await bridge.observeSessionCreated(makeChildCreatedEvent({}));
+
+    expect(calls).toHaveLength(0);
+  });
+
+  test('dispose awaits held update and rejects an admission crossing cleanup', async () => {
+    let finishUpdate!: () => void;
+    const calls: RulesCall[] = [];
+    const bridge = makeBridge({
+      session: makeSession((input) => {
+        calls.push(input as RulesCall);
+        return new Promise((resolve) => {
+          finishUpdate = () => resolve({});
+        });
+      }),
+    });
+    const admission = bridge.applyChildSession('ses_child_held', 'probe');
+    let admissionSucceeded = false;
+    const observedAdmission = admission.then(
+      () => {
+        admissionSucceeded = true;
+      },
+      () => {
+        // The strict admission promise below is asserted separately; observe
+        // its rejection here too so the lifecycle test has no stray rejection.
+      },
+    );
+    await Promise.resolve();
+
+    let disposalFinished = false;
+    const disposal = bridge.dispose().then(() => {
+      disposalFinished = true;
+    });
+    await Promise.resolve();
+    expect(disposalFinished).toBe(false);
+    expect(admissionSucceeded).toBe(false);
+
+    finishUpdate();
+    await expect(admission).rejects.toThrow('disposed during application');
+    await Promise.all([observedAdmission, disposal]);
+    expect(disposalFinished).toBe(true);
+    expect(admissionSucceeded).toBe(false);
+    expect(calls).toHaveLength(1);
+    await bridge.dispose();
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('createV2Setup permission rules wiring', () => {
@@ -694,141 +829,224 @@ describe('createV2Setup permission rules wiring', () => {
     await rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  test('the event pump applies child session rules via ctx.session.update', async () => {
-    const calls: RulesCall[] = [];
-    const projectDir = path.join(fixtureRoot, 'project');
-    let transformAgents!: (draft: unknown) => void;
-    let publishEvent!: (event: Record<string, unknown>) => void;
-    const eventQueue: Record<string, unknown>[] = [];
-    let wakeEvent: (() => void) | undefined;
-    let eventStreamStopped = false;
-    const ctx = {
-      app: { name: 'opencode', version: 'v2-perm-rules-test' },
-      options: {},
-      location: {
-        directory: projectDir,
-        project: {
-          id: 'proj_perm_rules',
+  test.each([true, false])(
+    'setup prompt barrier with snapshot availability %s',
+    async (snapshotAvailable) => {
+      const calls: RulesCall[] = [];
+      const projectDir = path.join(fixtureRoot, 'project');
+      let transformAgents!: (draft: unknown) => void;
+      const nativeAgents = [
+        {
+          id: 'explorer',
+          permissions: [
+            { action: 'read', resource: 'src/**', effect: 'deny' },
+            { action: 'read', resource: 'src/public.ts', effect: 'allow' },
+          ],
+        },
+      ];
+      let transformsApplied = false;
+      let publishEvent!: (event: Record<string, unknown>) => void;
+      let promptHandler:
+        | ((event: V2SessionPromptEvent) => Promise<void>)
+        | undefined;
+      let holdRulesUpdate = false;
+      let finishRulesUpdate!: () => void;
+      let failNextRulesUpdate = false;
+      const eventQueue: Record<string, unknown>[] = [];
+      let wakeEvent: (() => void) | undefined;
+      let eventStreamStopped = false;
+      const ctx = {
+        app: { name: 'opencode', version: 'v2-perm-rules-test' },
+        options: {},
+        location: {
           directory: projectDir,
-          canonical: projectDir,
-        },
-      },
-      agent: {
-        transform: async (cb: (draft: unknown) => void) => {
-          transformAgents = cb;
-          return { dispose: () => {} };
-        },
-        reload: async () => ({}),
-        list: async () => [],
-      },
-      session: {
-        hook: async () => ({ dispose: () => {} }),
-        update: async (input: RulesCall) => {
-          calls.push(input);
-          return {};
-        },
-      },
-      event: {
-        subscribe: () => ({
-          [Symbol.asyncIterator]: () => ({
-            next: async (): Promise<
-              IteratorResult<Record<string, unknown>>
-            > => {
-              while (eventQueue.length === 0 && !eventStreamStopped) {
-                await new Promise<void>((resolve) => {
-                  wakeEvent = resolve;
-                });
-              }
-              const event = eventQueue.shift();
-              return event
-                ? { value: event, done: false }
-                : { value: undefined, done: true };
-            },
-            return: async () => {
-              eventStreamStopped = true;
-              wakeEvent?.();
-              return { value: undefined, done: true } as IteratorResult<
-                Record<string, unknown>
-              >;
-            },
-          }),
-        }),
-      },
-    } as unknown as V2Context;
-    publishEvent = (event) => {
-      eventQueue.push(event);
-      wakeEvent?.();
-      wakeEvent = undefined;
-    };
-
-    const cleanup = await createV2Setup()(ctx);
-
-    try {
-      // The host may defer transforms until its State.batch finishes, after
-      // setup has already returned. The event pump must still recognize
-      // plugin agent membership and use the now-captured native snapshot.
-      transformAgents({
-        list: () => [
-          {
-            id: 'explorer',
-            permissions: [
-              { action: 'read', resource: 'src/**', effect: 'deny' },
-              {
-                action: 'read',
-                resource: 'src/public.ts',
-                effect: 'allow',
-              },
-            ],
+          project: {
+            id: 'proj_perm_rules',
+            directory: projectDir,
+            canonical: projectDir,
           },
-        ],
-        get: () => undefined,
-        default: () => {},
-        update: () => {},
-        remove: () => {},
-      });
-      publishEvent({
-        type: 'session.created',
-        data: {
-          sessionID: 'ses_probe_child',
-          parentID: 'ses_probe_parent',
-          agent: 'explorer',
         },
-      });
-      // The pump dispatches asynchronously; poll briefly for the apply.
-      const deadline = Date.now() + 10_000;
-      while (calls.length === 0 && Date.now() < deadline) {
-        await Bun.sleep(25);
+        agent: {
+          transform: async (cb: (draft: unknown) => void) => {
+            transformAgents = cb;
+            return { dispose: () => {} };
+          },
+          reload: async () => ({}),
+          list: async () => {
+            if (!transformsApplied) {
+              transformsApplied = true;
+              transformAgents({
+                list: () => nativeAgents,
+                get: () => undefined,
+                default: () => {},
+                update: () => {},
+                remove: () => {},
+              });
+            }
+            if (!snapshotAvailable) throw new Error('agent listing failed');
+            return nativeAgents;
+          },
+        },
+        session: {
+          hook: async (name: string, callback: unknown) => {
+            if (name === 'prompt') {
+              promptHandler = callback as typeof promptHandler;
+            }
+            return { dispose: () => {} };
+          },
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data:
+              sessionID === 'ses_probe_root'
+                ? { agent: 'orchestrator' }
+                : sessionID === 'ses_probe_foreign'
+                  ? { parentID: 'ses_parent', agent: 'host-agent' }
+                  : { parentID: 'ses_parent', agent: 'explorer' },
+          }),
+          update: async (input: RulesCall) => {
+            calls.push(input);
+            if (failNextRulesUpdate) {
+              failNextRulesUpdate = false;
+              throw new Error('held permission update failed');
+            }
+            if (holdRulesUpdate) {
+              await new Promise<void>((resolve) => {
+                finishRulesUpdate = resolve;
+              });
+            }
+            return {};
+          },
+        },
+        event: {
+          subscribe: () => ({
+            [Symbol.asyncIterator]: () => ({
+              next: async (): Promise<
+                IteratorResult<Record<string, unknown>>
+              > => {
+                while (eventQueue.length === 0 && !eventStreamStopped) {
+                  await new Promise<void>((resolve) => {
+                    wakeEvent = resolve;
+                  });
+                }
+                const event = eventQueue.shift();
+                return event
+                  ? { value: event, done: false }
+                  : { value: undefined, done: true };
+              },
+              return: async () => {
+                eventStreamStopped = true;
+                wakeEvent?.();
+                return { value: undefined, done: true } as IteratorResult<
+                  Record<string, unknown>
+                >;
+              },
+            }),
+          }),
+        },
+      } as unknown as V2Context;
+      publishEvent = (event) => {
+        eventQueue.push(event);
+        wakeEvent?.();
+        wakeEvent = undefined;
+      };
+
+      const cleanup = await createV2Setup()(ctx);
+
+      try {
+        // agent.list() during setup forced the host's deferred transform.
+        expect(transformsApplied).toBe(true);
+        expect(promptHandler).toBeDefined();
+        holdRulesUpdate = snapshotAvailable;
+        publishEvent({
+          type: 'session.created',
+          data: {
+            sessionID: 'ses_probe_child',
+            parentID: 'ses_probe_parent',
+            agent: 'explorer',
+          },
+        });
+        // The pump dispatches asynchronously; poll briefly for the apply.
+        const deadline = Date.now() + 10_000;
+        while (calls.length === 0 && Date.now() < deadline) {
+          if (!snapshotAvailable) break;
+          await Bun.sleep(25);
+        }
+        if (!snapshotAvailable) {
+          expect(calls).toHaveLength(0);
+          await expect(
+            (promptHandler as NonNullable<typeof promptHandler>)({
+              sessionID: 'ses_probe_managed',
+              messageID: 'msg_managed',
+              prompt: { text: 'managed child input' },
+            }),
+          ).rejects.toThrow('child permission snapshot unavailable');
+          await (promptHandler as NonNullable<typeof promptHandler>)({
+            sessionID: 'ses_probe_foreign',
+            messageID: 'msg_foreign',
+            prompt: { text: 'foreign child input' },
+          });
+          await (promptHandler as NonNullable<typeof promptHandler>)({
+            sessionID: 'ses_probe_root',
+            messageID: 'msg_root',
+            prompt: { text: 'root input' },
+          });
+          expect(calls).toHaveLength(0);
+          return;
+        }
+        expect(calls).toHaveLength(1);
+        let admissionFinished = false;
+        const admission = (promptHandler as NonNullable<typeof promptHandler>)({
+          sessionID: 'ses_probe_child',
+          messageID: 'msg_probe_child',
+          prompt: { text: 'first child input' },
+        }).then(() => {
+          admissionFinished = true;
+        });
+        await Promise.resolve();
+        expect(admissionFinished).toBe(false);
+        finishRulesUpdate();
+        await admission;
+        expect(admissionFinished).toBe(true);
+        holdRulesUpdate = false;
+        failNextRulesUpdate = true;
+        await expect(
+          (promptHandler as NonNullable<typeof promptHandler>)({
+            sessionID: 'ses_probe_failed',
+            messageID: 'msg_failed',
+            prompt: { text: 'must not proceed' },
+          }),
+        ).rejects.toThrow('held permission update failed');
+        expect(calls[0].sessionID).toBe('ses_probe_child');
+        // The fixture's exact-match entry made it through the derivation
+        // (v1 `bash` maps to the v2 `execute` + `bash` actions).
+        expect(calls[0].permissions).toContainEqual({
+          action: 'execute',
+          resource: 'git push',
+          effect: 'ask',
+        });
+        expect(calls[0].permissions).toContainEqual({
+          action: 'bash',
+          resource: 'git push',
+          effect: 'ask',
+        });
+        // Ordered native host rules survive compilation unchanged, including
+        // the later exception, in the real session.update replacement payload.
+        expect(calls[0].permissions.slice(-2)).toEqual([
+          { action: 'read', resource: 'src/**', effect: 'deny' },
+          { action: 'read', resource: 'src/public.ts', effect: 'allow' },
+        ]);
+        expect(
+          calls[0].permissions.some(
+            (rule) =>
+              rule.action === 'execute' &&
+              rule.resource === 'git push' &&
+              rule.effect === 'ask',
+          ),
+        ).toBe(true);
+      } finally {
+        if (holdRulesUpdate) finishRulesUpdate();
+        await cleanup();
       }
-      expect(calls).toHaveLength(1);
-      expect(calls[0].sessionID).toBe('ses_probe_child');
-      // The fixture's exact-match entry made it through the derivation
-      // (v1 `bash` maps to the v2 `execute` + `bash` actions).
-      expect(calls[0].permissions).toContainEqual({
-        action: 'execute',
-        resource: 'git push',
-        effect: 'ask',
-      });
-      expect(calls[0].permissions).toContainEqual({
-        action: 'bash',
-        resource: 'git push',
-        effect: 'ask',
-      });
-      // Ordered native host rules survive compilation unchanged, including
-      // the later exception, in the real session.update replacement payload.
-      expect(calls[0].permissions.slice(-2)).toEqual([
-        { action: 'read', resource: 'src/**', effect: 'deny' },
-        { action: 'read', resource: 'src/public.ts', effect: 'allow' },
-      ]);
-      expect(
-        calls[0].permissions.some(
-          (rule) =>
-            rule.action === 'execute' &&
-            rule.resource === 'git push' &&
-            rule.effect === 'ask',
-        ),
-      ).toBe(true);
-    } finally {
-      await cleanup();
-    }
-  }, 20_000);
+    },
+    20_000,
+  );
 });

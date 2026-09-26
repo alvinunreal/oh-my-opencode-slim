@@ -850,15 +850,39 @@ export function createPermissionRulesBridge(
   /** Observe one raw v2 event; applies rules when it is a
    * plugin-managed child `session.created`. Never throws. */
   observeSessionCreated(event: Record<string, unknown>): Promise<void>;
+  /** Apply rules for a child session after its identity has been resolved.
+   * Unlike event observation, failures reject so awaited admission hooks do
+   * not claim the permission barrier succeeded. */
+  applyChildSession(sessionID: string, agent: string): Promise<void>;
+  dispose(): Promise<void>;
 } {
   /** sessionIDs whose rules application was handled (strictly once per
    * child; FIFO-bounded like every per-session bridge map). */
   const applied = new Map<string, true>();
+  const applying = new Map<string, Promise<void>>();
+  let disposed = false;
+  let disposal: Promise<void> | undefined;
 
   async function applyChildSessionRules(
     sessionID: string,
     agent: string,
   ): Promise<void> {
+    if (disposed) {
+      throw new Error('permission rules bridge is disposed');
+    }
+    if (applied.has(sessionID)) return;
+    const inFlight = applying.get(sessionID);
+    if (inFlight) return inFlight;
+    const task = applyRules(sessionID, agent);
+    applying.set(sessionID, task);
+    try {
+      await task;
+    } finally {
+      if (applying.get(sessionID) === task) applying.delete(sessionID);
+    }
+  }
+
+  async function applyRules(sessionID: string, agent: string): Promise<void> {
     const updateFn = session?.update;
     if (typeof updateFn !== 'function') {
       if (!permissionRulesUnavailableWarned) {
@@ -868,7 +892,7 @@ export function createPermissionRulesBridge(
           (() => log(PERMISSION_RULES_UNAVAILABLE_WARNING))
         )();
       }
-      return;
+      throw new Error('ctx.session.update unavailable');
     }
     const permission = options.permissionForAgent(agent);
     const rules = Array.isArray(permission)
@@ -895,7 +919,13 @@ export function createPermissionRulesBridge(
       );
       return;
     }
+    if (disposed) {
+      throw new Error('permission rules bridge disposed before application');
+    }
     await updateFn({ sessionID, permissions: rules });
+    if (disposed) {
+      throw new Error('permission rules bridge disposed during application');
+    }
     // Latch only after the host call resolves: a rejected call leaves
     // the slot free, so a replayed or duplicate session.created retries
     // instead of stranding the child on inherited session rules
@@ -938,6 +968,21 @@ export function createPermissionRulesBridge(
         // Fail-soft: the event pump must keep flowing.
         log('[v2][permission-rules] bridge failed', String(err));
       }
+    },
+    async applyChildSession(sessionID, agent) {
+      if (!sessionID || !options.pluginAgents.has(agent)) return;
+      if (disposed) {
+        throw new Error('permission rules bridge is disposed');
+      }
+      await applyChildSessionRules(sessionID, agent);
+    },
+    dispose() {
+      if (disposal) return disposal;
+      disposed = true;
+      disposal = Promise.allSettled(applying.values()).then(() => {
+        applying.clear();
+      });
+      return disposal;
     },
   };
 }
@@ -1524,27 +1569,6 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       let permissionRulesBridge:
         | ReturnType<typeof createPermissionRulesBridge>
         | undefined;
-      const pendingPermissionEvents: Record<string, unknown>[] = [];
-      let permissionEventQueue = Promise.resolve();
-      const flushPermissionEvents = () => {
-        const bridge = permissionRulesBridge;
-        if (!permissionSnapshotReady || !bridge) return;
-        for (const event of pendingPermissionEvents.splice(0)) {
-          permissionEventQueue = permissionEventQueue.then(() =>
-            bridge.observeSessionCreated(event),
-          );
-        }
-      };
-      const queuePermissionEvent = (event: Record<string, unknown>) => {
-        const bridge = permissionRulesBridge;
-        if (!permissionSnapshotReady || !bridge) {
-          pendingPermissionEvents.push(event);
-          return;
-        }
-        permissionEventQueue = permissionEventQueue.then(() =>
-          bridge.observeSessionCreated(event),
-        );
-      };
       let synthCommands:
         | Record<string, { template?: string; description?: string }>
         | undefined;
@@ -1602,7 +1626,6 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             }),
           );
           permissionSnapshotReady = true;
-          flushPermissionEvents();
           for (const [name, cfg] of Object.entries(resolvedAgents ?? {})) {
             try {
               applyAgentToDraft(
@@ -1635,6 +1658,19 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         log('[v2] agents registered', {
           count: Object.keys(resolvedAgents ?? {}).length,
         });
+        // v2 transform callbacks may be deferred until State.batch flushes.
+        // agent.list() forces those transforms, so snapshot reads above are
+        // complete before the event stream or prompt barrier can use them.
+        try {
+          await ctx.agent.list();
+          if (nativePermissionRulesByAgent === undefined) {
+            throw new Error('agent transform did not produce a snapshot');
+          }
+        } catch (err) {
+          nativePermissionRulesByAgent = undefined;
+          permissionSnapshotReady = false;
+          log('[v2] native permission snapshot unavailable', String(err));
+        }
       } catch (err) {
         log('[v2] agent.transform failed', String(err));
       }
@@ -1789,7 +1825,45 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       let promptBridge: V2SessionPromptBridge | undefined;
       if (chatMessage) {
         const bridge = createSessionPromptBridge(chatMessage);
-        const promptReg = await ctx.session.hook('prompt', bridge.handlePrompt);
+        const promptReg = await ctx.session.hook('prompt', async (event) => {
+          const permissionBridge = permissionRulesBridge;
+          if (permissionBridge) {
+            const getSession = ctx.session.get;
+            if (typeof getSession !== 'function') {
+              throw new Error(
+                'ctx.session.get unavailable for permission barrier',
+              );
+            }
+            const response = await getSession.call(ctx.session, {
+              sessionID: event.sessionID,
+            });
+            const record =
+              isRecord(response) && isRecord(response.data)
+                ? response.data
+                : response;
+            if (isRecord(record)) {
+              const parentID = record.parentID;
+              const agent = record.agent;
+              if (
+                typeof parentID === 'string' &&
+                parentID &&
+                typeof agent === 'string' &&
+                agent &&
+                resolvedAgents !== undefined &&
+                Object.hasOwn(resolvedAgents, agent)
+              ) {
+                if (!permissionSnapshotReady) {
+                  throw new Error('child permission snapshot unavailable');
+                }
+                await permissionBridge.applyChildSession(
+                  event.sessionID,
+                  agent,
+                );
+              }
+            }
+          }
+          await bridge.handlePrompt(event);
+        });
         disposers.push(() => promptReg.dispose());
         promptBridge = bridge;
         log('[v2] native session prompt hook registered');
@@ -1940,7 +2014,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             },
             pluginAgents: new Set(Object.keys(resolvedAgents ?? {})),
           });
-          flushPermissionEvents();
+          const permissionBridge = permissionRulesBridge;
+          disposers.push(() => permissionBridge.dispose());
           const iter = ctx.event.subscribe();
           const eventIterator = iter[Symbol.asyncIterator]();
           let eventStopped = false;
@@ -1968,7 +2043,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                   // Child-session permission projection sees the same RAW
                   // event (before v1-shape synthesis) so it is independent
                   // of v1 event-hook presence.
-                  queuePermissionEvent(next.value);
+                  await permissionRulesBridge.observeSessionCreated(next.value);
                   if (eventHook) {
                     for (const ev of mapV2EventToV1(next.value)) {
                       await eventHook({ event: ev });
@@ -2009,6 +2084,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
 
       return async () => {
         log('[v2] dispose invoked');
+        await permissionRulesBridge?.dispose();
         // FIFO is intentional: the success path preserves the historical
         // registration-order teardown; only the abort path unwinds LIFO.
         for (const d of disposers) {

@@ -105,8 +105,8 @@ export function adaptPermissions(
 }
 
 /** Compile the v1 agent permission map as the baseline for native ordered
- * host rules. Explicit v1 policy remains the floor; native rules are applied
- * afterwards so host-specific exceptions retain their declared order. */
+ * host rules. Native last-match evaluation lets host rules override earlier
+ * baseline denials; final denials and configured ceilings remain immutable. */
 export function compileAgentPermissions(
   permission: unknown,
   options: {

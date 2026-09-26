@@ -138,6 +138,44 @@ describe('adaptPermissions', () => {
 });
 
 describe('compileAgentPermissions', () => {
+  test('native host allow overrides an earlier v1 baseline denial', () => {
+    const rules = compileAgentPermissions(
+      { edit: 'deny' },
+      {
+        hostRules: [{ action: 'edit', resource: '*', effect: 'allow' }],
+      },
+    );
+
+    expect(evaluatePermission(rules, 'edit')).toBe('allow');
+  });
+
+  test('final denials remain after host rules', () => {
+    const rules = compileAgentPermissions(
+      { edit: 'deny' },
+      {
+        hostRules: [{ action: 'edit', resource: '*', effect: 'allow' }],
+        finalDenials: ['edit'],
+      },
+    );
+
+    expect(evaluatePermission(rules, 'edit')).toBe('deny');
+  });
+
+  test('action ceilings remain after host rules', () => {
+    const rules = compileAgentPermissions(
+      { edit: 'deny' },
+      {
+        hostRules: [{ action: 'edit', resource: '*', effect: 'allow' }],
+        ceilings: {
+          actions: { edit: 'deny' },
+          namespaces: [],
+        },
+      },
+    );
+
+    expect(evaluatePermission(rules, 'edit')).toBe('deny');
+  });
+
   test('preserves native ordered exceptions after the v1 baseline', () => {
     const rules = compileAgentPermissions(undefined, {
       hostRules: [
