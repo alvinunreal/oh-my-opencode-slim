@@ -248,7 +248,7 @@ describe('marketplace synchronous lease lifecycle', () => {
     try {
       const owner = acquireMarketplaceLease(paths, {
         staleMs: 10,
-        timeoutMs: 50,
+        timeoutMs: 5_000,
         retryMs: 1,
       });
       owner.release();
@@ -266,6 +266,50 @@ describe('marketplace synchronous lease lifecycle', () => {
           MarketplaceValidationError,
         );
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('cleans its fresh candidate and closes the descriptor when fstat fails', () => {
+    const root = tempRoot();
+    const paths = getMarketplacePaths(root);
+    const originalFstat = fs.fstatSync;
+    const originalClose = fs.closeSync;
+    let injected = false;
+    let failedDescriptor: number | undefined;
+    const closedDescriptors: number[] = [];
+    const fstat = spyOn(fs, 'fstatSync').mockImplementation((fd) => {
+      if (!injected) {
+        injected = true;
+        failedDescriptor = fd;
+        throw Object.assign(new Error('injected candidate fstat failure'), {
+          code: 'EIO',
+        });
+      }
+      return originalFstat(fd);
+    });
+    const close = spyOn(fs, 'closeSync').mockImplementation((fd) => {
+      closedDescriptors.push(fd);
+      return originalClose(fd);
+    });
+
+    try {
+      expect(() => acquireMarketplaceLease(paths, LOCK)).toThrow(
+        'injected candidate fstat failure',
+      );
+    } finally {
+      close.mockRestore();
+      fstat.mockRestore();
+    }
+
+    try {
+      expect(injected).toBe(true);
+      expect(failedDescriptor).toBeDefined();
+      expect(closedDescriptors).toContain(failedDescriptor);
+      expect(lockEntries(paths.lockDir)).toEqual([]);
+      const owner = acquireMarketplaceLease(paths, LOCK);
+      owner.release();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

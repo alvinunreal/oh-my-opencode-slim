@@ -246,6 +246,28 @@ function cleanupAgedEntries(lockDir: string, staleMs: number): LockState {
   return readLockDirectory(lockDir);
 }
 
+function cleanupCreatedCandidate(
+  candidatePath: string,
+  identity?: Pick<fs.Stats, 'dev' | 'ino'>,
+): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(candidatePath);
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return;
+    throw error;
+  }
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    stat.size !== 0 ||
+    (identity && (stat.dev !== identity.dev || stat.ino !== identity.ino))
+  ) {
+    return;
+  }
+  unlinkExact(candidatePath);
+}
+
 function createCandidate(lockDir: string): LockEntry {
   const uuid = randomUUID();
   const pid = process.pid;
@@ -259,9 +281,33 @@ function createCandidate(lockDir: string): LockEntry {
     mtimeMs: Date.now(),
   };
   const fd = fs.openSync(candidate.path, 'wx', 0o600);
-  fs.closeSync(fd);
+  let stat: fs.Stats | undefined;
+  let failure: { error: unknown } | undefined;
+  try {
+    stat = fs.fstatSync(fd);
+  } catch (error) {
+    failure = { error };
+    try {
+      stat = fs.fstatSync(fd);
+    } catch {
+      // A one-shot descriptor-stat failure may still yield a safe inode check.
+    }
+  }
+  try {
+    fs.closeSync(fd);
+  } catch (error) {
+    failure ??= { error };
+  }
+  if (failure) {
+    try {
+      cleanupCreatedCandidate(candidate.path, stat);
+    } catch {
+      // Preserve the original post-create error if cleanup also fails.
+    }
+    throw failure.error;
+  }
+  if (!stat) throw new Error('Marketplace candidate descriptor had no stat');
   syncDirectory(lockDir);
-  const stat = fs.lstatSync(candidate.path);
   return { ...candidate, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino };
 }
 
