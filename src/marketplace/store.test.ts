@@ -92,6 +92,46 @@ function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'marketplace-store-'));
 }
 
+function createStoreWithInterruptedUpdate(
+  damage: 'corrupt' | 'missing' | 'unreadable',
+): {
+  root: string;
+  store: MarketplaceStore;
+  olderVersionPath: string;
+  oldPackageBytes: Buffer;
+  oldSidecarBytes: Buffer;
+} {
+  const root = tempRoot();
+  const store = createStore({ rootDir: root });
+  const v1 = store.install(bundle('1.0.0'));
+  const oldPackageBytes = readFileSync(join(v1.path, 'package.json'));
+  const oldSidecarBytes = readFileSync(join(v1.path, 'sha256'));
+  const v2 = store.update(bundle('2.0.0'));
+  store.install(bundle('1.0.0', { id: 'community/other', agentName: 'other' }));
+
+  mkdirSync(v1.path, { recursive: true });
+  writeFileSync(join(v1.path, 'package.json'), oldPackageBytes);
+  writeFileSync(join(v1.path, 'sha256'), oldSidecarBytes);
+
+  if (damage === 'corrupt') {
+    writeFileSync(join(v2.path, 'package.json'), '{corrupt selected');
+  } else if (damage === 'missing') {
+    rmSync(v2.path, { recursive: true, force: true });
+  } else {
+    const selectedManifest = join(v2.path, 'package.json');
+    rmSync(selectedManifest);
+    mkdirSync(selectedManifest);
+  }
+
+  return {
+    root,
+    store,
+    olderVersionPath: v1.path,
+    oldPackageBytes,
+    oldSidecarBytes,
+  };
+}
+
 function markStaleLease(directory: string, pid: number, uuid: string): void {
   mkdirSync(directory, { recursive: true });
   const target = join(directory, `${pid}.${uuid}.lease`);
@@ -629,32 +669,16 @@ describe('MarketplaceStore', () => {
   });
 
   test.each(['corrupt', 'missing', 'unreadable'] as const)(
-    'preserves older version bytes when committed selected version is %s',
+    'keeps unrelated loads and exact repair available when selected version is %s',
     (damage) => {
-      const root = tempRoot();
+      const {
+        root,
+        store,
+        olderVersionPath,
+        oldPackageBytes,
+        oldSidecarBytes,
+      } = createStoreWithInterruptedUpdate(damage);
       try {
-        const store = createStore({ rootDir: root });
-        const v1 = store.install(bundle('1.0.0'));
-        const oldPackageBytes = readFileSync(join(v1.path, 'package.json'));
-        const oldSidecarBytes = readFileSync(join(v1.path, 'sha256'));
-        const v2 = store.update(bundle('2.0.0'));
-
-        // Recreate the old version as an interrupted post-commit cleanup
-        // orphan, matching the state reconciliation must safely handle.
-        mkdirSync(v1.path, { recursive: true });
-        writeFileSync(join(v1.path, 'package.json'), oldPackageBytes);
-        writeFileSync(join(v1.path, 'sha256'), oldSidecarBytes);
-
-        if (damage === 'corrupt') {
-          writeFileSync(join(v2.path, 'package.json'), '{corrupt selected');
-        } else if (damage === 'missing') {
-          rmSync(v2.path, { recursive: true, force: true });
-        } else {
-          const selectedManifest = join(v2.path, 'package.json');
-          rmSync(selectedManifest);
-          mkdirSync(selectedManifest);
-        }
-
         let loadError: unknown;
         try {
           store.show('community/example');
@@ -667,11 +691,57 @@ describe('MarketplaceStore', () => {
         } else {
           expect(loadError).toBeInstanceOf(MarketplaceIntegrityError);
         }
-        expect(existsSync(v1.path)).toBe(true);
-        expect(readFileSync(join(v1.path, 'package.json'))).toEqual(
+        const unrelated = store.loadSelected(['community/other']);
+        expect(unrelated.errors.size).toBe(0);
+        expect(unrelated.packages.get('community/other')?.manifest.id).toBe(
+          'community/other',
+        );
+        expect(existsSync(olderVersionPath)).toBe(true);
+        expect(readFileSync(join(olderVersionPath, 'package.json'))).toEqual(
           oldPackageBytes,
         );
-        expect(readFileSync(join(v1.path, 'sha256'))).toEqual(oldSidecarBytes);
+        expect(readFileSync(join(olderVersionPath, 'sha256'))).toEqual(
+          oldSidecarBytes,
+        );
+
+        const repaired = store.install(bundle('2.0.0'));
+        expect(repaired.manifest.version).toBe('2.0.0');
+        expect(store.show('community/example').digest).toBe(repaired.digest);
+        expect(existsSync(olderVersionPath)).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(['corrupt', 'missing', 'unreadable'] as const)(
+    'allows removal when selected version is %s and preserves old bytes until removal',
+    (damage) => {
+      const {
+        root,
+        store,
+        olderVersionPath,
+        oldPackageBytes,
+        oldSidecarBytes,
+      } = createStoreWithInterruptedUpdate(damage);
+      try {
+        expect(() => store.show('community/example')).toThrow();
+        expect(existsSync(olderVersionPath)).toBe(true);
+        expect(readFileSync(join(olderVersionPath, 'package.json'))).toEqual(
+          oldPackageBytes,
+        );
+        expect(readFileSync(join(olderVersionPath, 'sha256'))).toEqual(
+          oldSidecarBytes,
+        );
+
+        store.remove('community/example');
+        expect(
+          store.getLockfile().packages['community/example'],
+        ).toBeUndefined();
+        expect(existsSync(olderVersionPath)).toBe(false);
+        expect(store.show('community/other').manifest.id).toBe(
+          'community/other',
+        );
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

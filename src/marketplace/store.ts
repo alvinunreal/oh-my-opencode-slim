@@ -77,6 +77,19 @@ export interface MarketplaceStoreInspection {
 }
 
 type MutationMode = 'install' | 'update';
+const PACKAGE_READ_ERROR_CODES = new Set([
+  'EACCES',
+  'EBADF',
+  'EBUSY',
+  'EIO',
+  'EISDIR',
+  'ELOOP',
+  'EMFILE',
+  'ENFILE',
+  'ENOENT',
+  'ENOTDIR',
+  'EPERM',
+]);
 
 function errnoCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) {
@@ -87,6 +100,12 @@ function errnoCode(error: unknown): string | undefined {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isPackageReadFailure(error: unknown): boolean {
+  if (error instanceof MarketplaceIntegrityError) return true;
+  const code = errnoCode(error);
+  return code !== undefined && PACKAGE_READ_ERROR_CODES.has(code);
 }
 
 function pathExists(target: string): boolean {
@@ -466,7 +485,7 @@ export class MarketplaceStore {
           try {
             return this.loadLockedPackage(lockfile, id);
           } catch (error) {
-            if (!(error instanceof MarketplaceIntegrityError)) throw error;
+            if (!isPackageReadFailure(error)) throw error;
             exactRepair = true;
           }
         }
@@ -893,7 +912,14 @@ export class MarketplaceStore {
         if (selectedEntry && unselectedVersions.length > 0) {
           // Do not destroy recoverable package bytes until the lock-selected
           // version has passed the same integrity checks as a normal load.
-          this.loadLockedPackage(lockfile, id);
+          // This pruning is optional: leave old bytes in place on package
+          // read failures so unrelated operations and exact repair can proceed.
+          try {
+            this.loadLockedPackage(lockfile, id);
+          } catch (error) {
+            if (isPackageReadFailure(error)) continue;
+            throw error;
+          }
         }
         for (const version of unselectedVersions) {
           removeTree(path.join(packageDir, version));
