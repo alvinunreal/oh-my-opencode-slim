@@ -192,10 +192,6 @@ describe('tui-reusable-projection', () => {
     } finally {
       first.dispose();
     }
-    // This test runs both boards in one PID: mark the former owner as dead.
-    updateSnapshot(projectDir, (snapshot) => {
-      snapshot.reusableOwners['parent-1'] = 2_147_483_647;
-    });
 
     // Second host process starts over an empty board: the creation
     // sweep must wipe the dead dots without waiting for any mutation
@@ -235,6 +231,69 @@ describe('tui-reusable-projection', () => {
       projection.dispose();
     }
   });
+
+  test('dispose clears only this projection’s still-owned parent sections', () => {
+    const board = new BackgroundJobBoard();
+    const projection = createTuiReusableProjection({ board, projectDir });
+    board.registerLaunch({
+      taskID: 'ses_owned',
+      parentSessionID: 'parent-owned',
+      agent: 'oracle',
+    });
+    updateSnapshot(projectDir, (snapshot) => {
+      snapshot.reusableByAgent['parent-foreign'] = {
+        fixer: [{ taskID: 'ses_foreign', alias: 'fix-1', running: true }],
+      };
+      snapshot.reusableOwners['parent-foreign'] = 1;
+    });
+
+    projection.dispose();
+    projection.dispose();
+
+    const snapshot = readTuiSnapshot(projectDir);
+    expect(snapshot.reusableByAgent['parent-owned']).toBeUndefined();
+    expect(snapshot.reusableOwners['parent-owned']).toBeUndefined();
+    expect(snapshot.reusableByAgent['parent-foreign']?.fixer?.[0]?.taskID).toBe(
+      'ses_foreign',
+    );
+  });
+
+  test('a timed-out projection write keeps its ownership for the next mutation', () => {
+    const board = new BackgroundJobBoard();
+    const projection = createTuiReusableProjection({ board, projectDir });
+    board.registerLaunch({
+      taskID: 'ses_old',
+      parentSessionID: 'parent-old',
+      agent: 'oracle',
+    });
+    const lockPath = `${getTuiStatePath(projectDir)}.lock`;
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        token: 'held',
+        createdAt: Date.now(),
+      }),
+    );
+    try {
+      board.drop('ses_old'); // The lock prevents the removal from persisting.
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-old'],
+      ).toBeDefined();
+      fs.unlinkSync(lockPath);
+      board.registerLaunch({
+        taskID: 'ses_new',
+        parentSessionID: 'parent-new',
+        agent: 'fixer',
+      });
+      const sections = readTuiSnapshot(projectDir).reusableByAgent;
+      expect(sections['parent-old']).toBeUndefined();
+      expect(sections['parent-new']?.fixer?.[0]?.taskID).toBe('ses_new');
+    } finally {
+      if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+      projection.dispose();
+    }
+  }, 5_000);
 
   test('two live processes keep their own parent sections across startup and mutations', async () => {
     const board = new BackgroundJobBoard();

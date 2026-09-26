@@ -1009,6 +1009,7 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
           wrapMode: 'none',
           truncate: true,
           flexShrink: 1,
+          marginLeft: 1,
         },
         [modelName],
       ),

@@ -511,7 +511,7 @@ describe('tui sidebar agents', () => {
 
       // Explorer row should have the agent label on left and truncated model on right
       const explorerLine = lines[explorerLineIdx];
-      expect(explorerLine).toMatch(/explorer\s+accounts\.\.\.p5-turbo/);
+      expect(explorerLine).toMatch(/explorer\s+account\.\.\.p5-turbo/);
 
       // Oracle row should be single-line with right-aligned model
       const oracleLine = lines[oracleLineIdx];
@@ -1711,6 +1711,185 @@ describe('clickable sidebar sessions', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     }, 10_000);
+
+    test(`discarding a board generation removes its sidebar spinner (${host})`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-generation-'));
+      const projectDir = path.join(root, 'project');
+      fs.mkdirSync(projectDir, { recursive: true });
+      const restoreDataHome = withIsolatedDataHome(root);
+      const board = new BackgroundJobBoard();
+      const first = createTuiReusableProjection({ board, projectDir });
+      let second: ReturnType<typeof createTuiReusableProjection> | undefined;
+      const setups: Array<Awaited<ReturnType<typeof testRender>>> = [];
+      const mounts: Array<Awaited<ReturnType<typeof mountClickableSidebar>>> =
+        [];
+      try {
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'openai/gpt-6' } },
+          projectDir,
+        );
+        board.registerLaunch({
+          taskID: 'ses_previous',
+          parentSessionID: 'conv-1',
+          agent: 'oracle',
+        });
+        const firstMount = await mountClickableSidebar({
+          host,
+          projectDir,
+          sessionID: 'conv-1',
+        });
+        mounts.push(firstMount);
+        const firstRender = await testRender(
+          () => firstMount.slotPlugin?.slots.sidebar_content() as never,
+          { width: 52, height: 14 },
+        );
+        setups.push(firstRender);
+        await firstRender.renderOnce();
+        expect(
+          firstRender
+            .captureCharFrame()
+            .split('\n')
+            .find((line) => line.includes('oracle')),
+        ).toMatch(ACTIVITY_FRAME_PATTERN);
+
+        first.dispose();
+        for (const dispose of firstMount.disposers) dispose();
+        firstRender.renderer.destroy();
+        second = createTuiReusableProjection({
+          board: new BackgroundJobBoard(),
+          projectDir,
+        });
+        const secondMount = await mountClickableSidebar({
+          host,
+          projectDir,
+          sessionID: 'conv-1',
+        });
+        mounts.push(secondMount);
+        const secondRender = await testRender(
+          () => secondMount.slotPlugin?.slots.sidebar_content() as never,
+          { width: 52, height: 14 },
+        );
+        setups.push(secondRender);
+        await Bun.sleep(40);
+        await secondRender.renderOnce();
+        const oracleLine = secondRender
+          .captureCharFrame()
+          .split('\n')
+          .find((line) => line.includes('oracle'));
+        expect(oracleLine).toContain('•');
+        expect(oracleLine).not.toMatch(ACTIVITY_FRAME_PATTERN);
+      } finally {
+        for (const setup of setups) setup.renderer.destroy();
+        for (const mount of mounts) {
+          for (const dispose of mount.disposers) dispose();
+        }
+        second?.dispose();
+        first.dispose();
+        restoreDataHome();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test(`compact rows separate long agent names and badges from models (${host})`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-separator-'));
+      const projectDir = path.join(root, 'project');
+      fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ compactSidebar: true }),
+      );
+      const restoreDataHome = withIsolatedDataHome(root);
+      try {
+        updateSnapshot(projectDir, (snapshot) => {
+          snapshot.agentModels = {
+            abcdefghijklmn: 'meta/muse-spark-1.3-contributor',
+            'krait-auditor-bot': 'meta/muse-spark-1.3-contributor',
+          };
+          for (const agent of Object.keys(snapshot.agentModels)) {
+            for (let index = 1; index <= 2; index++) {
+              const sessionID = `${agent}-${index}`;
+              snapshot.activeSessions[sessionID] = agent;
+              snapshot.sessionParents[sessionID] = 'conv-1';
+            }
+          }
+        });
+        for (const width of [34, 42]) {
+          const mounted = await mountClickableSidebar({
+            host,
+            projectDir,
+            sessionID: 'conv-1',
+            navigate: () => {},
+          });
+          const setup = await testRender(
+            () => mounted.slotPlugin?.slots.sidebar_content() as never,
+            { width, height: 14 },
+          );
+          try {
+            await setup.renderOnce();
+            const lines = setup.captureCharFrame().split('\n');
+            for (const agent of ['abcdefghijklmn', 'krait-auditor-bot']) {
+              const line = lines.find((entry) =>
+                entry.includes(agent.slice(0, 4)),
+              );
+              expect(line).toBeDefined();
+              expect(line).toContain('▸2');
+              const modelColumn = line?.indexOf('muse') ?? -1;
+              expect(modelColumn).toBeGreaterThan(0);
+              expect(line?.[modelColumn - 1]).toBe(' ');
+            }
+          } finally {
+            setup.renderer.destroy();
+            for (const dispose of mounted.disposers) dispose();
+          }
+        }
+      } finally {
+        restoreDataHome();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test(`full rows keep models solely in their detail rows (${host})`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-full-model-'));
+      const projectDir = path.join(root, 'project');
+      fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ compactSidebar: false }),
+      );
+      const restoreDataHome = withIsolatedDataHome(root);
+      let mounted:
+        | Awaited<ReturnType<typeof mountClickableSidebar>>
+        | undefined;
+      let setup: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'meta/muse-spark-1.3-contributor' } },
+          projectDir,
+        );
+        mounted = await mountClickableSidebar({
+          host,
+          projectDir,
+          sessionID: 'conv-1',
+        });
+        setup = await testRender(
+          () => mounted?.slotPlugin?.slots.sidebar_content() as never,
+          { width: 60, height: 14 },
+        );
+        await setup.renderOnce();
+        const lines = setup.captureCharFrame().split('\n');
+        expect(lines.find((line) => line.includes('oracle'))).not.toContain(
+          'muse',
+        );
+        expect(lines.filter((line) => line.includes('muse'))).toEqual([
+          expect.stringContaining('model'),
+        ]);
+      } finally {
+        setup?.renderer.destroy();
+        for (const dispose of mounted?.disposers ?? []) dispose();
+        restoreDataHome();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   }
 
   function withIsolatedDataHome(root: string): () => void {

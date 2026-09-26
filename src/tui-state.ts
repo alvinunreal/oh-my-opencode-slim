@@ -519,37 +519,39 @@ function memoFor(statePath: string): TuiSnapshot | undefined {
 export function updateSnapshot(
   projectDir: string,
   mutator: (snapshot: TuiSnapshot) => void,
-): void {
+): boolean {
   const statePath = getTuiStatePath(projectDir);
 
   const memo = memoFor(statePath);
   if (memo) {
     const candidate = cloneSnapshot(memo);
     mutator(candidate);
-    if (snapshotSectionsEqual(candidate, memo)) return; // no-op update
+    if (snapshotSectionsEqual(candidate, memo)) return true; // no-op update
   }
 
   try {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
   } catch {
-    return;
+    return false;
   }
   const lock = acquireStateLock(statePath);
-  if (!lock) return;
+  if (!lock) return false;
 
   try {
     const snapshot = readTuiSnapshotStrict(statePath);
-    if (!snapshot) return;
+    if (!snapshot) return false;
     const before = cloneSnapshot(snapshot);
     mutator(snapshot);
     if (snapshotSectionsEqual(snapshot, before)) {
       rememberSnapshot(statePath, snapshot);
-      return;
+      return true;
     }
     snapshot.updatedAt = Date.now();
     if (writeTuiSnapshot(snapshot, projectDir)) {
       rememberSnapshot(statePath, snapshot);
+      return true;
     }
+    return false;
   } finally {
     releaseStateLock(lock);
   }

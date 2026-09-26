@@ -64,8 +64,10 @@ export function createTuiReusableProjection(input: {
       byAgent[job.agent] = sessions;
       next[job.parentSessionID] = byAgent;
     }
-    updateSnapshot(projectDir, (snapshot) => {
-      for (const parent of ownedParents) {
+    const previousOwnedParents = ownedParents;
+    const nextOwnedParents = new Set(Object.keys(next));
+    const applied = updateSnapshot(projectDir, (snapshot) => {
+      for (const parent of previousOwnedParents) {
         if (
           next[parent] === undefined &&
           snapshot.reusableOwners[parent] === process.pid
@@ -78,8 +80,11 @@ export function createTuiReusableProjection(input: {
         snapshot.reusableByAgent[parent] = byAgent;
         snapshot.reusableOwners[parent] = process.pid;
       }
+      ownedParents = nextOwnedParents;
     });
-    ownedParents = new Set(Object.keys(next));
+    // The optimistic no-op probe also invokes the mutator. Retain the old
+    // ownership when the subsequent lock or disk write fails.
+    if (!applied) ownedParents = previousOwnedParents;
   };
 
   const listener = (): void => {
@@ -97,8 +102,22 @@ export function createTuiReusableProjection(input: {
 
   return {
     dispose() {
-      disposed = true;
-      board.removeMutationListener(listener);
+      if (!disposed) {
+        disposed = true;
+        board.removeMutationListener(listener);
+      }
+      if (ownedParents.size === 0) return;
+      if (
+        updateSnapshot(projectDir, (snapshot) => {
+          for (const parent of ownedParents) {
+            if (snapshot.reusableOwners[parent] !== process.pid) continue;
+            delete snapshot.reusableByAgent[parent];
+            delete snapshot.reusableOwners[parent];
+          }
+        })
+      ) {
+        ownedParents.clear();
+      }
     },
   };
 }

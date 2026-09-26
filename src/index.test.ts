@@ -362,6 +362,64 @@ describe('plugin tool registration', () => {
       await rm(configDir, { recursive: true, force: true });
     }
   });
+
+  test('disposing a plugin generation retracts its board spinner before same-PID re-init', async () => {
+    const originalEnv = { ...process.env };
+    const projectDir = await mkdtemp('/tmp/oh-my-opencode-slim-generation-');
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: projectDir,
+      XDG_DATA_HOME: `${projectDir}/data`,
+      XDG_CACHE_HOME: `${projectDir}/cache`,
+      OPENCODE_LOG_DIR: `${projectDir}/logs`,
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: false } }),
+    );
+    const createHooks = () =>
+      plugin({
+        client: createPluginClient(async () => ({})),
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let second: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks();
+      await first['tool.execute.before']?.(
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+        {
+          args: {
+            subagent_type: 'explorer',
+            background: true,
+            description: 'generation one child',
+          },
+        },
+      );
+      await first['tool.execute.after']?.(
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+        { output: 'task_id: child-generation-1\nstate: running' },
+      );
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-1']?.explorer?.[0]
+          ?.taskID,
+      ).toBe('child-generation-1');
+
+      await first.dispose?.();
+      second = await createHooks();
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-1'],
+      ).toBeUndefined();
+    } finally {
+      await second?.dispose?.();
+      await first?.dispose?.();
+      process.env = originalEnv;
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('plugin reload generation cleanup', () => {
@@ -1261,6 +1319,24 @@ describe('plugin TUI agent activity', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  test('a model observed before busy never enters raw per-session TUI details', async () => {
+    await hooks?.['chat.message']?.(
+      {
+        sessionID: 'ora-early',
+        agent: 'oracle',
+        model: { providerID: 'openai', modelID: 'gpt-6' },
+      } as never,
+      {} as never,
+    );
+    await busy('ora-early');
+
+    const raw = JSON.parse(readFileSync(getTuiStatePath(projectDir), 'utf8'));
+    expect(raw.sessionDetails['ora-early']).toEqual({ status: 'busy' });
+    expect(readTuiSnapshot(projectDir).sessionDetails['ora-early']).toEqual({
+      status: 'busy',
+    });
   });
 
   test('chat.message model after idle does not resurrect sessionDetails', async () => {
