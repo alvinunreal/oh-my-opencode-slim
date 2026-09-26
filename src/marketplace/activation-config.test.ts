@@ -452,6 +452,157 @@ describe('marketplace activation persistence', () => {
     }
   });
 
+  test('evaluates local replacement and addition placeholders but keeps untouched text', () => {
+    const fixture = setup();
+    const previousPackage = process.env.MARKETPLACE_LOCAL_PACKAGE;
+    const previousOther = process.env.MARKETPLACE_LOCAL_OTHER;
+    try {
+      process.env.MARKETPLACE_LOCAL_PACKAGE = PACKAGE_A;
+      process.env.MARKETPLACE_LOCAL_OTHER = PACKAGE_B;
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            work: {
+              marketplace: {
+                agents: ['{env:MARKETPLACE_LOCAL_PACKAGE}', PACKAGE_B],
+              },
+            },
+          },
+        }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      disableMarketplacePackage(fixture.project, PACKAGE_A);
+      let saved = JSON.parse(readFileSync(fixture.userConfig, 'utf8'));
+      expect(saved.presets.work.marketplace.agents).toEqual([PACKAGE_B]);
+
+      // An addition directive uses the same effective ID comparison while
+      // preserving the untouched placeholder verbatim.
+      saved.presets.work.marketplace = {
+        agents_add: [
+          '{env:MARKETPLACE_LOCAL_PACKAGE}',
+          '{env:MARKETPLACE_LOCAL_OTHER}',
+        ],
+      };
+      writeFileSync(fixture.userConfig, JSON.stringify(saved));
+      disableMarketplacePackage(fixture.project, PACKAGE_A);
+      saved = JSON.parse(readFileSync(fixture.userConfig, 'utf8'));
+      expect(saved.presets.work.marketplace.agents_add).toEqual([
+        '{env:MARKETPLACE_LOCAL_OTHER}',
+      ]);
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      saved = JSON.parse(readFileSync(fixture.userConfig, 'utf8'));
+      expect(saved.presets.work.marketplace.agents_add).toEqual([
+        '{env:MARKETPLACE_LOCAL_OTHER}',
+        PACKAGE_A,
+      ]);
+    } finally {
+      if (previousPackage === undefined)
+        delete process.env.MARKETPLACE_LOCAL_PACKAGE;
+      else process.env.MARKETPLACE_LOCAL_PACKAGE = previousPackage;
+      if (previousOther === undefined)
+        delete process.env.MARKETPLACE_LOCAL_OTHER;
+      else process.env.MARKETPLACE_LOCAL_OTHER = previousOther;
+      fixture.cleanup();
+    }
+  });
+
+  test('cancels an interpolated local removal without rewriting other entries', () => {
+    const fixture = setup();
+    const previousPackage = process.env.MARKETPLACE_REMOVE_PACKAGE;
+    const previousOther = process.env.MARKETPLACE_REMOVE_OTHER;
+    try {
+      process.env.MARKETPLACE_REMOVE_PACKAGE = PACKAGE_A;
+      process.env.MARKETPLACE_REMOVE_OTHER = PACKAGE_B;
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            base: { marketplace: { agents: [PACKAGE_A] } },
+            work: {
+              extends: 'base',
+              marketplace: {
+                agents_remove: [
+                  '{env:MARKETPLACE_REMOVE_PACKAGE}',
+                  '{env:MARKETPLACE_REMOVE_OTHER}',
+                ],
+              },
+            },
+          },
+        }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+
+      expect(
+        JSON.parse(readFileSync(fixture.userConfig, 'utf8')).presets.work
+          .marketplace.agents_remove,
+      ).toEqual(['{env:MARKETPLACE_REMOVE_OTHER}']);
+      disableMarketplacePackage(fixture.project, PACKAGE_A);
+      expect(
+        JSON.parse(readFileSync(fixture.userConfig, 'utf8')).presets.work
+          .marketplace.agents_remove,
+      ).toEqual(['{env:MARKETPLACE_REMOVE_OTHER}', PACKAGE_A]);
+    } finally {
+      if (previousPackage === undefined)
+        delete process.env.MARKETPLACE_REMOVE_PACKAGE;
+      else process.env.MARKETPLACE_REMOVE_PACKAGE = previousPackage;
+      if (previousOther === undefined)
+        delete process.env.MARKETPLACE_REMOVE_OTHER;
+      else process.env.MARKETPLACE_REMOVE_OTHER = previousOther;
+      fixture.cleanup();
+    }
+  });
+
+  test('fails without changing config for missing or invalid local placeholders', () => {
+    const fixture = setup();
+    const previous = process.env.MARKETPLACE_INVALID_PACKAGE;
+    try {
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({
+          preset: 'work',
+          presets: {
+            work: {
+              marketplace: {
+                agents_add: ['{env:MARKETPLACE_MISSING_PACKAGE}', PACKAGE_B],
+              },
+            },
+          },
+        }),
+      );
+      const original = readFileSync(fixture.userConfig, 'utf8');
+      expect(() =>
+        disableMarketplacePackage(fixture.project, PACKAGE_A),
+      ).toThrow(
+        "environment variable 'MARKETPLACE_MISSING_PACKAGE' is not set",
+      );
+      expect(readFileSync(fixture.userConfig, 'utf8')).toBe(original);
+
+      process.env.MARKETPLACE_INVALID_PACKAGE = 'not-a-package-id';
+      const invalid = JSON.parse(original);
+      invalid.presets.work.marketplace.agents_add = [
+        '{env:MARKETPLACE_INVALID_PACKAGE}',
+        PACKAGE_B,
+      ];
+      writeFileSync(fixture.userConfig, JSON.stringify(invalid));
+      const invalidOriginal = readFileSync(fixture.userConfig, 'utf8');
+      expect(() =>
+        disableMarketplacePackage(fixture.project, PACKAGE_A),
+      ).toThrow('invalid marketplace.agents_add package ID');
+      expect(readFileSync(fixture.userConfig, 'utf8')).toBe(invalidOriginal);
+    } finally {
+      if (previous === undefined)
+        delete process.env.MARKETPLACE_INVALID_PACKAGE;
+      else process.env.MARKETPLACE_INVALID_PACKAGE = previous;
+      fixture.cleanup();
+    }
+  });
+
   test('uses environment-selected preset without persisting the selection', () => {
     const fixture = setup();
     try {

@@ -1,6 +1,10 @@
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { mutateJsonFile, stripJsonComments } from '../cli/config-io';
-import { findPluginConfigPaths, loadPluginConfig } from '../config/loader';
+import {
+  findPluginConfigPaths,
+  interpolateEnvironmentVariables,
+  loadPluginConfig,
+} from '../config/loader';
 import {
   mergePresetMaps,
   normalizePreset,
@@ -67,10 +71,7 @@ function normalizePackageIds(ids: readonly string[]): string[] {
 
 function interpolateEnvironment(value: unknown): unknown {
   if (typeof value === 'string') {
-    return value.replace(
-      /\{env:([^}]+)\}/g,
-      (_match, name: string) => process.env[name] ?? '',
-    );
+    return interpolateEnvironmentVariables(value);
   }
   if (Array.isArray(value)) return value.map(interpolateEnvironment);
   if (value && typeof value === 'object') {
@@ -82,6 +83,73 @@ function interpolateEnvironment(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function interpolateDirectiveValues(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\{env:([^}]+)\}/g, (_match, name: string) => {
+      if (process.env[name] === undefined) {
+        throw new MarketplaceActivationError(
+          `Cannot update marketplace activation: environment variable '${name}' is not set`,
+        );
+      }
+      return interpolateEnvironmentVariables(`{env:${name}}`);
+    });
+  }
+  if (Array.isArray(value)) return value.map(interpolateDirectiveValues);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        interpolateDirectiveValues(entry),
+      ]),
+    );
+  }
+  return value;
+}
+
+function normalizeDirectiveIds(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== 'string')
+  ) {
+    throw new MarketplaceActivationError(
+      `Cannot update marketplace activation: marketplace.${field} must be an array of package IDs`,
+    );
+  }
+  try {
+    return (value as string[]).map(normalizeMarketplacePackageId);
+  } catch (error) {
+    throw new MarketplaceActivationError(
+      `Cannot update marketplace activation: invalid marketplace.${field} package ID (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+}
+
+function withoutPackage(
+  raw: readonly string[],
+  resolved: readonly string[],
+  id: string,
+): string[] {
+  return raw.filter((_, index) => resolved[index] !== id);
+}
+
+function assertDirectiveEnvironmentIsSet(value: unknown): void {
+  if (typeof value === 'string') {
+    for (const match of value.matchAll(/\{env:([^}]+)\}/g)) {
+      const name = match[1];
+      if (name && process.env[name] === undefined) {
+        throw new MarketplaceActivationError(
+          `Cannot update marketplace activation: environment variable '${name}' is not set`,
+        );
+      }
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) assertDirectiveEnvironmentIsSet(entry);
+  }
 }
 
 function readPluginConfig(filePath: string | null): ConfigRecord {
@@ -109,6 +177,23 @@ function persistActivation(
       const persisted = { ...current };
       // The effective config is read inside mutateJsonFile's cross-process
       // lease, so a preceding writer's changes are part of this mutation.
+      const rawPresetName =
+        process.env.OH_MY_OPENCODE_SLIM_PRESET ?? persisted.preset;
+      if (typeof rawPresetName === 'string') {
+        const rawPreset = asRecord(asRecord(persisted.presets)[rawPresetName]);
+        const rawMarketplace = asRecord(rawPreset.marketplace);
+        for (const key of ['agents', 'agents_add', 'agents_remove']) {
+          assertDirectiveEnvironmentIsSet(rawMarketplace[key]);
+        }
+        const resolvedMarketplace = interpolateDirectiveValues(
+          rawMarketplace,
+        ) as ConfigRecord;
+        for (const key of ['agents', 'agents_add', 'agents_remove']) {
+          if (Object.hasOwn(rawMarketplace, key)) {
+            normalizeDirectiveIds(resolvedMarketplace[key], key);
+          }
+        }
+      }
       const effectiveConfig = loadPluginConfig(directory, { silent: true });
       const presetName = activePresetName(effectiveConfig);
       if (!effectiveConfig.presets?.[presetName]) {
@@ -162,16 +247,30 @@ function persistActivation(
       const localMarketplace = marketplaceAgentOverride
         ? {}
         : asRecord(currentPreset.marketplace);
+      const resolvedLocalMarketplace = interpolateDirectiveValues(
+        localMarketplace,
+      ) as ConfigRecord;
       const ownsAgents = Array.isArray(localMarketplace.agents);
+      const rawReplacement = ownsAgents
+        ? (localMarketplace.agents as string[])
+        : [];
       const replacement = ownsAgents
-        ? normalizePackageIds(localMarketplace.agents as string[])
+        ? normalizeDirectiveIds(resolvedLocalMarketplace.agents, 'agents')
         : undefined;
-      const additions = Array.isArray(localMarketplace.agents_add)
-        ? normalizePackageIds(localMarketplace.agents_add as string[])
+      const rawAdditions = Array.isArray(localMarketplace.agents_add)
+        ? (localMarketplace.agents_add as string[])
         : [];
-      const removals = Array.isArray(localMarketplace.agents_remove)
-        ? normalizePackageIds(localMarketplace.agents_remove as string[])
+      const additions = normalizeDirectiveIds(
+        resolvedLocalMarketplace.agents_add,
+        'agents_add',
+      );
+      const rawRemovals = Array.isArray(localMarketplace.agents_remove)
+        ? (localMarketplace.agents_remove as string[])
         : [];
+      const removals = normalizeDirectiveIds(
+        resolvedLocalMarketplace.agents_remove,
+        'agents_remove',
+      );
 
       // Remove this file's directives to determine whether the package comes
       // from an inherited/lower layer. This preserves future parent additions.
@@ -207,20 +306,20 @@ function persistActivation(
       if (enabled) {
         if (active && !removals.includes(id)) throw NO_ACTIVATION_CHANGE;
         if (ownsAgents && !replacement?.includes(id)) {
-          next.agents = [...(replacement ?? []), id];
+          next.agents = [...rawReplacement, id];
         } else if (!ownsAgents && !inherited && !additions.includes(id)) {
-          next.agents_add = [...additions, id];
+          next.agents_add = [...rawAdditions, id];
         }
         if (removals.includes(id)) {
-          next.agents_remove = removals.filter((value) => value !== id);
+          next.agents_remove = withoutPackage(rawRemovals, removals, id);
         }
       } else {
         if (!active && !additions.includes(id)) throw NO_ACTIVATION_CHANGE;
         if (ownsAgents && replacement?.includes(id)) {
-          next.agents = replacement.filter((value) => value !== id);
+          next.agents = withoutPackage(rawReplacement, replacement, id);
         }
         if (additions.includes(id)) {
-          const remaining = additions.filter((value) => value !== id);
+          const remaining = withoutPackage(rawAdditions, additions, id);
           const lowerPreset = writesProjectConfig
             ? (userPresets[presetName] as PresetInput | undefined)
             : undefined;
@@ -238,7 +337,7 @@ function persistActivation(
           (inherited || (ownsAgents && active && !replacement?.includes(id))) &&
           !removals.includes(id)
         ) {
-          next.agents_remove = [...removals, id];
+          next.agents_remove = [...rawRemovals, id];
         }
       }
       if (JSON.stringify(next) === JSON.stringify(localMarketplace)) {

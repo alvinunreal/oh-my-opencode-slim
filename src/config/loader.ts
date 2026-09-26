@@ -90,6 +90,14 @@ const DISABLED_CONFIG_KEYS = [
   'disabled_skills',
 ] as const;
 
+/** Apply the environment placeholder syntax shared by config consumers. */
+export function interpolateEnvironmentVariables(value: string): string {
+  return value.replace(
+    /\{env:([^}]+)\}/g,
+    (_match, varName: string) => process.env[varName] ?? '',
+  );
+}
+
 /**
  * Normalize disabled_* config keys in place so a non-array value does not
  * reject the whole config object during schema validation. A string value
@@ -318,10 +326,7 @@ function loadConfigFromPath(
     let rawConfig: unknown;
     try {
       const stripped = stripJsonComments(content);
-      const interpolated = stripped.replace(
-        /\{env:([^}]+)\}/g,
-        (_, varName) => process.env[varName] ?? '',
-      );
+      const interpolated = interpolateEnvironmentVariables(stripped);
       rawConfig = JSON.parse(interpolated);
     } catch (error) {
       // Empty file or JSON parse error is treated as invalid-json
