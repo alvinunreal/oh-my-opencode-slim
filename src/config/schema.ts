@@ -652,9 +652,12 @@ export const FailoverConfigSchema = z.preprocess(
         .min(0)
         .default(3)
         .describe(
-          'Number of consecutive 429/rate-limit responses tolerated on the ' +
-            'same model before aborting (or swapping to the next fallback ' +
-            'model when a chain is configured).',
+          'Number of current-model retries allowed before Slim switches to ' +
+            'the next fallback model (or aborts when no chain is configured). ' +
+            'The budget is shared across the whole fallback chain and is not ' +
+            'reset by a model switch; it resets only on a successful ' +
+            'assistant response, session deletion, or a new user turn. 0 ' +
+            'switches immediately.',
         ),
       initialRetryDelayMs: z
         .number()

@@ -180,8 +180,8 @@ written to the user config file; reload OpenCode for it to take effect. See
 | `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit `task(..., background: true)` call is converted to the existing foreground execution path. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
-| `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. |
-| `fallback.maxRetries` | number | `3` | Consecutive retryable 429 responses allowed for the same foreground model before Slim aborts or selects the next configured fallback model. It does not cap OpenCode provider retries or background subagent retries. |
+| `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** Slim's automatic foreground fallback is disabled regardless (temporary compatibility limitation: the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight switch could commit after a newer user turn has taken over). Host-native retries still run, but the configured chain is not executed automatically. Re-enable only once a host atomic conditional-switch capability is confirmed — not merely because a `switchModel` method exists. |
+| `fallback.maxRetries` | number | `3` | Number of current-model retries allowed before Slim switches to the next configured fallback model. The budget is chain-global (shared across every model in the fallback chain) and counts both host-initiated retries (`session.status: retry`) and Slim-initiated same-model retries on terminal errors (`session.error` / `message.updated`). It is not reset by a model switch and clears only on a successful assistant response, session deletion, or a confirmed new user turn; `0` switches immediately for ordinary retryable errors. Confirmed permanent quota/usage/billing errors (explicit spending limits, expired coding plans, exhausted fixed-window limits, explicit quota exhaustion) skip the budget **and** `fallback.initialRetryDelayMs` and advance the chain immediately; ordinary 429/rate-limit errors keep using the budget and the delay. It does not cap OpenCode provider retries or background subagent retries. |
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. |
 | `fallback.retryDelayMs` | number | `500` | Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables. |
 | `council.presets` | object | - | **Required if using council.** Named councillor presets See [Council configuration note](#council-configuration-note). |
@@ -472,8 +472,18 @@ running session.
 
 `fallback.maxRetries` is unrelated to the wall-clock supervisor and to
 OpenCode's provider retry policy. A value of `0` disables Slim's foreground
-429 failover budget; it does not prevent OpenCode from retrying a provider
-request in a child session.
+retry budget; it does not prevent OpenCode from retrying a provider request in
+a child session.
+
+On v2 hosts, Slim's automatic foreground fallback is disabled entirely
+(temporary compatibility limitation): the v2 `switchModel` has no per-turn /
+atomic conditional form, so `session.error`, `message.updated` and
+`session.status` retry cannot keep host and manager state consistent — an
+in-flight switch could commit on the host after a newer user turn has taken
+over. Host-native retries and their decisions are left untouched, but the
+configured fallback chain is not executed automatically. This must only be
+re-enabled once a host atomic conditional-switch capability is confirmed, not
+merely because a `switchModel` method exists.
 
 ### Agent Display Names
 

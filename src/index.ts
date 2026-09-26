@@ -698,9 +698,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       backgroundJobBoard: backgroundJobCoordinator,
       revivedRunTracker,
     });
+    // The current v2 host interface has no per-turn/atomic conditional switch,
+    // so an in-flight switch can commit on the host after a newer user turn has
+    // taken over. Disable the manager's automatic intervention entirely on v2
+    // (unregistering only the retry hook is not enough: session.error,
+    // message.updated and session.status retry all reach the replay path).
+    const fallbackEnabled =
+      runtime.fallback.enabled !== false && hostFlavor !== 'v2';
+    if (runtime.fallback.enabled !== false && hostFlavor === 'v2') {
+      // Deterministic notice: no timestamps or per-call ids. Do not log when
+      // the user explicitly disabled fallback.
+      log(
+        '[foreground-fallback] automatic fallback disabled on v2 hosts (no atomic per-turn model switch)',
+      );
+    }
     foregroundFallback = new ForegroundFallbackManager(
       runtime.runtimeChains,
-      runtime.fallback.enabled !== false,
+      fallbackEnabled,
       ctx,
       runtime.fallback.maxRetries,
       sessionLifecycle,

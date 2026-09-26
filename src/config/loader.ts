@@ -431,7 +431,7 @@ export function loadPluginConfigFromPath(
         .fallback as Record<string, unknown>;
       const present = LEGACY_FALLBACK_KEYS.filter((key) => key in fallback);
       if (present.length > 0) {
-        const fallbackMsg = `Deprecated fallback config key${present.length === 1 ? '' : 's'} ${present.join(', ')} found and ignored. These fields were removed in 2.3.x; fallback behavior is controlled by fallback.enabled and fallback.maxRetries.`;
+        const fallbackMsg = `Deprecated fallback config key${present.length === 1 ? '' : 's'} ${present.join(', ')} found and ignored. These keys are no longer supported by foreground fallback and have no effect.`;
         options?.onWarning?.({
           path: configPath,
           kind: 'deprecated-key',

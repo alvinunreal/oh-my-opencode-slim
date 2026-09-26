@@ -1224,7 +1224,6 @@ describe('deepMerge behavior', () => {
         fallback: {
           enabled: true,
           timeoutMs: 15000,
-          retryDelayMs: 500,
           retry_on_empty: false,
           runtimeOverride: true,
         },
@@ -1244,8 +1243,67 @@ describe('deepMerge behavior', () => {
     expect(config.fallback?.enabled).toBe(true);
     // Removed fields must not survive into the parsed config
     expect(config.fallback).not.toHaveProperty('timeoutMs');
+    expect(config.fallback).not.toHaveProperty('retry_on_empty');
     expect(config.fallback).not.toHaveProperty('runtimeOverride');
     expect(config.agents?.oracle?.model).toBe('valid/model');
+  });
+
+  test('fallback delay keys are live and preserved alongside legacy keys', () => {
+    const userOpencodeDir = path.join(userConfigDir, 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: {
+          enabled: true,
+          maxRetries: 5,
+          initialRetryDelayMs: 250,
+          retryDelayMs: 750,
+          timeoutMs: 15000,
+          retry_on_empty: false,
+        },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(userConfigDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    // Only the legacy keys warn; the live delay keys are untouched.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('timeoutMs');
+    expect(warnings[0]?.message).toContain('retry_on_empty');
+    expect(config.fallback?.enabled).toBe(true);
+    expect(config.fallback?.maxRetries).toBe(5);
+    expect(config.fallback?.initialRetryDelayMs).toBe(250);
+    expect(config.fallback?.retryDelayMs).toBe(750);
+    expect(config.fallback).not.toHaveProperty('timeoutMs');
+    expect(config.fallback).not.toHaveProperty('retry_on_empty');
+  });
+
+  test('fallback delay keys alone produce no deprecation warning', () => {
+    const userOpencodeDir = path.join(userConfigDir, 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: {
+          enabled: true,
+          initialRetryDelayMs: 100,
+          retryDelayMs: 400,
+        },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(userConfigDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(warnings).toHaveLength(0);
+    expect(config.fallback?.initialRetryDelayMs).toBe(100);
+    expect(config.fallback?.retryDelayMs).toBe(400);
   });
 });
 

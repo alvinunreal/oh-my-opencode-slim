@@ -110,7 +110,7 @@ async function triggerFailover(
     { orchestrator: ['anthropic/claude-a', 'anthropic/claude-b'] },
     true,
     input as never,
-    3,
+    0, // maxRetries — first error triggers failover (budget tested in unit tests)
     undefined,
     options?.onSessionModelChanged,
   );

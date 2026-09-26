@@ -26,6 +26,7 @@ import { readTuiSnapshot, snapshotSectionsEqual } from './tui-state';
 import { BackgroundJobCoordinator } from './utils/background-job-coordinator';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
+import * as loggerModule from './utils/logger';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
@@ -2417,4 +2418,217 @@ describe('v1 host plugin module contract', () => {
     // a server module declaring `tui` is rejected outright.
     expect('tui' in module).toBe(false);
   });
+});
+
+describe('plugin foreground fallback host gating', () => {
+  let originalEnv: typeof process.env;
+  let projectDir: string;
+
+  const V2_NOTICE =
+    '[foreground-fallback] automatic fallback disabled on v2 hosts (no atomic per-turn model switch)';
+
+  const createFallbackClient = () => {
+    const noop = async () => ({});
+    const messages = mock(async () => ({ data: [] }));
+    const abort = mock(async () => ({}));
+    const promptAsync = mock(async () => ({}));
+    const session = new Proxy(
+      { messages, abort, promptAsync, get: noop, status: noop },
+      { get: (target, key) => Reflect.get(target, key) ?? noop },
+    );
+    const client = new Proxy(
+      { app: { log: noop }, session },
+      {
+        get: (target, key) =>
+          Reflect.get(target, key) ?? new Proxy({}, { get: () => noop }),
+      },
+    );
+    return { client, messages, abort, promptAsync };
+  };
+
+  const createHooks = (hostFlavor?: string) =>
+    plugin({
+      client: createFallbackClient().client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+      ...(hostFlavor ? { hostFlavor } : {}),
+    } as never);
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    projectDir = await mkdtemp('/tmp/oh-my-opencode-slim-fallback-gate-');
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: projectDir,
+      XDG_CONFIG_HOME: projectDir,
+      XDG_DATA_HOME: `${projectDir}/data`,
+      XDG_CACHE_HOME: `${projectDir}/cache`,
+      OPENCODE_LOG_DIR: `${projectDir}/logs`,
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+        },
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    process.env = originalEnv;
+    await rm(projectDir, { recursive: true, force: true });
+  });
+
+  test('v2 host: the manager is disabled and performs no automatic intervention', async () => {
+    const captured: string[] = [];
+    const capture = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string) => {
+        captured.push(message);
+      },
+    );
+    try {
+      const { client, abort, promptAsync } = createFallbackClient();
+      const hooks = await plugin({
+        client,
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+        hostFlavor: 'v2',
+      } as never);
+
+      // The startup notice is emitted exactly once.
+      expect(captured.filter((message) => message === V2_NOTICE)).toHaveLength(
+        1,
+      );
+
+      const switchModel = mock(async () => ({}));
+      const decision = { retry: true, delay: 2_000 };
+      const retryEvent = {
+        sessionID: 'sess-v2-gate',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+        error: { message: 'Rate limit exceeded' },
+        decision,
+      };
+      await hooks['v2.session.retry']?.(
+        retryEvent as never,
+        switchModel as never,
+      );
+      expect(switchModel).not.toHaveBeenCalled();
+      // Host-native retry decision is left untouched.
+      expect(retryEvent.decision).toBe(decision);
+
+      await hooks.event?.({
+        event: {
+          type: 'session.error',
+          properties: {
+            sessionID: 'sess-v2-gate',
+            error: { message: 'Rate limit exceeded' },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              sessionID: 'sess-v2-gate',
+              id: 'm-v2-gate',
+              agent: 'orchestrator',
+              role: 'assistant',
+              providerID: 'openai',
+              modelID: 'gpt-b',
+              error: { message: 'Rate limit exceeded' },
+            },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'sess-v2-gate',
+            status: {
+              type: 'retry',
+              attempt: 1,
+              message: 'rate limit, retrying...',
+            },
+          },
+        },
+      } as never);
+
+      expect(switchModel).not.toHaveBeenCalled();
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+
+      await hooks.dispose?.();
+    } finally {
+      capture.mockRestore();
+    }
+  });
+
+  test('v2 host with fallback explicitly disabled: no startup notice', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: false },
+      }),
+    );
+    const captured: string[] = [];
+    const capture = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string) => {
+        captured.push(message);
+      },
+    );
+    try {
+      const hooks = await createHooks('v2');
+      expect(captured.filter((message) => message === V2_NOTICE)).toHaveLength(
+        0,
+      );
+      await hooks.dispose?.();
+    } finally {
+      capture.mockRestore();
+    }
+  });
+
+  for (const hostFlavor of [undefined, 'v1'] as const) {
+    test(`v1 host (${hostFlavor ?? 'absent'}): the manager stays enabled`, async () => {
+      const captured: string[] = [];
+      const capture = spyOn(loggerModule, 'log').mockImplementation(
+        (message: string) => {
+          captured.push(message);
+        },
+      );
+      try {
+        const hooks = await createHooks(hostFlavor);
+        expect(
+          captured.filter((message) => message === V2_NOTICE),
+        ).toHaveLength(0);
+
+        const switchModel = mock(async () => ({}));
+        const event = {
+          sessionID: 'sess-v1-gate',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        };
+        await hooks['v2.session.retry']?.(event as never, switchModel as never);
+        expect(switchModel).toHaveBeenCalledWith('sess-v1-gate', {
+          providerID: 'openai',
+          id: 'gpt-c',
+        });
+
+        await hooks.dispose?.();
+      } finally {
+        capture.mockRestore();
+      }
+    });
+  }
 });
