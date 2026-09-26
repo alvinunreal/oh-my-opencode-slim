@@ -16,6 +16,7 @@ import {
   parseMarketplaceRegistrySelector,
   renderDefaultMarketplaceAutoDelegationBlock,
   resolveMarketplaceRegistryEntry,
+  resolveMarketplaceRegistryEntryV3,
   validateMarketplaceRegistryEntry,
   validateMarketplaceRegistryEntryV3,
 } from './index';
@@ -118,6 +119,85 @@ describe('marketplace contract routing export', () => {
         '1.0.0',
       ).version,
     ).toBe('1.2.0');
+  });
+
+  test('resolves prereleases by semver for both registry contract versions', () => {
+    const versions = ['1.1.0', '1.2.0-beta.2', '1.2.0-beta.10'];
+    const v2Index = createMarketplaceRegistryIndex(
+      versions.map((version) =>
+        createMarketplaceRegistryEntry({
+          manifest: { ...manifest, version },
+        }),
+      ),
+    );
+    const v3Index = createMarketplaceRegistryIndexV3(
+      versions.map((version) =>
+        createMarketplaceRegistryEntryV3({
+          manifest: {
+            ...manifest,
+            schemaVersion: 3,
+            version,
+            routing: {
+              lane: 'Contract lane.',
+              stats: ['Fast'],
+              delegateWhen: ['The contract task matches.'],
+              avoid: ['Unbounded work.'],
+            },
+          },
+        }),
+      ),
+    );
+    const selector = { id: 'community/contract-agent' };
+    const exactPrerelease = { ...selector, version: '1.2.0-beta.2' };
+    const compatibility = { pluginVersion: '3.1.0' };
+
+    expect(
+      resolveMarketplaceRegistryEntry(v2Index, selector, compatibility).version,
+    ).toBe('1.2.0-beta.10');
+    expect(
+      resolveMarketplaceRegistryEntryV3(v3Index, selector, compatibility)
+        .version,
+    ).toBe('1.2.0-beta.10');
+    expect(
+      resolveMarketplaceRegistryEntry(v2Index, exactPrerelease, compatibility)
+        .version,
+    ).toBe('1.2.0-beta.2');
+    expect(
+      resolveMarketplaceRegistryEntryV3(v3Index, exactPrerelease, compatibility)
+        .version,
+    ).toBe('1.2.0-beta.2');
+    expect(
+      resolveMarketplaceRegistryEntry(
+        v2Index,
+        selector,
+        compatibility,
+        '1.2.0-beta.2',
+      ).version,
+    ).toBe('1.2.0-beta.10');
+    expect(
+      resolveMarketplaceRegistryEntryV3(
+        v3Index,
+        selector,
+        compatibility,
+        '1.2.0-beta.2',
+      ).version,
+    ).toBe('1.2.0-beta.10');
+    expect(() =>
+      resolveMarketplaceRegistryEntry(
+        v2Index,
+        selector,
+        compatibility,
+        '1.2.0-beta.10',
+      ),
+    ).toThrow();
+    expect(() =>
+      resolveMarketplaceRegistryEntryV3(
+        v3Index,
+        selector,
+        compatibility,
+        '1.2.0-beta.10',
+      ),
+    ).toThrow();
   });
 
   test('projects prompt-free summaries and validates artifact identity/digest', () => {

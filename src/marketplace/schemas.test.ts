@@ -3,6 +3,7 @@ import {
   MarketplaceAgentManifestSchema,
   MarketplaceAgentManifestSummaryV2Schema,
   MarketplaceAgentManifestSummaryV3Schema,
+  MarketplaceModelCandidateSchema,
   MarketplacePackageManifestSchema,
   MarketplacePackageManifestV3Schema,
   MarketplaceVersionSchema,
@@ -43,6 +44,12 @@ const commonV3 = {
   },
 };
 
+function withoutPrompt<T extends { prompt: string }>(manifest: T) {
+  const { prompt, ...summary } = manifest;
+  void prompt;
+  return summary;
+}
+
 describe('agents-only marketplace manifest schemas', () => {
   test('rejects non-canonical semantic-version aliases', () => {
     expect(MarketplaceVersionSchema.safeParse('v1.0.0').success).toBe(false);
@@ -52,6 +59,118 @@ describe('agents-only marketplace manifest schemas', () => {
         version: 'v1.0.0',
       }).success,
     ).toBe(false);
+  });
+
+  test('validates explicit provider/model IDs while preserving model-name spaces', () => {
+    for (const candidate of [
+      'missing-provider',
+      '/model',
+      'provider/',
+      'provider name/model',
+    ]) {
+      expect(MarketplaceModelCandidateSchema.safeParse(candidate).success).toBe(
+        false,
+      );
+      expect(
+        MarketplaceModelCandidateSchema.safeParse({ id: candidate }).success,
+      ).toBe(false);
+    }
+    for (const candidate of [
+      'provider/model name',
+      'provider/nested/model name',
+      { id: 'provider/model name with spaces' },
+      { id: 'provider/nested/model name', variant: 'fast' },
+    ]) {
+      expect(MarketplaceModelCandidateSchema.safeParse(candidate).success).toBe(
+        true,
+      );
+    }
+  });
+
+  test('rejects line breaks in rendered descriptions, skills, and MCP names', () => {
+    const cases = [
+      {
+        schema: MarketplacePackageManifestSchema,
+        value: common,
+      },
+      {
+        schema: MarketplacePackageManifestV3Schema,
+        value: commonV3,
+      },
+      {
+        schema: MarketplaceAgentManifestSummaryV2Schema,
+        value: withoutPrompt(common),
+      },
+      {
+        schema: MarketplaceAgentManifestSummaryV3Schema,
+        value: withoutPrompt(commonV3),
+      },
+    ];
+    const invalidChanges = [
+      { description: 'first\r\nsecond' },
+      { skills: ['skill\nname'] },
+      { mcps: ['mcp\rname'] },
+    ];
+
+    for (const { schema, value } of cases) {
+      for (const change of invalidChanges) {
+        expect(schema.safeParse({ ...value, ...change }).success).toBe(false);
+      }
+    }
+
+    for (const [field, text] of [
+      ['description', 'first\nsecond'],
+      ['when', 'first\rsecond'],
+    ] as const) {
+      expect(
+        MarketplacePackageManifestSchema.safeParse({
+          ...common,
+          routing: { ...common.routing, [field]: text },
+        }).success,
+      ).toBe(false);
+      expect(
+        MarketplaceAgentManifestSummaryV2Schema.safeParse({
+          ...withoutPrompt(common),
+          routing: { ...common.routing, [field]: text },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  test('accepts valid single-line rendered values and multiline prompt/metadata', () => {
+    const manifest = {
+      ...common,
+      prompt: 'First line.\nSecond line.',
+      tags: ['tag\nmetadata'],
+      author: { name: 'Author\nmetadata' },
+      model: {
+        source: 'explicit' as const,
+        candidates: [
+          'provider/model name with spaces',
+          { id: 'provider/nested/model name', variant: 'fast' },
+        ],
+      },
+    };
+    expect(MarketplacePackageManifestSchema.safeParse(manifest).success).toBe(
+      true,
+    );
+    expect(
+      MarketplaceAgentManifestSummaryV2Schema.safeParse(withoutPrompt(manifest))
+        .success,
+    ).toBe(true);
+    const manifestV3 = {
+      ...manifest,
+      schemaVersion: 3 as const,
+      routing: commonV3.routing,
+    };
+    expect(
+      MarketplacePackageManifestV3Schema.safeParse(manifestV3).success,
+    ).toBe(true);
+    expect(
+      MarketplaceAgentManifestSummaryV3Schema.safeParse(
+        withoutPrompt(manifestV3),
+      ).success,
+    ).toBe(true);
   });
 
   test('accepts standalone and single-builtin extension agents', () => {

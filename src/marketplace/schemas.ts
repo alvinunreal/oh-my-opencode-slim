@@ -2,6 +2,7 @@ import { valid, validRange } from 'semver';
 import { z } from 'zod';
 import { SUPPORTED_SPECIALIST_ROLES } from '../config/agent-roles.js';
 import { AGENT_THEME_COLORS } from '../config/constants.js';
+import { ProviderModelIdSchema } from '../config/model-id-schema.js';
 
 export const MARKETPLACE_MANIFEST_SCHEMA_VERSION = 2 as const;
 export const MARKETPLACE_MANIFEST_SCHEMA_VERSION_V3 = 3 as const;
@@ -35,17 +36,26 @@ export const MarketplaceBuiltinSchema = z.enum(SUPPORTED_SPECIALIST_ROLES);
 export type MarketplaceBuiltin = z.infer<typeof MarketplaceBuiltinSchema>;
 
 const BoundedTextSchema = (max: number) => z.string().trim().min(1).max(max);
-const MarketplaceRoutingLineSchema = z
-  .string()
-  .refine((value) => !/[\r\n]/.test(value), {
-    message: 'Routing values must be single-line strings',
-  })
-  .trim()
-  .min(1)
-  .max(160);
+const SingleLineTextSchema = (max: number) =>
+  z
+    .string()
+    .refine((value) => !/[\r\n]/.test(value), {
+      message: 'Value must be a single-line string',
+    })
+    .trim()
+    .min(1)
+    .max(max);
+const MarketplaceRoutingLineSchema = SingleLineTextSchema(160);
 
 const UniqueStringArraySchema = z
   .array(z.string().trim().min(1).max(200))
+  .max(128)
+  .refine((values) => new Set(values).size === values.length, {
+    message: 'Values must be unique',
+  });
+
+const UniqueSingleLineStringArraySchema = z
+  .array(SingleLineTextSchema(200))
   .max(128)
   .refine((values) => new Set(values).size === values.length, {
     message: 'Values must be unique',
@@ -75,11 +85,15 @@ export const MarketplaceAuthorSchema = z
   })
   .strict();
 
+const MarketplaceModelIdSchema = BoundedTextSchema(200).pipe(
+  ProviderModelIdSchema,
+);
+
 export const MarketplaceModelCandidateSchema = z.union([
-  BoundedTextSchema(200),
+  MarketplaceModelIdSchema,
   z
     .object({
-      id: BoundedTextSchema(200),
+      id: MarketplaceModelIdSchema,
       variant: BoundedTextSchema(100).optional(),
     })
     .strict(),
@@ -110,8 +124,8 @@ export const MarketplaceCompatibilitySchema = z
 
 export const MarketplaceRoutingSchema = z
   .object({
-    description: BoundedTextSchema(500),
-    when: BoundedTextSchema(500),
+    description: SingleLineTextSchema(500),
+    when: SingleLineTextSchema(500),
     keywords: UniqueStringArraySchema,
   })
   .strict();
@@ -151,14 +165,14 @@ const ManifestFields = {
   id: MarketplacePackageIdSchema,
   version: MarketplaceVersionSchema,
   displayName: BoundedTextSchema(120),
-  description: BoundedTextSchema(1000),
+  description: SingleLineTextSchema(1000),
   agentName: z
     .string()
     .trim()
     .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'Expected a valid agent name'),
   prompt: BoundedTextSchema(100_000),
-  skills: UniqueStringArraySchema,
-  mcps: UniqueStringArraySchema,
+  skills: UniqueSingleLineStringArraySchema,
+  mcps: UniqueSingleLineStringArraySchema,
   tools: z
     .array(MarketplaceToolSchema)
     .max(11)
