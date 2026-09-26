@@ -281,7 +281,6 @@ export function buildResolvedAgentRegistry(
 
   for (const definition of definitions) {
     const name = definition.name;
-    const displayName = identities[name] ?? name;
     const finalEntry = finalAgentConfig[name] as Record<string, unknown>;
     const permission = (finalEntry.permission ?? {}) as Record<string, unknown>;
     const agentMcps = (sdk[name] as { mcps?: string[] }).mcps ?? [];
@@ -301,9 +300,16 @@ export function buildResolvedAgentRegistry(
     const legacyAlias = Object.keys(AGENT_ALIASES).find(
       (key) => AGENT_ALIASES[key] === name,
     );
+    const visibleNativeRules = definition.displayName
+      ? Object.entries(nativeRules).find(
+          ([agentName]) =>
+            normalizeAgentName(agentName).toLowerCase() ===
+            normalizeAgentName(definition.displayName as string).toLowerCase(),
+        )?.[1]
+      : undefined;
     const hostRuleSet =
-      nativeRules[displayName] ??
       nativeRules[name] ??
+      visibleNativeRules ??
       (legacyAlias ? nativeRules[legacyAlias] : undefined) ??
       [];
     policyMap[name] = compilePermissionPolicy({
@@ -329,20 +335,23 @@ export function buildResolvedAgentRegistry(
   for (const definition of definitions) {
     const display = identities[definition.name];
     if (display && display !== definition.name) {
+      const legacyAlias = Object.keys(AGENT_ALIASES).find(
+        (key) => AGENT_ALIASES[key] === definition.name,
+      );
       const canonicalConfig = finalAgentConfig[definition.name] as Record<
         string,
         unknown
       >;
       const aliasHost = hostEntries[display];
+      identities[display] = display;
       const visibleConfig: Record<string, unknown> = {
         ...clone(canonicalConfig),
         ...(aliasHost ? clone(aliasHost) : {}),
-        model: canonicalConfig.model,
-        variant: canonicalConfig.variant,
-        permission: clone(canonicalConfig.permission),
+        permission: {
+          ...((canonicalConfig.permission ?? {}) as Record<string, unknown>),
+          ...((aliasHost?.permission ?? {}) as Record<string, unknown>),
+        },
       };
-      if (canonicalConfig.model === undefined) delete visibleConfig.model;
-      if (canonicalConfig.variant === undefined) delete visibleConfig.variant;
       if (!aliasHost || !('hidden' in aliasHost)) delete visibleConfig.hidden;
       if (
         definition.name === 'council' &&
@@ -352,6 +361,23 @@ export function buildResolvedAgentRegistry(
           visibleConfig.prompt,
         );
       }
+      const visiblePermission = visibleConfig.permission as Record<
+        string,
+        unknown
+      >;
+      const visibleMcps = (visibleConfig.mcps as string[] | undefined) ?? [];
+      for (const mcpName of availableMcpNames) {
+        const permissionKey = `${mcpName.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`;
+        if (!(permissionKey in visiblePermission)) {
+          visiblePermission[permissionKey] = parseList(
+            visibleMcps,
+            availableMcpNames,
+          ).includes(mcpName)
+            ? 'allow'
+            : 'deny';
+        }
+      }
+      visibleConfig.permission = visiblePermission;
       finalAgentConfig[display] = visibleConfig;
       sdk[display] = clone(visibleConfig) as SDKAgentConfig &
         Record<string, unknown>;
@@ -359,13 +385,36 @@ export function buildResolvedAgentRegistry(
         delete (sdk[display] as Record<string, unknown>).hidden;
       }
       candidateMap[display] = clone(candidateMap[definition.name] ?? []);
-      effective[display] = clone(effective[definition.name] ?? {});
-      if (policyMap[definition.name])
-        policyMap[display] = policyMap[definition.name];
+      const visibleModel =
+        typeof visibleConfig.model === 'string'
+          ? visibleConfig.model
+          : undefined;
+      const visibleVariant =
+        typeof visibleConfig.variant === 'string'
+          ? visibleConfig.variant
+          : undefined;
+      effective[display] = {
+        ...(visibleModel ? { model: visibleModel } : {}),
+        ...(visibleVariant ? { variant: visibleVariant } : {}),
+      };
+      const visibleRules =
+        nativeRules[display] ??
+        nativeRules[definition.name] ??
+        (legacyAlias ? nativeRules[legacyAlias] : undefined) ??
+        [];
+      policyMap[display] = compilePermissionPolicy({
+        baselineRules: adaptPermissions(visiblePermission).filter(
+          (rule): rule is V2PermissionRule =>
+            rule.effect === 'allow' ||
+            rule.effect === 'ask' ||
+            rule.effect === 'deny',
+        ),
+        hostRules: visibleRules,
+      });
       if (definition.name === 'orchestrator') {
-        tuiModels[display] = tuiModels[definition.name] ?? 'default';
-        if (tuiVariants[definition.name])
-          tuiVariants[display] = tuiVariants[definition.name];
+        tuiModels[display] = visibleModel ?? 'default';
+        if (visibleVariant) tuiVariants[display] = visibleVariant;
+        else delete tuiVariants[display];
       }
     }
   }

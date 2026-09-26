@@ -1896,9 +1896,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           );
         }
       } catch (err) {
-        throw new Error('Unable to snapshot configured MCP namespaces', {
-          cause: err,
-        });
+        throw new Error(
+          'Unable to snapshot configured MCP namespaces: this host cannot ' +
+            'expose configured MCP namespaces; update to a supported v2 host',
+          { cause: err },
+        );
       }
 
       // ── Agents ──

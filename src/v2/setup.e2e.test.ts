@@ -22,7 +22,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readdirSync as readDirSync, readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { flushLoggerForTesting } from '../utils/logger';
 import { createV2Setup } from './setup';
@@ -286,8 +286,9 @@ describe('createV2Setup e2e', () => {
     projectDir = path.join(fixtureRoot, 'project');
     configDir = path.join(fixtureRoot, 'config');
     logDir = path.join(fixtureRoot, 'logs');
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
     await Bun.write(
-      path.join(configDir, 'oh-my-opencode-slim.json'),
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       // Minimal fixture: empty plugin config with the companion disabled so
       // factory init stays hermetic (no user config, no side processes).
       JSON.stringify({ companion: { enabled: false } }),
@@ -488,6 +489,78 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test('v2 draft registration applies display-name model and ordered policy overrides', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        agents: { explorer: { displayName: 'Scout' } },
+      }),
+    );
+    const { ctx } = makeMockV2Context(projectDir);
+    const registered = new Map<string, Record<string, unknown>>();
+    const visibleRules = [
+      { action: 'skill', resource: '*', effect: 'allow' },
+      { action: 'skill', resource: 'review-tools', effect: 'deny' },
+    ];
+    const nativeAgents: Record<string, Record<string, unknown>> = {
+      explorer: {
+        id: 'explorer',
+        mode: 'subagent',
+        model: { providerID: 'canonical', id: 'canonical-model' },
+        permissions: [],
+      },
+      Scout: {
+        id: 'Scout',
+        mode: 'subagent',
+        model: { providerID: 'visible', id: 'visible-model' },
+        permissions: visibleRules,
+      },
+    };
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+    };
+    agent.transform = async (callback) => {
+      callback({
+        list: () => Object.keys(nativeAgents).map((id) => ({ id })),
+        get: (id: string) => nativeAgents[id],
+        default: () => {},
+        update: (
+          id: string,
+          project: (draft: Record<string, unknown>) => void,
+        ) => {
+          const draft = { ...nativeAgents[id] };
+          project(draft);
+          registered.set(id, draft);
+        },
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const visible = registered.get('Scout');
+      const canonical = registered.get('explorer');
+      expect(visible?.model).toEqual({
+        providerID: 'visible',
+        id: 'visible-model',
+      });
+      expect(visible?.permissions).toEqual(
+        expect.arrayContaining(visibleRules),
+      );
+      expect(canonical?.model).toEqual({
+        providerID: 'canonical',
+        id: 'canonical-model',
+      });
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
   test('host-only MCP namespaces are denied in both agent and child policies', async () => {
     const { ctx, events, calls } = makeMockV2Context(projectDir);
     const setupCtx = ctx as unknown as {
@@ -591,6 +664,20 @@ describe('createV2Setup e2e', () => {
       'Unable to snapshot configured MCP namespaces',
     );
     expect(calls.disposed).toContain('mcp.transform');
+  }, 20_000);
+
+  test('missing MCP transform fails startup and unwinds earlier resources', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    const mcp = ctx.mcp as unknown as { transform?: unknown };
+    mcp.transform = undefined;
+
+    await expect(createV2Setup()(ctx)).rejects.toThrow(
+      'this host cannot expose configured MCP namespaces; update to a supported v2 host',
+    );
+    await flushLoggerForTesting();
+    const logText = readPluginLog();
+    expect(logText).toContain('[v2][interview] bridge disposed');
+    expect(logText).toContain('[v2] v1 dispose hook invoked (abort path)');
   }, 20_000);
 
   test('subagent launch flows into the job board through the tool bridges', async () => {

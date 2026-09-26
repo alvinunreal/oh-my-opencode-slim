@@ -104,15 +104,18 @@ background child). v2 conformance is compile-time-pinned by the
 mirror-conformance guard against the `@opencode/plugin` 2.0.15
 devDependency and exercised by the mock-driven bridge tests. Every v2
 API the adapter touches is
-capability-probed at runtime (`typeof ctx.mcp?.transform === 'function'`,
-`s.switchModel`, `ctx.generate`, …), so a host lacking one capability
-degrades that single feature with a log line instead of breaking the load.
+capability-probed at runtime (`s.switchModel`, `ctx.generate`, …), so a host
+lacking an optional capability degrades that single feature with a log line
+instead of breaking the load. The configured MCP namespace inventory is a
+required input to finalized-registry permission policy: a host without
+`ctx.mcp.transform` is unsupported and setup fails with an actionable error.
 The session hooks are the deliberate exception: on full contexts they
 register unconditionally and a
 registration failure fails setup (see
 [The v2 adapter](#the-v2-adapter-srcv2setupts)).
-`ctx.mcp.transform` in particular is present in **all** v2.0.x stable hosts;
-its probe only ever matters on non-stable host builds.
+`ctx.mcp.transform` is present in **all** v2.0.x stable hosts. Its inventory
+snapshot is required to preserve host-only MCP namespace policy; missing it is
+not an optional-degradation path.
 
 ## The v2 adapter (`src/v2/setup.ts`)
 
@@ -270,13 +273,19 @@ its probe only ever matters on non-stable host builds.
      secondary-model summaries without a temp session
    - `dispose` → returned cleanup
 
-Each domain-transform bridge (agent/tool/mcp/command) is independently
+Agent/tool/command domain-transform bridges are independently
 try/catch-guarded so one failure cannot disable the rest, and a
-zero-registration load logs a loud health-check warning. The session hooks
+zero-registration load logs a loud health-check warning. MCP setup is
+different: it first snapshots the configured host namespace inventory from
+`ctx.mcp.transform`, which is required for finalized-registry permission
+policy. A missing transform or unavailable inventory fails setup and
+unwinds registrations already acquired. The session hooks
 (`prompt`, `context`, `model.request`, `compaction`) register
 **unconditionally** on full v2 contexts: a registration failure fails
 setup loudly instead of degrading — hook-name rejection is treated as a
-host contract violation, not a degrade path.
+host contract violation, not a degrade path. Separately, `session.update`
+remains optional for PR7's child permission bridge: without it, only that
+child bridge degrades with a one-time warning.
 
 ### Task-control prompt and idle-wait contracts
 

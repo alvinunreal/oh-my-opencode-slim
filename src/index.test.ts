@@ -2350,6 +2350,27 @@ describe('plugin config model inheritance', () => {
     );
   });
 
+  test('admission uses the visible host model when canonical and visible entries differ', async () => {
+    await assertAdmissionUsesFinalModel(
+      'researcher',
+      {
+        backgroundJobs: {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { host: 1 },
+          },
+        },
+        agents: {
+          explorer: { model: 'plugin/explorer', displayName: 'researcher' },
+        },
+      },
+      {
+        explorer: { model: 'canonical/capacity' },
+        researcher: { model: 'host/visible' },
+      },
+    );
+  });
+
   test('admission resolves a legacy agent alias to the final canonical entry', async () => {
     await assertAdmissionUsesFinalModel(
       'explore',

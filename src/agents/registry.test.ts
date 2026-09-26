@@ -319,6 +319,145 @@ describe('finalized existing-agent registry', () => {
     expect(registry.nativePolicies.explore.rules).toBe(policy.rules);
   });
 
+  test('keeps canonical and visible host overrides independent', () => {
+    const runtime = runtimeFor({
+      agents: {
+        explorer: { displayName: 'Scout', model: 'plugin/model' },
+      },
+    });
+    const canonicalRules = [
+      { action: 'skill', resource: 'review-tools', effect: 'allow' as const },
+      { action: 'skill', resource: 'review-tools', effect: 'ask' as const },
+    ];
+    const visibleRules = [
+      { action: 'skill', resource: '*', effect: 'allow' as const },
+      { action: 'skill', resource: 'review-tools', effect: 'deny' as const },
+    ];
+    const registry = build(
+      runtime,
+      {
+        agent: {
+          explorer: {
+            model: 'canonical/model',
+            variant: 'canonical-v',
+            permission: { read: 'allow', canonical_tool: 'allow' },
+          },
+          Scout: {
+            model: 'visible/model',
+            variant: 'visible-v',
+            permission: { read: 'deny', visible_tool: 'allow' },
+          },
+        },
+      },
+      {
+        hostFlavor: 'v2',
+        nativePermissionsByAgent: {
+          explorer: canonicalRules,
+          Scout: visibleRules,
+        },
+      },
+    );
+    const sdk = registry.getSdkAgentProjection() as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const canonicalPermission = sdk.explorer?.permission as Record<
+      string,
+      unknown
+    >;
+    const visiblePermission = sdk.Scout?.permission as Record<string, unknown>;
+
+    expect(sdk.explorer).toMatchObject({
+      model: 'canonical/model',
+      variant: 'canonical-v',
+    });
+    expect(sdk.Scout).toMatchObject({
+      model: 'visible/model',
+      variant: 'visible-v',
+    });
+    expect(canonicalPermission).toMatchObject({
+      read: 'allow',
+      canonical_tool: 'allow',
+    });
+    expect(visiblePermission).toMatchObject({
+      read: 'deny',
+      canonical_tool: 'allow',
+      visible_tool: 'allow',
+    });
+    expect(registry.effectiveStartupModels.explorer).toEqual({
+      model: 'canonical/model',
+      variant: 'canonical-v',
+    });
+    expect(registry.effectiveStartupModels.Scout).toEqual({
+      model: 'visible/model',
+      variant: 'visible-v',
+    });
+    expect(registry.nativePolicies.explorer.rules.slice(-2)).toEqual(
+      canonicalRules,
+    );
+    expect(registry.nativePolicies.Scout.rules.slice(-2)).toEqual(visibleRules);
+    expect(
+      registry.nativePolicies.explorer.decide('skill', 'review-tools'),
+    ).toBe('ask');
+    expect(registry.nativePolicies.Scout.decide('skill', 'review-tools')).toBe(
+      'deny',
+    );
+  });
+
+  test('visible native rules backfill the canonical policy when no canonical rules exist', () => {
+    const runtime = runtimeFor({
+      agents: { explorer: { displayName: 'Scout' } },
+    });
+    const visibleRules = [
+      { action: 'skill', resource: '*', effect: 'allow' as const },
+      { action: 'skill', resource: 'review-tools', effect: 'deny' as const },
+    ];
+    const registry = build(
+      runtime,
+      {},
+      {
+        hostFlavor: 'v2',
+        nativePermissionsByAgent: { Scout: visibleRules },
+      },
+    );
+
+    expect(registry.nativePolicies.explorer.rules.slice(-2)).toEqual(
+      visibleRules,
+    );
+    expect(
+      registry.nativePolicies.explorer.decide('skill', 'review-tools'),
+    ).toBe('deny');
+    expect(registry.nativePolicies.Scout.rules.slice(-2)).toEqual(visibleRules);
+  });
+
+  test('canonical native rules remain unchanged when no visible rules exist', () => {
+    const runtime = runtimeFor({
+      agents: { explorer: { displayName: 'Scout' } },
+    });
+    const canonicalRules = [
+      { action: 'skill', resource: '*', effect: 'deny' as const },
+      { action: 'skill', resource: 'review-tools', effect: 'allow' as const },
+    ];
+    const registry = build(
+      runtime,
+      {},
+      {
+        hostFlavor: 'v2',
+        nativePermissionsByAgent: { explorer: canonicalRules },
+      },
+    );
+
+    expect(registry.nativePolicies.explorer.rules.slice(-2)).toEqual(
+      canonicalRules,
+    );
+    expect(
+      registry.nativePolicies.explorer.decide('skill', 'review-tools'),
+    ).toBe('allow');
+    expect(registry.nativePolicies.Scout.rules.slice(-2)).toEqual(
+      canonicalRules,
+    );
+  });
+
   test('keeps the SDK orchestrator stripped while TUI retains its effective model', () => {
     const runtime = runtimeFor({
       stripOrchestratorModel: true,
