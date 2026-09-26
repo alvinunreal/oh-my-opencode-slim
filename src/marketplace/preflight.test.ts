@@ -230,13 +230,28 @@ describe('marketplace host preflight', () => {
     }
   });
 
-  test('extracts enabled v2 desired servers and classifies manifest requirements', () => {
+  test('extracts direct v2 MCP entries and classifies manifest requirements', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
+    const project = join(root, 'project');
+    const userConfig = join(root, 'xdg', 'opencode');
     try {
       setConfigHome(root);
-      process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
-        mcp: {
-          servers: {
+      mkdirSync(userConfig, { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      writeFileSync(
+        join(userConfig, 'opencode.json'),
+        JSON.stringify({
+          mcp: {
+            inherited: { type: 'remote', url: 'https://inherited' },
+            winner: { type: 'remote', url: 'https://user' },
+          },
+        }),
+      );
+      writeFileSync(
+        join(project, '.opencode', 'opencode.json'),
+        JSON.stringify({
+          mcp: {
+            winner: { type: 'remote', url: 'https://project' },
             desired: { type: 'remote', url: 'https://desired' },
             disabled: {
               type: 'remote',
@@ -244,15 +259,36 @@ describe('marketplace host preflight', () => {
               disabled: true,
             },
             malformed: { type: 'remote' },
+            servers: {
+              desired: { type: 'remote', url: 'https://legacy-wrapper' },
+            },
           },
-        },
-      });
-      const runtime = RuntimeConfig.init(root, {});
-      expect(Object.keys(discoverOnDiskOpenCodeMcps(root, 'v2'))).toEqual([
+        }),
+      );
+      const runtime = RuntimeConfig.init(project, {});
+      expect(Object.keys(discoverOnDiskOpenCodeMcps(project, 'v2'))).toEqual([
+        'inherited',
+        'winner',
         'desired',
       ]);
-      expect(discoverDesiredV2Mcps(runtime, root, ['context7'])).toEqual([
+      expect(discoverOnDiskOpenCodeMcps(project, 'v2').winner).toEqual({
+        type: 'remote',
+        url: 'https://project',
+      });
+      expect(discoverDesiredV2Mcps(runtime, project, ['context7'])).toEqual([
         'context7',
+        'inherited',
+        'winner',
+        'desired',
+      ]);
+      expect(discoverDesiredV2Mcps(runtime, project, [])).not.toContain(
+        'context7',
+      );
+      expect(discoverPreflightMcps(runtime, project, 'v2')).toEqual([
+        'context7',
+        'gh_grep',
+        'inherited',
+        'winner',
         'desired',
       ]);
       expect(
@@ -274,7 +310,7 @@ describe('marketplace host preflight', () => {
         },
       });
     } finally {
-      RuntimeConfig.reset(root);
+      RuntimeConfig.reset(project);
       rmSync(root, { recursive: true, force: true });
     }
   });

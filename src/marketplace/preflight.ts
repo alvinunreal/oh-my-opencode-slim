@@ -335,10 +335,8 @@ export function discoverOnDiskOpenCodeMcps(
   const mcp = asObject(config.mcp);
   if (!mcp) return {};
   if (hostFlavor !== 'v2') return mcp;
-  const servers = asObject(mcp.servers);
-  if (!servers) return {};
   return Object.fromEntries(
-    Object.entries(servers).filter(
+    Object.entries(mcp).filter(
       ([name, value]) =>
         V2McpSchema.safeParse(value).success &&
         (value as { disabled?: boolean }).disabled !== true &&
