@@ -6,10 +6,6 @@ import { createCancelTaskTool } from './cancel-task';
 
 let mockClient: Record<string, unknown>;
 
-mock.module('../utils/opencode-client', () => ({
-  getClient: () => mockClient,
-}));
-
 function createTool(overrides?: {
   abort?: () => Promise<unknown>;
   status?: (() => Promise<unknown>) | null;
@@ -35,7 +31,7 @@ function createTool(overrides?: {
     session: { abort, status, get: getSession, delete: deleteSession },
   };
   const tools = createCancelTaskTool({
-    input: { directory: '/test/project' } as any,
+    input: { directory: '/test/project', client: mockClient } as any,
     backgroundJobBoard: board,
     shouldManageSession: overrides?.shouldManageSession ?? (() => true),
     abortTimeoutMs: overrides?.abortTimeoutMs,
@@ -99,7 +95,7 @@ describe('task_cancel tool', () => {
       session: { abort, get: getSession, delete: mock(async () => ({})) },
     };
     const tools = createCancelTaskTool({
-      input: { directory: '/test/project' } as any,
+      input: { directory: '/test/project', client: mockClient } as any,
       backgroundJobBoard: board,
       shouldManageSession: () => true,
       verifyAbortMs: 10,
@@ -401,7 +397,7 @@ describe('task_cancel tool', () => {
         session: { abort, get: getSession, delete: mock(async () => ({})) },
       };
       const tools = createCancelTaskTool({
-        input: { directory: '/test/project' } as any,
+        input: { directory: '/test/project', client: mockClient } as any,
         backgroundJobBoard: board,
         shouldManageSession: () => true,
         verifyAbortMs: 10,

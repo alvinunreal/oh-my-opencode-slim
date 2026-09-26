@@ -4,7 +4,6 @@ import { BackgroundJobBoard } from '../utils/background-job-fixture';
 import { createTaskMessageTool } from './task-message';
 
 let client: Record<string, any>;
-mock.module('../utils/opencode-client', () => ({ getClient: () => client }));
 afterEach(() => mock.restore());
 
 function registerRunningChild(
@@ -36,14 +35,14 @@ function makeSession(prompt: ReturnType<typeof mock>) {
 
 function createTool(board: BackgroundJobBoard) {
   return createTaskMessageTool({
-    input: { directory: '/test' } as any,
+    input: { directory: '/test', client } as any,
     backgroundJobBoard: board,
   }).task_message;
 }
 
 function createToolWithTimeout(board: BackgroundJobBoard, timeoutMs: number) {
   return createTaskMessageTool({
-    input: { directory: '/test' } as any,
+    input: { directory: '/test', client } as any,
     backgroundJobBoard: board,
     messageTimeoutMs: timeoutMs,
   }).task_message;

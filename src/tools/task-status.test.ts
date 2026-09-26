@@ -3,7 +3,6 @@ import { BackgroundJobBoard } from '../utils/background-job-board';
 import { createTaskStatusTool } from './task-status';
 
 let client: Record<string, any>;
-mock.module('../utils/opencode-client', () => ({ getClient: () => client }));
 
 function makeTool(options: {
   board: BackgroundJobBoard;
@@ -11,7 +10,7 @@ function makeTool(options: {
   statusTimeoutMs?: number;
 }) {
   return createTaskStatusTool({
-    input: { directory: '/test' } as any,
+    input: { directory: '/test', client } as any,
     backgroundJobBoard: options.board,
     now: options.now,
     statusTimeoutMs: options.statusTimeoutMs,

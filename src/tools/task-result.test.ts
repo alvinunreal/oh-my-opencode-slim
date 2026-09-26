@@ -6,9 +6,6 @@ import {
 } from '../utils/background-job-terminal-gate';
 import { createTaskResultTool } from './task-result';
 
-mock.module('../utils/opencode-client', () => ({
-  getClient: (input: { client: unknown }) => input.client,
-}));
 const gates: BackgroundJobTerminalGate[] = [];
 afterEach(() => {
   for (const gate of gates.splice(0)) gate.dispose();
