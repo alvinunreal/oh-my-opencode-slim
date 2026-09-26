@@ -408,6 +408,14 @@ export function createTaskSessionManagerHook(
     hasInputWait: (s) => hasInputWait(s),
     getIdleSessionToken: (s) => getIdleSessionToken(s),
     isCurrentIdleSessionToken: (s, t) => isCurrentIdleSessionToken(s, t),
+    // Read-and-clear for the deferred-error backstop: consuming at fire
+    // time keeps a newer deferral authoritative and leaves no stale
+    // entries to poison a later reuse of the session.
+    consumeDeferredError: (sessionID) => {
+      const message = deferredInlineErrors.get(sessionID);
+      if (message !== undefined) deferredInlineErrors.delete(sessionID);
+      return message;
+    },
   });
   const runtimeStatusReconciler = createRuntimeStatusReconciler({
     input: _ctx,
@@ -725,7 +733,12 @@ export function createTaskSessionManagerHook(
         const sessionID =
           input.event.properties?.info?.id ?? input.event.properties?.sessionID;
         if (sessionID) {
-          deferredInlineErrors.delete(sessionID);
+          // deferredInlineErrors is intentionally NOT cleared here: the
+          // event router's session.deleted branch owns the deferral —
+          // it publishes the deferred error for genuine deletions and
+          // keeps it (with a re-armed backstop) through fallback
+          // teardown. An unconditional clear would swallow the error
+          // and strand a mid-fallback record in `running` forever.
           if (!options.isFallbackInProgress?.(sessionID)) {
             const hardTimedOut =
               backgroundJobBoard.field(sessionID, 'deadlineExceededAt') !==

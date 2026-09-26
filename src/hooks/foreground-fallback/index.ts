@@ -419,9 +419,13 @@ export class ForegroundFallbackManager {
   ) => number | undefined;
 
   /** Exposed for task-session-manager: prevents idle reconciliation
-   *  while a fallback abort/re-prompt is in flight for this session. */
+   *  while a fallback abort/re-prompt is in flight for this session, or
+   *  while its initial retry delay is still pending — the re-prompt is
+   *  equally "coming" in both windows. */
   isFallbackInProgress(sessionID: string): boolean {
-    return this.inProgress.has(sessionID);
+    return (
+      this.inProgress.has(sessionID) || this.pendingInitialDelay.has(sessionID)
+    );
   }
 
   /**

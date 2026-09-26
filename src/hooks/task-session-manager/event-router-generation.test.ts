@@ -29,6 +29,7 @@ function createDeps(board: BackgroundJobBoard, now: () => number) {
     idleReconciler: {
       scheduleIdleReconciliation: mock(() => {}),
       scheduleChildIdleReconciliation: mock(() => {}),
+      scheduleDeferredErrorBackstop: mock(() => {}),
       scheduleErrorTerminalize: mock(() => {}),
       clearIdleTimers: mock(() => {}),
       clearAllTimers: mock(() => []),

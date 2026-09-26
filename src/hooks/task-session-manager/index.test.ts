@@ -5288,6 +5288,324 @@ describe('task-session-manager hook', () => {
     });
   });
 
+  test('deferred child failover error survives the idle that races the in-flight fallback', async () => {
+    // Incident interleave (issue #1321): the failed prompt's session.idle
+    // is processed while ForegroundFallbackManager is still preparing the
+    // re-prompt (isFallbackInProgress=true — the host dispatches events
+    // without awaiting the plugin hook). The idle backstop must not
+    // commit the deferred error inside that window: terminalizing the
+    // record before the observation handoff arms orphans the retried
+    // run's result. The backstop must re-check the fallback state and
+    // let the re-prompt's busy cancel it.
+    const board = new BackgroundJobBoard();
+    let fallbackInFlight = false;
+    const { hook, complete } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      willAttemptFallback: () => true,
+      isFallbackInProgress: (id) => fallbackInFlight && id === 'child-1',
+      idleReconcileDelayMs: 10,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config schema',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    // session.error → deferred (the fallback for it has not started yet).
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { statusCode: 429, message: 'rate limit exceeded' },
+        },
+      },
+    });
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The fallback manager picked the error up; the failed prompt's idle
+    // arrives while the re-prompt is still in flight.
+    fallbackInFlight = true;
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+    // Let a would-be immediate backstop fire several times.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    // The deferred error must NOT have been committed inside the window.
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The re-prompt lands: busy cancels the backstop and clears the
+    // deferral; the retried run finishes and publishes exactly once.
+    fallbackInFlight = false;
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-1', status: { type: 'busy' } },
+      },
+    });
+    complete('child-1', 'retried run result');
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+    await flushChildIdleReconcile();
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'completed',
+      resultSummary: 'retried run result',
+      terminalRevision: 1,
+    });
+  });
+
+  test('session.deleted inside the deferral window publishes the deferred error', async () => {
+    // A genuine deletion between the deferred error and any recovery
+    // means no idle can ever fire again — the backstop would never run.
+    // Pre-fix semantics published the error at session.error time, so
+    // the deletion path must publish the deferred error (for a
+    // fence-passing running record) instead of leaving the parent with
+    // a task that never resolves.
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      willAttemptFallback: () => true,
+      idleReconcileDelayMs: 0,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config schema',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { statusCode: 429, message: 'rate limit exceeded' },
+        },
+      },
+    });
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The session is genuinely deleted before any recovery.
+    await hook.event({
+      event: { type: 'session.deleted', properties: { sessionID: 'child-1' } },
+    });
+    await flushChildIdleReconcile();
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'error',
+      resultSummary: 'rate limit exceeded',
+    });
+  });
+
+  test('bounded backstop commits the deferred error when the fallback never leaves the window', async () => {
+    // The backstop's renewals are bounded: a fallback that silently hangs
+    // in the preparation window must not defer the failure forever —
+    // after the renewal cap the deferred error terminalizes.
+    const board = new BackgroundJobBoard();
+    let fallbackInFlight = false;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      willAttemptFallback: () => true,
+      // Flips true after the error, simulating the fallback manager
+      // picking it up and then hanging in the preparation window.
+      isFallbackInProgress: (id) => fallbackInFlight && id === 'child-1',
+      idleReconcileDelayMs: 5,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config schema',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    // The error defers while the fallback has not started yet.
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { statusCode: 429, message: 'rate limit exceeded' },
+        },
+      },
+    });
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The fallback picks the error up and hangs; its idle schedules the
+    // backstop inside the window.
+    fallbackInFlight = true;
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The renewal cap (5 renewals × 5ms) bounds the wait; well past it the
+    // deferred error must be published even though the fallback still
+    // claims to be in flight.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(board.get('child-1')).toMatchObject({
+      state: 'error',
+      resultSummary: 'rate limit exceeded',
+    });
+  });
+
+  test('chain-exhaustion flip commits the second error immediately and clears the deferral', async () => {
+    // error#1 defers while the chain is armed; the chain then exhausts
+    // (willAttemptFallback flips false), so error#2 is final: it must
+    // commit immediately with its own message, and the stale deferral
+    // from error#1 must be cleared — a later reuse of this session must
+    // not have error#1's deferred error terminalize it.
+    const board = new BackgroundJobBoard();
+    let chainArmed = true;
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      willAttemptFallback: () => chainArmed,
+      idleReconcileDelayMs: 0,
+    });
+
+    const run = board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config schema',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    // error#1: failover-worthy with an armed chain → deferred.
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { statusCode: 429, message: 'rate limit exceeded' },
+        },
+      },
+    });
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The chain exhausts; error#2 is final and commits immediately.
+    chainArmed = false;
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { statusCode: 429, message: 'quota exhausted on all models' },
+        },
+      },
+    });
+    expect(board.get('child-1')).toMatchObject({
+      state: 'error',
+      resultSummary: 'quota exhausted on all models',
+      terminalRevision: 1,
+    });
+
+    // The deferral entry from error#1 must be gone: relaunch the task and
+    // prove a later idle runs the normal inspect path instead of the
+    // deferred-error backstop with the stale message.
+    const lease = board.acquireRelaunchLease('child-1', run.generation);
+    if (!lease) throw new Error('missing relaunch lease');
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config schema',
+      background: true,
+      relaunchLease: lease,
+    });
+    board.releaseLease(lease);
+    // Live busy first so the post-relaunch generation fence accepts the
+    // subsequent idle (same-ID relaunch quarantines the first lifecycle
+    // event without provenance).
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-1', status: { type: 'busy' } },
+      },
+    });
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+    });
+    await flushChildIdleReconcile();
+
+    const relaunched = board.get('child-1');
+    expect(relaunched?.state).not.toBe('error');
+    expect(relaunched?.resultSummary).not.toBe('rate limit exceeded');
+  });
+
+  test('busy clears the deferral; a later non-failover error commits immediately', async () => {
+    // Behavioral pin for the busy-path consumption: after live busy
+    // clears the deferred failover error, a subsequent non-failover
+    // error must terminalize immediately with its own message — no
+    // stale deferral may delay or replace it.
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      willAttemptFallback: () => true,
+    });
+
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      description: 'map config schema',
+    });
+    board.updateStatus({ taskID: 'child-1', state: 'running' });
+
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: { statusCode: 429, message: 'rate limit exceeded' },
+        },
+      },
+    });
+    expect(board.get('child-1')?.state).toBe('running');
+
+    // The re-prompt landed: live busy clears the deferral.
+    await hook.event({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'child-1', status: { type: 'busy' } },
+      },
+    });
+
+    // A later non-failover error is final and commits immediately.
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'child-1',
+          error: {
+            name: 'AI_APICallError',
+            message: 'Invalid request: unknown parameter',
+          },
+        },
+      },
+    });
+
+    expect(board.get('child-1')).toMatchObject({
+      state: 'error',
+      resultSummary: 'Invalid request: unknown parameter',
+      terminalRevision: 1,
+    });
+  });
+
   test('completed reconciled job appears reusable and resumes via task', async () => {
     const board = new BackgroundJobBoard();
     const { hook } = createHook({ backgroundJobBoard: board });
