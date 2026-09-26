@@ -166,11 +166,21 @@ function persistActivation(
   directory: string,
   id: string,
   enabled: boolean,
+  store?: MarketplaceStoreReader,
 ): void {
   const filePath = configWritePath(directory);
   try {
     mutateJsonFile(filePath, (current) => {
       const persisted = { ...current };
+      if (enabled) {
+        if (!store) {
+          throw new Error('Marketplace store is required to enable a package');
+        }
+        // mutateJsonFile holds the config lease here. Keep lock ordering
+        // config → store so removal and activation cannot cross-check stale
+        // package state.
+        store.show(id);
+      }
       // The effective config is read inside mutateJsonFile's cross-process
       // lease, so a preceding writer's changes are part of this mutation.
       const rawPresetName =
@@ -380,8 +390,7 @@ export function enableMarketplaceAgent(
 ): void {
   const id = normalizeMarketplacePackageId(packageId);
   preflightMarketplaceAgentActivation(directory);
-  store.show(id);
-  persistActivation(directory, id, true);
+  persistActivation(directory, id, true, store);
 }
 
 export function disableMarketplacePackage(

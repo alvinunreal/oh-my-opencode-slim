@@ -530,6 +530,43 @@ function parseJsonConfigText(source: string): JsonConfig {
   return parsed as JsonConfig;
 }
 
+function hasSameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => hasSameJsonValue(value, right[index]))
+    );
+  }
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== 'object' ||
+    typeof right !== 'object'
+  ) {
+    return false;
+  }
+
+  const leftObject = left as Record<string, unknown>;
+  const rightObject = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftObject).filter(
+    (key) => leftObject[key] !== undefined,
+  );
+  const rightKeys = Object.keys(rightObject).filter(
+    (key) => rightObject[key] !== undefined,
+  );
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(rightObject, key) &&
+        hasSameJsonValue(leftObject[key], rightObject[key]),
+    )
+  );
+}
+
 function publishConfig(
   configPath: string,
   config: OpenCodeConfig,
@@ -548,6 +585,72 @@ function publishConfig(
         )}`
       : `${bom}${JSON.stringify(config, null, 2)}\n`;
   writeAtomic(configPath, content);
+}
+
+export interface PreparedJsonConfigWrite {
+  configPath: string;
+  originalText?: string;
+  content: string;
+  changed: boolean;
+}
+
+/** Render a JSON/JSONC edit without publishing it. */
+export function prepareJsonConfigWrite(
+  configPath: string,
+  currentText: string | undefined,
+  config: OpenCodeConfig,
+): PreparedJsonConfigWrite {
+  const current = currentText ? parseJsonConfigText(currentText) : {};
+  if (currentText !== undefined && hasSameJsonValue(current, config)) {
+    return {
+      configPath,
+      originalText: currentText,
+      content: currentText,
+      changed: false,
+    };
+  }
+  const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const content =
+    configPath.endsWith('.jsonc') && currentText
+      ? `${bom}${jsoncDiff(
+          currentText.replace(/^\uFEFF/, ''),
+          current,
+          config,
+        )}`
+      : `${bom}${JSON.stringify(config, null, 2)}\n`;
+
+  return {
+    configPath,
+    originalText: currentText,
+    content:
+      currentText !== undefined && content === currentText
+        ? currentText
+        : content,
+    changed: content !== currentText,
+  };
+}
+
+/** Publish prepared bytes under an already-held config write lease. */
+export function publishPreparedJsonConfig(
+  prepared: PreparedJsonConfigWrite,
+): void {
+  if (!prepared.changed) return;
+
+  if (prepared.originalText !== undefined) {
+    writeFileSync(`${prepared.configPath}.bak`, prepared.originalText);
+  }
+  writeAtomic(prepared.configPath, prepared.content);
+}
+
+/** Restore the exact pre-transaction bytes without replacing its backup. */
+export function restorePreparedJsonConfig(
+  prepared: PreparedJsonConfigWrite,
+): void {
+  if (prepared.originalText === undefined) {
+    rmSync(prepared.configPath, { force: true });
+    return;
+  }
+  writeAtomic(prepared.configPath, prepared.originalText);
 }
 
 function jsoncFormattingOptions(source: string) {

@@ -16,6 +16,8 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,6 +32,9 @@ import {
   mutateJsonFile,
   parseConfig,
   parseConfigFile,
+  prepareJsonConfigWrite,
+  publishPreparedJsonConfig,
+  restorePreparedJsonConfig,
   stripJsonComments,
   writeConfig,
   writeJsonAtomic,
@@ -358,6 +363,141 @@ describe('config-io', () => {
     expect(readFileSync(path, 'utf-8')).toBe(original);
     expect(readFileSync(`${path}.bak`, 'utf-8')).toBe(original);
     publish.mockRestore();
+  });
+
+  test('prepares all JSONC edits before publishing either file', () => {
+    const firstPath = join(tmpDir, 'first.jsonc');
+    const secondPath = join(tmpDir, 'second.jsonc');
+    const firstOriginal = '{\n  // First comment\n  "value": 1,\n}\n';
+    const secondOriginal = '{\n  // Second comment\n  "value": 2,\n}\n';
+    writeFileSync(firstPath, firstOriginal);
+    writeFileSync(secondPath, secondOriginal);
+
+    const prepared = [
+      prepareJsonConfigWrite(firstPath, readFileSync(firstPath, 'utf-8'), {
+        value: 10,
+      } as any),
+      prepareJsonConfigWrite(secondPath, readFileSync(secondPath, 'utf-8'), {
+        value: 20,
+      } as any),
+    ];
+
+    expect(prepared.every((write) => write.changed)).toBe(true);
+    expect(readFileSync(firstPath, 'utf-8')).toBe(firstOriginal);
+    expect(readFileSync(secondPath, 'utf-8')).toBe(secondOriginal);
+
+    for (const write of prepared) publishPreparedJsonConfig(write);
+    expect(
+      JSON.parse(stripJsonComments(readFileSync(firstPath, 'utf-8'))),
+    ).toEqual({ value: 10 });
+    expect(
+      JSON.parse(stripJsonComments(readFileSync(secondPath, 'utf-8'))),
+    ).toEqual({ value: 20 });
+  });
+
+  test('prepared no-op keeps original bytes and does not create a backup', () => {
+    const path = join(tmpDir, 'prepared-noop.jsonc');
+    const original = '\uFEFF{\r\n  // Keep exactly\r\n  "value": 1,\r\n}\r\n';
+    writeFileSync(path, original);
+
+    const prepared = prepareJsonConfigWrite(path, readFileSync(path, 'utf-8'), {
+      value: 1,
+    } as any);
+    publishPreparedJsonConfig(prepared);
+
+    expect(prepared.changed).toBe(false);
+    expect(readFileSync(path, 'utf-8')).toBe(original);
+    expect(existsSync(`${path}.bak`)).toBe(false);
+  });
+
+  test('prepared compact JSON no-op preserves file and existing backup', () => {
+    const path = join(tmpDir, 'prepared-compact-noop.json');
+    const original = '{"value":1}';
+    const backup = 'keep this backup byte-for-byte';
+    writeFileSync(path, original);
+    writeFileSync(`${path}.bak`, backup);
+    const oldTime = new Date('2020-01-01T00:00:00.000Z');
+    utimesSync(path, oldTime, oldTime);
+    utimesSync(`${path}.bak`, oldTime, oldTime);
+
+    const fileMtime = statSync(path).mtimeMs;
+    const backupMtime = statSync(`${path}.bak`).mtimeMs;
+    const prepared = prepareJsonConfigWrite(path, original, {
+      value: 1,
+    } as any);
+    publishPreparedJsonConfig(prepared);
+
+    expect(prepared.changed).toBe(false);
+    expect(prepared.content).toBe(original);
+    expect(readFileSync(path, 'utf-8')).toBe(original);
+    expect(readFileSync(`${path}.bak`, 'utf-8')).toBe(backup);
+    expect(statSync(path).mtimeMs).toBe(fileMtime);
+    expect(statSync(`${path}.bak`).mtimeMs).toBe(backupMtime);
+  });
+
+  test('prepared BOM JSON no-op preserves file and existing backup', () => {
+    const path = join(tmpDir, 'prepared-bom-noop.json');
+    const original = '\uFEFF{"value":1}';
+    const backup = 'keep this BOM backup';
+    writeFileSync(path, original);
+    writeFileSync(`${path}.bak`, backup);
+    const oldTime = new Date('2020-01-01T00:00:00.000Z');
+    utimesSync(path, oldTime, oldTime);
+    utimesSync(`${path}.bak`, oldTime, oldTime);
+
+    const fileMtime = statSync(path).mtimeMs;
+    const backupMtime = statSync(`${path}.bak`).mtimeMs;
+    const prepared = prepareJsonConfigWrite(path, original, {
+      value: 1,
+    } as any);
+    publishPreparedJsonConfig(prepared);
+
+    expect(prepared.changed).toBe(false);
+    expect(prepared.content).toBe(original);
+    expect(readFileSync(path, 'utf-8')).toBe(original);
+    expect(readFileSync(`${path}.bak`, 'utf-8')).toBe(backup);
+    expect(statSync(path).mtimeMs).toBe(fileMtime);
+    expect(statSync(`${path}.bak`).mtimeMs).toBe(backupMtime);
+  });
+
+  test('prepared unchanged malformed config still fails parsing', () => {
+    const path = join(tmpDir, 'prepared-malformed.json');
+    expect(() =>
+      prepareJsonConfigWrite(path, '{"value":', { value: 1 } as any),
+    ).toThrow('Invalid JSONC config');
+  });
+
+  test('restores exact prepared bytes and leaves the recovery backup intact', () => {
+    const firstPath = join(tmpDir, 'rollback-first.jsonc');
+    const secondPath = join(tmpDir, 'rollback-second.json');
+    const firstOriginal =
+      '\uFEFF{\r\n  // Preserve exactly\r\n  "value": 1,\r\n}\r\n';
+    const secondOriginal = '{ "value": 2 }';
+    writeFileSync(firstPath, firstOriginal);
+    writeFileSync(secondPath, secondOriginal);
+    const prepared = [
+      prepareJsonConfigWrite(firstPath, firstOriginal, { value: 10 } as any),
+      prepareJsonConfigWrite(secondPath, secondOriginal, { value: 20 } as any),
+    ];
+
+    publishPreparedJsonConfig(prepared[0]);
+    const recoveryBackup = readFileSync(`${firstPath}.bak`, 'utf-8');
+    const publish = spyOn(marketplaceLease, 'writeAtomic').mockImplementation(
+      () => {
+        throw new Error('second publication failed');
+      },
+    );
+    expect(() => publishPreparedJsonConfig(prepared[1])).toThrow(
+      'second publication failed',
+    );
+    publish.mockRestore();
+
+    restorePreparedJsonConfig(prepared[0]);
+    restorePreparedJsonConfig(prepared[1]);
+    expect(readFileSync(firstPath, 'utf-8')).toBe(firstOriginal);
+    expect(readFileSync(secondPath, 'utf-8')).toBe(secondOriginal);
+    expect(readFileSync(`${firstPath}.bak`, 'utf-8')).toBe(recoveryBackup);
+    expect(readFileSync(`${firstPath}.bak`, 'utf-8')).toBe(firstOriginal);
   });
 
   test('mutateJsonFile starts from an empty object for a missing config', () => {

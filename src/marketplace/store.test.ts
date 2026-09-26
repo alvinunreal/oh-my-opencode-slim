@@ -559,6 +559,180 @@ describe('MarketplaceStore', () => {
     }
   });
 
+  test('notifies once after a successful removal and for an absent package', () => {
+    const root = tempRoot();
+    try {
+      const store = createStore({ rootDir: root });
+      store.install(bundle());
+      let notifications = 0;
+      store.remove('community/example', {
+        onCommitted: () => {
+          notifications++;
+        },
+      });
+      expect(notifications).toBe(1);
+      expect(store.getLockfile().packages).toEqual({});
+
+      store.remove('community/example', {
+        onCommitted: () => {
+          notifications++;
+        },
+      });
+      expect(notifications).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('retries committed removal quarantine cleanup when package is absent', () => {
+    const root = tempRoot();
+    try {
+      const store = createStore({ rootDir: root });
+      store.install(bundle());
+      const quarantineRoot = join(
+        store.paths.stagingDir,
+        'removed',
+        'community',
+        'example',
+      );
+      const originalRm = fsModule.rmSync;
+      const remove = spyOn(fsModule, 'rmSync').mockImplementation(
+        (target, options) => {
+          if (String(target).startsWith(quarantineRoot)) {
+            throw new Error('injected removal quarantine cleanup failure');
+          }
+          return originalRm(target, options);
+        },
+      );
+      const callbacks: string[] = [];
+      try {
+        store.remove('community/example', {
+          onCommitted: () => callbacks.push('initial'),
+        });
+        expect(callbacks).toEqual(['initial']);
+        expect(existsSync(quarantineRoot)).toBe(true);
+        expect(
+          store.getLockfile().packages['community/example'],
+        ).toBeUndefined();
+
+        const retryEvents: string[] = [];
+        remove.mockImplementation((target, options) => {
+          if (String(target).startsWith(quarantineRoot)) {
+            retryEvents.push('cleanup');
+            throw new Error('injected removal quarantine cleanup failure');
+          }
+          return originalRm(target, options);
+        });
+        const reopened = createStore({ rootDir: root });
+        expect(() =>
+          reopened.remove('community/example', {
+            onCommitted: () => retryEvents.push('committed'),
+          }),
+        ).toThrow('injected removal quarantine cleanup failure');
+        expect(retryEvents).toEqual(['committed', 'cleanup']);
+        expect(callbacks).toEqual(['initial']);
+        expect(existsSync(quarantineRoot)).toBe(true);
+      } finally {
+        remove.mockRestore();
+      }
+
+      const reopened = createStore({ rootDir: root });
+      reopened.remove('community/example', {
+        onCommitted: () => callbacks.push('retry'),
+      });
+
+      expect(callbacks).toEqual(['initial', 'retry']);
+      expect(existsSync(quarantineRoot)).toBe(false);
+      expect(reopened.getLockfile().packages).toEqual({});
+      expect(readdirSync(store.paths.packagesDir, { recursive: true })).toEqual(
+        [],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('does not notify when removal lockfile publication fails', () => {
+    const root = tempRoot();
+    try {
+      const store = createStore({ rootDir: root });
+      const installed = store.install(bundle());
+      const originalRename = fsModule.renameSync;
+      const rename = spyOn(fsModule, 'renameSync').mockImplementation(
+        (source, destination) => {
+          if (destination === store.paths.lockfilePath) {
+            throw new Error('injected removal lockfile failure');
+          }
+          return originalRename(source, destination);
+        },
+      );
+      let notifications = 0;
+      try {
+        expect(() =>
+          store.remove('community/example', {
+            onCommitted: () => {
+              notifications++;
+            },
+          }),
+        ).toThrow('injected removal lockfile failure');
+      } finally {
+        rename.mockRestore();
+      }
+      expect(notifications).toBe(0);
+      expect(store.show('community/example').path).toBe(installed.path);
+      expect(existsSync(installed.path)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('notifies before lease release and leaves quarantine intact if it throws', () => {
+    const root = tempRoot();
+    try {
+      const store = createStore({ rootDir: root });
+      store.install(bundle());
+      const originalUnlink = fsModule.unlinkSync;
+      const order: string[] = [];
+      const unlink = spyOn(fsModule, 'unlinkSync').mockImplementation(
+        (target) => {
+          if (String(target).endsWith('.lease')) {
+            order.push('release');
+            throw new Error('injected lease release failure');
+          }
+          return originalUnlink(target);
+        },
+      );
+      const callbackError = new Error('notification failure');
+      let quarantinePresent = false;
+      try {
+        expect(() =>
+          store.remove('community/example', {
+            onCommitted: () => {
+              order.push('callback');
+              quarantinePresent = existsSync(
+                join(store.paths.stagingDir, 'removed', 'community', 'example'),
+              );
+              throw callbackError;
+            },
+          }),
+        ).toThrow(callbackError);
+      } finally {
+        unlink.mockRestore();
+      }
+
+      expect(order).toEqual(['callback', 'release']);
+      expect(quarantinePresent).toBe(true);
+      expect(
+        existsSync(
+          join(store.paths.stagingDir, 'removed', 'community', 'example'),
+        ),
+      ).toBe(true);
+      expect(store.getLockfile().packages).toEqual({});
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('repairs a damaged package only from the exact locked bundle', () => {
     const root = tempRoot();
     try {

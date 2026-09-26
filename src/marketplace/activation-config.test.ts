@@ -860,6 +860,117 @@ writeFileSync(donePath, 'done');`,
     }
   });
 
+  test('checks package existence under the config lease before adding a reference', async () => {
+    const fixture = setup();
+    const configLockRoot = join(
+      fixture.root,
+      'config',
+      'opencode',
+      '.oh-my-opencode-slim.json.write-lock',
+    );
+    const configLease = acquireMarketplaceLease(
+      getMarketplacePaths(configLockRoot),
+    );
+    let leaseReleased = false;
+    let worker: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({ preset: 'work', presets: { work: {} } }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      const readyPath = join(fixture.root, 'enable.ready');
+      const showPath = join(fixture.root, 'store.show');
+      const resultPath = join(fixture.root, 'enable.result');
+      worker = Bun.spawn(
+        [
+          'bun',
+          '-e',
+          `import { writeFileSync } from 'node:fs';
+import { enableMarketplaceAgent } from './src/marketplace/activation-config.ts';
+import { MarketplaceStore } from './src/marketplace/store.ts';
+const { directory, packageId, root, readyPath, showPath, resultPath } = JSON.parse(process.argv[1]);
+const store = new MarketplaceStore({ rootDir: root, pluginVersion: '3.2.0' });
+const reader = { show(id) { writeFileSync(showPath, 'checked'); return store.show(id); } };
+writeFileSync(readyPath, 'ready');
+try {
+  enableMarketplaceAgent(directory, packageId, reader);
+  writeFileSync(resultPath, 'enabled');
+} catch (error) {
+  writeFileSync(resultPath, String(error));
+}`,
+          JSON.stringify({
+            directory: fixture.project,
+            packageId: PACKAGE_A,
+            root: join(fixture.root, 'store'),
+            readyPath,
+            showPath,
+            resultPath,
+          }),
+        ],
+        { stdout: 'pipe', stderr: 'pipe', env: { ...process.env } },
+      );
+
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(readyPath)) {
+        if (Date.now() >= deadline) {
+          throw new Error('Timed out waiting for activation worker to start');
+        }
+        await Bun.sleep(10);
+      }
+      await Bun.sleep(100);
+      expect(existsSync(showPath)).toBe(false);
+
+      // The held config lease represents a removal that has acquired the
+      // config lock before the store lock. Once the package is gone, activation
+      // must observe that fact before it publishes the config reference.
+      fixture.store.remove(PACKAGE_A);
+      configLease.release();
+      leaseReleased = true;
+
+      expect(await worker.exited).toBe(0);
+      expect(readFileSync(resultPath, 'utf8')).toContain('Error');
+      expect(existsSync(showPath)).toBe(true);
+      expect(
+        JSON.parse(readFileSync(fixture.userConfig, 'utf8')).presets.work
+          .marketplace,
+      ).toBeUndefined();
+    } finally {
+      if (!leaseReleased) configLease.release();
+      if (worker) await worker.exited;
+      fixture.cleanup();
+    }
+  });
+
+  test('a removal after activation commit disables its config reference', () => {
+    const fixture = setup();
+    try {
+      writeFileSync(
+        fixture.userConfig,
+        JSON.stringify({ preset: 'work', presets: { work: {} } }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+      expect(
+        JSON.parse(readFileSync(fixture.userConfig, 'utf8')).presets.work
+          .marketplace.agents_add,
+      ).toEqual([PACKAGE_A]);
+
+      disableMarketplacePackage(fixture.project, PACKAGE_A);
+      fixture.store.remove(PACKAGE_A);
+
+      expect(
+        JSON.parse(readFileSync(fixture.userConfig, 'utf8')).presets.work
+          .marketplace.agents_add,
+      ).toEqual([]);
+      expect(() => fixture.store.show(PACKAGE_A)).toThrow();
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test('failed publication leaves the original config intact and backup recoverable', () => {
     const fixture = setup();
     try {

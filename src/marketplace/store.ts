@@ -390,12 +390,19 @@ export class MarketplaceStore {
     });
   }
 
-  remove(id: string): void {
+  remove(id: string, options?: { onCommitted?: () => void }): void {
     const normalizedId = this.normalizeId(id);
     this.withLease((lease) => {
       const lockfile = this.readLockfile();
+      if (!lockfile.packages[normalizedId]) {
+        // Absence in the authoritative lockfile means removal is already
+        // committed. Notify before reconciliation so cleanup failures cannot
+        // make the caller roll back config references for a committed removal.
+        options?.onCommitted?.();
+        this.reconcileLockedState(lockfile, lease);
+        return;
+      }
       this.reconcileLockedState(lockfile, lease);
-      if (!lockfile.packages[normalizedId]) return;
 
       const packagePath = packageIdPath(this.paths, normalizedId);
       const quarantinePath = this.removalQuarantinePath(normalizedId);
@@ -426,6 +433,9 @@ export class MarketplaceStore {
           throw error;
         }
       });
+
+      // Notification is post-commit and outside the rollback boundary.
+      options?.onCommitted?.();
 
       if (quarantined) {
         try {
