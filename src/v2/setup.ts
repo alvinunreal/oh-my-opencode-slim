@@ -38,7 +38,12 @@ import {
 } from '../utils/background-job-persistence';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
-import { adaptTool, applyAgentToDraft, v1PermKeyToV2 } from './adapters';
+import {
+  adaptTool,
+  applyAgentToDraft,
+  compileAgentPermissions,
+  v1PermKeyToV2,
+} from './adapters';
 import {
   buildPluginInput,
   resetClientShimGenerationWarnings,
@@ -827,7 +832,7 @@ export interface V2PermissionRulesOptions {
  * child's agent is plugin-defined — the v2-local equivalent of the
  * event-router's `shouldManageSession(parent)` gate, since session agent
  * metadata lives inside the v1 factory), installs the child agent's
- * task-policy as session-scoped exact-match rules via
+ * task-policy as ordered session-scoped rules via
  * `session.update({sessionID, permissions})` exactly once per sessionID
  * (duplicate event delivery is idempotent).
  *
@@ -865,12 +870,21 @@ export function createPermissionRulesBridge(
       }
       return;
     }
-    const rules = deriveExactPermissionRules(options.permissionForAgent(agent));
+    const permission = options.permissionForAgent(agent);
+    const rules = Array.isArray(permission)
+      ? permission.filter(
+          (rule): rule is V2PermissionRule =>
+            isRecord(rule) &&
+            typeof rule.action === 'string' &&
+            typeof rule.resource === 'string' &&
+            (rule.effect === 'allow' ||
+              rule.effect === 'ask' ||
+              rule.effect === 'deny'),
+        )
+      : deriveExactPermissionRules(permission);
     if (rules.length === 0) {
-      // Nothing in the task-policy is expressible as an exact match
-      // (wildcard-only shapes: the `'*'` catch-all key alone, or
-      // wildcard-suffixed MCP keys): an empty replace would add nothing
-      // over the static agent permissions, so skip the host call.
+      // Legacy permission maps may contain only wildcard-only shapes; an
+      // empty replace would add nothing over static agent permissions.
       // Marked handled here — an empty derivation is a final
       // answer that cannot change between duplicate events.
       applied.set(sessionID, true);
@@ -889,7 +903,7 @@ export function createPermissionRulesBridge(
     // same replace payload — idempotent on the host side.
     applied.set(sessionID, true);
     pruneSessionMap(applied);
-    log('[v2][permission-rules] applied exact-match rules to child session', {
+    log('[v2][permission-rules] applied compiled rules to child session', {
       sessionID,
       agent,
       count: rules.length,
@@ -1503,6 +1517,34 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
 
       // Resolve agents/commands via the v1 config() hook (model resolution etc.).
       let resolvedAgents: Record<string, Record<string, unknown>> | undefined;
+      let nativePermissionRulesByAgent:
+        | Record<string, V2PermissionRule[]>
+        | undefined;
+      let permissionSnapshotReady = false;
+      let permissionRulesBridge:
+        | ReturnType<typeof createPermissionRulesBridge>
+        | undefined;
+      const pendingPermissionEvents: Record<string, unknown>[] = [];
+      let permissionEventQueue = Promise.resolve();
+      const flushPermissionEvents = () => {
+        const bridge = permissionRulesBridge;
+        if (!permissionSnapshotReady || !bridge) return;
+        for (const event of pendingPermissionEvents.splice(0)) {
+          permissionEventQueue = permissionEventQueue.then(() =>
+            bridge.observeSessionCreated(event),
+          );
+        }
+      };
+      const queuePermissionEvent = (event: Record<string, unknown>) => {
+        const bridge = permissionRulesBridge;
+        if (!permissionSnapshotReady || !bridge) {
+          pendingPermissionEvents.push(event);
+          return;
+        }
+        permissionEventQueue = permissionEventQueue.then(() =>
+          bridge.observeSessionCreated(event),
+        );
+      };
       let synthCommands:
         | Record<string, { template?: string; description?: string }>
         | undefined;
@@ -1538,9 +1580,44 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       // ── Agents ──
       try {
         const reg = await ctx.agent.transform((draft) => {
+          // Capture the host's original ordered rules before updating plugin
+          // agents. No bridge may use this snapshot until this callback has
+          // run; an empty pre-read snapshot would erase inherited policy.
+          nativePermissionRulesByAgent = Object.fromEntries(
+            draft.list().flatMap((listed) => {
+              const name = typeof listed.id === 'string' ? listed.id : '';
+              if (!name) return [];
+              const native = draft.get(name) ?? listed;
+              if (!Array.isArray(native.permissions)) return [];
+              const rules = native.permissions.filter(
+                (rule): rule is V2PermissionRule =>
+                  isRecord(rule) &&
+                  typeof rule.action === 'string' &&
+                  typeof rule.resource === 'string' &&
+                  (rule.effect === 'allow' ||
+                    rule.effect === 'ask' ||
+                    rule.effect === 'deny'),
+              );
+              return [[name, rules]];
+            }),
+          );
+          permissionSnapshotReady = true;
+          flushPermissionEvents();
           for (const [name, cfg] of Object.entries(resolvedAgents ?? {})) {
             try {
-              applyAgentToDraft(draft, name, cfg);
+              applyAgentToDraft(
+                draft,
+                name,
+                cfg,
+                compileAgentPermissions(cfg.permission, {
+                  tools: Array.isArray(cfg.tools)
+                    ? cfg.tools.filter(
+                        (tool): tool is string => typeof tool === 'string',
+                      )
+                    : [],
+                  hostRules: nativePermissionRulesByAgent?.[name] ?? [],
+                }),
+              );
             } catch (err) {
               log('[v2] agent adapt failed', { name, err: String(err) });
             }
@@ -1842,19 +1919,28 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         if (eventHook || interviewBridge) {
           // ── Per-session permission rules (ctx.session.update) ──
           // Plugin-managed child sessions get their agent's task-policy
-          // installed as session-scoped exact-match rules at creation
+          // installed as ordered session-scoped rules at creation
           // (session.update's `permissions` REPLACES the session-scoped
           // list). Fail-soft inside the bridge; the v1 event dispatch
           // below never depends on it (capability-absent hosts degrade
           // with a one-time deterministic warning).
-          const permissionRulesBridge = createPermissionRulesBridge(
-            ctx.session,
-            {
-              permissionForAgent: (agent) =>
-                resolvedAgents?.[agent]?.permission,
-              pluginAgents: new Set(Object.keys(resolvedAgents ?? {})),
+          permissionRulesBridge = createPermissionRulesBridge(ctx.session, {
+            permissionForAgent: (agent) => {
+              if (!permissionSnapshotReady) return undefined;
+              const config = resolvedAgents?.[agent];
+              if (!config) return undefined;
+              return compileAgentPermissions(config.permission, {
+                tools: Array.isArray(config.tools)
+                  ? config.tools.filter(
+                      (tool): tool is string => typeof tool === 'string',
+                    )
+                  : [],
+                hostRules: nativePermissionRulesByAgent?.[agent] ?? [],
+              });
             },
-          );
+            pluginAgents: new Set(Object.keys(resolvedAgents ?? {})),
+          });
+          flushPermissionEvents();
           const iter = ctx.event.subscribe();
           const eventIterator = iter[Symbol.asyncIterator]();
           let eventStopped = false;
@@ -1879,10 +1965,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     if (eventHook) await eventHook({ event: next.value });
                     continue;
                   }
-                  // Child-session permission tightening sees the same RAW
+                  // Child-session permission projection sees the same RAW
                   // event (before v1-shape synthesis) so it is independent
                   // of v1 event-hook presence.
-                  await permissionRulesBridge.observeSessionCreated(next.value);
+                  queuePermissionEvent(next.value);
                   if (eventHook) {
                     for (const ev of mapV2EventToV1(next.value)) {
                       await eventHook({ event: ev });

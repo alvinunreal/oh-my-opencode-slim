@@ -3,6 +3,7 @@ import { createReadOnlyAgentPermission } from '../agents/permissions';
 import {
   adaptPermissions,
   applyAgentToDraft,
+  compileAgentPermissions,
   parseModelRef,
   rewritePromptForV2,
 } from './adapters';
@@ -133,6 +134,38 @@ describe('adaptPermissions', () => {
       'deny',
     );
     expect(evaluatePermission(rules, 'bash', 'ls')).toBe('deny');
+  });
+});
+
+describe('compileAgentPermissions', () => {
+  test('preserves native ordered exceptions after the v1 baseline', () => {
+    const rules = compileAgentPermissions(undefined, {
+      hostRules: [
+        { action: 'read', resource: 'src/**', effect: 'deny' },
+        { action: 'read', resource: 'src/public.ts', effect: 'allow' },
+      ],
+    });
+    expect(evaluatePermission(rules, 'read', 'src/private.ts')).toBe('deny');
+    expect(evaluatePermission(rules, 'read', 'src/public.ts')).toBe('allow');
+    expect(evaluatePermission(rules, 'subagent')).toBe('allow');
+  });
+
+  test('applies final denials and action, namespace, and resource ceilings', () => {
+    const rules = compileAgentPermissions(undefined, {
+      hostRules: [{ action: '*', resource: '*', effect: 'allow' }],
+      ceilings: {
+        actions: { read: 'ask' },
+        namespaces: ['context7_*'],
+        namespaceEffects: { 'context7_*': 'deny' },
+        resources: { read: { 'private/**': 'deny' } },
+      },
+      finalDenials: ['execute'],
+    });
+    expect(evaluatePermission(rules, 'read', 'public.ts')).toBe('ask');
+    expect(evaluatePermission(rules, 'read', 'private/key.ts')).toBe('deny');
+    expect(evaluatePermission(rules, 'context7_search')).toBe('deny');
+    expect(evaluatePermission(rules, 'execute')).toBe('deny');
+    expect(evaluatePermission(rules, 'unadmitted_action')).toBe('deny');
   });
 });
 

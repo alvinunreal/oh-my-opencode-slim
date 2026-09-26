@@ -651,29 +651,6 @@ describe('createPermissionRulesBridge', () => {
   });
 });
 
-/** Event stream that yields the given events, then parks forever (the
- * pump keeps consuming until dispose). */
-function eventIterable(
-  events: Array<Record<string, unknown>>,
-): AsyncIterable<Record<string, unknown>> {
-  let index = 0;
-  return {
-    [Symbol.asyncIterator]: () => ({
-      next: (): Promise<IteratorResult<Record<string, unknown>>> => {
-        if (index < events.length) {
-          return Promise.resolve({ value: events[index++], done: false });
-        }
-        return new Promise(() => {});
-      },
-      return: () =>
-        Promise.resolve({
-          value: undefined,
-          done: true,
-        } as IteratorResult<Record<string, unknown>>),
-    }),
-  };
-}
-
 describe('createV2Setup permission rules wiring', () => {
   let originalEnv: typeof process.env;
   let fixtureRoot: string;
@@ -720,6 +697,11 @@ describe('createV2Setup permission rules wiring', () => {
   test('the event pump applies child session rules via ctx.session.update', async () => {
     const calls: RulesCall[] = [];
     const projectDir = path.join(fixtureRoot, 'project');
+    let transformAgents!: (draft: unknown) => void;
+    let publishEvent!: (event: Record<string, unknown>) => void;
+    const eventQueue: Record<string, unknown>[] = [];
+    let wakeEvent: (() => void) | undefined;
+    let eventStreamStopped = false;
     const ctx = {
       app: { name: 'opencode', version: 'v2-perm-rules-test' },
       options: {},
@@ -733,13 +715,7 @@ describe('createV2Setup permission rules wiring', () => {
       },
       agent: {
         transform: async (cb: (draft: unknown) => void) => {
-          cb({
-            list: () => [],
-            get: () => undefined,
-            default: () => {},
-            update: () => {},
-            remove: () => {},
-          });
+          transformAgents = cb;
           return { dispose: () => {} };
         },
         reload: async () => ({}),
@@ -753,23 +729,71 @@ describe('createV2Setup permission rules wiring', () => {
         },
       },
       event: {
-        subscribe: () =>
-          eventIterable([
-            {
-              type: 'session.created',
-              data: {
-                sessionID: 'ses_probe_child',
-                parentID: 'ses_probe_parent',
-                agent: 'explorer',
-              },
+        subscribe: () => ({
+          [Symbol.asyncIterator]: () => ({
+            next: async (): Promise<
+              IteratorResult<Record<string, unknown>>
+            > => {
+              while (eventQueue.length === 0 && !eventStreamStopped) {
+                await new Promise<void>((resolve) => {
+                  wakeEvent = resolve;
+                });
+              }
+              const event = eventQueue.shift();
+              return event
+                ? { value: event, done: false }
+                : { value: undefined, done: true };
             },
-          ]),
+            return: async () => {
+              eventStreamStopped = true;
+              wakeEvent?.();
+              return { value: undefined, done: true } as IteratorResult<
+                Record<string, unknown>
+              >;
+            },
+          }),
+        }),
       },
     } as unknown as V2Context;
+    publishEvent = (event) => {
+      eventQueue.push(event);
+      wakeEvent?.();
+      wakeEvent = undefined;
+    };
 
     const cleanup = await createV2Setup()(ctx);
 
     try {
+      // The host may defer transforms until its State.batch finishes, after
+      // setup has already returned. The event pump must still recognize
+      // plugin agent membership and use the now-captured native snapshot.
+      transformAgents({
+        list: () => [
+          {
+            id: 'explorer',
+            permissions: [
+              { action: 'read', resource: 'src/**', effect: 'deny' },
+              {
+                action: 'read',
+                resource: 'src/public.ts',
+                effect: 'allow',
+              },
+            ],
+          },
+        ],
+        get: () => undefined,
+        default: () => {},
+        update: () => {},
+        remove: () => {},
+      });
+      publishEvent({
+        type: 'session.created',
+        data: {
+          sessionID: 'ses_probe_child',
+          parentID: 'ses_probe_parent',
+          agent: 'explorer',
+        },
+      });
       // The pump dispatches asynchronously; poll briefly for the apply.
       const deadline = Date.now() + 10_000;
       while (calls.length === 0 && Date.now() < deadline) {
@@ -789,14 +813,20 @@ describe('createV2Setup permission rules wiring', () => {
         resource: 'git push',
         effect: 'ask',
       });
-      // Whatever else the resolved task-policy contributed stays
-      // host-canonical (whole-tool '*' or wildcard-free patterns).
-      for (const rule of calls[0].permissions) {
-        expect(rule.action).not.toMatch(/[*?]/);
-        expect(rule.resource === '*' || !rule.resource.match(/[*?]/)).toBe(
-          true,
-        );
-      }
+      // Ordered native host rules survive compilation unchanged, including
+      // the later exception, in the real session.update replacement payload.
+      expect(calls[0].permissions.slice(-2)).toEqual([
+        { action: 'read', resource: 'src/**', effect: 'deny' },
+        { action: 'read', resource: 'src/public.ts', effect: 'allow' },
+      ]);
+      expect(
+        calls[0].permissions.some(
+          (rule) =>
+            rule.action === 'execute' &&
+            rule.resource === 'git push' &&
+            rule.effect === 'ask',
+        ),
+      ).toBe(true);
     } finally {
       await cleanup();
     }
