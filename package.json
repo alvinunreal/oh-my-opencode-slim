@@ -16,6 +16,10 @@
     "./tui": {
       "import": "./dist/tui2.js",
       "types": "./dist/v2/tui.d.ts"
+    },
+    "./marketplace-contract": {
+      "types": "./dist/marketplace-contract/index.d.ts",
+      "import": "./dist/marketplace-contract/index.js"
     }
   },
   "bin": {
@@ -58,11 +62,12 @@
   "scripts": {
     "clean:dist": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "build:plugin": "bun build src/index.ts src/tui.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external @opentui/core --external @opentui/solid --external solid-js --external jsdom --external zod",
+    "build:marketplace-contract": "bun build src/marketplace-contract/index.ts --outfile dist/marketplace-contract/index.js --target node --format esm --external zod --external semver",
     "build:v2": "bun build src/index.ts --outfile dist/server/index.js --target node --format esm --external jsdom",
     "build:tui": "bun build src/v2/tui.ts --outfile dist/tui2.js --target node --format esm --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external @opentui/core --external @opentui/solid --external solid-js --external jsdom",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opencode-ai/sdk --external @opencode-ai/sdk/v2 --external jsdom --external zod",
     "gen:build-info": "bun run scripts/gen-build-info.ts",
-    "build": "bun run gen:build-info && bun run clean:dist && bun run build:plugin && bun run build:v2 && bun run build:tui && bun run build:cli && tsc --emitDeclarationOnly && bun run generate-schema",
+    "build": "bun run gen:build-info && bun run clean:dist && bun run build:plugin && bun run build:marketplace-contract && bun run build:v2 && bun run build:tui && bun run build:cli && tsc --emitDeclarationOnly && bun run generate-schema",
     "prepare": "bun run build",
     "contributors:add": "all-contributors add",
     "contributors:check": "all-contributors check",
@@ -94,6 +99,7 @@
     "@opencode-ai/sdk": "1.18.32",
     "jsdom": "^30.0.0",
     "lru-cache": "^11.5.3",
+    "semver": "^7.7.3",
     "turndown": "^7.2.4",
     "zod": "^4.6.5"
   },
@@ -107,6 +113,7 @@
     "@opencode/plugin": "2.0.15",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
+    "@types/semver": "^7.7.1",
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",

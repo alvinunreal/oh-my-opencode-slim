@@ -1,3 +1,10 @@
+import type { SpecialistRole } from '../config/agent-roles.js';
+
+export interface RoleRoutingDefinition {
+  readonly id: SpecialistRole;
+  readonly routingBlock: string;
+}
+
 export const ROLE_ROUTING_BLOCKS: Readonly<Record<string, string>> =
   Object.freeze({
     explorer: `@explorer
@@ -73,3 +80,13 @@ export const ROLE_ROUTING_BLOCKS: Readonly<Record<string, string>> =
 - **Rule of thumb:** Even if your model supports vision, delegate visual analysis to @observer - it isolates large image/PDF bytes from your context window, returning only concise structured text. Need exact file contents for routing? → Read only the minimal context yourself.
 - **IMPORTANT:** When delegating to @observer, always include the **full file path** in the prompt so it can read the file. Example: "Analyze the screenshot at /path/to/file.png - describe the UI elements and error messages."`,
   });
+
+export function renderRoleRoutingBlock(
+  role: RoleRoutingDefinition,
+  runtimeName: string,
+): string {
+  return role.routingBlock.replace(
+    new RegExp(`@${role.id}\\b`, 'g'),
+    `@${runtimeName}`,
+  );
+}

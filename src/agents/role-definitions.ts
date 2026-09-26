@@ -1,3 +1,7 @@
+import {
+  type SpecialistRole,
+  SUPPORTED_SPECIALIST_ROLES,
+} from '../config/agent-roles';
 import type { AgentDefinition } from './orchestrator';
 import {
   DESIGNER_PROMPT,
@@ -14,16 +18,8 @@ export interface SpecialistRoleDefinition {
   readonly description: string;
 }
 
-export const SPECIALIST_ROLES = [
-  'explorer',
-  'librarian',
-  'oracle',
-  'designer',
-  'fixer',
-  'observer',
-] as const;
-
-export type SpecialistRole = (typeof SPECIALIST_ROLES)[number];
+export const SPECIALIST_ROLES = SUPPORTED_SPECIALIST_ROLES;
+export type { SpecialistRole };
 
 export const ROLE_DEFINITIONS: Readonly<
   Record<SpecialistRole, SpecialistRoleDefinition>
