@@ -973,6 +973,191 @@ describe('writePreset', () => {
     });
   });
 
+  test('merges distinct fields changed on the same agent', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          active: {
+            orchestrator: { model: 'openai/old', temperature: 0.2 },
+          },
+        },
+      }),
+    );
+    const base = getEditablePreset(tempDir, 'active');
+
+    const diskEditor = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, unknown>>;
+    };
+    diskEditor.presets.active.orchestrator = {
+      model: 'openai/new',
+      temperature: 0.2,
+    };
+    fs.writeFileSync(configPath, JSON.stringify(diskEditor));
+
+    expect(
+      writePreset(
+        tempDir,
+        'active',
+        {
+          ...base,
+          agents: {
+            orchestrator: { model: 'openai/old', temperature: 0.7 },
+          },
+        },
+        { mergeChangesFrom: base },
+      ),
+    ).toBe(true);
+
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, { orchestrator: Record<string, unknown> }>;
+    };
+    expect(saved.presets.active.orchestrator).toEqual({
+      model: 'openai/new',
+      temperature: 0.7,
+    });
+  });
+
+  test('preserves independent agent additions and removals during merge', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        presets: {
+          active: {
+            orchestrator: { model: 'openai/old' },
+            oracle: { model: 'openai/remove' },
+          },
+        },
+      }),
+    );
+    const base = getEditablePreset(tempDir, 'active');
+
+    const diskEditor = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, unknown>>;
+    };
+    diskEditor.presets.active.orchestrator = { model: 'openai/new' };
+    diskEditor.presets.active.explorer = { model: 'openai/added' };
+    fs.writeFileSync(configPath, JSON.stringify(diskEditor));
+
+    expect(
+      writePreset(
+        tempDir,
+        'active',
+        {
+          ...base,
+          agents: { orchestrator: base.agents.orchestrator },
+        },
+        { mergeChangesFrom: base },
+      ),
+    ).toBe(true);
+
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, unknown>>;
+    };
+    expect(saved.presets.active).toEqual({
+      orchestrator: { model: 'openai/new' },
+      explorer: { model: 'openai/added' },
+    });
+  });
+
+  test('rejects concurrent changes to the same agent field', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const initial = {
+      presets: {
+        active: {
+          orchestrator: { temperature: 0.2 },
+        },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(initial));
+    const base = getEditablePreset(tempDir, 'active');
+
+    const changedOnDisk = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      presets: Record<string, Record<string, { temperature: number }>>;
+    };
+    changedOnDisk.presets.active.orchestrator.temperature = 0.8;
+    fs.writeFileSync(configPath, JSON.stringify(changedOnDisk));
+    const beforeRejectedWrite = fs.readFileSync(configPath, 'utf-8');
+
+    expect(
+      writePreset(
+        tempDir,
+        'active',
+        {
+          ...base,
+          agents: {
+            orchestrator: { temperature: 0.9 },
+          },
+        },
+        { mergeChangesFrom: base },
+      ),
+    ).toBe(false);
+    expect(fs.readFileSync(configPath, 'utf-8')).toBe(beforeRejectedWrite);
+  });
+
+  test('rejects concurrent updates to nested options or permission subtrees', () => {
+    const configDir = path.join(tempDir, 'opencode-config');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const baseConfig = {
+      presets: {
+        active: {
+          orchestrator: {
+            options: { thinking: { budget: 100 } },
+            permission: { edit: 'ask' },
+          },
+        },
+      },
+    };
+
+    for (const field of ['options', 'permission'] as const) {
+      fs.writeFileSync(configPath, JSON.stringify(baseConfig));
+      const base = getEditablePreset(tempDir, 'active');
+      const changedOnDisk = JSON.parse(
+        fs.readFileSync(configPath, 'utf-8'),
+      ) as {
+        presets: Record<string, Record<string, Record<string, unknown>>>;
+      };
+      changedOnDisk.presets.active.orchestrator[field] =
+        field === 'options' ? { thinking: { budget: 200 } } : { edit: 'allow' };
+      fs.writeFileSync(configPath, JSON.stringify(changedOnDisk));
+      const beforeRejectedWrite = fs.readFileSync(configPath, 'utf-8');
+
+      expect(
+        writePreset(
+          tempDir,
+          'active',
+          {
+            ...base,
+            agents: {
+              orchestrator: {
+                ...base.agents.orchestrator,
+                [field]:
+                  field === 'options'
+                    ? { thinking: { budget: 300 } }
+                    : { edit: 'deny' },
+              },
+            },
+          },
+          { mergeChangesFrom: base },
+        ),
+      ).toBe(false);
+      expect(fs.readFileSync(configPath, 'utf-8')).toBe(beforeRejectedWrite);
+    }
+  });
+
   test('rejects conflicting concurrent parent changes without writing', () => {
     const configDir = path.join(tempDir, 'opencode-config');
     fs.mkdirSync(configDir, { recursive: true });

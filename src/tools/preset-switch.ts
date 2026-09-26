@@ -624,7 +624,8 @@ export function writePreset(
         for (const agentName of agentNames) {
           const wasPresent = Object.hasOwn(base.agents, agentName);
           const isPresent = Object.hasOwn(normalized.agents, agentName);
-          const changed =
+          const isPresentOnDisk = Object.hasOwn(current.agents, agentName);
+          const changedByEditor =
             wasPresent !== isPresent ||
             (wasPresent &&
               isPresent &&
@@ -632,12 +633,100 @@ export function writePreset(
                 base.agents[agentName],
                 normalized.agents[agentName],
               ));
-          if (!changed) continue;
-          if (isPresent) {
-            agents[agentName] = normalized.agents[agentName];
-          } else {
-            delete agents[agentName];
+          const changedOnDisk =
+            wasPresent !== isPresentOnDisk ||
+            (wasPresent &&
+              isPresentOnDisk &&
+              !isDeepStrictEqual(
+                base.agents[agentName],
+                current.agents[agentName],
+              ));
+
+          if (!changedByEditor) continue;
+          if (!wasPresent) {
+            if (
+              isPresentOnDisk &&
+              !isDeepStrictEqual(
+                normalized.agents[agentName],
+                current.agents[agentName],
+              )
+            ) {
+              throw new Error(
+                `Preset "${name}" agent "${agentName}" was added concurrently`,
+              );
+            }
+            if (isPresent) agents[agentName] = normalized.agents[agentName];
+            continue;
           }
+
+          if (!isPresent || !isPresentOnDisk) {
+            if (changedOnDisk && isPresent !== isPresentOnDisk) {
+              throw new Error(
+                `Preset "${name}" agent "${agentName}" changed concurrently`,
+              );
+            }
+            if (isPresent) {
+              agents[agentName] = normalized.agents[agentName];
+            } else {
+              delete agents[agentName];
+            }
+            continue;
+          }
+
+          const baseOverride = base.agents[agentName] as Record<
+            string,
+            unknown
+          >;
+          const editorOverride = normalized.agents[agentName] as Record<
+            string,
+            unknown
+          >;
+          const diskOverride = current.agents[agentName] as Record<
+            string,
+            unknown
+          >;
+          const mergedOverride = { ...diskOverride };
+          const fields = new Set([
+            ...Object.keys(baseOverride),
+            ...Object.keys(editorOverride),
+          ]);
+          for (const field of fields) {
+            const wasSet = Object.hasOwn(baseOverride, field);
+            const isSetByEditor = Object.hasOwn(editorOverride, field);
+            const isSetOnDisk = Object.hasOwn(diskOverride, field);
+            const editorChanged =
+              wasSet !== isSetByEditor ||
+              (wasSet &&
+                isSetByEditor &&
+                !isDeepStrictEqual(baseOverride[field], editorOverride[field]));
+            if (!editorChanged) continue;
+
+            const diskChanged =
+              wasSet !== isSetOnDisk ||
+              (wasSet &&
+                isSetOnDisk &&
+                !isDeepStrictEqual(baseOverride[field], diskOverride[field]));
+            if (
+              diskChanged &&
+              (isSetByEditor !== isSetOnDisk ||
+                (isSetByEditor &&
+                  !isDeepStrictEqual(
+                    editorOverride[field],
+                    diskOverride[field],
+                  )))
+            ) {
+              throw new Error(
+                `Preset "${name}" agent "${agentName}" field "${field}" changed concurrently`,
+              );
+            }
+
+            if (isSetByEditor) {
+              mergedOverride[field] = editorOverride[field];
+            } else {
+              delete mergedOverride[field];
+            }
+          }
+          agents[agentName] = mergedOverride as AgentOverrideConfig;
         }
         normalized.agents = agents;
         // Marketplace activation may have changed while the editor was open.

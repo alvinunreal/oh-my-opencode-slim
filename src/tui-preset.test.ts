@@ -638,6 +638,141 @@ describe('openPresetManager', () => {
     expect(active.extends).toBe('nextBase');
   });
 
+  test('merges concurrent model and temperature edits to the same agent', async () => {
+    for (const saveModelFirst of [true, false]) {
+      writeUserConfigFile({
+        presets: {
+          active: {
+            orchestrator: { model: 'openai/old', temperature: 0.2 },
+          },
+        },
+      });
+      const modelEditor = createMockApi();
+      const temperatureEditor = createMockApi();
+      for (const mock of [modelEditor, temperatureEditor]) {
+        const client = mock.api.client as unknown as {
+          config: { providers: () => Promise<unknown> };
+        };
+        client.config.providers = async () => ({
+          data: {
+            providers: [
+              {
+                id: 'openai',
+                models: {
+                  old: { name: 'Old' },
+                  new: { name: 'New' },
+                },
+              },
+            ],
+          },
+        });
+      }
+      openPresetManager(modelEditor.api, tempDir, snapshotRef);
+      openPresetManager(temperatureEditor.api, tempDir, snapshotRef);
+
+      const editAgent = async (
+        mock: ReturnType<typeof createMockApi>,
+        model: string,
+        temperature: string,
+      ) => {
+        mock.selectOption(mock.getSelectProps(), { value: 'active' });
+        mock.selectOption(mock.getSelectProps(), { value: 'edit' });
+        mock.selectOption(mock.getSelectProps(), { value: 'orchestrator' });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const select = mock.getSelectProps();
+        if (!select) throw new Error('Expected model picker');
+        const option = (select.options as Array<{ value: string }>).find(
+          (item) => item.value === model,
+        );
+        if (!option) throw new Error(`Expected model option ${model}`);
+        mock.selectOption(select, option);
+        const temperaturePrompt = mock.getPromptProps();
+        if (!temperaturePrompt) throw new Error('Expected temperature prompt');
+        (temperaturePrompt.onConfirm as (value: string) => void)(temperature);
+        const optionsPrompt = mock.getPromptProps();
+        if (!optionsPrompt) throw new Error('Expected options prompt');
+        (optionsPrompt.onConfirm as (value: string) => void)('');
+      };
+
+      await editAgent(modelEditor, 'openai/new', '0.2');
+      await editAgent(temperatureEditor, 'openai/old', '0.7');
+
+      const saveModel = () =>
+        modelEditor.selectOption(modelEditor.getSelectProps(), {
+          value: '__omo_save__',
+        });
+      const saveTemperature = () =>
+        temperatureEditor.selectOption(temperatureEditor.getSelectProps(), {
+          value: '__omo_save__',
+        });
+      if (saveModelFirst) {
+        saveModel();
+        saveTemperature();
+      } else {
+        saveTemperature();
+        saveModel();
+      }
+
+      const saved = readUserConfigFile();
+      const active = (saved.presets as Record<string, Record<string, unknown>>)
+        .active;
+      const orchestrator = active.orchestrator as Record<string, unknown>;
+      expect(orchestrator.model).toBe('openai/new');
+      expect(orchestrator.temperature).toBe(0.7);
+    }
+  });
+
+  test('rejects a same-field conflict on retry without changing disk', async () => {
+    writeUserConfigFile({
+      presets: {
+        active: {
+          orchestrator: {
+            model: 'anthropic/claude-3.5-haiku',
+            temperature: 0.2,
+          },
+        },
+      },
+    });
+    const firstEditor = createMockApi();
+    const secondEditor = createMockApi();
+    openPresetManager(firstEditor.api, tempDir, snapshotRef);
+    openPresetManager(secondEditor.api, tempDir, snapshotRef);
+
+    const editTemperature = async (
+      mock: ReturnType<typeof createMockApi>,
+      value: string,
+    ) => {
+      mock.selectOption(mock.getSelectProps(), { value: 'active' });
+      mock.selectOption(mock.getSelectProps(), { value: 'edit' });
+      mock.selectOption(mock.getSelectProps(), { value: 'orchestrator' });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      mock.selectOption(mock.getSelectProps(), {
+        value: 'anthropic/claude-3.5-haiku',
+      });
+      const temperature = mock.getPromptProps();
+      if (!temperature) throw new Error('Expected temperature prompt');
+      (temperature.onConfirm as (value: string) => void)(value);
+      const options = mock.getPromptProps();
+      if (!options) throw new Error('Expected options prompt');
+      (options.onConfirm as (value: string) => void)('');
+    };
+
+    await editTemperature(firstEditor, '0.7');
+    await editTemperature(secondEditor, '0.8');
+    firstEditor.selectOption(firstEditor.getSelectProps(), {
+      value: '__omo_save__',
+    });
+    const savedByFirst = readUserConfigFile();
+
+    for (let retry = 0; retry < 2; retry++) {
+      secondEditor.selectOption(secondEditor.getSelectProps(), {
+        value: '__omo_save__',
+      });
+      expect(readUserConfigFile()).toEqual(savedByFirst);
+      expect(secondEditor.toasts.at(-1)?.title).toBe('Save failed');
+    }
+  });
+
   test('marks project presets as [project - read-only] and limits actions', () => {
     writeUserConfigFile({
       presets: {
