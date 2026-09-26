@@ -1281,40 +1281,6 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     return this.list(parent).filter(isSidebarHistory);
   }
 
-  /** Shared selection logic for sidebar recency and taskID tiebreaks. */
-  private upsertSidebarSelection(
-    latest: Map<string, ReusableSessionSelection>,
-    job: BackgroundJobRecord,
-  ): void {
-    const selection: ReusableSessionSelection = {
-      taskID: job.taskID,
-      alias: job.alias,
-      terminalState:
-        job.terminalState ?? terminalStateOf(job.state) ?? 'completed',
-      completedAt: job.completedAt,
-      lastUsedAt: job.lastUsedAt,
-    };
-    const current = latest.get(job.agent);
-    if (
-      current === undefined ||
-      sidebarRecency(selection) > sidebarRecency(current) ||
-      (sidebarRecency(selection) === sidebarRecency(current) &&
-        selection.taskID > current.taskID)
-    ) {
-      latest.set(job.agent, selection);
-    }
-  }
-
-  latestReconciledByAgent(
-    parentSessionID: string,
-  ): Map<string, ReusableSessionSelection> {
-    const latest = new Map<string, ReusableSessionSelection>();
-    for (const job of this.listSidebarHistory(parentSessionID)) {
-      this.upsertSidebarSelection(latest, job);
-    }
-    return latest;
-  }
-
   /** Every accessible terminal session, grouped for TUI navigation. */
   sidebarHistoryByParentAgent() {
     const byParent = new Map<string, Map<string, ReusableSessionSelection[]>>();
