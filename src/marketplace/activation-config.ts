@@ -1,9 +1,10 @@
-import { accessSync, constants, readFileSync } from 'node:fs';
-import { mutateJsonFile, stripJsonComments } from '../cli/config-io';
+import { accessSync, constants } from 'node:fs';
+import { mutateJsonFile } from '../cli/config-io';
 import {
   findPluginConfigPaths,
   interpolateEnvironmentVariables,
   loadPluginConfig,
+  loadPluginConfigFromPath,
 } from '../config/loader';
 import {
   mergePresetMaps,
@@ -154,14 +155,9 @@ function assertDirectiveEnvironmentIsSet(value: unknown): void {
 
 function readPluginConfig(filePath: string | null): ConfigRecord {
   if (!filePath) return {};
-  try {
-    const source = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
-    return asRecord(
-      interpolateEnvironment(JSON.parse(stripJsonComments(source))),
-    );
-  } catch {
-    return {};
-  }
+  return asRecord(
+    loadPluginConfigFromPath(filePath, { silent: true }) ?? undefined,
+  );
 }
 
 const NO_ACTIVATION_CHANGE = Symbol('no-marketplace-activation-change');

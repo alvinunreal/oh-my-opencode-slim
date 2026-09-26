@@ -314,7 +314,7 @@ function normalizePresetDeclarations(config: RawPluginConfig): RawPluginConfig {
  * @param onWarning - Optional callback for warnings
  * @returns Validated config object, or null if loading failed
  */
-function loadConfigFromPath(
+export function loadPluginConfigFromPath(
   configPath: string,
   options?: LoadPluginConfigOptions,
 ): RawPluginConfig | null {
@@ -681,11 +681,11 @@ export function loadPluginConfig(
     findPluginConfigPaths(directory);
 
   let config: RawPluginConfig = userConfigPath
-    ? (loadConfigFromPath(userConfigPath, options) ?? {})
+    ? (loadPluginConfigFromPath(userConfigPath, options) ?? {})
     : {};
 
   const projectConfig = projectConfigPath
-    ? loadConfigFromPath(projectConfigPath, options)
+    ? loadPluginConfigFromPath(projectConfigPath, options)
     : null;
   if (projectConfig) {
     config = mergePluginConfigs(config, projectConfig);

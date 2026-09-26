@@ -176,6 +176,63 @@ describe('marketplace activation persistence', () => {
     }
   });
 
+  test('ignores schema-invalid user config when activating a valid project preset', () => {
+    const fixture = setup();
+    try {
+      const invalidUser = JSON.stringify({
+        presets: {
+          work: { marketplace: { agents: ['not a valid package ID'] } },
+        },
+      });
+      writeFileSync(fixture.userConfig, invalidUser);
+      writeFileSync(
+        fixture.projectConfig,
+        JSON.stringify({ preset: 'work', presets: { work: {} } }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+
+      expect(readFileSync(fixture.userConfig, 'utf8')).toBe(invalidUser);
+      expect(
+        JSON.parse(readFileSync(fixture.projectConfig, 'utf8')).presets.work
+          .marketplace,
+      ).toEqual({ agents_add: [PACKAGE_A] });
+      expect(
+        resolvePresetDefinition(
+          'work',
+          JSON.parse(readFileSync(fixture.projectConfig, 'utf8')).presets,
+        ).marketplace?.agents,
+      ).toEqual([PACKAGE_A]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('ignores malformed user JSONC consistently during project activation', () => {
+    const fixture = setup();
+    const jsoncPath = fixture.userConfig.replace(/\.json$/, '.jsonc');
+    const invalidUser = '{ /* malformed user config */ presets: { work: }';
+    try {
+      writeFileSync(jsoncPath, invalidUser);
+      writeFileSync(
+        fixture.projectConfig,
+        JSON.stringify({ preset: 'work', presets: { work: {} } }),
+      );
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+
+      enableMarketplaceAgent(fixture.project, PACKAGE_A, fixture.store);
+
+      expect(readFileSync(jsoncPath, 'utf8')).toBe(invalidUser);
+      expect(
+        JSON.parse(readFileSync(fixture.projectConfig, 'utf8')).presets.work
+          .marketplace,
+      ).toEqual({ agents_add: [PACKAGE_A] });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test('updates JSONC while preserving comments and unrelated config keys', () => {
     const fixture = setup();
     try {
