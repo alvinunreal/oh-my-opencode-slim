@@ -57,19 +57,24 @@ function isSkillFrontmatter(
   );
 }
 
+function normalizedSkillName(data: unknown): string | undefined {
+  if (!isSkillFrontmatter(data)) return undefined;
+
+  const name = data.name.trim();
+  return name === '' ? undefined : name;
+}
+
 /** Parse skill frontmatter and return its string name when valid. */
 export function parseSkillFrontmatterName(content: string): string | undefined {
   try {
     const parsed = matter(content);
-    if (isSkillFrontmatter(parsed.data)) return parsed.data.name;
+    return normalizedSkillName(parsed.data);
   } catch {
     try {
       const parsed = matter(fallbackSanitization(content));
-      if (isSkillFrontmatter(parsed.data)) return parsed.data.name;
+      return normalizedSkillName(parsed.data);
     } catch {
       return undefined;
     }
   }
-
-  return undefined;
 }

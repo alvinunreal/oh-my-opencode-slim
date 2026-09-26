@@ -14,11 +14,32 @@ description: Test skill. # description comment
     ).toBe('quoted-skill');
   });
 
+  test('trims whitespace around quoted names', () => {
+    expect(
+      parseSkillFrontmatterName(`---
+name: " my-skill "
+description: Test skill.
+---
+`),
+    ).toBe('my-skill');
+  });
+
   test('accepts block scalar names', () => {
     expect(
       parseSkillFrontmatterName(`---
 name: |-
   block-skill
+description: Test skill.
+---
+`),
+    ).toBe('block-skill');
+  });
+
+  test('trims whitespace around block scalar names', () => {
+    expect(
+      parseSkillFrontmatterName(`---
+name: |-
+    block-skill${'  '}
 description: Test skill.
 ---
 `),
@@ -41,6 +62,26 @@ description: Text with a colon: accepted by fallback
 ---
 `),
     ).toBe('colon:skill');
+  });
+
+  test('trims quoted names when fallback sanitization is used', () => {
+    expect(
+      parseSkillFrontmatterName(`---
+name: " fallback-skill "
+description: Text with a colon: accepted by fallback
+---
+`),
+    ).toBe('fallback-skill');
+  });
+
+  test('rejects names that are empty after trimming', () => {
+    expect(
+      parseSkillFrontmatterName(`---
+name: "   "
+description: Test skill.
+---
+`),
+    ).toBeUndefined();
   });
 
   test('rejects non-string names', () => {

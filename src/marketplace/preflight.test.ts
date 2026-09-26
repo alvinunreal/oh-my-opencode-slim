@@ -93,6 +93,66 @@ describe('marketplace host preflight', () => {
     }
   });
 
+  test('current project MCP settings override ancestor settings', () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
+    const project = join(root, 'project');
+    try {
+      setConfigHome(root);
+      mkdirSync(join(root, '.git'), { recursive: true });
+      mkdirSync(join(root, '.opencode'), { recursive: true });
+      mkdirSync(join(project, '.opencode'), { recursive: true });
+      writeFileSync(
+        join(root, '.opencode', 'opencode.json'),
+        JSON.stringify({
+          mcp: {
+            projectDisables: {
+              type: 'remote',
+              url: 'https://ancestor',
+              enabled: true,
+            },
+            projectEnables: {
+              type: 'remote',
+              url: 'https://ancestor',
+              enabled: false,
+            },
+          },
+        }),
+      );
+      writeFileSync(
+        join(project, '.opencode', 'opencode.json'),
+        JSON.stringify({
+          mcp: {
+            projectDisables: {
+              type: 'remote',
+              url: 'https://project',
+              enabled: false,
+            },
+            projectEnables: {
+              type: 'remote',
+              url: 'https://project',
+              enabled: true,
+            },
+          },
+        }),
+      );
+
+      const config = loadMergedOpenCodeConfig(project);
+      const mcps = config.mcp as Record<string, { enabled?: boolean }>;
+      expect(mcps.projectDisables.enabled).toBe(false);
+      expect(mcps.projectEnables.enabled).toBe(true);
+
+      const names = discoverPreflightMcps(
+        RuntimeConfig.init(project, {}),
+        project,
+      );
+      expect(names).not.toContain('projectDisables');
+      expect(names).toContain('projectEnables');
+    } finally {
+      RuntimeConfig.reset(project);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('parses JSONC environment content and ignores malformed content', () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
     try {

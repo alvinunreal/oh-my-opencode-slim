@@ -109,6 +109,7 @@ function configDirectories(project?: string): string[] {
   const configured = process.env.OPENCODE_CONFIG_DIR?.trim();
   if (configured) directories.push(configured);
   if (project && process.env.OPENCODE_DISABLE_PROJECT_CONFIG !== 'true') {
+    const chain: string[] = [];
     let current = resolve(project);
     let boundary: string | undefined;
     for (let path = current; ; path = dirname(path)) {
@@ -122,11 +123,12 @@ function configDirectories(project?: string): string[] {
     while (true) {
       const candidate = join(current, '.opencode');
       try {
-        if (statSync(candidate).isDirectory()) directories.push(candidate);
+        if (statSync(candidate).isDirectory()) chain.unshift(candidate);
       } catch {}
       if (current === boundary || dirname(current) === current) break;
       current = dirname(current);
     }
+    directories.push(...chain);
   }
   return [...new Set(directories)];
 }
