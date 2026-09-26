@@ -303,6 +303,72 @@ describe('preset inheritance', () => {
     });
   });
 
+  test('preserves flat marketplace agent overrides alongside activation layers', () => {
+    const agentLayer = parsePresets({
+      presets: {
+        custom: { marketplace: { model: 'provider/model' } },
+      },
+    });
+    const activationLayer = parsePresets({
+      presets: {
+        custom: { marketplace: { agents_add: ['owner/package'] } },
+      },
+    });
+
+    for (const merged of [
+      mergePresetMaps(agentLayer, activationLayer),
+      mergePresetMaps(activationLayer, agentLayer),
+    ]) {
+      expect(merged?.custom).toMatchObject({
+        agents: { marketplace: { model: 'provider/model' } },
+        marketplace: { agents_add: ['owner/package'] },
+      });
+      expect(resolvePresetDefinition('custom', merged ?? {})).toEqual({
+        agents: { marketplace: { model: 'provider/model' } },
+        marketplace: { agents: ['owner/package'] },
+      });
+    }
+  });
+
+  test('preserves empty marketplace agent overrides in flat inherited presets', () => {
+    const user = parsePresets({
+      presets: {
+        shared: { marketplace: { agents: ['owner/shared'] } },
+        custom: {
+          extends: 'shared',
+          marketplace: { model: 'provider/model' },
+        },
+      },
+    });
+    const project = parsePresets({
+      presets: {
+        custom: { marketplace: { agents_add: ['owner/project'] } },
+      },
+    });
+    const merged = mergePresetMaps(user, project) ?? {};
+
+    expect(resolvePresetDefinition('custom', merged)).toEqual({
+      extends: 'shared',
+      agents: { marketplace: { model: 'provider/model' } },
+      marketplace: { agents: ['owner/shared', 'owner/project'] },
+    });
+
+    const emptyAgentLayer = parsePresets({
+      presets: { custom: { marketplace: {} } },
+    });
+    const activationOnlyLayer = parsePresets({
+      presets: {
+        custom: { marketplace: { agents_add: ['owner/package'] } },
+      },
+    });
+    const emptyMerged =
+      mergePresetMaps(emptyAgentLayer, activationOnlyLayer) ?? {};
+    expect(resolvePresetDefinition('custom', emptyMerged)).toEqual({
+      agents: { marketplace: {} },
+      marketplace: { agents: ['owner/package'] },
+    });
+  });
+
   test('canonical agent aliases win field-by-field over legacy aliases', () => {
     expect(
       mergeAgentOverrides(

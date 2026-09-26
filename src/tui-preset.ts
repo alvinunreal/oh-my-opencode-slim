@@ -427,7 +427,10 @@ function editPresetWorkingCopy(
   state.api.ui.dialog.replace(() =>
     state.api.ui.Dialog({
       size: 'large',
-      onClose: () => state.api.ui.dialog.clear(),
+      onClose: () => {
+        state.presetEditBases.delete(presetName);
+        state.api.ui.dialog.clear();
+      },
       children: state.api.ui.DialogSelect<string>({
         title: `Edit preset: ${presetName}`,
         options,
@@ -476,6 +479,7 @@ function editPresetWorkingCopy(
               break;
             }
             case ACTION_BACK:
+              state.presetEditBases.delete(presetName);
               showPresetList(state);
               break;
             default:
@@ -710,7 +714,9 @@ function savePreset(
       ? { mergeChangesFrom: state.presetEditBases.get(presetName) }
       : {},
   );
-  state.presetEditBases.delete(presetName);
+  if (ok) {
+    state.presetEditBases.delete(presetName);
+  }
   if (!silent) {
     state.api.ui.toast({
       variant: ok ? 'success' : 'warning',

@@ -240,7 +240,11 @@ export function mergePresetMaps(
       mergedDefinition.extends = parent;
     }
 
+    const hasMarketplaceAgentCollision =
+      mergedDefinition.marketplace !== undefined &&
+      Object.hasOwn(mergedDefinition.agents, 'marketplace');
     if (
+      hasMarketplaceAgentCollision ||
       usesStructuredPresetSyntax(baseInput) ||
       usesStructuredPresetSyntax(overrideInput)
     ) {

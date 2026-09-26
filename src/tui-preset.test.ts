@@ -567,6 +567,77 @@ describe('openPresetManager', () => {
     }
   });
 
+  test('keeps the edit baseline after a parent conflict until it is resolved', () => {
+    writeUserConfigFile({
+      presets: {
+        base: { oracle: { model: 'openai/base' } },
+        nextBase: { oracle: { model: 'openai/next' } },
+        otherBase: { oracle: { model: 'openai/other' } },
+        active: { extends: 'base', agents: {} },
+      },
+    });
+
+    const firstEditor = createMockApi();
+    const secondEditor = createMockApi();
+    openPresetManager(firstEditor.api, tempDir, snapshotRef);
+    openPresetManager(secondEditor.api, tempDir, snapshotRef);
+
+    firstEditor.selectOption(firstEditor.getSelectProps(), { value: 'active' });
+    firstEditor.selectOption(firstEditor.getSelectProps(), { value: 'edit' });
+    firstEditor.selectOption(firstEditor.getSelectProps(), {
+      value: '__omo_base_preset__',
+    });
+    firstEditor.selectOption(firstEditor.getSelectProps(), {
+      value: 'nextBase',
+    });
+
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: 'active',
+    });
+    secondEditor.selectOption(secondEditor.getSelectProps(), { value: 'edit' });
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: '__omo_base_preset__',
+    });
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: 'otherBase',
+    });
+
+    firstEditor.selectOption(firstEditor.getSelectProps(), {
+      value: '__omo_save__',
+    });
+    const savedByFirstEditor = readUserConfigFile();
+
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: '__omo_save__',
+    });
+    expect(readUserConfigFile()).toEqual(savedByFirstEditor);
+    expect(secondEditor.toasts.at(-1)?.title).toBe('Save failed');
+
+    // Retrying the still-open editor must use its original baseline and
+    // reject the same conflicting parent change again.
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: '__omo_save__',
+    });
+    expect(readUserConfigFile()).toEqual(savedByFirstEditor);
+    expect(secondEditor.toasts.at(-1)?.title).toBe('Save failed');
+
+    // Explicitly resolve by accepting the parent now on disk.
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: '__omo_base_preset__',
+    });
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: 'nextBase',
+    });
+    secondEditor.selectOption(secondEditor.getSelectProps(), {
+      value: '__omo_save__',
+    });
+
+    const resolved = readUserConfigFile();
+    const active = (resolved.presets as Record<string, Record<string, unknown>>)
+      .active;
+    expect(active.extends).toBe('nextBase');
+  });
+
   test('marks project presets as [project - read-only] and limits actions', () => {
     writeUserConfigFile({
       presets: {
