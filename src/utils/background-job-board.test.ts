@@ -2231,7 +2231,11 @@ describe('BackgroundJobBoard', () => {
     });
   });
 
-  describe('latestReconciledByAgent (sidebar dot)', () => {
+  describe('sidebarHistoryByParentAgent', () => {
+    function sidebarHistory(board: BackgroundJobBoard, parent: string) {
+      return board.sidebarHistoryByParentAgent().get(parent) ?? new Map();
+    }
+
     /** Seed one oracle job and walk it to reconciled with controlled clocks. */
     function seedReconciled(
       board: BackgroundJobBoard,
@@ -2272,18 +2276,24 @@ describe('BackgroundJobBoard', () => {
       seedReconciled(board, 'ses_b', { launchAt: 400, reconciledAt: 600 });
       seedReconciled(board, 'ses_c', { launchAt: 700, reconciledAt: 900 });
       seedReconciled(board, 'ses_d', { launchAt: 1000, reconciledAt: 1200 });
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_d');
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_d',
+      );
 
       // ses_a becomes the most recently used despite being oldest-launched.
       board.markUsed('parent-1', 'ses_a', 5000);
 
-      const latest = board.latestReconciledByAgent('parent-1');
-      expect(latest.get('oracle')).toMatchObject({
+      const latest = sidebarHistory(board, 'parent-1');
+      expect(latest.get('oracle')?.[0]).toMatchObject({
         taskID: 'ses_a',
         terminalState: 'completed',
       });
+      expect(latest.get('oracle')?.map((entry) => entry.taskID)).toEqual([
+        'ses_a',
+        'ses_d',
+        'ses_c',
+        'ses_b',
+      ]);
     });
 
     test('excludes unattributed placeholders even after acknowledgement', () => {
@@ -2304,15 +2314,13 @@ describe('BackgroundJobBoard', () => {
 
       // Same exclusion as the prompt's reusable section: the sidebar dot
       // must not advertise a placeholder nobody attributed.
-      expect(board.latestReconciledByAgent('parent-1').has('oracle')).toBe(
-        false,
-      );
+      expect(sidebarHistory(board, 'parent-1').has('oracle')).toBe(false);
 
       // An attributed sibling still selects normally.
       seedReconciled(board, 'ses_attributed', { launchAt: 400 });
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_attributed');
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_attributed',
+      );
     });
 
     test('includes a finished session before the parent acknowledges it', () => {
@@ -2329,9 +2337,9 @@ describe('BackgroundJobBoard', () => {
         now: 200,
       });
 
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_done');
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_done',
+      );
     });
 
     test('excludes running, statusUncertain, and stopped-retained jobs', () => {
@@ -2374,8 +2382,8 @@ describe('BackgroundJobBoard', () => {
       board.markStopped('ses_stopped', 'no native result', 110, undefined, 110);
       board.markReconciled('ses_stopped', 300);
 
-      const latest = board.latestReconciledByAgent('parent-1');
-      expect(latest.get('oracle')?.taskID).toBe('ses_ok');
+      const latest = sidebarHistory(board, 'parent-1');
+      expect(latest.get('oracle')?.[0]?.taskID).toBe('ses_ok');
       expect(new Set(latest.keys())).toEqual(new Set(['oracle']));
     });
 
@@ -2391,10 +2399,10 @@ describe('BackgroundJobBoard', () => {
         state: 'cancelled',
       });
 
-      const latest = board.latestReconciledByAgent('parent-1');
-      expect(latest.get('explorer')?.terminalState).toBe('completed');
-      expect(latest.get('fixer')?.terminalState).toBe('error');
-      expect(latest.get('designer')?.terminalState).toBe('cancelled');
+      const latest = sidebarHistory(board, 'parent-1');
+      expect(latest.get('explorer')?.[0]?.terminalState).toBe('completed');
+      expect(latest.get('fixer')?.[0]?.terminalState).toBe('error');
+      expect(latest.get('designer')?.[0]?.terminalState).toBe('cancelled');
     });
 
     test('markUsed on an older session moves the selection (user override)', () => {
@@ -2402,15 +2410,15 @@ describe('BackgroundJobBoard', () => {
       seedReconciled(board, 'ses_old', { launchAt: 100, reconciledAt: 300 });
       seedReconciled(board, 'ses_new', { launchAt: 400, reconciledAt: 600 });
 
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_new');
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_new',
+      );
 
       // Explicit reuse of the old session must win the dot.
       board.markUsed('parent-1', 'ses_old', 5000);
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_old');
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_old',
+      );
     });
 
     test('LRU trim beyond maxReusablePerAgent evicts the oldest and keeps the selection correct', () => {
@@ -2422,17 +2430,17 @@ describe('BackgroundJobBoard', () => {
       // The oldest was evicted by the count cap; selection falls to the
       // newest survivor.
       expect(board.get('ses_1')).toBeUndefined();
-      const latest = board.latestReconciledByAgent('parent-1');
-      expect(latest.get('oracle')?.taskID).toBe('ses_3');
+      const latest = sidebarHistory(board, 'parent-1');
+      expect(latest.get('oracle')?.[0]?.taskID).toBe('ses_3');
     });
 
     test('relaunch of the selected session (no preserveRun) falls back to the previous reconciled', () => {
       const board = new BackgroundJobBoard();
       seedReconciled(board, 'ses_first', { launchAt: 100, reconciledAt: 300 });
       seedReconciled(board, 'ses_second', { launchAt: 400, reconciledAt: 600 });
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_second');
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_second',
+      );
 
       const lease = board.acquireRelaunchLease(
         'ses_second',
@@ -2449,8 +2457,8 @@ describe('BackgroundJobBoard', () => {
 
       // The relaunched job is running again — only the older reconciled
       // session remains a dot target.
-      const latest = board.latestReconciledByAgent('parent-1');
-      expect(latest.get('oracle')?.taskID).toBe('ses_first');
+      const latest = sidebarHistory(board, 'parent-1');
+      expect(latest.get('oracle')?.[0]?.taskID).toBe('ses_first');
     });
 
     test('scopes by parentSessionID; drop and clearParent empty the projection', () => {
@@ -2458,19 +2466,19 @@ describe('BackgroundJobBoard', () => {
       seedReconciled(board, 'ses_mine', { parent: 'parent-1' });
       seedReconciled(board, 'ses_other', { parent: 'parent-2' });
 
-      expect(
-        board.latestReconciledByAgent('parent-1').get('oracle')?.taskID,
-      ).toBe('ses_mine');
-      expect(
-        board.latestReconciledByAgent('parent-2').get('oracle')?.taskID,
-      ).toBe('ses_other');
-      expect(board.latestReconciledByAgent('parent-3').size).toBe(0);
+      expect(sidebarHistory(board, 'parent-1').get('oracle')?.[0]?.taskID).toBe(
+        'ses_mine',
+      );
+      expect(sidebarHistory(board, 'parent-2').get('oracle')?.[0]?.taskID).toBe(
+        'ses_other',
+      );
+      expect(sidebarHistory(board, 'parent-3').size).toBe(0);
 
       board.drop('ses_mine');
-      expect(board.latestReconciledByAgent('parent-1').size).toBe(0);
+      expect(sidebarHistory(board, 'parent-1').size).toBe(0);
 
       board.clearParent('parent-2');
-      expect(board.latestReconciledByAgent('parent-2').size).toBe(0);
+      expect(sidebarHistory(board, 'parent-2').size).toBe(0);
     });
 
     test('mutation listener fires on launch, trim, and drop', () => {
@@ -2496,12 +2504,12 @@ describe('BackgroundJobBoard', () => {
       expect(calls).toBeGreaterThan(0);
     });
 
-    test('latestReconciledByAgent never mutates lastUsedAt (read-only)', () => {
+    test('sidebarHistoryByParentAgent never mutates lastUsedAt (read-only)', () => {
       const board = new BackgroundJobBoard();
       seedReconciled(board, 'ses_1', { launchAt: 100, reconciledAt: 300 });
       const before = board.get('ses_1')?.lastUsedAt;
 
-      board.latestReconciledByAgent('parent-1');
+      sidebarHistory(board, 'parent-1');
 
       expect(board.get('ses_1')?.lastUsedAt).toBe(before);
     });

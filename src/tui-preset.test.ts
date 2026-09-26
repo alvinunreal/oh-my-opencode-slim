@@ -169,6 +169,7 @@ describe('openPresetManager', () => {
       sessionParents: {},
       sessionDetails: {},
       reusableByAgent: {},
+      reusableOwners: {},
     } as TuiSnapshot,
   };
 

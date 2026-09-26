@@ -1,26 +1,23 @@
-import { updateSnapshot } from '../tui-state';
-import type {
-  BackgroundJobBoard,
-  ReusableSessionSelection,
-} from './background-job-board';
+import {
+  isProcessRunning,
+  type TuiReusableSession,
+  updateSnapshot,
+} from '../tui-state';
+import type { BackgroundJobBoard } from './background-job-board';
 
 /**
- * Board → tui-state projection for the sidebar's reusable dot (#1197
- * follow-up). On every board mutation (set/delete/trim/drop — the
- * listener is intentionally payload-less), re-derive the latest
- * reconciled session per agent for every parent the board knows and
- * persist it into the snapshot's `reusableByAgent` section. The TUI is a
- * pure reader of this section; it never writes it.
+ * Board → tui-state projection for sidebar session destinations and live
+ * spinners. On every board mutation, publish all canonical terminal sessions
+ * and attributed, certain running jobs (running entries contain only stable
+ * taskID/alias plus a marker). The TUI is a pure reader of this section.
  *
- * The board is the parent index (each record carries parentSessionID);
- * parents whose records are all gone drop out of the derivation. The
- * board is process-local, so this section must never be restored from a
- * stale file — the creation sweep clears it and the projection
- * repopulates from the live board.
+ * Each parent section carries the publishing PID. Startup sweeps dead,
+ * ownerless, and same-PID inherited sections (SIGKILL residue lasts until
+ * that sweep). Other live processes survive for different parents;
+ * concurrent writers to the same parent are last-writer-wins.
  *
- * Cost: O(all jobs) per mutation. `updateSnapshot` early-outs when the
- * derived section is unchanged, so no-op mutations (e.g. heartbeat
- * status updates) never touch the filesystem.
+ * Cost: O(all jobs) per mutation. `updateSnapshot` early-outs when stable
+ * projection fields do not change, so heartbeats do not write the file.
  */
 
 interface ProjectorHandle {
@@ -34,19 +31,65 @@ export function createTuiReusableProjection(input: {
 }): ProjectorHandle {
   const { board, projectDir } = input;
   let disposed = false;
+  let ownedParents = new Set<string>();
+
+  // A new board supersedes sections left by an earlier run in this PID.
+  // Sections belonging to other live processes survive startup.
+  updateSnapshot(projectDir, (snapshot) => {
+    for (const parent of Object.keys(snapshot.reusableByAgent)) {
+      const owner = snapshot.reusableOwners[parent];
+      if (
+        owner === undefined ||
+        owner === process.pid ||
+        !isProcessRunning(owner)
+      ) {
+        delete snapshot.reusableByAgent[parent];
+        delete snapshot.reusableOwners[parent];
+      }
+    }
+  });
 
   const project = (): void => {
     if (disposed) return;
-    updateSnapshot(projectDir, (snapshot) => {
-      const next: Record<
-        string,
-        Record<string, ReusableSessionSelection[]>
-      > = {};
-      for (const [parent, byAgent] of board.sidebarHistoryByParentAgent()) {
-        next[parent] = Object.fromEntries(byAgent);
+    const next: Record<string, Record<string, TuiReusableSession[]>> = {};
+    for (const [parent, byAgent] of board.sidebarHistoryByParentAgent()) {
+      next[parent] = Object.fromEntries(byAgent);
+    }
+    for (const job of board.list()) {
+      if (job.state !== 'running' || job.provisional || job.statusUncertain) {
+        continue;
       }
-      snapshot.reusableByAgent = next;
+      const byAgent = next[job.parentSessionID] ?? {};
+      const sessions = byAgent[job.agent] ?? [];
+      sessions.unshift({
+        taskID: job.taskID,
+        alias: job.alias,
+        running: true,
+      });
+      byAgent[job.agent] = sessions;
+      next[job.parentSessionID] = byAgent;
+    }
+    const previousOwnedParents = ownedParents;
+    const nextOwnedParents = new Set(Object.keys(next));
+    const applied = updateSnapshot(projectDir, (snapshot) => {
+      for (const parent of previousOwnedParents) {
+        if (
+          next[parent] === undefined &&
+          snapshot.reusableOwners[parent] === process.pid
+        ) {
+          delete snapshot.reusableByAgent[parent];
+          delete snapshot.reusableOwners[parent];
+        }
+      }
+      for (const [parent, byAgent] of Object.entries(next)) {
+        snapshot.reusableByAgent[parent] = byAgent;
+        snapshot.reusableOwners[parent] = process.pid;
+      }
+      ownedParents = nextOwnedParents;
     });
+    // The optimistic no-op probe also invokes the mutator. Retain the old
+    // ownership when the subsequent lock or disk write fails.
+    if (!applied) ownedParents = previousOwnedParents;
   };
 
   const listener = (): void => {
@@ -59,16 +102,27 @@ export function createTuiReusableProjection(input: {
 
   board.addMutationListener(listener);
 
-  // The board is process-local (board = store): any section persisted
-  // by a previous host process is stale by construction. Clear it once
-  // at creation so dead dots can never survive a host restart, even if
-  // no board mutation ever follows.
+  // Publish this board's parents without replacing other live owners.
   listener();
 
   return {
     dispose() {
-      disposed = true;
-      board.removeMutationListener(listener);
+      if (!disposed) {
+        disposed = true;
+        board.removeMutationListener(listener);
+      }
+      if (ownedParents.size === 0) return;
+      if (
+        updateSnapshot(projectDir, (snapshot) => {
+          for (const parent of ownedParents) {
+            if (snapshot.reusableOwners[parent] !== process.pid) continue;
+            delete snapshot.reusableByAgent[parent];
+            delete snapshot.reusableOwners[parent];
+          }
+        })
+      ) {
+        ownedParents.clear();
+      }
     },
   };
 }

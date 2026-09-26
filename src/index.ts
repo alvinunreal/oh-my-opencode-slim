@@ -93,6 +93,7 @@ import {
   recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
+  type TuiSessionDetails,
   updateTuiSessionDetails,
 } from './tui-state';
 import {
@@ -242,10 +243,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // arrived before or after busy; both orders converge here or via the
     // coordinator's identity listener).
     const alias = backgroundJobBoard?.get(sessionID)?.alias;
-    const model = sessionMetadata.getModel(sessionID);
-    const details = {
+    const details: TuiSessionDetails = {
       ...(alias ? { alias } : {}),
-      ...(model ? { model } : {}),
       ...(status ? { status } : {}),
     };
     recordTuiAgentActivity(
@@ -360,6 +359,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
   let backgroundJobBoard: BackgroundJobBoard;
+  let tuiReusableProjection:
+    | ReturnType<typeof createTuiReusableProjection>
+    | undefined;
   let backgroundJobSupervisor: BackgroundJobSupervisor;
   let backgroundTaskConcurrency: BackgroundTaskConcurrency;
   let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
@@ -558,12 +560,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // clickable sidebar can label active subagent sessions. Best-effort:
     // a failed tui-state write must never fail a launch.
     //
-    // Generation-scoped by construction: the projector listens on THIS
-    // generation's board, which dies with the generation, so its listener
-    // is never notified after dispose and no explicit unhook is wired
-    // into the instance-disposed path. Revisit only if a board ever
-    // outlives its generation.
-    createTuiReusableProjection({
+    // Each generation must retract its own projected sections on dispose:
+    // a reload reuses this PID, so the startup dead-owner sweep retains
+    // the previous generation's entries until explicitly removed.
+    tuiReusableProjection = createTuiReusableProjection({
       board: backgroundJobBoard,
       projectDir: ctx.directory,
     });
@@ -1472,15 +1472,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           if (!internalAdmission) {
             sessionMetadata.setModel(info.sessionID, model);
           }
-          // Per-session sidebar detail: the model actually observed for
-          // this session (two same-agent sessions may differ). Published
-          // regardless of admission origin: the executing model is a
-          // runtime fact, not selection tracking.
-          updateTuiSessionDetails(
-            info.sessionID,
-            { model },
-            tuiActivityDirectory(info.sessionID),
-          );
           // Managed background-task sessions are identified by their session
           // ID. If the model serving one changed (fallback re-prompt, runtime
           // switch), migrate the admission accounting so provider/model caps
@@ -1638,6 +1629,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       clearAllWakeSessions();
       await interviewManager.dispose();
       clearTuiActivities();
+      tuiReusableProjection?.dispose();
       // Explicitly release this generation's companion ownership: a
       // reloaded generation only replaces the active manager at its own
       // onLoad, and if it fails before that the detached companion would
@@ -1841,14 +1833,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (!internalAdmission) {
           sessionMetadata.setModel(input.sessionID, model);
         }
-        // v2 synthesizes message.updated without provider/model; publish
-        // the observed model here so sessionDetails is not empty for the
-        // entire run. Only-if-active: idle sessions are not resurrected.
-        updateTuiSessionDetails(
-          input.sessionID,
-          { model },
-          tuiActivityDirectory(input.sessionID),
-        );
         backgroundTaskConcurrency.migrateTask(input.sessionID, model);
       }
       taskSessionManagerHook.observeChatMessage(input, output);

@@ -338,7 +338,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
           // terminal evidence stay untouched.
           if (!existing.provisional) return existing;
           const promoted = { ...existing, provisional: false };
-          this.jobs.set(input.taskID, promoted);
+          this.setJob(promoted);
           // The stop-time notification skipped this record while it was
           // still provisional; the attributed record owes the wake.
           this.notifyTerminalStateListeners(input.taskID);
@@ -1253,7 +1253,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
           background: record.background || metadata.background === true,
         }
       : { ...record, provisional: false };
-    this.jobs.set(taskID, promoted);
+    this.setJob(promoted);
     if (promoted.state !== 'running') {
       // The stop-time notification skipped this record while it was
       // still provisional; the attributed record owes the wake.
@@ -1279,40 +1279,6 @@ export class BackgroundJobBoard implements BackgroundJobStore {
    *  canonical terminal state is history even while still unreconciled. */
   private listSidebarHistory(parent?: string): BackgroundJobRecord[] {
     return this.list(parent).filter(isSidebarHistory);
-  }
-
-  /** Shared selection logic for sidebar recency and taskID tiebreaks. */
-  private upsertSidebarSelection(
-    latest: Map<string, ReusableSessionSelection>,
-    job: BackgroundJobRecord,
-  ): void {
-    const selection: ReusableSessionSelection = {
-      taskID: job.taskID,
-      alias: job.alias,
-      terminalState:
-        job.terminalState ?? terminalStateOf(job.state) ?? 'completed',
-      completedAt: job.completedAt,
-      lastUsedAt: job.lastUsedAt,
-    };
-    const current = latest.get(job.agent);
-    if (
-      current === undefined ||
-      sidebarRecency(selection) > sidebarRecency(current) ||
-      (sidebarRecency(selection) === sidebarRecency(current) &&
-        selection.taskID > current.taskID)
-    ) {
-      latest.set(job.agent, selection);
-    }
-  }
-
-  latestReconciledByAgent(
-    parentSessionID: string,
-  ): Map<string, ReusableSessionSelection> {
-    const latest = new Map<string, ReusableSessionSelection>();
-    for (const job of this.listSidebarHistory(parentSessionID)) {
-      this.upsertSidebarSelection(latest, job);
-    }
-    return latest;
   }
 
   /** Every accessible terminal session, grouped for TUI navigation. */

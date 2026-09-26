@@ -494,6 +494,28 @@ describe('tui-state persistence', () => {
     ]);
   });
 
+  test('parseSnapshot accepts stable running entries without terminal fields', () => {
+    const filePath = getTuiStatePath(tempDir);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        reusableByAgent: {
+          'parent-1': {
+            oracle: [
+              { taskID: 'ses_live', alias: 'ora-1', running: true },
+              { taskID: 'ses_bad', alias: 'ora-2', running: false },
+            ],
+          },
+        },
+      }),
+    );
+    expect(
+      readTuiSnapshot(tempDir).reusableByAgent['parent-1']?.oracle,
+    ).toEqual([{ taskID: 'ses_live', alias: 'ora-1', running: true }]);
+  });
+
   test('parseSnapshot drops malformed reusableByAgent entries', () => {
     const filePath = getTuiStatePath(tempDir);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -743,18 +765,18 @@ describe('tui-state persistence', () => {
 });
 
 describe('sessionDetails (clickable sidebar projection)', () => {
-  test('activation with details round-trips alias/model/status', () => {
+  test('activation with details round-trips alias/status', () => {
     recordTuiAgentActivity(
       {
         sessionID: 'ora-1-ses',
         agentName: 'oracle',
         active: true,
-        details: { alias: 'ora-1', model: 'openai/gpt-6', status: 'busy' },
+        details: { alias: 'ora-1', status: 'busy' },
       },
       tempDir,
     );
     expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({
-      'ora-1-ses': { alias: 'ora-1', model: 'openai/gpt-6', status: 'busy' },
+      'ora-1-ses': { alias: 'ora-1', status: 'busy' },
     });
   });
 
@@ -786,25 +808,25 @@ describe('sessionDetails (clickable sidebar projection)', () => {
       tempDir,
     );
     updateTuiSessionDetails('live', { alias: 'ora-1' }, tempDir);
-    updateTuiSessionDetails('live', { model: 'openai/gpt-6' }, tempDir);
+    updateTuiSessionDetails('live', { status: 'retry' }, tempDir);
     expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({
-      live: { alias: 'ora-1', model: 'openai/gpt-6' },
+      live: { alias: 'ora-1', status: 'retry' },
     });
   });
 
-  test('clearTuiSessionAlias retracts only the alias, keeping model/status', () => {
+  test('clearTuiSessionAlias retracts only the alias, keeping status', () => {
     recordTuiAgentActivity(
       {
         sessionID: 'live',
         agentName: 'oracle',
         active: true,
-        details: { alias: 'ora-1', model: 'openai/gpt-6', status: 'busy' },
+        details: { alias: 'ora-1', status: 'busy' },
       },
       tempDir,
     );
     clearTuiSessionAlias('live', tempDir);
     expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({
-      live: { model: 'openai/gpt-6', status: 'busy' },
+      live: { status: 'busy' },
     });
     // Alias-less entry with no other fields is removed entirely.
     recordTuiAgentActivity(
@@ -856,7 +878,8 @@ describe('sessionDetails (clickable sidebar projection)', () => {
         version: 1,
         updatedAt: 1,
         sessionDetails: {
-          good: { alias: 'ora-1', status: 'busy' },
+          good: { alias: 'ora-1', model: 'openai/gpt-6', status: 'busy' },
+          oldModelOnly: { model: 'openai/gpt-6' },
           badStatus: { alias: 'ora-2', status: 'weird' },
           nonObject: 'nope',
           nullEntry: null,

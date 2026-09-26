@@ -408,6 +408,20 @@ export function getActiveSidebarAgentNames(
       names.add(agentName);
     }
   }
+  for (const [parentID, byAgent] of Object.entries(snapshot.reusableByAgent)) {
+    if (
+      root !== undefined &&
+      resolveTuiSnapshotRoot(snapshot, parentID) !== root
+    ) {
+      continue;
+    }
+    for (const [agentName, entries] of Object.entries(byAgent)) {
+      // The projection prepends running jobs ahead of terminal history.
+      if (entries[0]?.running === true) {
+        names.add(agentName);
+      }
+    }
+  }
   return names;
 }
 
@@ -416,7 +430,6 @@ export interface SidebarSessionTarget {
   sessionID: string;
   agentName: string;
   alias?: string;
-  model?: string;
   status?: 'busy' | 'retry' | 'reusable';
 }
 
@@ -456,7 +469,6 @@ export function getSidebarAgentTargets(
       sessionID,
       agentName,
       alias: details?.alias,
-      model: details?.model,
       status: details?.status,
     });
     byAgent.set(agentName, list);
@@ -493,7 +505,8 @@ export interface SidebarReusableTarget {
   taskID: string;
   alias: string;
   completedAt?: number;
-  lastUsedAt: number;
+  lastUsedAt?: number;
+  running?: true;
 }
 
 /**
@@ -522,10 +535,13 @@ export function getSidebarReusableTargets(
         const candidate: SidebarReusableTarget = {
           taskID: entry.taskID,
           alias: entry.alias,
+          ...(entry.running === true ? { running: true as const } : {}),
           ...(entry.completedAt !== undefined
             ? { completedAt: entry.completedAt }
             : {}),
-          lastUsedAt: entry.lastUsedAt,
+          ...(entry.lastUsedAt !== undefined
+            ? { lastUsedAt: entry.lastUsedAt }
+            : {}),
         };
         const existing = byTaskID.get(entry.taskID);
         if (
@@ -540,17 +556,20 @@ export function getSidebarReusableTargets(
     }
   }
   for (const entries of targets.values()) {
-    entries.sort(
-      (a, b) =>
+    entries.sort((a, b) => {
+      if (a.running !== b.running) return a.running ? -1 : 1;
+      if (a.running) return 0;
+      return (
         reusableRecency(b) - reusableRecency(a) ||
-        b.taskID.localeCompare(a.taskID),
-    );
+        b.taskID.localeCompare(a.taskID)
+      );
+    });
   }
   return targets;
 }
 
 function reusableRecency(target: SidebarReusableTarget): number {
-  return Math.max(target.lastUsedAt, target.completedAt ?? 0);
+  return Math.max(target.lastUsedAt ?? 0, target.completedAt ?? 0);
 }
 
 function compareSidebarTargets(
@@ -661,11 +680,7 @@ export function makeRouteNavigator(
   };
 }
 
-export function getSidebarActivityIndicator(
-  active: boolean,
-  now = Date.now(),
-): string {
-  if (!active) return ' ';
+export function getSidebarActivityIndicator(now = Date.now()): string {
   const frame = Math.floor(now / ACTIVITY_FRAME_MS) % ACTIVITY_FRAMES.length;
   return ACTIVITY_FRAMES[frame];
 }
@@ -863,25 +878,59 @@ function statusDot(
       width: 2,
     },
     active
-      ? [() => `${getSidebarActivityIndicator(true, now())} `]
+      ? [() => `${getSidebarActivityIndicator(now())} `]
       : [hasHistory ? '✦ ' : `${STATUS_DOT_GLYPH} `],
   );
 }
 
-function agentRow(
-  label: string,
-  model: string,
-  variant: string | undefined,
-  active: boolean,
-  now: () => number,
-  theme: AgentRowTheme,
-  sessionCount?: number,
-  expanded = false,
-  onClick?: () => void,
-  hoverBackground?: unknown,
-  hasSelectedText?: () => boolean,
-  hasHistory?: boolean,
-): JSX.Element {
+interface AgentRowOptions {
+  label: string;
+  model: string;
+  variant?: string;
+  active: boolean;
+  now: () => number;
+  theme: AgentRowTheme;
+  sessionCount?: number;
+  expanded: boolean;
+  onClick?: () => void;
+  hoverBackground?: unknown;
+  hasSelectedText?: () => boolean;
+  hasHistory: boolean;
+}
+
+function agentHeaderCells({
+  label,
+  active,
+  now,
+  theme,
+  sessionCount,
+  expanded,
+  hasHistory,
+}: AgentRowOptions): JSX.Element[] {
+  return [
+    statusDot(active, hasHistory, now, theme),
+    text(
+      {
+        fg: theme.textMuted,
+        wrapMode: 'none',
+        truncate: true,
+        flexShrink: 1,
+      },
+      [label],
+    ),
+    ...(sessionCount !== undefined && sessionCount > 1
+      ? [
+          text({ fg: theme.textMuted, wrapMode: 'none', flexShrink: 0 }, [
+            ` ${expanded ? '▾' : '▸'}${sessionCount}`,
+          ]),
+        ]
+      : []),
+  ];
+}
+
+function agentRow(options: AgentRowOptions): JSX.Element {
+  const { model, variant, theme, onClick, hoverBackground, hasSelectedText } =
+    options;
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
 
@@ -914,25 +963,7 @@ function agentRow(
       flexDirection: 'row',
       shouldFill: true,
     },
-    [
-      statusDot(active, hasHistory ?? false, now, theme),
-      text(
-        {
-          fg: theme.textMuted,
-          wrapMode: 'none',
-          truncate: true,
-          flexShrink: 1,
-        },
-        [label],
-      ),
-      ...(sessionCount !== undefined && sessionCount > 1
-        ? [
-            text({ fg: theme.textMuted, wrapMode: 'none', flexShrink: 0 }, [
-              ` ${expanded ? '▾' : '▸'}${sessionCount}`,
-            ]),
-          ]
-        : []),
-    ],
+    agentHeaderCells(options),
   );
   decorateInteractiveRow(header, {
     hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
@@ -951,20 +982,8 @@ function agentRow(
   );
 }
 
-function compactAgentRow(
-  label: string,
-  model: string,
-  _variant: string | undefined,
-  active: boolean,
-  now: () => number,
-  theme: AgentRowTheme,
-  sessionCount?: number,
-  expanded = false,
-  onClick?: () => void,
-  hoverBackground?: unknown,
-  hasSelectedText?: () => boolean,
-  hasHistory?: boolean,
-): JSX.Element {
+function compactAgentRow(options: AgentRowOptions): JSX.Element {
+  const { model, theme, onClick, hoverBackground, hasSelectedText } = options;
   const modelName = splitSidebarModelId(model).model;
   const row = box(
     {
@@ -981,31 +1000,7 @@ function compactAgentRow(
           flexDirection: 'row',
           shouldFill: false,
         },
-        [
-          statusDot(active, hasHistory ?? false, now, theme),
-          text(
-            {
-              fg: theme.textMuted,
-              wrapMode: 'none',
-              truncate: true,
-              flexShrink: 1,
-            },
-            [label],
-          ),
-          ...(sessionCount !== undefined && sessionCount > 1
-            ? [
-                text(
-                  {
-                    fg: theme.textMuted,
-                    wrapMode: 'none',
-                    flexShrink: 0,
-                  },
-                  [` ${expanded ? '▾' : '▸'}${sessionCount}`],
-                ),
-              ]
-            : []),
-          box({ flexGrow: 1, shouldFill: false }),
-        ],
+        [...agentHeaderCells(options), box({ flexGrow: 1, shouldFill: false })],
       ),
       box({ flexDirection: 'row', flexGrow: 1, shouldFill: false }),
       text(
@@ -1014,6 +1009,7 @@ function compactAgentRow(
           wrapMode: 'none',
           truncate: true,
           flexShrink: 1,
+          marginLeft: 1,
         },
         [modelName],
       ),
@@ -1063,7 +1059,7 @@ function sessionTargetRow(
         [
           reusable
             ? `${STATUS_DOT_GLYPH} `
-            : () => `${getSidebarActivityIndicator(true, now())} `,
+            : () => `${getSidebarActivityIndicator(now())} `,
         ],
       ),
       text(
@@ -1237,12 +1233,13 @@ function renderSidebar(
                   sessionID: target.taskID,
                   agentName,
                   alias: target.alias,
-                  model,
-                  status: 'reusable',
+                  status: target.running === true ? 'busy' : 'reusable',
                 }),
               );
             const allTargets = [...sessions, ...reusableTargets];
-            const history = reusableTargets.length > 0;
+            const history = reusableTargets.some(
+              (target) => target.status === 'reusable',
+            );
             const clickable =
               interaction?.navigate !== undefined && allTargets.length > 0;
             const expanded =
@@ -1258,35 +1255,23 @@ function renderSidebar(
                   }
                 }
               : undefined;
+            const rowOptions: AgentRowOptions = {
+              label: agentName,
+              model,
+              variant,
+              active,
+              now,
+              theme,
+              sessionCount: clickable ? allTargets.length : undefined,
+              expanded,
+              onClick: onAgentClick,
+              hoverBackground,
+              hasSelectedText: interaction?.hasSelectedText,
+              hasHistory: !active && history,
+            };
             const agentRowEl = compactSidebar
-              ? compactAgentRow(
-                  agentName,
-                  model,
-                  variant,
-                  active,
-                  now,
-                  theme,
-                  clickable ? allTargets.length : undefined,
-                  expanded,
-                  onAgentClick,
-                  hoverBackground,
-                  interaction?.hasSelectedText,
-                  !active && history,
-                )
-              : agentRow(
-                  agentName,
-                  model,
-                  variant,
-                  active,
-                  now,
-                  theme,
-                  clickable ? allTargets.length : undefined,
-                  expanded,
-                  onAgentClick,
-                  hoverBackground,
-                  interaction?.hasSelectedText,
-                  !active && history,
-                );
+              ? compactAgentRow(rowOptions)
+              : agentRow(rowOptions);
             if (!expanded) return [agentRowEl];
             return [
               agentRowEl,
@@ -1466,15 +1451,20 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   };
 }
 
-/**
- * V2 entry point: sidebar slot + refresh loop; returns cleanup.
- * `/preset` stays v1-only (`api.command` is absent on v2).
- */
-async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
-  if (isPluginDisabledByEnv()) return;
+interface SidebarRuntimeAdapter {
+  version: string;
+  getDirectory: () => string;
+  getVisibleSession: () => string | undefined;
+  client?: unknown;
+  renderer: { requestRender: () => void; getSelection?: () => unknown };
+  theme: () => Parameters<typeof renderSidebar>[2];
+  navigate?: (sessionID: string) => void;
+  registerSlot: (render: () => JSX.Element) => undefined | (() => void);
+}
 
-  const version = (await readPackageVersion()) ?? 'dev';
-  let configDirectory = ctx.location?.directory ?? process.cwd();
+/** One refresh/animation/interaction lifecycle for both host slot contracts. */
+function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
+  let configDirectory = adapter.getDirectory();
   let { configInvalid, compactSidebar } = readConfigState(configDirectory);
   const [snapshot, setSnapshot] = createSignal(
     readTuiSnapshot(configDirectory),
@@ -1484,7 +1474,7 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
   const remoteCache: RemoteModelCache = {};
   const refreshSidebar = async () => {
     if (disposed) return;
-    const currentDirectory = ctx.location?.directory ?? process.cwd();
+    const currentDirectory = adapter.getDirectory();
     let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
     if (disposed) return;
     const directoryChanged = currentDirectory !== configDirectory;
@@ -1494,77 +1484,89 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     }
     nextSnapshot = await hydrateRemoteModels(
       nextSnapshot,
-      ctx.client,
+      adapter.client,
       currentDirectory,
       remoteCache,
     );
     if (disposed) return;
-    if (
-      !isRefreshCurrent(
-        currentDirectory,
-        ctx.location?.directory ?? process.cwd(),
-      )
-    ) {
+    if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
       return;
     }
     if (!directoryChanged && snapshotSectionsEqual(nextSnapshot, snapshot())) {
       return;
     }
     setSnapshot(nextSnapshot);
-    ctx.renderer.requestRender();
+    if (!disposed) adapter.renderer.requestRender();
   };
+  const interaction = createSidebarInteraction(
+    adapter.navigate,
+    selectionGuard(adapter.renderer),
+  );
   const scheduleRefresh = createSerializedRefresh(refreshSidebar);
   scheduleRefresh();
   const renderTimer = setInterval(scheduleRefresh, 1000);
   const animationTimer = setInterval(() => {
     if (
       !disposed &&
-      getActiveSidebarAgentNames(snapshot(), visibleSession()).size > 0
+      getActiveSidebarAgentNames(snapshot(), adapter.getVisibleSession()).size >
+        0
     ) {
       setAnimationNow(Date.now());
     }
   }, ACTIVITY_FRAME_MS);
 
-  const visibleSession = () => resolveRouteSessionId(ctx.ui.router.current());
-
-  // Clickable sidebar: navigation is optional on v2 hosts (feature-detected
-  // at startup); without it the sidebar renders informatively.
-  const interaction = createSidebarInteraction(
-    makeRouteNavigator(ctx.ui.router, 'navigate', true),
-    selectionGuard(ctx.renderer),
+  const disposeSlot = adapter.registerSlot(() =>
+    reactiveElement(() => {
+      const visible = adapter.getVisibleSession();
+      const currentSnapshot = snapshot();
+      interaction.syncScope(
+        configDirectory,
+        visible === undefined
+          ? undefined
+          : resolveTuiSnapshotRoot(currentSnapshot, visible),
+      );
+      return renderSidebar(
+        currentSnapshot,
+        adapter.version,
+        adapter.theme(),
+        configInvalid,
+        compactSidebar,
+        animationNow,
+        visible,
+        interaction,
+      );
+    }),
   );
 
-  const disposeSlot = ctx.ui.slot({
-    append: 'sidebar.content',
-    render: () =>
-      reactiveElement(() => {
-        const visible = visibleSession();
-        const currentSnapshot = snapshot();
-        interaction.syncScope(
-          configDirectory,
-          visible === undefined
-            ? undefined
-            : resolveTuiSnapshotRoot(currentSnapshot, visible),
-        );
-        return renderSidebar(
-          currentSnapshot,
-          version,
-          v2ThemeView(ctx.theme),
-          configInvalid,
-          compactSidebar,
-          animationNow,
-          visible,
-          interaction,
-        );
-      }),
-  });
-
-  return () => {
-    disposed = true;
-    disposeSlot();
-    clearInterval(renderTimer);
-    clearInterval(animationTimer);
+  return {
+    getDirectory: () => configDirectory,
+    getSnapshot: snapshot,
+    setSnapshot,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      disposeSlot?.();
+      clearInterval(renderTimer);
+      clearInterval(animationTimer);
+    },
   };
+}
+
+/** V2 slot adapter; `/preset` remains registered by src/v2/tui.ts. */
+async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
+  if (isPluginDisabledByEnv()) return;
+  const runtime = createSidebarRuntime({
+    version: (await readPackageVersion()) ?? 'dev',
+    getDirectory: () => ctx.location?.directory ?? process.cwd(),
+    getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
+    client: ctx.client,
+    renderer: ctx.renderer,
+    theme: () => v2ThemeView(ctx.theme),
+    navigate: makeRouteNavigator(ctx.ui.router, 'navigate', true),
+    registerSlot: (render) =>
+      ctx.ui.slot({ append: 'sidebar.content', render }),
+  });
+  return runtime.dispose;
 }
 
 /**
@@ -1648,90 +1650,23 @@ const plugin: TuiDualContractModule = {
   tui: async (api, _options, meta) => {
     if (isPluginDisabledByEnv()) return;
 
-    const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
-    let configDirectory = getTuiDirectory(api);
-    let { configInvalid, compactSidebar } = readConfigState(configDirectory);
-    const [snapshot, setSnapshot] = createSignal(
-      readTuiSnapshot(configDirectory),
-    );
-    const [animationNow, setAnimationNow] = createSignal(Date.now());
-    const remoteCache: RemoteModelCache = {};
-    const refreshSidebar = async () => {
-      const currentDirectory = getTuiDirectory(api);
-      let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
-      const directoryChanged = currentDirectory !== configDirectory;
-      if (directoryChanged) {
-        configDirectory = currentDirectory;
-        ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
-      }
-      nextSnapshot = await hydrateRemoteModels(
-        nextSnapshot,
-        (api as { client?: unknown }).client,
-        currentDirectory,
-        remoteCache,
-      );
-      if (!isRefreshCurrent(currentDirectory, getTuiDirectory(api))) return;
-      if (
-        !directoryChanged &&
-        snapshotSectionsEqual(nextSnapshot, snapshot())
-      ) {
-        return;
-      }
-      setSnapshot(nextSnapshot);
-      api.renderer.requestRender();
-    };
-    const scheduleRefresh = createSerializedRefresh(refreshSidebar);
-    scheduleRefresh();
-    const renderTimer = setInterval(scheduleRefresh, 1000);
-    const animationTimer = setInterval(() => {
-      if (
-        getActiveSidebarAgentNames(
-          snapshot(),
-          resolveRouteSessionId(api.route.current),
-        ).size > 0
-      ) {
-        setAnimationNow(Date.now());
-      }
-    }, ACTIVITY_FRAME_MS);
-
-    api.lifecycle.onDispose(() => {
-      clearInterval(renderTimer);
-      clearInterval(animationTimer);
-    });
-
-    // Clickable sidebar: v1 hosts always expose api.route.navigate.
-    const interaction = createSidebarInteraction(
-      makeRouteNavigator(api.route, 'navigate', false),
-      selectionGuard(api.renderer),
-    );
-
-    api.slots.register({
-      order: resolveSidebarSlotOrder(api.tuiConfig?.plugin, PLUGIN_NAME),
-      slots: {
-        sidebar_content() {
-          return reactiveElement(() => {
-            const visible = resolveRouteSessionId(api.route.current);
-            const currentSnapshot = snapshot();
-            interaction.syncScope(
-              configDirectory,
-              visible === undefined
-                ? undefined
-                : resolveTuiSnapshotRoot(currentSnapshot, visible),
-            );
-            return renderSidebar(
-              currentSnapshot,
-              version,
-              api.theme.current,
-              configInvalid,
-              compactSidebar,
-              animationNow,
-              visible,
-              interaction,
-            );
-          });
-        },
+    const runtime = createSidebarRuntime({
+      version: meta.version ?? (await readPackageVersion()) ?? 'dev',
+      getDirectory: () => getTuiDirectory(api),
+      getVisibleSession: () => resolveRouteSessionId(api.route.current),
+      client: (api as { client?: unknown }).client,
+      renderer: api.renderer,
+      theme: () => api.theme.current,
+      navigate: makeRouteNavigator(api.route, 'navigate', false),
+      registerSlot: (render) => {
+        api.slots.register({
+          order: resolveSidebarSlotOrder(api.tuiConfig?.plugin, PLUGIN_NAME),
+          slots: { sidebar_content: render },
+        });
+        return undefined;
       },
     });
+    api.lifecycle.onDispose(runtime.dispose);
 
     // `/preset` is a pure TUI slash command (like the built-in `/models`):
     // it opens a picker, switches the preset via on-disk state, and never
@@ -1744,19 +1679,15 @@ const plugin: TuiDualContractModule = {
     if (api.command) {
       const snapshotRef: { snapshot: TuiSnapshot } = {
         get snapshot() {
-          return snapshot();
+          return runtime.getSnapshot();
         },
         set snapshot(value: TuiSnapshot) {
-          setSnapshot(value);
+          runtime.setSnapshot(value);
         },
       };
       const disposeCommands = api.command.register(() => [
-        buildPresetCommand(api, () => configDirectory, snapshotRef),
-        buildKillAllCommand(
-          api,
-          () => configDirectory,
-          () => snapshot(),
-        ),
+        buildPresetCommand(api, runtime.getDirectory, snapshotRef),
+        buildKillAllCommand(api, runtime.getDirectory, runtime.getSnapshot),
       ]);
       api.lifecycle.onDispose(disposeCommands);
     }

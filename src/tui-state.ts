@@ -5,22 +5,28 @@ import * as path from 'node:path';
 import type { ReusableSessionSelection } from './utils/background-job-board';
 
 /**
- * Per-session metadata projection for the clickable sidebar. Entries only
+ * Per-session alias/status projection for the clickable sidebar. Entries only
  * exist for sessions present in `activeSessions`; they never activate a
  * session by themselves. The key is always the full sessionID — never an
  * alias — and the parent link lives exclusively in `sessionParents`.
  */
 export interface TuiSessionDetails {
   alias?: string;
-  /** providerID/modelID observed for this specific session. */
-  model?: string;
   status?: 'busy' | 'retry';
 }
 
-/** Accessible reusable sessions per agent of a parent session. Written only
- * by the host-side board projection; the TUI never writes this section.
- * Empty on hosts without a board. */
-export type TuiReusableSession = ReusableSessionSelection;
+/** Host-board sidebar sessions. Running entries carry only stable identity;
+ * terminal entries retain their reusable destination metadata. */
+export type TuiReusableSession =
+  | (ReusableSessionSelection & { running?: never })
+  | {
+      taskID: string;
+      alias: string;
+      running: true;
+      terminalState?: never;
+      completedAt?: never;
+      lastUsedAt?: never;
+    };
 
 export interface TuiSnapshot {
   version: 1;
@@ -42,14 +48,15 @@ export interface TuiSnapshot {
    * cannot scope the sidebar; the session tree can.
    */
   sessionParents: Record<string, string>;
-  /** Per-active-session details (alias/model/status) for the sidebar. */
+  /** Per-active-session details (alias/status) for the sidebar. */
   sessionDetails: Record<string, TuiSessionDetails>;
   /**
-   * All accessible reusable sessions per agent, keyed by parent
-   * sessionID. Host-board state is process-local by design, so this
-   * section is never restored from a stale file.
+   * Accessible terminal and running sessions per agent, keyed by parent
+   * sessionID. The board owns this process-local projection.
    */
   reusableByAgent: Record<string, Record<string, TuiReusableSession[]>>;
+  /** Host PID owning each parent projection, independent of activityPids. */
+  reusableOwners: Record<string, number>;
 }
 
 const STATE_DIR = 'oh-my-opencode-slim';
@@ -100,6 +107,7 @@ function emptySnapshot(): TuiSnapshot {
     sessionParents: {},
     sessionDetails: {},
     reusableByAgent: {},
+    reusableOwners: {},
   };
 }
 
@@ -128,10 +136,9 @@ function parseSessionDetails(
   const out: Record<string, TuiSessionDetails> = {};
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (entry === null || typeof entry !== 'object') continue;
-    const rec = entry as { alias?: unknown; model?: unknown; status?: unknown };
+    const rec = entry as { alias?: unknown; status?: unknown };
     const details: TuiSessionDetails = {};
     if (typeof rec.alias === 'string') details.alias = rec.alias;
-    if (typeof rec.model === 'string') details.model = rec.model;
     if (rec.status === 'busy' || rec.status === 'retry') {
       details.status = rec.status;
     }
@@ -160,13 +167,23 @@ function parseReusableByAgent(
         const rec = item as {
           taskID?: unknown;
           alias?: unknown;
+          running?: unknown;
           terminalState?: unknown;
           completedAt?: unknown;
           lastUsedAt?: unknown;
         };
+        if (typeof rec.taskID !== 'string' || typeof rec.alias !== 'string') {
+          continue;
+        }
+        if (rec.running === true) {
+          sessions.push({
+            taskID: rec.taskID,
+            alias: rec.alias,
+            running: true,
+          });
+          continue;
+        }
         if (
-          typeof rec.taskID !== 'string' ||
-          typeof rec.alias !== 'string' ||
           (rec.terminalState !== 'completed' &&
             rec.terminalState !== 'error' &&
             rec.terminalState !== 'cancelled') ||
@@ -208,6 +225,7 @@ function parseSnapshot(value: string): TuiSnapshot {
     // The host-board projection is absent until its first write. Present
     // values parse as arrays for the TUI's reusable-session navigation.
     reusableByAgent: parseReusableByAgent(parsed.reusableByAgent),
+    reusableOwners: parsePidRecord(parsed.reusableOwners),
   };
 }
 
@@ -313,7 +331,7 @@ function writeTuiSnapshot(snapshot: TuiSnapshot, projectDir: string): boolean {
   }
 }
 
-function isProcessRunning(pid: number): boolean {
+export function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -448,6 +466,7 @@ function cloneSnapshot(snapshot: TuiSnapshot): TuiSnapshot {
         { ...agents },
       ]),
     ),
+    reusableOwners: { ...snapshot.reusableOwners },
   };
 }
 
@@ -459,7 +478,8 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
     JSON.stringify(a.activityPids) === JSON.stringify(b.activityPids) &&
     JSON.stringify(a.sessionParents) === JSON.stringify(b.sessionParents) &&
     JSON.stringify(a.sessionDetails) === JSON.stringify(b.sessionDetails) &&
-    JSON.stringify(a.reusableByAgent) === JSON.stringify(b.reusableByAgent)
+    JSON.stringify(a.reusableByAgent) === JSON.stringify(b.reusableByAgent) &&
+    JSON.stringify(a.reusableOwners) === JSON.stringify(b.reusableOwners)
   );
 }
 
@@ -499,37 +519,39 @@ function memoFor(statePath: string): TuiSnapshot | undefined {
 export function updateSnapshot(
   projectDir: string,
   mutator: (snapshot: TuiSnapshot) => void,
-): void {
+): boolean {
   const statePath = getTuiStatePath(projectDir);
 
   const memo = memoFor(statePath);
   if (memo) {
     const candidate = cloneSnapshot(memo);
     mutator(candidate);
-    if (snapshotSectionsEqual(candidate, memo)) return; // no-op update
+    if (snapshotSectionsEqual(candidate, memo)) return true; // no-op update
   }
 
   try {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
   } catch {
-    return;
+    return false;
   }
   const lock = acquireStateLock(statePath);
-  if (!lock) return;
+  if (!lock) return false;
 
   try {
     const snapshot = readTuiSnapshotStrict(statePath);
-    if (!snapshot) return;
+    if (!snapshot) return false;
     const before = cloneSnapshot(snapshot);
     mutator(snapshot);
     if (snapshotSectionsEqual(snapshot, before)) {
       rememberSnapshot(statePath, snapshot);
-      return;
+      return true;
     }
     snapshot.updatedAt = Date.now();
     if (writeTuiSnapshot(snapshot, projectDir)) {
       rememberSnapshot(statePath, snapshot);
+      return true;
     }
+    return false;
   } finally {
     releaseStateLock(lock);
   }
@@ -599,7 +621,7 @@ export function recordTuiAgentActivity(
 }
 
 /**
- * Update per-session sidebar details (alias/model/status) for an ACTIVE
+ * Update per-session sidebar details (alias/status) for an ACTIVE
  * session only. A late detail update after idle must never resurrect an
  * activity entry — the whole update is dropped when the session is gone
  * from `activeSessions` at commit time (under the same lock).
@@ -618,7 +640,7 @@ export function updateTuiSessionDetails(
 
 /**
  * Retract only the alias of an active session (e.g. its board record was
- * dropped). Model/status survive; the session stays visible in the
+ * dropped). Status survives; the session stays visible in the
  * sidebar under its abbreviated sessionID until it goes idle.
  */
 export function clearTuiSessionAlias(
