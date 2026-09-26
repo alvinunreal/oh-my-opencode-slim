@@ -122,10 +122,11 @@ returns the raw fetched content as a graceful fallback.
 ## Caching
 
 Fetches are cached in memory with an LRU cache (50 MiB max, 15-minute TTL).
-The cache key includes the URL plus request- and representation-affecting options
-(`format`, `extract_main`, `prefer_llms_txt`, `save_binary`), so changing these
-re-fetches the URL. The page's `Accept` header prefers the requested format
-(markdown, plain text, or HTML); the llms.txt probe retains its own text preference.
+Page cache keys include the URL and request/representation options (`format`,
+`extract_main`, `prefer_llms_txt`, `save_binary`); changing format re-fetches
+the page with its preferred `Accept`. llms.txt keeps its own text `Accept` and
+shares one format-independent cache entry, probed again when stale. If no llms.txt
+exists, changing format re-probes before fetching the page.
 
 Expired entries are revalidated with `ETag`/`Last-Modified` when available.
 On `304` at the same final URL, the cached body is reused and its TTL refreshed;
@@ -296,7 +297,7 @@ these modules:
 | `tool.ts` | Entry point — permission prompts, cache lookup, llms.txt preference logic, binary-vs-text branching, metadata emission, secondary-model integration |
 | `network.ts` | URL normalization, redirect policy, charset/body decoding, header extraction, llms.txt probing, HTTP fetch with HTTPS upgrade fallback |
 | `utils.ts` | HTML extraction (Mozilla Readability + Turndown), heading cleanup, markdown/text cleaning, frontmatter generation, quality signal detection |
-| `cache.ts` | LRU cache keyed by URL + request options; stale entries retain validators for conditional page revalidation, while llms.txt is probed anew |
+| `cache.ts` | LRU cache keyed by URL + request options (format omitted for llms.txt); stale entries retain validators for conditional page revalidation, while stale llms.txt is probed anew |
 | `binary.ts` | Binary content persistence to disk, MIME-to-extension mapping, safe filename allocation |
 | `secondary-model.ts` | Dedicated webfetch/`small_model` config resolution, temporary session creation, content truncation, model fallback chain |
 | `constants.ts` | Timeouts, size limits, docs domain heuristics, binary MIME prefixes, tool description |

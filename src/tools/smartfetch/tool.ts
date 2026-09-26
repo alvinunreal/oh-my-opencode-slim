@@ -140,6 +140,10 @@ export function createWebfetchTool(
         save_binary: args.save_binary,
       };
       const cacheKey = buildCacheKey(args.url, cacheOptions);
+      const llmsCacheKey = buildCacheKey(args.url, {
+        ...cacheOptions,
+        format: undefined,
+      });
       const shouldProbeLlmsTxt =
         args.prefer_llms_txt === 'always' ||
         (args.prefer_llms_txt === 'auto' && isDocsLikeUrl(url));
@@ -168,7 +172,10 @@ export function createWebfetchTool(
       );
       return runWithScopedTimeout(ctx.abort, timeoutMs, async (signal) => {
         signal.throwIfAborted();
-        const cached = lookup(cacheKey);
+        const cachedLlms = shouldProbeLlmsTxt
+          ? lookup(llmsCacheKey)
+          : undefined;
+        const cached = cachedLlms?.fresh ? cachedLlms : lookup(cacheKey);
         let fetchResult = cached.fresh ? cached.entry : undefined;
         let cacheHit = cached.fresh;
         let revalidated = false;
@@ -251,11 +258,9 @@ export function createWebfetchTool(
           }
 
           if (!fetchResult) {
-            const validators =
-              cached.entry &&
-              !('usedLlmsTxt' in cached.entry && cached.entry.usedLlmsTxt)
-                ? conditionalHeaders(cached.entry)
-                : {};
+            const validators = cached.entry
+              ? conditionalHeaders(cached.entry)
+              : {};
             let { result, upgradedToHttps } = await fetchWithUpgradeFallback(
               normalized,
               signal,
@@ -464,7 +469,14 @@ export function createWebfetchTool(
           }
         }
         if (!fetchResult) throw new Error('Fetch produced no result');
-        if (!cached.fresh) CACHE.set(cacheKey, fetchResult);
+        if (!cached.fresh) {
+          CACHE.set(
+            'usedLlmsTxt' in fetchResult && fetchResult.usedLlmsTxt
+              ? llmsCacheKey
+              : cacheKey,
+            fetchResult,
+          );
+        }
 
         ctx.metadata({
           title:

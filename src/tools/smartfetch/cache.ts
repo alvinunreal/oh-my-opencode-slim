@@ -2,7 +2,8 @@ import { LRUCache } from 'lru-cache';
 import type { FetchResult } from './types';
 
 type CacheOptions = {
-  format: 'text' | 'markdown' | 'html';
+  /** llms.txt uses its own Accept header, so its cache entry omits format. */
+  format?: 'text' | 'markdown' | 'html';
   extract_main: boolean;
   prefer_llms_txt: 'auto' | 'always' | 'never';
   save_binary: boolean;

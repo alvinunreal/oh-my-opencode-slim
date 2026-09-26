@@ -117,6 +117,7 @@ describe('smartfetch/tool', () => {
     ) as typeof fetch;
     const webfetch = createWebfetchTool({ client: {} } as any);
     for (const format of ['markdown', 'text', 'html'] as const) {
+      CACHE.clear();
       expect(
         await webfetch.execute(
           { url: 'https://docs.example.com/page', format },
@@ -127,6 +128,83 @@ describe('smartfetch/tool', () => {
     expect(accepts).toEqual(
       Array(3).fill('text/plain, text/markdown;q=0.9, */*;q=0.1'),
     );
+  });
+
+  test('one llms.txt probe serves html, markdown and text formats', async () => {
+    const requests: Array<[string, string | null]> = [];
+    globalThis.fetch = mock(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        requests.push([url, new Headers(init?.headers).get('Accept')]);
+        if (url !== 'https://docs.example.com/llms-full.txt') {
+          throw new Error(`Unexpected URL: ${url}`);
+        }
+        return new Response('# Shared llms docs', {
+          headers: { 'content-type': 'text/plain' },
+        });
+      },
+    ) as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    const outputs = [];
+    for (const format of ['html', 'markdown', 'text'] as const) {
+      outputs.push(
+        await webfetch.execute(
+          { url: 'https://docs.example.com/page', format },
+          createExecutionContext(),
+        ),
+      );
+    }
+    for (const result of outputs)
+      expect(result).toContain('used_llms_txt: true');
+    expect(outputs[0]).toContain('cache_hit: false');
+    expect(outputs[1]).toContain('cache_hit: true');
+    expect(outputs[2]).toContain('cache_hit: true');
+    expect(requests).toEqual([
+      [
+        'https://docs.example.com/llms-full.txt',
+        'text/plain, text/markdown;q=0.9, */*;q=0.1',
+      ],
+    ]);
+    expect(CACHE.size).toBe(1);
+  });
+
+  test('no-llms docs pages keep per-format Accept and representations', async () => {
+    const pageAccepts: string[] = [];
+    globalThis.fetch = mock(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        if (
+          String(input).endsWith('/llms-full.txt') ||
+          String(input).endsWith('/llms.txt')
+        ) {
+          return new Response('missing', { status: 404 });
+        }
+        const accept = new Headers(init?.headers).get('Accept') || '';
+        pageAccepts.push(accept);
+        return accept.startsWith('text/markdown')
+          ? new Response('# Negotiated markdown', {
+              headers: { 'content-type': 'text/markdown' },
+            })
+          : new Response('<html><body><h1>HTML version</h1></body></html>', {
+              headers: { 'content-type': 'text/html' },
+            });
+      },
+    ) as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    const args = { url: 'https://docs.example.com/page' };
+    const markdown = await webfetch.execute(
+      { ...args, format: 'markdown' },
+      createExecutionContext(),
+    );
+    const html = await webfetch.execute(
+      { ...args, format: 'html' },
+      createExecutionContext(),
+    );
+    expect(markdown).toContain('# Negotiated markdown');
+    expect(html).toContain('HTML version');
+    expect(html).not.toContain('Negotiated markdown');
+    expect(pageAccepts).toHaveLength(2);
+    expect(pageAccepts[0]).toStartWith('text/markdown');
+    expect(pageAccepts[1]).toStartWith('text/html;q=1.0');
   });
 
   test('a persistent Cloudflare challenge reports 403 and mentions the retry', async () => {
@@ -443,7 +521,7 @@ describe('smartfetch/tool', () => {
     const args = { url: 'https://docs.example.com/page' };
     await webfetch.execute(args, createExecutionContext());
     const key = buildCacheKey(args.url, {
-      format: 'markdown',
+      format: undefined,
       extract_main: true,
       prefer_llms_txt: 'auto',
       save_binary: false,
@@ -486,7 +564,7 @@ describe('smartfetch/tool', () => {
       'used_llms_txt: true',
     );
     const key = buildCacheKey(args.url, {
-      format: 'markdown',
+      format: undefined,
       extract_main: true,
       prefer_llms_txt: 'auto',
       save_binary: false,

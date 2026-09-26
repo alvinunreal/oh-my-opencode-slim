@@ -87,6 +87,15 @@ describe('smartfetch/cache', () => {
     expect(JSON.parse(base)).toMatchObject({ saveBinary: false });
   });
 
+  test('llms.txt cache key omits format and differs from every page key', () => {
+    const url = 'https://docs.example.com/page';
+    const llms = buildCacheKey(url, { ...cacheOptions, format: undefined });
+    expect(Object.hasOwn(JSON.parse(llms), 'format')).toBe(false);
+    for (const format of ['markdown', 'text', 'html'] as const) {
+      expect(buildCacheKey(url, { ...cacheOptions, format })).not.toBe(llms);
+    }
+  });
+
   test('llms.txt-shaped result is charged once for its content', () => {
     const llmsTxt = Array.from(
       { length: 64 },
